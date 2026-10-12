@@ -517,6 +517,31 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     }
   });
 
+  it("continues transient recovery when the retry status callback rejects", async () => {
+    const closeRetryWait = vi.fn();
+    const onRetryWait = vi.fn(() => closeRetryWait);
+    const controller = createController(
+      vi.fn(async () => false),
+      false,
+      undefined,
+      onRetryWait,
+    );
+    controller.observeAttempt({ providerRetryMaxRetries: 1 });
+    const onRetry = vi.fn(async () => {
+      throw new Error("event sink disconnected");
+    });
+
+    await expect(controller.maybeRetryTransient({ reason: "server_error", onRetry })).resolves.toBe(
+      true,
+    );
+
+    expect(onRetry).toHaveBeenCalledOnce();
+    expect(onRetryWait).toHaveBeenCalledOnce();
+    expect(mocks.sleepWithAbort).toHaveBeenCalledOnce();
+    expect(closeRetryWait).toHaveBeenCalledWith(true);
+    expect(controller.transientRetryCount).toBe(1);
+  });
+
   it("escalates after one successful rate-limit rotation without advancing again", async () => {
     const advanceAuthProfile = vi.fn(async () => true);
     const controller = createController(advanceAuthProfile, true);

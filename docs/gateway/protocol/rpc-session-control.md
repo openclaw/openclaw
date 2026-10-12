@@ -25,6 +25,10 @@ Model-catalog reads in `sessions.create`, `sessions.patch`, `sessions.patchMany`
 
 Session list orders update incrementally as committed session metadata changes. Each request still applies current visibility, activity, and time filters before pagination. Archived sessions retain their list position when their display rows are released from memory.
 
+Project recents batch repository-workspace reads using the selected sessions’ physical agent owners.
+
+GitHub publication options read independent account status and publication receipts concurrently. The response still checks current session access and personal account authority after those reads settle.
+
 ## Session control
 
 - `sessions.catalog.list` lists external session catalogs. Pass `metadataOnly: true` when a client needs catalog IDs, labels, capabilities, and share-route metadata without enumerating hosts or sessions. This mode returns the normal catalog objects with `hosts: []`; it retains agent and catalog selection, skips row filtering/pagination, and emits no host progress events. Omit the flag for full listing, including the host availability needed for terminal selection. The Control UI uses metadata-only discovery for the new-session picker and hidden-source labels in Settings.

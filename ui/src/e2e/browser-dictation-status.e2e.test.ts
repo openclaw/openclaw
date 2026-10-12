@@ -320,17 +320,23 @@ suite.define(() => {
         // can open while transcripts arrive. Establish which surface Escape owns.
         await textarea.hover();
         await textarea.focus();
-        const openTooltips = page.locator("openclaw-tooltip[open]");
+        const openTooltips = page.locator(
+          "openclaw-tooltip .tooltip-surface[popover]:popover-open",
+        );
         await expect.poll(() => openTooltips.count()).toBe(0);
         if (tooltipOpen) {
           const stop = page.getByRole("button", { name: "Stop and keep text" });
-          const tooltip = stop.locator("..").locator("wa-tooltip");
+          const tooltip = stop.locator("..").locator(".tooltip-surface[popover]");
           await stop.hover();
-          await expect.poll(() => tooltip.getAttribute("open")).not.toBeNull();
+          await expect
+            .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
+            .toBe(true);
 
           await page.keyboard.press("Escape");
 
-          await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
+          await expect
+            .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
+            .toBe(false);
           expect(await textarea.inputValue()).toBe("keep this draft discard this speech too");
           expect(await textarea.evaluate((element: HTMLTextAreaElement) => element.readOnly)).toBe(
             true,

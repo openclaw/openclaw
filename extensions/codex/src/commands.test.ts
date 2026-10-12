@@ -650,7 +650,7 @@ describe("codex command", () => {
                   }
                   elapsedClock.mockReturnValue(1_001);
                 }
-                return testCodexAppServerBindingStore.readAsync(bindingIdentity);
+                return await testCodexAppServerBindingStore.readAsync(bindingIdentity);
               },
             },
           },

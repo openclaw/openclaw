@@ -48,6 +48,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
+  clearRuntimeConfigSnapshot();
 });
 
 async function fixture() {

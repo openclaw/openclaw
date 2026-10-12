@@ -609,13 +609,13 @@ function collectControlUiPublicAssets(publicDir: string): { paths: string[]; has
 }
 
 export default function controlUiViteConfig(
-  options: { outDir?: string; command?: "serve" | "build" } = {},
+  options: { outDir?: string; command?: "serve" | "build"; buildInfo?: ControlUiBuildInfo } = {},
 ): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
   const bootstrapConfigPath =
     base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
-  const buildInfo = resolveControlUiBuildInfo();
+  const buildInfo = options.buildInfo ?? resolveControlUiBuildInfo();
   const devGateway =
     options.command === "serve"
       ? createControlUiDevGateway(process.env.OPENCLAW_UI_DEV_GATEWAY_URL)

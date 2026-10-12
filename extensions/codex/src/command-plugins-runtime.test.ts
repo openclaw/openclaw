@@ -13,8 +13,8 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
-  captureRuntimeConfigAsyncReader,
   clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   clearSessionStoreCacheForTest,
@@ -53,7 +53,6 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENAI_API_KEY", undefined);
   vi.stubEnv("CODEX_API_KEY", undefined);
-  await captureRuntimeConfigAsyncReader()();
 });
 
 afterEach(async () => {
@@ -71,8 +70,8 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   clearRuntimeAuthProfileStoreSnapshots();
-  clearSessionStoreCacheForTest();
   clearRuntimeConfigSnapshot();
+  clearSessionStoreCacheForTest();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -134,6 +133,7 @@ async function fixture(stableAccount = true) {
     requestConversationBinding: async () => ({ status: "error", message: "unused" }),
     detachConversationBinding: async () => ({ removed: false }),
   };
+  setRuntimeConfigSnapshot(ctx.config);
   await upsertSessionEntry({
     agentId: "second",
     sessionKey: ctx.sessionKey!,

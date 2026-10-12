@@ -5,6 +5,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import type { ReplyDeliveryObserver } from "../../agents/reply-completion.js";
+import type { SessionEntryCreationCommit } from "../../config/sessions/session-entry-creation.types.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { SessionEntry, SessionToolOverrides } from "../../config/sessions/types.js";
 // Shared get-reply type contracts for command, directive, and runtime layers.
@@ -83,6 +84,8 @@ type InternalReplySessionOptions = {
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Defers the child-completion wake until the visible waiting status is delivered. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
+  bindSessionCreation?: SessionEventExecution["bindSessionCreation"];
+  onSessionCreated?: (created: SessionEntryCreationCommit) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
   /** Observes one transcript-start reader preparation; completion cannot control the run. */
   onTranscriptStartPreparation?: () => (() => void) | undefined;

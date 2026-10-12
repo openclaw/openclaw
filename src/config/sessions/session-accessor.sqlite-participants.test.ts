@@ -819,6 +819,62 @@ describe("SQLite session participants", () => {
     });
   });
 
+  it("merges alias contributions with current destination writes and unknown timestamps", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
+      const makeScope = (name: string) => ({
+        agentId: "main",
+        env: state.env,
+        sessionKey: `agent:main:${name}`,
+      });
+      const canonical = makeScope("canonical");
+      const first = makeScope("first-alias");
+      const second = makeScope("second-alias");
+      for (const scope of [canonical, first, second]) {
+        await upsertSessionEntryCore(scope, { sessionId: scope.sessionKey, updatedAt: 1 });
+      }
+      recordSessionParticipant(canonical, { identity: profile("shared"), promptedAt: 20 });
+      recordSessionParticipant(first, { identity: profile("shared"), promptedAt: 10 });
+      recordSessionParticipant(first, { identity: profile("shared"), promptedAt: 30 });
+      recordSessionParticipant(second, { identity: profile("shared"), promptedAt: 40 });
+      const database = openOpenClawAgentDatabase(canonical);
+      database.db
+        .prepare("UPDATE session_participants SET first_prompted_at = NULL WHERE session_key = ?")
+        .run(second.sessionKey);
+      const reads = trackSqliteStatementExecutions(database.db, ["participants"], (sql) =>
+        sql.includes('from "session_participants"') ? "participants" : null,
+      );
+      try {
+        runOpenClawAgentWriteTransaction(() => {
+          copySessionNodeArtifactsForRepair(
+            database,
+            database,
+            [canonical.sessionKey, first.sessionKey, second.sessionKey],
+            canonical.sessionKey,
+          );
+          // A second transfer must consume the aggregate written earlier in this transaction.
+          copySessionNodeArtifactsForRepair(
+            database,
+            database,
+            [first.sessionKey],
+            canonical.sessionKey,
+          );
+        }, canonical);
+        expect(reads.counts.participants).toBe(2);
+      } finally {
+        reads.restore();
+      }
+      expect(listSessionParticipantsReadOnly(canonical).get(canonical.sessionKey)).toEqual([
+        {
+          identity: profile("shared"),
+          contributionCount: 6,
+          firstPromptedAt: null,
+          lastPromptedAt: 40,
+        },
+      ]);
+    });
+  });
+
   it("preserves over-bound repair histories and does not inflate retried cross-store copies", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       await captureRuntimeConfigAsyncReader()();

@@ -6,7 +6,6 @@ import { decodeGitHubPublicationRequester } from "../state/github-publication-re
 import { readGitHubPublicationInWorker } from "../state/github-publication-worker.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
-import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createGitHubPublicationExecutionIdentity } from "./github-publication-execution-identity.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
@@ -23,6 +22,7 @@ import {
 } from "./github-publication-store-async.js";
 import {
   assertReceiptOwner,
+  prepareReceiptOwner,
   captureCheckpoint,
   resolveReceiptOwner,
 } from "./github-repository-publication-workspace.js";
@@ -74,7 +74,9 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
         "GitHub publication's recorded effects lack the facts needed for recovery; inspect the original target before requesting another publication.",
       );
     }
-    const preparedOwner = await getSessionRepositoryWorkspaceStore().prepare(row.workspace_id);
+    const preparedOwner = await prepareReceiptOwner(row);
+    using _ = { [Symbol.dispose]: () => preparedOwner.release() };
+
     assertCustody();
     const { assertCurrent, refreshIdentity } = createGitHubPublicationExecutionIdentity({
       row,
@@ -249,9 +251,8 @@ export function createRepositoryGitHubPublicationRecovery(params: {
           await placements.withRepositoryWorkspaceReservation(
             { sessionId: row.session_id, sessionKey: row.session_key, agentId: row.agent_id },
             async (assertCurrent) => {
-              const preparedOwner = await getSessionRepositoryWorkspaceStore().prepare(
-                row.workspace_id,
-              );
+              const preparedOwner = await prepareReceiptOwner(row);
+              using _ = { [Symbol.dispose]: () => preparedOwner.release() };
               assertCurrent();
               const owner = resolveReceiptOwner(row, preparedOwner);
               if (!owner) {

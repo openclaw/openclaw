@@ -28,7 +28,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await page
-        .locator(".chat-group.assistant .chat-text")
+        .locator(".chat-text")
         .getByText("Ready to prepare the release.", { exact: true })
         .waitFor();
       await page.locator(".agent-chat__input textarea").fill("Prepare the release");
@@ -129,7 +129,7 @@ suite.define(() => {
       });
       await historyPage.goto(`${suite.server.baseUrl}chat`);
       await historyPage
-        .locator(".chat-group.assistant .chat-text")
+        .locator(".chat-text")
         .getByText("Received the subagent update. The validation command needs attention.", {
           exact: true,
         })

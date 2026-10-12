@@ -9,6 +9,8 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProgressCardStore } from "../../session-cards/progress-card-store.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { progressCardStore } from "../progress-card-store.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -18,11 +20,7 @@ import {
   resolveSessionSharingTarget,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
-import {
-  prepareSessionSharingTestRuntime,
-  roleClient,
-  rolePolicyConfig,
-} from "../session-sharing.test-utils.js";
+import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createLazyCoreHandlers } from "./lazy-core-handlers.js";
 import { createProgressCardHandlers } from "./progress-card.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
@@ -32,9 +30,11 @@ describe("progress card request authorization", () => {
     "reads visible cards without participation under %s and hides private cards",
     async (scope) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        using _ = { [Symbol.dispose]: (await prepareSessionSharingTestRuntime()).release };
         const cfg = rolePolicyConfig();
         setRuntimeConfigSnapshot(cfg, cfg);
+        ensureUserProfilesSchema({});
+        using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        void profileCatalog;
         const client = roleClient("view", "card-viewer");
         client.connect.scopes = [scope];
         const owner = roleClient("view", "other-card-owner");
@@ -116,9 +116,11 @@ describe("progress card request authorization", () => {
     "does not publish a shared card after its %s changes during storage",
     async (change) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        using _ = { [Symbol.dispose]: (await prepareSessionSharingTestRuntime()).release };
         const cfg = rolePolicyConfig();
         setRuntimeConfigSnapshot(cfg, cfg);
+        ensureUserProfilesSchema({});
+        using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        void profileCatalog;
         const client = roleClient("view", "delayed-card-viewer");
         client.connect.scopes = ["operator.sessions.read"];
         const owner = roleClient("view", "delayed-card-owner");
@@ -207,12 +209,14 @@ describe("progress card request authorization", () => {
     "revalidates $method after delayed storage (beforeCommit=$beforeCommit)",
     async ({ method, beforeCommit }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        using _ = { [Symbol.dispose]: (await prepareSessionSharingTestRuntime()).release };
         const cfg: OpenClawConfig = {
           ...rolePolicyConfig(),
           agents: { ownership: "explicit", entries: { main: {}, work: {} } },
         };
         setRuntimeConfigSnapshot(cfg, cfg);
+        ensureUserProfilesSchema({});
+        using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        void profileCatalog;
         const target = { sessionKey: "global", agentId: "work" };
         const client = { ...roleClient("view", "card-owner"), connId: "card-owner" };
         const entry = {
@@ -329,13 +333,15 @@ describe("progress card request authorization", () => {
     "revalidates $method for $sessionKey after preparation (replace=$replace)",
     async (testCase) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        using _ = { [Symbol.dispose]: (await prepareSessionSharingTestRuntime()).release };
         const cfg: OpenClawConfig = {
           ...rolePolicyConfig(),
           agents: { ownership: "explicit", entries: { main: {}, work: {} } },
           session: { scope: "per-sender" },
         };
         setRuntimeConfigSnapshot(cfg, cfg);
+        ensureUserProfilesSchema({});
+        using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        void profileCatalog;
         const target = { sessionKey: testCase.sessionKey, agentId: "work" };
         const client = { ...roleClient("view", "admitted-owner"), connId: "admitted-owner" };
         const successor = roleClient("view", "successor-owner");
@@ -523,12 +529,14 @@ it.each(
   ),
 )("rejects pre-reset $method after a same-id reset (admin=$admin)", async ({ admin, method }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    using _ = { [Symbol.dispose]: (await prepareSessionSharingTestRuntime()).release };
     const cfg: OpenClawConfig = {
       ...rolePolicyConfig(),
       agents: { ownership: "explicit", entries: { main: {}, work: {} } },
     };
     setRuntimeConfigSnapshot(cfg, cfg);
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
     const target = { sessionKey: "global", agentId: "work" };
     const client = { ...roleClient("view", "reset-card-owner"), connId: "reset-card-owner" };
     if (admin) {

@@ -3,8 +3,8 @@ import path from "node:path";
 import { isNativeError } from "node:util/types";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
-  captureRuntimeConfigAsyncReader,
   clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
@@ -42,8 +42,8 @@ const expectDeadlineOptions = () =>
 
 describe("requestCodexAppServerJson sandbox guard", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-preflight-");
-  beforeEach(async () => {
-    await captureRuntimeConfigAsyncReader()();
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     sharedClientMocks.createIsolatedCodexAppServerClient.mockReset();
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
     sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();

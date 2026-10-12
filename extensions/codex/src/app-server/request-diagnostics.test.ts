@@ -19,6 +19,14 @@ vi.mock("./shared-client.js", async (importOriginal) => ({
   releaseLeasedSharedCodexAppServerClient: shared.release,
   retireSharedCodexAppServerClientIfCurrent: shared.retire,
 }));
+// mock-isolation: Diagnostic method labels must not start session-store I/O under the fake clock.
+vi.mock("./sandbox-guard.js", () => ({
+  prepareCodexAppServerDirectSandboxBypassBlock: async () => ({
+    block: undefined,
+    async assertCurrent() {},
+    release() {},
+  }),
+}));
 
 const { withCodexAppServerJsonClient } = await import("./request.js");
 type LogRecord = Extract<diagnostics.DiagnosticEventPayload, { type: "log.record" }>;

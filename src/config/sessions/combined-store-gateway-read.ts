@@ -1,4 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
+import {
+  resolveSessionStoreIdentity,
+  resolveStoredSessionKeyForAgentStore,
+} from "../../gateway/session-store-key.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../../state/agent-deletion-journal.read.js";
 import { listOpenIncognitoAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
@@ -10,8 +18,12 @@ import {
   type GatewayCombinedSessionStore,
   type GatewaySessionStoreOptions,
 } from "./combined-store-gateway.js";
+import type { GatewaySessionLineageReader } from "./combined-store-model-sources.js";
 import { storeTargetKey } from "./combined-store-paths.js";
-import type { CombinedSessionStoreTopologyResult } from "./combined-store.types.js";
+import type {
+  CombinedSessionStoreTopologyResult,
+  PreparedCombinedSessionStore,
+} from "./combined-store.types.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
 import {
   captureIncognitoSessionTopology,
@@ -27,6 +39,7 @@ import {
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-runtime.js";
 import { listConfiguredSessionStoreAgentIds } from "./targets.js";
+import type { SessionEntry } from "./types.js";
 
 type CombinedReadOptions = Omit<GatewaySessionStoreOptions, "loadEntries" | "onStoreLoaded">;
 
@@ -59,6 +72,88 @@ type IncognitoStore = {
   storePath: string;
   entries: SessionEntrySummary[];
 };
+
+/** A scoped listing prepares foreign lineage before publishing synchronous model readers. */
+async function prepareCombinedStoreLineage(
+  cfg: OpenClawConfig,
+  prepared: PreparedCombinedSessionStore,
+  rows: ReadonlyMap<string, SessionEntrySummary[]>,
+  env: NodeJS.ProcessEnv,
+): Promise<GatewaySessionLineageReader> {
+  const stored = new Map<string, SessionEntry | undefined>();
+  const aliases = new Map<string, SessionEntry | undefined>();
+  const identity = (agentId: string, key: string) => `${normalizeAgentId(agentId)}\0${key}`;
+  const reader: GatewaySessionLineageReader = {
+    readStored: (agentId, key) => stored.get(identity(agentId, key)),
+    readAlias: (key) => aliases.get(key),
+  };
+  if (!prepared.targets.preparedAgentIds) {
+    return reader;
+  }
+  const knownAgents = new Set(prepared.targets.preparedAgentIds);
+  const entries = prepared.reads.flatMap(({ target, storeTarget }) => {
+    knownAgents.add(target.agentId);
+    knownAgents.add(storeTarget.agentId);
+    return rows.get(storeTargetKey(storeTarget)) ?? [];
+  });
+  for (const { sessionKey } of entries) {
+    const owner = parseAgentSessionKey(sessionKey)?.agentId;
+    if (owner) {
+      knownAgents.add(normalizeAgentId(owner));
+    }
+  }
+  const parents = new Map<string, string>();
+  for (const { sessionKey, entry } of entries) {
+    for (const key of [
+      entry.parentSessionKey,
+      entry.spawnedBy,
+      resolveSessionParentSessionKey(sessionKey),
+    ]) {
+      const owner = key && parseAgentSessionKey(key)?.agentId;
+      if (key && owner && !knownAgents.has(normalizeAgentId(owner))) {
+        parents.set(key, normalizeAgentId(owner));
+      }
+    }
+  }
+  await Promise.all(
+    [...parents].map(async ([key, agentId]) => {
+      if (readAgentDatabaseAdmissionRefusal(agentId)) {
+        return;
+      }
+      const storedKey = resolveStoredSessionKeyForAgentStore({
+        cfg,
+        agentId,
+        sessionKey: key,
+        preserveQualifiedAddress: true,
+      });
+      const target = await resolveGatewaySessionStoreTargetInWorker({
+        cfg,
+        agentId,
+        key: storedKey,
+        env,
+        projection: "list",
+        preserveQualifiedAddress: true,
+      });
+      const entry = target.store[storedKey];
+      stored.set(identity(agentId, storedKey), entry);
+      if (entry) {
+        return;
+      }
+      const fallback = resolveSessionStoreIdentity({ cfg, sessionKey: key });
+      if (fallback.agentId === agentId && fallback.canonicalKey === storedKey) {
+        return;
+      }
+      const alias = await resolveGatewaySessionStoreTargetInWorker({
+        cfg,
+        key,
+        env,
+        projection: "list",
+      });
+      aliases.set(key, alias.store[alias.canonicalKey]);
+    }),
+  );
+  return reader;
+}
 
 /** Prepare durable topology in one worker request before a synchronous projection publication. */
 export async function prepareCombinedSessionStoreForGatewayAsync(
@@ -154,6 +249,7 @@ async function loadCombinedSessionStore(
         }),
       );
       const entries = new Map(rows);
+      const lineage = await prepareCombinedStoreLineage(config, prepared, entries, env);
       return mergeCombinedSessionStore(
         config,
         options,
@@ -165,6 +261,7 @@ async function loadCombinedSessionStore(
               incognitoStores.find((store) => store.storePath === target.storePath),
               "captured actor",
             ).entries),
+        lineage,
       );
     },
   );

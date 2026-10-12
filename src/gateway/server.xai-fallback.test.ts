@@ -347,6 +347,7 @@ it(
         });
         const completed = await gateway.client.request<{
           status: string;
+          error?: string;
           terminalReply?: { text?: string };
         }>(
           "agent.wait",
@@ -363,14 +364,31 @@ it(
           messages: Array<{ role: string; content: unknown; stopReason?: string }>;
         }>("chat.history", { sessionKey, limit: 20 });
         const assistant = history.messages.findLast((message) => message.role === "assistant");
-        expect.soft(requests[0], scenario).toBe(primaryModel);
+        const runEvents = events.filter((event) => event.runId === started.runId);
+        expect
+          .soft(
+            requests[0],
+            requests[0] === primaryModel
+              ? scenario
+              : JSON.stringify({
+                  scenario,
+                  completedError: completed.error?.slice(0, 1000),
+                  chatErrors: runEvents
+                    .filter((event) => event.state === "error")
+                    .slice(-3)
+                    .map((event) => ({
+                      errorKind: event.errorKind,
+                      errorMessage: event.errorMessage?.slice(0, 1000),
+                    })),
+                }),
+          )
+          .toBe(primaryModel);
         expect
           .soft(
             requests.filter((requested) => requested === primaryModel),
             scenario,
           )
           .toHaveLength(rejection && rejection.reason !== "rate_limit" ? 1 : 2);
-        const runEvents = events.filter((event) => event.runId === started.runId);
         const terminal = runEvents
           .filter((event) => event.state === "final")
           .filter((event) => event.stopReason === "stop");

@@ -824,14 +824,20 @@ describe("plugin runtime session work admission", () => {
     await mutationStarted.promise;
 
     const snapshotRead = createDeferred();
-    const readEntry = sessionEntryRead.readSessionEntryReadOnlyInWorker;
+    const readEntry = sessionEntryRead.withSessionEntryReadOnlyInWorker;
     using captureRead = vi
-      .spyOn(sessionEntryRead, "readSessionEntryReadOnlyInWorker")
-      .mockImplementationOnce(async (...args) => {
-        const entry = await readEntry(...args);
-        snapshotRead.resolve();
-        return entry;
-      });
+      .spyOn(sessionEntryRead, "withSessionEntryReadOnlyInWorker")
+      .mockImplementationOnce((input, assertCurrent, consume, ...rest) =>
+        readEntry(
+          input,
+          assertCurrent,
+          async (...result) => {
+            snapshotRead.resolve();
+            return consume(...result);
+          },
+          ...rest,
+        ),
+      );
     const run = vi.fn(async () => {});
     const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, run);
     try {

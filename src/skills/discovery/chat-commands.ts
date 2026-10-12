@@ -4,9 +4,9 @@ import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope
 import {
   type ExecPolicyOverrides,
   type ExecSessionDefaults,
-  resolveNodeExecEligibility,
   resolveNodeExecEligibilityAsync,
 } from "../../agents/exec-defaults.js";
+import { resolveNodeExecEligibilityLegacy } from "../../agents/exec-defaults.legacy.js";
 import {
   getAgentWorkspaceAccess,
   isWorkspaceAccessUnavailableError,
@@ -47,7 +47,7 @@ type WorkspaceSkillCommandParams = {
 
 function resolveWorkspaceSkillCommandOptions(
   params: WorkspaceSkillCommandParams,
-  nodeSkills: ReturnType<typeof resolveNodeExecEligibility>,
+  nodeSkills: ReturnType<typeof resolveNodeExecEligibilityLegacy>,
 ) {
   const eligibility = {
     nodeSkills,
@@ -87,7 +87,7 @@ export function listSkillCommandsForWorkspace(
     replacement: "prepareSkillCommandsForWorkspace",
   });
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
-    ...resolveWorkspaceSkillCommandOptions(params, resolveNodeExecEligibility(params)),
+    ...resolveWorkspaceSkillCommandOptions(params, resolveNodeExecEligibilityLegacy(params)),
     reservedNames: listReservedChatSlashCommandNames(),
     gatewayOnly: hasRemoteWorkspace(params.workspaceDir),
   });
@@ -243,7 +243,7 @@ export function listSkillCommandsForAgents(params: AgentSkillCommandParams): Ski
       buildWorkspaceSkillCommandSpecs(workspaceDir, {
         ...resolveWorkspaceSkillCommandOptions(
           workspaceParams,
-          resolveNodeExecEligibility(workspaceParams),
+          resolveNodeExecEligibilityLegacy(workspaceParams),
         ),
         gatewayOnly,
         reservedNames: used,
