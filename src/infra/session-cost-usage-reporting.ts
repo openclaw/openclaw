@@ -11,6 +11,7 @@ import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-m
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sleep } from "../utils/sleep.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
+import { isSessionCostUsageRefreshRunning } from "./session-cost-usage-cache.sqlite.js";
 import {
   readTranscriptRecords,
   readTranscriptRecordsBestEffort,
@@ -42,6 +43,7 @@ import type {
 } from "./session-cost-usage.types.js";
 
 const USAGE_COST_DIRECT_REFRESH_RETRY_MS = 25;
+const USAGE_COST_DIRECT_REFRESH_MAX_WAIT_MS = 5_000;
 
 type SessionUsageDiagnosticParams = {
   sessionId?: string;
@@ -151,6 +153,38 @@ export async function loadSessionCostSummary(params: {
     }
     const { sessionFile } = source;
     const prepared = captured ?? prepareUsageCostWorker({ ...scoped, sessionFiles: [sessionFile] });
+    const refreshWaitStartedAt = Date.now();
+    let refreshResult: "refreshed" | "busy" = "busy";
+    while (Date.now() - refreshWaitStartedAt < USAGE_COST_DIRECT_REFRESH_MAX_WAIT_MS) {
+      if (
+        await isSessionCostUsageRefreshRunning(
+          scoped.incognito?.actor.agentId ?? scoped.agentId,
+          scoped.incognito?.actor.path ?? prepared.location.databasePath,
+          scoped.incognito,
+        )
+      ) {
+        await sleep(USAGE_COST_DIRECT_REFRESH_RETRY_MS);
+        continue;
+      }
+      refreshResult = await refreshCostUsageCacheForAgent({
+        config: scoped.config,
+        agentId: scoped.agentId,
+        agentDir: prepared.agentDir,
+        databasePath: prepared.location.databasePath,
+        storePath: prepared.location.storePath,
+        env: prepared.location.env,
+        sessionFiles: [sessionFile],
+        incognito: scoped.incognito,
+      });
+      if (refreshResult !== "busy") {
+        break;
+      }
+    }
+    // A held lock means the cache can lag the transcript. Return no total
+    // instead of projecting that checkpoint.
+    if (refreshResult === "busy") {
+      return null;
+    }
     const inventory = await runUsageCostWorker(
       prepared,
       {
@@ -164,22 +198,6 @@ export async function loadSessionCostSummary(params: {
     }
     if (inventory.files.length === 0) {
       return null;
-    }
-    while (
-      (await refreshCostUsageCacheForAgent({
-        config: scoped.config,
-        agentId: scoped.agentId,
-        agentDir: prepared.agentDir,
-        databasePath: prepared.location.databasePath,
-        storePath: prepared.location.storePath,
-        env: prepared.location.env,
-        sessionFiles: [sessionFile],
-        incognito: scoped.incognito,
-      })) === "busy"
-    ) {
-      // Direct detail callers require the requested session, unlike background
-      // summary refreshes. Wait for the agent-wide writer to release, then retry.
-      await sleep(USAGE_COST_DIRECT_REFRESH_RETRY_MS);
     }
     const pricingFingerprint = await resolveUsageCostPricingFingerprint(
       prepared.config,
