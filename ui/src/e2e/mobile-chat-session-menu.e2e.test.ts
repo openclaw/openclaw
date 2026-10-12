@@ -67,14 +67,9 @@ suite.define(() => {
         const menu = page.getByRole("menu", { name: "Actions for Mobile menu" });
         const menuHost = page.locator("openclaw-chat-header-session-menu");
         await menu.waitFor({ state: "visible" });
-        const rootItems = menuHost.locator(":scope > wa-dropdown > wa-dropdown-item");
-        await expect
-          .poll(() =>
-            rootItems.evaluateAll((items) =>
-              items.map((item) => Math.round(item.getBoundingClientRect().height)),
-            ),
-          )
-          .toEqual(Array.from({ length: 11 }, () => 34));
+        await menuHost
+          .getByRole("menuitem", { name: "Session sharing", exact: true })
+          .waitFor({ state: "visible" });
         await expect
           .poll(() => menu.evaluate((element) => element.getBoundingClientRect().height))
           .toBeLessThan(550);

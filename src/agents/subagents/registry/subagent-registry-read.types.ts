@@ -135,16 +135,3 @@ export type SubagentRunReadRecord = {
     status: SwarmCollectorStatus;
   };
 };
-
-/** Cloneable comparison input; source custody and the deletion verdict remain with the caller. */
-export type SubagentRunsDurableBasis = Readonly<{
-  databasePath: string;
-  databaseIdentity: string;
-  databaseBirthtime?: string;
-  sessionKeys: readonly string[];
-  liveTopology: readonly Readonly<{
-    childSessionKey: string;
-    requesterSessionKey: string;
-  }>[];
-  digest: string | null;
-}>;

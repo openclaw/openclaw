@@ -10,6 +10,7 @@ import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js
 import {
   createOpenClawAgentDatabasePathMatcher,
   isIncognitoOpenClawAgentSqlitePath,
+  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
@@ -26,10 +27,7 @@ import { withConversationPublication } from "./session-accessor.sqlite-conversat
 import { selectConversationRowsFromDatabase } from "./session-accessor.sqlite-conversation-read.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionActorMemoryConversationRegistration } from "./session-actor-memory-conversation-contract.js";
-import {
-  captureSessionActorStorageOwner,
-  getSessionActorStorageBinding,
-} from "./session-actor-storage-binding.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
@@ -62,12 +60,21 @@ export async function prepareConversationRegistryScope(params: {
       agentId: params.agentId,
     }),
   };
-  const memory = captureSessionActorStorageOwner(input);
+  const memory = getSessionActorStorageBinding({});
   if (memory) {
+    const sameOwner = input.agentId === memory.agentId;
+    if (sameOwner) {
+      getSessionActorStorageBinding(input);
+    }
     return {
-      agentId: memory.agentId,
-      databaseAgentId: memory.agentId,
-      storePath: memory.path,
+      agentId: input.agentId,
+      databaseAgentId: input.agentId,
+      storePath: sameOwner
+        ? memory.path
+        : resolveIncognitoOpenClawAgentSqlitePath({
+            agentId: input.agentId,
+            env: { OPENCLAW_STATE_DIR: path.resolve(memory.path, "../../../..") },
+          }),
       env: captureSessionTranscriptStorageEnvironment(process.env),
     };
   }
@@ -127,19 +134,16 @@ function readConversationsAsync(
   query: ConversationReadQuery,
 ): Promise<ConversationRecord[]> {
   const capturedQuery = structuredClone(query);
-  const selected = captureSessionActorStorageOwner({
-    agentId: scope.databaseAgentId ?? scope.agentId,
-    storePath: scope.storePath,
-  });
+  const selected = getSessionActorStorageBinding({});
   if (selected) {
-    if (selected.agentId === selected.binding.agentId && selected.path === selected.binding.path) {
-      return selected.binding.actor.storage!.read(
-        { type: "session.conversation.read", input: capturedQuery },
-        selected.authority,
-      );
+    const agentId = scope.databaseAgentId ?? scope.agentId;
+    if (agentId !== selected.agentId) {
+      return Promise.resolve([]);
     }
-    return Promise.resolve(
-      selected.owner?.readConversations(capturedQuery, selected.authority) ?? [],
+    getSessionActorStorageBinding({ agentId, storePath: scope.storePath });
+    return selected.actor.storage!.read(
+      { type: "session.conversation.read", input: capturedQuery },
+      selected.authority,
     );
   }
   if (scope.storePath && isIncognitoOpenClawAgentSqlitePath(scope.storePath, scope)) {
@@ -169,18 +173,17 @@ function selectConversationRows(
   scope: ConversationRegistryScope,
   options: Parameters<typeof selectConversationRowsFromDatabase>[1] = {},
 ): ConversationRecord[] {
-  const selected = captureSessionActorStorageOwner({
-    agentId: scope.databaseAgentId ?? scope.agentId,
-    storePath: scope.storePath,
-  });
+  const selected = getSessionActorStorageBinding({});
   if (selected) {
-    if (selected.agentId === selected.binding.agentId && selected.path === selected.binding.path) {
-      return selected.binding.actor.storage!.readCurrent(
-        { type: "session.conversation.read", input: options },
-        selected.authority,
-      );
+    const agentId = scope.databaseAgentId ?? scope.agentId;
+    if (agentId !== selected.agentId) {
+      return [];
     }
-    return selected.owner?.readConversations(options, selected.authority) ?? [];
+    getSessionActorStorageBinding({ agentId, storePath: scope.storePath });
+    return selected.actor.storage!.readCurrent(
+      { type: "session.conversation.read", input: options },
+      selected.authority,
+    );
   }
   const resolved = resolveSqliteReadScope({
     agentId: scope.agentId,

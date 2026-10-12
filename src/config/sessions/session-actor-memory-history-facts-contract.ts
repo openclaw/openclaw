@@ -99,13 +99,6 @@ export type SessionActorMemoryHistoryFactsReads = {
   };
 };
 
-export type SessionActorMemoryHistoryFactsQuery = {
-  [Key in keyof SessionActorMemoryHistoryFactsReads]: {
-    type: Key;
-    input: SessionActorMemoryHistoryFactsReads[Key]["input"];
-  };
-}[keyof SessionActorMemoryHistoryFactsReads];
-
 export type SessionActorMemoryAnchorReads = {
   "session.history.anchors": {
     input: SessionTranscriptAnchorSelection & { sessionId?: string };

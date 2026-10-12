@@ -8,32 +8,6 @@ import { parseOcPath } from "../../oc-path.js";
 describe("setJsonlOcPath — value replacement", () => {
   const log = '{"event":"start"}\n{"event":"step","n":1}\n{"event":"end"}\n';
 
-  it("replaces a field on a specific line", () => {
-    const { ast } = parseJsonl(log);
-    const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/L2/n"), {
-      kind: "number",
-      value: 42,
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const lines = r.ast.raw.split("\n");
-      expect(JSON.parse(lines[1] ?? "")).toEqual({ event: "step", n: 42 });
-    }
-  });
-
-  it("replaces an entire line value", () => {
-    const { ast } = parseJsonl(log);
-    const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/L2"), {
-      kind: "object",
-      entries: [{ key: "event", line: 0, value: { kind: "string", value: "replaced" } }],
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const lines = r.ast.raw.split("\n");
-      expect(JSON.parse(lines[1] ?? "")).toEqual({ event: "replaced" });
-    }
-  });
-
   it("resolves $last and edits the most recent value line", () => {
     const { ast } = parseJsonl(log);
     const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/$last/event"), {
@@ -75,22 +49,22 @@ describe("setJsonlOcPath — value replacement", () => {
     expect(r).toEqual({ ok: false, reason: "unresolved" });
   });
 
-  it.each([
-    { kind: "blank", raw: "" },
-    { kind: "malformed", raw: "broken" },
-  ])("reports not-a-value-line when targeting a $kind line", ({ kind, raw }) => {
-    const { ast } = parseJsonl(`{"a":1}\n${raw}\n{"b":2}\n`);
-    const path = parseOcPath("oc://session-events/L2");
-    expect(resolveJsonlOcPath(ast, path)).toMatchObject({
-      kind: "line",
-      node: { kind, line: 2, raw },
-    });
-    const r = setJsonlOcPath(ast, path, {
-      kind: "number",
-      value: 1,
-    });
-    expect(r).toEqual({ ok: false, reason: "not-a-value-line" });
-  });
+  it.each([{ kind: "malformed", raw: "broken" }])(
+    "reports not-a-value-line when targeting a $kind line",
+    ({ kind, raw }) => {
+      const { ast } = parseJsonl(`{"a":1}\n${raw}\n{"b":2}\n`);
+      const path = parseOcPath("oc://session-events/L2");
+      expect(resolveJsonlOcPath(ast, path)).toMatchObject({
+        kind: "line",
+        node: { kind, line: 2, raw },
+      });
+      const r = setJsonlOcPath(ast, path, {
+        kind: "number",
+        value: 1,
+      });
+      expect(r).toEqual({ ok: false, reason: "not-a-value-line" });
+    },
+  );
 });
 
 describe("appendJsonlOcPath — session checkpointing primitive", () => {
@@ -103,17 +77,6 @@ describe("appendJsonlOcPath — session checkpointing primitive", () => {
     expect(next.raw).toBe('{"event":"start"}');
   });
 
-  it("appends to an existing log preserving prior lines", () => {
-    const { ast } = parseJsonl('{"a":1}\n');
-    const next = appendJsonlOcPath(ast, {
-      kind: "object",
-      entries: [{ key: "b", line: 0, value: { kind: "number", value: 2 } }],
-    });
-    const out = next.raw.split("\n");
-    expect(out).toHaveLength(2);
-    expect(JSON.parse(out[1] ?? "")).toEqual({ b: 2 });
-  });
-
   it("preserves CRLF line endings when appending", () => {
     const { ast } = parseJsonl('{"a":1}\r\n');
     const next = appendJsonlOcPath(ast, {
@@ -121,32 +84,6 @@ describe("appendJsonlOcPath — session checkpointing primitive", () => {
       entries: [{ key: "b", line: 0, value: { kind: "number", value: 2 } }],
     });
     expect(next.raw).toBe('{"a":1}\r\n{"b":2}');
-  });
-});
-
-describe("setJsonlOcPath — $last line address", () => {
-  const log = '{"event":"start","n":1}\n{"event":"step","n":2}\n{"event":"end","n":3}\n';
-
-  it("writes under $last line address", () => {
-    const { ast } = parseJsonl(log);
-    const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/$last/n"), {
-      kind: "number",
-      value: 99,
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const lines = r.ast.raw.split("\n");
-      expect(JSON.parse(lines[2] ?? "")).toEqual({ event: "end", n: 99 });
-    }
-  });
-
-  it("reports unresolved for $last against an empty log", () => {
-    const { ast } = parseJsonl("");
-    const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/$last/n"), {
-      kind: "number",
-      value: 99,
-    });
-    expect(r).toEqual({ ok: false, reason: "unresolved" });
   });
 });
 

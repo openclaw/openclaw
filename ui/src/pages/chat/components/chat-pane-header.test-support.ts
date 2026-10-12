@@ -42,8 +42,6 @@ export function mountChatPaneHeader(
     canReveal: true,
     copiedAction: null,
     renameDisabledReason: undefined,
-    panelActions: nothing,
-    panelLayoutActions: nothing,
     sessionMenuAction: nothing,
     onBeginRename: vi.fn(),
     onRenameInput: vi.fn(),

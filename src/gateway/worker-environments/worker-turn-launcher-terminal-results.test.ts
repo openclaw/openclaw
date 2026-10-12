@@ -11,6 +11,7 @@ import { buildAgentRunTerminalReplySnapshot } from "../../agents/agent-run-termi
 import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run.js";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveModelFallbackError } from "../../agents/failover-error.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
@@ -56,7 +57,6 @@ import {
   createWorkerTurnTunnel,
   reconcileUnchangedLocalWorkspace,
   acknowledgeCompletedWorkerTurn,
-  abortWorkerTurnClaimWaitOnSignal,
   ENVIRONMENT_ID,
   MANIFEST_REF,
   OWNER_EPOCH,
@@ -610,17 +610,17 @@ describe("worker turn launcher terminal results", () => {
       await dispatch.dispatch({ ...REQUEST, sessionId: "unrelated" });
       expect(targetRecovery).toHaveBeenCalledOnce();
       await expect(running).resolves.toMatchObject({
-        name: "WorkerWorkspaceReconciliationError",
-        message:
-          "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: gateway TLS fingerprint mismatch",
+        payloads: [{ text: "Remote work completed" }],
       });
       await expect(stopping).resolves.toMatchObject({ state: "local", sessionId: SESSION_ID });
+      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
       expect(stopCleanup).toHaveBeenCalledOnce();
     } finally {
       failTransfer.resolve();
       // Failure cleanup aborts only the waiter; recovery remains the sole claim-release owner.
       claimWaitCleanup.abort();
       await Promise.all([running, stopping]);
+      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
       workerTurn.preparedRunAdmission.close();
     }
 
@@ -630,7 +630,7 @@ describe("worker turn launcher terminal results", () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  it("recovers a durable Move result while interrupting its admitted turn", async () => {
+  it("recovers a durable Move result after its caller receives the final reply", async () => {
     await seedActivePlacement();
     await gitInit(root);
     const source = placements.get(SESSION_ID);
@@ -653,7 +653,7 @@ describe("worker turn launcher terminal results", () => {
     const failTransfer = createDeferredCore();
     const barrierEntered = createDeferredCore();
     const startBarrier = createDeferredCore();
-    const interrupted = createDeferredCore();
+    const claimWaitEntered = createDeferredCore();
     const turnAbort = new AbortController();
     const targetedAdmission = createDeferredCore();
     const recoverySettled = createDeferredCore();
@@ -681,7 +681,17 @@ describe("worker turn launcher terminal results", () => {
           return pending;
         }),
     );
-    abortWorkerTurnClaimWaitOnSignal(claimWaitCleanup.signal);
+    const waitForClaim = placements.waitForTurnClaimRelease;
+    vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) => {
+      const pending = waitForClaim(sessionId, {
+        ...options,
+        signal: options.signal
+          ? AbortSignal.any([options.signal, claimWaitCleanup.signal])
+          : claimWaitCleanup.signal,
+      });
+      claimWaitEntered.resolve();
+      return pending;
+    });
     const unexpected = async (): Promise<never> => {
       throw new Error("Unexpected destination or abandoned-source work");
     };
@@ -765,7 +775,6 @@ describe("worker turn launcher terminal results", () => {
       assertAllowed: () => {},
       onInterrupt: (reason) => {
         turnAbort.abort(reason);
-        interrupted.resolve();
       },
     });
     const running = admission
@@ -784,19 +793,17 @@ describe("worker turn launcher terminal results", () => {
       .finally(() => admission.release())
       .catch((error: unknown) => error);
     await transferEntered.promise;
+    await expect(running).resolves.toMatchObject({
+      payloads: [{ text: "Remote work completed" }],
+    });
     expect(placements.get(SESSION_ID)?.state).toBe("draining");
     expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
     const moving = dispatch.move(request).catch((error: unknown) => error);
     try {
       await barrierEntered.promise;
       startBarrier.resolve();
-      await Promise.race([
-        interrupted.promise,
-        moving.then(() => {
-          throw new Error("Move ended before interrupting its admitted turn");
-        }),
-      ]);
-      expect(turnAbort.signal.aborted).toBe(true);
+      await claimWaitEntered.promise;
+      expect(turnAbort.signal.aborted).toBe(false);
       failTransfer.resolve();
       await targetedAdmission.promise;
       await dispatch.forceDestroyEnvironment("unrelated");
@@ -809,11 +816,7 @@ describe("worker turn launcher terminal results", () => {
         message: "fixture: Move barrier complete",
       });
       expect(reclaimSource).toHaveBeenCalledOnce();
-      await expect(running).resolves.toMatchObject({
-        name: "WorkerWorkspaceReconciliationError",
-        message:
-          "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: gateway TLS fingerprint mismatch",
-      });
+      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
     } finally {
       failTransfer.resolve();
       startBarrier.resolve();
@@ -821,6 +824,7 @@ describe("worker turn launcher terminal results", () => {
       // Failure cleanup aborts only the waiter; recovery remains the sole claim-release owner.
       claimWaitCleanup.abort();
       await Promise.all([running, moving]);
+      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
       workerTurn.preparedRunAdmission.close();
     }
 

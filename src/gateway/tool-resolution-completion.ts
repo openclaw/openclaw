@@ -7,10 +7,7 @@ import { evaluateGatewayToolCallerReceiptAdmission } from "../agents/tools/gatew
 import type { GatewayToolCallerReceiptAdmission } from "../agents/tools/gateway-caller-receipt.types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
-import {
-  captureSessionActorStorageOwner,
-  getSessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { projectSessionEntryCapabilityFacts } from "../config/sessions/session-entry-capability-facts.js";
 import type {
   SessionEntryCurrentFacts,
@@ -49,7 +46,6 @@ function createMemoryCompletionCapabilityStore(): SessionCapabilityLookup | unde
     return undefined;
   }
   const storage = memory.actor.storage!;
-  const owners = new Map<string, ReturnType<typeof captureSessionActorStorageOwner>>();
   return {
     authoritative: true,
     get(sessionKey) {
@@ -64,12 +60,7 @@ function createMemoryCompletionCapabilityStore(): SessionCapabilityLookup | unde
       if (!agentId || !isIncognitoSessionKey(sessionKey)) {
         throw new Error("Completion lineage requires its selected session actor owner");
       }
-      if (!owners.has(agentId)) {
-        owners.set(agentId, captureSessionActorStorageOwner({ agentId, sessionActor: memory }));
-      }
-      const selected = owners.get(agentId);
-      const entry = selected?.owner?.readSession(sessionKey, selected.authority)?.entry;
-      return entry && projectSessionEntryCapabilityFacts(entry);
+      return undefined;
     },
     getById(sessionId) {
       const row = storage.readCurrent(

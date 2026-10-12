@@ -36,6 +36,10 @@ export type PromptCacheRequestObservation = {
   dropCause?: string;
   promptTokens?: number;
   changes: PromptCacheChange[] | null;
+  requests?: {
+    previous?: NonNullable<ProviderPromptState["lastAttempt"]>["wire"];
+    current?: NonNullable<ProviderPromptState["lastAttempt"]>["wire"];
+  };
 };
 
 /** Pairs foreground request inputs with completion usage before billing aggregation. */
@@ -122,6 +126,7 @@ export function createPromptCacheRequestObserver(
         requestGapMs: request.requestGapMs,
         providerPrefix,
         dropCause,
+        requests: cacheBreak?.requests,
         promptTokens:
           usage?.contextUsage?.state === "available" ? usage.contextUsage.promptTokens : undefined,
         input: usage?.input,

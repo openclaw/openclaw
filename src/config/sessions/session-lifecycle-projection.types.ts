@@ -1,4 +1,3 @@
-import type { SubagentRunsDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type {
@@ -9,7 +8,6 @@ import type {
 export type SessionLifecycleProjectionCommit = ProjectedLifecycleCommitInput & {
   agentId: string;
   removalPlans: MaterializedSessionStateDeletePlan[];
-  descendantRunBasis?: SubagentRunsDurableBasis;
 };
 
 export type SessionLifecycleProjectionCommitted = {

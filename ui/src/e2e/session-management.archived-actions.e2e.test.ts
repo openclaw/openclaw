@@ -20,6 +20,36 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
+  it("waits for lifecycle actionability before activating a self-removing control once", async () => {
+    const context = await suite.browser.newContext({ viewport: { width: 390, height: 320 } });
+    const page = await context.newPage();
+    try {
+      await page.setContent(
+        '<main style="padding-top: 900px"><button disabled>Unarchive</button></main>',
+      );
+      await page.evaluate(() => {
+        const button = document.querySelector<HTMLButtonElement>("button");
+        if (!button) {
+          throw new Error("Lifecycle fixture control is missing");
+        }
+        document.body.dataset.activations = "0";
+        button.addEventListener("click", () => {
+          document.body.dataset.activations = String(Number(document.body.dataset.activations) + 1);
+          button.remove();
+        });
+        requestAnimationFrame(() => {
+          button.disabled = false;
+        });
+      });
+      const unarchive = page.getByRole("button", { name: "Unarchive", exact: true });
+      await activateSelfRemovingControl(unarchive);
+      expect(await unarchive.count()).toBe(0);
+      expect(await page.locator("body").getAttribute("data-activations")).toBe("1");
+    } finally {
+      await context.close();
+    }
+  });
+
   for (const viewport of [
     { height: 900, label: "desktop", width: 1280 },
     { height: 844, label: "mobile", width: 390 },

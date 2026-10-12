@@ -12,6 +12,7 @@ import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
+import { resolveModelCallUrgency } from "../../agents/run-trigger.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import {
@@ -59,7 +60,6 @@ import {
 import {
   estimatePromptTokensFromSessionTranscript,
   readSessionLogSnapshot,
-  type TranscriptTokenEstimate,
 } from "./agent-runner-memory-transcript-context.js";
 import { buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
@@ -86,7 +86,7 @@ import {
   estimatePromptTokensForMemoryFlush,
   hasAlreadyFlushedForCurrentCompaction,
   resolveCompactionThreshold,
-  resolveEffectivePromptTokens,
+  resolveProjectedPromptTokens,
   resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
@@ -112,24 +112,6 @@ const memoryFlushPreparationLoader = createLazyImportLoader(
 
 // Leave room for large assistant outputs when checking near-threshold usage.
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
-
-function projectPromptTokens(
-  persistedPromptTokens: number | undefined,
-  promptTokenEstimate: number | undefined,
-  transcript: TranscriptTokenEstimate | undefined,
-): number {
-  const project = (promptTokens: number | undefined, outputTokens: number | undefined) =>
-    typeof promptTokens === "number"
-      ? resolveEffectivePromptTokens(promptTokens, outputTokens, promptTokenEstimate)
-      : 0;
-  return Math.max(
-    project(persistedPromptTokens, transcript?.outputTokens),
-    project(
-      transcript?.promptTokens,
-      transcript?.promptIncludesOutput ? undefined : transcript?.outputTokens,
-    ),
-  );
-}
 
 /** Compacts session context before a reply or after a completed direct command. */
 export async function runSessionCompactionIfNeeded(params: {
@@ -316,7 +298,7 @@ export async function runSessionCompactionIfNeeded(params: {
     return entry;
   }
   const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
-  const projectedTokenCount = projectPromptTokens(
+  const projectedTokenCount = resolveProjectedPromptTokens(
     freshPersistedTokens,
     promptTokenEstimate,
     transcriptUsageTokens,
@@ -476,6 +458,11 @@ export async function runSessionCompactionIfNeeded(params: {
         thinkLevel: params.followupRun.run.thinkLevel,
         bashElevated: params.followupRun.run.bashElevated,
         trigger: "budget",
+        modelCallUrgency: resolveModelCallUrgency({
+          ...params.followupRun.run,
+          trigger: params.isHeartbeat ? "heartbeat" : "user",
+          currentInboundEventKind: params.followupRun.currentInboundEventKind,
+        }),
         force: true,
         forcePreflight: true,
         preflightRequired: true,
@@ -828,7 +815,7 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   }
 
-  const projectedTokenCount = projectPromptTokens(
+  const projectedTokenCount = resolveProjectedPromptTokens(
     asPositiveFiniteNumber(persistedPromptTokens),
     promptTokenEstimate,
     transcriptPromptTokens === 0 ? undefined : transcriptUsageTokens,

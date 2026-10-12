@@ -353,7 +353,7 @@ describe("admitted lazy session writer", () => {
   });
 
   it.each([false])(
-    "uses a stale-version postimage once without replaying a durable append (incognito=%s)",
+    "refuses an explicitly stale actor append without replay or persistence (incognito=%s)",
     async (incognito) => {
       await withInitialWriter(
         async ({ manager, target, transcript }) => {
@@ -372,14 +372,14 @@ describe("admitted lazy session writer", () => {
             );
           const read = vi.spyOn(actor, "read");
           try {
-            const id = await manager.appendCustomEntryAsync("after-stale-version");
-            expect(stale).toHaveBeenCalledTimes(2);
+            await expect(
+              manager.appendCustomEntryAsync("after-stale-version"),
+            ).rejects.toMatchObject({
+              name: "SessionActorStaleVersionError",
+            });
+            expect(stale).toHaveBeenCalledOnce();
             expect(read).not.toHaveBeenCalled();
-            const persisted = loadTranscriptEventsSync(target);
-            expect(persisted.slice(0, before.length)).toEqual(before);
-            expect(persisted.slice(before.length)).toMatchObject([
-              { id, customType: "after-stale-version" },
-            ]);
+            expect(loadTranscriptEventsSync(target)).toEqual(before);
           } finally {
             stale.mockRestore();
             read.mockRestore();

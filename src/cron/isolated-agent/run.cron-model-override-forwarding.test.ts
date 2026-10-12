@@ -637,10 +637,9 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     };
     cronSession.initialSessionEntry = initialEntry;
     loadSessionEntryMock.mockReturnValue(initialEntry);
-    let basePersistCount = 0;
     const persist = expectDefined(patchSessionEntryMock.getMockImplementation(), "persist mock");
     patchSessionEntryMock.mockImplementation(async (...args) => {
-      if (!args[0].sessionKey.includes(":run:") && ++basePersistCount === 2) {
+      if (!args[0].sessionKey.includes(":run:") && args[2]?.fallbackEntry?.systemSent === true) {
         throw new Error("ENOSPC: no space left on device");
       }
       return persist(...args);

@@ -4,19 +4,17 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronJob } from "../types.js";
 import { cronStoreKey } from "./key.js";
+import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import { cronRunReceiptSettlement } from "./run-receipt-settlement.js";
 import {
+  adjudicateActiveCronRunReceiptInDatabase,
   claimCronRunReceiptInDatabase,
   claimLocalCronRunReceiptOwnership,
   findActiveCronRunReceiptInDatabase,
   prepareCronRunReceiptAdjudication,
 } from "./run-receipt-store.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
-import type {
-  CronRunReceiptHandle,
-  CronRunReceiptOwnerObservation,
-  PreparedCronRunReceiptClaim,
-} from "./run-receipt.types.js";
+import type { CronRunReceiptHandle, CronRunReceiptOwnerObservation } from "./run-receipt.types.js";
 
 export function inspectActiveCronRunReceipt(params: { storePath: string; jobId: string }) {
   return runOpenClawStateWriteTransaction(({ db }) =>
@@ -73,11 +71,26 @@ export function claimCronRunReceiptForTest(storePath: string, job: CronJob, star
   );
 }
 
-export function claimCronRunReceiptInDatabaseForTest(
-  params: Omit<Parameters<typeof claimCronRunReceiptInDatabase>[0], "receiptSchema">,
-) {
+export function claimCronRunReceiptInDatabaseForTest(params: {
+  database: Parameters<typeof claimCronRunReceiptInDatabase>[0]["database"];
+  prepared: ReturnType<typeof prepareCronRunReceiptClaim>;
+  resolveAgentId: (job: CronJob) => string;
+}) {
+  const { handle: preparedHandle } = params.prepared;
+  adjudicateActiveCronRunReceiptInDatabase({
+    database: params.database,
+    jobId: preparedHandle.jobId,
+    prepared: params.prepared,
+    finishedAtMs: preparedHandle.startedAtMs,
+  });
   const handle = claimCronRunReceiptInDatabase({
-    ...params,
+    database: params.database,
+    handle: preparedHandle,
+    job: loadedCronStoreFromRows(
+      loadCronRows(params.database, preparedHandle.storeKey, new Set([preparedHandle.jobId])),
+    ).store.jobs[0],
+    requestRunId: params.prepared.requestRunId,
+    resolveAgentId: params.resolveAgentId,
     receiptSchema: prepareCronRunReceiptWriteSchema(params.database),
   });
   claimLocalCronRunReceiptOwnership(handle);
@@ -93,7 +106,7 @@ export function prepareCronRunReceiptClaim(params: {
   startedAtMs: number;
   requestRunId?: string;
   observed: CronRunReceiptOwnerObservation | undefined;
-}): PreparedCronRunReceiptClaim {
+}) {
   const ownerStartTime = getFileLockProcessStartTime(process.pid);
   if (ownerStartTime === null) {
     throw new Error("cron run cannot acquire a durable fence without process start identity");
