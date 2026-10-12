@@ -74,11 +74,7 @@ import type {
   SessionTranscriptReadScope,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import type {
-  SessionEntryCurrentFacts,
-  SessionEntryCurrentWorkerInput,
-  SessionEntryCurrentWorkerResult,
-} from "./session-entry-current.types.js";
+import type { SessionEntryCurrentFacts } from "./session-entry-current.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type {
   SessionEntryListWorkerInput,
@@ -160,6 +156,8 @@ import type {
   SessionSqliteTargetWorkerInput,
   SessionResetRecallWorkerInput,
   SessionEntryWorkerInput,
+  SessionEntryCurrentWorkerInput,
+  SessionEntryCurrentWorkerResult,
   BoardSnapshotWorkerInput,
   BoardWidgetDocumentWorkerInput,
   SessionHistoricalEvictionCandidatesWorkerInput,
