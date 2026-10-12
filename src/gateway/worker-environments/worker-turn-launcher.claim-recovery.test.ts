@@ -602,8 +602,8 @@ describe("worker pre-launch claim recovery", () => {
         resume.resolve();
       }
       await expect(recovery).resolves.toMatchObject({
-        status: "aborted",
-        action: "abort_embedded_run",
+        status: "force_cleared",
+        action: "force_clear_embedded_run",
       });
       vi.useRealTimers();
       if (stage === "uncertain dispatch") {

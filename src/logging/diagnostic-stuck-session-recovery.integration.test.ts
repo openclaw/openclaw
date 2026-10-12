@@ -672,9 +672,11 @@ describe("stuck session recovery integration", () => {
       // The shared deadline can leave the owner-settlement clamp's final 100 ms.
       await vi.advanceTimersByTimeAsync(15_100);
 
+      // Nothing was aborted here: the owner never acknowledged the abort and the
+      // lane was released by the force-clear, so the outcome must say so.
       await expect(recovery).resolves.toMatchObject({
-        status: "aborted",
-        action: "abort_embedded_run",
+        status: "force_cleared",
+        action: "force_clear_embedded_run",
         aborted: false,
         drained: false,
         forceCleared: true,
