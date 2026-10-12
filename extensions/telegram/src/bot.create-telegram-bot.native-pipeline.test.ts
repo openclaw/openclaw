@@ -820,7 +820,7 @@ describe("createTelegramBot typed command pipeline", () => {
         apiCalls.mock.calls
           .filter(([method]) => method === "sendMessage")
           .map(([, payload]) => {
-            const { text, message_thread_id } = requireRecord(payload);
+            const { text, message_thread_id } = requireRecord(payload, "sendMessage payload");
             return [text, message_thread_id];
           }),
       );
