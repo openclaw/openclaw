@@ -142,7 +142,9 @@ export function formatCodexUsageLimitErrorMessage(params: {
   const parts = [CODEX_USAGE_LIMIT_MESSAGE_PREFIX];
   let recoveryAction = "Wait until Codex becomes available";
   if (nextReset) {
-    parts.push(`Next reset ${formatResetTime(nextReset.resetsAtMs, nowMs)}.`);
+    parts.push(
+      `Next reset in ${formatRelativeDuration(nextReset.resetsAtMs - nowMs)}, ${formatCalendarResetTime(nextReset.resetsAtMs, nowMs)}.`,
+    );
     recoveryAction = "Wait until the reset time";
   } else {
     const codexRetryHint = extractCodexRetryHint(message);
@@ -276,7 +278,7 @@ function summarizeRateLimitUsage(
     ...(blockingReset
       ? {
           blockedUntilMs: blockingReset.resetsAtMs,
-          blockedUntilText: formatAccountResetTime(blockingReset.resetsAtMs, nowMs),
+          blockedUntilText: `${formatCalendarResetTime(blockingReset.resetsAtMs, nowMs)} (in ${formatRelativeDuration(blockingReset.resetsAtMs - nowMs)})`,
           blockedResetRelative: `in ${formatRelativeDuration(blockingReset.resetsAtMs - nowMs)}`,
         }
       : {}),
@@ -443,19 +445,6 @@ function formatLimitLabel(snapshot: RateLimitSnapshot): string {
 
 function formatReachedType(value: string): string {
   return value.replace(/[_-]+/gu, " ").replace(/\s+/gu, " ").trim();
-}
-
-function formatResetTime(resetsAtMs: number, nowMs: number): string {
-  return `in ${formatRelativeDuration(resetsAtMs - nowMs)}, ${formatCalendarResetTime(
-    resetsAtMs,
-    nowMs,
-  )}`;
-}
-
-function formatAccountResetTime(resetsAtMs: number, nowMs: number): string {
-  return `${formatCalendarResetTime(resetsAtMs, nowMs)} (in ${formatRelativeDuration(
-    resetsAtMs - nowMs,
-  )})`;
 }
 
 function snapshotHasLimitBlock(snapshot: RateLimitSnapshot): boolean {

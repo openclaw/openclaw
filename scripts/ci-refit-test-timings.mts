@@ -107,12 +107,15 @@ async function main() {
   const runs: CiTimingRun[] = [];
   const seenRuns = new Map<number, string>();
   const seenJobs = new Map<number, string>();
-  type TimingSource = "main" | "release" | "pull-request" | "tooling";
+  type TimingSource = "main" | "release" | "pull-request" | "tooling" | "packed-release";
   async function readRun(run: z.infer<typeof runSchema>, source: TimingSource) {
     const logs: CiTimingRun["logs"] = [];
     // Successful PRs can select a strict subset of the suite.
     const completeInventory =
-      source !== "pull-request" && source !== "tooling" && run.conclusion === "success";
+      source !== "pull-request" &&
+      source !== "tooling" &&
+      source !== "packed-release" &&
+      run.conclusion === "success";
     const jobsByAttempt: TimingJob[][] = [];
     let afterCutoff = false;
     let pages = 0;
@@ -176,19 +179,23 @@ async function main() {
           const extensionJob =
             /^checks-node-changed-extensions-(?:bundle-\d+|config(?:-\d+)?)$/u.test(job.name);
           const kind =
-            source === "release"
-              ? /(?:^| \/ )Repo E2E \(Gateway \d+\/\d+\)$/u.test(job.name)
-                ? "repoE2e"
+            source === "packed-release"
+              ? job.name.startsWith("checks-node-release-packed-")
+                ? "release-packed"
                 : undefined
-              : source === "tooling"
-                ? compactJob
-                  ? "tooling"
+              : source === "release"
+                ? /(?:^| \/ )Repo E2E \(Gateway \d+\/\d+\)$/u.test(job.name)
+                  ? "repoE2e"
                   : undefined
-                : source === "main" && job.name.startsWith("checks-ui-e2e (")
-                  ? "uiE2e"
-                  : compactJob || extensionJob
-                    ? "compact"
-                    : undefined;
+                : source === "tooling"
+                  ? compactJob
+                    ? "tooling"
+                    : undefined
+                  : source === "main" && job.name.startsWith("checks-ui-e2e (")
+                    ? "uiE2e"
+                    : compactJob || extensionJob
+                      ? "compact"
+                      : undefined;
           if (kind) {
             timingJobs.push({ ...job, kind });
           }
@@ -244,11 +251,12 @@ async function main() {
         : source === "pull-request"
           ? "pull_request"
           : "workflow_dispatch";
+    const completedRuns = source === "main" || source === "packed-release";
     const pageSchema = z.object({
       total_count: z.number().int().nonnegative(),
       workflow_runs: z.array(
         runSchema.extend({
-          conclusion: source === "main" ? z.string().nullable() : z.literal("success"),
+          conclusion: completedRuns ? z.string().nullable() : z.literal("success"),
           // PR measurements retain their merge-ref provenance and partial inventory.
           // Their workflow/job head_sha identifies the PR head, not that merge.
           // A release dispatch can check out target_ref; scheduled CI binds main.
@@ -262,7 +270,7 @@ async function main() {
     const query = new URLSearchParams({
       ...(source === "main" ? { branch: "main" } : {}),
       event,
-      status: source === "main" ? "completed" : "success",
+      status: completedRuns ? "completed" : "success",
       created: `${lower}..${upper}`,
       per_page: String(pageSize),
     });
@@ -309,7 +317,7 @@ async function main() {
         const { contributingRunIds } = refitTestTimings([timingRun]);
         const compact = contributingRunIds.blacksmith.length + contributingRunIds.github.length > 0;
         const contributes =
-          source === "main"
+          source === "main" || source === "packed-release"
             ? compact
             : source === "pull-request"
               ? compact ||
@@ -320,7 +328,7 @@ async function main() {
         if (contributes) {
           runs.push(timingRun);
         }
-        if (source === "release" || contributes) {
+        if (source === "release" || source === "packed-release" || contributes) {
           sampled += 1;
         }
         if (sampled === count) {
@@ -393,6 +401,7 @@ async function main() {
     ]) {
       await sampleWorkflow(workflow, "release");
     }
+    await sampleWorkflow("ci.yml", "packed-release");
     await sampleWorkflow("ci.yml", "pull-request");
   }
   let previous;
@@ -410,14 +419,24 @@ async function main() {
   );
   const { blacksmith, github, toolingBlacksmith, toolingGithub } = contributingRunIds;
   const prRunIds = new Set(runs.filter((run) => run.pullRequestMergeRef).map((run) => run.id));
-  const mainBlacksmith = blacksmith.filter((id) => !prRunIds.has(id));
-  const mainGithub = github.filter((id) => !prRunIds.has(id));
+  const packedReleaseRunIds = new Set(
+    runs
+      .filter((run) => run.logs.some((log) => log.kind === "release-packed"))
+      .map((run) => run.id),
+  );
+  const mainBlacksmith = blacksmith.filter(
+    (id) => !prRunIds.has(id) && !packedReleaseRunIds.has(id),
+  );
+  const mainGithub = github.filter((id) => !prRunIds.has(id) && !packedReleaseRunIds.has(id));
   const mainContributors = new Set([...mainBlacksmith, ...mainGithub]);
   console.log(
     `\nIndependent main compact contributors: ${mainContributors.size} (Blacksmith: ${mainBlacksmith.length}; GitHub: ${mainGithub.length}). Release Gateway contributors: ${contributingRunIds.repoE2e.length}.\n`,
   );
   console.log(
     `Independent PR compact contributors: ${new Set([...blacksmith, ...github].filter((id) => prRunIds.has(id))).size}; merge-ref samples never prune absent timings.\n`,
+  );
+  console.log(
+    `Independent packed release contributors: ${github.filter((id) => packedReleaseRunIds.has(id)).length}; partial inventories never prune absent timings.\n`,
   );
   console.log(
     `Independent PR tooling contributors: ${new Set([...toolingBlacksmith, ...toolingGithub]).size} (Blacksmith: ${toolingBlacksmith.length}; GitHub: ${toolingGithub.length}).${seedTooling ? " Explicit tooling seed; single-run measurements allowed." : ""}\n`,

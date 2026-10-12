@@ -8,11 +8,8 @@ import {
   stagedInputPathDirectory,
 } from "../../media/staged-inputs.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
-import {
-  activeWorkspaceHashContext,
-  withWorkspaceHashContext,
-  withWorkspaceHashMemo,
-} from "./workspace-hash-memo.js";
+import { withWorkspaceHashContext } from "./workspace-hash-memo.js";
+import { sameEntry } from "./workspace-manifest-comparison.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
@@ -21,12 +18,12 @@ import {
   type WorkerWorkspaceReconciliationJournal,
   type WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import {
   applyWorkspaceDirectoryChanges,
   assertActualWorkspaceManifest,
-  changedPaths,
   ConcurrentWorkspacePathError,
-  hasReplacedBaseEntryAncestor,
+  createWorkspaceManifestVerifier,
   manifestNodes,
   preflightWorkspaceApply,
   retainedConflictPaths,
@@ -35,7 +32,6 @@ import {
 import {
   prepareNonDirectoryTargets,
   reconciliationDirectories,
-  reconciliationEntries,
 } from "./workspace-reconcile-derived-paths.js";
 import { entryMatches } from "./workspace-reconcile-fs.js";
 import {
@@ -65,12 +61,15 @@ export async function applyStagedWorkerWorkspace(params: {
     | { kind: "exact-target"; verify: () => Promise<void> };
 }): Promise<WorkerWorkspaceApplyResult> {
   return await withWorkspaceHashContext(async (): Promise<WorkerWorkspaceApplyResult> => {
-    const { memo: hashMemo, metrics } = activeWorkspaceHashContext()!;
     const root = await fs.realpath(params.root);
     const stagedInputDirectories = stagedInputDirectoriesFromEntries(params.current.entries);
     const baseNodes = manifestNodes(params.base);
     const currentNodes = manifestNodes(params.current);
-    const changed = changedPaths(params.base, params.current);
+    const changed = new Set(
+      [...baseNodes.keys(), ...currentNodes.keys()].filter(
+        (entryPath) => !sameEntry(baseNodes.get(entryPath), currentNodes.get(entryPath)),
+      ),
+    );
     const acceptance = params.acceptance;
     const acceptExactTarget = async (
       verify: () => Promise<void>,
@@ -124,26 +123,6 @@ export async function applyStagedWorkerWorkspace(params: {
     const includePaths = params.current.baseCommit
       ? new Set([...baseNodes.keys(), ...currentNodes.keys()])
       : undefined;
-    const createApplyResult = (
-      actual: Awaited<ReturnType<typeof captureWorkspaceManifest>>,
-      conflictPaths: string[],
-    ): WorkerWorkspaceApplyResult => ({
-      ...actual,
-      conflictPaths,
-      verifyLocalStable: async () =>
-        await withWorkspaceHashMemo(
-          hashMemo,
-          async () =>
-            await assertActualWorkspaceManifest({
-              root,
-              expectedRef: actual.manifestRef,
-              baseCommit: actual.manifest.baseCommit,
-              preserveDirectories,
-              includePaths,
-            }),
-          metrics,
-        ),
-    });
     const inspectPaths = () =>
       preflightWorkspaceApply({ root, base: params.base, current: params.current });
     const preflight = await inspectPaths();
@@ -170,30 +149,49 @@ export async function applyStagedWorkerWorkspace(params: {
       await reconcile.publish?.({ ...actual, conflictPaths });
       params.assertCurrent?.();
       await params.journal.commit(actual.manifestRef);
-      return createApplyResult(actual, conflictPaths);
+      return {
+        ...actual,
+        conflictPaths,
+        verifyLocalStable: createWorkspaceManifestVerifier({
+          root,
+          expectedRef: actual.manifestRef,
+          baseCommit: actual.manifest.baseCommit,
+          preserveDirectories,
+          includePaths,
+        }),
+      };
     };
     if (changed.size === 0) {
       return acceptance.kind === "exact-target"
         ? await acceptExactTarget(acceptance.verify)
         : await acceptReconciled(acceptance, preflight);
     }
-    const baseByPath = new Map(
-      reconciliationEntries(params.base.entries).map((entry) => [entry.path, entry]),
-    );
-    const currentByPath = new Map(
-      reconciliationEntries(params.current.entries).map((entry) => [entry.path, entry]),
-    );
-    const baseEntries = reconciliationEntries(params.base.entries).filter(
-      (entry) => changed.has(entry.path) && preflight.applyPaths.has(entry.path),
+    const baseEntries = [...baseNodes.values()].filter(
+      (entry): entry is WorkerWorkspaceManifestEntry =>
+        entry.type !== "directory" &&
+        changed.has(entry.path) &&
+        preflight.applyPaths.has(entry.path),
     );
     const appliedEntries: WorkerWorkspaceManifestEntry[] = [];
-    for (const entry of reconciliationEntries(params.current.entries)) {
-      if (!changed.has(entry.path) || !preflight.applyPaths.has(entry.path)) {
+    for (const entry of currentNodes.values()) {
+      if (
+        entry.type === "directory" ||
+        !changed.has(entry.path) ||
+        !preflight.applyPaths.has(entry.path)
+      ) {
         continue;
       }
+      const base = baseNodes.get(entry.path);
       if (
-        !baseByPath.has(entry.path) &&
-        !hasReplacedBaseEntryAncestor(entry.path, baseByPath, currentByPath) &&
+        (!base || base.type === "directory") &&
+        ![...workspacePathAncestors(entry.path)].some((ancestor) => {
+          const previous = baseNodes.get(ancestor);
+          return (
+            previous &&
+            previous.type !== "directory" &&
+            !sameEntry(previous, currentNodes.get(ancestor))
+          );
+        }) &&
         (await entryMatches(root, entry))
       ) {
         continue;

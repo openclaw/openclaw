@@ -26,20 +26,6 @@ export function scheduleGatewayIdleTask(params: {
   const scheduler = params.scheduler.scope();
   const isClosing = () =>
     scheduler.signal.aborted || params.isClosing() || getGatewayRestartDrainSignal().aborted;
-  const run = async () => {
-    if (isClosing()) {
-      return;
-    }
-    // Newly admitted request work takes priority over maintenance.
-    if (params.isBusy()) {
-      schedule(params.retryDelayMs);
-    } else {
-      await params.run(AbortSignal.any([scheduler.signal, getGatewayRestartDrainSignal()]));
-      if (params.repeatDelayMs !== undefined) {
-        schedule(params.repeatDelayMs);
-      }
-    }
-  };
   const schedule = (delayMs: number) => {
     if (isClosing()) {
       return;
@@ -60,8 +46,15 @@ export function scheduleGatewayIdleTask(params: {
           schedule(params.retryDelayMs);
           return undefined;
         }
-        return Promise.resolve()
-          .then(() => admission.run(run))
+        return admission
+          .run(() =>
+            params.run(AbortSignal.any([scheduler.signal, getGatewayRestartDrainSignal()])),
+          )
+          .then(() => {
+            if (params.repeatDelayMs !== undefined) {
+              schedule(params.repeatDelayMs);
+            }
+          })
           .catch((error: unknown) => {
             if (
               !isGatewayRestartDrainError(error) &&

@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as configMachineState from "../state/config-machine-state-write.js";
-import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -14,6 +13,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { executeSharedStateCommand } from "../state/openclaw-state-worker-runtime.js";
+import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   buildTuiLastSessionScopeKey,
@@ -233,6 +233,7 @@ describe("tui last session state", () => {
         executeSharedStateCommand(
           { type: "tui.lastSession.clear", input: { retiredSessionKeys: ["agent:main:retired"] } },
           { databasePath: context.admission.databasePath },
+          open,
           open,
           open,
           open,

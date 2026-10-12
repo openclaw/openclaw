@@ -51,17 +51,10 @@ export function readCodexInferenceMetadata(
   if (!nested && !compatibility) {
     throw new Error("Codex inference request is missing bounded native metadata");
   }
-  const requestKind = reconcileMetadataStrings(
-    "request kind",
-    nested?.request_kind,
-    compatibility?.request_kind,
-  );
-  const generation = readId(
-    "parent generation",
-    nested?.[CODEX_INFERENCE_GENERATION_KEY],
-    compatibility?.[CODEX_INFERENCE_GENERATION_KEY],
-  );
-  const nativeThreadId = readId("thread", nested?.thread_id, compatibility?.thread_id);
+  const nativeField = (key: string) => [nested?.[key], compatibility?.[key]];
+  const requestKind = reconcileMetadataStrings("request kind", ...nativeField("request_kind"));
+  const generation = readId("parent generation", ...nativeField(CODEX_INFERENCE_GENERATION_KEY));
+  const nativeThreadId = readId("thread", ...nativeField("thread_id"));
   if (
     !nativeThreadId &&
     (requestKind === "turn" ||
@@ -70,13 +63,12 @@ export function readCodexInferenceMetadata(
     throw new Error("Codex inference request has no native thread metadata");
   }
   const readTurnId = (field: string, key: string) =>
-    readId(field, flat?.[key], nested?.[key], compatibility?.[key]);
+    readId(field, flat?.[key], ...nativeField(key));
   return Object.freeze({
     sessionId: readId(
       "session",
       flat?.session_id,
-      nested?.session_id,
-      compatibility?.session_id,
+      ...nativeField("session_id"),
       httpHeaders?.["session-id"],
     ),
     threadId: readId("thread", flat?.thread_id, nativeThreadId, httpHeaders?.["thread-id"]),
@@ -84,43 +76,31 @@ export function readCodexInferenceMetadata(
     parentThreadId: readId(
       "parent thread",
       flat?.["x-codex-parent-thread-id"],
-      nested?.parent_thread_id,
-      compatibility?.parent_thread_id,
+      ...nativeField("parent_thread_id"),
       httpHeaders?.["x-codex-parent-thread-id"],
     ),
     parentTurnId: readTurnId("parent turn", "parent_turn_id"),
     rootTurnId: readTurnId("root turn", "root_turn_id"),
     requestKind,
-    threadSource: reconcileMetadataStrings(
-      "thread source",
-      nested?.thread_source,
-      compatibility?.thread_source,
-    ),
+    threadSource: reconcileMetadataStrings("thread source", ...nativeField("thread_source")),
     // SessionSource is fixed for this native model client, including across reused WS turns.
     subagent: reconcileMetadataStrings(
       "subagent",
       flat?.["x-openai-subagent"],
       headers?.["x-openai-subagent"],
     ),
-    subagentKind: reconcileMetadataStrings(
-      "subagent kind",
-      nested?.subagent_kind,
-      compatibility?.subagent_kind,
-    ),
+    subagentKind: reconcileMetadataStrings("subagent kind", ...nativeField("subagent_kind")),
     guardianClassifierSourceThreadId: readId(
       "Guardian classifier source thread",
-      nested?.guardian_classifier_source_thread_id,
-      compatibility?.guardian_classifier_source_thread_id,
+      ...nativeField("guardian_classifier_source_thread_id"),
     ),
     autoReviewEnabled: reconcileMetadataBooleans(
       "automatic review",
-      nested?.auto_review_enabled,
-      compatibility?.auto_review_enabled,
+      ...nativeField("auto_review_enabled"),
     ),
     nodeReplAutoReviewRequired: reconcileMetadataBooleans(
       "model-required review",
-      nested?.node_repl_auto_review_required,
-      compatibility?.node_repl_auto_review_required,
+      ...nativeField("node_repl_auto_review_required"),
     ),
     generation,
   });

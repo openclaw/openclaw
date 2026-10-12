@@ -27,12 +27,6 @@ const BACKUP_RESTORE_WARNINGS = [
 
 const BACKUP_RESTORE_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
 
-type BackupRestoreOptions = {
-  archive: string;
-  target?: string;
-  json?: boolean;
-};
-
 type BackupRestoreResult = Awaited<ReturnType<typeof backupRestoreCommand>>;
 
 async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
@@ -46,7 +40,7 @@ async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
     );
   }
   const configSnapshot = await readConfigFileSnapshot({ observe: false });
-  const discoverySnapshot = resolveLegacyConfigSnapshotForBackup(configSnapshot);
+  const discoverySnapshot = await resolveLegacyConfigSnapshotForBackup(configSnapshot);
   if (!discoverySnapshot) {
     return;
   }
@@ -158,7 +152,10 @@ function formatRestoreResult(result: BackupRestoreResult): string {
 }
 
 /** Verify first, then extract a whole backup archive into a fresh staging directory. */
-export async function backupRestoreCommand(runtime: RuntimeEnv, options: BackupRestoreOptions) {
+export async function backupRestoreCommand(
+  runtime: RuntimeEnv,
+  options: { archive: string; target?: string; json?: boolean },
+) {
   const targetPath = resolveRequiredBackupPath(options.target, "--target");
   await assertTargetOutsideLiveState(targetPath);
   const {

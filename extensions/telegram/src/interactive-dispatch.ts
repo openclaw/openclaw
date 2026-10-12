@@ -72,16 +72,11 @@ const dispatchTelegramInteractive = createChannelInteractiveDispatcher<
   dispatchInteractiveKey: "callbackMessage",
 });
 
-export async function dispatchTelegramPluginInteractiveHandler(params: {
-  data: string;
-  callbackId: string;
-  ctx: Parameters<typeof dispatchTelegramInteractive>[0]["ctx"];
-  respond: TelegramInteractiveHandlerContext["respond"];
-  onMatched?: () => Promise<void> | void;
-  afterInvoke?: (result: TelegramInteractiveHandlerResult) => Promise<void> | void;
-}) {
+export async function dispatchTelegramPluginInteractiveHandler(
+  params: Omit<Parameters<typeof dispatchTelegramInteractive>[0], "dedupeId" | "conversation">,
+) {
   return await dispatchTelegramInteractive({
     ...params,
-    dedupeId: params.callbackId,
+    dedupeId: params.ctx.callbackId,
   });
 }

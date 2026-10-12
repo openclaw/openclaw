@@ -33,12 +33,12 @@ export async function withImmutableUpdateOwner<T>(
     ) {
       throw new Error("Immutable executor control is not root-owned and protected.");
     }
-    const { createManagedHandoffLeaseDatabase, captureManagedUpdateLeaseDatabaseIdentity } =
+    const { prepareManagedHandoffLeaseDatabase, captureManagedUpdateLeaseDatabaseIdentity } =
       await import("./update-managed-service-handoff-database.js");
     // Bootstrap the existing lease owner's schema before pinning it. The public
     // adoption record remains readable; only native executor metadata is private.
     if (!fs.existsSync(leasePath)) {
-      createManagedHandoffLeaseDatabase(leasePath)(true, () => undefined);
+      (await prepareManagedHandoffLeaseDatabase(leasePath))(true, () => undefined);
     }
     pinned = {
       ...captureManagedUpdateLeaseDatabaseIdentity(leasePath),

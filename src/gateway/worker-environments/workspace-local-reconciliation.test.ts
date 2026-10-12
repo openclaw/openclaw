@@ -10,7 +10,6 @@ import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import {
   hasWorkerWorkspaceResultRef,
   preparedWorkerWorkspaceResultRef,
-  readStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
@@ -86,7 +85,7 @@ async function prepareUnchangedWorkspace(options?: {
 
 describe("unchanged local workspace reconciliation", () => {
   it.each([undefined, "local change\n"])(
-    "finalizes durable result refs with local content %j",
+    "retains a result ref only when local content %j needs reconciliation",
     async (localContent) => {
       const f = await prepareUnchangedWorkspace({ localContent });
       const { root, base, ref, reconciliation, quiescence, journal } = f;
@@ -100,7 +99,7 @@ describe("unchanged local workspace reconciliation", () => {
         expect(reconciliation.acceptUnchangedStagedResult).toBeTypeOf("function");
         expect(f.verifyStable).not.toHaveBeenCalled();
         expect(journal.commit).not.toHaveBeenCalled();
-        await expect(hasRef(prepared)).resolves.toBe(true);
+        await expect(hasRef(prepared)).resolves.toBe(false);
         expect(f.record).not.toHaveBeenCalled();
       }
       const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
@@ -109,6 +108,8 @@ describe("unchanged local workspace reconciliation", () => {
       expect(f.publishAcceptedManifest).toHaveBeenCalledTimes(localContent ? 1 : 0);
       expect(journal.commit).toHaveBeenCalledExactlyOnceWith(applied?.manifestRef);
       if (localContent) {
+        expect(f.record).toHaveBeenCalledExactlyOnceWith(ref);
+        await expect(hasRef(ref)).resolves.toBe(true);
         expect(applied?.manifestRef).not.toBe(base.manifestRef);
         await expect(fs.readFile(path.join(root, "result.txt"), "utf8")).resolves.toBe(
           localContent,
@@ -116,13 +117,10 @@ describe("unchanged local workspace reconciliation", () => {
       } else {
         expect(applied).toMatchObject({ manifestRef: base.manifestRef, conflictPaths: [] });
         expect(journal.begin).not.toHaveBeenCalled();
-        expect(f.record).toHaveBeenCalledExactlyOnceWith(ref);
-        expect(await readStagedWorkerWorkspaceResult(root, ref)).toMatchObject({
-          baseManifestRef: base.manifestRef,
-          currentManifestRef: base.manifestRef,
-          changed: false,
-        });
+        expect(f.record).not.toHaveBeenCalled();
+        await expect(hasRef(ref)).resolves.toBe(false);
         await expect(hasRef(prepared)).resolves.toBe(false);
+        expect(await fs.readdir(root)).toEqual(["result.txt"]);
       }
     },
   );

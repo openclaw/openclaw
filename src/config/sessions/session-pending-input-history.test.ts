@@ -1,6 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type {
@@ -8,6 +11,7 @@ import type {
   SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -21,8 +25,30 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   registerSessionPendingInputOwner,
   releaseSessionPendingInputOwner,
-  type SessionPendingInputOwner,
 } from "./session-accessor.sqlite-pending-inputs.js";
+import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
+import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
+
+it("serves empty pending history from its counted snapshot in one data read", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:empty-pending-history",
+      sessionId: "empty-pending-history",
+    };
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+    const counter = trackSqliteStatementExecutions(database.db, ["pending"], (query) =>
+      /\bfrom\s+"?session_pending_inputs\b/i.test(query) ? "pending" : null,
+    );
+    try {
+      expect(readPendingInputHistoryInDatabase(database, scope)).toEqual({ rows: [], total: 0 });
+      expect(counter.counts.pending).toBe(1);
+    } finally {
+      counter.restore();
+    }
+  });
+});
 
 it("bounds materialized pending pages by bytes without truncating input or skipping its cursor", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -195,18 +221,13 @@ it.each(["transaction", "commit"] as const)(
         finish: () => releaseSessionPendingInputOwner(owner),
       };
       let registered = false;
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === phase && !registered) {
-              registerSessionPendingInputOwner(owner);
-              registered = true;
-            }
-            callback(request, grant);
-          }, attachment),
-        );
+      const spy = probe.admission(workerAdmission, (request, grant, callback) => {
+        if (request.stage === phase && !registered) {
+          registerSessionPendingInputOwner(owner);
+          registered = true;
+        }
+        callback(request, grant);
+      });
       const hostSql = observeHostDataSql();
       try {
         const read = listSessionPendingInputs(scope);

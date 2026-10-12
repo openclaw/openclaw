@@ -1,16 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SpawnResult } from "../../process/exec.js";
-import { completeWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { parseWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
-import {
-  createPlacementTurnClaimFixtureOps,
-  seedAttachedPlacementEnvironment,
-} from "./placement-test-fixtures.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerGatewayTools } from "./worker-session-tool-executor.js";
@@ -40,9 +38,11 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("worker turn launcher claim admission", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each(["worker-turn", "remote-exec"] as const)(
     "rejects compaction successors throughout the %s placement lifecycle without changing ownership",
@@ -255,53 +255,6 @@ describe("worker turn launcher claim admission", () => {
     },
   );
 
-  it("retries admission when a collided claim releases before inspection", async () => {
-    await seedActivePlacement();
-    const active = placements.get(SESSION_ID);
-    if (active?.state !== "active") {
-      throw new Error("expected active placement");
-    }
-    const priorClaim = await placements.claimTurn({
-      sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-      claimId: "released-before-inspection",
-      runId: "prior-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
-    const claimOps = createPlacementTurnClaimFixtureOps(database);
-    const claimTurn = placements.claimTurn.bind(placements);
-    vi.spyOn(placements, "claimTurn").mockImplementationOnce(async (...args) => {
-      try {
-        return await claimTurn(...args);
-      } catch (error) {
-        claimOps.releaseTurn(priorClaim);
-        throw error;
-      }
-    });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments: unusedEnvironments(),
-      placements,
-    });
-
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "next-run",
-        },
-        turn("next-run"),
-        async () => ({ meta: { durationMs: 1 } }),
-      ),
-    ).rejects.toThrow("Active worker placement does not match its attached environment");
-  });
-
   it("holds a remote-exec follow-up when reconciliation starts during claim admission", async () => {
     await seedActivePlacement("remote-exec");
     const active = placements.get(SESSION_ID);
@@ -316,8 +269,11 @@ describe("worker turn launcher claim admission", () => {
       runId: "remote-result-run",
       owner: placementTurnOwner(active),
     });
+    const projectionReads = vi.spyOn(placements, "readProjection");
+    let readsBeforeClaim = 0;
     const claimTurn = placements.claimTurn.bind(placements);
     vi.spyOn(placements, "claimTurn").mockImplementationOnce(async (...args) => {
+      readsBeforeClaim = projectionReads.mock.calls.length;
       try {
         return await claimTurn(...args);
       } catch (error) {
@@ -352,6 +308,8 @@ describe("worker turn launcher claim admission", () => {
     await expect(replacement).rejects.toThrow(
       "Active remote-exec placement does not match its attached environment",
     );
+    // Placement and pending-result preparation must use the same worker request.
+    expect(readsBeforeClaim).toBe(1);
   });
 
   it("redispatches the admitted replacement after pending-result recovery reclaims it", async () => {
@@ -722,9 +680,12 @@ describe("worker turn launcher claim admission", () => {
           launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
             request.onDispatchReady?.();
             launchCount += 1;
-            const descriptor = completeWorkerLaunchDescriptor(structuredClone(request.plan), {
-              kind: "unix",
-              socketPath: "/worker/gateway.sock",
+            const descriptor = parseWorkerLaunchDescriptor({
+              ...structuredClone(request.plan),
+              connectionEndpoint: {
+                kind: "unix",
+                socketPath: "/worker/gateway.sock",
+              },
             });
             turnIds.push(descriptor.assignment.turnId);
             if (launchCount === 1) {

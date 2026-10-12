@@ -37,6 +37,13 @@ registry replacement operation; it does not create a second delegated task.
 Adoption clears a child-only pause notice instead of carrying it into completion.
 Actual requester completion batches keep their frozen membership and generation.
 
+Before admitting another turn in a yielded requester, the recovery owner transfers
+its ended execution's fence to the current durable child batch. The batch is
+revalidated before the write commits; absent or adopted batches, unrelated run
+fences, and outstanding recovery or delivery work remain fenced. The successor
+then receives its own execution fence, so completing it leaves later user input
+admissible without discarding pending child results.
+
 An explicit `waitFor: "message"` counts as continuation evidence after the
 registry accepts the wait. The attempt carries that fact into terminal reply
 presentation, so a registered message wait does not produce a missing-continuation
@@ -114,7 +121,10 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   direct user turn, cancellation, session reset or archive, and Gateway restart.
   After the successor binds its run scope, that scope owns the entitlement until
   it closes. Retiring the delivered child batch cannot revoke a still-running
-  requester.
+  requester. A new direct user turn retires the automation entitlement, not the
+  child batch’s separately retained completion source. Valid results can still
+  return under their original caller’s restrictions; they never borrow the new
+  turn’s identity or permissions.
 - **Completion-source custody.** Registration retains the live operator source
   separately from execution. Individual delivery and requester settlement use
   that captured permission ceiling, not the async caller that later schedules

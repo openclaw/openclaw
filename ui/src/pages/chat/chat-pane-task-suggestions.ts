@@ -302,16 +302,14 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         suggestion: TaskSuggestion,
         mode: TaskSuggestionStartMode,
         cwd?: string,
-      ) => {
-        return ownsDisplayedOperation(suggestion)
+      ) =>
+        ownsDisplayedOperation(suggestion)
           ? this.resolveTaskSuggestion(suggestion, "accept", mode, cwd)
-          : undefined;
-      },
-      onDismissTaskSuggestion: (suggestion: TaskSuggestion) => {
-        return ownsDisplayedOperation(suggestion)
+          : undefined,
+      onDismissTaskSuggestion: (suggestion: TaskSuggestion) =>
+        ownsDisplayedOperation(suggestion)
           ? this.resolveTaskSuggestion(suggestion, "dismiss")
-          : undefined;
-      },
+          : undefined,
     };
   }
 

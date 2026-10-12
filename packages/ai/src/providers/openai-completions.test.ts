@@ -57,25 +57,12 @@ vi.mock("openai", () => {
         create: (params: unknown, requestOptions: unknown) => {
           mockOpenAIOptionsRef.payloads.push(params);
           mockOpenAIOptionsRef.requests.push(requestOptions);
-          return {
-            withResponse: async () => {
-              if (mockChunksRef.stream) {
-                return {
-                  data: mockChunksRef.stream,
-                  response: { status: 200, headers: new Headers() },
-                };
-              }
-              async function* generate() {
-                for (const chunk of mockChunksRef.chunks) {
-                  yield chunk;
-                }
-              }
-              return {
-                data: generate(),
-                response: { status: 200, headers: new Headers() },
-              };
-            },
-          };
+          async function* generate() {
+            yield* mockChunksRef.chunks;
+          }
+          return Object.assign(Promise.resolve(mockChunksRef.stream ?? generate()), {
+            asResponse: async () => new Response(null, { status: 200 }),
+          });
         },
       },
     };
@@ -1137,14 +1124,11 @@ describe("openai-completions stop-reason tool-call guard", () => {
       {
         type: "text",
         text: "following text",
-        textSignature: expect.stringMatching(
-          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-        ),
       },
     ]);
   });
 
-  it("rolls back provisional commentary when an unfinished tool stream is interrupted", async () => {
+  it("preserves narration when an unfinished tool stream is interrupted", async () => {
     mockChunksRef.chunks = [
       makeTextChunk("ordinary narration"),
       makeToolCallChunk("call_1", "lookup", '{"value":1}'),
@@ -1179,9 +1163,6 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(result.content[0]).toEqual({
       type: "text",
       text: "Use <",
-      textSignature: expect.stringMatching(
-        /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-      ),
     });
     expect(result.content[1]).toMatchObject({ type: "toolCall", id: "call_1", name: "bash" });
   });

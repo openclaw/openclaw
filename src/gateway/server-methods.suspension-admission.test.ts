@@ -48,6 +48,7 @@ beforeEach(() => {
 afterEach(() => {
   resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetGatewayWorkAdmission();
+  vi.useRealTimers();
 });
 
 describe("gateway request suspension admission", () => {
@@ -455,6 +456,7 @@ describe("gateway request suspension admission", () => {
           terminalSessions.disposeAll();
         }
 
+        vi.useFakeTimers();
         const pending = dispatch({
           method: "gateway.suspend.status",
           scope: "operator.read",
@@ -462,6 +464,8 @@ describe("gateway request suspension admission", () => {
           requestParams: { suspensionId: result.suspensionId },
           context,
         });
+        await vi.advanceTimersByTimeAsync(15_000);
+        vi.useRealTimers();
         await pending.request;
         expect(pending.respond).toHaveBeenCalledWith(true, {
           status: "draining",

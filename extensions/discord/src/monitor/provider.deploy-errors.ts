@@ -126,15 +126,13 @@ export function formatDiscordDeployErrorMessage(err: unknown): string {
     return "Discord REST request was aborted";
   }
   const timing: string[] = [];
-  if (timeoutMs !== undefined) {
-    timing.push(
-      `timeout=${formatDurationSeconds(timeoutMs, { decimals: timeoutMs >= 1000 ? 1 : 0 })}`,
-    );
-  }
-  if (requestMs !== undefined) {
-    timing.push(
-      `observed=${formatDurationSeconds(requestMs, { decimals: requestMs >= 1000 ? 1 : 0 })}`,
-    );
+  for (const [label, value] of [
+    ["timeout", timeoutMs],
+    ["observed", requestMs],
+  ] as const) {
+    if (value !== undefined) {
+      timing.push(`${label}=${formatDurationSeconds(value, { decimals: value >= 1000 ? 1 : 0 })}`);
+    }
   }
   const timingText = timing.length > 0 ? ` (${timing.join(", ")})` : "";
   if (timeoutMs !== undefined && requestMs !== undefined && requestMs >= timeoutMs) {

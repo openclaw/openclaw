@@ -7,11 +7,17 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveSkillsPrompt } from "../skills/loading/workspace-skill-prompt.js";
+import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 import { bindCodeModeSessionStore } from "./code-mode-session-store.js";
@@ -36,7 +42,7 @@ import { createReadTool, type ToolDefinition } from "./sessions/index.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
-import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
+import { addClientToolsToToolCatalog, restrictToolSearchCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { createToolSurfacePresentationForTest } from "./tool-surface-plan.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
@@ -44,6 +50,7 @@ import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
 afterEach(async () => {
   vi.useRealTimers();
+  consumeRunSkillUsage("run-code-mode");
   vi.restoreAllMocks();
   for (const ctx of catalogs.splice(0)) {
     clearToolSearchCatalog(ctx);
@@ -68,6 +75,22 @@ function indexOf(description: string) {
 }
 
 describe("Code Mode catalog and model-visible surface", () => {
+  it("refreshes guest metadata after catalog replacement and restriction", async () => {
+    const { ctx, tools, exec } = catalog([fakeTool("lookup", "Original metadata")]);
+    const read = () => exec.execute("metadata", { code: "return catalog.all();" });
+    for (let i = 0; i < 2; i++) {
+      expect(resultDetails(await read()).value).toEqual([
+        expect.objectContaining({ callableName: "lookup", description: "Original metadata" }),
+      ]);
+    }
+    applyCodeModeCatalog({ ...ctx, tools: [...tools, fakeTool("lookup", "Updated metadata")] });
+    expect(resultDetails(await read()).value).toEqual([
+      expect.objectContaining({ callableName: "lookup", description: "Updated metadata" }),
+    ]);
+    restrictToolSearchCatalog({ ...ctx, allowedToolNames: new Set() });
+    expect(resultDetails(await read()).value).toEqual([]);
+  });
+
   it("removes shell-computation guidance when a client shadows the shell tool", () => {
     const { ctx, exec } = catalog([fakeTool("exec", "Run shell command")]);
     expect(exec.description).toContain("Use the shell tool `exec` for heavier computation");
@@ -334,6 +357,73 @@ it("searches and reads eligible skills through the worker bridge and normal tool
   });
 });
 
+it("records Code Mode skills.read of a workshop skill as run usage and skill.used", async () => {
+  const learned = createFixtureSkillEntry("learned", { source: "openclaw-workshop" });
+  const codeModeSkills = resolveCodeModeSkills({
+    skillsPrompt: await resolveSkillsPrompt({ entries: [learned], workspaceDir: "/workspace" }),
+    candidates: [learned.skill],
+    reader: async () => "# Learned instructions\n",
+  });
+  const used: Array<{ event: DiagnosticEventPayload; skillFile?: string }> = [];
+  const stop = onTrustedInternalDiagnosticEvent(
+    (event, _metadata, privateData) => {
+      used.push({ event, skillFile: privateData.skillUsage?.skillFile });
+    },
+    { include: ["skill.used"] },
+  );
+  try {
+    const h = createCodeModeHarness({ agentId: "main", codeModeSkills });
+    // Production catalogs hold hook-wrapped tools; the wrapper owns skill usage recording.
+    const hookCtx = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      skillsSnapshot: {
+        prompt: "",
+        skills: [{ name: "learned" }],
+        resolvedSkills: [learned.skill],
+      },
+    };
+    applyCodeModeCatalog({
+      ...h.ctx,
+      tools: [
+        ...h.tools,
+        ...createInstalledSkillTools(codeModeSkills).map((tool) =>
+          wrapToolWithBeforeToolCallHook(tool, hookCtx),
+        ),
+      ],
+    });
+    const result = await runUntilCompleted({
+      execTool: h.tools[0]!,
+      waitTool: h.tools[1]!,
+      code: 'return await skills.read("learned");',
+    });
+    expect(result).toMatchObject({ status: "completed", value: "# Learned instructions\n" });
+    expect(consumeRunSkillUsage("run-code-mode")).toEqual([
+      {
+        name: "learned",
+        source: "workspace",
+        activation: "read",
+        skillFile: "/skills/learned/SKILL.md",
+      },
+    ]);
+    await vi.waitFor(() => expect(used).toHaveLength(1));
+    expect(used[0]).toEqual({
+      event: expect.objectContaining({
+        type: "skill.used",
+        runId: "run-code-mode",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        skillName: "learned",
+        skillSource: "workspace",
+        activation: "read",
+      }),
+      skillFile: "/skills/learned/SKILL.md",
+    });
+  } finally {
+    stop();
+  }
+});
 it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as const)(
   "keeps disk-backed skill discovery within the harness read authority: %s",
   async (scenario, { signal: testSignal }) =>

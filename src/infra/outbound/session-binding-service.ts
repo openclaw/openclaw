@@ -1,6 +1,6 @@
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveSpawnThreadBindingPlacement } from "../../channels/conversation-resolution.js";
-import { getActivePluginChannelRegistrySnapshotFromState } from "../../plugins/runtime-channel-state.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
@@ -59,10 +59,11 @@ export { isSessionBindingError } from "./session-binding-errors.js";
 export type SessionBindingService = {
   bind: (input: SessionBindingBindInput) => Promise<SessionBindingRecord>;
   getCapabilities: (params: SessionBindingScope) => SessionBindingCapabilities;
+  /** @deprecated Use listBySessionAsync; removed in the next Plugin SDK major. */
   listBySession: (targetSessionKey: string) => SessionBindingRecord[];
-  /** @deprecated Use resolveByConversationAsync. Retained through the next Plugin SDK major. */
+  /** @deprecated Use resolveByConversationAsync. The synchronous form will be removed in the next Plugin SDK major. */
   resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
-  /** @deprecated Use touchAsync. Retained through the next Plugin SDK major. */
+  /** @deprecated Use touchAsync. The synchronous form will be removed in the next Plugin SDK major. */
   touch: (bindingId: string, at?: number, scope?: SessionBindingScope) => void;
   unbind: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
 };
@@ -75,31 +76,61 @@ export type AsyncSessionBindingService = SessionBindingService & {
   touchAsync: (bindingId: string, at?: number, scope?: SessionBindingScope) => Promise<void>;
 };
 
+export type SessionBindingServiceV2 = AsyncSessionBindingService & {
+  listBySessionAsync: typeof listSessionBindingsBySessionAsync;
+};
+
 type SessionBindingAdapterCapabilities = {
   placements?: SessionBindingPlacement[];
   bindSupported?: boolean;
   unbindSupported?: boolean;
 };
 
+/** @deprecated Implement SessionBindingAdapterV2; removed in the next Plugin SDK major. */
 export type SessionBindingAdapter = {
   channel: string;
   accountId: string;
   capabilities?: SessionBindingAdapterCapabilities;
   bind?: (input: SessionBindingBindInput) => Promise<SessionBindingRecord | null>;
+  /** @deprecated Use listBySessionAsync; removed in the next Plugin SDK major. */
   listBySession: (targetSessionKey: string) => SessionBindingRecord[];
-  /** @deprecated Use resolveByConversationAsync. Retained through the next Plugin SDK major. */
+  /** @deprecated Use resolveByConversationAsync. The synchronous form will be removed in the next Plugin SDK major. */
   resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
-  /** Pure selection for ownership checks; defaults to resolveByConversation for legacy adapters. */
+  /** @deprecated Use inspectByConversationAsync; removed in the next Plugin SDK major. */
   inspectByConversation?: (ref: ConversationRef) => SessionBindingRecord | null;
   /** Inspects committed ownership without creating storage or pruning rows. */
   inspectByConversationAsync?: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
   resolveByConversationAsync?: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
-  /** @deprecated Use touchAsync. Retained through the next Plugin SDK major. */
+  /** @deprecated Use touchAsync. The synchronous form will be removed in the next Plugin SDK major. */
   touch?: (bindingId: string, at?: number) => void;
   /** Settles accepted persistence before resolving. */
   touchAsync?: (bindingId: string, at?: number) => Promise<void>;
   unbind?: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
 };
+
+/** A coherent source-owned selection; its assertion also covers absence and replacement. */
+export type SessionBindingSelectionSnapshot = {
+  bindings: readonly (SessionBindingRecord | null)[];
+  assertCurrent: () => void;
+};
+
+/** Awaited adapter contract. Synchronous members serve released SDK consumers only. */
+export type SessionBindingAdapterV2 = SessionBindingAdapter & {
+  version: 2;
+  inspectByConversationsAsync: (
+    refs: readonly ConversationRef[],
+  ) => Promise<SessionBindingSelectionSnapshot>;
+  touchAsync: (bindingId: string, at?: number) => Promise<void>;
+  /** Rechecks the original owner after awaited work and before accepting mutations. */
+  assertCurrent: () => void;
+  listBySessionAsync: (targetSessionKey: string) => Promise<SessionBindingRecord[]>;
+  inspectByConversationAsync: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
+  resolveByConversationAsync: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
+};
+
+function isAsyncAdapter(adapter: SessionBindingAdapter): adapter is SessionBindingAdapterV2 {
+  return "version" in adapter && adapter.version === 2;
+}
 
 function normalizePlacement(raw: unknown): SessionBindingPlacement | undefined {
   return raw === "current" || raw === "child" ? raw : undefined;
@@ -134,7 +165,8 @@ function resolveAdapterCapabilities(
 
 const SESSION_BINDING_ADAPTERS_KEY = Symbol.for("openclaw.sessionBinding.adapters");
 
-type NativeCapableSessionBindingAdapter = SessionBindingAdapter & NativeSessionBindingReads;
+type NativeCapableSessionBindingAdapter = (SessionBindingAdapter | SessionBindingAdapterV2) &
+  NativeSessionBindingReads;
 
 type SessionBindingAdapterRegistration = {
   adapter: SessionBindingAdapter;
@@ -145,7 +177,18 @@ const ADAPTERS_BY_CHANNEL_ACCOUNT = resolveGlobalMap<string, SessionBindingAdapt
   SESSION_BINDING_ADAPTERS_KEY,
 );
 
+/** @deprecated Use registerSessionBindingAdapterV2; removed in the next Plugin SDK major. */
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
+  warnPluginSdkDeprecation({
+    family: "conversation-bindings",
+    method: "registerSessionBindingAdapter",
+    replacement: "registerSessionBindingAdapterV2",
+    compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
+  });
+  registerAdapter(adapter);
+}
+
+function registerAdapter(adapter: SessionBindingAdapter | SessionBindingAdapterV2): void {
   const normalizedAdapter: NativeCapableSessionBindingAdapter = {
     ...adapter,
     ...normalizeConversationRef({
@@ -157,10 +200,13 @@ export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): v
   const key = buildChannelAccountKey(normalizedAdapter);
   // Registrations are stacked so duplicate module graphs can temporarily
   // coexist and unregister without tearing down the active replacement.
-  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, [
-    ...(ADAPTERS_BY_CHANNEL_ACCOUNT.get(key) ?? []),
-    { adapter, normalizedAdapter },
-  ]);
+  const registrations = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key) ?? [];
+  registrations.push({ adapter, normalizedAdapter });
+  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, registrations);
+}
+
+export function registerSessionBindingAdapterV2(adapter: SessionBindingAdapterV2): void {
+  registerAdapter(adapter);
 }
 
 export function unregisterSessionBindingAdapter(params: {
@@ -180,12 +226,10 @@ export function unregisterSessionBindingAdapter(params: {
   if (registrationIndex < 0) {
     return;
   }
-  const nextRegistrations = registrations.toSpliced(registrationIndex, 1);
-  if (nextRegistrations.length === 0) {
+  registrations.splice(registrationIndex, 1);
+  if (registrations.length === 0) {
     ADAPTERS_BY_CHANNEL_ACCOUNT.delete(key);
-    return;
   }
-  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, nextRegistrations);
 }
 
 function resolveAdapterForChannelAccount(
@@ -207,6 +251,9 @@ function assertAdapterSelectionCurrent(
   ref: SessionBindingScope,
   adapter: SessionBindingAdapter | null,
 ) {
+  if (adapter && isAsyncAdapter(adapter)) {
+    adapter.assertCurrent();
+  }
   if (
     resolveAdapterForChannelAccount(ref) !== adapter ||
     (!adapter && requiresRegisteredSessionBindingAdapter(ref))
@@ -273,40 +320,29 @@ export async function listSessionBindingsBySessionsAsync(
   }
   const context = captureOpenClawStateWorkerContext();
   const adapters = getActiveRegisteredAdapters();
-  const registry = getActivePluginChannelRegistrySnapshotFromState();
-  const assertCurrent = () => {
-    context.admission.assertCurrent();
-    const current = getActiveRegisteredAdapters();
-    if (
-      getActivePluginChannelRegistrySnapshotFromState() !== registry ||
-      current.length !== adapters.length ||
-      current.some((adapter, index) => adapter !== adapters[index])
-    ) {
-      throw new SessionBindingError(
-        "BINDING_ADAPTER_UNAVAILABLE",
-        "Session binding owners changed during destination listing",
-      );
-    }
-  };
   const prepared = new Map<NativeCapableSessionBindingAdapter, SessionBindingRecord[][]>();
   for (const adapter of adapters) {
     const nativeList = adapter[nativeSessionBindingListBySessions];
-    if (!nativeList) {
+    if (!nativeList && !isAsyncAdapter(adapter)) {
       continue;
     }
-    assertCurrent();
-    const records = await nativeList.call(adapter, keys, context);
-    assertCurrent();
+    if (isAsyncAdapter(adapter)) {
+      adapter.assertCurrent();
+    }
+    const records = nativeList
+      ? await nativeList.call(adapter, keys, context)
+      : isAsyncAdapter(adapter)
+        ? await Promise.all(keys.map((key) => adapter.listBySessionAsync(key)))
+        : [];
+    if (isAsyncAdapter(adapter)) {
+      adapter.assertCurrent();
+    }
     if (records.length !== keys.length) {
       throw new Error("Session binding owner returned an incomplete session listing");
     }
     prepared.set(adapter, records);
   }
-  const generic = await listGenericCurrentConversationBindingsBySessionsAsync(keys, {
-    assertCurrent,
-    context,
-  });
-  assertCurrent();
+  const generic = await listGenericCurrentConversationBindingsBySessionsAsync(keys, context);
   return new Map(
     keys.map((key, index) => {
       const results: SessionBindingRecord[] = [];
@@ -315,7 +351,6 @@ export async function listSessionBindingsBySessionsAsync(
         const entries = prepared.has(adapter)
           ? prepared.get(adapter)![index]!
           : adapter.listBySession(key);
-        assertCurrent();
         results.push(...entries);
       }
       results.push(...(generic[index] ?? []));
@@ -333,9 +368,16 @@ export async function listSessionBindingsBySessionAsync(
   );
 }
 
+/** @deprecated Use inspectSessionBindingByConversationAsync; removed in the next Plugin SDK major. */
 export function inspectSessionBindingByConversation(
   ref: ConversationRef,
 ): SessionBindingInspection {
+  warnPluginSdkDeprecation({
+    family: "conversation-bindings",
+    method: "inspectSessionBindingByConversation",
+    replacement: "inspectSessionBindingByConversationAsync",
+    compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
+  });
   return inspectSessionBindingsByConversations([ref])[0]!;
 }
 
@@ -399,7 +441,7 @@ function availableBindingInspection(
 }
 
 /** Awaits worker-backed ownership inspection; legacy external adapters retain their sync reader. */
-async function inspectSessionBindingByConversationAsync(
+export async function inspectSessionBindingByConversationAsync(
   ref: ConversationRef,
 ): Promise<ReturnType<typeof inspectSessionBindingByConversation>> {
   const normalized = captureConversationRef(ref);
@@ -410,10 +452,16 @@ async function inspectSessionBindingByConversationAsync(
   if (!adapter && requiresRegisteredSessionBindingAdapter(normalized)) {
     return withSessionBindingInspectionConversation({ status: "unavailable" as const }, normalized);
   }
+  if (adapter && isAsyncAdapter(adapter)) {
+    adapter.assertCurrent();
+  }
+  let snapshot: SessionBindingSelectionSnapshot | undefined;
   const binding = adapter
-    ? adapter.inspectByConversationAsync
-      ? await adapter.inspectByConversationAsync(normalized)
-      : (adapter.inspectByConversation || adapter.resolveByConversation).call(adapter, normalized)
+    ? isAsyncAdapter(adapter)
+      ? ((snapshot = await adapter.inspectByConversationsAsync([normalized])).bindings[0] ?? null)
+      : adapter.inspectByConversationAsync
+        ? await adapter.inspectByConversationAsync(normalized)
+        : (adapter.inspectByConversation || adapter.resolveByConversation).call(adapter, normalized)
     : await inspectGenericCurrentConversationBindingAsync(normalized);
   if (
     resolveAdapterForChannelAccount(normalized) !== adapter ||
@@ -421,6 +469,10 @@ async function inspectSessionBindingByConversationAsync(
   ) {
     return withSessionBindingInspectionConversation({ status: "unavailable" as const }, normalized);
   }
+  if (adapter && isAsyncAdapter(adapter)) {
+    adapter.assertCurrent();
+  }
+  snapshot?.assertCurrent();
   return availableBindingInspection(normalized, binding);
 }
 
@@ -464,19 +516,24 @@ export async function readSessionBindingSelectionCurrent(
   };
   assertCurrent();
   const nativeRead = adapter?.[nativeSessionBindingSelection];
+  let snapshot: SessionBindingSelectionSnapshot | undefined;
   const records = !adapter
     ? await readGenericCurrentConversationBindingSelectionAsync(conversations, { assertCurrent })
     : nativeRead
       ? await nativeRead.call(adapter, conversations)
-      : await readLegacyAdapterSelection(adapter, conversations, assertCurrent);
+      : isAsyncAdapter(adapter)
+        ? (snapshot = await adapter.inspectByConversationsAsync(conversations)).bindings
+        : await readLegacyAdapterSelection(adapter, conversations, assertCurrent);
   assertCurrent();
+  snapshot?.assertCurrent();
   if (records.length !== conversations.length) {
     throw new Error("Session binding owner returned an incomplete conversation selection");
   }
   return records.map(routableBinding);
 }
 
-const DEFAULT_SESSION_BINDING_SERVICE: AsyncSessionBindingService = {
+const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
+  listBySessionAsync: listSessionBindingsBySessionAsync,
   inspectByConversationAsync: inspectSessionBindingByConversationAsync,
   bind: async (input) => {
     const assertCurrent = input.assertCurrent;
@@ -540,6 +597,12 @@ const DEFAULT_SESSION_BINDING_SERVICE: AsyncSessionBindingService = {
           resolveAdapterCapabilities(null));
   },
   listBySession: (targetSessionKey) => {
+    warnPluginSdkDeprecation({
+      family: "conversation-bindings",
+      method: "SessionBindingService.listBySession",
+      replacement: "SessionBindingService.listBySessionAsync",
+      compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
+    });
     const key = targetSessionKey.trim();
     if (!key) {
       return [];
@@ -552,6 +615,12 @@ const DEFAULT_SESSION_BINDING_SERVICE: AsyncSessionBindingService = {
     return dedupeBindings(results).filter((record) => routableBinding(record));
   },
   resolveByConversation: (ref) => {
+    warnPluginSdkDeprecation({
+      family: "conversation-bindings",
+      method: "SessionBindingService.resolveByConversation",
+      replacement: "SessionBindingService.resolveByConversationAsync",
+      compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
+    });
     const normalized = normalizeConversationRef(ref);
     if (!normalized.channel || !normalized.conversationId) {
       return null;
@@ -571,8 +640,8 @@ const DEFAULT_SESSION_BINDING_SERVICE: AsyncSessionBindingService = {
     const adapter = resolveAdapterForChannelAccount(normalized);
     assertAdapterSelectionCurrent(normalized, adapter);
     const binding = adapter
-      ? adapter.resolveByConversationAsync
-        ? await adapter.resolveByConversationAsync(normalized)
+      ? isAsyncAdapter(adapter) || adapter.resolveByConversationAsync
+        ? await adapter.resolveByConversationAsync!(normalized)
         : adapter.resolveByConversation(normalized)
       : await resolveGenericCurrentConversationBindingAsync(normalized, {
           assertCurrent: () => assertAdapterSelectionCurrent(normalized, null),
@@ -581,6 +650,12 @@ const DEFAULT_SESSION_BINDING_SERVICE: AsyncSessionBindingService = {
     return routableBinding(binding);
   },
   touch: (bindingId, at, scope) => {
+    warnPluginSdkDeprecation({
+      family: "conversation-bindings",
+      method: "SessionBindingService.touch",
+      replacement: "SessionBindingService.touchAsync",
+      compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
+    });
     const normalizedBindingId = bindingId.trim();
     if (!normalizedBindingId) {
       return;
@@ -605,8 +680,8 @@ const DEFAULT_SESSION_BINDING_SERVICE: AsyncSessionBindingService = {
       if (!isSessionBindingAdapterCurrent(adapter)) {
         continue;
       }
-      if (adapter.touchAsync) {
-        await adapter.touchAsync(normalizedBindingId, at);
+      if (isAsyncAdapter(adapter) || adapter.touchAsync) {
+        await adapter.touchAsync!(normalizedBindingId, at);
       } else {
         // External adapters keep their synchronous contract during migration.
         adapter.touch?.(normalizedBindingId, at);
@@ -635,7 +710,7 @@ const DEFAULT_SESSION_BINDING_SERVICE: AsyncSessionBindingService = {
   },
 };
 
-export function getSessionBindingService(): AsyncSessionBindingService {
+export function getSessionBindingService(): SessionBindingServiceV2 {
   return DEFAULT_SESSION_BINDING_SERVICE;
 }
 

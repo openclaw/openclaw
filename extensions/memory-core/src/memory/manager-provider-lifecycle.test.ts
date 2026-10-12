@@ -87,7 +87,7 @@ describe("memory index", () => {
     trackManager(first);
 
     await expect(first.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
-    expect(providerFixture.embedBatchCalls).toBe(1);
+    expect(providerFixture.embedQueryCalls).toBe(1);
     await first.close();
 
     const second = requireManager(
@@ -114,7 +114,7 @@ describe("memory index", () => {
       checkedAtMs: cachedBeforeProbe?.checkedAtMs,
       cacheExpiresAtMs: cachedBeforeProbe?.cacheExpiresAtMs,
     });
-    expect(providerFixture.embedBatchCalls).toBe(1);
+    expect(providerFixture.embedQueryCalls).toBe(1);
 
     const cached = second.getCachedEmbeddingAvailability?.();
     expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(30_000);

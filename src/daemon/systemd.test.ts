@@ -2648,8 +2648,8 @@ describe("systemd service control", () => {
     "reports the %s mutation despite observer or output failure",
     async (action) => {
       const sequence: string[] = [];
-      execFileMock.mockImplementationOnce(execFileSuccess());
       if (action === "start") {
+        execFileMock.mockImplementationOnce(execFileSuccess());
         execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
           assertUserSystemctlArgs(args, "reset-failed", GATEWAY_SERVICE);
           sequence.push(args[1] ?? "");
@@ -2705,15 +2705,9 @@ describe("systemd service control", () => {
           ),
         );
       } else {
-        execFileMock
-          .mockImplementationOnce(execFileSuccess())
-          .mockImplementationOnce(
-            execFileResult(
-              createExecFileError("stop failed", { code: 1 }),
-              "",
-              "permission denied",
-            ),
-          );
+        execFileMock.mockImplementationOnce(
+          execFileResult(createExecFileError("stop failed", { code: 1 }), "", "permission denied"),
+        );
       }
       const operation = stopSystemdService({
         stdout: createWritableStreamMock().stdout,

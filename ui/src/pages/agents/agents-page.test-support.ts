@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsFilesListResult,
@@ -14,6 +14,8 @@ import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.
 import type { CronState } from "../../lib/cron/types.ts";
 import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { AgentsPageState } from "./agents-page-state.ts";
+import type { AgentFilesState } from "./files.ts";
 import type { AgentsRouteData } from "./route.ts";
 
 const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods([
@@ -22,7 +24,7 @@ const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods([
   "agents.update",
 ]);
 
-export type TestAgentsPage = HTMLElement & {
+export type TestAgentsPage = AgentFilesState & {
   context: ApplicationContext;
   readonly client: GatewayBrowserClient | null;
   readonly connected: boolean;
@@ -32,7 +34,7 @@ export type TestAgentsPage = HTMLElement & {
   agentFilesLoading: boolean;
   agentFilesList: AgentsFilesListResult | null;
   agentFileActive: string | null;
-  agentFileContents: Record<string, string>;
+  agentFileEditors: AgentFilesState["agentFileEditors"];
   agentIdentityLoading: boolean;
   agentSkillsError: string | null;
   readonly agentsPanel: AgentsPanel;
@@ -50,7 +52,9 @@ export type TestAgentsPage = HTMLElement & {
     hostUpdate: () => void;
     hostDisconnected: () => void;
   };
-  willUpdate: (changed: Map<PropertyKey, unknown>) => void;
+  applyRoute: () => void;
+  readonly viewProps: AgentsPageState["viewProps"];
+  disconnect: () => void;
   gateway: {
     readonly snapshot: ApplicationGatewaySnapshot | null;
     applySnapshot: (
@@ -68,13 +72,31 @@ export type TestAgentsPage = HTMLElement & {
   loadEffectiveToolsForAgent: (agentId: string) => void;
   loadAgentFiles: (agentId: string, force?: boolean) => Promise<void>;
   clearAgentSkills: (agentId: string) => void;
-  saveAgentConfig: () => void;
+  selectDefaultAgentFile: (agentId: string) => Promise<void>;
+  syncCurrentAgentFiles: (agents?: ApplicationContext["agents"]) => void;
+  saveSelectedAgentFile: (agentId: string, name: string) => void;
+  refreshAgents: (mode?: "ensure" | "refresh" | "save") => Promise<void>;
   identityDraft: { name: string | null; emoji: string | null; avatar: string | null };
   identitySaving: boolean;
   identityError: string | null;
   saveIdentityDraft: () => void;
   setDefaultAgent: (agentId: string) => void;
 };
+
+const pages = new Set<AgentsPageState>();
+
+afterEach(() => {
+  for (const page of pages) {
+    page.disconnect();
+  }
+  pages.clear();
+});
+
+export function createAgentsPage(): TestAgentsPage {
+  const page = new AgentsPageState();
+  pages.add(page);
+  return page as unknown as TestAgentsPage;
+}
 
 export function setPageGateway(
   page: TestAgentsPage,

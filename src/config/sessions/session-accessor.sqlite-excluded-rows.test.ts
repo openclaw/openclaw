@@ -20,6 +20,7 @@ import {
   readReferencedSessionIds,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { readSessionMaintenanceCapCandidates } from "./session-accessor.sqlite-maintenance-candidates.js";
+import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -55,11 +56,16 @@ function insertEntry(
   id: string,
   json?: string | Buffer,
 ) {
+  const entryJson = json ?? JSON.stringify({ sessionId: id, updatedAt: 1 });
+  const columns = deriveSessionPredicateColumns(
+    typeof entryJson === "string" ? entryJson : entryJson.toString("utf8"),
+  );
   database.db
     .prepare(
-      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, CAST(? AS TEXT), ?)",
+      `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at,
+        session_started_at, has_optional_references) VALUES (?, ?, CAST(? AS TEXT), ?, ?, ?)`,
     )
-    .run(key, id, json ?? JSON.stringify({ sessionId: id, updatedAt: 1 }), 1);
+    .run(key, id, entryJson, 1, columns.session_started_at, columns.has_optional_references);
 }
 
 function trackMaterializedKeys(database: OpenClawAgentDatabase) {

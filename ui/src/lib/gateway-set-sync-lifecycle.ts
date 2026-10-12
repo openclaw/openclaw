@@ -1,7 +1,7 @@
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayRetryOwner } from "./gateway-retry.ts";
 
-/** Active consumers own registrations and fence queued work when their set detaches. */
+/** Active consumers own registrations; detached sets skip queued work. */
 export function createGatewaySetSyncLifecycle(
   gateway: ApplicationGateway,
   options: {
@@ -15,7 +15,6 @@ export function createGatewaySetSyncLifecycle(
   const retry = createGatewayRetryOwner();
   let attached = false;
   let scheduled = false;
-  let scheduleGeneration = 0;
   let stopSnapshots: (() => void) | null = null;
   let stopEvents: (() => void) | null = null;
   let visibilityDocument: Document | null = null;
@@ -32,12 +31,8 @@ export function createGatewaySetSyncLifecycle(
       return;
     }
     scheduled = true;
-    const generation = scheduleGeneration;
-    globalThis.queueMicrotask(() => {
-      if (generation === scheduleGeneration) {
-        sync();
-      }
-    });
+    // A same-turn reattach may sync twice; consumers deduplicate the current set.
+    globalThis.queueMicrotask(sync);
   }
 
   const handleVisibilityChange = () => {
@@ -79,7 +74,6 @@ export function createGatewaySetSyncLifecycle(
       visibilityDocument?.removeEventListener("visibilitychange", handleVisibilityChange);
       visibilityDocument = null;
       retry.reset();
-      scheduleGeneration += 1;
       scheduled = false;
       options.onDetach();
     },

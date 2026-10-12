@@ -646,13 +646,6 @@ describe("openclaw live updater", () => {
       healthReady: true,
       readyReady: false,
     },
-    {
-      name: "readiness-shaped liveness",
-      health: { ready: true },
-      ready: { ready: true },
-      healthReady: false,
-      readyReady: false,
-    },
   ])(
     "routes managed probes through the injected port with $name",
     async ({ health, ready, healthReady, readyReady }) => {

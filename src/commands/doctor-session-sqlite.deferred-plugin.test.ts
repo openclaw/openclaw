@@ -20,10 +20,7 @@ import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migrati
 import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -33,6 +30,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   editAndDeleteImportedSessions,

@@ -262,16 +262,13 @@ async function originalCaptureFixture(externalAgents = false) {
       { path: plugin, kind: "directory" },
       { path: missingFile, kind: "file" },
       { path: missingDatabase, kind: "sqlite" },
+      { path: workshop, kind: "directory" },
+      { path: missingDirectory, kind: "directory" },
     ],
     deferredPluginIds: new Set(),
     notices: [],
     assertCurrent: () => {},
   });
-  const workshopOwner = await import("../commands/doctor-update-rehearsal-workshop.js");
-  vi.spyOn(workshopOwner, "collectDoctorSkillWorkshopBackupResources").mockResolvedValue([
-    { path: workshop, kind: "directory" },
-    { path: missingDirectory, kind: "directory" },
-  ]);
   const { captureUpdateRecoveryBaseline } = await import("./update-recovery-baseline-capture.js");
   const env = {
     ...process.env,
@@ -669,7 +666,9 @@ it("retains an unsealed capture when the database changes after its snapshot", a
     return captured;
   });
   await expect(f.captureOriginal("changed")).rejects.toMatchObject({
-    cause: expect.objectContaining({ message: expect.stringContaining("generation changed") }),
+    cause: expect.objectContaining({
+      message: `Original database generation changed or could not be verified; capture is unsealed.\n${f.shared}: generation changed after its snapshot.`,
+    }),
   });
   const directory = path.join(`${f.stateDir}.update-captures`, "changed");
   await expect(fs.lstat(path.join(directory, "manifest.json"))).rejects.toMatchObject({
@@ -681,6 +680,43 @@ it("retains an unsealed capture when the database changes after its snapshot", a
     { value: "retained" },
     { value: "later" },
   ]);
+});
+
+it("names the database and its backup warning when no stable generation was recorded", async () => {
+  const f = await originalCaptureFixture();
+  const owner = await import("./update-database-backup.js");
+  const capture = owner.createUpdateDatabaseBackup;
+  const producerWarnings = [
+    `Database write generation unavailable for ${f.shared}: SQLITE_BUSY: database is locked`,
+    `Database changed during capture; its snapshot requires manual recovery: ${f.shared}`,
+  ];
+  vi.spyOn(owner, "createUpdateDatabaseBackup").mockImplementationOnce(async (params) => {
+    const captured = await capture(params);
+    const { [f.shared]: _unverified, ...sourceGenerations } = captured.sourceGenerations;
+    return {
+      ...captured,
+      sourceGenerations,
+      warnings: [
+        ...captured.warnings,
+        "Available disk space could not be measured near /elsewhere; database backup will be attempted.",
+        ...producerWarnings,
+      ],
+    };
+  });
+  await expect(f.captureOriginal("unverified")).rejects.toMatchObject({
+    cause: expect.objectContaining({
+      message: [
+        "Original database generation changed or could not be verified; capture is unsealed.",
+        `${f.shared}: no stable generation was recorded during its snapshot.`,
+        ...producerWarnings,
+      ].join("\n"),
+    }),
+  });
+  const directory = path.join(`${f.stateDir}.update-captures`, "unverified");
+  await expect(fs.lstat(path.join(directory, "manifest.json"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  expect((await fs.readdir(path.join(directory, "payload"))).length).toBeGreaterThan(0);
 });
 
 it.each(["insufficient", "unknown"] as const)(

@@ -92,31 +92,22 @@ export function bindMcpAppResourceHandlers(owner: {
         arguments: params.arguments,
       }),
     );
-  bridge.setListToolsHandler(async (params) =>
-    requireMcpResult(
-      specTypeSchemas.ListToolsResult,
-      await request(
-        "mcp.app.listTools",
-        params?.cursor !== undefined ? { cursor: params.cursor } : {},
-      ),
-    ),
+  const listHandler =
+    <T>(method: string, schema: StandardSchemaV1Sync<unknown, T>) =>
+    async (params?: { cursor?: string }): Promise<T> =>
+      requireMcpResult(
+        schema,
+        await request(method, params?.cursor !== undefined ? { cursor: params.cursor } : {}),
+      );
+  bridge.setListToolsHandler(listHandler("mcp.app.listTools", specTypeSchemas.ListToolsResult));
+  bridge.onlistresources = listHandler(
+    "mcp.app.listResources",
+    specTypeSchemas.ListResourcesResult,
   );
-  bridge.onlistresources = async (params) =>
-    requireMcpResult(
-      specTypeSchemas.ListResourcesResult,
-      await request(
-        "mcp.app.listResources",
-        params?.cursor !== undefined ? { cursor: params.cursor } : {},
-      ),
-    );
-  bridge.onlistresourcetemplates = async (params) =>
-    requireMcpResult(
-      specTypeSchemas.ListResourceTemplatesResult,
-      await request(
-        "mcp.app.listResourceTemplates",
-        params?.cursor !== undefined ? { cursor: params.cursor } : {},
-      ),
-    );
+  bridge.onlistresourcetemplates = listHandler(
+    "mcp.app.listResourceTemplates",
+    specTypeSchemas.ListResourceTemplatesResult,
+  );
   bridge.onreadresource = async (params, extra) =>
     requireMcpResult(
       specTypeSchemas.ReadResourceResult,

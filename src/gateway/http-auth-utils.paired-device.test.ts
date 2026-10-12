@@ -1,12 +1,20 @@
-import { expect, it } from "vitest";
+import fs from "node:fs";
+import { IncomingMessage } from "node:http";
+import { Socket } from "node:net";
+import { join } from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
-import { ensureDeviceToken, revokeDeviceToken } from "../infra/device-pairing-tokens.js";
+import * as deviceTokens from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { readJsonBodyWithLimit } from "../infra/http-body.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "./control-ui-bootstrap-contract.js";
+import { handleControlUiHttpRequest } from "./control-ui.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
   AUTH_TOKEN,
@@ -19,6 +27,7 @@ import {
 import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+import { makeMockHttpResponse } from "./test-http-response.js";
 
 it.each(["operator.admin", "operator.read"])(
   "createGatewayHttpServer plugin PUT/POST revalidates paired %s authority after reading the body",
@@ -34,7 +43,7 @@ it.each(["operator.admin", "operator.read"])(
         clientMode: "webchat",
       });
       await approveDevicePairing(requested.request.requestId, { callerScopes: scopes });
-      const token = await ensureDeviceToken({
+      const token = await deviceTokens.ensureDeviceToken({
         deviceId: "browser",
         role: "operator",
         scopes,
@@ -114,7 +123,7 @@ it.each(["operator.admin", "operator.read"])(
           const dispatch = dispatchRequest(server, pending, response.res);
           await bodyStarted.promise;
           const previousEffects = effects;
-          await revokeDeviceToken({ deviceId: "browser", role: "operator" });
+          await deviceTokens.revokeDeviceToken({ deviceId: "browser", role: "operator" });
           pending.emit("data", Buffer.from("{}"));
           pending.emit("end");
           await dispatch;
@@ -139,3 +148,63 @@ it.each(["operator.admin", "operator.read"])(
     });
   },
 );
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
+
+it("keeps the public shell when a paired token is revoked during bootstrap admission", async () => {
+  await withOpenClawTestState({ label: "bootstrap-revoked-device" }, async () => {
+    const root = dirs.make("bootstrap-revoked-device-");
+    fs.writeFileSync(
+      join(root, "index.html"),
+      "<!doctype html><html><head></head><body><openclaw-app></openclaw-app></body></html>",
+    );
+    const auth = { mode: "token" as const, token: "synthetic-shared-token", allowTailscale: false };
+    const scopes = ["operator.read"];
+    const pairing = await requestDevicePairing({
+      deviceId: "bootstrap-browser",
+      publicKey: "synthetic-public-key",
+      role: "operator",
+      scopes,
+      clientId: "openclaw-control-ui",
+      clientMode: "webchat",
+    });
+    await approveDevicePairing(pairing.request.requestId, { callerScopes: scopes });
+    const token = await deviceTokens.ensureDeviceToken({
+      deviceId: "bootstrap-browser",
+      role: "operator",
+      scopes,
+      issuer: {
+        kind: "shared-gateway-auth",
+        generation: resolveSharedGatewaySessionGeneration(auth, [])!,
+      },
+    });
+    expect(token).not.toBeNull();
+    const verify = deviceTokens.verifyDeviceToken;
+    vi.spyOn(deviceTokens, "verifyDeviceToken").mockImplementationOnce(async (params) => {
+      const result = await verify(params);
+      await deviceTokens.revokeDeviceToken({ deviceId: "bootstrap-browser", role: "operator" });
+      return result;
+    });
+
+    const req = new IncomingMessage(new Socket());
+    req.url = "/control/chat/main/topic";
+    req.method = "GET";
+    req.headers = { authorization: `Bearer ${token!.token}` };
+    const response = makeMockHttpResponse();
+    const config: OpenClawConfig = {};
+    await handleControlUiHttpRequest(req, response.res, {
+      basePath: "/control",
+      root: { kind: "resolved", path: root },
+      config,
+      getRuntimeConfig: () => config,
+      auth,
+      sessionEntryPath: req.url,
+      isSessionEntryCurrent: () => true,
+    });
+    expect(response.res.statusCode).toBe(200);
+    const body = String(response.end.mock.calls[0]?.[0] ?? "");
+    expect(body).toContain("<openclaw-app");
+    expect(body).not.toContain(CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE);
+  });
+});

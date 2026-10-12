@@ -40,19 +40,12 @@ export function cloneAuthProfileJsonValue<T>(input: T): T {
           (_, index) => clone(value[index], `${index}`) ?? null,
         );
       }
-      const result: Record<string, unknown> = {};
-      for (const property of Object.keys(value)) {
-        const copied = clone(Reflect.get(value, property), property);
-        if (copied !== undefined) {
-          Object.defineProperty(result, property, {
-            value: copied,
-            enumerable: true,
-            configurable: true,
-            writable: true,
-          });
-        }
-      }
-      return result;
+      return Object.fromEntries(
+        Object.keys(value).flatMap((property) => {
+          const copied = clone(Reflect.get(value, property), property);
+          return copied === undefined ? [] : [[property, copied] as const];
+        }),
+      );
     } finally {
       ancestors.delete(value);
     }

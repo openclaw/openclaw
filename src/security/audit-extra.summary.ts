@@ -4,7 +4,6 @@ import {
   listAgentIds,
   resolveAgentConfig,
 } from "../agents/agent-scope-config.js";
-// Summarizes extra security audit findings for user-facing output.
 import {
   resolveConfiguredToolPolicies,
   resolveProviderToolPolicy,
@@ -113,7 +112,6 @@ function isBrowserEnabled(cfg: OpenClawConfig): boolean {
   });
 }
 
-/** Produce a concise inventory of major security-relevant surfaces. */
 export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;

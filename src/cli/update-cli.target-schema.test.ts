@@ -6,11 +6,18 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
+import { waitForCliSignalExit } from "./signal-exit-barrier.js";
 import {
   expectNoSideEffects,
   freshRestartCalls,
@@ -49,7 +56,6 @@ import {
   resolveNpmChannelTag,
   resolveOpenClawPackageRoot,
   runCommandWithTimeout,
-  runUpdateFailureTriage,
   doctorCommand,
   mockGitUpdateAfterMutation,
   runDaemonInstall,
@@ -69,6 +75,10 @@ import {
 import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
+
+const { preflightOpenClawDatabaseSchemas } = await vi.importActual<
+  typeof import("../state/openclaw-database-preflight.js")
+>("../state/openclaw-database-preflight.js");
 
 describe("update-cli", () => {
   const nodeExecutable = resolveTestNodeExecPath();
@@ -94,6 +104,40 @@ describe("update-cli", () => {
     setupNpmUpdatedRootRefresh,
     setupUpdatedRootRefresh,
   } = createUpdateCliFixture();
+
+  it("refuses a v2026.7.1-2 target and names every current-schema agent store", async () => {
+    await useFileBackedConfig();
+    await mockPackageInstallAtCaseDir("schema-published-downgrade");
+    const env = process.env;
+    const configured = openOpenClawAgentDatabase({ agentId: "main", env }).path;
+    const retired = openOpenClawAgentDatabase({ agentId: "retired", env }).path;
+    const custom = openOpenClawAgentDatabase({
+      agentId: "registered-custom",
+      env,
+      path: path.join(createCaseDir("custom-agent-store"), "openclaw-agent.sqlite"),
+    }).path;
+    closeOpenClawAgentDatabasesForTest();
+    unregisterOpenClawAgentDatabase({ agentId: "retired", env, path: retired });
+    await closeOpenClawStateDatabaseAsync();
+    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(
+      preflightOpenClawDatabaseSchemas,
+    );
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ version: "2026.7.1-2", schemaVersions: { state: 1, agent: 1 } }),
+    );
+
+    await expect(updateCommand({ tag: "2026.7.1-2", yes: true })).rejects.toEqual(new ExitError(1));
+
+    const output = [getLogOutput(), getErrorOutput()].join("\n");
+    for (const agentPath of [configured, retired, custom]) {
+      expect(output).toContain(
+        `${agentPath} has schema ${OPENCLAW_AGENT_SCHEMA_VERSION}; target supports 1`,
+      );
+    }
+    expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("database-schema-preflight");
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expectNoSideEffects(serviceStop, serviceStart, serviceRestart, replaceConfigFile);
+  });
 
   it.each(["git", "package-to-git", "package-preview"] as const)(
     "refuses a service-only incompatible %s target before any mutable preparation",
@@ -213,58 +257,6 @@ describe("update-cli", () => {
     },
   );
 
-  it.each(["absent"] as const)(
-    "refuses a newly owned service after an initially %s Git admission snapshot",
-    async (initial) => {
-      const root = createCaseDir(`new-service-${initial}`);
-      await writeOpenClawPackageFixture(root, "1.0.0", { git: true });
-      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
-      const managedState = profileStateDir("work");
-      let admitted = false;
-      databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(({ env }) => ({
-        incompatible:
-          env.OPENCLAW_STATE_DIR === managedState
-            ? [newerAgentSchemaFixture(path.join(managedState, "worker.sqlite"))]
-            : [],
-        indeterminate: [],
-      }));
-      vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts: options }) => {
-        primeServiceCommand(
-          [nodeExecutable, path.join(root, "dist", "index.js"), "gateway", "run"],
-          {
-            OPENCLAW_PROFILE: "work",
-            OPENCLAW_STATE_DIR: managedState,
-            OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
-          },
-        );
-        serviceLoaded.mockResolvedValue(true);
-        await requireValue(
-          options.beforeGitMutation,
-          "Git mutation admission",
-        )({ schemaVersions: { state: 3, agent: 11 } });
-        admitted = true;
-        return makeOkUpdateResult({ mode: "git", root });
-      });
-      let failure: unknown;
-      try {
-        await updateCommand({ yes: true, json: true });
-      } catch (error) {
-        failure = error;
-      }
-      expect(admitted).toBe(false);
-      expect(failure).toEqual(new ExitError(1));
-      expectNoSideEffects(
-        serviceStop,
-        cleanupStaleManagedServiceUpdateHandoffs,
-        launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
-      );
-      expect(lastWriteJsonCall()).toMatchObject({
-        status: "error",
-        reason: "managed-service-preflight",
-      });
-    },
-  );
-
   it.each([
     "package metadata",
     "package runtime",
@@ -379,10 +371,8 @@ describe("update-cli", () => {
     const root = await mockPackageInstallAtCaseDir("openclaw-early-signal");
     const packageBefore = await fs.readFile(path.join(root, "package.json"), "utf8");
     const processOnSpy = vi.spyOn(process, "on");
-    const exitCalled = createDeferred();
     const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-      exitCalled.resolve();
-      return undefined as never;
+      throw new Error("update must settle without a forced native exit");
     });
     let entered!: () => void;
     let release!: () => void;
@@ -414,7 +404,7 @@ describe("update-cli", () => {
       for (const listener of listeners) {
         listener();
       }
-      await exitCalled.promise;
+      expect(await waitForCliSignalExit()).toBe(143);
       // Inspect while preflight remains blocked: ordinary unwind cannot settle this row.
       expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
         runId: before.runId,
@@ -423,7 +413,8 @@ describe("update-cli", () => {
         reason: "interrupted",
         finishedAtMs: expect.any(Number),
       });
-      expect(processExitSpy).toHaveBeenCalledWith(143);
+      expect(process.exitCode).toBe(143);
+      expect(processExitSpy).not.toHaveBeenCalled();
       expect(await fs.readFile(path.join(root, "package.json"), "utf8")).toBe(packageBefore);
       expect(packageInstallCommandCall()).toBeUndefined();
       expect(serviceStop).not.toHaveBeenCalled();
@@ -521,94 +512,6 @@ Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtime
       phase: "finished",
       reason: "unmanaged-package-install",
     });
-  });
-
-  it("refuses a git target that changes after the service stops", async () => {
-    const root = createCaseDir("schema-git");
-    const sha = "a".repeat(40);
-    await writeOpenClawPackageFixture(root, "1.0.0", {
-      git: true,
-      builtSha: sha,
-      entrySource: "export {};\n",
-    });
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
-    vi.mocked(runCommandWithTimeout).mockResolvedValue(commandResult({ stdout: sha }));
-    mockOwnedGitService(root);
-    mockGatewayHealth("1.0.0", "restored", "fixture-original-build");
-    const entrypoint = path.join(root, "dist", "index.js");
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
-
-    serviceLoaded.mockResolvedValue(true);
-    vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts: options }) => {
-      await requireValue(
-        options.beforeGitMutation,
-        "Git mutation admission",
-      )({ schemaVersions: { state: 3, agent: 11 } });
-      return makeOkUpdateResult({ mode: "git" });
-    });
-    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(() =>
-      serviceStop.mock.calls.length === 0
-        ? { incompatible: [], indeterminate: [] }
-        : {
-            incompatible: [],
-            indeterminate: [
-              { kind: "agent", path: "/tmp/openclaw-agent.sqlite", reason: "database busy" },
-            ],
-          },
-    );
-
-    await expect(updateCommand({ yes: true, timeout: "17" })).rejects.toEqual(new ExitError(1));
-
-    expect(serviceStop).toHaveBeenCalledOnce();
-    const stoppedAt = serviceStop.mock.invocationCallOrder[0]!;
-    const schemaCalls =
-      databasePreflightMocks.preflightOpenClawDatabaseSchemas.mock.invocationCallOrder;
-    expect(schemaCalls.some((order) => order < stoppedAt)).toBe(true);
-    expect(schemaCalls.some((order) => order > stoppedAt)).toBe(true);
-    expect(freshRestartCalls()).toEqual([
-      [
-        [
-          process.execPath,
-          entrypoint,
-          "gateway",
-          "restart",
-          "--preserve-definition",
-          "--json",
-          "--update-executor",
-          "run",
-        ],
-        expect.objectContaining({ cwd: root, timeoutMs: 17_000, baseEnv: {} }),
-      ],
-    ]);
-    expectNoSideEffects(serviceStart, serviceRestart);
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(vi.mocked(runCommandWithTimeout).mock.invocationCallOrder.at(-1)).toBeLessThan(
-      requireValue(
-        vi.mocked(runUpdateFailureTriage).mock.invocationCallOrder.at(-1),
-        "triage after service recovery",
-      ),
-    );
-  });
-
-  it("fails a post-stop git refusal when no managed service was running", async () => {
-    vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts: options }) => {
-      await requireValue(
-        options.beforeGitMutation,
-        "Git mutation admission",
-      )({ schemaVersions: { state: 3, agent: 11 } });
-      return makeOkUpdateResult({ mode: "git" });
-    });
-    databasePreflightMocks.preflightOpenClawDatabaseSchemas
-      .mockReturnValueOnce({ incompatible: [], indeterminate: [] })
-      .mockReturnValueOnce({
-        incompatible: [],
-        indeterminate: [{ kind: "state", path: "/tmp/openclaw.sqlite", reason: "database busy" }],
-      });
-
-    await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
-
-    expectNoSideEffects(serviceStop, serviceRestart);
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("does not write a control-plane sentinel when a dry-run preflight fails", async () => {

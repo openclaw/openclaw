@@ -36,7 +36,6 @@ export function createCodexNativeHookRemoteCredential(params: {
     params.relay.relayId,
     params.relay.generation,
   );
-  const projectionKey = credentialPath;
   const owner = Symbol("native-hook-credential");
   let preparation: Promise<void> | undefined;
   let removal: Promise<void> | undefined;
@@ -47,13 +46,13 @@ export function createCodexNativeHookRemoteCredential(params: {
       if (disposed) {
         return Promise.reject(new Error("Native hook relay credential is closed"));
       }
-      preparation ??= projections.enqueue(projectionKey, async () => {
+      preparation ??= projections.enqueue(credentialPath, async () => {
         if (disposed) {
           throw new Error("Native hook relay credential is closed");
         }
         params.assertCurrent();
         const { token } = params.relay.enableRemoteCallback();
-        projectionOwners.set(projectionKey, owner);
+        projectionOwners.set(credentialPath, owner);
         const credential = {
           url: `${params.config.url.replace(/\/$/, "")}/${encodeURIComponent(params.relay.relayId)}`,
           token,
@@ -89,8 +88,8 @@ export function createCodexNativeHookRemoteCredential(params: {
       }
       // A previous owner's late disposal must not remove its successor's file.
       // The shared queue orders each client write request before removal/replacement.
-      removal ??= projections.enqueue(projectionKey, async () => {
-        if (projectionOwners.get(projectionKey) !== owner) {
+      removal ??= projections.enqueue(credentialPath, async () => {
+        if (projectionOwners.get(credentialPath) !== owner) {
           return;
         }
         try {
@@ -102,7 +101,7 @@ export function createCodexNativeHookRemoteCredential(params: {
         } catch {
           throw new Error("Could not remove the retired native hook relay credential from Codex");
         } finally {
-          projectionOwners.delete(projectionKey);
+          projectionOwners.delete(credentialPath);
         }
       });
       return removal;

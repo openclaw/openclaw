@@ -1,4 +1,5 @@
 export const SESSION_FIELD_LABELS: Record<string, string> = {
+  "agents.entries.*.subagents.delegateToolsTo": "Delegated Tool Targets",
   "agents.entries.*.tools.agentToAgent": "Agent Outbound Messaging",
   "agents.entries.*.tools.agentToAgent.send": "Agent Send Destination Allowlist",
   "tools.agentToAgent": "Agent-to-Agent Tool Access",
@@ -22,6 +23,9 @@ export const SESSION_FIELD_LABELS: Record<string, string> = {
   "session.resetByChannel": "Session Reset by Channel",
   "session.store": "Session Store Path",
   "session.mainKey": "Session Main Key",
+  "session.communication": "Session Communication Defaults",
+  "session.communication.send": "Send Messages to Other Sessions",
+  "session.communication.receive": "Receive Messages from Other Sessions",
   "session.sendPolicy": "Session Send Policy",
   "session.sendPolicy.default": "Session Send Policy Default Action",
   "session.sendPolicy.rules": "Session Send Policy Rules",

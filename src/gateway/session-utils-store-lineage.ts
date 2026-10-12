@@ -1,4 +1,5 @@
 import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
@@ -14,6 +15,10 @@ import { readGatewaySessionStore } from "./session-utils-store-read.js";
 export function createGatewaySessionLineageReader(cfg: OpenClawConfig) {
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
   function readAlias(key: string, agentId: string) {
+    const metadata = captureSessionEntryMetadataRead({ sessionKey: key, agentId });
+    if (metadata) {
+      return metadata.readCurrent();
+    }
     const target = resolveGatewaySessionStoreTargetWithStore({
       cfg,
       key,

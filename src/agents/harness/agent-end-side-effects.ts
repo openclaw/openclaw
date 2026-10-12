@@ -5,8 +5,15 @@ import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-ent
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
-import { scheduleSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
+import {
+  scheduleSkillExperienceReview,
+  scheduleUnusedWorkshopSkillArchive,
+} from "../../skills/workshop/experience-review-default.js";
 import type { EmbeddedForegroundPromptContext } from "../embedded-agent-runner/run/params.js";
+import {
+  completedTurnMessageAnchor,
+  type CompletedTurnMessageAnchor,
+} from "../sessions/session-manager-message-anchor.js";
 import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
@@ -16,6 +23,7 @@ const log = createSubsystemLogger("agents/harness");
 
 type BaseAgentEndSideEffectsParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
 type AgentEndSideEffectsParams = Omit<BaseAgentEndSideEffectsParams, "ctx"> & {
+  [completedTurnMessageAnchor]?: CompletedTurnMessageAnchor;
   /** Exact completed-turn boundary; context loading stays off the foreground path. */
   skillExperienceReviewSource?: Pick<
     TranscriptEntryAnchor,
@@ -36,18 +44,17 @@ function runCoreAgentEndSideEffects(
   read: "native" | "worker",
 ): void | Promise<void> {
   const usedSkills = consumeRunSkillUsage(params.ctx.runId);
-  // CLI hook contexts omit skillWorkshopAvailable, so isEligibleContext rejects them.
-  const source = params.skillExperienceReviewSource;
-  if (!params.ctx.foregroundPromptContext || !source) {
+  const foregroundPromptContext = params.ctx.foregroundPromptContext;
+  if (!foregroundPromptContext) {
     return;
   }
   // Hook contexts do not always carry the config; the runtime config is the owner at this boundary.
   const config = params.ctx.config ?? getRuntimeConfig();
-  const ctx = { ...params.ctx, foregroundPromptContext: params.ctx.foregroundPromptContext };
   const schedule = (anchor: TranscriptEntryAnchor | undefined) => {
     if (!anchor) {
       return;
     }
+    const ctx = { ...params.ctx, foregroundPromptContext };
     scheduleSkillExperienceReview({
       event: params.event,
       ctx,
@@ -61,9 +68,21 @@ function runCoreAgentEndSideEffects(
     log.warn(`skill experience review scheduling failed: ${String(error)}`);
   };
   try {
+    scheduleUnusedWorkshopSkillArchive(config, foregroundPromptContext.agentId);
+    // CLI hook contexts omit skillWorkshopAvailable, so isEligibleContext rejects them.
+    const source = params.skillExperienceReviewSource;
+    if (!source) {
+      return;
+    }
     if (read === "worker") {
-      const assertCurrent = captureOwnedTranscriptWriteAssertion(source);
+      const committed = params[completedTurnMessageAnchor];
+      const assertCurrent =
+        committed?.assertCurrent ?? captureOwnedTranscriptWriteAssertion(source);
       assertCurrent();
+      if (committed) {
+        schedule(committed.anchor);
+        return;
+      }
       return readActiveTranscriptEntryAnchorAsync(source)
         .then((anchor) => {
           assertCurrent();

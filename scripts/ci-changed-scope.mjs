@@ -160,9 +160,11 @@ const WINDOWS_WORKER_BUNDLE_SCOPE_RE =
 const WINDOWS_WORKER_WORKSPACE_SCOPE_RE =
   /^src\/(?:infra\/git-exec(?:\.test)?|agents\/worktrees\/(?:git|base-ref)(?:\.test)?|node-host\/node-worker-transfer-client(?:\.test)?|gateway\/worker-environments\/(?:node-worker-tunnel(?:\.test)?|workspace-result-(?:git(?:\.test)?|staging|ref-mutation\.test)|session-repository-checkpoints(?:\.test)?|workspace-sync-(?:scripts|manifest\.test)))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
-  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|extensions\/[^/]+\/(?:package\.json$|(?:.*\/)?i18n\/locales\/)|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/(?:control-ui-plugin-i18n-catalog\.ts|control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json)))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+// A plugin can declare its browser entry in any package directory. Keep this
+// path-only planner conservative; source discovery selects actual UI owners.
 const CONTROL_UI_I18N_PRODUCTION_SOURCE_RE =
-  /^(?:ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?|src\/config\/(?:schema[^/]*|zod-schema[^/]*|media-audio-field-metadata|talk-defaults|channel-config-keys)\.ts)$/;
+  /^(?:ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?|extensions\/[^/]+\/.*\.tsx?|src\/config\/(?:schema[^/]*|zod-schema[^/]*|media-audio-field-metadata|talk-defaults|channel-config-keys)\.ts)$/;
 const CONTROL_UI_HARD_GENERATED_I18N_RE =
   /^ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl))$/;
 const RELEASE_BRANCH_RE = /^release\/\d{4}\.\d+\.\d+$/;
@@ -171,9 +173,10 @@ class ControlUiGeneratedArtifactsMixedError extends Error {}
 class NativeGeneratedArtifactsMixedError extends Error {}
 // Browser setup and sharding inputs must select the same proof as the config;
 // matching the harness family also covers per-project bundle setup owners.
-// QA Lab real-Gateway suites share the same Chromium owner.
+// QA Lab real-Gateway suites share the same Chromium owner. The test runtime
+// owner sets the Bun UI env; main runs UI on Node, so only PRs prove it.
 const CHROMIUM_UI_TEST_SCOPE_RE =
-  /^(ui\/|extensions\/[^/]+\/browser(?:\/|$)|extensions\/browser\/chrome-extension\/|extensions\/qa-lab\/src\/[^/]+\.real-gateway\.e2e\.test\.ts$|test\/vitest\/vitest\.(?:ui-(?:e2e|browser)(?:-[^/.]+)?\.[^/]+\.ts|(?:pattern-file|performance-config|timeouts|weighted-sharding)\.ts|ui-(?:isolated-)?paths\.mjs)$|test\/helpers\/temp-dir\.ts$|scripts\/(?:ensure-playwright-chromium\.mts|test-desktop-resize-real\.mts|check-control-ui-(?:performance(?:-base)?|precompressed-assets)\.mts|ui\.(?:mts|js)|control-ui-mock-[^/]+\.ts|lib\/(?:ci-test-timings(?:-schema)?|desktop-resize-proof|vitest-local-scheduling)\.mts)$|config\/(?:ci-test-timings|control-ui-startup-budget-baseline)\.json$|\.github\/workflows\/ci\.yml$)/;
+  /^(ui\/|extensions\/[^/]+\/browser(?:\/|$)|extensions\/browser\/chrome-extension\/|extensions\/qa-lab\/src\/[^/]+\.real-gateway\.e2e\.test\.ts$|test\/vitest\/vitest\.(?:ui-(?:e2e|browser)(?:-[^/.]+)?\.[^/]+\.ts|(?:pattern-file|performance-config|timeouts|weighted-sharding)\.ts|ui-(?:isolated-)?paths\.mjs)$|test\/helpers\/temp-dir\.ts$|scripts\/(?:ensure-playwright-chromium\.mts|test-desktop-resize-real\.mts|check-control-ui-(?:performance(?:-base)?|precompressed-assets)\.mts|ui\.(?:mts|js)|control-ui-mock-[^/]+\.ts|lib\/(?:ci-test-(?:runtime|timings(?:-schema)?)|desktop-resize-proof|vitest-local-scheduling)\.mts)$|config\/(?:ci-test-timings|control-ui-startup-budget-baseline)\.json$|\.github\/workflows\/ci\.yml$)/;
 const NATIVE_I18N_SCOPE_RE =
   /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-(?:app-i18n|i18n-(?:inventory|locales)))\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
 const FAST_INSTALL_SMOKE_SCOPE_RE =

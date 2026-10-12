@@ -37,8 +37,9 @@ export function resolveThinkingProfile(params: {
         return CLAUDE_CLI_OFF_THINKING_PROFILE;
       }
       // Claude Code exposes Fable's native effort ladder. Keep subscription-
-      // backed and API-backed Fable routes on one model contract.
-      return resolveClaudeThinkingProfile(contractModelId, undefined, {
+      // backed and API-backed Fable routes on one model contract. Row params
+      // carry any capabilities Anthropic's model listing advertised.
+      return resolveClaudeThinkingProfile(contractModelId, params.params, {
         includeNativeMax: true,
       });
     default:

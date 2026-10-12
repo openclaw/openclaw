@@ -19,11 +19,11 @@ import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { settleIncognitoTrajectoryRuntimeRetention } from "../trajectory/runtime-retention.js";
 import { createSqliteTrajectoryRuntimeSink } from "../trajectory/runtime-store-writer.js";
+import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import {
   appendSqliteTrajectoryRuntimeEvents,
-  loadSqliteTrajectoryRuntimeEvents,
-} from "../trajectory/runtime-store.sqlite.js";
-import { createTrajectoryEvent } from "../trajectory/runtime-store.test-support.js";
+  createTrajectoryEvent,
+} from "../trajectory/runtime-store.test-support.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   getOpenClawAgentDatabaseIfOpen,
@@ -338,7 +338,11 @@ it("preserves native incognito trajectory age and global-budget retention", asyn
       });
       await retained.sessions.sideData(authority, {
         type: "session.trajectory.append",
-        input: { sessionKey: sessionKey(name), sessionId: name, events: [event] },
+        input: {
+          sessionKey: sessionKey(name),
+          sessionId: name,
+          events: [{ runId: event.runId, ts: event.ts, line: JSON.stringify(event) }],
+        },
       });
       appendSqliteTrajectoryRuntimeEvents({ ...native, sessionId: name }, [event]);
     }
@@ -373,7 +377,11 @@ it("preserves native incognito trajectory age and global-budget retention", asyn
       } else {
         await retained.sessions.sideData(authority, {
           type: "session.trajectory.append",
-          input: { sessionKey: sessionKey("current"), sessionId: "current", events: [event] },
+          input: {
+            sessionKey: sessionKey("current"),
+            sessionId: "current",
+            events: [{ runId: event.runId, ts: event.ts, line: JSON.stringify(event) }],
+          },
         });
         await settleIncognitoTrajectoryRuntimeRetention({
           actor: retained,
@@ -406,7 +414,7 @@ it("preserves native incognito trajectory age and global-budget retention", asyn
           .toSorted((a, b) => a.sessionId.localeCompare(b.sessionId));
         const nativeRuns = [];
         for (const sessionId of names) {
-          const events = await loadSqliteTrajectoryRuntimeEvents({ ...native, sessionId });
+          const events = loadSqliteTrajectoryRuntimeEventRowsSync({ ...native, sessionId });
           if (events.length) {
             nativeRuns.push({ sessionId, events: events.length });
           }
@@ -547,10 +555,14 @@ it("keeps readers usable after refusing a foreign sharing key", async () => {
   ).toBeNull();
 });
 
-it("fences every category target during grants and rolls the whole batch back before commit", async () => {
+it("keeps category preimages grant-local and rolls the whole batch back before commit", async () => {
   const names = ["batch-a", "batch-b"];
   const keys = names.map(key);
   await Promise.all(names.map((name) => create(name, "batch-category")));
+  const preimages = new Map(
+    keys.map((sessionKey) => [sessionKey, actor.sessions.readSharing(sessionKey)]),
+  );
+  const outsideGrantChecks: Promise<unknown>[] = [];
   let allowed = true;
   const admitted: string[] = [];
   const source: IncognitoSessionAuthority = {
@@ -561,8 +573,26 @@ it("fences every category target during grants and rolls the whole batch back be
     },
     authorize(stage, facts) {
       for (const sessionKey of keys) {
-        expect(() => actor.sessions.readSharing(sessionKey)).toThrow("pending or unavailable");
+        const sharing = actor.sessions.readSharing(sessionKey);
+        expect(sharing).toEqual(preimages.get(sessionKey));
+        assert(sharing?.entry);
+        sharing.entry.sessionId = "detached grant read";
+        expect(actor.sessions.readSharing(sessionKey)).toEqual(preimages.get(sessionKey));
       }
+      outsideGrantChecks.push(
+        Promise.resolve().then(() => {
+          try {
+            for (const sessionKey of keys) {
+              expect(() => actor.sessions.readSharing(sessionKey)).toThrow(
+                "pending or unavailable",
+              );
+            }
+          } catch (error) {
+            return error;
+          }
+          return undefined;
+        }),
+      );
       if (stage === "transaction") {
         admitted.push(facts.sessionKey);
       } else {
@@ -577,6 +607,7 @@ it("fences every category target during grants and rolls the whole batch back be
     }),
   ).rejects.toThrow("category authority revoked");
   expect(admitted).toEqual(keys);
+  expect(await Promise.all(outsideGrantChecks)).toEqual(outsideGrantChecks.map(() => undefined));
   expect(
     await actor.sessions.sideData(authority, {
       type: "session.category.keys",

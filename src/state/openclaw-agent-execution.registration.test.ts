@@ -1,22 +1,22 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { serialize } from "node:v8";
-import type { MessagePort } from "node:worker_threads";
+import { MessagePort } from "node:worker_threads";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import {
+  failSqliteWorkerSlot,
   receiveSqliteWorkerReply,
-  settleFailedSqliteWorkerJobs,
   settleSqliteWorkerJob,
 } from "../infra/sqlite-worker-broker-reply.js";
-import type { Job } from "../infra/sqlite-worker-broker.types.js";
+import type { Actor, Job } from "../infra/sqlite-worker-broker.types.js";
 import {
   isSqliteWorkerError,
   SqliteWorkerError,
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
 } from "../infra/sqlite-worker-contract.js";
-import type { SqliteWorkerAdmissionRequest } from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { AgentDatabaseDeletionRefusedError } from "./agent-deletion-journal.js";
 import type {
   OpenClawAgentDatabaseRegistrationCommit,
   OpenClawAgentDatabaseRegistrationObserver,
@@ -43,7 +43,10 @@ const edge = vi.hoisted(() => {
         registration?: OpenClawAgentDatabaseRegistrationObserver,
       ) => typeof database
     >(),
-    request: vi.fn<(request: SqliteWorkerAdmissionRequest) => void>(),
+    request:
+      vi.fn<
+        typeof import("../infra/sqlite-worker-operation-admission.js").requestSqliteWorkerOperationAdmission
+      >(),
     attachment: vi.fn(() => ({ kind: "agent-execution", startupJournal: false })),
     nativeClose: vi.fn(() => {
       database.db.isOpen = false;
@@ -62,14 +65,12 @@ vi.mock("node:sqlite", () => ({ DatabaseSync: edge.forbidden }));
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
   return {
+    ...actual,
     parentPort: { on: edge.on, postMessage: edge.publishReply },
     isMainThread: false,
     workerData: null,
     threadId: 1,
-    isMarkedAsUntransferable: actual.isMarkedAsUntransferable,
     Worker: edge.forbidden,
-    MessageChannel: actual.MessageChannel,
-    receiveMessageOnPort: actual.receiveMessageOnPort,
   };
 });
 vi.mock("node:child_process", () => ({
@@ -79,7 +80,11 @@ vi.mock("node:child_process", () => ({
   execFileSync: edge.forbidden,
   fork: edge.forbidden,
 }));
-vi.mock("../infra/node-sqlite.js", () => ({ openNodeSqliteDatabase: edge.forbidden }));
+// mock-isolation: Native database opening must remain forbidden in the worker registration fixture.
+vi.mock("../infra/node-sqlite.js", () => ({
+  openNodeSqliteDatabase: edge.forbidden,
+  captureSqliteNativeRuntimeAdmission: () => undefined,
+}));
 vi.mock("../logging/console.js", () => ({ routeLogsToStderr() {} }));
 vi.mock("../process/output-drain.js", () => ({ drainProcessOutput: (done: () => void) => done() }));
 vi.mock("../infra/sqlite-worker-identity.js", async () => ({
@@ -94,7 +99,19 @@ vi.mock("../infra/sqlite-worker-operation-admission.js", async (importOriginal) 
     await importOriginal<typeof import("../infra/sqlite-worker-operation-admission.js")>();
   return {
     ...actual,
-    requestSqliteWorkerOperationAdmission: edge.request,
+    requestSqliteWorkerOperationAdmission: (...args: Parameters<typeof edge.request>) => {
+      const [request] = args;
+      const facts = request.facts;
+      if (
+        facts &&
+        typeof facts === "object" &&
+        "validationPort" in facts &&
+        facts.validationPort instanceof MessagePort
+      ) {
+        facts.validationPort.postMessage({ deferUnverifiedIntegrity: false }, []);
+      }
+      edge.request(...args);
+    },
     takeSqliteWorkerOperationAdmissionAttachment: edge.attachment,
   };
 });
@@ -201,24 +218,29 @@ function retireFailedReply(
     reject,
     detach() {},
   };
-  receiveSqliteWorkerReply({ current: job, worker: { postMessage: edge.forbidden } }, reply, {
-    fail(error, currentError, openOutcome) {
-      if (!(error instanceof Error)) {
-        throw error;
-      }
-      settleFailedSqliteWorkerJobs({
-        current: job,
-        queued: [],
-        queuedError: new SqliteWorkerError("retired", "unavailable"),
-        error,
+  const slot: Parameters<typeof receiveSqliteWorkerReply>[0] &
+    Parameters<typeof failSqliteWorkerSlot>[0] = {
+    actors: new Set<Actor>(),
+    current: job,
+    queue: [],
+    worker: { postMessage: edge.forbidden },
+  };
+  receiveSqliteWorkerReply(slot, reply, {
+    fail(error, currentError, openOutcome, completed) {
+      failSqliteWorkerSlot(slot, error, {
         currentError,
         openOutcome,
+        completed,
         retire: () => retired.promise,
         finish: settleSqliteWorkerJob,
       });
     },
-    finish: edge.forbidden,
-    dispatch: edge.forbidden,
+    finish(target, error, _value, settlement) {
+      expect(target).toBe(job);
+      settleNative(settlement);
+      reject(error);
+    },
+    dispatch() {},
   });
   return { retired, completion, reject, settleNative };
 }
@@ -291,6 +313,7 @@ it("settles eager native factory creation synchronously", async () => {
 it.each([
   "direct refusal",
   "native and report failure",
+  "late deletion refusal",
   "cleanup failure",
   "ordinary closed",
 ] as const)(
@@ -303,10 +326,12 @@ it.each([
     const nativeError =
       outcome === "ordinary closed"
         ? new SqliteWorkerError("Independent native opening failed", "closed")
-        : new SqliteCoordinatorError(
-            "Independent native opening failed",
-            new Error("Native fault"),
-          );
+        : outcome === "late deletion refusal"
+          ? new AgentDatabaseDeletionRefusedError("Deletion fence changed after native open")
+          : new SqliteCoordinatorError(
+              "Independent native opening failed",
+              new Error("Native fault"),
+            );
     const cleanupError = new SqliteCoordinatorError(
       "Independent native cleanup failed",
       new Error("Cleanup fault"),
@@ -336,7 +361,7 @@ it.each([
       }
       registration?.starting?.();
       registration?.committed?.(receipt);
-      if (outcome === "native and report failure") {
+      if (outcome === "native and report failure" || outcome === "late deletion refusal") {
         throw nativeError;
       }
       nativeOpened = true;
@@ -655,14 +680,8 @@ describe("committed agent registration across failed native opening", () => {
         [{ stage: "open", facts: input }],
       ]);
       expect(edge.open).not.toHaveBeenCalled();
-      const { retired, completion, reject, settleNative } = retireFailedReply(
-        reply,
-        opening,
-        refused,
-      );
-      expect(reject).not.toHaveBeenCalled();
-      expect(settleNative).not.toHaveBeenCalled();
-      retired.resolve();
+      const { completion, reject, settleNative } = retireFailedReply(reply, opening, refused);
+      expect(reject).toHaveBeenCalledExactlyOnceWith(refused);
       expect(await completion.promise).toBe(refused);
       expect(settleNative).toHaveBeenCalledExactlyOnceWith({ kind: "completed" });
     } finally {

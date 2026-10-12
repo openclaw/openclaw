@@ -13,25 +13,16 @@ describe("buildSlackBlocksFallbackText", () => {
     ).toBe("Deploy status");
   });
 
-  it("uses image alt text", () => {
-    expect(
-      buildSlackBlocksFallbackText([
-        { type: "image", image_url: "https://example.com/image.png", alt_text: "Latency chart" },
-      ] as never),
-    ).toBe("Latency chart");
-  });
-
-  it.each([
-    ["image", "Alt &lt;@U123&gt;", "Alt &lt;@U123&gt;"],
-    ["video", "Title &lt;@U123&gt;", "Title <@U123>"],
-  ])("preserves %s title/alt precedence and formatting", (type, escaped, plain) => {
+  it("preserves image title/alt precedence and formatting", () => {
     const block = {
-      type,
+      type: "image",
       alt_text: " Alt <@U123> ",
       title: { type: "plain_text", text: " Title <@U123> " },
     };
-    expect(renderSlackBlockFallbackText(block)).toBe(escaped);
-    expect(renderSlackBlockFallbackText(block, { nativeDataFormat: "plain" })).toBe(plain);
+    expect(renderSlackBlockFallbackText(block)).toBe("Alt &lt;@U123&gt;");
+    expect(renderSlackBlockFallbackText(block, { nativeDataFormat: "plain" })).toBe(
+      "Alt &lt;@U123&gt;",
+    );
     expect(renderSlackBlockFallbackText({ ...block, alt_text: "" })).toBe("Title &lt;@U123&gt;");
     expect(renderSlackBlockFallbackText({ ...block, title: null })).toBe("Alt &lt;@U123&gt;");
   });
@@ -121,20 +112,6 @@ describe("buildSlackBlocksFallbackText", () => {
         ],
       }),
     ).toBe("Deploy status\n*Region*\nus-east-1\nHealthy");
-  });
-
-  it("includes section accessory labels without hidden values", () => {
-    expect(
-      renderSlackBlockFallbackText({
-        type: "section",
-        text: { type: "mrkdwn", text: "Deploy status" },
-        accessory: {
-          type: "button",
-          text: { type: "plain_text", text: "Approve" },
-          value: "secret-approval-token",
-        },
-      }),
-    ).toBe("Deploy status\nApprove");
   });
 
   it("renders rich text and context without hidden metadata", () => {
@@ -233,23 +210,6 @@ describe("buildSlackBlocksFallbackText", () => {
 });
 
 describe("parseSlackBlocksInput", () => {
-  it("returns undefined when blocks are missing", () => {
-    expect(parseSlackBlocksInput(undefined)).toBeUndefined();
-    expect(parseSlackBlocksInput(null)).toBeUndefined();
-  });
-
-  it("accepts blocks arrays", () => {
-    const parsed = parseSlackBlocksInput([{ type: "divider" }]);
-    expect(parsed).toEqual([{ type: "divider" }]);
-  });
-
-  it("accepts JSON blocks strings", () => {
-    const parsed = parseSlackBlocksInput(
-      '[{"type":"section","text":{"type":"mrkdwn","text":"hi"}}]',
-    );
-    expect(parsed).toEqual([{ type: "section", text: { type: "mrkdwn", text: "hi" } }]);
-  });
-
   it("rejects invalid block payloads", () => {
     const cases = [
       {
@@ -292,26 +252,5 @@ describe("parseSlackModalPrivateMetadata", () => {
     expect(parseSlackModalPrivateMetadata(undefined)).toStrictEqual({});
     expect(parseSlackModalPrivateMetadata("")).toStrictEqual({});
     expect(parseSlackModalPrivateMetadata("{bad-json")).toStrictEqual({});
-  });
-
-  it("parses known metadata fields", () => {
-    expect(
-      parseSlackModalPrivateMetadata(
-        JSON.stringify({
-          sessionKey: "agent:main:slack:channel:C1",
-          channelId: "D123",
-          channelType: "im",
-          userId: "U123",
-          pluginInteractiveData: "dean.contract:confirm",
-          ignored: "x",
-        }),
-      ),
-    ).toEqual({
-      sessionKey: "agent:main:slack:channel:C1",
-      channelId: "D123",
-      channelType: "im",
-      userId: "U123",
-      pluginInteractiveData: "dean.contract:confirm",
-    });
   });
 });

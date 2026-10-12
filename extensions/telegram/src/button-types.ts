@@ -32,6 +32,10 @@ import {
 
 export type TelegramButtonStyle = "danger" | "success" | "primary";
 
+export function normalizeTelegramButtonStyle(style: unknown): TelegramButtonStyle | undefined {
+  return style === "danger" || style === "success" || style === "primary" ? style : undefined;
+}
+
 type TelegramInlineButton = {
   text: string;
   callback_data?: string;
@@ -106,11 +110,7 @@ function toTelegramInlineButton(
   button: MessagePresentationButton,
   options?: TelegramButtonBuildOptions,
 ): TelegramInlineButton | undefined {
-  const buttonStyle = button.style;
-  const style =
-    buttonStyle === "danger" || buttonStyle === "success" || buttonStyle === "primary"
-      ? buttonStyle
-      : undefined;
+  const style = normalizeTelegramButtonStyle(button.style);
   const action = resolveMessagePresentationButtonAction(button);
   if (!action) {
     return recordDroppedControl(button, options, "invalid_action");
@@ -190,29 +190,22 @@ function chunkInteractiveButtons(
   rows: TelegramInlineButton[][],
   options?: TelegramButtonBuildOptions,
 ) {
-  let row: TelegramInlineButton[] = [];
-  const flush = () => {
-    if (row.length > 0) {
-      rows.push(row);
-      row = [];
-    }
-  };
+  let row: TelegramInlineButton[] | undefined;
   for (const button of buttons) {
     const rendered = toTelegramInlineButton(button, options);
     if (!rendered) {
       continue;
     }
-    if (resolveMessagePresentationButtonAction(button)?.type === "question") {
-      flush();
-      rows.push([rendered]);
-      continue;
+    const singleRow = resolveMessagePresentationButtonAction(button)?.type === "question";
+    if (!row || row.length === TELEGRAM_INTERACTIVE_ROW_SIZE || singleRow) {
+      row = [];
+      rows.push(row);
     }
     row.push(rendered);
-    if (row.length === TELEGRAM_INTERACTIVE_ROW_SIZE) {
-      flush();
+    if (singleRow) {
+      row = undefined;
     }
   }
-  flush();
 }
 
 export function buildTelegramPresentationButtons(
@@ -224,19 +217,15 @@ export function buildTelegramPresentationButtons(
     if (!isMessagePresentationInteractiveBlock(block)) {
       continue;
     }
-    if (block.type === "buttons") {
-      chunkInteractiveButtons(block.buttons, rows, options);
-      continue;
-    }
-    chunkInteractiveButtons(
-      block.options.map((option) => ({
-        label: option.label,
-        action: option.action,
-        value: option.value,
-      })),
-      rows,
-      options,
-    );
+    const buttons =
+      block.type === "buttons"
+        ? block.buttons
+        : block.options.map((option) => ({
+            label: option.label,
+            action: option.action,
+            value: option.value,
+          }));
+    chunkInteractiveButtons(buttons, rows, options);
   }
   return rows.length > 0 ? rows : undefined;
 }

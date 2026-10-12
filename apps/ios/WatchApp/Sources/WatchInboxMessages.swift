@@ -535,10 +535,6 @@ extension WatchAppSnapshotMessage: Codable {
         let gatewayConnected = Self.boolValue(payload["gatewayConnected"])
         let agentName = (payload["agentName"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let agentAvatarURL = (payload["agentAvatarUrl"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let agentAvatarText = (payload["agentAvatarText"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
         let sessionKey = (payload["sessionKey"] as? String) ?? ""
         let gatewayStableID = WatchGatewayID.exact(payload["gatewayStableID"] as? String)
         let talkEnabled = Self.boolValue(payload["talkEnabled"])
@@ -560,8 +556,8 @@ extension WatchAppSnapshotMessage: Codable {
                     connected: gatewayConnected),
             gatewayConnected: gatewayConnected,
             agentName: agentName.isEmpty ? "Main" : agentName,
-            agentAvatarURL: agentAvatarURL?.isEmpty == false ? agentAvatarURL : nil,
-            agentAvatarText: agentAvatarText?.isEmpty == false ? agentAvatarText : nil,
+            agentAvatarURL: (payload["agentAvatarUrl"] as? String)?.trimmedNonEmpty,
+            agentAvatarText: (payload["agentAvatarText"] as? String)?.trimmedNonEmpty,
             sessionKey: sessionKey.isEmpty ? "main" : sessionKey,
             gatewayStableID: gatewayStableID,
             talkStatus: Self.parseStatus(
@@ -633,30 +629,22 @@ extension WatchAppSnapshotMessage: Codable {
         let talkStatusText = try legacy.decodeIfPresent(String.self, forKey: .talkStatusText)
         let chatStatusCode = try legacy.decodeIfPresent(String.self, forKey: .chatStatusCode)
         let chatStatusText = try legacy.decodeIfPresent(String.self, forKey: .chatStatusText)
-        if let gatewayStatus = OpenClawWatchAppStatus.decode(
+        self.gatewayStatus = OpenClawWatchAppStatus.decode(
             from: container,
             forKey: .gatewayStatus,
             fallbackText: gatewayStatusText)
-        {
-            self.gatewayStatus = gatewayStatus
-        } else {
-            self.gatewayStatus = OpenClawWatchAppStatus.decodeLegacyGateway(
+            ?? OpenClawWatchAppStatus.decodeLegacyGateway(
                 text: gatewayStatusText,
                 connected: self.gatewayConnected)
-        }
-        if let talkStatus = OpenClawWatchAppStatus.decode(
+        self.talkStatus = OpenClawWatchAppStatus.decode(
             from: container,
             forKey: .talkStatus,
             fallbackText: talkStatusText)
-        {
-            self.talkStatus = talkStatus
-        } else {
-            self.talkStatus = OpenClawWatchAppStatus.decodeLegacyTalk(
+            ?? OpenClawWatchAppStatus.decodeLegacyTalk(
                 text: talkStatusText,
                 enabled: self.talkEnabled,
                 listening: self.talkListening,
                 speaking: self.talkSpeaking)
-        }
         self.chatStatus = (try? container.decode(
             OpenClawWatchAppStatus.self,
             forKey: .chatStatus)) ?? OpenClawWatchAppStatus.decodeLegacyChat(

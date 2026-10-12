@@ -195,11 +195,7 @@ export function broadcastApprovalResolvedEvent<TPayload>(params: {
     params.approvalKind === "system-agent"
       ? "openclaw.approval.resolved"
       : `${params.approvalKind}.approval.resolved`;
-  const recipientConnIds = resolveApprovalRequestRecipientConnIds({
-    approvalKind: params.approvalKind,
-    context: params.context,
-    record: params.record,
-  });
+  const recipientConnIds = resolveApprovalRequestRecipientConnIds(params);
   if (recipientConnIds) {
     params.context.broadcastToConnIds(eventName, params.event, recipientConnIds, {
       dropIfSlow: true,
@@ -366,13 +362,22 @@ export async function handlePendingApprovalRequest<
         });
       }
     }
-    const internalApprovalSubscriberCount =
-      suppressDelivery || approvalClientsOnly
-        ? 0
-        : (params.context.approvalEvents?.publishRequested(
+    const approvalEvents = params.context.approvalEvents;
+    let internalApprovalSubscriberCount = 0;
+    if (!suppressDelivery && !approvalClientsOnly && approvalEvents) {
+      internalApprovalSubscriberCount = approvalEvents.publishRequestedAsync
+        ? await approvalEvents.publishRequestedAsync(
             params.approvalKind ?? "exec",
             params.requestEvent,
-          ) ?? 0);
+          )
+        : approvalEvents.publishRequested(params.approvalKind ?? "exec", params.requestEvent);
+    }
+
+    if (!params.manager.isPendingDeliveryCurrent(params.record)) {
+      deliveryReady.resolve(true);
+      await handoff.observation;
+      return;
+    }
 
     const hasApprovalClients = suppressDelivery
       ? false
@@ -396,12 +401,17 @@ export async function handlePendingApprovalRequest<
       !hasApprovalClients &&
       !delivered &&
       (params.approvalKind !== "plugin" || pluginRequest !== undefined) &&
-      hasApprovalTurnSourceRoute({
+      (await hasApprovalTurnSourceRoute({
         turnSourceChannel: params.record.request.turnSourceChannel,
         turnSourceAccountId: params.record.request.turnSourceAccountId,
         approvalKind: params.approvalKind ?? "exec",
         ...(pluginRequest ? { request: pluginRequest } : {}),
-      });
+      }));
+    if (!params.manager.isPendingDeliveryCurrent(params.record)) {
+      deliveryReady.resolve(true);
+      await handoff.observation;
+      return;
+    }
     const deliveryRoute: ApprovalRequestDeliveryRoute = delivered
       ? "forwarder"
       : hasApprovalClients
@@ -514,13 +524,15 @@ export async function handleApprovalResolve<
       respondApprovalStorageUnavailable({ ...params, operation: "resolve", error });
     }
   };
-  const custody = params.reviewer
-    ? prepareApprovalChannelCustody({
-        cfg: params.context.getRuntimeConfig(),
-        approvalKind: params.approvalKind,
-        reviewer: params.reviewer,
-      })
-    : null;
+  const readCustody = () =>
+    params.reviewer
+      ? prepareApprovalChannelCustody({
+          cfg: params.context.getRuntimeConfig(),
+          approvalKind: params.approvalKind,
+          reviewer: params.reviewer,
+        })
+      : null;
+  const custody = readCustody();
   if (params.reviewer && !custody) {
     respondUnknownOrExpiredApproval(params.respond);
     return;
@@ -591,13 +603,7 @@ export async function handleApprovalResolve<
     family: params.authority.guard.family,
     assertCurrent: () => {
       params.authority.assertCommitCurrent();
-      const currentCustody = params.reviewer
-        ? prepareApprovalChannelCustody({
-            cfg: params.context.getRuntimeConfig(),
-            approvalKind: params.approvalKind,
-            reviewer: params.reviewer,
-          })
-        : null;
+      const currentCustody = readCustody();
       if (
         params.manager.getLocalSnapshot(resolved.approvalId) !== resolved.snapshot ||
         resolved.snapshot.request.sessionKey !== sourceSessionKey ||

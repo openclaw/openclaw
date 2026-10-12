@@ -8,6 +8,7 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
@@ -39,28 +40,16 @@ it("settles accepted binding writes after scheduler cancellation before closing 
       targetSessionKey: "agent:main:old",
       targetKind: "session",
     });
-    const run = stateWorker.runOpenClawStateWorkerOperation;
-    const spy = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        run(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                if (
-                  command.type === "conversationBindings.bind" ||
-                  command.type === "conversationBindings.remove"
-                ) {
-                  entered.resolve();
-                  await release.promise;
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-      );
+    const spy = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (
+        command.type === "conversationBindings.bind" ||
+        command.type === "conversationBindings.remove"
+      ) {
+        entered.resolve();
+        await release.promise;
+      }
+      return scope.execute(command, executeOptions);
+    });
     restore = () => spy.mockRestore();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     kernel.scheduler.schedule({

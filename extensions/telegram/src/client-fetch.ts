@@ -34,10 +34,6 @@ export function asTelegramClientFetch(
   return fetchImpl as unknown as TelegramClientFetch;
 }
 
-function asTelegramCompatFetch(fetchImpl: TelegramClientFetch): TelegramCompatFetch {
-  return fetchImpl as unknown as TelegramCompatFetch;
-}
-
 function isTelegramAbortSignalLike(value: unknown): value is TelegramAbortSignalLike {
   return (
     typeof value === "object" &&
@@ -64,7 +60,7 @@ export function createTelegramClientFetch(params: {
   shutdownSignal?: unknown;
   transport?: Partial<Pick<TelegramTransport, "forceFallback" | "sourceFetch">>;
 }): TelegramCompatFetch {
-  const callFetch = asTelegramCompatFetch(params.fetchImpl);
+  const callFetch = params.fetchImpl as unknown as TelegramCompatFetch;
   const isRawSourceFetch =
     params.transport?.sourceFetch !== undefined &&
     params.fetchImpl === asTelegramClientFetch(params.transport.sourceFetch);

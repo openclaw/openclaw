@@ -127,9 +127,14 @@ function resolveTerminalRequest(
     completionOutcome = { status: "timeout" };
     completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
   }
+  // Reply evidence follows producer order; duplicate receipts may still drain cleanup.
   const terminalReply = mergeAgentRunTerminalReplySnapshot(
     entry.completion?.terminalReply,
-    completeParams.terminalReply,
+    entry.completion?.terminalReply &&
+      typeof existingEndedAt === "number" &&
+      (completeParams.endedAt ?? now) <= existingEndedAt
+      ? undefined
+      : completeParams.terminalReply,
   );
   return {
     requestedEndedAt,
@@ -439,6 +444,20 @@ function planTerminalCompletion(
     };
     entry.cleanupHandled = false;
     entry.terminalOwner = "interrupted-recovery";
+    if (!entry.collect && !suppressSessionEffects) {
+      // Unfinished work needs its history even when successful completion would delete it.
+      entry.cleanup = "keep";
+      if (
+        entry.expectsCompletionMessage === false &&
+        entry.completionRequesterSessionId &&
+        entry.completionRequesterLifecycleRevision
+      ) {
+        // Quiet completion does not waive continuation after a restart. Keep the
+        // handoff private and bound to the requester captured before launch.
+        entry.completionTarget = "parent";
+        entry.requesterTurnRunId = undefined;
+      }
+    }
   }
   const sessionSuperseded = context.newerGenerationOwnsSession(currentEntry);
   if (

@@ -117,29 +117,23 @@ export function runEmbeddedAgent(
     (internalParamsInput.preparedModelRuntimeMode === "isolated-read-only"
       ? undefined
       : getPreparedModelRuntimePluginGeneration());
-  return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-    runEmbeddedAgentInternal({
+  return withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+    const prepared = await prepareEmbeddedRunSession({
       ...internalParamsInput,
       config,
       lifecycleGeneration,
       ...(pluginGeneration ? { pluginGeneration } : {}),
-    }),
-  );
-}
-
-async function runEmbeddedAgentInternal(
-  paramsInput: RunEmbeddedAgentInternalParams,
-): Promise<EmbeddedAgentRunResult> {
-  const prepared = await prepareEmbeddedRunSession(paramsInput);
-  return await withRequiredSessionPlacement(
-    prepared.runSessionTarget,
-    {
-      config: prepared.params.config,
-      assertCurrent: () => prepared.params.preparedRunAdmission?.assertSourceCurrent(),
-      signal: prepared.params.abortSignal,
-    },
-    () => runEmbeddedAgentForSession(prepared),
-  );
+    });
+    return await withRequiredSessionPlacement(
+      prepared.runSessionTarget,
+      {
+        config: prepared.params.config,
+        assertCurrent: prepared.params.preparedRunAdmission?.assertSourceCurrent,
+        signal: prepared.params.abortSignal,
+      },
+      () => runEmbeddedAgentForSession(prepared),
+    );
+  });
 }
 
 async function runEmbeddedAgentForSession(
@@ -148,13 +142,10 @@ async function runEmbeddedAgentForSession(
   const {
     params: paramsBase,
     runSessionTarget,
-    sessionAdmission,
     contextEngineAgentId,
     queuedLifecycleGeneration,
   } = prepared;
-  const skillWorkshopProposalMutationBudget = paramsBase.skillWorkshopProposalOnly
-    ? (paramsBase.skillWorkshopProposalMutationBudget ?? { remaining: 1 })
-    : undefined;
+  let sessionAdmission = prepared.sessionAdmission;
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
     ...paramsBase,
@@ -164,7 +155,6 @@ async function runEmbeddedAgentForSession(
       (paramsBase.sessionPersistence === "detached"
         ? SessionManager.inMemory(paramsBase.cwd ?? paramsBase.workspaceDir)
         : undefined),
-    skillWorkshopProposalMutationBudget,
   });
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane, params);
@@ -199,6 +189,12 @@ async function runEmbeddedAgentForSession(
     },
     setParams: (nextParams) => {
       params = nextParams;
+    },
+    onSessionWriterClaimed: (entry) => {
+      if (sessionAdmission) {
+        // Native preparation must consume the claim's postimage, not the pre-queue row.
+        sessionAdmission = { ...sessionAdmission, entry };
+      }
     },
   });
   const { enqueueGlobal, enqueueSession, noteLaneTaskProgress, throwIfAborted } = laneController;
@@ -450,7 +446,9 @@ async function runEmbeddedAgentForSession(
               });
               const normalizedSessionKey = params.sessionKey?.trim();
               const modelFallbackAvailability =
-                params.modelFallbackAvailability ??
+                (params.resolvedModelSelection?.fallbacksOverride === undefined
+                  ? params.modelFallbackAvailability
+                  : undefined) ??
                 resolveModelFallbackAvailability({
                   cfg: params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG,
                   agentId: workspaceResolution.agentId,
@@ -485,7 +483,10 @@ async function runEmbeddedAgentForSession(
                 runId: params.runId,
                 trigger: params.trigger,
                 event: { cleanedBody: params.prompt },
-                context: hookCtx,
+                context: {
+                  ...hookCtx,
+                  heartbeatEventQueueSessionKey: params.heartbeatEventQueueSessionKey,
+                },
                 onDispatch: () =>
                   notifyExecutionPhase("before_agent_reply", { provider, model: modelId }),
                 onDeclined: () =>
@@ -508,7 +509,7 @@ async function runEmbeddedAgentForSession(
               }
 
               assistantErrorTranscript ??=
-                params.assistantErrorTranscript ?? createAssistantErrorTranscript(params);
+                params.assistantErrorTranscript ?? createAssistantErrorTranscript();
               terminal ??=
                 (params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd)
                   ? undefined
@@ -676,7 +677,7 @@ async function runEmbeddedAgentForSession(
         } finally {
           // Error transcript and terminal publication belong to the logical run, not each generation.
           if (ownsAssistantErrorTranscript) {
-            await assistantErrorTranscript?.settle(failed && !params.abortSignal?.aborted);
+            assistantErrorTranscript?.settle(failed && !params.abortSignal?.aborted);
           }
         }
         refresh.mergeTerminalReceipt(result);

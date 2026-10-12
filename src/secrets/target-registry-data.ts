@@ -113,32 +113,24 @@ function listChannelSecretTargetRegistryEntries(
 }
 
 const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
-  {
-    id: "auth-profiles.api_key.key",
-    targetType: "auth-profiles.api_key.key",
+  ...(
+    [
+      ["api_key", "key"],
+      ["token", "token"],
+    ] as const
+  ).map(([authProfileType, field]): SecretTargetRegistryEntry => ({
+    id: `auth-profiles.${authProfileType}.${field}`,
+    targetType: `auth-profiles.${authProfileType}.${field}`,
     configFile: "auth-profile-store",
-    pathPattern: "profiles.*.key",
-    refPathPattern: "profiles.*.keyRef",
+    pathPattern: `profiles.*.${field}`,
+    refPathPattern: `profiles.*.${field}Ref`,
     secretShape: SIBLING_REF_SHAPE,
     expectedResolvedValue: "string",
     includeInPlan: true,
     includeInConfigure: true,
     includeInAudit: true,
-    authProfileType: "api_key",
-  },
-  {
-    id: "auth-profiles.token.token",
-    targetType: "auth-profiles.token.token",
-    configFile: "auth-profile-store",
-    pathPattern: "profiles.*.token",
-    refPathPattern: "profiles.*.tokenRef",
-    secretShape: SIBLING_REF_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-    authProfileType: "token",
-  },
+    authProfileType,
+  })),
   ...[
     "memory.search.remote.apiKey",
     "agents.entries.*.memory.search.remote.apiKey",
@@ -148,6 +140,15 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     "gateway.remote.password",
     "gateway.remote.token",
   ].map((pathPattern) => createOpenClawConfigSecretTargetEntry(pathPattern)),
+  // Header strings support authored env references, but not structured SecretRef config writes.
+  ...["memory.search.remote.headers.*", "agents.entries.*.memory.search.remote.headers.*"].map(
+    (pathPattern): SecretTargetRegistryEntry =>
+      Object.assign(createOpenClawConfigSecretTargetEntry(pathPattern), {
+        includeInPlan: false,
+        includeInConfigure: false,
+        includeInAudit: false,
+      }),
+  ),
   ...["tts", "agents.entries.*.tts"].flatMap((prefix) =>
     ["providers.*", "personas.*.providers.*"].map((providerPath): SecretTargetRegistryEntry => {
       const path = `${prefix}.${providerPath}.apiKey`;

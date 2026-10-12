@@ -27,7 +27,7 @@ import {
   resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
 import {
-  inspectTelegramConversationRoute,
+  inspectTelegramConversationRouteAsync,
   resolveTelegramTargetSession,
   touchTelegramConversationRoute,
 } from "./conversation-route.js";
@@ -44,9 +44,24 @@ import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-me
 const loadTelegramNativeCommandDeliveryRuntime = createLazyRuntimeModule(
   () => import("./bot/delivery.js"),
 );
-const loadTelegramNativeCommandRuntime = createLazyRuntimeModule(
-  () => import("./bot-native-commands.runtime.js"),
-);
+const loadTelegramNativeCommandRuntime = createLazyRuntimeModule(async () => {
+  const {
+    ensureConfiguredBindingRouteReady,
+    getAgentScopedMediaLocalRoots,
+    getSessionEntryAsync,
+    recordDeliveredCommandExchange,
+    resolveChunkMode,
+    resolveStorePath,
+  } = await import("./bot-native-commands.runtime.js");
+  return {
+    ensureConfiguredBindingRouteReady,
+    getAgentScopedMediaLocalRoots,
+    getSessionEntryAsync,
+    recordDeliveredCommandExchange,
+    resolveChunkMode,
+    resolveStorePath,
+  };
+});
 
 type TelegramNativeCommandRuntime = Awaited<ReturnType<typeof loadTelegramNativeCommandRuntime>>;
 type TelegramNativeCommandDeliveryRuntime = Awaited<
@@ -96,6 +111,11 @@ export type TelegramCommandDispatch = TelegramCommandExecutorParams &
     nativeCommandRuntime: TelegramNativeCommandRuntime;
     deliveryOptions: DeliveryBaseOptions;
     loadDeliveryRuntime: () => Promise<TelegramNativeCommandDeliveryRuntime>;
+    recordDeliveredReply: (
+      commandText: string,
+      replyText: string,
+      replyId: string,
+    ) => Promise<void>;
   };
 
 export async function resolveTelegramNativeCommandThreadContext(params: {
@@ -120,7 +140,6 @@ export async function resolveTelegramNativeCommandThreadContext(params: {
   return {
     chatId,
     isGroup,
-    isForum,
     threadSpec,
     threadParams: buildTelegramThreadParams(threadSpec),
   };
@@ -141,12 +160,11 @@ async function resolveTelegramCommandAuth(params: {
   requireAuth: boolean;
 }) {
   const { msg, bot, cfg, accountId, telegramCfg, requireAuth } = params;
-  const { chatId, isGroup, isForum, threadSpec, threadParams } =
+  const { chatId, isGroup, threadSpec, threadParams } =
     await resolveTelegramNativeCommandThreadContext({ msg, bot });
   const senderId = msg.from?.id ? String(msg.from.id) : "";
-  const senderUsername = msg.from?.username ?? "";
   const scopedConfig = params.resolveTelegramGroupConfig(chatId, threadSpec.id, cfg);
-  const inspectedRoute = inspectTelegramConversationRoute({
+  const inspectedRoute = await inspectTelegramConversationRouteAsync({
     cfg,
     accountId,
     chatId,
@@ -155,7 +173,7 @@ async function resolveTelegramCommandAuth(params: {
     senderId,
     topicAgentId: scopedConfig.topicConfig?.agentId,
   });
-  const { route, bindingMode } = inspectedRoute;
+  const { route } = inspectedRoute;
   const targetSessionKey = resolveTelegramTargetSession({
     cfg,
     route,
@@ -204,7 +222,6 @@ async function resolveTelegramCommandAuth(params: {
     dmThreadId,
     storeAllowFrom,
     groupConfig,
-    topicConfig,
     groupAllowOverride,
     effectiveGroupAllow,
   } = groupAllowContext;
@@ -307,19 +324,13 @@ async function resolveTelegramCommandAuth(params: {
   return {
     chatId,
     isGroup,
-    isForum,
-    resolvedThreadId,
     senderId,
-    senderUsername,
-    groupConfig,
-    topicConfig,
     threadSpec,
     threadParams,
     commandAuthorized,
     senderIsOwner,
     assertOwnerCurrent,
     route,
-    bindingMode,
     targetSessionKey,
     inspectedRoute,
     ownerContext,
@@ -352,7 +363,7 @@ export async function prepareTelegramCommandDispatch(
   if (!auth) {
     return null;
   }
-  const { route, bindingMode } = auth;
+  const { route, bindingMode } = auth.inspectedRoute;
   const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
   auth.assertOwnerCurrent?.();
   await touchTelegramConversationRoute(auth.inspectedRoute);
@@ -375,7 +386,7 @@ export async function prepareTelegramCommandDispatch(
           params.bot.api.sendMessage(
             auth.chatId,
             "Configured ACP binding is unavailable right now. Please try again.",
-            buildTelegramThreadParams(auth.threadSpec) ?? {},
+            auth.threadParams ?? {},
           ),
       });
       return null;
@@ -415,6 +426,16 @@ export async function prepareTelegramCommandDispatch(
     linkPreview: runtimeTelegramCfg.linkPreview,
     richMessages,
   };
+  const storePath = nativeCommandRuntime.resolveStorePath(runtimeCfg.session?.store, {
+    agentId: route.agentId,
+  });
+  let transcriptSessionId = (
+    await nativeCommandRuntime.getSessionEntryAsync({
+      agentId: route.agentId,
+      sessionKey: auth.targetSessionKey,
+      storePath,
+    })
+  )?.sessionId;
   return {
     ...params,
     telegramDeps,
@@ -424,5 +445,23 @@ export async function prepareTelegramCommandDispatch(
     nativeCommandRuntime,
     deliveryOptions,
     loadDeliveryRuntime: loadTelegramNativeCommandDeliveryRuntime,
+    recordDeliveredReply: async (commandText, replyText, replyId) => {
+      const result = await nativeCommandRuntime.recordDeliveredCommandExchange({
+        config: runtimeCfg,
+        agentId: route.agentId,
+        sessionKey: auth.targetSessionKey,
+        expectedSessionId: transcriptSessionId,
+        assertCurrent: auth.assertOwnerCurrent,
+        commandText,
+        replyText,
+        commandId: `telegram:${route.accountId}:${auth.chatId}:${params.msg.message_id}`,
+        replyId,
+      });
+      if (result.ok) {
+        transcriptSessionId = result.target.sessionId;
+      } else {
+        logVerbose(`telegram command transcript skipped: ${result.reason}`);
+      }
+    },
   };
 }

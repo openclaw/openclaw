@@ -598,6 +598,7 @@ function withoutPluginHarnessPrivateState(
     assistantErrorTranscript: _assistantErrorTranscript,
     compactionCountOwner: _compactionCountOwner,
     completionCheck: _completionCheck,
+    preparedSessionTarget: _preparedSessionTarget,
     onContextAccountingEvent: _onContextAccountingEvent,
     onCompactionRequestBudget: _onCompactionRequestBudget,
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
@@ -636,6 +637,10 @@ function preparePluginHarnessParams(
       : undefined,
     harness.conversationToolPolicyNativeTools,
   );
+  if (policies.requiresLiveToolAuthority) {
+    // Native-runtime consent does not waive a separate revocable delegation grant.
+    assertPluginHarnessConversationToolPolicySupport(harness, true);
+  }
   const policyParams = {
     ...preparedParams,
     pluginHarnessToolPolicySafeDeniedTools:

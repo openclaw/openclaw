@@ -122,6 +122,44 @@ describe("memory index", () => {
     expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
   });
 
+  it.each([2, 6])(
+    "rejects a query whose %i dimensions no longer match the index",
+    async (dimensions) => {
+      const manager = await getPersistentManager(createCfg({ provider: "openai" }));
+      await manager.sync({ reason: "test", force: true });
+      const fields = manager as unknown as { provider: EmbeddingProvider };
+      const query = vi
+        .spyOn(fields.provider, "embed")
+        .mockResolvedValue(Array.from({ length: dimensions }, () => 1));
+
+      await expect(manager.search("alpha")).rejects.toThrow(
+        `query embedding has ${dimensions} dimensions, but the memory index expects 4`,
+      );
+      expect(query).toHaveBeenCalledTimes(1);
+
+      query.mockRestore();
+      expect(await manager.search("alpha")).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+      );
+    },
+  );
+
+  it("keeps configured provider fallback available after query dimension drift", async () => {
+    const manager = await getPersistentManager(
+      createCfg({ provider: "openai", fallback: "fallback-provider" }),
+    );
+    await manager.sync({ reason: "test", force: true });
+    const fields = manager as unknown as { provider: EmbeddingProvider };
+    vi.spyOn(fields.provider, "embed").mockResolvedValue([1, 0]);
+
+    expect(await manager.search("alpha")).toEqual([]);
+    expect(manager.status().provider).toBe("fallback-provider");
+    await manager.sync({ reason: "test", force: true });
+    expect(await manager.search("alpha")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+    );
+  });
+
   it("fails search after bounded query embedding retries are exhausted for an explicit provider", async () => {
     const cfg = createCfg({ provider: "openai" });
     const manager = await getPersistentManager(cfg);
@@ -259,20 +297,13 @@ describe("memory index", () => {
     },
   );
 
-  it.each(["bootstrap", "identity-repair", "lexical", "hybrid", "vector"] as const)(
+  it.each(["bootstrap", "lexical", "hybrid", "vector"] as const)(
     "rejects %s retrieval when shared worker admission is full and recovers after drain",
     async (mode) => {
       const cfg = createCfg({ vectorEnabled: false, minScore: 0 });
       const manager = await getPersistentManager(cfg);
       if (mode !== "bootstrap") {
         await manager.sync({ reason: "test" });
-      }
-      if (mode === "identity-repair") {
-        openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
-          "DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'",
-        );
-        expect(manager.status().chunks).toBeGreaterThan(0);
-        expect(manager.status().custom?.indexIdentity).toMatchObject({ status: "missing" });
       }
       const capacityOwner = new WorkerTaskPool({
         workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.search),
@@ -331,10 +362,7 @@ describe("memory index", () => {
     );
     await manager.sync({ reason: "test" });
 
-    const fields = manager as unknown as {
-      db: DatabaseSync;
-    };
-    const insertChunk = fields.db.prepare(
+    const insertChunk = openOpenClawAgentDatabase({ agentId: "main" }).db.prepare(
       "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
     for (let index = 0; index < 4096; index += 1) {
@@ -383,7 +411,7 @@ describe("memory index", () => {
     }
   });
 
-  it("supplements thin strict FTS results for conversational queries", async () => {
+  it("keeps strict keyword hits without expanding thin conversational results", async () => {
     const cases = [
       {
         query: "that thing we discussed about the API",
@@ -411,19 +439,20 @@ describe("memory index", () => {
       }),
     );
     await manager.sync({ reason: "test" });
-    const provider = Reflect.get(manager, "provider") as EmbeddingProvider;
-    const embedSpy = vi.spyOn(provider, "embed");
+    const keywordSpy = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryKeywordSearch");
 
-    for (const entry of cases) {
-      const results = await manager.search(entry.query, { maxResults: 6 });
-      expect(results.some((result) => result.path.endsWith(`memory/${entry.recallFile}`))).toBe(
-        true,
-      );
+    try {
+      for (const entry of cases) {
+        const results = await manager.search(entry.query, { maxResults: 6, lexicalOnly: true });
+        expect(results.map((result) => result.path)).toEqual([`memory/${entry.strictFile}`]);
+      }
+      expect(keywordSpy).toHaveBeenCalledTimes(cases.length);
+    } finally {
+      keywordSpy.mockRestore();
     }
-    expect(embedSpy).toHaveBeenCalledTimes(cases.length);
   });
 
-  it("bounds per-keyword FTS fallback in provider-backed hybrid search", async () => {
+  it("keeps zero-hit keyword fallback in one provider-backed worker request", async () => {
     const cfg = createCfg({
       minScore: 0.35,
     });
@@ -445,8 +474,7 @@ describe("memory index", () => {
       expect(partialResults).toHaveBeenCalledWith(
         expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
       );
-      expect(keywordSpy.mock.calls.length).toBeGreaterThan(1);
-      expect(keywordSpy.mock.calls.length).toBeLessThanOrEqual(7);
+      expect(keywordSpy).toHaveBeenCalledTimes(1);
     } finally {
       keywordSpy.mockRestore();
     }
@@ -867,13 +895,20 @@ describe("memory index", () => {
         expect(maintenance.adoptReindexRetryState).toHaveBeenCalledWith({
           dirty: true,
           memoryFullRetryDirty: true,
+          fullReindexRetryBackoff: { attempts: 0, retryAt: 0, failedWithEmbeddings: false },
           sessionsDirty: true,
           sessionsFullRetryDirty: true,
           sessionsReconcileDirty: true,
           sessionsDirtyFiles: new Set(["session.jsonl"]),
         });
         expect(maintenance.sync).toHaveBeenCalledTimes(expectedSyncCalls);
-        expect(maintenance.sync).toHaveBeenCalledWith({ reason: "search" });
+        expect(maintenance.sync).toHaveBeenNthCalledWith(1, { reason: "search" });
+        if (expectedSyncCalls === 2) {
+          expect(maintenance.sync).toHaveBeenNthCalledWith(2, {
+            reason: "search",
+            force: true,
+          });
+        }
         expect(maintenance.close).toHaveBeenCalledTimes(1);
         expect(manager.status().lastSyncError).toContain(syncError.message);
         expect(Reflect.get(manager, "dirty")).toBe(true);

@@ -35,22 +35,6 @@ function resolveAccountGroups(
   return matchKey ? accounts[matchKey]?.groups : undefined;
 }
 
-function migrateTelegramGroupsInPlace(
-  groups: TelegramGroups | undefined,
-  oldChatId: string,
-  newChatId: string,
-): { migrated: boolean; skippedExisting: boolean } {
-  if (!groups || oldChatId === newChatId || !Object.hasOwn(groups, oldChatId)) {
-    return { migrated: false, skippedExisting: false };
-  }
-  if (Object.hasOwn(groups, newChatId)) {
-    return { migrated: false, skippedExisting: true };
-  }
-  groups[newChatId] = expectDefined(groups[oldChatId], "owned Telegram group config key");
-  delete groups[oldChatId];
-  return { migrated: true, skippedExisting: false };
-}
-
 export function migrateTelegramGroupConfig(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -60,20 +44,23 @@ export function migrateTelegramGroupConfig(params: {
   const scopes: MigrationScope[] = [];
   let skippedExisting = false;
 
-  const migrationTargets: Array<{
-    scope: MigrationScope;
-    groups: TelegramGroups | undefined;
-  }> = [
+  const migrationTargets = [
     { scope: "account", groups: resolveAccountGroups(params.cfg, params.accountId) },
     { scope: "global", groups: params.cfg.channels?.telegram?.groups },
-  ];
+  ] as const;
 
-  for (const target of migrationTargets) {
-    const result = migrateTelegramGroupsInPlace(target.groups, params.oldChatId, params.newChatId);
-    if (result.migrated) {
-      scopes.push(target.scope);
+  const { oldChatId, newChatId } = params;
+  for (const { scope, groups } of migrationTargets) {
+    if (!groups || oldChatId === newChatId || !Object.hasOwn(groups, oldChatId)) {
+      continue;
     }
-    skippedExisting ||= result.skippedExisting;
+    if (Object.hasOwn(groups, newChatId)) {
+      skippedExisting = true;
+      continue;
+    }
+    groups[newChatId] = expectDefined(groups[oldChatId], "owned Telegram group config key");
+    delete groups[oldChatId];
+    scopes.push(scope);
   }
 
   return { migrated: scopes.length > 0, skippedExisting, scopes };

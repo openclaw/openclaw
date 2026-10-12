@@ -13,26 +13,25 @@ export type {
   DispatchReplyWithDispatcher,
 } from "./provider-dispatcher.types.js";
 
-/** Dispatch a reply using the buffered block dispatcher path. */
-export const dispatchReplyWithBufferedBlockDispatcherCore: DispatchReplyWithBufferedBlockDispatcher =
-  async (params) =>
-    await dispatchInboundMessageWithBufferedDispatcher({
-      ctx: params.ctx,
-      cfg: params.cfg,
-      dispatcherOptions: params.dispatcherOptions,
-      toolsAllow: params.toolsAllow,
-      replyResolver: params.replyResolver,
-      replyOptions: params.replyOptions,
-      dispatchReplyFromConfig: params.dispatchReplyFromConfig,
-    });
-
-/** Dispatch a reply using the standard dispatcher path. */
-export const dispatchReplyWithDispatcherCore: DispatchReplyWithDispatcher = async (params) =>
-  await dispatchInboundMessageWithDispatcher({
+function projectDispatchParams(params: Parameters<DispatchReplyWithDispatcher>[0]) {
+  return {
     ctx: params.ctx,
     cfg: params.cfg,
     dispatcherOptions: params.dispatcherOptions,
     toolsAllow: params.toolsAllow,
     replyResolver: params.replyResolver,
     replyOptions: params.replyOptions,
-  });
+  };
+}
+
+/** Dispatch a reply using the buffered block dispatcher path. */
+export const dispatchReplyWithBufferedBlockDispatcherCore: DispatchReplyWithBufferedBlockDispatcher =
+  async (params) =>
+    await dispatchInboundMessageWithBufferedDispatcher({
+      ...projectDispatchParams(params),
+      dispatchReplyFromConfig: params.dispatchReplyFromConfig,
+    });
+
+/** Dispatch a reply using the standard dispatcher path. */
+export const dispatchReplyWithDispatcherCore: DispatchReplyWithDispatcher = async (params) =>
+  await dispatchInboundMessageWithDispatcher(projectDispatchParams(params));

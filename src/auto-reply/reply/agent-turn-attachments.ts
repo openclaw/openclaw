@@ -63,21 +63,14 @@ export async function resolveAgentTurnAttachments(params: {
         isImageAttachment: runtime.isImageAttachment,
       })
     : [];
-  const firstHistoryAttachmentIndex =
-    currentAttachments.reduce(
-      (maxIndex, attachment) =>
-        Number.isFinite(attachment.index) ? Math.max(maxIndex, attachment.index) : maxIndex,
-      -1,
-    ) + 1;
+  // Normalization assigns ascending source indexes, preserving gaps from filtered media.
+  const firstHistoryAttachmentIndex = (currentAttachments.at(-1)?.index ?? -1) + 1;
   const historyAttachments: MediaAttachment[] = recentHistoryImages.map((image, index) => ({
     path: image.path,
     mime: image.contentType,
     kind: image.kind,
     index: firstHistoryAttachmentIndex + index,
   }));
-  const historyAttachmentByIndex = new Map(
-    historyAttachments.map((attachment, index) => [attachment.index, recentHistoryImages[index]]),
-  );
   const mediaAttachments = [...currentAttachments, ...historyAttachments];
   const cache = new runtime.MediaAttachmentCache(mediaAttachments, {
     localPathRoots: runtime.resolveMediaAttachmentLocalRoots({
@@ -110,7 +103,7 @@ export async function resolveAgentTurnAttachments(params: {
         data: buffer.toString("base64"),
       });
       resultIndexes.push(attachment.index);
-      const historyImage = historyAttachmentByIndex.get(attachment.index);
+      const historyImage = recentHistoryImages[attachment.index - firstHistoryAttachmentIndex];
       if (historyImage) {
         resolvedHistoryImages.push(historyImage);
       }

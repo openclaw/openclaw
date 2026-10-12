@@ -3,20 +3,19 @@ import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   createRetainedOperation,
+  mapRetainedOperation,
   type RetainedOperation,
 } from "@openclaw/worker-runtime/lifecycle";
 import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
 import { getChildLogger } from "../logging/logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import type {
   PreparedSqliteReadOnlyLocation,
   RetainedPreparedSqliteReadOnlyLocation,
 } from "./sqlite-readonly-location.types.js";
-import {
-  beginSqliteSnapshotRetirement,
-  drainPendingSqliteSnapshotTokens,
-} from "./sqlite-snapshot-retirement.js";
+import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import { SQLITE_STAGING_TOKEN_FILES, type SqliteStagingToken } from "./sqlite-staging-token.js";
 
 export class SqliteSnapshotCleanupError extends Error {}
@@ -52,7 +51,6 @@ type SnapshotDirectory = {
   retiringRetained?: RetainedOperation<boolean>;
   retirementStarted?: boolean;
   retired?: boolean;
-  removed?: boolean;
   readers: Set<symbol>;
 };
 type SnapshotCleanupState = {
@@ -62,7 +60,7 @@ type SnapshotCleanupState = {
   pendingSignalCleanup: Promise<void> | undefined;
   signalCleanup: () => Promise<void>;
 };
-// Reloaded callers share reader, work, and retirement fences with retained native owners.
+// Reader and producer lifetimes share one cleanup registry.
 const cleanupState = resolveGlobalSingleton<SnapshotCleanupState>(
   Symbol.for("openclaw.sqliteSnapshotCleanup"),
   () => ({
@@ -75,9 +73,6 @@ const cleanupState = resolveGlobalSingleton<SnapshotCleanupState>(
 );
 const snapshotDirectories = cleanupState.directories;
 const activeSnapshotWork = cleanupState.activeWork;
-// A caller keeps its original record until settlement, even after another caller removes its bytes.
-const pendingTempDirectoryCleanup = new Map<string, SnapshotDirectory>();
-
 function snapshotDirectory(directory: string): SnapshotDirectory {
   let owner = snapshotDirectories.get(directory);
   if (!owner) {
@@ -87,17 +82,9 @@ function snapshotDirectory(directory: string): SnapshotDirectory {
   return owner;
 }
 
-function findSnapshotDirectory(directory: string): SnapshotDirectory | undefined {
-  return pendingTempDirectoryCleanup.get(directory) ?? snapshotDirectories.get(directory);
-}
-
-function releaseSnapshotDirectoryCustody(directory: string, owner: SnapshotDirectory | undefined) {
-  if (pendingTempDirectoryCleanup.get(directory) === owner) {
-    pendingTempDirectoryCleanup.delete(directory);
-  }
-  if (snapshotDirectories.get(directory) === owner) {
-    snapshotDirectories.delete(directory);
-  }
+function completeSnapshotDirectoryRemoval(directory: string) {
+  snapshotDirectories.delete(directory);
+  return true;
 }
 
 export function cleanupSnapshotOperations(): Promise<void> {
@@ -115,16 +102,13 @@ export function cleanupSnapshotOperations(): Promise<void> {
       if (next.done) {
         break;
       }
-      const [directory, owner] = next.value;
-      await removeTempDirectoryAsync(
-        directory,
-        (error) =>
-          emitSnapshotCleanupFailure({
-            cleanupRoot: directory,
-            operation: "rm",
-            code: extractErrorCode(error),
-          }),
-        owner,
+      const [directory] = next.value;
+      await removeTempDirectoryAsync(directory, (error) =>
+        emitSnapshotCleanupFailure({
+          cleanupRoot: directory,
+          operation: "rm",
+          code: extractErrorCode(error),
+        }),
       );
     }
   })().finally(() => {
@@ -155,7 +139,7 @@ export async function withPreparedSqliteSnapshot<T>(
   } catch (cause) {
     outcome = { cause };
   }
-  if (!(await snapshot.cleanupAsync())) {
+  if (!(await snapshot.cleanupAsync().catch(() => false))) {
     // An exit retry is best-effort, not proof that this private copy was removed.
     const readFailure =
       "cause" in outcome
@@ -178,7 +162,6 @@ export function registerSnapshotTempDirectory(
 ): void {
   const owner = snapshotDirectory(directory);
   owner.release = release ?? owner.release;
-  pendingTempDirectoryCleanup.set(directory, owner);
   registerSnapshotCleanup();
 }
 
@@ -191,8 +174,8 @@ function registerSnapshotCleanup(): void {
       }
       // A surviving child retains its kernel token; the next owner reclaims it.
       if (activeSnapshotWork.size === 0) {
-        for (const [pendingDir, owner] of snapshotDirectories) {
-          removeTempDirectory(pendingDir, undefined, owner);
+        for (const pendingDir of snapshotDirectories.keys()) {
+          removeTempDirectory(pendingDir);
         }
       }
     });
@@ -223,13 +206,13 @@ export function retainSnapshotTempDirectory(directory: string): () => void {
 
 /** A successful child hands its files to the caller's enclosing staging owner. */
 export function releaseSnapshotTempDirectory(directory: string): void {
-  const owner = findSnapshotDirectory(directory);
+  const owner = snapshotDirectories.get(directory);
   assertSnapshotReadersRetired(owner);
   if (owner?.releaseRetained) {
     throw new SqliteSnapshotCleanupError("SQLite snapshot requires asynchronous cleanup");
   }
   owner?.release?.(false);
-  releaseSnapshotDirectoryCustody(directory, owner);
+  snapshotDirectories.delete(directory);
 }
 const tempDirectoryRemovalOptions = {
   force: true,
@@ -276,7 +259,6 @@ function assertSnapshotReadersRetired(owner: SnapshotDirectory | undefined): voi
 }
 
 function prepareSnapshotRetirement(directory: string, owner: SnapshotDirectory | undefined) {
-  drainPendingSqliteSnapshotTokens(directory);
   assertSnapshotReadersRetired(owner);
   if (owner?.releaseRetained) {
     throw new SqliteSnapshotCleanupError("SQLite snapshot requires asynchronous cleanup");
@@ -298,6 +280,7 @@ export function retireSqliteSnapshotPayload(
   retirement: ReturnType<typeof beginSqliteSnapshotRetirement>,
 ): void {
   for (const file of retirement.payload) {
+    retireSqliteDatabaseAdmissionForPath(file);
     fs.rmSync(file, tempDirectoryRemovalOptions);
   }
   // Free copied bytes before SQLite allocates its retirement page/journal.
@@ -308,14 +291,9 @@ export function retireSqliteSnapshotPayload(
 export function removeTempDirectory(
   tempDir: string,
   onFailure?: (error: unknown) => void,
-  selectedOwner = findSnapshotDirectory(tempDir),
 ): boolean {
-  let owner = selectedOwner;
+  let owner = snapshotDirectories.get(tempDir);
   try {
-    if (owner?.removed) {
-      releaseSnapshotDirectoryCustody(tempDir, owner);
-      return true;
-    }
     const retirement = prepareSnapshotRetirement(tempDir, owner);
     try {
       if (retirement) {
@@ -328,11 +306,7 @@ export function removeTempDirectory(
     } finally {
       retirement?.release();
     }
-    if (owner) {
-      owner.removed = true;
-    }
-    releaseSnapshotDirectoryCustody(tempDir, owner);
-    return true;
+    return completeSnapshotDirectoryRemoval(tempDir);
   } catch (error) {
     onFailure?.(error);
     registerSnapshotTempDirectory(tempDir);
@@ -343,17 +317,12 @@ export function removeTempDirectory(
 export async function removeTempDirectoryAsync(
   tempDir: string,
   onFailure?: (error: unknown) => void,
-  selectedOwner = findSnapshotDirectory(tempDir),
 ): Promise<boolean> {
-  let owner = selectedOwner;
-  if (owner?.removed) {
-    releaseSnapshotDirectoryCustody(tempDir, owner);
-    return true;
-  }
+  let owner = snapshotDirectories.get(tempDir);
   if (owner?.releaseRetained) {
     const removed = await startRemoveTempDirectory(tempDir, onFailure, owner).result;
     if (removed) {
-      releaseSnapshotDirectoryCustody(tempDir, owner);
+      snapshotDirectories.delete(tempDir);
     }
     return removed;
   }
@@ -362,6 +331,7 @@ export async function removeTempDirectoryAsync(
     const retirement = prepareSnapshotRetirement(tempDir, owner);
     try {
       for (const file of retirement?.payload ?? []) {
+        retireSqliteDatabaseAdmissionForPath(file);
         await retainSnapshotWork(fs.promises.rm(file, tempDirectoryRemovalOptions));
       }
       if (retirement) {
@@ -374,11 +344,7 @@ export async function removeTempDirectoryAsync(
     } finally {
       retirement?.release();
     }
-    if (owner) {
-      owner.removed = true;
-    }
-    releaseSnapshotDirectoryCustody(tempDir, owner);
-    return true;
+    return completeSnapshotDirectoryRemoval(tempDir);
   } catch (error) {
     onFailure?.(error);
     registerSnapshotTempDirectory(tempDir);
@@ -389,7 +355,7 @@ export async function removeTempDirectoryAsync(
 export function startRemoveTempDirectory(
   directory: string,
   onFailure?: (error: unknown) => void,
-  owner = findSnapshotDirectory(directory),
+  owner = snapshotDirectories.get(directory),
 ): RetainedOperation<boolean> {
   if (owner?.retiringRetained) {
     return owner.retiringRetained;
@@ -411,18 +377,9 @@ export function startRemoveTempDirectory(
       onFailure?.(outcome.error);
       retained.resolve(false);
     } else {
-      if (owner) {
-        owner.removed = true;
-      }
-      releaseSnapshotDirectoryCustody(directory, owner);
-      retained.resolve(true);
+      retained.resolve(completeSnapshotDirectoryRemoval(directory));
     }
   });
-  if (owner?.removed) {
-    releaseSnapshotDirectoryCustody(directory, owner);
-    retained.resolve(true);
-    return retained.operation;
-  }
   try {
     sealRetainedSnapshotTempDirectory(directory);
     if (!owner?.releaseRetained) {
@@ -468,24 +425,16 @@ export function adoptPreparedLocation(
   ownedRoot?: string,
   requireCleanup = false,
   onCleanupFailure?: (report: CleanupFailureReport) => void,
-): PreparedSqliteReadOnlyLocation {
-  return adoptRetainedPreparedLocation(location, ownedRoot, requireCleanup, onCleanupFailure);
-}
-
-export function adoptRetainedPreparedLocation(
-  location: string,
-  ownedRoot?: string,
-  requireCleanup = false,
-  onCleanupFailure?: (report: CleanupFailureReport) => void,
 ): PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation {
   const tempDir = ownedRoot ?? path.dirname(location);
   registerSnapshotTempDirectory(tempDir);
-  const originalOwner = snapshotDirectory(tempDir);
   let active = true;
   let pending: Promise<boolean> | undefined;
   let retainedCleanup: RetainedOperation<boolean> | undefined;
   let reported = false;
+  let cleanupFailure: unknown;
   const reportFailure = (error: unknown) => {
+    cleanupFailure = error;
     if (!requireCleanup && !reported) {
       reported = true;
       emitSnapshotCleanupFailure(
@@ -497,10 +446,11 @@ export function adoptRetainedPreparedLocation(
   const complete = (removed: boolean) => {
     if (removed) {
       active = false;
-      releaseSnapshotDirectoryCustody(tempDir, originalOwner);
+      snapshotDirectories.delete(tempDir);
     } else if (requireCleanup) {
       throw new SqliteSnapshotCleanupError(
         `SQLite read-only worker snapshot cleanup failed: ${tempDir}`,
+        { cause: cleanupFailure },
       );
     }
     return removed;
@@ -509,37 +459,15 @@ export function adoptRetainedPreparedLocation(
     if (retainedCleanup?.read().status === "pending") {
       return retainedCleanup;
     }
-    let removal: RetainedOperation<boolean> | undefined;
-    const retained = createRetainedOperation<boolean>(() => {
-      if (!removal || retained.operation.read().status !== "pending") {
-        return;
-      }
-      removal.service();
-      const outcome = removal.read();
-      if (outcome.status === "pending") {
-        return;
-      }
-      try {
-        if (outcome.status === "rejected") {
-          throw outcome.error;
-        }
-        retained.resolve(complete(outcome.value));
-      } catch (error) {
-        retained.reject(error);
-      }
-    });
-    retainedCleanup = retained.operation;
-    if (!active || originalOwner.removed) {
+    if (!active) {
+      const retained = createRetainedOperation<boolean>(() => {});
       retained.resolve(complete(true));
-    } else {
-      removal = startRemoveTempDirectory(tempDir, reportFailure);
-      void removal.result.then(
-        () => retained.operation.service(),
-        () => retained.operation.service(),
-      );
-      retained.operation.service();
+      return (retainedCleanup = retained.operation);
     }
-    return retained.operation;
+    return (retainedCleanup = mapRetainedOperation(
+      startRemoveTempDirectory(tempDir, reportFailure),
+      complete,
+    ));
   };
   return {
     location,
@@ -550,25 +478,25 @@ export function adoptRetainedPreparedLocation(
         // requireCleanup delegates to complete(false) for the fatal throw.
         return requireCleanup ? complete(false) : false;
       }
-      if (!active || originalOwner.removed) {
+      if (!active) {
         return complete(true);
       }
       return complete(removeTempDirectory(tempDir, reportFailure));
     },
     cleanupAsync: () => {
-      if (findSnapshotDirectory(tempDir)?.releaseRetained || retainedCleanup) {
+      if (snapshotDirectories.get(tempDir)?.releaseRetained || retainedCleanup) {
         return startCleanup().result;
       }
       if (pending) {
         return pending;
       }
-      if (!active || originalOwner.removed) {
+      if (!active) {
         return Promise.resolve(complete(true));
       }
       // Register ownership before invoking native removal; concurrent callers
       // join it, and synchronous callers cannot race or report early success.
       pending = Promise.resolve()
-        .then(() => removeTempDirectoryAsync(tempDir, reportFailure, originalOwner))
+        .then(() => removeTempDirectoryAsync(tempDir, reportFailure))
         .then(complete)
         .finally(() => {
           pending = undefined;

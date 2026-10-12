@@ -85,16 +85,10 @@ export async function getUpdateCheckResult(params: {
 }
 
 export function resolveUpdateAvailability(update: UpdateCheckResult) {
-  if (update.installKind === "host" || update.installKind === "immutable") {
-    return {
-      available: false,
-      hasGitUpdate: false,
-      hasRegistryUpdate: false,
-      latestVersion: null,
-      gitBehind: null,
-    };
-  }
-  const latestVersion = update.registry?.latestVersion ?? null;
+  const latestVersion =
+    update.installKind === "host" || update.installKind === "immutable"
+      ? null
+      : (update.registry?.latestVersion ?? null);
   const registryCmp = latestVersion ? compareSemverStrings(VERSION, latestVersion) : null;
   const hasRegistryUpdate = !update.error && registryCmp != null && registryCmp < 0;
   const gitBehind =
@@ -146,45 +140,6 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
   }
   const parts: string[] = [];
 
-  const appendRegistryUpdateSummary = () => {
-    const registryLabel =
-      update.registry?.tag && update.registry.tag !== "latest"
-        ? `npm ${update.registry.tag}`
-        : "npm latest";
-    if (update.registry?.latestVersion) {
-      const cmp = compareSemverStrings(VERSION, update.registry.latestVersion);
-      if (cmp === 0) {
-        if (update.installKind !== "git") {
-          parts.push("up to date");
-        }
-        // Git installs still show registry latest, but git ahead/behind remains the primary state.
-        parts.push(`${registryLabel} ${update.registry.latestVersion}`);
-      } else if (cmp != null && cmp < 0) {
-        parts.push(
-          update.registry.tag && update.registry.tag !== "latest"
-            ? `${registryLabel} update ${update.registry.latestVersion}`
-            : `npm update ${update.registry.latestVersion}`,
-        );
-      } else {
-        parts.push(
-          update.registry.tag === "extended-stable"
-            ? `ahead of extended-stable (${update.registry.latestVersion})`
-            : `${registryLabel} ${update.registry.latestVersion} (local newer)`,
-        );
-      }
-      return;
-    }
-    if (update.registry?.error) {
-      const errors = new Map([
-        ["unsupported_git_channel", "extended-stable requires a package install"],
-        ["selector_missing", "npm extended-stable selector missing"],
-        ["selector_query_failed", "npm extended-stable query failed"],
-        ["exact_package_mismatch", "npm extended-stable exact package verification failed"],
-      ]);
-      parts.push(errors.get(update.registry.reason ?? "") ?? `${registryLabel} unknown`);
-    }
-  };
-
   if (update.installKind === "git" && update.git) {
     const branch = update.git.branch ? `git ${update.git.branch}` : "git";
     parts.push(branch);
@@ -221,19 +176,47 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     if (update.git.builtSha && update.git.sha && update.git.builtSha !== update.git.sha) {
       parts.push(`stale build (running ${update.git.builtSha.slice(0, 8)}, run pnpm build)`);
     }
-    appendRegistryUpdateSummary();
   } else {
     parts.push(update.packageManager !== "unknown" ? update.packageManager : "pkg");
-    appendRegistryUpdateSummary();
   }
 
-  if (update.deps) {
-    if (update.deps.status === "ok") {
-      parts.push("deps ok");
+  const registryLabel =
+    update.registry?.tag && update.registry.tag !== "latest"
+      ? `npm ${update.registry.tag}`
+      : "npm latest";
+  if (update.registry?.latestVersion) {
+    const cmp = compareSemverStrings(VERSION, update.registry.latestVersion);
+    if (cmp === 0) {
+      if (update.installKind !== "git") {
+        parts.push("up to date");
+      }
+      // Git installs still show registry latest, but git ahead/behind remains the primary state.
+      parts.push(`${registryLabel} ${update.registry.latestVersion}`);
+    } else if (cmp != null && cmp < 0) {
+      parts.push(
+        update.registry.tag && update.registry.tag !== "latest"
+          ? `${registryLabel} update ${update.registry.latestVersion}`
+          : `npm update ${update.registry.latestVersion}`,
+      );
+    } else {
+      parts.push(
+        update.registry.tag === "extended-stable"
+          ? `ahead of extended-stable (${update.registry.latestVersion})`
+          : `${registryLabel} ${update.registry.latestVersion} (local newer)`,
+      );
     }
-    if (update.deps.status === "missing") {
-      parts.push("deps missing");
-    }
+  } else if (update.registry?.error) {
+    const errors = new Map([
+      ["unsupported_git_channel", "extended-stable requires a package install"],
+      ["selector_missing", "npm extended-stable selector missing"],
+      ["selector_query_failed", "npm extended-stable query failed"],
+      ["exact_package_mismatch", "npm extended-stable exact package verification failed"],
+    ]);
+    parts.push(errors.get(update.registry.reason ?? "") ?? `${registryLabel} unknown`);
+  }
+
+  if (update.deps?.status === "ok" || update.deps?.status === "missing") {
+    parts.push(`deps ${update.deps.status}`);
   }
   return `Update: ${parts.join(" · ")}`;
 }

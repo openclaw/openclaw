@@ -100,10 +100,8 @@ const mocks = vi.hoisted(() => ({
   maybeRepairGatewayServiceConfig: vi.fn().mockResolvedValue(undefined),
   maybeScanExtraGatewayServices: vi.fn().mockResolvedValue(undefined),
   maybeResolveDuelingSystemdGatewayScopes: vi.fn().mockResolvedValue(undefined),
-  noteMacLaunchAgentOverrides: vi.fn(),
+  noteMacGatewayPlatformWarnings: vi.fn(),
   noteMacDisabledGatewayLaunchAgent: vi.fn(),
-  noteMacLaunchctlGatewayEnvOverrides: vi.fn(),
-  noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn(),
   gatewaySecretInputPathCanWin: vi.fn(),
   readGatewaySecretInputValue: vi.fn((..._args: unknown[]) => undefined as string | undefined),
   checkGatewayHealth: vi.fn(async () => ({
@@ -398,11 +396,10 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
 
-vi.mock("../commands/doctor-platform-notes.js", () => ({
-  noteMacLaunchAgentOverrides: mocks.noteMacLaunchAgentOverrides,
+vi.mock("../commands/doctor-platform-notes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-platform-notes.js")>()),
+  noteMacGatewayPlatformWarnings: mocks.noteMacGatewayPlatformWarnings,
   noteMacDisabledGatewayLaunchAgent: mocks.noteMacDisabledGatewayLaunchAgent,
-  noteMacLaunchctlGatewayEnvOverrides: mocks.noteMacLaunchctlGatewayEnvOverrides,
-  noteMacStaleOpenClawUpdateLaunchdJobs: mocks.noteMacStaleOpenClawUpdateLaunchdJobs,
 }));
 
 vi.mock("../commands/doctor-foreign-launchd-jobs.js", () => ({
@@ -751,9 +748,7 @@ describe("doctor health contributions", () => {
     mocks.noteLegacyWhatsAppCrontabHealthCheck.mockResolvedValue(undefined);
     mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockResolvedValue([]);
     mocks.replaceConfigFile.mockResolvedValue(undefined);
-    mocks.noteMacLaunchAgentOverrides.mockResolvedValue(undefined);
-    mocks.noteMacLaunchctlGatewayEnvOverrides.mockResolvedValue(undefined);
-    mocks.noteMacStaleOpenClawUpdateLaunchdJobs.mockResolvedValue(undefined);
+    mocks.noteMacGatewayPlatformWarnings.mockResolvedValue(undefined);
     setRegisteredHealthChecks([
       { id: "core/example/internal", kind: "core" },
       { id: "plugin/example/unrelated", kind: "plugin" },
@@ -777,18 +772,12 @@ describe("doctor health contributions", () => {
 
     await expect(
       runDoctorHealthContributionList(ctx, [
-        createDoctorHealthContribution({
-          id: "doctor:test-config-write",
-          label: "Test config write",
+        createDoctorHealthContribution("doctor:test-config-write", "Test config write", {
           run: async () => {
             throw failure;
           },
         }),
-        createDoctorHealthContribution({
-          id: "doctor:test-later",
-          label: "Test later",
-          run: laterRun,
-        }),
+        createDoctorHealthContribution("doctor:test-later", "Test later", laterRun),
       ]),
     ).rejects.toBe(failure);
 
@@ -811,11 +800,7 @@ describe("doctor health contributions", () => {
     await expect(
       runDoctorHealthContributionList(ctx, [
         requireDoctorContribution("doctor:write-config-migrations"),
-        createDoctorHealthContribution({
-          id: "doctor:test-later",
-          label: "Test later",
-          run: laterRun,
-        }),
+        createDoctorHealthContribution("doctor:test-later", "Test later", laterRun),
       ]),
     ).rejects.toThrow("Config validation failed");
 
@@ -993,11 +978,7 @@ describe("doctor health contributions", () => {
     const laterRun = vi.fn(async () => undefined);
     await runDoctorHealthContributionList(ctx, [
       requireDoctorContribution("doctor:write-config-migrations"),
-      createDoctorHealthContribution({
-        id: "doctor:test-later",
-        label: "Test later",
-        run: laterRun,
-      }),
+      createDoctorHealthContribution("doctor:test-later", "Test later", laterRun),
     ]);
 
     // The refusal is a rendered warning, not a crash. Later repairs consume the
@@ -1138,11 +1119,7 @@ describe("doctor health contributions", () => {
 
     await runDoctorHealthContributionList(ctx, [
       requireDoctorContribution("doctor:write-config-migrations"),
-      createDoctorHealthContribution({
-        id: "doctor:test-later",
-        label: "Test later",
-        run: laterRun,
-      }),
+      createDoctorHealthContribution("doctor:test-later", "Test later", laterRun),
     ]);
 
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
@@ -1216,11 +1193,7 @@ describe("doctor health contributions", () => {
 
       await runDoctorHealthContributionList(ctx, [
         requireDoctorContribution("doctor:write-config-migrations"),
-        createDoctorHealthContribution({
-          id: "doctor:test-later",
-          label: "Test later",
-          run: laterRun,
-        }),
+        createDoctorHealthContribution("doctor:test-later", "Test later", laterRun),
       ]);
 
       expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
@@ -2701,11 +2674,13 @@ describe("doctor health contributions", () => {
       checksRepaired: 1,
       checksValidated: 0,
     });
-    const contribution = createDoctorHealthContribution({
-      id: "doctor:test-structured-run",
-      label: "Test structured run",
-      healthChecks,
-    });
+    const contribution = createDoctorHealthContribution(
+      "doctor:test-structured-run",
+      "Test structured run",
+      {
+        healthChecks,
+      },
+    );
     const ctx = createDoctorContext({
       cfg: {},
       cfgForPersistence: {},
@@ -2737,14 +2712,16 @@ describe("doctor health contributions", () => {
     const runWithPluginMetadataSnapshot = vi.fn((_scope: unknown, run: () => unknown) =>
       run(),
     ) as unknown as NonNullable<DoctorContributionRunContext["runWithPluginMetadataSnapshot"]>;
-    const contribution = createDoctorHealthContribution({
-      id: "doctor:test-workspace-scope",
-      label: "Test workspace scope",
-      healthChecks: {
-        description: "test workspace scope",
-        detect: vi.fn(async () => []),
+    const contribution = createDoctorHealthContribution(
+      "doctor:test-workspace-scope",
+      "Test workspace scope",
+      {
+        healthChecks: {
+          description: "test workspace scope",
+          detect: vi.fn(async () => []),
+        },
       },
-    });
+    );
     const ctx = createDoctorContext({
       cfg: { agents: { ownership: "explicit" } },
       cfgForPersistence: {},
@@ -2796,11 +2773,13 @@ describe("doctor health contributions", () => {
       checksRepaired: 0,
       checksValidated: 0,
     });
-    const contribution = createDoctorHealthContribution({
-      id: "doctor:test-structured-findings",
-      label: "Test structured findings",
-      healthChecks,
-    });
+    const contribution = createDoctorHealthContribution(
+      "doctor:test-structured-findings",
+      "Test structured findings",
+      {
+        healthChecks,
+      },
+    );
     const ctx = createDoctorContext({
       cfg: {},
       cfgForPersistence: {},
@@ -2817,9 +2796,7 @@ describe("doctor health contributions", () => {
 
   it("requires explicit health check ids for multi-check contributions", () => {
     expect(() =>
-      createDoctorHealthContribution({
-        id: "doctor:test-multiple-checks",
-        label: "Test multiple checks",
+      createDoctorHealthContribution("doctor:test-multiple-checks", "Test multiple checks", {
         healthChecks: [
           {
             description: "first",
@@ -3360,18 +3337,12 @@ describe("doctor health contributions", () => {
       const later = vi.fn(async () => {});
       await expect(
         runDoctorHealthContributionList(ctx, [
-          createDoctorHealthContribution({
-            id: "doctor:session-transcripts",
-            label: "Sessions",
+          createDoctorHealthContribution("doctor:session-transcripts", "Sessions", {
             run: async () => {
               receipts.push(recorded);
             },
           }),
-          createDoctorHealthContribution({
-            id: "doctor:later",
-            label: "Later repair",
-            run: later,
-          }),
+          createDoctorHealthContribution("doctor:later", "Later repair", later),
         ]),
       ).rejects.toMatchObject({ stepReceipts: [recorded] });
       expect(later).not.toHaveBeenCalled();
@@ -3386,21 +3357,17 @@ describe("doctor health contributions", () => {
       });
       const later = vi.fn(async () => {});
       await runDoctorHealthContributionList(ctx, [
-        createDoctorHealthContribution({
-          id: "doctor:session-transcripts",
-          label: "Sessions",
+        createDoctorHealthContribution("doctor:session-transcripts", "Sessions", {
           run: async () => {
             receipts.push(recorded);
           },
         }),
-        createDoctorHealthContribution({
-          id: "doctor:advisory",
-          label: "Advisory",
+        createDoctorHealthContribution("doctor:advisory", "Advisory", {
           run: async () => {
             throw new Error("optional diagnostic\nunavailable");
           },
         }),
-        createDoctorHealthContribution({ id: "doctor:later", label: "Later repair", run: later }),
+        createDoctorHealthContribution("doctor:later", "Later repair", later),
       ]);
       expect(later).toHaveBeenCalledOnce();
       expect(receipts).toEqual([recorded]);

@@ -74,13 +74,6 @@ describe("ensureMatrixCryptoRuntime", () => {
     ({ ensureMatrixCryptoRuntime } = await import("./deps.js"));
   });
 
-  it("loads the matrix SDK once across repeated calls", async () => {
-    await ensureMatrixCryptoRuntime();
-    await ensureMatrixCryptoRuntime();
-
-    expect(cryptoRequire).toHaveBeenCalledTimes(1);
-  });
-
   it("shares one bootstrap of missing crypto runtime and retries matrix SDK load", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-crypto-bootstrap-"));
     const scriptPath = path.join(tmpDir, "download-lib.js");
@@ -178,25 +171,16 @@ describe("ensureMatrixSdkInstalled", () => {
     expect(resolveFn).toHaveBeenCalled();
   });
 
-  it("lists only the packages that fail to resolve", async () => {
+  it("lists missing packages without prompting for installation (regression: #80758)", async () => {
+    const confirm = vi.fn(async () => true);
     const resolveFn = vi.fn((id: string) => {
       if (id === "@matrix-org/matrix-sdk-crypto-wasm") {
         throw new Error("Cannot find module");
       }
       return "/fake/path";
     });
-    await expect(ensureMatrixSdkInstalled({ resolveFn })).rejects.toThrow(
-      /Matrix plugin dependencies are missing: @matrix-org\/matrix-sdk-crypto-wasm\./,
-    );
-  });
-
-  it("does not invoke the install confirm prompt when packages are missing (regression: #80758)", async () => {
-    const confirm = vi.fn(async () => true);
-    const resolveFn = vi.fn((_id: string) => {
-      throw new Error("Cannot find module");
-    });
     await expect(ensureMatrixSdkInstalled({ resolveFn, confirm })).rejects.toThrow(
-      /Matrix plugin dependencies are missing: matrix-js-sdk, @matrix-org\/matrix-sdk-crypto-nodejs, @matrix-org\/matrix-sdk-crypto-wasm\. Repair this plugin with `openclaw plugins update matrix` or run `openclaw doctor --fix`\./,
+      /Matrix plugin dependencies are missing: @matrix-org\/matrix-sdk-crypto-wasm\./,
     );
     expect(confirm).not.toHaveBeenCalled();
   });

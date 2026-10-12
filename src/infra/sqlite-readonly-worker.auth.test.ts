@@ -2,11 +2,10 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { prepareAgentAuthProfileRowsRead } from "../agents/auth-profiles/sqlite-read.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import { BrokerChild } from "../process/spawn-broker/child.js";
@@ -99,52 +98,6 @@ function read(
     signal,
   });
 }
-
-it("keeps prepared auth source reads and cleanup off the host SQLite thread", async () => {
-  const { source, rows } = createAuthDatabase();
-  const before = fs.readFileSync(source);
-  const env = { ...process.env, OPENCLAW_STATE_DIR: path.dirname(source) };
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  let childClosed = false;
-  vi.mocked(spawn).mockImplementationOnce((...args) => {
-    const child = actual.spawn(...args);
-    child.once("close", () => {
-      childClosed = true;
-    });
-    return child;
-  });
-  const sql = [
-    ...(["exec", "prepare", "close"] as const).map((method) =>
-      vi.spyOn(DatabaseSync.prototype, method),
-    ),
-    ...(["all", "get", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    ),
-  ];
-  const absentPath = path.join(path.dirname(source), "absent.sqlite");
-  const absent = prepareAgentAuthProfileRowsRead({
-    databasePath: absentPath,
-    agentId: "main",
-    env,
-  });
-  const reader = prepareAgentAuthProfileRowsRead({ databasePath: source, agentId: "main", env });
-  try {
-    await expect(absent.read()).resolves.toEqual({
-      store: { status: "missing", reason: "database" },
-      state: { status: "missing", reason: "database" },
-      cacheable: false,
-    });
-    expect(fs.existsSync(absentPath)).toBe(false);
-    await expect(reader.read()).resolves.toEqual(rows);
-    expect(childClosed).toBe(true);
-  } finally {
-    await Promise.all([absent.dispose(), reader.dispose()]);
-  }
-  for (const operation of sql) {
-    expect(operation).not.toHaveBeenCalled();
-  }
-  expect(fs.readFileSync(source)).toEqual(before);
-});
 
 describe.each([
   // Snapshots must bypass an active broker; also keep native proof where brokers are unsupported.
@@ -288,18 +241,26 @@ describe.each([
   );
 });
 
-it("replaces a scoped auth child when its captured environment or source changes", async () => {
+it("reuses equivalent state roots and replaces changed auth environments or sources", async () => {
   const { source } = createAuthDatabase();
-  const changedEnv = { ...process.env, OPENCLAW_FIXTURE: "changed" };
+  const implicitEnv = { ...process.env };
+  delete implicitEnv.OPENCLAW_STATE_DIR;
+  const explicitEnv = { ...implicitEnv, OPENCLAW_STATE_DIR: resolveStateDir(implicitEnv) };
+  const changedEnv = { ...implicitEnv, OPENCLAW_FIXTURE: "changed" };
+  const changedRoot = { ...changedEnv, OPENCLAW_STATE_DIR: path.dirname(source) };
   await withSqliteReadOnlyWorkerScope(async () => {
-    await read(source, "canonical");
+    await read(source, "canonical", undefined, implicitEnv);
+    await read(source, "canonical", undefined, explicitEnv);
+    expect(spawn).toHaveBeenCalledTimes(1);
     await read(source, "canonical", undefined, changedEnv);
     expect(vi.mocked(spawn).mock.results[0]?.value.exitCode).toBe(0);
-    await read(source, "snapshot", undefined, changedEnv);
+    await read(source, "canonical", undefined, changedRoot);
     expect(vi.mocked(spawn).mock.results[1]?.value.exitCode).toBe(0);
+    await read(source, "snapshot", undefined, changedRoot);
+    expect(vi.mocked(spawn).mock.results[2]?.value.exitCode).toBe(0);
   });
-  expect(spawn).toHaveBeenCalledTimes(3);
-  expect(vi.mocked(spawn).mock.results[2]?.value.exitCode).toBe(0);
+  expect(spawn).toHaveBeenCalledTimes(4);
+  expect(vi.mocked(spawn).mock.results[3]?.value.exitCode).toBe(0);
 });
 
 it("closes a scoped auth child before rejecting queued reads on shutdown", async () => {

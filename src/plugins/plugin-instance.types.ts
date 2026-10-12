@@ -2,6 +2,8 @@
 export type PluginInstanceLifecycle = {
   readonly signal: AbortSignal;
   onDispose: (dispose: () => void | Promise<void>) => () => void;
+  /** Detach caller context while retaining this instance's current registry and host resources. */
+  runInBackgroundContext: <T>(run: () => T) => T;
 };
 
 /** Execution and host cleanup retain the same instance admission. */
@@ -68,7 +70,6 @@ export interface PluginModuleLoaderOwner extends PluginInstanceResource, PluginI
 export interface PluginInvocationInstance extends PluginModuleLoaderOwner {
   /** The current invocation's call or retained-consumer token is still admitted. */
   readonly hasActiveCall: boolean;
-  /** This instance's replacement is reserved and still joins the given live token. */
   holdsPendingReplacement(token: object): boolean;
   readonly slots: Map<string | symbol, { runtime: unknown }>;
   wrap<T>(value: T): T;

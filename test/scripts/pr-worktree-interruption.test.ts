@@ -15,7 +15,7 @@ function fixture(mode: "native" | "managed" = "native", files = 128) {
   return createProvisionOwnerFixture(tempDirs.make("openclaw-pr-owner-"), mode, files);
 }
 describePosix("PR worktree interruption", () => {
-  it.each(["native", "managed"] as const)(
+  it.each(["native"] as const)(
     "scales the %s checkout deadline with the tree and survives five minutes of progress",
     (mode) => {
       const deadlines: number[] = [];

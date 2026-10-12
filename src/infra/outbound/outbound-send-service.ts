@@ -54,14 +54,10 @@ export function materializeMessagePresentationFallback(params: {
 }): string {
   const presentation = normalizeMessagePresentation(params.payload.presentation);
   const text = (params.text ?? params.payload.text ?? "").trim();
-  if (!presentation) {
-    return text;
-  }
-  const fallback = renderMessagePresentationFallbackText({ presentation });
-  if (!fallback || text.includes(fallback)) {
-    return text;
-  }
-  return [text, fallback].filter(Boolean).join("\n\n");
+  const fallback = presentation ? renderMessagePresentationFallbackText({ presentation }) : "";
+  return !fallback || text.includes(fallback)
+    ? text
+    : [text, fallback].filter(Boolean).join("\n\n");
 }
 
 export function hasCorePresentationDelivery(outbound?: ChannelOutboundAdapter): boolean {

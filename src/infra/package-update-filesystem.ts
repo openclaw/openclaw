@@ -48,6 +48,17 @@ export function assertPackagePathIdentity(
   }
 }
 
+export function createPackagePathAssertion(
+  filePath: string,
+  expected: BigIntStats,
+  assertParents: () => void,
+): () => void {
+  return () => {
+    assertParents();
+    assertPackagePathIdentity(filePath, expected);
+  };
+}
+
 export async function packagePathEntryExists(targetPath: string): Promise<boolean> {
   try {
     await fs.lstat(targetPath);
@@ -232,10 +243,7 @@ export async function copyPackagePathEntry(
   const staging = await fs.mkdtemp(path.join(destinationParent, ".openclaw-shim-stage-"));
   const stagingIdentity = fsSync.lstatSync(staging, { bigint: true });
   const staged = path.join(staging, "entry");
-  const assertStaging = () => {
-    assertParent();
-    assertPackagePathIdentity(staging, stagingIdentity);
-  };
+  const assertStaging = createPackagePathAssertion(staging, stagingIdentity, assertParent);
   let failure: { error: unknown } | undefined;
   try {
     const stagedRoot = await fsSafeRoot(staging, { assertBeforeMutation: assertStaging });
@@ -247,20 +255,14 @@ export async function copyPackagePathEntry(
       assertParents: () => void,
       nested: boolean,
     ): Promise<void> => {
-      const assertEntry = () => {
-        assertParents();
-        assertPackagePathIdentity(from, identity);
-      };
+      const assertEntry = createPackagePathAssertion(from, identity, assertParents);
       assertEntry();
       const to = path.join(staging, relativePath);
       if (identity.isDirectory()) {
         await stagedRoot.mkdir(relativePath, { assertBeforeMutation: assertEntry });
         assertEntry();
         const directoryIdentity = fsSync.lstatSync(to, { bigint: true });
-        const assertDirectory = () => {
-          assertEntry();
-          assertPackagePathIdentity(to, directoryIdentity);
-        };
+        const assertDirectory = createPackagePathAssertion(to, directoryIdentity, assertEntry);
         const names = (await fs.readdir(from)).toSorted();
         assertDirectory();
         const children = names.map((name) => ({
@@ -289,10 +291,7 @@ export async function copyPackagePathEntry(
         await fs.symlink(linkTarget, to);
         assertEntry();
         const linkIdentity = fsSync.lstatSync(to, { bigint: true });
-        const assertLink = () => {
-          assertEntry();
-          assertPackagePathIdentity(to, linkIdentity);
-        };
+        const assertLink = createPackagePathAssertion(to, linkIdentity, assertEntry);
         if (nested) {
           if (process.platform === "darwin") {
             assertLink();

@@ -435,9 +435,10 @@ describe("node worker supervisor recovery", () => {
     },
   );
 
-  it.runIf(process.platform === "linux" || process.platform === "darwin").each(cleanupContracts)(
-    "%s retains capacity when a dead anchor has an empty group but an escaped descendant remains",
-    async (mode) => {
+  it.runIf(process.platform === "linux" || process.platform === "darwin")(
+    "retains capacity when a dead anchor has an empty group but an escaped descendant remains",
+    async () => {
+      const mode = "owned-anchor";
       const { bundleRoot, env, root, workspaceDir } = fixture("node-worker-lost-lineage-");
       const input = testWorkerLaunchInput(workspaceDir, "lost-lineage", "escaped-tree");
       selectCleanupContract(input, mode);
@@ -478,7 +479,6 @@ describe("node worker supervisor recovery", () => {
           worker: anchor,
           workerCleanupMode: mode,
           workerLineageSettled: false,
-          ...(mode === "linux-subreaper" ? { workerDescendantsReaped: false } : {}),
         });
         expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
         expect(inspectNodeWorkerProcessIdentity(descendant)).toBe("live");
@@ -550,7 +550,6 @@ describe("node worker supervisor recovery", () => {
   });
 
   it.runIf(process.platform !== "win32").for([
-    { operation: "cancel", state: "cancelled", leader: "live" },
     { operation: "initialize", state: "interrupted", leader: "dead" },
     { operation: "environment stop", state: "cancelled", leader: "live" },
   ])(
@@ -605,7 +604,7 @@ describe("node worker supervisor recovery", () => {
         expect(inspectNodeWorkerProcessIdentity(grandchild)).toBe("live");
       }
 
-      if (operation === "cancel") {
+      if (operation === "environment stop") {
         await expect(
           supervisor.cancel({ ...testNodeWorkerLaunchIdentity(input), runId: "run-mismatch" }),
         ).resolves.toBeUndefined();
@@ -706,10 +705,7 @@ describe("node worker supervisor recovery", () => {
             stopWorkspace.mockRestore();
           }
         } else {
-          recovered =
-            operation === "initialize"
-              ? await supervisor.initialize().then(() => supervisor.status(input.launchId))
-              : await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
+          recovered = await supervisor.initialize().then(() => supervisor.status(input.launchId));
         }
 
         expect(recovered).toMatchObject({ state, worker });

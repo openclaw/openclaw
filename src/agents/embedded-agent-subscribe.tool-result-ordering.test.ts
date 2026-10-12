@@ -24,7 +24,7 @@ import {
   createSubscribedSessionHarness,
   emitAssistantTextDeltaAndEnd,
 } from "./embedded-agent-subscribe.e2e-harness.js";
-import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.tools.js";
+import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import {
   createOpenAiResponsesPartial,
   createOpenAiResponsesTextBlock,

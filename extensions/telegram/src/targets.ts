@@ -14,20 +14,11 @@ const TELEGRAM_TOPIC_SUFFIX_REGEX = /^(.+?):(?:(direct-topic|topic):)?(\d+)$/;
 export const TELEGRAM_INVALID_TOPIC_ID_MESSAGE =
   "Telegram topic ID must be a positive safe integer.";
 
+const TELEGRAM_INTERNAL_PREFIXES_RE = /^(?:telegram|tg):(?:\s*(?:telegram|tg|group):)*/i;
+
 export function stripTelegramInternalPrefixes(to: string): string {
-  let trimmed = to.trim();
-  let strippedTelegramPrefix = false;
-  while (true) {
-    if (/^(telegram|tg):/i.test(trimmed)) {
-      strippedTelegramPrefix = true;
-      trimmed = trimmed.replace(/^(telegram|tg):/i, "").trim();
-    } else if (strippedTelegramPrefix && /^group:/i.test(trimmed)) {
-      // Legacy internal form: `telegram:group:<id>` (still emitted by session keys).
-      trimmed = trimmed.replace(/^group:/i, "").trim();
-    } else {
-      return trimmed;
-    }
-  }
+  // A Telegram prefix admits the following legacy group and repeated Telegram prefixes.
+  return to.trim().replace(TELEGRAM_INTERNAL_PREFIXES_RE, "").trim();
 }
 
 export function normalizeTelegramChatId(raw: string): string | undefined {
@@ -42,17 +33,11 @@ export function isNumericTelegramChatId(raw: string): boolean {
 export function normalizeTelegramOutboundTarget(raw: string): string {
   const trimmed = raw.trim();
   const legacyGroupMatch = /^group:(-?\d+(?::(?:direct-topic|topic):\d+|:\d+)?)$/i.exec(trimmed);
-  if (legacyGroupMatch?.[1]) {
-    return legacyGroupMatch[1];
-  }
-  return raw;
+  return legacyGroupMatch?.[1] ?? raw;
 }
 
 export function normalizeTelegramLookupTarget(raw: string): string | undefined {
   const stripped = stripTelegramInternalPrefixes(raw);
-  if (!stripped) {
-    return undefined;
-  }
   if (TELEGRAM_NUMERIC_CHAT_ID_REGEX.test(stripped)) {
     return stripped;
   }
@@ -109,8 +94,7 @@ export function hasRejectedTelegramTopic(raw: string): boolean {
   const base = TELEGRAM_TOPIC_SUFFIX_REGEX.exec(normalized)?.[1];
   return (
     base !== undefined &&
-    (normalizeTelegramChatId(base) !== undefined ||
-      normalizeTelegramLookupTarget(base) !== undefined) &&
+    normalizeTelegramLookupTarget(base) !== undefined &&
     parseTelegramTarget(normalized).chatId === normalized
   );
 }

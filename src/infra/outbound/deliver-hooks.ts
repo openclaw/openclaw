@@ -17,14 +17,8 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { formatErrorMessage } from "../errors.js";
 import { normalizeEmptyPayloadForDelivery } from "./deliver-payload.js";
-import {
-  OutboundDeliveryError,
-  type OutboundDeliveryFailureStage,
-  type OutboundDeliveryResult,
-  type OutboundPayloadDeliveryOutcome,
-} from "./deliver-types.js";
+import type { OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
 import type { QueuedReplyPayloadSendingHook } from "./delivery-queue-storage.js";
 import {
   summarizeOutboundPayloadForTransport,
@@ -239,33 +233,5 @@ export async function applyReplyPayloadSendingHook(
     cancelled: !nextPayload,
     payload: nextPayload ?? params.payload,
     changed: nextPayload !== null && nextPayload !== params.payload,
-  };
-}
-
-export function toOutboundDeliveryError(params: {
-  error: unknown;
-  results: readonly OutboundDeliveryResult[];
-  payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
-  stage: OutboundDeliveryFailureStage;
-}): OutboundDeliveryError {
-  if (params.error instanceof OutboundDeliveryError) {
-    return params.error;
-  }
-  return new OutboundDeliveryError(formatErrorMessage(params.error), {
-    cause: params.error,
-    results: params.results,
-    payloadOutcomes: params.payloadOutcomes,
-    stage: params.stage,
-  });
-}
-
-export function suppressedPayloadOutcome(
-  params: Omit<Extract<OutboundPayloadDeliveryOutcome, { status: "suppressed" }>, "status">,
-): OutboundPayloadDeliveryOutcome {
-  return {
-    index: params.index,
-    status: "suppressed",
-    reason: params.reason,
-    ...(params.hookEffect ? { hookEffect: params.hookEffect } : {}),
   };
 }

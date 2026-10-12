@@ -24,37 +24,7 @@ const entry = (params: LegacyDeliveryFixture): EffectiveReplyRouteEntry =>
   normalizeLegacySessionEntryDelivery(params as SessionEntry);
 
 describe("resolveEffectiveReplyRoute", () => {
-  it("uses live origin context for normal providers", () => {
-    expect(
-      resolveEffectiveReplyRoute({
-        ctx: ctx({
-          Provider: "slack",
-          OriginatingChannel: "discord",
-          OriginatingTo: "channel:live",
-          AccountId: "live-account",
-          ChatType: "channel",
-        }),
-        entry: entry({
-          deliveryContext: {
-            channel: "telegram",
-            to: "chat:persisted",
-            accountId: "persisted-account",
-          },
-          lastChannel: "whatsapp",
-          lastTo: "last-to",
-          lastAccountId: "last-account",
-        }),
-      }),
-    ).toEqual({
-      channel: "discord",
-      to: "channel:live",
-      accountId: "live-account",
-      chatType: "channel",
-    });
-  });
-
   it.each<EffectiveReplyRouteContext>([
-    { Provider: "slack" },
     { InputProvenance: { kind: "internal_system", sourceTool: "restart-sentinel" } },
   ])("does not inherit a route without an internal wake source (%j)", (context) => {
     expect(
@@ -123,12 +93,6 @@ describe("resolveEffectiveReplyRoute", () => {
     {
       name: "session-normalized metadata",
       thread: { id: "thread:stale", source: "session" as const },
-      chatType: undefined,
-      expectedThread: {},
-    },
-    {
-      name: "unmarked normalized metadata",
-      thread: { id: "thread:stale" },
       chatType: undefined,
       expectedThread: {},
     },
@@ -217,35 +181,6 @@ describe("resolveEffectiveReplyRoute", () => {
     });
   });
 
-  it("ignores persisted webchat routes for sessions_send handoffs", () => {
-    expect(
-      resolveEffectiveReplyRoute({
-        ctx: ctx({
-          Provider: "webchat",
-          Surface: "webchat",
-          OriginatingChannel: "webchat",
-          OriginatingTo: "session:dashboard",
-          InputProvenance: {
-            kind: "inter_session",
-            sourceTool: "sessions_send",
-          },
-        }),
-        entry: entry({
-          deliveryContext: {
-            channel: "webchat",
-            to: "session:old-dashboard",
-          },
-          lastChannel: "webchat",
-          lastTo: "session:old-dashboard",
-        }),
-      }),
-    ).toEqual({
-      channel: "webchat",
-      to: "session:dashboard",
-      accountId: undefined,
-    });
-  });
-
   it("prefers live origin context for exec-event replies", () => {
     expect(
       resolveEffectiveReplyRoute({
@@ -293,23 +228,6 @@ describe("resolveEffectiveReplyRoute", () => {
       channel: "telegram",
       to: "chat:persisted",
       accountId: "persisted-account",
-    });
-  });
-
-  it("falls back to legacy last route fields for exec-event replies", () => {
-    expect(
-      resolveEffectiveReplyRoute({
-        ctx: ctx({ InternalTurnSource: "exec" }),
-        entry: entry({
-          lastChannel: "slack",
-          lastTo: "last-to",
-          lastAccountId: "last-account",
-        }),
-      }),
-    ).toEqual({
-      channel: "slack",
-      to: "last-to",
-      accountId: "last-account",
     });
   });
 

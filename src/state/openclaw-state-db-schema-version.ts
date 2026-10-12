@@ -1,33 +1,31 @@
 import type { DatabaseSync } from "node:sqlite";
-import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
 } from "../infra/kysely-sync.js";
-import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
-import {
-  getAdmittedSqliteSchemaFacts,
-  getSqliteReadOperationRevision,
-  type SqliteReadOperationRevision,
-} from "../infra/sqlite-schema-facts.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
 } from "../infra/sqlite-user-version.js";
+import {
+  getStateSchemaVersionAdmission,
+  rememberStateSchemaVersionAdmission,
+  type StateSchemaVersionFacts,
+} from "./openclaw-state-db-admission.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
 // Read-only clients need schema admission without loading updater publication policy.
 export const CONTENT_VERSION_KEY = "state.schema.contentVersion";
 type StateSchemaVersionDatabase = Pick<DB, "config_machine_state">;
-const admittedContentVersions = new WeakMap<
-  DatabaseSync,
-  SqliteReadOperationRevision & { contentVersion: number }
->();
+export type StateSchemaContentVersionRowReader = (
+  db: DatabaseSync,
+) => { value_json: string | null } | undefined;
 const contentVersionQuery = createSqliteQueryCache((db) =>
   prepareSqliteQuerySync<void, Pick<DB["config_machine_state"], "value_json">>(db, () =>
     getNodeSqliteKysely<StateSchemaVersionDatabase>(db)
@@ -38,42 +36,37 @@ const contentVersionQuery = createSqliteQueryCache((db) =>
 );
 
 /** Content and its marker commit together, even while older readers retain their version floor. */
-export function readStateSchemaContentVersion(db: DatabaseSync): number {
+export function readStateSchemaContentVersion(
+  db: DatabaseSync,
+  published?: number,
+  readRow: StateSchemaContentVersionRowReader = readStateSchemaContentVersionRow,
+): number {
+  const admitted = getStateSchemaVersionAdmission(db);
+  if (admitted) {
+    return Math.max(published ?? admitted.userVersion, admitted.contentVersion);
+  }
   const schema = getAdmittedSqliteSchemaFacts(db);
-  const revision = getSqliteReadOperationRevision(db);
-  const admitted = admittedContentVersions.get(db);
-  if (
-    revision &&
-    admitted?.schema === revision.schema &&
-    admitted.dataVersion === revision.dataVersion &&
-    admitted.mutationRevision === revision.mutationRevision
-  ) {
-    return admitted.contentVersion;
+  const version = schema?.userVersion ?? readSqliteUserVersion(db);
+  const contentVersion = parseContentVersion(
+    tableExists(db, "config_machine_state") ? readRow(db)?.value_json : undefined,
+  );
+  if (getAdmittedSqliteSchemaFacts(db) === schema) {
+    rememberStateSchemaVersionAdmission(db, { userVersion: version, contentVersion });
   }
-  const contentVersion = readContentVersion(db, schema?.userVersion ?? readSqliteUserVersion(db));
-  if (revision && getSqliteReadOperationRevision(db) === revision) {
-    if (!admitted) {
-      const unregister = registerNodeSqliteDisposeCallback(db, () => {
-        admittedContentVersions.delete(db);
-        unregister();
-      });
-    }
-    admittedContentVersions.set(db, { ...revision, contentVersion });
-  }
-  return contentVersion;
+  return Math.max(published ?? version, contentVersion);
 }
 
-function readContentVersion(db: DatabaseSync, published: number): number {
-  if (!tableExists(db, "config_machine_state")) {
-    return published;
-  }
-  const row = contentVersionQuery(db)().rows[0];
-  if (!row) {
-    return published;
+export function readStateSchemaContentVersionRow(db: DatabaseSync) {
+  return contentVersionQuery(db)().rows[0];
+}
+
+function parseContentVersion(valueJson: string | null | undefined): number {
+  if (valueJson === undefined) {
+    return 0;
   }
   let contentVersion: unknown;
   try {
-    contentVersion = JSON.parse(row.value_json);
+    contentVersion = valueJson === null ? null : JSON.parse(valueJson);
   } catch (cause) {
     throw new SqliteSchemaMismatchError(
       `Invalid shared state schema content version in ${CONTENT_VERSION_KEY}.`,
@@ -89,75 +82,28 @@ function readContentVersion(db: DatabaseSync, published: number): number {
       `Invalid shared state schema content version in ${CONTENT_VERSION_KEY}.`,
     );
   }
-  return Math.max(published, contentVersion);
+  return contentVersion;
 }
 
-/** Cold migration planning checks physical content; admission still uses the recorded version. */
-export function readStateSchemaMigrationVersion(db: DatabaseSync): number {
-  const version = readStateSchemaContentVersion(db);
-  if (version !== 16) {
-    return version;
-  }
-  const reviewWorkspace = tableHasColumn(db, "skill_workshop_collection_reviews", "workspace_dir");
-  const proposalWorkspace = tableHasColumn(db, "skill_workshop_proposals", "workspace_dir");
-  const releasedClaim = tableHasColumn(db, "skill_workshop_proposals", "claim_released_time");
-  if (!reviewWorkspace && !proposalWorkspace && !releasedClaim) {
-    return version;
-  }
-  // Review attribution needs the old proposal workspace mapping. Never guess it from a mixed pair.
-  const missingAttribution = reviewWorkspace && !proposalWorkspace;
-  const schema = `
-    CREATE TABLE skill_workshop_collection_reviews (
-      review_id TEXT NOT NULL PRIMARY KEY,
-      ${reviewWorkspace ? "workspace_dir" : "owner_agent_id"} TEXT NOT NULL,
-      backup_id TEXT NOT NULL,
-      create_time INTEGER NOT NULL,
-      kept_names_json TEXT NOT NULL,
-      written_names_json TEXT NOT NULL,
-      dropped_json TEXT NOT NULL
-    ) STRICT;
-    CREATE TABLE skill_workshop_proposals (
-      proposal_id TEXT NOT NULL PRIMARY KEY,
-      record_json TEXT NOT NULL,
-      owner_agent_id TEXT,
-      ${proposalWorkspace ? "workspace_dir TEXT NOT NULL," : ""}
-      kind TEXT NOT NULL CHECK (kind IN ('create', 'update')),
-      status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected', 'quarantined', 'stale')),
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      draft_hash TEXT NOT NULL,
-      origin_agent_id TEXT,
-      origin_session_key TEXT,
-      origin_run_id TEXT,
-      origin_message_id TEXT,
-      applied_at TEXT,
-      rejected_at TEXT,
-      quarantined_at TEXT,
-      stale_at TEXT,
-      status_reason TEXT
-      ${releasedClaim ? ", claim_released_time INTEGER" : ""}
-    ) STRICT;
-  `;
-  const issues = collectSqliteSchemaIssues(db, schema, {
-    allowedMissingTables: ["skill_workshop_collection_reviews"],
-    allowedColumnDefinitions: {
-      "skill_workshop_collection_reviews.workspace_dir": ["workspace_dir TEXT NOT NULL DEFAULT ''"],
-      "skill_workshop_proposals.workspace_dir": ["workspace_dir TEXT NOT NULL DEFAULT ''"],
-    },
-  });
-  if (!missingAttribution && issues.length === 0) {
-    return 15;
-  }
-  throw new SqliteSchemaMismatchError(
-    "Unrecognized Skill Workshop ownership schema; cannot apply the schema 16 migration.",
-  );
-}
+export type { StateSchemaVersionFacts } from "./openclaw-state-db-admission.js";
 
-export function assertSupportedStateSchemaVersion(db: DatabaseSync, pathname: string): number {
+export function assertSupportedStateSchemaVersion(
+  db: DatabaseSync,
+  pathname: string,
+  prepared?: StateSchemaVersionFacts,
+  readRow?: StateSchemaContentVersionRowReader,
+): number {
   try {
-    const userVersion = getAdmittedSqliteSchemaFacts(db)?.userVersion ?? readSqliteUserVersion(db);
+    const userVersion =
+      prepared?.userVersion ??
+      getStateSchemaVersionAdmission(db)?.userVersion ??
+      getAdmittedSqliteSchemaFacts(db)?.userVersion ??
+      readSqliteUserVersion(db);
     const contentVersion =
-      userVersion > OPENCLAW_STATE_SCHEMA_VERSION ? userVersion : readStateSchemaContentVersion(db);
+      prepared?.contentVersion ??
+      (userVersion > OPENCLAW_STATE_SCHEMA_VERSION
+        ? userVersion
+        : readStateSchemaContentVersion(db, userVersion, readRow));
     if (contentVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
       throw createNewerSqliteSchemaVersionError(
         "OpenClaw state database",

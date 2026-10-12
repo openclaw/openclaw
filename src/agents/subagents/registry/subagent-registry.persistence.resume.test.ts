@@ -683,6 +683,8 @@ describe("subagent registry persistence resume", () => {
           expect.objectContaining({ method: "agent.wait" }),
         );
 
+        // Activation's collector publications must settle before the manual sweep captures them.
+        await settleSubagentRegistryPersistenceWork(() => settleOwnedWork?.(true));
         const sweptWake = createDeferredCore<boolean>();
         wakeRequester.mockImplementationOnce(() => {
           sweptWake.resolve(false);

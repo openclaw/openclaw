@@ -146,7 +146,9 @@ describe("plugin-sdk facade runtime", () => {
     const readSurfaces = async () => [
       auth.resolveBrowserControlAuth().token,
       profiles.resolveBrowserConfig(undefined).defaultProfile,
-      await maintenance.closeTrackedBrowserTabsForSessions({ sessionKeys: ["fixture-session"] }),
+      await maintenance.closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:main:fixture-session"],
+      }),
     ];
 
     writeSurfaces(1);
@@ -160,7 +162,9 @@ describe("plugin-sdk facade runtime", () => {
     expect(await readSurfaces()).toEqual(["fixture-2", "fixture-2", 2]);
     setRuntimeConfigSnapshot({ plugins: { entries: { browser: { enabled: false } } } });
     expect(
-      await maintenance.closeTrackedBrowserTabsForSessions({ sessionKeys: ["fixture-session"] }),
+      await maintenance.closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:main:fixture-session"],
+      }),
     ).toBe(0);
   });
 

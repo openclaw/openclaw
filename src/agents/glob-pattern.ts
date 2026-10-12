@@ -13,9 +13,6 @@ function compileGlobPattern(params: {
   normalize: (value: string) => string;
 }): CompiledGlobPattern {
   const normalized = params.normalize(params.raw);
-  if (!normalized) {
-    return { kind: "exact", value: "" };
-  }
   if (normalized === "*") {
     return { kind: "all" };
   }
@@ -42,13 +39,11 @@ export function compileGlobPatterns(params: {
 
 export function matchesAnyGlobPattern(value: string, patterns: CompiledGlobPattern[]): boolean {
   for (const pattern of patterns) {
-    if (pattern.kind === "all") {
-      return true;
-    }
-    if (pattern.kind === "exact" && value === pattern.value) {
-      return true;
-    }
-    if (pattern.kind === "regex" && pattern.value.test(value)) {
+    if (
+      pattern.kind === "all" ||
+      (pattern.kind === "exact" && value === pattern.value) ||
+      (pattern.kind === "regex" && pattern.value.test(value))
+    ) {
       return true;
     }
   }

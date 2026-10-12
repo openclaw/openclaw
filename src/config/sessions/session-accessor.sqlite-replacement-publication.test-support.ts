@@ -21,6 +21,9 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
       const owned = actual.captureOpenClawAgentDatabaseExecution(...args);
       return {
         ...owned,
+        get fileIdentity() {
+          return owned.fileIdentity;
+        },
         runExisting: (source, operation, options) =>
           owned.runExisting(
             source,

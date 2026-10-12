@@ -2230,8 +2230,7 @@ describe("ci workflow guards", () => {
       const fixtureTier = JSON.stringify({
         includeReleaseOnlyTests: scenario.includeReleaseOnlyTests,
         includePrExemptRuntimeTests: true,
-        changedPaths:
-          scenario.eventName === "pull_request" ? selectedTestTargets : scenario.changedPaths,
+        changedPaths: scenario.changedPaths,
       });
       for (const [name, config, output, job, stepName] of [
         ["ui", "ui/vitest.config.ts", "ui_test_groups_gzip_base64", "checks-ui", "Test Control UI"],
@@ -3615,7 +3614,7 @@ describe("ci workflow guards", () => {
     { eventName: "push" as const, changedPaths: ["ui/src/main.ts"], qa: false, performance: true },
     {
       eventName: "push" as const,
-      changedPaths: ["src/gateway/control-ui-asset-manifest.ts"],
+      changedPaths: ["src/gateway/control-ui-route-preloads.ts"],
       qa: false,
       performance: true,
     },
@@ -10204,6 +10203,67 @@ describe("ci workflow guards", () => {
     },
   );
 
+  // Main runs UI on Node, so these PR rows are the only automatic Bun UI proof.
+  it.each([
+    { paths: ["scripts/lib/ci-test-runtime.mts"], selected: true },
+    { paths: ["scripts/lib/ci-test-native-bun-qualification.json"], selected: false },
+  ])(
+    "selects the complete Bun UI unit shards for the UI runtime owner ($selected)",
+    ({ paths, selected }) => {
+      const workflow = readCiWorkflow();
+      const step = workflow.jobs.preflight.steps.find(
+        (candidate: WorkflowStep) => candidate.id === "manifest",
+      );
+      const runUiTests = evaluateWorkflowExpression(step.env.OPENCLAW_CI_RUN_UI_TESTS, {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        steps: {
+          changed_scope: {
+            outputs: { run_ui_tests: String(detectChangedScope(paths).runUiTests) },
+          },
+          runner_profile: {
+            outputs: { node_runner_backend: "blacksmith", ci_qualification: "false" },
+          },
+        },
+      });
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        bunTestRuntime: true,
+        bunUiTestRuntime: true,
+        historicalCompatibility: false,
+        eventName: "pull_request",
+        changedPaths: paths,
+        selectedTestTargets: ["src/owner.test.ts"],
+        scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: String(runUiTests) },
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const expectedUi = selected ? CI_MANIFEST_FIXTURE_TARGETS.ui : [];
+      expect(manifest.outputs.run_ui_tests).toBe(String(selected));
+      expect(
+        JSON.parse(expectDefined(manifest.outputs.ui_test_matrix, "UI matrix")).include,
+      ).toEqual(expectedUi.map((_, index) => ({ shard: index + 1 })));
+      expect(
+        resolveSelectedUiIncludes(
+          expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI selection"),
+        ).flat(),
+      ).toEqual(expectedUi);
+      expect(manifest.outputs.ui_test_runtime_policy).toBe("bun-compatible");
+      const ui = workflow.jobs["checks-ui"];
+      const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        preflightOutputs: manifest.outputs,
+      };
+      const bunSetup = ui.steps.find(
+        (candidate: WorkflowStep) => candidate.name === "Setup pinned Bun test runtime",
+      );
+      expect(evaluateWorkflowExpression(`\${{ ${ui.if} }}`, context)).toBe(selected);
+      expect(evaluateWorkflowExpression(`\${{ ${bunSetup.if} }}`, context)).toBe(true);
+    },
+  );
+
   it("gates current Control UI changes on ordinary and real-Gateway Chromium E2E", () => {
     const workflow = readCiWorkflow();
     const ui = workflow.jobs["checks-ui"];
@@ -11177,9 +11237,13 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it.each([undefined, "changed-manual-inventory"])(
-    "packs flat manual Node rows without losing timing identity %s",
-    (timingKey) => {
+  it.each([
+    { timingKey: undefined, releaseGate: true },
+    { timingKey: "changed-manual-inventory", releaseGate: true },
+    { timingKey: "release-full-manual-inventory", releaseGate: false },
+  ])(
+    "packs flat manual Node rows without losing timing identity $timingKey (releaseGate=$releaseGate)",
+    ({ timingKey, releaseGate }) => {
       const configs = ["test/vitest/vitest.unit-fast.config.ts"];
       const env = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
       const includePatterns = Array.from(
@@ -11191,7 +11255,8 @@ describe("ci workflow guards", () => {
         bundledPlanner: true,
         eventName: "workflow_dispatch",
         historicalCompatibility: false,
-        releaseGate: true,
+        releaseGate,
+        runnerProfile: "github",
         changedPaths: ["src/infra/manual-inventory/owner.ts"],
         scopeEnv: { OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40) },
         nodeTestShards: [
@@ -11219,9 +11284,23 @@ describe("ci workflow guards", () => {
         check_name: "checks-node-manual-inventory",
         env,
         runner: "ubuntu-24.04",
-        shard_name: "manual-inventory",
         timeout_minutes: 20,
       });
+      if (releaseGate) {
+        expect(row.shard_name).toBe("manual-inventory");
+      } else {
+        for (const field of ["shard_name", "git_commits", "requires_dist"]) {
+          expect(row).not.toHaveProperty(field);
+        }
+        for (const field of [
+          "requires_bun",
+          "requires_go",
+          "requires_ripgrep",
+          "requires_sandbox_image",
+        ]) {
+          expect(row[field]).not.toBe(false);
+        }
+      }
       for (const field of ["groups", "configs", "includePatterns"]) {
         expect(row).not.toHaveProperty(field);
       }
@@ -11241,6 +11320,53 @@ describe("ci workflow guards", () => {
           },
         },
       ]);
+    },
+  );
+
+  it.each([
+    { eventName: "pull_request", checkName: "checks-node-fixture", runAttempt: 1, expected: "1" },
+    { eventName: "pull_request", checkName: "checks-node-fixture", runAttempt: 2, expected: "0" },
+    {
+      eventName: "workflow_dispatch",
+      checkName: "checks-node-release-packed-1",
+      runAttempt: 1,
+      expected: "1",
+    },
+    {
+      eventName: "workflow_dispatch",
+      checkName: "checks-node-release-packed-1",
+      runAttempt: 2,
+      expected: "1",
+    },
+    {
+      eventName: "workflow_dispatch",
+      checkName: "checks-node-fixture",
+      runAttempt: 1,
+      expected: "0",
+    },
+    {
+      eventName: "schedule",
+      checkName: "checks-node-release-packed-1",
+      runAttempt: 1,
+      expected: "0",
+    },
+  ] as const)(
+    "retains sibling coverage for $eventName $checkName attempt $runAttempt",
+    (scenario) => {
+      const step = expectDefined(
+        readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps.find(
+          (candidate: WorkflowStep) => candidate.name === "Run Node test shard",
+        ),
+        "Node shard execution",
+      );
+      expect(
+        evaluateWorkflowExpression(step.env.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE, {
+          eventName: scenario.eventName,
+          runAttempt: scenario.runAttempt,
+          repository: "openclaw/openclaw",
+          matrix: { check_name: scenario.checkName },
+        }),
+      ).toBe(scenario.expected);
     },
   );
 

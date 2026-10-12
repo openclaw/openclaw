@@ -35,6 +35,9 @@ default agent, or the first configured agent when there is no default; it is not
 a fleet total. A running Gateway serves clean health and status session summaries
 from its resident session-row projection. Store hydration and exact dirty-row
 refreshes retain the existing read-only SQLite fallback.
+These summaries wait for current selection metadata. Display preparation and
+background model catalog discovery can continue independently, so a large fleet's
+catalog warmup does not hold session counts and recent-activity summaries open.
 
 ## Deep diagnostics
 
@@ -86,9 +89,11 @@ The Gateway exposes three unauthenticated `GET`/`HEAD` check pairs:
 
 `/startupz` returns `503` with `status: "starting"` while startup sidecars or agent database inspection/preparation are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. After sidecars settle, pending inspection for any agent, including an optional agent, reports `pendingReason: "agent-database-inspection"`. This lets `openclaw update` candidate verification wait within its startup budget before checking readiness. A settled inspection failure does not keep startup pending; readiness and per-agent admission report the failure.
 
-A default or system agent database with a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending` while the Gateway can report ready and serve the Control UI and healthy agents. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
+A default or system agent database with a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending` while the Gateway can report ready and serve the Control UI and healthy agents. Agent-scoped `sessions.list`, plus `sessions.resolve`, `sessions.describe`, and `models.list`, wait up to 20 seconds for their selected agents to finish startup preparation, then recheck request authorization before reading. Requests targeting healthy agents proceed independently. Unscoped session lists continue returning admitted agents while other stores prepare. Writes still require completed admission. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
 
 A broken Telegram or other channel account can also make `/readyz` return `503` while `/startupz` remains started. Neither check replaces the other: startup completion alone does not certify agent or channel availability.
+
+Disabled, unconfigured, and ordinarily unlinked accounts do not fail channel readiness. An enabled, configured account with a recorded terminal disconnect, blocked lifecycle, or unavailable ingress still fails its health check even if it becomes unlinked. For example, a terminal WhatsApp logout makes `/readyz` return `503` with `failing: ["whatsapp"]` in detailed responses. Terminal disconnects and blocked accounts require operator action; the health monitor does not restart them.
 
 Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
 
@@ -176,6 +181,24 @@ degradation reason reports process CPU pressure with delay co-evidence; it does
 not identify the thread consuming CPU or prove a main-thread hang. Inspect the
 delay measurements alongside CPU pressure. The `eventLoop` diagnostic does not
 change the readiness result by itself.
+
+Main-thread callbacks longer than one second produce a `main-thread stall` log
+with a code-owned task label where available. On Node 26, a bounded CPU flight
+recorder writes one additional bounded `main-thread stall profile` line with a
+trailing window's top inclusive frames, sample count, and truncation status.
+Several callbacks can finish before a sample, so this window is not assigned to
+an individual task. It samples every 10 ms and rotates five-second windows without
+stopping the sampler. At most two windows are retained; no profile files are
+written. Symbols and locations use the same redaction policy as on-demand
+diagnostic profiles. Inclusive counts overlap when a sampled stack contains
+several listed frames; they are not independent durations.
+
+The recorder skips Bun, Node 24 (which lacks the bounded coarse-sampling API),
+and processes already started with conflicting profiling, tracing, or debugger
+options. Callback labels still work on those runtimes. Native blocking work can
+remain unsymbolized, and an unusually long stall can exhaust the sample cap;
+`truncated=true` identifies incomplete evidence. Recorder failures are logged
+once and disable recording for that monitor's lifetime.
 
 ## Uptime monitoring
 

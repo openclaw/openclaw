@@ -105,7 +105,7 @@ profile selection, safe credential input, and background app launch.
 - The built-in agent `computer` tool does **not** use this socket. A paired macOS node fulfills `computer.act` in the app process with embedded Peekaboo services.
 - UI automation uses a separate UNIX socket (`~/Library/Application Support/OpenClaw/<socket>`) and the PeekabooBridge JSON protocol.
 - Host preference order (client-side): Peekaboo.app -> Claude.app -> OpenClaw.app -> local execution.
-- Security: bridge hosts require the exact signed Peekaboo client bundle identifier and Peekaboo's canonical
+- Security: bridge hosts require the exact signed Peekaboo client bundle identifier and Peekaboo's official
   current/legacy release signer set. `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1`
   guards a DEBUG-only same-UID escape hatch (Peekaboo convention).
 - See: [PeekabooBridge usage](/platforms/mac/peekaboo) for details.

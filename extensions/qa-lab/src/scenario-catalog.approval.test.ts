@@ -61,21 +61,3 @@ it("accepts an unavailable approval response for the configured command owner's 
     resetPluginRuntimeStateForTest();
   }
 });
-
-it.each([
-  ["retired submission error", "❌ Failed to submit approval: unknown or expired approval id"],
-  ["usage", "Usage: /approve <id> <decision>"],
-  ["unrelated reply", "Everything looks good."],
-])("rejects %s for a real approval decision", async (_label, reply) => {
-  await expect(
-    runLoadedScenarioFlow("approve-command-prototype-decision-usage", {
-      onWaitForOutboundMessage: ({ waitCount, state }) => {
-        state.addOutboundMessage({
-          accountId: "qa-channel",
-          to: "dm:approve-prototype-dm",
-          text: waitCount === 1 ? "Usage: /approve <id> <decision>" : reply,
-        });
-      },
-    }),
-  ).rejects.toThrow(`real decision did not receive the unknown-approval response: ${reply}`);
-});

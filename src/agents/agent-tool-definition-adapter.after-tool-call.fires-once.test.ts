@@ -79,8 +79,8 @@ function createToolHandlerCtx() {
 }
 
 let toToolDefinitions: typeof import("./agent-tool-definition-adapter.js").toToolDefinitions;
-let handleToolExecutionStart: typeof import("./embedded-agent-subscribe.handlers.tools.js").handleToolExecutionStart;
-let handleToolExecutionEnd: typeof import("./embedded-agent-subscribe.handlers.tools.js").handleToolExecutionEnd;
+let handleToolExecutionStart: typeof import("./embedded-agent-subscribe.handlers.tools.start.js").handleToolExecutionStart;
+let handleToolExecutionEnd: typeof import("./embedded-agent-subscribe.handlers.tools.completion.js").handleToolExecutionEnd;
 
 async function loadFreshAfterToolCallModulesForTest() {
   vi.doMock("../plugins/hook-runner-global.js", () => ({
@@ -114,8 +114,10 @@ async function loadFreshAfterToolCallModulesForTest() {
     runBeforeToolCallHook: beforeToolCallMocks.runBeforeToolCallHook,
   }));
   ({ toToolDefinitions } = await import("./agent-tool-definition-adapter.js"));
-  ({ handleToolExecutionStart, handleToolExecutionEnd } =
-    await import("./embedded-agent-subscribe.handlers.tools.js"));
+  ({ handleToolExecutionStart } =
+    await import("./embedded-agent-subscribe.handlers.tools.start.js"));
+  ({ handleToolExecutionEnd } =
+    await import("./embedded-agent-subscribe.handlers.tools.completion.js"));
 }
 
 describe("after_tool_call fires exactly once in embedded runs", () => {

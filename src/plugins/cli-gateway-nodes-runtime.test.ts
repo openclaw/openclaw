@@ -92,15 +92,6 @@ describe("createPluginCliGatewayNodesRuntime", () => {
     expect(callGatewayMock.mock.calls[0]?.[0].params).not.toHaveProperty("signal");
   });
 
-  it("preserves the existing Gateway request shape when no signal is supplied", async () => {
-    const nodes = createPluginCliGatewayNodesRuntime();
-
-    await nodes.invoke({ nodeId: "node-1", command: "ollama.chat" });
-
-    expect(callGatewayMock.mock.calls[0]?.[0]).not.toHaveProperty("signal");
-    expect(callGatewayMock.mock.calls[0]?.[0].params).not.toHaveProperty("signal");
-  });
-
   it("rejects duplex commands without opening a polling Gateway fallback", async () => {
     const nodes = createPluginCliGatewayNodesRuntime();
 

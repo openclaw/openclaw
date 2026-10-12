@@ -24,7 +24,6 @@ import type {
 } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { assertCodexBindingMayBeReplaced, clearCodexBindingForClient } from "./session-binding.js";
-import { isCodexContextRestartSelectionChangedError } from "./thread-lifecycle-errors.js";
 import {
   CodexUsageLimitPromptError,
   formatCodexTurnStartUsageLimitError,
@@ -38,7 +37,7 @@ export async function startCodexAttemptTurn(
   notifications: CodexAttemptNotificationController,
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
 ): Promise<{ result: EmbeddedRunAttemptResult } | CodexStartedTurn> {
-  const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
+  const { prompt, state: resourceState, trajectoryRecorder } = resources;
   const { context, turnState, systemPromptReport } = prompt;
   const { runtime, historyState, hookContext, hookRunner } = context;
   const { connection, runtimeParams } = runtime;
@@ -166,7 +165,7 @@ export async function startCodexAttemptTurn(
         aborted: runAbortController.signal.aborted,
         promptError: message,
       });
-      markTrajectoryEndRecorded();
+      resourceState.trajectoryEndRecorded = true;
       runAgentHarnessLlmOutputHook({
         event: {
           ...buildLlmOutputEvent(),
@@ -204,7 +203,7 @@ export async function startCodexAttemptTurn(
           authProfileId: startupAuthProfileId,
           rateLimits: usageLimitError.rateLimitsForProfile,
         });
-      } else if (!isCodexContextRestartSelectionChangedError(turnStartError)) {
+      } else {
         throw turnStartError;
       }
       const result = buildCodexTurnStartFailureResult({

@@ -64,7 +64,7 @@ function readInteractionUser(rawData: RawInteraction, client: InteractionClient)
   }
   const memberUser = rawData.member?.user;
   if (memberUser && typeof memberUser === "object" && typeof memberUser.id === "string") {
-    const user = { ...memberUser } as APIUser;
+    const user = { ...memberUser };
     if (typeof user.username !== "string") {
       user.username = "";
     }

@@ -29,10 +29,6 @@ const TOPIC_BINDING_ERROR =
 const CONVERSATION_BINDING_ERROR =
   "Delegated Telegram conversation read requires the exact current chat and account.";
 
-function rejectUnboundTopicMutation(): never {
-  throw new Error(TOPIC_BINDING_ERROR);
-}
-
 type CurrentTelegramConversation = {
   matchesChat: boolean;
   threadId?: number;
@@ -58,10 +54,7 @@ function resolveCurrentTelegramConversation(
     targets.length > 0 &&
     parsedTargets.every((target) => target.chatId === chatId) &&
     (threadId === undefined || threadIds.every((value) => value === threadId));
-  return {
-    matchesChat,
-    ...(threadId !== undefined ? { threadId } : {}),
-  };
+  return { matchesChat, threadId };
 }
 
 function resolveMatchingTelegramRequesterAccount(params: {
@@ -126,7 +119,7 @@ export async function resolveTelegramMessageMutationChatId(params: {
   );
   const selectedAccountId = resolveMatchingTelegramRequesterAccount(params);
   if (!selectedAccountId || !currentConversation.matchesChat) {
-    return rejectUnboundTopicMutation();
+    throw new Error(TOPIC_BINDING_ERROR);
   }
 
   const threadId = target.messageThreadId ?? currentConversation.threadId;
@@ -134,7 +127,7 @@ export async function resolveTelegramMessageMutationChatId(params: {
     return target.chatId;
   }
   if (currentConversation.threadId !== threadId) {
-    return rejectUnboundTopicMutation();
+    throw new Error(TOPIC_BINDING_ERROR);
   }
 
   const currentMessageId = parseStrictPositiveInteger(
@@ -162,7 +155,7 @@ export async function resolveTelegramMessageMutationChatId(params: {
     messageId: String(params.messageId),
   });
   if (!hasProviderObservedTelegramThreadBinding(cached, threadId)) {
-    return rejectUnboundTopicMutation();
+    throw new Error(TOPIC_BINDING_ERROR);
   }
   return target.chatId;
 }

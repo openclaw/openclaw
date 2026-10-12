@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { enrichChatHistoryCompactionMarkers } from "./chat-history-page-kernel.js";
-import { prepareChatHistoryResponsePage } from "./chat-history-response-page.js";
+import {
+  enrichChatHistoryCompactionMarkers,
+  prepareChatHistoryResponsePage,
+} from "./chat-history-response-page.js";
 
 describe("enrichChatHistoryCompactionMarkers", () => {
   it("joins retained legacy token metrics to the matching transcript marker", () => {

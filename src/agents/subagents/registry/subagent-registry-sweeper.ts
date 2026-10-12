@@ -32,6 +32,7 @@ import {
   warnSuspendedDeliveryPressure,
 } from "./subagent-registry-suspended-delivery.js";
 import {
+  createSubagentSweepReadScope,
   deleteSweptSession,
   mutateCleanup,
   freezeSessionIdentity,
@@ -117,11 +118,10 @@ export function createSubagentRegistrySweeper(params: {
   }
 
   function start() {
-    if (intervalStarted) {
-      return;
+    if (!intervalStarted) {
+      intervalStarted = true;
+      schedule({ delayMs: 60_000 });
     }
-    intervalStarted = true;
-    schedule({ delayMs: 60_000 });
   }
 
   function stop() {
@@ -199,6 +199,7 @@ export function createSubagentRegistrySweeper(params: {
     sweepInProgress = true;
     try {
       const now = Date.now();
+      const readScope = createSubagentSweepReadScope(runs, params.getGatewayRecoveryRuntime);
       recovery.prune();
       if (recoveryOnly) {
         const restoredRuns = [...runs];
@@ -211,28 +212,25 @@ export function createSubagentRegistrySweeper(params: {
         string,
         { requesterSessionKey: string; groupId: string; requesterAgentId?: string }
       >();
-      const phase = ([runId, entry]: [string, SubagentRunRecord]) =>
-        entry.requesterSettleWake
+      const phases: Array<Array<[string, SubagentRunRecord]>> = Array.from({ length: 7 }, () => []);
+      for (const item of runs) {
+        const [runId, entry] = item;
+        const phase = entry.requesterSettleWake
           ? 0
           : isSuspendedPendingFinalDelivery(entry)
             ? 1
             : entry.terminalOwner === "interrupted-recovery"
               ? 2
               : !getAgentRunContext(runId) && typeof entry.execution.endedAt !== "number"
-                ? 3
+                ? isStaleUnendedSubagentRun(entry, now)
+                  ? 3
+                  : 4
                 : entry.killReconciliation
-                  ? 4
-                  : 5;
-      const runEntries = [...runs.entries()].toSorted((left, right) => {
-        const phaseDelta = phase(left) - phase(right);
-        return (
-          phaseDelta ||
-          (phase(left) === 3
-            ? Number(isStaleUnendedSubagentRun(right[1], now)) -
-              Number(isStaleUnendedSubagentRun(left[1], now))
-            : 0)
-        );
-      });
+                  ? 5
+                  : 6;
+        phases[phase]!.push(item);
+      }
+      const runEntries = phases.flat();
       // Completion stays fresh across awaits, but deletion must retain the earlier
       // CAS identity. Bind it to the exact run so replacements wait for another pass.
       const cleanupIdentities = new Map<object, FrozenSessionIdentity | undefined>();
@@ -251,14 +249,27 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         // Suppressed session cleanup still requires the captured member for artifact cleanup.
-        cleanupIdentities.set(
-          getSubagentRunRuntimeKey(entry),
-          shouldSuppressSubagentRecoverySessionEffects(entry)
-            ? undefined
-            : freezeSessionIdentity(entry.childSessionKey),
-        );
+        if (shouldSuppressSubagentRecoverySessionEffects(entry)) {
+          if (runs.get(entry.runId) === entry) {
+            cleanupIdentities.set(getSubagentRunRuntimeKey(entry), undefined);
+          }
+          continue;
+        }
+        try {
+          readScope.assertRunCurrent(entry);
+          const identity = await freezeSessionIdentity(entry, () =>
+            readScope.assertRunCurrent(entry),
+          );
+          readScope.assertRunCurrent(entry);
+          cleanupIdentities.set(getSubagentRunRuntimeKey(entry), identity);
+        } catch (error) {
+          if (error !== readScope.retiredRead) {
+            throw error;
+          }
+        }
       }
       for (const [runId, snapshot] of runEntries) {
+        readScope.assertCurrent();
         const selected = runs.get(runId);
         if (!selected || !isSameSubagentRunOwner(selected, snapshot)) {
           continue;
@@ -342,18 +353,50 @@ export function createSubagentRegistrySweeper(params: {
           const notStale = entry.execution.status === "queued" || getAgentRunContext(runId);
           const activeAgeMs = now - (entry.execution.startedAt ?? entry.createdAt);
           if (!notStale && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
-            const orphanReason = resolveSubagentRunOrphanReason({ entry });
-            const sessionEntry = loadSubagentSessionEntry({
-              childSessionKey: entry.childSessionKey,
-            });
+            const assertActiveReadCurrent = () => {
+              readScope.assertRunCurrent(entry);
+              if (
+                typeof entry.execution.endedAt === "number" ||
+                entry.execution.status === "queued" ||
+                entry.killIntent ||
+                entry.killReconciliation ||
+                getAgentRunContext(runId)
+              ) {
+                throw readScope.retiredRead;
+              }
+            };
+            let observation;
+            try {
+              assertActiveReadCurrent();
+              const classification = resolveSubagentRunOrphanReason({ entry });
+              observation =
+                typeof classification === "object" && classification !== null
+                  ? await classification.read(assertActiveReadCurrent)
+                  : {
+                      orphanReason: classification,
+                      sessionEntry: await loadSubagentSessionEntry({
+                        childSessionKey: entry.childSessionKey,
+                        childAgentId: entry.childAgentId,
+                        assertCurrent: assertActiveReadCurrent,
+                      }),
+                    };
+              assertActiveReadCurrent();
+            } catch (error) {
+              if (error === readScope.retiredRead) {
+                continue;
+              }
+              throw error;
+            }
+            const { orphanReason, sessionEntry } = observation;
             const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
               notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
             });
             await params.completeSubagentRunWithRecovery(
               {
                 runId,
+                expectedEntry: entry,
+                recoveryCurrent: readScope.completionCurrent,
                 ...(completion ?? {
-                  expectedEntry: entry,
                   endedAt: now,
                   outcome: {
                     status: "error" as const,

@@ -264,17 +264,33 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     groupConfig,
     dmPolicy: params.dmPolicy,
   });
-  const storeAllowFrom = await loadTelegramPairingStoreIfNeeded({
-    cfg: params.cfg,
-    allowFrom: params.allowFrom,
-    groupAllowOverride,
-    accountId,
-    senderId: params.senderId,
-    isGroup: params.isGroup ?? false,
-    effectiveDmPolicy,
-    skipPairingStoreRead: params.skipPairingStoreRead,
-    readChannelAllowFromStore: params.readChannelAllowFromStore,
-  });
+  const configuredAllowFrom = groupAllowOverride ?? params.allowFrom;
+  let needsPairingStore =
+    !params.skipPairingStoreRead && !params.isGroup && effectiveDmPolicy === "pairing";
+  if (needsPairingStore && configuredAllowFrom?.length) {
+    const configuredAllow = normalizeAllowFrom(
+      await expandTelegramAllowFromWithAccessGroups({
+        ...params,
+        accountId,
+        allowFrom: configuredAllowFrom,
+      }),
+    );
+    needsPairingStore =
+      !configuredAllow.hasEntries || !isSenderIdAllowed(configuredAllow, params.senderId, true);
+  }
+  let storeAllowFrom: string[] = [];
+  if (needsPairingStore) {
+    try {
+      storeAllowFrom = await (params.readChannelAllowFromStore ?? readChannelAllowFromStore)(
+        "telegram",
+        process.env,
+        accountId,
+      );
+    } catch (cause) {
+      throw new TelegramPairingStoreReadError(cause);
+    }
+  }
+
   const expandedGroupAllowFrom = await expandTelegramAllowFromWithAccessGroups({
     cfg: params.cfg,
     allowFrom: groupAllowOverride ?? params.groupAllowFrom,
@@ -304,45 +320,6 @@ export class TelegramPairingStoreReadError extends Error {
     super(`Telegram pairing store read failed: ${String(cause)}`);
     this.name = "TelegramPairingStoreReadError";
     this.cause = cause;
-  }
-}
-
-async function loadTelegramPairingStoreIfNeeded(params: {
-  cfg?: OpenClawConfig;
-  allowFrom?: Array<string | number>;
-  groupAllowOverride?: Array<string | number>;
-  accountId: string;
-  senderId?: string;
-  isGroup: boolean;
-  effectiveDmPolicy: DmPolicy;
-  skipPairingStoreRead?: boolean;
-  readChannelAllowFromStore?: typeof readChannelAllowFromStore;
-}): Promise<string[]> {
-  if (params.skipPairingStoreRead || params.isGroup || params.effectiveDmPolicy !== "pairing") {
-    return [];
-  }
-  const configuredAllowFrom = params.groupAllowOverride ?? params.allowFrom;
-  if (configuredAllowFrom?.length) {
-    const expandedAllowFrom = await expandTelegramAllowFromWithAccessGroups({
-      ...params,
-      allowFrom: configuredAllowFrom,
-    });
-    const normalizedAllowFrom = normalizeAllowFrom(expandedAllowFrom);
-    if (
-      normalizedAllowFrom.hasEntries &&
-      isSenderIdAllowed(normalizedAllowFrom, params.senderId, true)
-    ) {
-      return [];
-    }
-  }
-  try {
-    return await (params.readChannelAllowFromStore ?? readChannelAllowFromStore)(
-      "telegram",
-      process.env,
-      params.accountId,
-    );
-  } catch (cause) {
-    throw new TelegramPairingStoreReadError(cause);
   }
 }
 

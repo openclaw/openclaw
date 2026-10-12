@@ -269,7 +269,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const elevatedRequested = elevatedMode !== "off";
       if (elevatedRequested && (!elevatedDefaults?.enabled || !elevatedDefaults.allowed)) {
         const runtime = defaults?.sandbox ? "sandboxed" : "direct";
-        const gates: string[] = [];
         const contextParts: string[] = [];
         const provider = normalizeOptionalString(defaults?.messageProvider);
         const sessionKey = normalizeOptionalString(defaults?.sessionKey);
@@ -279,17 +278,13 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         if (sessionKey) {
           contextParts.push(`session=${sessionKey}`);
         }
-        if (!elevatedDefaults?.enabled) {
-          gates.push("enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled)");
-        } else {
-          gates.push(
-            "allowFrom (tools.elevated.allowFrom.<provider> / agents.entries.*.tools.elevated.allowFrom.<provider>)",
-          );
-        }
+        const gate = !elevatedDefaults?.enabled
+          ? "enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled)"
+          : "allowFrom (tools.elevated.allowFrom.<provider> / agents.entries.*.tools.elevated.allowFrom.<provider>)";
         throw new Error(
           [
             `elevated is not available right now (runtime=${runtime}).`,
-            `Failing gates: ${gates.join(", ")}`,
+            `Failing gates: ${gate}`,
             contextParts.length > 0 ? `Context: ${contextParts.join(" ")}` : undefined,
             "Fix-it keys:",
             "- tools.elevated.enabled",
@@ -456,47 +451,51 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           warnings,
         });
 
+        const hostApprovalParams = () => ({
+          command: params.command,
+          toolCallId,
+          env,
+          requestedEnv,
+          sessionKey: defaults?.sessionKey,
+          sessionId: defaults?.sessionId,
+          sessionStore: defaults?.sessionStore,
+          bashElevated: elevatedDefaults,
+          approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
+          nonInteractiveApproval: defaults?.nonInteractiveApproval,
+          approvalFollowupMode: defaults?.approvalFollowupMode,
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
+          agentId,
+          security,
+          ask,
+          bypassHostApprovalFloors: defaults?.bypassHostApprovalFloors,
+          autoReview,
+          autoReviewer,
+          signal,
+          strictInlineEval: defaults?.strictInlineEval,
+          commandHighlighting: defaults?.commandHighlighting,
+          trigger: defaults?.trigger,
+          timeoutSec: params.timeoutSeconds,
+          defaultTimeoutSec,
+          approvalRunningNoticeMs,
+          warnings,
+          notifySessionKey,
+          trustedSafeBinDirs,
+        });
+
         if (host === "node") {
           return executeNodeHostCommand({
-            command: params.command,
-            toolCallId,
+            ...hostApprovalParams(),
             workdir,
-            env,
-            requestedEnv,
             executionContext,
             requestedNode: params.node?.trim(),
             boundNode: defaults?.node?.trim(),
-            sessionKey: defaults?.sessionKey,
-            sessionId: defaults?.sessionId,
-            sessionStore: defaults?.sessionStore,
-            bashElevated: elevatedDefaults,
-            approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
-            nonInteractiveApproval: defaults?.nonInteractiveApproval,
-            approvalFollowupMode: defaults?.approvalFollowupMode,
-            turnSourceChannel: defaults?.messageProvider,
-            turnSourceTo: defaults?.currentChannelId,
-            turnSourceAccountId: defaults?.accountId,
-            turnSourceThreadId: defaults?.currentThreadTs,
-            agentId,
-            security,
-            ask,
-            bypassHostApprovalFloors: defaults?.bypassHostApprovalFloors,
-            autoReview,
-            autoReviewer,
-            signal,
-            strictInlineEval: defaults?.strictInlineEval,
-            commandHighlighting: defaults?.commandHighlighting,
-            trigger: defaults?.trigger,
-            timeoutSec: params.timeoutSeconds,
-            defaultTimeoutSec,
-            approvalRunningNoticeMs,
-            warnings,
             foregroundWarnings: foregroundFallbackWarning ? [foregroundFallbackWarning] : [],
             // Remote system.run has no process-session owner.
             processContinuationAvailable: false,
-            notifySessionKey,
             notifyOnExit,
-            trustedSafeBinDirs,
           });
         }
 
@@ -511,53 +510,23 @@ export function createExecTool(defaults?: ExecToolDefaults) {
 
         if (host === "gateway" && !bypassApprovals) {
           gatewayApproval = await processGatewayAllowlist({
-            command: params.command,
+            ...hostApprovalParams(),
             workdir,
-            env,
             secretEgressBindings,
             githubProfileDir,
             pathPrepend: defaultPathPrepend,
-            requestedEnv,
             pty: params.pty === true && !sandbox,
-            timeoutSec: params.timeoutSeconds,
-            defaultTimeoutSec,
-            security,
-            ask,
-            bypassHostApprovalFloors: defaults?.bypassHostApprovalFloors,
-            autoReview,
-            autoReviewer,
-            signal,
             safeBins,
             safeBinProfiles,
-            strictInlineEval: defaults?.strictInlineEval,
-            commandHighlighting: defaults?.commandHighlighting,
-            trigger: defaults?.trigger,
-            agentId,
-            sessionKey: defaults?.sessionKey,
             runId: defaults?.runId,
-            toolCallId,
             onApprovalReview: (review) => (approvalReview = review),
-            sessionId: defaults?.sessionId,
-            sessionStore: defaults?.sessionStore,
-            bashElevated: elevatedDefaults,
-            approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
-            nonInteractiveApproval: defaults?.nonInteractiveApproval,
-            turnSourceChannel: defaults?.messageProvider,
-            turnSourceTo: defaults?.currentChannelId,
-            turnSourceAccountId: defaults?.accountId,
-            turnSourceThreadId: defaults?.currentThreadTs,
             scopeKey: defaults?.scopeKey,
             approvalFollowupText: defaults?.approvalFollowupText,
             approvalFollowup: defaults?.approvalFollowup,
-            approvalFollowupMode: defaults?.approvalFollowupMode,
-            warnings,
-            notifySessionKey,
-            approvalRunningNoticeMs,
             maxOutput: DEFAULT_MAX_OUTPUT,
             pendingMaxOutput: DEFAULT_PENDING_MAX_OUTPUT,
             cleanupMs,
             processContinuationAvailable: allowBackground,
-            trustedSafeBinDirs,
           });
           const immediateResult = gatewayApproval.pendingResult ?? gatewayApproval.deniedResult;
           if (immediateResult) {

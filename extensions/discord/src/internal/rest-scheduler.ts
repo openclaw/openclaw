@@ -380,6 +380,6 @@ export class RestScheduler<TData> {
 
 function isGlobalRateLimit(parsed: unknown): boolean {
   return parsed && typeof parsed === "object" && "global" in parsed
-    ? Boolean((parsed as { global?: unknown }).global)
+    ? Boolean(parsed.global)
     : false;
 }

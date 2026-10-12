@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { publishedBackupRollback } from "./backup-rollback-summary.mjs";
 import { publishedNativeAssignments } from "./native-assignment-summary.mjs";
+import { assertPackageRecoveryEvidence } from "./package-activation-recovery.mjs";
 import { publishedPluginPolicy } from "./plugin-policy-summary.mjs";
 
 // Capture and snapshot validation stay plain Node. The host entrypoint owns
@@ -84,9 +85,16 @@ const logNames = [
   "repair.err",
   "recovery-update.json",
   "recovery-update.err",
+  "interrupted-update.json",
+  "interrupted-update.err",
+  "next-update.json",
+  "next-update.err",
+  "stranded-update.json",
+  "stranded-update.err",
   "post-update-validate.json",
   "post-update-validate.err",
   "doctor.log",
+  "volume-doctor-budget.json",
   "baseline-doctor.log",
   "workshop-doctor-recovery.json",
   "update-report-recovery.json",
@@ -638,6 +646,22 @@ function migrationProjection(section, value, sanitize = (text) => text) {
   throw new Error();
 }
 
+function projectMigrationSections(read, sanitize) {
+  return Object.fromEntries(
+    ["doctor", "sessions", "archives", "sibling"].map((section) => {
+      try {
+        return [
+          section,
+          { availability: "captured", ...migrationProjection(section, read(section), sanitize) },
+        ];
+      } catch {
+        omissions[`migration-${section}`] ??= reasons[3];
+        return [section, { availability: "unavailable" }];
+      }
+    }),
+  );
+}
+
 // A native read-only open can create missing WAL sidecars or require journal recovery.
 // This bootstrap observer never copies operator databases or imports a migrating runtime reader.
 function assertNativeSqliteObservationSafe(handles, label) {
@@ -664,28 +688,45 @@ function assertNativeSqliteObservationSafe(handles, label) {
   }
 }
 
+const sqliteObservationFiles = [
+  "state/openclaw.sqlite",
+  "state/openclaw.sqlite-wal",
+  "state/openclaw.sqlite-shm",
+  "state/openclaw.sqlite-journal",
+];
+
+function openObservationSources(handles, root, files, requireDatabase = false) {
+  for (const relative of files) {
+    try {
+      const handle = openOwned(root, relative);
+      handles.push(handle);
+      if (handle.stat.size > (relative.endsWith(".json") ? indexLimit : 64 * 1024 * 1024)) {
+        throw new Error();
+      }
+    } catch (error) {
+      if ((requireDatabase && relative.endsWith(".sqlite")) || error.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+}
+
+function assertObservationSourcesUnchanged(handles) {
+  for (const { fd, stat, file } of handles) {
+    // SQLite readers update SHM read marks. Preserve identity checks without
+    // mistaking those cache timestamps for durable index mutations.
+    const matches = file.endsWith("-shm") ? sameFileIdentity : unchangedFile;
+    if (!matches(stat, fs.fstatSync(fd)) || !matches(stat, fs.lstatSync(file))) {
+      throw new Error();
+    }
+  }
+}
+
 function readMigrationSessions(stateRoot) {
   const handles = [];
   let db;
   try {
-    for (const relative of [
-      "state/openclaw.sqlite",
-      "state/openclaw.sqlite-wal",
-      "state/openclaw.sqlite-shm",
-      "state/openclaw.sqlite-journal",
-    ]) {
-      try {
-        const handle = openOwned(stateRoot, relative);
-        handles.push(handle);
-        if (handle.stat.size > 64 * 1024 * 1024) {
-          throw new Error();
-        }
-      } catch (error) {
-        if (relative.endsWith(".sqlite") || error.code !== "ENOENT") {
-          throw error;
-        }
-      }
-    }
+    openObservationSources(handles, stateRoot, sqliteObservationFiles, true);
     assertNativeSqliteObservationSafe(handles, "migration-sessions");
     db = new DatabaseSync(handles[0].file, { readOnly: true });
     db.exec("BEGIN");
@@ -743,12 +784,7 @@ function readMigrationSessions(stateRoot) {
     db.exec("COMMIT");
     db.close();
     db = undefined;
-    for (const { fd, stat, file } of handles) {
-      const matches = file.endsWith("-shm") ? sameFileIdentity : unchangedFile;
-      if (!matches(stat, fs.fstatSync(fd)) || !matches(stat, fs.lstatSync(file))) {
-        throw new Error();
-      }
-    }
+    assertObservationSourcesUnchanged(handles);
     return { deferred, imports };
   } finally {
     db?.close();
@@ -827,16 +863,7 @@ function captureMigrationEvidence(stateRoot, artifactRoot, observationRoot) {
       };
     },
   };
-  return Object.fromEntries(
-    Object.entries(sources).map(([section, read]) => {
-      try {
-        return [section, { availability: "captured", ...migrationProjection(section, read()) }];
-      } catch {
-        omissions[`migration-${section}`] ??= reasons[3];
-        return [section, { availability: "unavailable" }];
-      }
-    }),
-  );
+  return projectMigrationSections((section) => sources[section]());
 }
 
 function sessionMigrationProjection(raw, kind, runId, sanitize = (text) => text) {
@@ -1116,47 +1143,29 @@ function armPostCoreCapture() {
   }
 }
 
-async function pluginIdentities(stateRoot, artifactRoot) {
-  const unavailable = {
+function unknownPluginIdentity() {
+  return {
     availability: "unknown",
     evidence: "persisted index + current bytes; not observed loaded modules",
     reader: "SQLite or historical fallback; missing/error is not absence",
     plugins: [],
   };
+}
+
+async function pluginIdentities(stateRoot, artifactRoot) {
+  const unavailable = unknownPluginIdentity();
   const handles = [];
   try {
     // The existing reader opens SQLite read-only. Fence every file it may read;
     // disable its config fallback rather than consulting failed-state CLI/config.
-    for (const relative of [
-      "state/openclaw.sqlite",
-      "state/openclaw.sqlite-wal",
-      "state/openclaw.sqlite-shm",
-      "state/openclaw.sqlite-journal",
+    openObservationSources(handles, stateRoot, [
+      ...sqliteObservationFiles,
       "plugins/installs.json",
-    ]) {
-      try {
-        const handle = openOwned(stateRoot, relative);
-        handles.push(handle);
-        if (handle.stat.size > (relative.endsWith(".json") ? indexLimit : 64 * 1024 * 1024)) {
-          throw new Error();
-        }
-      } catch (error) {
-        if (error.code !== "ENOENT") {
-          throw error;
-        }
-      }
-    }
+    ]);
     assertNativeSqliteObservationSafe(handles, "plugin identity");
     const { readPluginInstallIndex } = await import("../plugin-index-sqlite.mjs");
     const index = readPluginInstallIndex({ stateDir: stateRoot, configPath: null });
-    for (const { fd, stat, file } of handles) {
-      // SQLite readers update SHM read marks: its cache timestamps are not
-      // durable index mutations. Keep file identity checks on every source.
-      const matches = file.endsWith("-shm") ? sameFileIdentity : unchangedFile;
-      if (!matches(stat, fs.fstatSync(fd)) || !matches(stat, fs.lstatSync(file))) {
-        throw new Error();
-      }
-    }
+    assertObservationSourcesUnchanged(handles);
     if (Buffer.byteLength(JSON.stringify(index)) > indexLimit || !Array.isArray(index.plugins)) {
       throw new Error();
     }
@@ -1681,6 +1690,36 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
   }
   const pluginPolicy = publishedPluginPolicy(snapshot, { sanitize, boundedList });
   const nativeAssignments = publishedNativeAssignments(snapshot);
+  let packageActivationRecovery;
+  if (
+    ["package-publication-recovery", "package-verification-recovery"].includes(snapshot.scenario)
+  ) {
+    const proof = snapshot.packageActivationRecovery;
+    assertPackageRecoveryEvidence(proof);
+    packageActivationRecovery = {
+      status: proof.status,
+      cut: proof.interruption.cut,
+      phase: proof.interruption.phase,
+      writerVersion: proof.interruption.writerVersion,
+      candidateVersion: proof.candidate.version,
+      candidateSha256: proof.candidate.tarballSha256,
+      nextVersion: proof.nextUpdate.installed.version,
+      helperPreserved: true,
+      retainedBytesPreserved: true,
+      repeatRepairPassed: true,
+      distinctNextUpdatePassed: true,
+    };
+  } else if (snapshot.scenario === "package-stranded-first-hop") {
+    const proof = snapshot.packageActivationRecovery;
+    assertPackageRecoveryEvidence(proof);
+    packageActivationRecovery = {
+      status: proof.status,
+      writerVersion: "2026.9.7",
+      installedVersion: "2026.9.8",
+      firstHop: proof.firstHop,
+      newerCandidateInvoked: false,
+    };
+  }
   for (const value of [
     snapshot.baseline?.spec,
     snapshot.baseline?.version,
@@ -1701,6 +1740,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     "startupSeconds",
     "updateRestartSeconds",
     "idempotenceSeconds",
+    "idempotenceBudgetSeconds",
     "healthzSeconds",
     "readyzSeconds",
     "statusSeconds",
@@ -1774,6 +1814,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     backupRollback: publishedBackupRollback(snapshot, { sanitize, boundedList, textFields }),
     ...(pluginPolicy ? { pluginPolicy } : {}),
     ...(nativeAssignments ? { nativeAssignments } : {}),
+    ...(packageActivationRecovery ? { packageActivationRecovery } : {}),
     timings,
     phases: boundedList(snapshot.phases).map((event) => {
       if (
@@ -2044,12 +2085,7 @@ export function publishDiagnostics(
   } catch {
     // Do not promote a partial or unbound receipt into a reported Doctor outcome.
   }
-  report.pluginIdentity = {
-    availability: "unknown",
-    evidence: "persisted index + current bytes; not observed loaded modules",
-    reader: "SQLite or historical fallback; missing/error is not absence",
-    plugins: [],
-  };
+  report.pluginIdentity = unknownPluginIdentity();
   if (snapshot.pluginIdentity?.availability === "observed") {
     try {
       const plugins = boundedList(snapshot.pluginIdentity.plugins).map((entry) => {
@@ -2090,23 +2126,13 @@ export function publishDiagnostics(
       omissions["plugin identity"] = reasons[3];
     }
   }
-  report.migration = Object.fromEntries(
-    ["doctor", "sessions", "archives", "sibling"].map((section) => {
-      try {
-        const value = snapshot.migration?.[section];
-        if (value?.availability !== "captured") {
-          throw new Error();
-        }
-        return [
-          section,
-          { availability: "captured", ...migrationProjection(section, value, sanitize) },
-        ];
-      } catch {
-        omissions[`migration-${section}`] ??= reasons[3];
-        return [section, { availability: "unavailable" }];
-      }
-    }),
-  );
+  report.migration = projectMigrationSections((section) => {
+    const value = snapshot.migration?.[section];
+    if (value?.availability !== "captured") {
+      throw new Error();
+    }
+    return value;
+  }, sanitize);
   writeReport(artifactRoot, destination, "failure.json", report, publicLimit);
   if (Object.keys(omissions).length) {
     process.stderr.write(

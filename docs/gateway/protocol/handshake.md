@@ -238,6 +238,12 @@ the general protocol version. Frames stay under 64 KiB, except a negotiated
 `worker.heartbeat`, `worker.transcript.commit`, `worker.live-event`,
 `worker.inference.start`, and `worker.inference.cancel`.
 
+Assistant messages in `worker.transcript.commit` may carry the live event's
+`itemId`. The Gateway binds it to its generated commit key, removes it before
+storage, and publishes the correlation only after the row commits. It is not
+provider replay data. This worker-only field travels between the exact
+builds admitted by the bundle, version, and feature checks above.
+
 For an identity-audited attached run, the live turn capability can record the
 credential, build, owner-epoch, and placement checks as one enforced admission
 receipt. The receipt contains none of the credential, build hashes, tokens,

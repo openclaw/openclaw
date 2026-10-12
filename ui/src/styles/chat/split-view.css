@@ -111,15 +111,6 @@
   }
 }
 
-.chat-pane__header--centered {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-}
-
-.chat-pane__header--centered .chat-pane__header-trailing {
-  margin-left: 0;
-}
-
 /* These groups become the two mobile identity rows. They stay transparent to
    the desktop flex trail so its existing one-line geometry is unchanged. */
 .chat-pane__project-row,
@@ -180,7 +171,8 @@
 }
 
 .chat-pane__session-title-text,
-.chat-pane__parent-session-text {
+.chat-pane__parent-session-text,
+.chat-pane__sharing-member-label {
   display: block;
   overflow: hidden;
   white-space: nowrap;
@@ -332,9 +324,56 @@
   height: 14px;
 }
 
+.chat-pane__branches-menu {
+  --versions-icon-column: 28px;
+}
+
+.chat-pane__versions-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-pane__versions-info {
+  margin-inline-start: auto;
+  width: var(--versions-icon-column);
+  min-width: var(--versions-icon-column);
+  height: 28px;
+  padding: 6px;
+}
+
+.chat-pane__versions-info svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-pane__versions-help {
+  --max-width: 280px;
+
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.chat-pane__branches-menu::part(menu) {
+  width: min(360px, calc(100vw - 24px));
+}
+
 .chat-pane__branch-item {
-  min-width: 260px;
-  max-width: 360px;
+  min-width: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* Current is a readable selection, not an unavailable action. */
+.chat-pane__branch-item[data-active="true"] {
+  opacity: 1;
+  cursor: var(--cursor-action);
 }
 
 .chat-pane__branch-copy {
@@ -356,7 +395,9 @@
 
 .chat-pane__branch-active {
   display: inline-flex;
-  margin-left: auto;
+  width: var(--versions-icon-column);
+  align-items: center;
+  justify-content: center;
   color: var(--accent);
 }
 
@@ -437,30 +478,6 @@
 .chat-pane__public-share-indicator svg {
   width: 13px;
   height: 13px;
-}
-
-.chat-pane__header-center .chat-pane__sharing-menu,
-.chat-pane__header-center .chat-pane__draft-indicator {
-  position: absolute;
-  inset-block-start: 50%;
-  inset-inline-start: 100%;
-  display: inline-flex;
-  transform: translateY(-50%);
-}
-
-.chat-pane__header-center .chat-pane__sharing-trigger,
-.chat-pane__header-center .chat-pane__draft-indicator {
-  width: 28px;
-  height: 28px;
-  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: 0 var(--radius-full) var(--radius-full) 0;
-  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
-}
-
-.chat-pane__header-center .chat-pane__sharing-trigger {
-  min-width: 28px;
-  min-height: 28px;
-  padding: 0;
 }
 
 .chat-pane__sharing-menu::part(menu) {
@@ -546,13 +563,6 @@
   justify-content: center;
 }
 
-.chat-pane__sharing-member-label {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .chat-pane__sharing-status--error {
   max-width: 260px;
   color: var(--danger);
@@ -566,11 +576,6 @@
 .chat-pane__draft-indicator svg {
   width: 15px;
   height: 15px;
-}
-
-.chat-pane__header-center .chat-pane__draft-indicator {
-  align-items: center;
-  justify-content: center;
 }
 
 /* A full split header measures 793px including insets, so secondary controls

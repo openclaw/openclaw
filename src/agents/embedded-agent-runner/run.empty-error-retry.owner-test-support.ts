@@ -86,7 +86,6 @@ function makeInput(
       maybeMarkAuthProfileFailure: vi.fn(async () => {}),
       transientRetryCount: 0,
       advanceAuthProfile: vi.fn(async () => false),
-      advanceRateLimitAuthProfile: vi.fn(async () => false),
     },
     traceAttempts: [],
     suspensionSessionId: "session:empty-error",

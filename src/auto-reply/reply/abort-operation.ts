@@ -5,9 +5,9 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { captureExecRequestCancellation } from "../../agents/bash-process-control.js";
 import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/active-run-projections.js";
 import { prepareEmbeddedAgentRunAbort } from "../../agents/embedded-agent-runner/runs.abort-target.js";
+import { captureExecRequestSubagentSelection } from "../../agents/subagents/registry/subagent-control-scope.js";
 import { killAllControlledSubagentRuns } from "../../agents/subagents/registry/subagent-control.js";
-import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { listRunsForControllerFromRuns } from "../../agents/subagents/registry/subagent-registry-queries.js";
+import type { SubagentRequestSessionOrigin } from "../../agents/subagents/registry/subagent-exec-request-ownership.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -30,8 +30,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { resolveCommandAuthorization } from "../command-auth.js";
-import type { FinalizedRuntimeMsgContext } from "../templating.js";
+import { resolveCommandAuthorizationAsync } from "../command-auth.js";
 import {
   type AbortCutoff,
   resolveAbortCutoffFromContext,
@@ -156,33 +155,20 @@ function resolveStoredSessionId(params: {
   }
 }
 
-async function resolveBoundAcpAbortTargetSessionKey(params: {
-  ctx: FinalizedRuntimeMsgContext;
-  cfg: OpenClawConfig;
-  activeSessionKey: string;
-}): Promise<string | undefined> {
-  const bindingContext = resolveSessionConversationBindingContext(params.cfg, params.ctx);
-  if (!bindingContext) {
-    return undefined;
-  }
-  return resolveEffectiveResetTargetSessionKey({
-    cfg: params.cfg,
-    ...bindingContext,
-    activeSessionKey: params.activeSessionKey,
-    skipConfiguredFallbackWhenActiveSessionNonAcp: false,
-    fallbackToActiveAcpWhenUnbound: false,
-  });
-}
-
 export async function stopSubagentsForRequester(params: {
   cfg: OpenClawConfig;
   requesterSessionKey?: string;
   requesterAgentId?: string;
+  requesterSession?: Pick<
+    SubagentRequestSessionOrigin["target"],
+    "storePath" | "sessionId" | "lifecycleRevision"
+  >;
+  assertCurrent?: () => void;
   beforeKill?: Parameters<typeof killAllControlledSubagentRuns>[0]["beforeKill"];
-}): Promise<{ stopped: number; failed: number }> {
+}): Promise<{ stopped: number; failed: number; execAborted?: boolean }> {
   const cleaned = normalizeOptionalString(params.requesterSessionKey);
   if (!cleaned) {
-    await params.beforeKill?.();
+    await params.beforeKill?.(() => {});
     return { stopped: 0, failed: 0 };
   }
   const { alias } = resolveMainSessionAlias(params.cfg);
@@ -192,16 +178,38 @@ export async function stopSubagentsForRequester(params: {
     sessionKey: requesterKey,
     fallbackAgentId: params.requesterAgentId,
   });
+  const controller = {
+    controllerSessionKey: requesterKey,
+    controllerAgentId,
+    callerSessionKey: requesterKey,
+    callerIsSubagent: isSubagentSessionKey(requesterKey),
+    controlScope: "children" as const,
+  };
+  const commands = captureExecRequestCancellation({
+    sessionKey: requesterKey,
+    agentId: controllerAgentId,
+  });
+  const requestSelection = captureExecRequestSubagentSelection({
+    cfg: params.cfg,
+    controller,
+    owners: commands.owners,
+    sessionOrigin: params.requesterSession
+      ? {
+          target: {
+            ...params.requesterSession,
+            sessionKey: requesterKey,
+            agentId: controllerAgentId,
+          },
+          acceptsRequest: () => true,
+        }
+      : undefined,
+  });
   const result = await killAllControlledSubagentRuns({
     cfg: params.cfg,
-    controller: {
-      controllerSessionKey: requesterKey,
-      controllerAgentId,
-      callerSessionKey: requesterKey,
-      callerIsSubagent: isSubagentSessionKey(requesterKey),
-      controlScope: "children",
-    },
-    runs: listRunsForControllerFromRuns(subagentRuns, requesterKey),
+    controller,
+    runs: requestSelection.runs,
+    requestSelection,
+    assertCurrent: params.assertCurrent,
     suppressTaskDelivery: true,
     beforeKill: params.beforeKill,
   });
@@ -211,7 +219,11 @@ export async function stopSubagentsForRequester(params: {
   if (result.killed > 0) {
     logVerbose(`abort: stopped ${result.killed} subagent run(s) for ${requesterKey}`);
   }
-  return { stopped: result.killed, failed: result.status === "error" ? result.failed : 0 };
+  return {
+    stopped: result.killed,
+    failed: result.status === "error" ? result.failed : 0,
+    ...(result.execAborted ? { execAborted: true } : {}),
+  };
 }
 
 export async function executeFastAbortRequest(
@@ -221,18 +233,7 @@ export async function executeFastAbortRequest(
   const { ctx, cfg } = params;
   const { commandSessionKey, targetKey, resolveTargetAgentId } = request;
 
-  const auth = resolveCommandAuthorization({
-    ctx,
-    cfg,
-    commandAuthorized: ctx.CommandAuthorized,
-  });
-  if (!auth.isAuthorizedSender) {
-    return { handled: false, aborted: false };
-  }
-
   const agentId = resolveTargetAgentId();
-  const abortKey = targetKey ?? auth.from ?? auth.to;
-  const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;
 
   if (targetKey) {
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
@@ -294,40 +295,68 @@ export async function executeFastAbortRequest(
         (key) => [key, prepareTarget(key)] as const,
       ),
     );
-    const conversationBoundAcpTargetKey = commandSessionKey
-      ? await resolveBoundAcpAbortTargetSessionKey({
-          ctx,
-          cfg,
-          activeSessionKey: commandSessionKey,
-        })
-      : undefined;
-    const boundAcpTargetKey = !isAcpSessionKey(resolvedTargetKey)
-      ? conversationBoundAcpTargetKey
-      : undefined;
-    const abortTargetKeys = [resolvedTargetKey];
-    if (boundAcpTargetKey && boundAcpTargetKey !== resolvedTargetKey) {
-      abortTargetKeys.push(boundAcpTargetKey);
-    }
-    const sourceAbortKey =
-      commandSessionKey &&
-      !abortTargetKeys.includes(commandSessionKey) &&
-      conversationBoundAcpTargetKey &&
-      abortTargetKeys.includes(conversationBoundAcpTargetKey)
-        ? commandSessionKey
-        : undefined;
-    const targets = [...abortTargetKeys, ...(sourceAbortKey ? [sourceAbortKey] : [])].map(
-      (key) => preparedTargets.get(key) ?? prepareTarget(key),
-    );
+    let authorized = false;
     let aborted = false;
     let activeAbortRejected = false;
     const acpCancellations: Promise<void>[] = [];
     try {
-      const { stopped, failed } = await stopSubagentsForRequester({
+      const { stopped, failed, execAborted } = await stopSubagentsForRequester({
         cfg,
-        requesterSessionKey,
+        requesterSessionKey: targetKey,
         requesterAgentId: agentId,
-        beforeKill: () => {
+        requesterSession: resolvedAbortTarget?.sessionId
+          ? {
+              storePath,
+              sessionId: resolvedAbortTarget.sessionId,
+              lifecycleRevision: resolvedAbortTarget.entry.lifecycleRevision ?? null,
+            }
+          : undefined,
+        assertCurrent,
+        beforeKill: async (sealRootSelection) => {
+          // Capture the selected work before authorization yields to later human turns.
+          const auth = await resolveCommandAuthorizationAsync({
+            ctx,
+            cfg,
+            commandAuthorized: ctx.CommandAuthorized,
+          });
+          authorized = auth.isAuthorizedSender;
+          if (!authorized) {
+            return false;
+          }
           assertCurrent();
+          const bindingContext = commandSessionKey
+            ? resolveSessionConversationBindingContext(cfg, ctx)
+            : undefined;
+          const conversationBoundAcpTargetKey = commandSessionKey
+            ? await (bindingContext
+                ? resolveEffectiveResetTargetSessionKey({
+                    cfg,
+                    ...bindingContext,
+                    activeSessionKey: commandSessionKey,
+                    skipConfiguredFallbackWhenActiveSessionNonAcp: false,
+                    fallbackToActiveAcpWhenUnbound: false,
+                  })
+                : undefined)
+            : undefined;
+          const boundAcpTargetKey = !isAcpSessionKey(resolvedTargetKey)
+            ? conversationBoundAcpTargetKey
+            : undefined;
+          const abortTargetKeys = [resolvedTargetKey];
+          if (boundAcpTargetKey && boundAcpTargetKey !== resolvedTargetKey) {
+            abortTargetKeys.push(boundAcpTargetKey);
+          }
+          const sourceAbortKey =
+            commandSessionKey &&
+            !abortTargetKeys.includes(commandSessionKey) &&
+            conversationBoundAcpTargetKey &&
+            abortTargetKeys.includes(conversationBoundAcpTargetKey)
+              ? commandSessionKey
+              : undefined;
+          const targets = [...abortTargetKeys, ...(sourceAbortKey ? [sourceAbortKey] : [])].map(
+            (key) => preparedTargets.get(key) ?? prepareTarget(key),
+          );
+          assertCurrent();
+          sealRootSelection();
           try {
             for (const target of targets) {
               const cleared = target.clearQueues();
@@ -379,6 +408,10 @@ export async function executeFastAbortRequest(
           return true;
         },
       });
+      if (!authorized) {
+        return { handled: false, aborted: false };
+      }
+      aborted ||= execAborted === true;
       const rejectionReason = activeAbortRejected && !aborted ? "finalizing" : undefined;
       if (!rejectionReason) {
         let persistedAbortTarget: SessionAbortTargetResult | null = null;
@@ -417,13 +450,26 @@ export async function executeFastAbortRequest(
     }
   }
 
+  const auth = await resolveCommandAuthorizationAsync({
+    ctx,
+    cfg,
+    commandAuthorized: ctx.CommandAuthorized,
+  });
+  if (!auth.isAuthorizedSender) {
+    return { handled: false, aborted: false };
+  }
+  const abortKey = auth.from ?? auth.to;
+  const requesterSessionKey = ctx.SessionKey ?? abortKey;
   if (abortKey) {
     setAbortMemory(abortKey, true);
   }
-  const { stopped, failed } = await stopSubagentsForRequester({ cfg, requesterSessionKey });
+  const { stopped, failed, execAborted } = await stopSubagentsForRequester({
+    cfg,
+    requesterSessionKey,
+  });
   return {
     handled: true,
-    aborted: false,
+    aborted: execAborted === true,
     stoppedSubagents: stopped,
     failedSubagents: failed,
   };

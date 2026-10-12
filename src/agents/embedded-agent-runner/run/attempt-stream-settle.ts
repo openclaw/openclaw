@@ -17,7 +17,7 @@ import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -81,7 +81,6 @@ export async function settleEmbeddedAttemptStream(input: {
     promptError: unknown;
     promptErrorSource: AgentRunAttemptFailureSource | null;
     yieldAborted: boolean;
-    sessionIdUsed: string;
   };
   readLifecycleState: () => {
     aborted: boolean;
@@ -106,7 +105,6 @@ export async function settleEmbeddedAttemptStream(input: {
   shouldFlushForContextEngine: boolean;
 }) {
   const { attempt, activeSession, sessionManager, subscription, state } = input;
-  let { promptError, promptErrorSource } = state;
 
   try {
     if (
@@ -132,12 +130,10 @@ export async function settleEmbeddedAttemptStream(input: {
       // An aborted run legitimately leaves async tasks unfinished; stamping a
       // timeout failure here would reclassify the abort as an errored completion.
       if (asyncTaskWait.timedOutRunIds.length > 0 && !input.readLifecycleState().aborted) {
-        promptError = new Error(
+        state.promptError = new Error(
           `Timed out waiting for async task completion: ${asyncTaskWait.timedOutRunIds.join(", ")}`,
         );
-        promptErrorSource = "prompt";
-        state.promptError = promptError;
-        state.promptErrorSource = promptErrorSource;
+        state.promptErrorSource = "prompt";
       }
     }
   } catch (err) {
@@ -166,7 +162,7 @@ export async function settleEmbeddedAttemptStream(input: {
         prePromptMessageCount: input.prePromptMessageCount,
       });
       const attemptAccepted =
-        !promptError &&
+        !state.promptError &&
         !input.readLifecycleState().aborted &&
         !input.readLifecycleState().timedOut &&
         !state.yieldAborted &&
@@ -211,11 +207,9 @@ export async function settleEmbeddedAttemptStream(input: {
     if (!isRunnerAbortError(err)) {
       throw err;
     }
-    if (!promptError) {
-      promptError = err;
-      promptErrorSource = "compaction";
-      state.promptError = promptError;
-      state.promptErrorSource = promptErrorSource;
+    if (!state.promptError) {
+      state.promptError = err;
+      state.promptErrorSource = "compaction";
     }
     if (!input.isProbeSession) {
       log.debug(`compaction wait aborted: runId=${attempt.runId} sessionId=${attempt.sessionId}`);
@@ -292,7 +286,7 @@ export async function settleEmbeddedAttemptStream(input: {
   let captured: ReturnType<typeof captureStreamSnapshot>;
   try {
     captured = await input.withOwnedTranscriptWrite(() =>
-      withSessionManagerWrite(sessionManager, async () => {
+      withSessionManagerAppend(sessionManager, async () => {
         const { timedOutDuringCompaction } = input.readLifecycleState();
         const compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
         const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
@@ -328,8 +322,8 @@ export async function settleEmbeddedAttemptStream(input: {
         const streamSnapshot = captureStreamSnapshot();
 
         if (
-          promptError &&
-          promptErrorSource === "prompt" &&
+          state.promptError &&
+          state.promptErrorSource === "prompt" &&
           !streamSnapshot.compactionOccurredThisAttempt &&
           !attempt.abortSignal?.aborted
         ) {
@@ -341,7 +335,7 @@ export async function settleEmbeddedAttemptStream(input: {
               provider: attempt.provider,
               model: attempt.modelId,
               api: attempt.model.api,
-              error: formatErrorMessage(promptError),
+              error: formatErrorMessage(state.promptError),
             });
           } catch (entryErr) {
             log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
@@ -365,8 +359,8 @@ export async function settleEmbeddedAttemptStream(input: {
   }
 
   return {
-    promptError,
-    promptErrorSource,
+    promptError: state.promptError,
+    promptErrorSource: state.promptErrorSource,
     timedOutDuringCompaction: input.readLifecycleState().timedOutDuringCompaction,
     ...captured,
     successfulNestedToolNames: [...input.nestedToolActivityState.successfulToolNames],
@@ -419,6 +413,10 @@ export async function prepareEmbeddedAttemptTransport(input: {
   const streamExtraParamsOverride = {
     ...attempt.streamParams,
     fastMode: attempt.fastMode,
+    // Memory extraction must see the original history, not a provider summary.
+    ...(attempt.trigger === "memory"
+      ? { anthropicServerCompaction: false, responsesServerCompaction: false }
+      : {}),
   };
   const selectedAuth = attempt.runtimePlan?.auth;
   const auth = selectedAuth?.selectedAuthMode

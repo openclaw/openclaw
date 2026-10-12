@@ -121,7 +121,7 @@ suite.define(() => {
       if (captureProofEnabled) {
         await page.waitForTimeout(400);
       }
-      await composer.press("Control+Enter");
+      await composer.press("Control+Shift+Enter");
 
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { agentId: "main", message: `run this separately on ${label}` },
@@ -255,7 +255,7 @@ suite.define(() => {
       await page.getByRole("link", { name: "New conversation" }).first().click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       await page.locator(".new-session-page__message").fill("verify another default mock");
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.locator(".new-session-page__message").press("Control+Enter");
       await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
       expect((await gateway.getRequests("sessions.create")).at(-1)).toMatchObject({
         params: { agentId: "main", message: "verify another default mock" },
@@ -799,9 +799,9 @@ suite.define(() => {
           // The visible chat header now owns the titlebar, not a second draft-scroll inset.
           const pendingChat = page.locator("openclaw-pending-session-create");
           expect(await pendingChat.locator(".chat-pane__header").isVisible()).toBe(true);
-          expect(
-            await pendingChat.locator(".agent-chat__composer-combobox textarea").isDisabled(),
-          ).toBe(true);
+          const followUpComposer = pendingChat.locator(".agent-chat__composer-combobox textarea");
+          expect(await followUpComposer.isEnabled()).toBe(true);
+          expect(await followUpComposer.inputValue()).toBe("");
           await captureUiProof(suite, page, `${proofName}-submitted.png`);
           const presentation = await expectPendingNewSessionPresentation(page);
           if (captureProofEnabled) {
@@ -810,9 +810,10 @@ suite.define(() => {
               JSON.stringify(presentation, null, 2),
             );
           }
-          await page.keyboard.press("Enter");
-          await page.keyboard.press("Control+Enter");
+          await followUpComposer.press("Enter");
+          await followUpComposer.press("Control+Enter");
           expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           await submittedPrompt.locator(".chat-message-image-button").click();
           const attachmentViewer = page.locator("openclaw-image-lightbox");
           await expectDecodedThumbnail(attachmentViewer.locator("img.image"));

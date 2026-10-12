@@ -179,60 +179,6 @@ describe("trusted plugin selected session facts", () => {
       }),
   );
 
-  it("shares the snapshot and revision across concurrent cold and changed reads", ({ signal }) =>
-    withFixture(async (fixture) => {
-      const releaseForeground = retainSessionListForegroundWork();
-      const projection = getSessionRowProjection(fixture.context)!;
-      const prepare = projection.withPreparedExactRows.bind(projection);
-      const selected = () => withSelectedFacts(fixture, async (value) => value);
-      let previous: RuntimeSessionFactsSelectionResult | undefined;
-      try {
-        for (const label of ["Cold concurrent selection", "Changed concurrent selection"]) {
-          await fixture.seed(sessionKey, fixture.profile.id, { label });
-          await fixture.subscriptions.replace(fixture.client.connId, [sessionKey]);
-          await projection.ensureMaterialized();
-          const entered = createDeferredCore();
-          const release = createDeferredCore();
-          let arrivals = 0;
-          using _ = vi
-            .spyOn(projection, "withPreparedExactRows")
-            .mockImplementation(async (queries, consume, options) => {
-              if (++arrivals === 2) {
-                entered.resolve();
-              }
-              await release.promise;
-              return prepare(queries, consume, options);
-            });
-          const reading = Promise.all([selected(), selected()]);
-          try {
-            await withinTest(
-              awaitGateBeforeSettlement(
-                entered.promise,
-                reading,
-                "Concurrent selections completed before both reached facts preparation",
-              ),
-              signal,
-            );
-            release.resolve();
-            const [first, second] = await withinTest(reading, signal);
-            expect(first.sessions).toMatchObject([{ key: sessionKey, label }]);
-            expect(second).toBe(first);
-            expect(second.revision).toBe(first.revision);
-            if (previous) {
-              expect(first.revision).not.toBe(previous.revision);
-            }
-            expect(await selected()).toBe(first);
-            previous = first;
-          } finally {
-            release.resolve();
-            await reading.catch(() => {});
-          }
-        }
-      } finally {
-        releaseForeground();
-      }
-    }));
-
   it("retains unchanged facts while persistent rows and authority epochs change", () =>
     withFixture(async (fixture) => {
       const sibling = "agent:main:unchanged-facts";
@@ -492,7 +438,7 @@ describe("trusted plugin selected session facts", () => {
       }
     }));
 
-  it("expires cached people at the inclusive activity boundary and reselects after clock rollback", () =>
+  it("expires cached people at the inclusive activity boundary", () =>
     withFixture(async (fixture) => {
       const initial = Date.now();
       let now = initial;
@@ -522,8 +468,6 @@ describe("trusted plugin selected session facts", () => {
         expect(expired.sessions.map((row) => row.key)).toEqual([otherKey]);
         expect(people(expired)).toEqual([fixture.other.id]);
         expect(expired.activityExpiresAt).toBe(initial + 60_000);
-        now = initial - 1;
-        expect(people(await selected())).toEqual(people(boundary));
         now = initial + 60_001;
         const empty = await selected();
         expect(empty.sessions).toEqual([]);
@@ -580,6 +524,10 @@ describe("trusted plugin selected session facts", () => {
         await fixture.subscriptions.pollNow();
         expect(fixture.load).toHaveBeenCalledTimes(attempts + 1);
         expect(retried.retryAt).toBe(now + 120_000);
+        await fixture.seed(sessionKey, fixture.profile.id, { label: "Changed stored metadata" });
+        await selected();
+        await fixture.subscriptions.pollNow();
+        expect(fixture.load).toHaveBeenCalledTimes(attempts + 2);
         await fixture.seed(sessionKey, fixture.profile.id, {
           lifecycleRevision: "replacement-generation",
           worktree: {

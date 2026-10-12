@@ -970,4 +970,4 @@ jobs:
           retention-days: 30
 
   # Exact public artifact verification runs in plugin-clawhub-postpublish.yml
-  # after the authorizing parent succeeds. Waiting here would deadlock staging.
+  # after the authorizing parent becomes terminal. Waiting here deadlocks staging.

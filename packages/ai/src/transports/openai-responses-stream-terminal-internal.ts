@@ -77,13 +77,10 @@ export function resolveResponsesToolCallId(
   const callId = typeof item.call_id === "string" ? item.call_id.trim() : "";
   const itemId = typeof item.id === "string" ? item.id.trim() : "";
   const [fallbackCallId, fallbackItemId = ""] = splitToolCallId(fallbackId ?? "");
-  const resolvedCallId = callId || fallbackCallId;
+  const resolvedCallId =
+    callId || fallbackCallId || `call_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
   const resolvedItemId = itemId || fallbackItemId;
-  if (resolvedCallId) {
-    return resolvedItemId ? `${resolvedCallId}|${resolvedItemId}` : resolvedCallId;
-  }
-  const generated = `call_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
-  return resolvedItemId ? `${generated}|${resolvedItemId}` : generated;
+  return resolvedItemId ? `${resolvedCallId}|${resolvedItemId}` : resolvedCallId;
 }
 
 export function resolveCompletedResponsesToolCall(
@@ -161,7 +158,8 @@ export function createResponsesTerminalController(params: {
       }
     }
   };
-  const appendText = (item: ResponseOutputMessage, contentIndex?: number): number | undefined => {
+  const appendText = (item: ResponseOutputMessage, initialIndex?: number): number | undefined => {
+    let contentIndex = initialIndex;
     const text = (Array.isArray(item.content) ? item.content : [])
       .map((part) => {
         const content = part as { type: string; text?: string; refusal?: string };
@@ -187,42 +185,31 @@ export function createResponsesTerminalController(params: {
           stream.push({ type: "text_delta", contentIndex, delta });
         }
       }
-      stream.push({
-        type: "text_end",
-        contentIndex,
-        content: text,
-        partial: output,
+    } else {
+      const previous = params.getLastTextBlock();
+      const collapse = resolveResponsesMessageSnapshotCollapse({
+        prior: previous && { text: previous.block.text, phase: previous.phase },
+        nextText: text,
+        nextPhase: phase,
       });
-      return contentIndex;
+      if (collapse.kind === "extend" && previous) {
+        previous.block.text = collapse.text;
+        previous.block.textSignature = encodeTextSignatureV1(item.id, phase);
+        contentIndex = previous.index;
+      } else {
+        const newBlock: TextContent = {
+          type: "text",
+          text,
+          textSignature: encodeTextSignatureV1(item.id, phase),
+        };
+        blocks.push(newBlock);
+        contentIndex = blocks.length - 1;
+        params.setLastTextBlock({ block: newBlock, index: contentIndex, phase });
+        stream.push({ type: "text_start", contentIndex, partial: output });
+      }
     }
-    const previous = params.getLastTextBlock();
-    const collapse = resolveResponsesMessageSnapshotCollapse({
-      prior: previous && { text: previous.block.text, phase: previous.phase },
-      nextText: text,
-      nextPhase: phase,
-    });
-    if (collapse.kind === "extend" && previous) {
-      previous.block.text = collapse.text;
-      previous.block.textSignature = encodeTextSignatureV1(item.id, phase);
-      stream.push({
-        type: "text_end",
-        contentIndex: previous.index,
-        content: collapse.text,
-        partial: output,
-      });
-      return previous.index;
-    }
-    const newBlock: TextContent = {
-      type: "text",
-      text,
-      textSignature: encodeTextSignatureV1(item.id, phase),
-    };
-    blocks.push(newBlock);
-    const index = blocks.length - 1;
-    params.setLastTextBlock({ block: newBlock, index, phase });
-    stream.push({ type: "text_start", contentIndex: index, partial: output });
-    stream.push({ type: "text_end", contentIndex: index, content: text, partial: output });
-    return index;
+    stream.push({ type: "text_end", contentIndex, content: text, partial: output });
+    return contentIndex;
   };
   const emitToolCallCompletion = (
     item: { type: "function_call"; id?: string; call_id?: string },
@@ -233,7 +220,7 @@ export function createResponsesTerminalController(params: {
     // Complete the same public block with authoritative identities and arguments;
     // scratch JSON must never survive into transcript replay.
     const completed = { id: resolveResponsesToolCallId(item, started?.block.id), ...validated };
-    const toolCall: ToolCall & { partialJson?: string } = started
+    const toolCall: ToolCall = started
       ? Object.assign(started.block, completed)
       : { type: "toolCall", ...completed };
     delete toolCall.partialJson;

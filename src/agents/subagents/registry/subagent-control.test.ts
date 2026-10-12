@@ -6,9 +6,6 @@ import { runSubagentStateWorkerOperation, useSubagentControlFixture, useSubagent
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { stopSubagentsForRequester } from "../../../auto-reply/reply/abort-operation.js";
-import { tryFastAbortFromMessage } from "../../../auto-reply/reply/abort.js";
-import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
-import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import {
   loadSessionEntry,
@@ -29,7 +26,7 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import * as killSession from "./subagent-control-session.js";
 import { registerAdmissionDrainControlTests } from "./subagent-control.admission-drain.test-support.js";
@@ -40,6 +37,10 @@ import {
 } from "./subagent-control.js";
 import { registerLateDescendantControlTests } from "./subagent-control.late-registration.test-support.js";
 import { registerQueuedReservationFailureTests } from "./subagent-control.queued-failure.test-support.js";
+import {
+  registerQueuedStopControlTests,
+  registerRequestFrontierControlTests,
+} from "./subagent-control.stop-selection.test-support.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -1306,134 +1307,13 @@ describe("killAllControlledSubagentRuns", () => {
     writeSessionStoreFixture,
   });
 
-  it.each(["first cancellation await", "admin tree", "channel stop"])(
-    "does not dispatch selected queued work during %s cancellation",
-    async (kind) => {
-      const controllerSessionKey = "agent:main:main";
-      const runningFixture = createSubagentRunRecord({
-        runId: "running-collector",
-        childSessionKey: "agent:main:subagent:running-collector",
-        controllerSessionKey,
-        requesterSessionKey: controllerSessionKey,
-        task: "running collector",
-        collect: true,
-        createdAt: 1,
-        startedAt: 2,
-      });
-      const queuedFixture = createSubagentRunRecord({
-        ...runningFixture,
-        runId: "queued-collector",
-        childSessionKey: "agent:main:subagent:queued-collector",
-        controllerSessionKey: kind.endsWith("tree")
-          ? runningFixture.childSessionKey
-          : controllerSessionKey,
-        requesterSessionKey: kind.endsWith("tree")
-          ? runningFixture.childSessionKey
-          : controllerSessionKey,
-        execution: { status: "queued" },
-        swarmLaunchPending: true,
-      });
-      const running = await addRun(runningFixture);
-      const queued = await addRun(queuedFixture);
-      const storePath = await writeSessionStoreFixture("abort-dispatch", {
-        [running.childSessionKey]: { sessionId: "running-session", updatedAt: 1 },
-      });
-      const started: string[] = [];
-      for (const runId of [queued.runId, "unselected"]) {
-        enqueueSwarmRun({
-          groupId: "cancelled-group",
-          runId,
-          maxConcurrent: 1,
-          activeRunIds: [running.runId],
-          start: async () => {
-            started.push(runId);
-          },
-          onStartFailure: () => true,
-        });
-      }
-      setSubagentControlDepsForTest({
-        isEmbeddedAgentRunActive: () => true,
-        abortEmbeddedAgentRun: (sessionId) => {
-          expect(sessionId).toBe("running-session");
-          if (kind !== "channel stop" && kind !== "first cancellation await") {
-            expect(releaseSwarmRun(running.runId)).toBe(true);
-          }
-          return true;
-        },
-      });
-      const controller = { ...controllerFor(controllerSessionKey), controllerAgentId: "main" };
-      const cfg = cfgWithSessionStore(storePath);
-      const parent =
-        kind === "channel stop"
-          ? createReplyOperation({
-              sessionKey: controllerSessionKey,
-              sessionId: "parent-session",
-              resetTriggered: false,
-            })
-          : undefined;
-      parent?.attachBackend({
-        kind: "embedded",
-        cancel: () => {
-          expect(releaseSwarmRun(running.runId)).toBe(true);
-        },
-        isStreaming: () => true,
-      });
-      try {
-        if (kind === "first cancellation await") {
-          const cancellation = killAllControlledSubagentRuns({
-            cfg,
-            controller,
-            runs: [running, queued],
-          });
-          // Natural terminal cleanup calls this same capacity owner while kill
-          // admission is pending; no synthetic execution outcome is needed.
-          expect(releaseSwarmRun(running.runId)).toBe(true);
-          expect(await cancellation).toMatchObject({ status: "ok", killed: 2 });
-        } else if (kind === "admin tree") {
-          expect(
-            await killSubagentRunAdmin({
-              cfg,
-              sessionKey: running.childSessionKey,
-              expectedRunId: running.runId,
-              expectedGeneration: running.generation,
-              expectedOwnerKey: controllerSessionKey,
-            }),
-          ).toMatchObject({ found: true, killed: true, cascadeKilled: 1 });
-        } else {
-          expect(
-            await tryFastAbortFromMessage({
-              cfg,
-              ctx: buildTestCtx({
-                CommandBody: "/stop",
-                RawBody: "/stop",
-                CommandAuthorized: true,
-                Provider: "telegram",
-                Surface: "telegram",
-                SessionKey: controllerSessionKey,
-                From: "telegram:queue-owner",
-                To: "telegram:queue-owner",
-              }),
-            }),
-          ).toMatchObject({ handled: true, stoppedSubagents: 2, failedSubagents: 0 });
-          expect(parent?.abortSignal.aborted).toBe(true);
-        }
-        for (const entry of [running, queued]) {
-          expect(await getSubagentRunByChildSessionKey(entry.childSessionKey)).toMatchObject({
-            execution: { status: "terminal" },
-            endedReason: SUBAGENT_ENDED_REASON_KILLED,
-          });
-        }
-        expect(
-          started,
-          "selected queued child must never dispatch during cancellation",
-        ).not.toContain(queued.runId);
-        await vi.waitFor(() => expect(started).toEqual(["unselected"]));
-      } finally {
-        parent?.complete();
-        swarmSchedulerTesting.reset();
-      }
-    },
-  );
+  registerQueuedStopControlTests({
+    addRun,
+    controllerFor,
+    cfgWithSessionStore,
+    setSubagentControlDepsForTest,
+    writeSessionStoreFixture,
+  });
 
   registerQueuedReservationFailureTests({
     cfgWithSessionStore,
@@ -1441,6 +1321,8 @@ describe("killAllControlledSubagentRuns", () => {
     writeSessionStoreFixture,
     resetRegistryLeafMocks,
   });
+
+  registerRequestFrontierControlTests(fixture);
 
   it("preserves exactRunId authority when an in-flight launch remaps the same row", async () => {
     const runId = "launch-before-admission";

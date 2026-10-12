@@ -49,6 +49,12 @@ struct GatewayConnectFailureBackoff {
 }
 
 extension GatewayChannelActor {
+    public func clearConnectFailureBackoff() {
+        self.backoffMs = 500
+        self.connectFailureBackoff.reset()
+        self.connectFailureBackoffWaitTask?.cancel()
+    }
+
     nonisolated static func minimumProtocolVersion(role: String, clientMode: String) -> Int {
         // Node RPC frames stayed compatible across v3/v4. Operator chat surfaces require v4.
         if role == "node", clientMode == "node" {
@@ -61,16 +67,23 @@ extension GatewayChannelActor {
         guard let deadline = self.connectFailureBackoff.deadline else { return }
         // Delay inside the shared connect attempt so callers coalesce before a
         // socket is created instead of starting independent retry bursts.
-        #if DEBUG
-        if let testConnectFailureBackoffWaitHandler {
-            try await testConnectFailureBackoffWaitHandler()
-            self.connectFailureBackoff.clear(deadline: deadline)
-            return
+        let wait = Task {
+            #if DEBUG
+            if let testConnectFailureBackoffWaitHandler = self.testConnectFailureBackoffWaitHandler {
+                try await testConnectFailureBackoffWaitHandler()
+                return
+            }
+            #endif
+            let clock = ContinuousClock()
+            if clock.now < deadline { try await clock.sleep(until: deadline) }
         }
-        #endif
-        let clock = ContinuousClock()
-        if clock.now < deadline {
-            try await clock.sleep(until: deadline)
+        self.connectFailureBackoffWaitTask = wait
+        defer { self.connectFailureBackoffWaitTask = nil }
+        do {
+            try await withTaskCancellationHandler { try await wait.value } onCancel: { wait.cancel() }
+        } catch is CancellationError {
+            // A satisfied path cancels the delay, not the shared connection attempt.
+            try Task.checkCancellation()
         }
         self.connectFailureBackoff.clear(deadline: deadline)
     }

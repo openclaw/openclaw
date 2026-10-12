@@ -93,7 +93,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     modelId,
     attemptedThinking,
     fail,
-    authStorage,
     modelRegistry,
     apiKeyInfo,
     hasRuntimeAuthExchange,
@@ -185,10 +184,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     const extensionFactories = buildEmbeddedExtensionFactories({
       cfg: params.config,
       sessionManager,
-      provider,
-      modelId,
+      workspaceDir: effectiveWorkspace,
       model: effectiveModel,
-      contextTokenBudget,
       agentId: sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey ?? sandboxSessionKey,
@@ -261,30 +258,28 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         });
         session = createdSession.session;
         session[agentSessionSetContextReplacementHook](
-          (tokensAfter, tokensBefore) =>
-            recordCompaction({ tokensBefore, tokensAfter, compactionKind: "context-engine" }),
+          (tokensAfter, tokensBefore, details) =>
+            recordCompaction({
+              tokensBefore,
+              tokensAfter,
+              compactionKind: "context-engine",
+              details,
+            }),
           assertActive,
         );
         session.setBaseSystemPrompt(systemPromptText.trim());
         // Compaction builds the same embedded system prompt, so it must flow
         // through the same transport/payload shaping stack as normal turns.
         const { effectiveExtraParams, transportApiKey } = await prepareCompactionSessionAgent({
+          ...runtime,
           session,
           llmRuntime: getModelRegistryRuntime(modelRegistry).llmRuntime,
           providerStreamFn,
           sessionId: params.sessionId,
           signal: runAbortController.signal,
-          effectiveModel,
           resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
-          authStorage,
           config: params.config,
-          provider,
-          modelId,
           thinkLevel,
-          sessionAgentId,
-          effectiveWorkspace,
-          agentDir,
-          runtimePlan,
         });
         const compactionReplayEnabled = resolveCompactionReplayEligibility(effectiveModel, {
           extraParams: effectiveExtraParams,
@@ -462,6 +457,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               context: { systemPrompt: systemPromptText, messages: session.messages },
               sessionManager,
               extraParams: effectiveExtraParams,
+              requestBudget: accountingRecorder?.requestBudget,
               customInstructions: params.customInstructions,
               config: params.config,
               onUsage: recordUsage,

@@ -43,6 +43,10 @@ import {
   assertTrustedStagingRoot,
 } from "./local-repository-directory-policy.js";
 import {
+  createPrivateSnapshotDirectory,
+  isPrivateDirectoryAlreadyExists,
+} from "./local-repository-private-directory.js";
+import {
   copySnapshotArtifact,
   hashSnapshotArtifact,
   readSnapshotManifest,
@@ -123,7 +127,8 @@ class LocalSqliteSnapshotProvider {
     if (!Number.isFinite(now.getTime())) {
       throw new Error("SQLite snapshot timestamp is invalid.");
     }
-    const snapshotId = buildSnapshotId(now);
+    const timestamp = now.toISOString().replaceAll(/[:.]/g, "-");
+    const snapshotId = `${timestamp}-${randomUUID()}`;
     const snapshotRefPath = path.join(this.#repositoryPath, snapshotId);
     const snapshotDir = path.join(trustedRepositoryPath, snapshotId);
     const stagingDir = path.join(trustedRepositoryPath, `.tmp-${randomUUID()}`);
@@ -165,17 +170,8 @@ class LocalSqliteSnapshotProvider {
       await syncDirectoryIfSupported(stagingDir);
 
       await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
-      try {
-        await createPrivateSqliteDirectory(snapshotDir);
-        snapshotDirectoryCreated = true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-          throw new Error(`SQLite snapshot directory already exists: ${snapshotDir}`, {
-            cause: error,
-          });
-        }
-        throw error;
-      }
+      await createPrivateSnapshotDirectory(snapshotDir);
+      snapshotDirectoryCreated = true;
       await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
       publishedDirectory = await pinDirectory(snapshotDir, {
         label: "SQLite snapshot directory",
@@ -540,7 +536,13 @@ async function verifySnapshotDatabaseFile(
         database.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
         await loadSqliteVecExtension({ db: database });
         assertSqliteIntegrity(database, artifactPath);
-        buildManifestDatabaseValidator(manifest.database)(database, artifactPath);
+        buildSnapshotValidator(manifest.database)(database, artifactPath);
+        const userVersion = readSqliteUserVersion(database);
+        if (userVersion !== manifest.database.userVersion) {
+          throw new Error(
+            `Snapshot database user_version mismatch for ${artifactPath}: expected ${manifest.database.userVersion}, got ${userVersion}`,
+          );
+        }
       } finally {
         database.close();
       }
@@ -582,26 +584,6 @@ function buildDatabaseManifest(
   return { role: "generic", id: identity.id, basename, userVersion };
 }
 
-function buildManifestDatabaseValidator(
-  manifest: SnapshotDatabaseManifest,
-): import("../infra/sqlite-snapshot.js").SqliteSnapshotValidator {
-  const validateOwner = buildSnapshotValidator(manifest);
-  return (database, pathname) => {
-    validateOwner(database, pathname);
-    const userVersion = readSqliteUserVersion(database);
-    if (userVersion !== manifest.userVersion) {
-      throw new Error(
-        `Snapshot database user_version mismatch for ${pathname}: expected ${manifest.userVersion}, got ${userVersion}`,
-      );
-    }
-  };
-}
-
-function buildSnapshotId(now: Date): string {
-  const timestamp = now.toISOString().replaceAll(/[:.]/g, "-");
-  return `${timestamp}-${randomUUID()}`;
-}
-
 async function ensurePrivateDirectory(
   directoryPath: string,
   scopeLabel: string,
@@ -641,7 +623,7 @@ async function ensurePrivateDirectory(
           await createPrivateSqliteDirectory(targetPath);
           return;
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          if (!isPrivateDirectoryAlreadyExists(error)) {
             throw error;
           }
         }

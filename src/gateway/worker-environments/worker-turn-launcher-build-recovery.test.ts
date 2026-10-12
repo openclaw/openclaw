@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   abortEmbeddedAgentRun,
@@ -17,6 +17,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
@@ -54,6 +55,8 @@ import {
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
+
+afterAll(closeStateDatabaseForTest);
 
 async function expectSinglePersistedInput() {
   expect(
@@ -184,6 +187,7 @@ async function createBuildRecoveryHarness(
   };
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
   const dispatch = createWorkerPlacementDispatchService({
+    initialPlacements: placements.list(),
     placements,
     environments,
     runnerAvailability: { read: () => undefined, version: () => 0 },
@@ -304,7 +308,7 @@ async function createBuildRecoveryHarness(
 
 describe("worker turn launcher build recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
   afterEach(() => {
     resetGatewayWorkAdmission();
     resetDiagnosticRunActivityForTest();

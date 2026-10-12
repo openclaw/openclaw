@@ -7,6 +7,7 @@ import {
 import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { readIncognitoSessionSteeringEntry } from "../../config/sessions/session-accessor.sqlite-incognito-sharing.js";
+import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,
@@ -29,6 +30,21 @@ import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { MessageInjectionTargetUnavailableError } from "./message-injection-authority.js";
+
+function prepareCurrentSteeringRead(assertCurrent: () => void) {
+  return {
+    prepareCurrent: async () => {
+      assertCurrent();
+      if (isToolAuthorityReadCaptureActive()) {
+        recordPreparedToolAuthorityRead({
+          reads: [],
+          assertPrepared: assertCurrent,
+          assertLegacyCurrent: assertCurrent,
+        });
+      }
+    },
+  };
+}
 
 /** Carry terminal-delivery eligibility into the target's final prepared admission. */
 export function prepareSteeringDelivery(params: {
@@ -69,6 +85,12 @@ export function prepareSteeringDelivery(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   });
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    return prepareCurrentSteeringRead(() => {
+      assertEntry(memory.actor.snapshot(memory.authority)?.entry);
+    });
+  }
   const binding = captureIncognitoSessionBinding(scope);
   if (binding) {
     const claim = binding.actor.sessions.captureCurrent(scope.sessionKey);
@@ -79,18 +101,7 @@ export function prepareSteeringDelivery(params: {
       claim.assertCurrent();
       assertEntry(binding.actor.sessions.readSteering(scope.sessionKey));
     };
-    return {
-      prepareCurrent: async () => {
-        assertActorCurrent();
-        if (isToolAuthorityReadCaptureActive()) {
-          recordPreparedToolAuthorityRead({
-            reads: [],
-            assertPrepared: assertActorCurrent,
-            assertLegacyCurrent: assertActorCurrent,
-          });
-        }
-      },
-    };
+    return prepareCurrentSteeringRead(assertActorCurrent);
   }
   if (isNativeSessionEntryRead(scope, agentId)) {
     const storePath = isIncognitoSessionKey(scope.sessionKey)
@@ -106,18 +117,7 @@ export function prepareSteeringDelivery(params: {
         owner ? readIncognitoSessionSteeringEntry(owner.db, scope.sessionKey) : undefined,
       );
     };
-    return {
-      prepareCurrent: async () => {
-        assertNativeCurrent();
-        if (isToolAuthorityReadCaptureActive()) {
-          recordPreparedToolAuthorityRead({
-            reads: [],
-            assertPrepared: assertNativeCurrent,
-            assertLegacyCurrent: assertNativeCurrent,
-          });
-        }
-      },
-    };
+    return prepareCurrentSteeringRead(assertNativeCurrent);
   }
   const candidates = captureSessionStoreReadCandidates(scope.storePath!);
   const identities = captureSessionStoreCandidateIdentities(candidates);

@@ -143,10 +143,6 @@ export function readUiCss(): string {
   return cachedUiCss;
 }
 
-export function messageCircleOffSvg() {
-  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m2 2 20 20"></path><path d="M4.93 4.929a10 10 0 0 0-1.938 11.412 2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 0 0 11.302-1.989"></path><path d="M8.35 2.69A10 10 0 0 1 21.3 15.65"></path></svg>`;
-}
-
 export async function waitForLayoutSettled(page: Page, selector: string): Promise<void> {
   // content-visibility and container queries can defer descendant layout beyond
   // a fixed rAF pair. Require a short quiet window so a delayed update cannot
@@ -213,4 +209,20 @@ export function rectsOverlap(
     first.y < second.y + second.height &&
     first.y + first.height > second.y
   );
+}
+
+export async function mountMcpAppSurfaceFixture(page: Page, baseUrl: string) {
+  await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  await page.addScriptTag({
+    type: "module",
+    url: new URL("src/components/mcp-app-view-registration.ts", baseUrl).href,
+  });
+  const fixtureUrl = new URL("src/pages/chat/components/chat-sidebar.test-support.ts", baseUrl)
+    .href;
+  return page.evaluateHandle(`(async () => {
+    const { createChatSidebarContainer } = await import(${JSON.stringify(fixtureUrl)});
+    const owner = createChatSidebarContainer();
+    document.body.replaceChildren(owner);
+    return owner;
+  })()`);
 }

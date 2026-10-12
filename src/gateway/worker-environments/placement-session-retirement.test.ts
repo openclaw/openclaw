@@ -128,6 +128,7 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
     },
     forceDestroyEnvironment,
     createSessionEvidenceResolver,
+    reportChanges: (operation) => operation(),
     warn: vi.fn(),
   });
   return {
@@ -193,6 +194,7 @@ describe("placement session retirement", () => {
       environments: { get: () => undefined },
       forceDestroyEnvironment,
       createSessionEvidenceResolver: async () => async () => "absent",
+      reportChanges: (operation) => operation(),
       warn,
     });
 
@@ -261,6 +263,7 @@ describe("placement session retirement", () => {
       },
       createSessionEvidenceResolver: async () => async (placement) =>
         placement.sessionId === current.sessionId ? "current" : "unknown",
+      reportChanges: (operation) => operation(),
       warn: vi.fn(),
     });
 

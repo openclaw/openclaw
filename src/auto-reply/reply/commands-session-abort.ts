@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -103,6 +104,11 @@ async function applyAbortTarget(
 export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
   { label: "/stop", match: (body) => (body === "/stop" ? true : null) },
   async (params) => {
+    const assertCurrent = () => {
+      if (params.opts?.isCommandTargetCurrent?.() === false) {
+        throw new Error("The selected session changed before it could be stopped.");
+      }
+    };
     const abortTarget = resolveAbortTarget(params);
     const abort = prepareSessionRunTargetAbort({
       agentId: abortTarget.agentId,
@@ -115,11 +121,7 @@ export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
           agentId: abortTarget.agentId,
           sessionKey: abortTarget.key,
           sessionId: abortTarget.sessionId,
-          assertCurrent: () => {
-            if (params.opts?.isCommandTargetCurrent?.() === false) {
-              throw new Error("The selected session changed before it could be stopped.");
-            }
-          },
+          assertCurrent,
         })
       : undefined;
     let abortOutcome = { active: false, aborted: false };
@@ -131,7 +133,19 @@ export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
       cfg: params.cfg,
       requesterSessionKey: abortTarget.key ?? params.sessionKey,
       requesterAgentId: params.agentId,
-      beforeKill: async () => {
+      requesterSession:
+        abortTarget.entry && abortTarget.sessionId
+          ? {
+              storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+                agentId: abortTarget.agentId,
+              }),
+              sessionId: abortTarget.sessionId,
+              lifecycleRevision: abortTarget.entry.lifecycleRevision ?? null,
+            }
+          : undefined,
+      assertCurrent,
+      beforeKill: async (sealRootSelection) => {
+        sealRootSelection();
         abortOutcome = await applyAbortTarget(
           params,
           abortTarget,
@@ -170,9 +184,11 @@ export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
         ? failures[0]
         : new AggregateError(failures, failures.map(formatErrorMessage).join("; "));
     }
-    const { stopped, failed } = subagents;
+    const { stopped, failed, execAborted } = subagents;
     const rejectionReason =
-      abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
+      abortOutcome.active && !abortOutcome.aborted && !execAborted
+        ? ("finalizing" as const)
+        : undefined;
     return commandReply(formatAbortReplyText(stopped, rejectionReason, failed));
   },
 );

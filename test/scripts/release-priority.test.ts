@@ -246,8 +246,8 @@ if (args[0] === "variable") {
 } else if (args[0] === "api" && args[1] === "-X") {
   if (JSON.stringify(args) !== JSON.stringify(["api", "-X", "POST", "repos/fixture/fixture/actions/runs/200/rerun"])) reject();
 } else {
-  if (args[0] !== "api" || !args.includes("Cache-Control: max-age=0")) reject();
-  const resource = args[1].replace("repos/fixture/fixture/", "");
+  if (args[0] !== "api" || !args.includes("--include") || !args.includes("Cache-Control: max-age=0")) reject();
+  const resource = args.find(arg => arg.startsWith("repos/fixture/fixture/")).replace("repos/fixture/fixture/", "");
   const query = new URL(resource, "https://example.invalid").searchParams;
   let value;
   if (resource === "actions/variables/${RELEASE_PRIORITY_VARIABLE}") value = { value: "" };
@@ -267,6 +267,7 @@ if (args[0] === "variable") {
     value = runs.find(run => resource === "actions/runs/" + run.id);
     if (!value) reject();
   }
+  process.stdout.write("HTTP/2.0 200 OK\nContent-Type: application/json\r\n\r\n");
   console.log(Array.isArray(value) ? value.map(row => JSON.stringify(row)).join("\n") : JSON.stringify(value));
 }
 `,

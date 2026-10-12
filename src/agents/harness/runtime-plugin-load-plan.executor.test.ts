@@ -4,7 +4,11 @@ import {
   makeRegistry,
 } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveAgentRuntimePluginLoadPlan } from "./runtime-plugin-load-plan.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import {
+  resolveAgentRuntimePluginLoadPlan,
+  resolveAgentRuntimePluginSelectionOwners,
+} from "./runtime-plugin-load-plan.js";
 
 describe("executor plugin runtime activation", () => {
   it.each([true, false])(
@@ -40,4 +44,44 @@ describe("executor plugin runtime activation", () => {
       );
     },
   );
+});
+
+describe("custom API provider generation ownership", () => {
+  it.each([true, false])("includes the API owner only when enabled: %s", (enabled) => {
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          "bedrock-west": {
+            api: "bedrock-converse-stream",
+            auth: "aws-sdk",
+            baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
+            models: [],
+          },
+        },
+      },
+      plugins: { entries: { "amazon-bedrock": { enabled } } },
+    };
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "amazon-bedrock",
+          origin: "global",
+          providers: ["amazon-bedrock"],
+          providerAuthAliases: { "bedrock-converse-stream": "amazon-bedrock" },
+          activation: { onStartup: false },
+        },
+      ],
+    });
+    metadataSnapshot.index.plugins[0]!.enabled = enabled;
+    const owners = resolveAgentRuntimePluginSelectionOwners({
+      config,
+      workspaceDir: "/fixture/workspace",
+      selections: [{ provider: "bedrock-west", modelId: "anthropic.claude-sonnet-4" }],
+      metadataSnapshot,
+    });
+    expect(owners).toEqual({
+      pluginIds: enabled ? ["amazon-bedrock"] : [],
+      forceActivatedPluginIds: enabled ? ["amazon-bedrock"] : [],
+    });
+  });
 });

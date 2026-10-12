@@ -18,8 +18,7 @@ type CrontabReader = () => Promise<{ stdout?: unknown; stderr?: unknown }>;
 
 const LEGACY_WHATSAPP_HEALTH_SCRIPT_RE =
   /(?:^|\s)(?:"[^"]*ensure-whatsapp\.sh"|'[^']*ensure-whatsapp\.sh'|[^\s#;|&]*ensure-whatsapp\.sh)\b/u;
-const CRON_MODEL_OVERRIDE_EXAMPLE_LIMIT = 3;
-const CRON_DELIVERY_TARGET_ADVISORY_EXAMPLE_LIMIT = 3;
+const CRON_ADVISORY_EXAMPLE_LIMIT = 3;
 const CRONTAB_READ_TIMEOUT_MS = 5_000;
 
 function normalizeModelRef(value: unknown): string | undefined {
@@ -41,6 +40,14 @@ function formatSortedCounts(counts: Map<string, number>): string {
     .toSorted(([left], [right]) => left.localeCompare(right))
     .map(([label, count]) => `${label}=${count}`)
     .join(", ");
+}
+
+function addJobExample(examples: string[], job: Record<string, unknown>, target: string) {
+  if (examples.length < CRON_ADVISORY_EXAMPLE_LIMIT) {
+    const id = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
+    const name = normalizeOptionalString(job.name);
+    examples.push(`${id ?? name ?? "<unnamed>"} -> ${target}`);
+  }
 }
 
 export function noteCronModelOverrides(params: {
@@ -75,11 +82,7 @@ export function noteCronModelOverrides(params: {
     const modelKey = modelRef ?? model.toLowerCase();
     if (defaultKey && modelKey && modelKey !== defaultKey) {
       mismatchCount += 1;
-      if (mismatchExamples.length < CRON_MODEL_OVERRIDE_EXAMPLE_LIMIT) {
-        const id = normalizeOptionalString(rawJob.id) ?? normalizeOptionalString(rawJob.jobId);
-        const name = normalizeOptionalString(rawJob.name);
-        mismatchExamples.push(`${id ?? name ?? "<unnamed>"} -> ${model}`);
-      }
+      addJobExample(mismatchExamples, rawJob, model);
     }
   }
 
@@ -109,13 +112,13 @@ function canonicalChannelKey(value: string): string {
   return normalizeChatChannelId(value) ?? value.trim().toLowerCase();
 }
 
-type ConcreteCronDeliveryTarget = { channel: string; job: Record<string, unknown> };
-
-function listConcreteCronDeliveryTargets(
-  jobs: Array<Record<string, unknown>>,
-): ConcreteCronDeliveryTarget[] {
-  const targets: ConcreteCronDeliveryTarget[] = [];
-  for (const job of jobs) {
+// Resolve the channel snapshot only when an enabled job pins a concrete delivery target.
+function collectCronDeliveryTargetAdvisory(params: {
+  cfg: OpenClawConfig;
+  jobs: Array<Record<string, unknown>>;
+}): string | null {
+  const concreteTargets: Array<{ channel: string; job: Record<string, unknown> }> = [];
+  for (const job of params.jobs) {
     // Only an explicit delivery object pins a concrete channel; without one the plan resolves
     // to the pseudo "last" route decided at run time, which doctor cannot validate ahead of time.
     if (job.enabled === false || !isRecord(job.delivery) || job.delivery.mode !== "announce") {
@@ -123,20 +126,10 @@ function listConcreteCronDeliveryTargets(
     }
     const plan = resolveCronDeliveryPlan(job as unknown as CronJob);
     // Skip webhook/none (no chat channel) and announce-to-`last` (resolved from runtime state).
-    if (plan.mode !== "announce" || !plan.channel || plan.channel === "last") {
-      continue;
+    if (plan.mode === "announce" && plan.channel && plan.channel !== "last") {
+      concreteTargets.push({ channel: plan.channel, job });
     }
-    targets.push({ channel: plan.channel, job });
   }
-  return targets;
-}
-
-// Resolve the channel snapshot only when an enabled job pins a concrete delivery target.
-function collectCronDeliveryTargetAdvisory(params: {
-  cfg: OpenClawConfig;
-  jobs: Array<Record<string, unknown>>;
-}): string | null {
-  const concreteTargets = listConcreteCronDeliveryTargets(params.jobs);
   if (concreteTargets.length === 0) {
     return null;
   }
@@ -164,11 +157,7 @@ function collectCronDeliveryTargetAdvisory(params: {
     }
     unavailableCount += 1;
     channelCounts.set(channel, (channelCounts.get(channel) ?? 0) + 1);
-    if (examples.length < CRON_DELIVERY_TARGET_ADVISORY_EXAMPLE_LIMIT) {
-      const id = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
-      const name = normalizeOptionalString(job.name);
-      examples.push(`${id ?? name ?? "<unnamed>"} -> ${channel}`);
-    }
+    addJobExample(examples, job, channel);
   }
 
   if (unavailableCount === 0) {

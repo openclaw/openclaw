@@ -108,14 +108,37 @@ export function isChatComposerOwnerCurrent(
   );
 }
 
+// A canonical create key can arrive before its Incognito roster metadata.
+// The captured privacy fact belongs to this account and conversation only.
+const createdPrivateScopes = new WeakMap<
+  ChatComposerScope,
+  {
+    isCurrent: () => boolean;
+    key: string;
+  }
+>();
+
+export function retainCreatedIncognitoComposerScope(
+  state: ChatComposerScope & { sessionKey: string },
+  isCurrent?: () => boolean,
+): void {
+  const owner = captureChatComposerOwner(state);
+  createdPrivateScopes.set(state, {
+    isCurrent: isCurrent ?? (() => isChatComposerOwnerCurrent(state, owner)),
+    key: storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey)),
+  });
+}
+
 export function isIncognitoComposerScope(
   state: ChatComposerScope & { sessionKey?: string },
   scope: StoredChatOutboxScope,
 ): boolean {
+  const created = createdPrivateScopes.get(state);
   // Keys classify private sessions before roster metadata arrives. A selected
   // session's metadata must never classify a delayed write to another scope.
   return (
     isIncognitoSessionKey(scope.sessionKey) ||
+    Boolean(created && created.key === storedChatOutboxScopeKey(scope) && created.isCurrent()) ||
     Boolean(
       state.selectedChatSessionIncognito &&
       state.sessionKey &&

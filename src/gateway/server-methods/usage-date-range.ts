@@ -84,10 +84,10 @@ const datePartsToStartMs = (
       interpretation.timeZone,
     );
   }
-  if (interpretation.mode === "utc-offset") {
-    return Date.UTC(year, monthIndex, day) - interpretation.utcOffsetMinutes * 60 * 1000;
-  }
-  return Date.UTC(year, monthIndex, day);
+  const utcStart = Date.UTC(year, monthIndex, day);
+  return interpretation.mode === "utc-offset"
+    ? utcStart - interpretation.utcOffsetMinutes * 60 * 1000
+    : utcStart;
 };
 
 const datePartsToEndMs = (

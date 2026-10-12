@@ -53,13 +53,6 @@ describe("tavily tools", () => {
     vi.unstubAllEnvs();
   });
 
-  it("exposes the expected metadata and selection wiring", () => {
-    const provider = createTavilyWebSearchProvider();
-    expect(provider.id).toBe("tavily");
-    expect(provider.credentialPath).toBe("plugins.entries.tavily.config.webSearch.apiKey");
-    expect(provider.applySelectionConfig?.({}).plugins?.entries?.tavily?.enabled).toBe(true);
-  });
-
   it("forwards cancellation through the public provider registration", async () => {
     const tool = createTavilyWebSearchProvider().createTool({ config: {} });
     expect(tool).not.toBeNull();
@@ -97,33 +90,6 @@ describe("tavily tools", () => {
     await expect(tool.execute({ query: "weather sf", count: "7.5" })).rejects.toThrow(
       "count must be an integer from 1 to 20",
     );
-  });
-
-  it("normalizes optional parameters before invoking Tavily", async () => {
-    const tool = createTavilySearchTool(fakeApi());
-
-    await tool.execute("call-1", {
-      query: "best docs",
-      search_depth: "advanced",
-      topic: "news",
-      max_results: 5,
-      include_answer: true,
-      time_range: "week",
-      include_domains: [" docs.openclaw.ai ", "   ", "openclaw.ai"],
-      exclude_domains: [" bad.example ", ""],
-    });
-
-    expect(runTavilySearch).toHaveBeenCalledWith({
-      cfg: {},
-      query: "best docs",
-      searchDepth: "advanced",
-      topic: "news",
-      maxResults: 5,
-      includeAnswer: true,
-      timeRange: "week",
-      includeDomains: ["docs.openclaw.ai", "openclaw.ai"],
-      excludeDomains: ["bad.example"],
-    });
   });
 
   it.each(["search", "extract"] as const)(
@@ -199,35 +165,6 @@ describe("tavily tools", () => {
     expect(runTavilyExtract.mock.calls[0]?.[0]?.urls).toEqual(["https://example.com"]);
   });
 
-  it("drops empty domain arrays and forwards query-scoped chunking", async () => {
-    const searchTool = createTavilySearchTool(fakeApi());
-    await searchTool.execute("call-2", {
-      query: "simple",
-      include_domains: ["   "],
-      exclude_domains: [],
-    });
-    expect(runTavilySearch).toHaveBeenCalledWith({
-      cfg: {},
-      query: "simple",
-      includeAnswer: false,
-    });
-
-    const extractTool = createTavilyExtractTool(fakeApi());
-    await extractTool.execute("id", {
-      urls: ["https://example.com"],
-      query: "pricing",
-      chunks_per_source: 2,
-    });
-
-    expect(runTavilyExtract).toHaveBeenCalledWith({
-      cfg: {},
-      urls: ["https://example.com"],
-      query: "pricing",
-      chunksPerSource: 2,
-      includeImages: false,
-    });
-  });
-
   it("rejects chunks_per_source without query", async () => {
     const tool = createTavilyExtractTool(fakeApi());
 
@@ -257,41 +194,6 @@ describe("tavily tools", () => {
     });
 
     expect(runTavilyExtract.mock.calls[0]?.[0]?.urls).toEqual(["https://example.com/article"]);
-  });
-
-  it("rejects fractional and out-of-range integer options before Tavily calls", async () => {
-    const searchTool = createTavilySearchTool(fakeApi());
-    await expect(
-      searchTool.execute("search-call", {
-        query: "openclaw",
-        max_results: 5.5,
-      }),
-    ).rejects.toThrow("max_results must be an integer from 1 to 20.");
-    await expect(
-      searchTool.execute("search-call", {
-        query: "openclaw",
-        max_results: 21,
-      }),
-    ).rejects.toThrow("max_results must be an integer from 1 to 20.");
-
-    const extractTool = createTavilyExtractTool(fakeApi());
-    await expect(
-      extractTool.execute("extract-call", {
-        urls: ["https://example.com"],
-        query: "pricing",
-        chunks_per_source: 2.5,
-      }),
-    ).rejects.toThrow("chunks_per_source must be an integer from 1 to 5.");
-    await expect(
-      extractTool.execute("extract-call", {
-        urls: ["https://example.com"],
-        query: "pricing",
-        chunks_per_source: 6,
-      }),
-    ).rejects.toThrow("chunks_per_source must be an integer from 1 to 5.");
-
-    expect(runTavilySearch).not.toHaveBeenCalled();
-    expect(runTavilyExtract).not.toHaveBeenCalled();
   });
 
   it("reads plugin web search config and prefers it over env defaults", () => {

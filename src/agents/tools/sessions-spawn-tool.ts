@@ -5,6 +5,10 @@ import { resolveThreadBindingSpawnPolicy } from "../../channels/thread-bindings-
 import { getRuntimeConfig } from "../../config/config.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  captureExecRequestOwners,
+  withExecRequestOwners,
+} from "../../infra/exec-request-context.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
@@ -68,10 +72,8 @@ import {
   PlacedSessionsSpawnSchema,
   PLACED_SESSIONS_SPAWN_DESCRIPTION,
 } from "./sessions-placement-tool-contract.js";
-import {
-  maybeSpawnVisibleSession,
-  type SessionsSpawnToolOptions,
-} from "./sessions-spawn-visible.js";
+import type { SessionsSpawnToolOptions } from "./sessions-spawn-options.js";
+import { maybeSpawnVisibleSession } from "./sessions-spawn-visible.js";
 import { SESSIONS_SPAWN_SESSION_SCHEMA } from "./sessions-spawn-visible.schema.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
@@ -302,6 +304,10 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
 export function createSessionsSpawnTool(
   opts?: SessionsSpawnToolOptions & { workerPlacement?: boolean },
 ): AnyAgentTool {
+  const requestOwners = captureExecRequestOwners({
+    runId: opts?.requesterTurnRunId,
+    sessionId: opts?.expectedParentSessionId,
+  });
   const effectiveConfig = opts?.config ?? getRuntimeConfig();
   const acpAvailable = isAcpRuntimeSpawnAvailable({
     config: effectiveConfig,
@@ -420,6 +426,11 @@ export function createSessionsSpawnTool(
         const taskName = taskNameResult.taskName;
         const label = readToolStringParam(params, "label") ?? "";
         const runtime = params.runtime === "acp" ? "acp" : "subagent";
+        if (runtime === "subagent" && opts?.delegatedToolPolicyUnavailable) {
+          throw new ToolInputError(
+            "This mediated tool surface cannot preserve the active delegated execution grant. Start the helper from a Gateway-side native tool surface.",
+          );
+        }
         const completionTarget = params.completionTarget;
         if (completionTarget !== undefined && completionTarget !== "parent") {
           throw new ToolInputError('sessions_spawn completionTarget must be "parent" or omitted.');
@@ -475,12 +486,15 @@ export function createSessionsSpawnTool(
             runTimeoutSeconds,
             sandbox,
             expectsCompletionMessage,
-            options: {
-              ...opts,
-              onSpawnEffectsStart,
-              assertActive,
-              signal: executionSignal,
-            },
+            options: withExecRequestOwners(
+              {
+                ...opts,
+                onSpawnEffectsStart,
+                assertActive,
+                signal: executionSignal,
+              },
+              requestOwners,
+            ),
           });
         const visibleResult =
           params.visible === true && opts?.expectedParentSessionId
@@ -571,6 +585,13 @@ export function createSessionsSpawnTool(
           sandboxed: opts?.sandboxed,
           inheritedToolAllowlist: opts?.inheritedToolAllowlist,
           inheritedToolDenylist: opts?.inheritedToolDenylist,
+          ...(runtime === "subagent"
+            ? {
+                delegatedToolDenyFloor: opts?.delegatedToolDenyFloor,
+                requesterToolDenylist: opts?.requesterToolDenylist,
+                readDelegationConfig: opts?.readDelegationConfig,
+              }
+            : {}),
           inheritedToolPolicySource: opts?.inheritedToolPolicySource,
           workspaceDir: opts?.workspaceDir,
           sessionPermissionPolicy: opts?.sessionPermissionPolicy,
@@ -646,15 +667,18 @@ export function createSessionsSpawnTool(
                 : undefined,
           },
           withParentExecutionIdentity(
-            {
-              ...inheritedSpawnContext(),
-              requesterThinkingLevel: opts?.requesterThinkingLevel,
-              requesterModel: opts?.requesterModel,
-              currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
-              agentGroupId: opts?.agentGroupId,
-              agentGroupChannel: opts?.agentGroupChannel,
-              requesterRunId: opts?.requesterRunId,
-            },
+            withExecRequestOwners(
+              {
+                ...inheritedSpawnContext(),
+                requesterThinkingLevel: opts?.requesterThinkingLevel,
+                requesterModel: opts?.requesterModel,
+                currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
+                agentGroupId: opts?.agentGroupId,
+                agentGroupChannel: opts?.agentGroupChannel,
+                requesterRunId: opts?.requesterRunId,
+              },
+              requestOwners,
+            ),
             parentExecutionIdentityToken,
           ),
         );

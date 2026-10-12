@@ -184,6 +184,10 @@ describe("memory dreaming host helpers", () => {
     ]);
   });
 
+  it("returns no workspaces for an explicitly empty roster", () => {
+    expect(resolveMemoryDreamingWorkspaces({ agents: { entries: {} } })).toEqual([]);
+  });
+
   it("retains configured owners when the primary workspace is already known", async () => {
     const root = tempDirs.make("dreaming-known-primary-");
     const alpha = path.join(root, "alpha");

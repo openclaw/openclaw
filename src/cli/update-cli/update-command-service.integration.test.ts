@@ -237,7 +237,8 @@ vi.mock("./update-command-config-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-config-snapshot.js")>()),
   createUpdateConfigSnapshot: mocks.configSnapshot,
 }));
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: {
     log: mocks.log,
     error: mocks.error,
@@ -809,10 +810,6 @@ describe("preserved update activation with real version guards", () => {
     if (loaded) {
       await servingOwner.publish("launchd");
     }
-    mocks.handoff.mockImplementation(() => ({
-      ok: true,
-      value: servingOwner.restart().then(() => true),
-    }));
     mocks.launchctl.mockImplementation(async (args) => {
       if (args[0] === "bootstrap") {
         if (scenario === "bootstrap denied" || scenario === "parent recovery refusal") {
@@ -952,6 +949,8 @@ describe("preserved update activation with real version guards", () => {
       expect(mocks.launchctl.mock.calls.every(([args]) => args[0] === "print")).toBe(true);
     } else if (scenario === "handoff") {
       expect(mocks.handoff).toHaveBeenCalledWith(expect.objectContaining({ mode: "kickstart" }));
+      // The detached restart follows command completion; join it before fixture cleanup.
+      await servingOwner.restart();
     } else {
       expect(mocks.launchctl.mock.calls.some(([args]) => args[0] === "kickstart")).toBe(true);
       expect(mocks.launchctl.mock.calls.some(([args]) => args[0] === "bootstrap")).toBe(

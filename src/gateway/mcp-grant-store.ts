@@ -9,7 +9,6 @@ import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { DelegationCapability } from "../agents/delegation-capability.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type { PreparedQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
-import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import type { PreparedSessionPermissionPolicy } from "../agents/tool-fs-policy.types.js";
@@ -18,6 +17,7 @@ import type {
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyTurnParticipants } from "../auto-reply/reply/reply-run-registry.contracts.js";
+import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
@@ -29,7 +29,6 @@ import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gatewa
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
-import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
 
 export type McpLoopbackRequestContext = {
@@ -84,7 +83,6 @@ export type McpLoopbackRequestContext = {
   webSearchDisabled?: true;
   /** Canonical observed native authority; null awaits this turn's initialization. */
   nativeCronCreatorToolAllowlist?: string[] | null;
-  skillWorkshop?: Pick<SkillWorkshopRunOptions, "proposalRevision">;
   /**
    * Attempt-local authority to start or redirect delegated work, stamped into
    * the grant so a fallback completion-report turn running on a CLI backend
@@ -142,6 +140,8 @@ type McpLoopbackToolAuth = {
 
 type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   runtimeOwnerToken: string;
+  /** Originating turn policy, independent of the bridge-only executable catalog. */
+  sessionEventSourcePolicy?: SessionEventSourcePolicy;
   /** Exact host admission retained outside the child-visible request context. */
   admittedRunContext?: AdmittedRunContext;
   /** Live reply participants remain host-owned across CLI fallback and HTTP callbacks. */
@@ -163,7 +163,6 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   /** Original CLI policy, rebound only to this stored row's exact lifetime. */
   bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
-  rootedExecution?: PreparedRootedExecutionCapability;
   activeCaptureKey?: string;
   /** Effective attempt authority, including plugin-owned timeout and cancellation. */
   assertCaptureCurrent?: () => void;
@@ -282,6 +281,7 @@ export function mintMcpLoopbackClientGrant(
     token: crypto.randomBytes(32).toString("hex"),
     context: structuredClone({ ...params.context, sessionKey }),
     runtimeOwnerToken,
+    sessionEventSourcePolicy: params.sessionEventSourcePolicy,
     admittedRunContext: params.admittedRunContext,
     personalToolParticipants: params.personalToolParticipants,
     requestScope: getPluginRuntimeGatewayRequestScope(),
@@ -292,7 +292,6 @@ export function mintMcpLoopbackClientGrant(
     assertCurrent: params.assertCurrent,
     bindQuestionAnswerAuthority: params.bindQuestionAnswerAuthority,
     skillLibraryAuthoring: params.skillLibraryAuthoring,
-    rootedExecution: params.rootedExecution,
     ...(params.toolAuth ? { toolAuth: structuredClone(params.toolAuth) } : {}),
   };
   clientGrantsByToken.set(grant.token, grant);
@@ -481,6 +480,7 @@ export function resolveMcpLoopbackClientGrant(params: {
   | {
       context: McpLoopbackRequestContext;
       captureKey: string;
+      sessionEventSourcePolicy?: SessionEventSourcePolicy;
       admittedRunContext: AdmittedRunContext;
       personalToolParticipants?: ReplyTurnParticipants;
       requestScope?: PluginRuntimeGatewayRequestScope;
@@ -489,7 +489,6 @@ export function resolveMcpLoopbackClientGrant(params: {
       cronAuthorityCheck?: () => boolean;
       questionAnswerAuthority?: PreparedQuestionAnswerAuthority;
       skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
-      rootedExecution?: PreparedRootedExecutionCapability;
       isCurrent: () => boolean;
       toolAuth?: McpLoopbackToolAuth;
     }
@@ -525,6 +524,7 @@ export function resolveMcpLoopbackClientGrant(params: {
   return {
     context: structuredClone(grant.context),
     captureKey: grant.activeCaptureKey,
+    sessionEventSourcePolicy: grant.sessionEventSourcePolicy,
     admittedRunContext,
     personalToolParticipants: grant.personalToolParticipants,
     requestScope: grant.requestScope,
@@ -541,7 +541,7 @@ export function resolveMcpLoopbackClientGrant(params: {
     questionAnswerAuthority,
     skillLibraryAuthoring: grant.skillLibraryAuthoring,
     isCurrent,
-    rootedExecution: grant.rootedExecution,
+
     ...(grant.toolAuth ? { toolAuth: grant.toolAuth } : {}),
   };
 }

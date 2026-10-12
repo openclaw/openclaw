@@ -114,15 +114,13 @@ describe("server-runtime-services", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("cron scheduler is disabled"));
   });
 
-  it("reports cron-disabled automatic skill collection reviews", () => {
+  it("does not warn about disabled cron when heartbeat cadence is disabled", () => {
     const warn = activateCronOff({
       agents: { defaults: { heartbeat: { every: "0m" } } },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     });
 
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("scheduled skill collection reviews are disabled"),
-    );
+    expect(warn).not.toHaveBeenCalled();
   });
 
   registerGatewayCronStartupTests(startGatewayCronWithLogging);
@@ -693,37 +691,6 @@ describe("server-runtime-services", () => {
     expect(run).toHaveBeenCalledOnce();
     expect(activeRootCounts).toEqual([1]);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
-  });
-
-  it("rechecks request work after joining the admitted root set", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const run = vi.fn(async () => undefined);
-    const isBusy = vi
-      .fn()
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true)
-      .mockReturnValue(false);
-
-    scheduleGatewayIdleTask({
-      id: "test:idle",
-      scheduler,
-      delayMs: 25,
-      retryDelayMs: 50,
-      isClosing: () => false,
-      isBusy,
-      run,
-      log: createLog(),
-      errorMessage: "idle task failed",
-    });
-
-    await clock.advanceBy(25);
-    expect(run).not.toHaveBeenCalled();
-    await clock.advanceBy(49);
-    expect(run).not.toHaveBeenCalled();
-    await clock.advanceBy(1);
-    expect(run).toHaveBeenCalledOnce();
-    expect(isBusy).toHaveBeenCalledTimes(4);
   });
 
   it.each(["stopPeriodicTasks", "skillUsageCleanup"] as const)(

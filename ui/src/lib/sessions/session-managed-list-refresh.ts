@@ -7,7 +7,7 @@ import {
   resolveGatewayReadRetryDelayMs,
 } from "../gateway-availability.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
-import { appendSessionResults, reconcileRosterPresentationMetadata } from "./reconcile.ts";
+import { appendSessionResults } from "./reconcile.ts";
 import type {
   SessionConnectionOwner,
   SessionGateway,
@@ -103,7 +103,7 @@ export function createSessionManagedListRefresh(
     managedLists: ReadonlyMap<string, ManagedSessionList>;
     observations: Pick<
       ReturnType<typeof createSessionRosterObservations>,
-      "inherit" | "accept" | "stageObservedRows" | "mergeRows"
+      "accept" | "stageObservedRows" | "mergeRows"
     >;
     nextRevision: () => number;
     isPageActive: () => boolean;
@@ -202,15 +202,12 @@ export function createSessionManagedListRefresh(
           const previous = entry.snapshot.result;
           // Only this response's rows were observed now; pagination retains older
           // members and discards duplicate page rows without refreshing their facts.
-          const presented = reconcileRosterPresentationMetadata(result, previous);
           const agentId = entry.query.agentId;
-          observations.inherit(presented, result, previous, agentId);
           const observed = observations.accept(
-            presented,
-            previous,
+            result,
+            entry.snapshot,
             host.readState().result,
             agentId,
-            entry.snapshot.agentId,
           );
           const nextResult =
             observed && next.append && requestParams.offset && previous

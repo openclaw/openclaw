@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -31,7 +32,10 @@ import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-mod
 import type { SandboxContext } from "../sandbox/types.js";
 import { beginForegroundSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { prepareSessionPlacementSandbox } from "../session-placement-admission.js";
-import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
+import {
+  buildCompactionFailureResult,
+  DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
+} from "./compact-reasons.js";
 import { runForegroundCompactionWork } from "./compact.foreground-work.js";
 import { compactNativeCliSession } from "./compact.js";
 import {
@@ -75,14 +79,12 @@ type QueuedCompactionParams = CompactEmbeddedAgentSessionParams & {
 };
 
 function lockedCompactionRuntimeFailure(runtime?: string): EmbeddedAgentCompactResult {
-  return {
-    ok: false,
-    compacted: false,
-    reason: runtime
+  return buildCompactionFailureResult(
+    runtime
       ? `Model selection is locked to native agent harness "${runtime}", but native compaction is unavailable.`
       : "Model selection is locked but the persisted agent harness is unavailable.",
-    failure: { reason: "model_selection_locked" },
-  };
+    { reason: "model_selection_locked" },
+  );
 }
 
 const MANUAL_COMPACTION_ACTIVE_RUN_REASON =
@@ -124,11 +126,11 @@ export async function compactEmbeddedAgentSession(
     const assertHostActive = options.assertActive;
     const host = {
       ...options,
-      assertActive: () => {
-        assertHostActive?.();
-        sourceAuthority.assertActive();
-        sourceAuthority.operatorAuthority?.assertCurrent();
-      },
+      assertActive: composeSessionSourceAssertion([
+        assertHostActive,
+        sourceAuthority.assertActive,
+        sourceAuthority.operatorAuthority?.assertCurrent,
+      ]),
     };
     const signals = [input.abortSignal, sourceAuthority.operatorAuthority?.signal].filter(
       (signal): signal is AbortSignal => signal !== undefined,
@@ -196,12 +198,9 @@ export async function compactEmbeddedAgentSession(
       // Reply operations and embedded handles are separate lifecycle owners. A
       // /compact reply may coexist with this handle, but another embedded writer may not.
       if (resolveManualCompactionActiveRunSessionId(resolvedParams)) {
-        return {
-          ok: false,
-          compacted: false,
-          reason: MANUAL_COMPACTION_ACTIVE_RUN_REASON,
-          failure: { reason: "active_run" },
-        };
+        return buildCompactionFailureResult(MANUAL_COMPACTION_ACTIVE_RUN_REASON, {
+          reason: "active_run",
+        });
       }
 
       const controller = new AbortController();
@@ -271,19 +270,22 @@ async function compactEmbeddedAgentSessionImpl(
             workspaceDir: resolvedWorkspaceDir,
           })
         : null;
-    const assertActive = () => {
-      sourceHost.assertActive?.();
-      placement?.assertCurrent();
-    };
+    const assertActive = composeSessionSourceAssertion(
+      [sourceHost.assertActive],
+      (assertSource) => {
+        assertSource();
+        placement?.assertCurrent();
+      },
+    );
     const host = {
       ...sourceHost,
       assertActive,
       sourceAuthority: {
         ...sourceHost.sourceAuthority,
-        assertActive: () => {
-          sourceHost.sourceAuthority.assertActive();
-          assertActive();
-        },
+        assertActive: composeSessionSourceAssertion([
+          sourceHost.sourceAuthority.assertActive,
+          assertActive,
+        ]),
       },
     };
     const placementSandbox = placement?.sandbox;
@@ -450,7 +452,7 @@ async function compactEmbeddedAgentSessionImpl(
           : undefined;
       assertQueuedCompactionPreparationActive(params, host);
       if (preparedAuth?.ok === false) {
-        return { ok: false, compacted: false, reason: formatErrorMessage(preparedAuth.error) };
+        return buildCompactionFailureResult(formatErrorMessage(preparedAuth.error));
       }
       const preparedHarnessRuntime =
         preparedAuth?.selectedPreparedHarness.id ?? selectedHarnessRuntime;
@@ -666,12 +668,10 @@ async function compactEmbeddedAgentSessionImpl(
               `(sessionKey=${preparedParams.sessionKey ?? preparedParams.sessionId}` +
               `${deferredScheduleFailure ? ` error=${formatErrorMessage(deferredScheduleFailure)}` : ""})`,
           );
-          return {
-            ok: false,
-            compacted: false,
-            reason: "failed to schedule background context-engine maintenance",
-            failure: { reason: "deferred_compaction_not_scheduled" },
-          };
+          return buildCompactionFailureResult(
+            "failed to schedule background context-engine maintenance",
+            { reason: "deferred_compaction_not_scheduled" },
+          );
         }
         log.info(
           `[compaction] deferred context-engine-owned budget compaction to background maintenance ` +

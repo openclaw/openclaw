@@ -55,6 +55,8 @@ be repaired later to add that platform.
 When backport discovery is requested or part of planning, read
 [backport discovery](backport-discovery.md), freeze the baseline and main SHA,
 and obtain approval for the categorized ledger before mutating the branch.
+Include its selected-contract closure and CI-optimization dispositions; recheck
+closure against the final candidate before freezing or starting qualification.
 Backports stay optional and operator-selected. An unspecified target means the
 newest open release branch. Extended-stable preparation additionally uses
 [its backport procedure](extended-stable-backports.md).
@@ -81,8 +83,12 @@ adjacent improvements. Validate that exact source and its publication bytes.
 
 Use `$openclaw-changelog-update` for source-history inventory, human credit,
 editorial grouping, renderer limits, and verification. Generate the complete
-history manifest and notes during preparation; editorial work may overlap
-Code validation. Refresh them for actual source changes, not tooling retries.
+history manifest and notes once, during preparation; editorial work may overlap
+Code validation. Notes are then frozen through validation recovery: a backport
+that creates a replacement Code SHA does not refresh them, and neither does a
+tooling retry. After the final Code SHA is green, refresh them at most once, as
+a notes-only descendant that credits every admitted backport (see
+[qualify publication bytes](regular-release.md#qualify-publication-bytes)).
 Beta notes use the exact
 `## YYYY.M.PATCH-beta.N` section in `CHANGELOG/YYYY.M.PATCH-beta.N.md` and
 matching `CHANGELOG/records/YYYY.M.PATCH-beta.N.md`. Capture npm's current

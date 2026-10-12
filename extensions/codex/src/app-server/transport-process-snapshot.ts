@@ -83,6 +83,15 @@ function inspectionFailure(error: unknown): ProcessInspectionError {
   );
 }
 
+function isMissingProcess(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ESRCH")
+  );
+}
+
 export async function readCodexAppServerProcessSnapshot(
   deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS,
   pids?: readonly number[],
@@ -292,12 +301,7 @@ async function readLinuxProcesses(
       const stat = await readFile(`/proc/${entry}/stat`, options).catch((error: unknown) => {
         // A process may exit between enumeration and read. Other failures must
         // not turn an unreadable process into proof that an orphan is gone.
-        if (
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          (error.code === "ENOENT" || error.code === "ESRCH")
-        ) {
+        if (isMissingProcess(error)) {
           return undefined;
         }
         throw error;
@@ -423,12 +427,7 @@ function readSelectedLinuxProcesses(selected: readonly number[], deadline: numbe
           PROCESS_INSPECTION_MAX_BYTES - bytes,
         );
       } catch (error) {
-        if (
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          (error.code === "ENOENT" || error.code === "ESRCH")
-        ) {
+        if (isMissingProcess(error)) {
           continue;
         }
         throw error;

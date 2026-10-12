@@ -62,12 +62,14 @@ describe("convertToLlm message ownership", () => {
       role: "user",
       content: blocks,
       timestamp: Date.parse(timestamp),
+      synthetic: true,
     });
     expect(text).not.toBe(textMessage);
     expect(text).toEqual({
       role: "user",
       content: [{ type: "text", text: "text content" }],
       timestamp: Date.parse(timestamp),
+      synthetic: true,
     });
     expect(text?.content).not.toBe(repeatedText?.content);
   });
@@ -112,6 +114,7 @@ describe("convertToLlm message ownership", () => {
         role: "user",
         content: [{ type: "text", text: "extension-owned content" }],
         timestamp: Date.parse(timestamp),
+        synthetic: true,
       },
       {
         role: "user",

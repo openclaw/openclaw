@@ -7,17 +7,20 @@ import {
 import {
   nextGeneration,
   normalizeEpoch,
-  placementTurnOwner,
+  projectPlacementTurnClaim,
   projectWorkerSessionTurnClaim,
   required,
   type WorkerSessionPlacementTransitionPatch,
 } from "./placement-record.js";
-import { getRequired, query, transitionValues, updateTransition } from "./placement-row-codec.js";
-import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
-  assertNoRunningWorkerSessionToolOperations,
-  clearWorkerTurnToolState,
-} from "./placement-session-tool-operations.kernel.js";
+  getRequired,
+  query,
+  transitionValues,
+  turnClaimValues,
+  updateTransition,
+} from "./placement-row-codec.js";
+import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { clearWorkerTurnToolState } from "./placement-session-tool-operations.kernel.js";
 import {
   canTransitionWorkerSessionPlacement,
   type WorkerSessionPlacementState,
@@ -135,10 +138,6 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
           throw new Error(`Cannot reconcile session ${sessionId} while its local turn is active`);
         }
         if (claim) {
-          assertNoRunningWorkerSessionToolOperations(db, {
-            sessionId,
-            claimId: claim.claimId,
-          });
           clearWorkerTurnToolState(db, {
             sessionId,
             claimId: claim.claimId,
@@ -154,16 +153,7 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
           .where("environment_id", "=", environmentId)
           .where("active_owner_epoch", "=", ownerEpoch);
         const guardedUpdate = claim
-          ? update
-              .where("turn_claim_owner", "=", claim.owner)
-              .where("turn_claim_id", "=", claim.claimId)
-              .where("turn_claim_run_id", "=", claim.runId)
-              .where("turn_claim_generation", "=", claim.generation)
-              .where(
-                "turn_claim_owner_epoch",
-                claim.owner === "worker" ? "=" : "is",
-                claim.ownerEpoch,
-              )
+          ? update.where((eb) => eb.and(turnClaimValues(claim)))
           : update.where("turn_claim_owner", "is", null);
         const result = executeSqliteQuerySync(db, guardedUpdate);
         if (result.numAffectedRows !== 1n) {
@@ -172,15 +162,7 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
         const updated = getRequired(db, sessionId);
         return {
           placement: updated,
-          closedClaim: claim
-            ? {
-                sessionId,
-                claimId: claim.claimId,
-                runId: claim.runId,
-                placementGeneration: claim.generation,
-                owner: placementTurnOwner(current),
-              }
-            : undefined,
+          closedClaim: projectPlacementTurnClaim(current),
         };
       });
     },
@@ -200,22 +182,8 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
         ) {
           throw new Error(`Worker session placement ${sessionId} changed before failure`);
         }
-        if (current.state === "failed") {
-          const result = executeSqliteQuerySync(
-            db,
-            query(db)
-              .updateTable("worker_session_placements")
-              .set({ recovery_error: recoveryError, updated_at_ms: now() })
-              .where("session_id", "=", sessionId)
-              .where("state", "=", "failed")
-              .where("transition_generation", "=", current.generation),
-          );
-          if (result.numAffectedRows !== 1n) {
-            throw new Error(`Worker session placement ${sessionId} changed during failure update`);
-          }
-          return { placement: getRequired(db, sessionId) };
-        }
-        if (!canTransitionWorkerSessionPlacement(current.state, "failed")) {
+        const alreadyFailed = current.state === "failed";
+        if (!alreadyFailed && !canTransitionWorkerSessionPlacement(current.state, "failed")) {
           throw new Error(`Cannot fail worker session placement from ${current.state}`);
         }
         const localClaim = current.turnClaim?.owner === "local" ? current.turnClaim : null;
@@ -225,28 +193,32 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
           query(db)
             .updateTable("worker_session_placements")
             .set({
-              state: "failed",
-              transition_generation: nextGeneration(current.generation),
               recovery_error: recoveryError,
-              terminal_reason: recoveryError,
-              terminal_at_ms: updatedAtMs,
-              turn_claim_owner: localClaim ? "local" : null,
-              turn_claim_id: localClaim?.claimId ?? null,
-              turn_claim_run_id: localClaim?.runId ?? null,
-              turn_claim_generation: localClaim?.generation ?? null,
-              turn_claim_owner_epoch: null,
               updated_at_ms: updatedAtMs,
-              state_changed_at_ms: updatedAtMs,
+              ...(alreadyFailed
+                ? {}
+                : {
+                    state: "failed" as const,
+                    transition_generation: nextGeneration(current.generation),
+                    terminal_reason: recoveryError,
+                    terminal_at_ms: updatedAtMs,
+                    ...turnClaimValues(localClaim),
+                    state_changed_at_ms: updatedAtMs,
+                  }),
             })
             .where("session_id", "=", sessionId)
             .where("state", "=", current.state)
             .where("transition_generation", "=", current.generation),
         );
         if (result.numAffectedRows !== 1n) {
-          throw new Error(`Worker session placement ${sessionId} changed during failure`);
+          throw new Error(
+            `Worker session placement ${sessionId} changed during failure${alreadyFailed ? " update" : ""}`,
+          );
         }
-        const updated = getRequired(db, sessionId);
-        return { placement: updated, closedClaim: projectWorkerSessionTurnClaim(current) };
+        return {
+          placement: getRequired(db, sessionId),
+          ...(alreadyFailed ? {} : { closedClaim: projectWorkerSessionTurnClaim(current) }),
+        };
       });
     },
   };

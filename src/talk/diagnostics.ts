@@ -1,6 +1,4 @@
 /**
- * Privacy-preserving Talk diagnostic event projection.
- *
  * The diagnostic stream needs timing and size counters for reliability work,
  * but must not export raw provider payloads, transcripts, or audio content.
  */
@@ -9,7 +7,6 @@ import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { firstFiniteTalkEventNumber } from "./event-metrics.js";
 import type { TalkEvent } from "./talk-events.js";
 
-/** Emit a trusted internal diagnostic event for one Talk event. */
 export function recordTalkDiagnosticEvent(event: TalkEvent): void {
   const payload = asOptionalRecord(event.payload);
   emitTrustedDiagnosticEvent({

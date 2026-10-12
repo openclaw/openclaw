@@ -116,7 +116,16 @@ export function createOpenClawDatabaseMaintenanceScope(
         if (access === "read") {
           return;
         }
-        throw new Error("Database maintenance authority check cannot admit a nested effect");
+        // Function names identify the admission without exposing stack paths or arguments.
+        const callers = new Error().stack
+          ?.split("\n")
+          .slice(2, 6)
+          .flatMap((line) => line.match(/^\s+at (?:async )?([\w$.]+) \(/u)?.[1] ?? [])
+          .join(" <- ")
+          .slice(0, 160);
+        throw new Error(
+          `Database maintenance authority check cannot admit a nested effect (access=effect; caller=${callers || "unknown"})`,
+        );
       }
       checkingOwner = true;
       try {
@@ -477,12 +486,6 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     record.admissions.set(databasePath, admission);
     return admission;
   };
-  const captureResolved = (databasePath: string): OpenClawStateDatabaseReadAdmission => {
-    const record = resolve(databasePath);
-    assertOpen(record);
-    return captureRecord(record, databasePath);
-  };
-
   return {
     identity(pathname: string): DatabasePathIdentity | undefined {
       return known(pathname)?.identity ?? inspectDatabasePathIdentitySync(pathname);
@@ -536,7 +539,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         }
       }
     },
-    register(resource: OpenClawStateDatabaseAsyncResource): () => void {
+    register(this: void, resource: OpenClawStateDatabaseAsyncResource): () => void {
       resources.add(resource);
       for (const attempt of attempts.values()) {
         attempt.queue?.add(resource);
@@ -552,7 +555,10 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         retained.assertCurrent();
         return retained;
       }
-      return captureResolved(resolveDatabasePath({ path: pathname }));
+      const databasePath = resolveDatabasePath({ path: pathname });
+      const record = resolve(databasePath);
+      assertOpen(record);
+      return captureRecord(record, databasePath);
     },
     holdExclusion(pathname: string): () => void {
       const record = resolve(resolveDatabasePath({ path: pathname }));

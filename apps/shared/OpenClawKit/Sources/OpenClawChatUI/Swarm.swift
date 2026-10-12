@@ -31,18 +31,10 @@ struct OpenClawChatSwarmActivityState: Equatable {
                         limit: maxTrackedSwarmChildren)
                     self.nextPhaseRank += 1
                 }
-                Self.setBounded(
-                    &self.currentPhaseByGroup,
-                    key: groupID,
-                    value: text,
-                    limit: maxTrackedSwarmGroups)
-            } else {
-                Self.setBounded(
-                    &self.latestLogByGroup,
-                    key: groupID,
-                    value: text,
-                    limit: maxTrackedSwarmGroups)
             }
+            let field: WritableKeyPath<Self, [String: String]> = kind == "phase"
+                ? \.currentPhaseByGroup : \.latestLogByGroup
+            Self.setBounded(&self[keyPath: field], key: groupID, value: text, limit: maxTrackedSwarmGroups)
             return true
         }
 

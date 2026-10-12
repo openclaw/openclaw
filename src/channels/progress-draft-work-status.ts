@@ -50,6 +50,8 @@ export function projectChannelWorkStatus(
     kind: child ? "subagent-status" : "operation-status",
     label: "",
     text: redactToolPayloadText(text),
+    // Bounded cards reserve lines for failures by status, ahead of plans and routine rows.
+    ...(child ? { status: state } : {}),
     prefix: false,
   };
 }

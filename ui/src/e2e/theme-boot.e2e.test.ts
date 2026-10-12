@@ -144,6 +144,7 @@ suite.define(() => {
                   kind: "direct",
                   label: "Second conversation",
                   updatedAt: 1,
+                  owner: { actor: { type: "human", id: profileId, label: "Theme Reader" } },
                 },
               ],
               deferredMethods: saved ? ["users.prefs.get"] : [],
@@ -239,7 +240,9 @@ suite.define(() => {
             await page.goBack();
             await page.locator(".agent-chat__composer-combobox textarea").waitFor();
             await assertThemeFrames(page, expectedAppearance);
-            const newThread = page.locator("openclaw-app-sidebar .sidebar-brand__new-thread");
+            const newThread = page.locator(
+              "openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session",
+            );
             await page
               .locator(
                 `.sidebar-recent-session[data-session-key="${secondSessionKey}"] a.sidebar-recent-session__link`,

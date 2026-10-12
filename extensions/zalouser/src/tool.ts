@@ -106,56 +106,40 @@ async function executeZalouserTool(
 ): Promise<AgentToolResult<unknown>> {
   try {
     switch (params.action) {
-      case "send": {
-        const target = resolveZalouserSendTarget(params, context);
-        if (!target.threadId || !params.message) {
-          throw new Error("threadId and message required for send action");
-        }
-        const result = await sendMessageZalouser(target.threadId, params.message, {
-          signal,
-          profile: params.profile,
-          isGroup: target.isGroup,
-        });
-        if (!result.ok) {
-          throw new Error(result.error || "Failed to send message");
-        }
-        return json({ success: true, messageId: result.messageId });
-      }
-
-      case "image": {
-        const target = resolveZalouserSendTarget(params, context);
-        if (!target.threadId) {
-          throw new Error("threadId required for image action");
-        }
-        if (!params.url) {
-          throw new Error("url required for image action");
-        }
-        const result = await sendImageZalouser(target.threadId, params.url, {
-          signal,
-          profile: params.profile,
-          mediaMaxBytes: resolveToolMediaMaxBytes(params.profile, context),
-          caption: params.message,
-          isGroup: target.isGroup,
-        });
-        if (!result.ok) {
-          throw new Error(result.error || "Failed to send image");
-        }
-        return json({ success: true, messageId: result.messageId });
-      }
-
+      case "send":
+      case "image":
       case "link": {
         const target = resolveZalouserSendTarget(params, context);
-        if (!target.threadId || !params.url) {
-          throw new Error("threadId and url required for link action");
+        const content = params.action === "send" ? params.message : params.url;
+        if (!target.threadId || !content) {
+          const required =
+            params.action === "image"
+              ? target.threadId
+                ? "url"
+                : "threadId"
+              : params.action === "send"
+                ? "threadId and message"
+                : "threadId and url";
+          throw new Error(`${required} required for ${params.action} action`);
         }
-        const result = await sendZaloLink(target.threadId, params.url, {
+        const send =
+          params.action === "send"
+            ? sendMessageZalouser
+            : params.action === "image"
+              ? sendImageZalouser
+              : sendZaloLink;
+        const result = await send(target.threadId, content, {
           signal,
           profile: params.profile,
-          caption: params.message,
+          ...(params.action === "image"
+            ? { mediaMaxBytes: resolveToolMediaMaxBytes(params.profile, context) }
+            : {}),
+          ...(params.action !== "send" ? { caption: params.message } : {}),
           isGroup: target.isGroup,
         });
         if (!result.ok) {
-          throw new Error(result.error || "Failed to send link");
+          const kind = params.action === "send" ? "message" : params.action;
+          throw new Error(result.error || `Failed to send ${kind}`);
         }
         return json({ success: true, messageId: result.messageId });
       }

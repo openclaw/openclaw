@@ -164,14 +164,19 @@ describe("DockLayoutController open intent", () => {
 
 describe("DockLayoutController inline columns", () => {
   it.each([
-    { dock: "right", reserved: { bottom: "0px", right: "520px" } },
-    { dock: "bottom", reserved: { bottom: "320px", right: "0px" } },
+    { dock: "right", hostKind: "element", reserved: { bottom: "0px", right: "520px" } },
+    { dock: "bottom", hostKind: "element", reserved: { bottom: "320px", right: "0px" } },
+    { dock: "right", hostKind: "controller", reserved: { bottom: "0px", right: "520px" } },
+    { dock: "bottom", hostKind: "controller", reserved: { bottom: "320px", right: "0px" } },
   ] as const)(
-    "lets only the standalone $dock dock own the viewport reservation",
-    ({ dock, reserved }) => {
+    "lets only the standalone $dock dock own the viewport reservation with an embedded $hostKind",
+    ({ dock, hostKind, reserved }) => {
       const layout = createLayout("right");
       layout.save({ open: true, dock, height: 320, width: 520 });
-      const embeddedHost = createEmbeddedControllerHost();
+      const embeddedHost =
+        hostKind === "controller"
+          ? { ...createControllerHost(), embedded: true }
+          : createEmbeddedControllerHost();
       // Both instances of one panel share its layout store and reservation properties.
       const options = { layout, reservationPrefix: "test-shared", isAvailable: () => true };
       const standalone = new DockLayoutController(createControllerHost(), options);
@@ -271,10 +276,9 @@ describe("DockLayoutController inline columns", () => {
     controller.hostConnected();
 
     render(controller.renderResizer("test", "Resize panel"), container);
-    let separator = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      '[role="separator"]',
-    )!;
+    let separator = container.querySelector("resizable-divider")!;
     await separator.updateComplete;
+    expect(separator.getAttribute("role")).toBe("separator");
     expect(separator.getAttribute("tabindex")).toBe("0");
     expect(separator.getAttribute("aria-orientation")).toBe("vertical");
 
@@ -285,9 +289,7 @@ describe("DockLayoutController inline columns", () => {
 
     controller.setDock("bottom", false);
     render(controller.renderResizer("test", "Resize panel"), container);
-    separator = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      '[role="separator"]',
-    )!;
+    separator = container.querySelector("resizable-divider")!;
     await separator.updateComplete;
     expect(separator.getAttribute("aria-orientation")).toBe("horizontal");
 

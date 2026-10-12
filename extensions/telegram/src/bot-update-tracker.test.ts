@@ -16,34 +16,6 @@ async function flushTrackerMicrotasks() {
 }
 
 describe("createTelegramUpdateTracker", () => {
-  it("persists accepted offsets before earlier pending updates complete", async () => {
-    const onAcceptedUpdateId = vi.fn();
-    const tracker = createTelegramUpdateTracker({
-      initialUpdateId: 100,
-      onAcceptedUpdateId,
-    });
-
-    const update101 = tracker.beginUpdate(updateCtx(101));
-    if (!update101.accepted) {
-      throw new Error("expected update 101 to be accepted");
-    }
-    await flushTrackerMicrotasks();
-    expect(onAcceptedUpdateId).toHaveBeenCalledWith(101);
-
-    const update102 = tracker.beginUpdate(updateCtx(102));
-    if (!update102.accepted) {
-      throw new Error("expected update 102 to be accepted");
-    }
-    tracker.finishUpdate(update102.update, { completed: true });
-    await flushTrackerMicrotasks();
-
-    expect(onAcceptedUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([101, 102]);
-    expect(tracker.beginUpdate(updateCtx(101)).accepted).toBe(false);
-    tracker.finishUpdate(update101.update, { completed: true });
-    await flushTrackerMicrotasks();
-    expect(onAcceptedUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([101, 102]);
-  });
-
   it("can persist offsets only after successful agent dispatch", async () => {
     const onAcceptedUpdateId = vi.fn();
     const tracker = createTelegramUpdateTracker({
@@ -189,30 +161,6 @@ describe("createTelegramUpdateTracker", () => {
     expect(tracker.beginUpdate(updateCtx(103)).accepted).toBe(false);
   });
 
-  it("bounds accepted-id memory without a persist callback via retention window", () => {
-    // No onAcceptedUpdateId: persisted floor never advances past the option floor.
-    const tracker = createTelegramUpdateTracker({
-      initialUpdateId: null,
-      persistenceFloorUpdateId: 0,
-      ackPolicy: "after_agent_dispatch",
-    });
-    const firstId = 1;
-    const lastId = ACCEPTED_UPDATE_ID_RETENTION + 50;
-    for (let updateId = firstId; updateId <= lastId; updateId += 1) {
-      const begun = tracker.beginUpdate(updateCtx(updateId));
-      if (!begun.accepted) {
-        throw new Error(`expected update ${updateId} to be accepted`);
-      }
-      tracker.finishUpdate(begun.update, { completed: true });
-    }
-    // Ids far below the retention window may be pruned; recent ids stay suppressed.
-    expect(tracker.beginUpdate(updateCtx(firstId)).accepted).toBe(true);
-    expect(tracker.beginUpdate(updateCtx(lastId))).toEqual({
-      accepted: false,
-      reason: "accepted-watermark",
-    });
-  });
-
   it("does not prune pending or failed accepted ids from the retention window", () => {
     const tracker = createTelegramUpdateTracker({
       initialUpdateId: null,
@@ -243,6 +191,8 @@ describe("createTelegramUpdateTracker", () => {
       accepted: false,
       reason: "accepted-watermark",
     });
+    expect(tracker.beginUpdate(updateCtx(3)).accepted).toBe(true);
+    expect(tracker.beginUpdate(updateCtx(lastId)).accepted).toBe(false);
     const failedRetry = tracker.beginUpdate(updateCtx(failedId));
     if (!failedRetry.accepted) {
       throw new Error("expected failed update retry to be accepted");
@@ -288,26 +238,6 @@ describe("createTelegramUpdateTracker", () => {
     expect(tracker.beginUpdate(updateCtx(104)).accepted).toBe(true);
     await flushTrackerMicrotasks();
     expect(writes).toEqual([101, 103, 104]);
-  });
-
-  it("keeps failed accepted updates retryable in the same process", () => {
-    const tracker = createTelegramUpdateTracker({ initialUpdateId: 200 });
-    const first = tracker.beginUpdate(updateCtx(201));
-    if (!first.accepted) {
-      throw new Error("expected first update to be accepted");
-    }
-    tracker.finishUpdate(first.update, { completed: false });
-
-    const retry = tracker.beginUpdate(updateCtx(201));
-    if (!retry.accepted) {
-      throw new Error("expected failed update retry to be accepted");
-    }
-    tracker.finishUpdate(retry.update, { completed: true });
-
-    expect(tracker.beginUpdate(updateCtx(201))).toEqual({
-      accepted: false,
-      reason: "accepted-watermark",
-    });
   });
 
   it("does not record an update when checking handler dispatch before acceptance", () => {

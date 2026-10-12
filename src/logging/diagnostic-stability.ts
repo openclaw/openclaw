@@ -243,10 +243,9 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
 
   switch (event.type) {
     case "agent.commentary":
-      // Trusted commentary belongs to harness traces, not the stability subscription.
-      break;
     case "gateway.rpc":
     case "gateway.event_loop.sample":
+    case "gateway.http.cancelled":
     case "diagnostic.gc":
     case "diagnostic.child_process.spawn":
     case "worker.request":
@@ -713,9 +712,7 @@ export function startDiagnosticStabilityRecorder(): void {
     return;
   }
   state.unsubscribe = onInternalDiagnosticEvent(
-    (event) => {
-      appendRecord(sanitizeDiagnosticEvent(event));
-    },
+    (event) => appendRecord(sanitizeDiagnosticEvent(event)),
     {
       // Recovery needs model-call telemetry; other trusted events have dedicated owners.
       includeTrusted: ["model.call.started", "model.call.completed", "model.call.error"],
@@ -724,6 +721,7 @@ export function startDiagnosticStabilityRecorder(): void {
         "telemetry.exporter",
         "gateway.rpc",
         "gateway.event_loop.sample",
+        "gateway.http.cancelled",
         "diagnostic.gc",
         "diagnostic.child_process.spawn",
         "worker.request",

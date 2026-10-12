@@ -14,7 +14,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
+import type { TemplateContext } from "../templating.js";
 import { isKnownModelSelectionProvider } from "./model-runtime-normalization.js";
 import {
   modelKey,
@@ -22,7 +22,7 @@ import {
   type ModelAliasIndex,
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
-import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
+import { publishReplySessionEntry, type ReplySessionEntryHandle } from "./session-entry-handle.js";
 
 export async function applyResetModelOverride(params: {
   cfg: OpenClawConfig;
@@ -32,7 +32,6 @@ export async function applyResetModelOverride(params: {
   resetTriggered: boolean;
   bodyStripped?: string;
   sessionCtx: TemplateContext;
-  ctx: MsgContext;
   sessionEntry?: SessionEntry;
   sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
@@ -191,10 +190,6 @@ export async function applyResetModelOverride(params: {
     });
   }
   adoptPersistedSessionSnapshot(sessionEntry, appliedEntry);
-  if (sessionEntryHandle) {
-    sessionEntryHandle.replaceCurrent(sessionEntry);
-  } else if (sessionStore) {
-    sessionStore[sessionKey] = sessionEntry;
-  }
+  publishReplySessionEntry({ sessionEntryHandle, sessionStore, sessionKey }, sessionEntry);
   return { selection: selectionApplied ? selection : undefined, cleanedBody };
 }

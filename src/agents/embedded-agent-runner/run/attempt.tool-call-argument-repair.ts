@@ -191,10 +191,7 @@ function readObjectMemberKeyAfterComma(raw: string, commaIndex: number): string 
 
 function normalizeToolCallRepairToolName(value: string): string | undefined {
   const trimmed = value.trim();
-  if (!/^[a-z0-9_-]{1,128}$/i.test(trimmed)) {
-    return undefined;
-  }
-  return trimmed.toLowerCase();
+  return /^[a-z0-9_-]{1,128}$/i.test(trimmed) ? trimmed.toLowerCase() : undefined;
 }
 
 function extractToolNameFromLeadingPrefix(prefix: string): string | undefined {
@@ -251,20 +248,14 @@ function readJsonValue(raw: string, startIndex: number): ToolCallRepairJsonValue
         return undefined;
       }
       i = endIndex - 1;
-      continue;
-    }
-    if (char === "{" || char === "[") {
+    } else if (char === "{" || char === "[") {
       depth += 1;
-      continue;
-    }
-    if (char === "}" || char === "]") {
+    } else if (char === "}" || char === "]") {
       if (depth === 0) {
         return parseJsonValuePrefix(raw, startIndex, i);
       }
       depth -= 1;
-      continue;
-    }
-    if (char === "," && depth === 0) {
+    } else if (char === "," && depth === 0) {
       return parseJsonValuePrefix(raw, startIndex, i);
     }
   }
@@ -300,29 +291,10 @@ function readCommaSeparatedBody(
       index = skipWhitespace(raw, index + 1);
       continue;
     }
-    if (raw[index] === closing) {
-      return index + 1;
-    }
-    return undefined;
+    return raw[index] === closing ? index + 1 : undefined;
   }
 
   return undefined;
-}
-
-function readSmartQuotedEditArray(
-  raw: string,
-  startIndex: number,
-): ToolCallRepairJsonValue | undefined {
-  const edits: Record<string, unknown>[] = [];
-  const endIndex = readCommaSeparatedBody(raw, startIndex, "]", (index) => {
-    const edit = parseSmartQuotedToolCallObject(raw, index);
-    if (!edit) {
-      return undefined;
-    }
-    edits.push(edit.value);
-    return edit.endIndex;
-  });
-  return endIndex === undefined ? undefined : { value: edits, endIndex };
 }
 
 function readObjectValue(
@@ -342,7 +314,16 @@ function readObjectValue(
     return parsed && { ...parsed, value: decodeSmartQuotedJsonStringEscapes(parsed.value) };
   }
   if (key === "edits" && char === "[") {
-    return readSmartQuotedEditArray(raw, startIndex);
+    const edits: Record<string, unknown>[] = [];
+    const endIndex = readCommaSeparatedBody(raw, startIndex, "]", (index) => {
+      const edit = parseSmartQuotedToolCallObject(raw, index);
+      if (!edit) {
+        return undefined;
+      }
+      edits.push(edit.value);
+      return edit.endIndex;
+    });
+    return endIndex === undefined ? undefined : { value: edits, endIndex };
   }
   return readJsonValue(raw, startIndex);
 }

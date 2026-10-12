@@ -184,7 +184,22 @@ export class NewSessionDraftPersistence {
       undefined,
       baseline.mentions,
     );
-    const restoring = this.restoreScope(scope, generation, mutationGeneration, signature);
+    const isCurrent = () => {
+      const current = this.read();
+      return (
+        generation === this.restoreGeneration &&
+        mutationGeneration === this.mutationGeneration &&
+        this.matchesScope(scope) &&
+        signature ===
+          chatAttachmentDraftSignature(
+            current.message,
+            current.attachments,
+            undefined,
+            current.mentions,
+          )
+      );
+    };
+    const restoring = this.restoreScope(scope, mutationGeneration, isCurrent);
     this.restorePromise = restoring;
     void restoring.then(
       (reconciled) => {
@@ -529,32 +544,10 @@ export class NewSessionDraftPersistence {
     };
   }
 
-  private isRestoreCurrent(
-    scope: DurableComposerDraftScope,
-    generation: number,
-    mutationGeneration: number,
-    signature: string,
-  ): boolean {
-    const current = this.read();
-    return (
-      generation === this.restoreGeneration &&
-      mutationGeneration === this.mutationGeneration &&
-      this.matchesScope(scope) &&
-      signature ===
-        chatAttachmentDraftSignature(
-          current.message,
-          current.attachments,
-          undefined,
-          current.mentions,
-        )
-    );
-  }
-
   private async restoreScope(
     scope: DurableComposerDraftScope,
-    generation: number,
     mutationGeneration: number,
-    signature: string,
+    isCurrent: () => boolean,
   ): Promise<boolean> {
     const { readDurableComposerDraft } = await durableComposerStore;
     const result = await readDurableComposerDraft(scope);
@@ -568,7 +561,7 @@ export class NewSessionDraftPersistence {
     // An absent authoritative row clears committed facts, never in-flight IDs.
     lineage.revision = storedRevision ?? 0;
     lineage.writeId = storedWriteId;
-    if (!this.isRestoreCurrent(scope, generation, mutationGeneration, signature)) {
+    if (!isCurrent()) {
       return false;
     }
     this.reconcileHandoffCommit();
@@ -604,7 +597,7 @@ export class NewSessionDraftPersistence {
         return false;
       }
     }
-    if (!this.isRestoreCurrent(scope, generation, mutationGeneration, signature)) {
+    if (!isCurrent()) {
       return false;
     }
     this.revision = storedRevision;

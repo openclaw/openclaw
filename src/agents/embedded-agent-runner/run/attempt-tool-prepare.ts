@@ -1,4 +1,5 @@
 import type { SessionPermissionMode } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { messageToolOwnsVisibleReply } from "../../../auto-reply/source-reply-delivery-mode.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
@@ -28,7 +29,7 @@ import {
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
 } from "../../local-model-lean.js";
-import { resolveModelAuthMode } from "../../model-auth.js";
+import { resolveModelAuthModeAsync } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { resolveNativeWebSearchRoute } from "../../native-web-search.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
@@ -101,6 +102,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   });
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({
     config: attempt.config,
+    trigger: attempt.trigger,
     agentId: params.setup.sessionAgentId,
     sessionKey: params.setup.sandboxSessionKey,
     forceMessageTool: forceDirectMessageTool,
@@ -171,9 +173,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     const cleanups = generationCleanups.splice(0);
     const settled = Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(reason))).then(
       (results) => {
-        if (results.some((result) => result.status === "rejected")) {
-          retiredCleanupFailed = true;
-        }
+        retiredCleanupFailed ||= results.some((result) => result.status === "rejected");
       },
     );
     retiringGenerations.add(settled);
@@ -324,20 +324,19 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         githubPublicationAvailable: attempt.githubPublicationAvailable,
         abortSignal,
         skillWorkshop: {
-          env: attempt.skillWorkshopProposalEnv,
-          proposalOnly: attempt.skillWorkshopProposalOnly,
-          ...(attempt.skillWorkshopUpdateProposals ? { updateProposals: true } : {}),
-          ...(attempt.skillWorkshopAutonomousCapture ? { autonomousCapture: true } : {}),
-          origin: attempt.skillWorkshopOrigin,
-          proposalMutationBudget: attempt.skillWorkshopProposalMutationBudget,
-          proposalRevision: attempt.skillWorkshopProposalRevision,
+          ...(attempt.skillWorkshopReviewOf ? { reviewOf: attempt.skillWorkshopReviewOf } : {}),
           libraryAuthoring: attempt.skillLibraryAuthoring,
         },
         modelCompat: extractModelCompat(attempt.model),
         delegationCapability: attempt.delegationCapability,
-        modelAuthMode: resolveModelAuthMode(attempt.model.provider, attempt.config, undefined, {
-          workspaceDir: params.setup.effectiveWorkspace,
-        }),
+        modelAuthMode: await resolveModelAuthModeAsync(
+          attempt.model.provider,
+          attempt.config,
+          attempt.authProfileStore,
+          {
+            workspaceDir: params.setup.effectiveWorkspace,
+          },
+        ),
         includeCoreTools: toolConstructionPlan.includeCoreTools,
         includeToolSearchControls: toolSearchControlsEnabledForRun,
         toolSearchCatalogExecutor: params.toolSearchCatalogExecutor,
@@ -374,6 +373,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         undefined,
         undefined,
         {
+          reader: getReplyOperationSessionReader(attempt.replyOperation),
           assertCurrent: resolveAdmittedRunActiveAssertion(attempt.admittedRunContext, abortSignal),
         },
       );

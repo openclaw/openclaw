@@ -18,16 +18,13 @@ import type { ManagedServiceRootRedirect } from "./update-command-service-contex
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 
 type CapturedWriteOptions = Required<
-  Pick<
-    UpdateRunWriteOptions,
-    "env" | "context" | "assertCurrent" | "assertAccepting" | "retainSettlement"
-  >
+  Pick<UpdateRunWriteOptions, "env" | "context" | "assertAccepting" | "retainSettlement">
 > &
-  Pick<UpdateRunWriteOptions, "requireNoRecovery">;
+  Pick<UpdateRunWriteOptions, "requireNoRecovery" | "busyTimeoutMs">;
 
 export type UpdateCommandExecutionGuards = {
   recordPhase: (phase: UpdateRunPhase, patch?: UpdateRunPhasePatch) => Promise<void>;
-  recordStep: (step: UpdateRunStep) => Promise<UpdateRunRecord>;
+  recordStep: (step: UpdateRunStep) => Promise<UpdateRunRecord | undefined>;
   captureWriteOptions: () => CapturedWriteOptions;
   onStateHandoff: () => void;
   admitExecutor: (acquired: UpdateRecoveryFence) => void;

@@ -1,4 +1,3 @@
-/** Audits installed daemon service definitions for drift and repair candidates. */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -186,51 +185,44 @@ function auditGatewayPassword(command: GatewayServiceCommand, issues: ServiceCon
   });
 }
 
-function auditManagedServiceEnvironment(
+function auditInlineServiceEnvironment(
   command: GatewayServiceCommand,
   issues: ServiceConfigIssue[],
+  kind: "managed" | "proxy",
   expectedManagedServiceEnvKeys?: Iterable<string>,
 ) {
   // Reinstall can migrate the managed base, but never rewrites operator drop-ins.
-  const inlineKeys = collectInlineManagedServiceEnvKeys(
-    resolveManagedGatewayServiceCommand(command),
-    expectedManagedServiceEnvKeys,
-  );
-  if (inlineKeys.length === 0) {
-    return;
-  }
-  issues.push({
-    code: SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded,
-    message: "Gateway service embeds managed environment values that should load at runtime.",
-    detail: `inline keys: ${inlineKeys.join(", ")}`,
-    environmentKeys: inlineKeys,
-    level: "recommended",
-  });
-}
-
-function auditProxyServiceEnvironment(
-  command: GatewayServiceCommand,
-  issues: ServiceConfigIssue[],
-) {
-  const inlineKeys = collectInlineServiceEnvKeys(command, SERVICE_PROXY_ENV_KEYS);
-  if (inlineKeys.length === 0) {
-    return;
-  }
-  issues.push({
-    code: SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded,
-    message: "Gateway service embeds proxy environment values that should not be persisted.",
-    detail: `inline keys: ${inlineKeys.join(", ")}`,
-    environmentKeys: Object.entries(command?.environment ?? {})
-      .filter(
-        ([key, value]) =>
-          value.trim() &&
-          SERVICE_PROXY_ENV_KEYS.some((proxyKey) => proxyKey === key) &&
-          hasInlineEnvironmentSource(
-            readEnvironmentValueSource(command?.environmentValueSources, key),
-          ),
+  const managed = kind === "managed";
+  const inlineKeys = managed
+    ? collectInlineManagedServiceEnvKeys(
+        resolveManagedGatewayServiceCommand(command),
+        expectedManagedServiceEnvKeys,
       )
-      .map(([key]) => key)
-      .toSorted(),
+    : collectInlineServiceEnvKeys(command, SERVICE_PROXY_ENV_KEYS);
+  if (inlineKeys.length === 0) {
+    return;
+  }
+  issues.push({
+    code: managed
+      ? SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded
+      : SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded,
+    message: managed
+      ? "Gateway service embeds managed environment values that should load at runtime."
+      : "Gateway service embeds proxy environment values that should not be persisted.",
+    detail: `inline keys: ${inlineKeys.join(", ")}`,
+    environmentKeys: managed
+      ? inlineKeys
+      : Object.entries(command?.environment ?? {})
+          .filter(
+            ([key, value]) =>
+              value.trim() &&
+              SERVICE_PROXY_ENV_KEYS.some((proxyKey) => proxyKey === key) &&
+              hasInlineEnvironmentSource(
+                readEnvironmentValueSource(command?.environmentValueSources, key),
+              ),
+          )
+          .map(([key]) => key)
+          .toSorted(),
     level: "recommended",
   });
 }
@@ -323,11 +315,7 @@ function auditGatewayServicePath(
   }
 }
 
-/**
- * Check if the service's embedded token differs from the config file token.
- * Returns an issue if drift is detected (service will use old token after restart).
- * The invoking CLI selects recovery advice for its installation.
- */
+/** The invoking CLI selects recovery advice for its installation. */
 export function checkTokenDrift(params: {
   serviceToken: string | undefined;
   configToken: string | undefined;
@@ -377,8 +365,13 @@ export async function auditGatewayServiceConfig(params: {
     issues,
     expectedPort: params.expectedPort,
   });
-  auditManagedServiceEnvironment(params.command, issues, params.expectedManagedServiceEnvKeys);
-  auditProxyServiceEnvironment(params.command, issues);
+  auditInlineServiceEnvironment(
+    params.command,
+    issues,
+    "managed",
+    params.expectedManagedServiceEnvKeys,
+  );
+  auditInlineServiceEnvironment(params.command, issues, "proxy");
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);
   auditGatewayPassword(params.command, issues);
   auditGatewayServicePath(params.command, issues, params.env, platform, params.expectedServicePath);
@@ -422,10 +415,11 @@ export async function auditGatewayServiceConfig(params: {
     definitionDriftError = "Service definition inspection could not be completed.";
   }
 
-  const notes = {
+  return {
+    ok: issues.length === 0,
+    issues,
     ...(runtimeNote ? { runtimeNote } : {}),
     ...(definitionDrift.length ? { definitionDrift } : {}),
     ...(definitionDriftError ? { definitionDriftError } : {}),
   };
-  return { ok: issues.length === 0, issues, ...notes };
 }

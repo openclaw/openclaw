@@ -96,12 +96,15 @@ function resolveMcpAppSessionOwner(params: Record<string, unknown>, cfg: OpenCla
   return owner.agentId;
 }
 
-function resolveRequestedMcpAppView({ params, context, client }: GatewayRequestHandlerOptions) {
+function resolveRequestedMcpAppView(
+  { params, context, client }: GatewayRequestHandlerOptions,
+  prepared?: { cfg: OpenClawConfig; requesterId: string | undefined },
+) {
   return resolveMcpAppActiveView({
     sessionKey: requireString(params, "sessionKey"),
-    agentId: resolveMcpAppSessionOwner(params, context.getRuntimeConfig()),
+    agentId: resolveMcpAppSessionOwner(params, prepared?.cfg ?? context.getRuntimeConfig()),
     viewId: requireString(params, "viewId"),
-    requesterId: resolveMcpAppRequesterId(client),
+    requesterId: prepared ? prepared.requesterId : resolveMcpAppRequesterId(client),
     cfg: context.getRuntimeConfig(),
     restore: false,
   });
@@ -116,14 +119,7 @@ function operationHandler(
     const operation = buildOperation(params);
     const cfg = context.getRuntimeConfig();
     const requesterId = resolveMcpAppRequesterId(client);
-    const active = await resolveMcpAppActiveView({
-      sessionKey: requireString(params, "sessionKey"),
-      agentId: resolveMcpAppSessionOwner(params, cfg),
-      viewId: requireString(params, "viewId"),
-      requesterId,
-      cfg: context.getRuntimeConfig(),
-      restore: false,
-    });
+    const active = await resolveRequestedMcpAppView(options, { cfg, requesterId });
     const read = retainSessionScopedRead(
       options,
       requireString(params, "sessionKey"),

@@ -13,7 +13,6 @@ import { createConfigIO } from "./io.factory.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "./io.runtime.js";
 import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
-import { replaceConfigFile } from "./mutate.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -205,13 +204,12 @@ describe("writeConfigFile canonical reread", () => {
 
   it.each([
     { writer: "direct", authority: "ordinary" },
-    { writer: "mutation", authority: "ordinary" },
     { writer: "runtime", authority: "ambient" },
   ] as const)(
     "restores through guarded copy fallback for $writer writes with $authority authority",
     async ({ writer, authority }) => {
       await withTempHome(async (home) => {
-        const { configPath, env, io, snapshot, options } = await prepareWrite(home);
+        const { configPath, env, io, options } = await prepareWrite(home);
         const priorAudit =
           writer === "direct"
             ? listConfigAuditRecordsForTests({ env: io.env, homedir: () => home })
@@ -244,9 +242,7 @@ describe("writeConfigFile canonical reread", () => {
           const pending =
             writer === "direct"
               ? io.writeConfigFile(nextConfig, options)
-              : writer === "runtime"
-                ? writeConfigFile(nextConfig, options)
-                : replaceConfigFile({ snapshot, writeOptions: options, nextConfig });
+              : writeConfigFile(nextConfig, options);
           const failure = await pending.catch((error: unknown) => error);
           expect(failure).toBeInstanceOf(Error);
           expect(failure).toMatchObject({

@@ -59,8 +59,6 @@ const schemaMigrationDescriptions = {
   "creator-namespace-v14": "cron creators -> explicit principal namespaces",
   "conversation-binding-targets-v15":
     "conversation bindings -> exact target keys without agent/session projections",
-  "skill-workshop-directory-ownership-v16":
-    "Skill Workshop proposals -> per-agent Workshop directory ownership",
   "prepared-worker-ownership-v17":
     "prepared workers -> one-use capacity and fixed workspace ownership",
   "github-publication-requester-authority-v18":

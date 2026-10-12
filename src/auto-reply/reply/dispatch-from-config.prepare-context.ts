@@ -27,7 +27,7 @@ import { emitMessageReceivedHooks as emitSharedMessageReceivedHooks } from "./me
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
+import { isDuplicateRestartRecoverySource } from "./restart-recovery-source.js";
 import { resolveDispatchConversationBinding } from "./session-conversation-binding.js";
 import {
   resolveReplyMessageToolAvailability,
@@ -112,7 +112,6 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       state.getPreDispatchAbortSignal()?.throwIfAborted();
       params.replyOptions?.operatorAuthority?.assertCurrent();
     };
-    let attemptedSessionId: string | undefined;
     let lastOwner: PluginBindingTranscriptOwner | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const targetSessionStoreEntry = await resolveSessionStoreLookup(
@@ -126,10 +125,9 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       );
       assertCurrent();
       const targetSessionEntry = targetSessionStoreEntry.entry;
-      if (!targetSessionEntry || targetSessionEntry.sessionId === attemptedSessionId) {
+      if (!targetSessionEntry || targetSessionEntry.sessionId === lastOwner?.expectedSessionId) {
         break;
       }
-      attemptedSessionId = targetSessionEntry.sessionId;
       lastOwner = {
         agentId: targetAgentId,
         expectedSessionId: targetSessionEntry.sessionId,
@@ -182,16 +180,17 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     resolveSourceReplyExpectation({ ctx, cfg, isHeartbeat: params.replyOptions?.isHeartbeat }),
     "empty",
   );
-  const { configuredVisibleReplies, harnessDefaultVisibleReplies } = resolveVisibleRepliesPolicy({
-    cfg,
-    chatType,
-    ctx,
-    entry: sessionStoreEntry.entry,
-    sessionAgentId,
-    sessionKey: acpDispatchSessionKey,
-    sessionStore: sessionStoreEntry.store,
-    turnModelOverride: resolveTurnModelOverride(params.replyOptions),
-  });
+  const { configuredVisibleReplies, harnessDefaultVisibleReplies } =
+    await resolveVisibleRepliesPolicy({
+      cfg,
+      chatType,
+      ctx,
+      entry: sessionStoreEntry.entry,
+      sessionAgentId,
+      sessionKey: acpDispatchSessionKey,
+      sessionStore: sessionStoreEntry.store,
+      turnModelOverride: resolveTurnModelOverride(params.replyOptions),
+    });
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
   const prefersMessageToolDelivery =
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
@@ -251,17 +250,16 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     messageToolAvailable,
     sessionStableMessageToolAvailable,
     isHeartbeat: params.replyOptions?.isHeartbeat,
+    requested: params.replyOptions?.sourceReplyDeliveryMode,
   } as const;
   let sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
     ...sourceReplyPolicyParams,
-    requested: params.replyOptions?.sourceReplyDeliveryMode,
     defaultVisibleReplies: harnessDefaultVisibleReplies,
   });
   const alternateHarnessDefault =
     harnessDefaultVisibleReplies === "message_tool" ? "automatic" : "message_tool";
   const alternateSourceReplyDeliveryMode = resolveSourceReplyVisibilityPolicy({
     ...sourceReplyPolicyParams,
-    requested: params.replyOptions?.sourceReplyDeliveryMode,
     defaultVisibleReplies: alternateHarnessDefault,
   }).sourceReplyDeliveryMode;
   const sourceReplyDeliveryModeOrigin =
@@ -297,6 +295,10 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
           ...(sourceReplyPolicy.sendPolicyDenied ? { sendPolicyDenied: true } : {}),
         }
       : result;
+  const baseDispatchResult = (queuedFinal = false) => ({
+    queuedFinal,
+    counts: dispatcher.getQueuedCounts(),
+  });
   const explicitCommandTurnCtx = isExplicitCommandTurnContext(ctx, cfg);
   const activeRunSafeCommandTurn =
     explicitCommandTurnCtx &&
@@ -315,10 +317,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     recordProcessed("skipped", { reason: "duplicate" });
     return {
       status: "complete" as const,
-      result: attachSourceReplyDeliveryMode({
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
-      }),
+      result: attachSourceReplyDeliveryMode(baseDispatchResult()),
     };
   };
 
@@ -408,8 +407,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       commitInboundDedupeIfClaimed();
     }
     return attachSourceReplyDeliveryMode({
-      queuedFinal: false,
-      counts: dispatcher.getQueuedCounts(),
+      ...baseDispatchResult(),
       ...(opts?.sessionMetadataChanges
         ? { sessionMetadataChanges: opts.sessionMetadataChanges }
         : {}),
@@ -439,8 +437,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     markIdle("message_completed");
     state.completeDispatchReplyOperation();
     return attachSourceReplyDeliveryMode({
-      queuedFinal,
-      counts: dispatcher.getQueuedCounts(),
+      ...baseDispatchResult(queuedFinal),
       ...(state.turnLedger.hasObservedDelivery() ? { observedReplyDelivery: true } : {}),
     });
   };
@@ -471,8 +468,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     return {
       status: "complete" as const,
       result: attachSourceReplyDeliveryMode({
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
+        ...baseDispatchResult(),
         observedReplyDelivery: true,
       }),
     };

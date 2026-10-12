@@ -2,14 +2,13 @@ import {
   decorativeEmoji,
   decorativePrefix,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
 import { summarizeStringEntries } from "../shared/string-sample.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
-import { formatCliRequirements } from "./skills-hooks-cli.format.js";
+import { formatCliRequirements, formatCliStatusTable } from "./skills-hooks-cli.format.js";
 
 export type HooksReportOptions = {
   agent?: string;
@@ -100,38 +99,24 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
       : "No hooks found.";
   }
 
-  const eligible = hooks.filter((h) => h.loadable);
-  const tableWidth = getTerminalTableWidth();
-  const rows = hooks.map((hook) => {
-    const emoji = hook.emoji ?? decorativeEmoji("🔗");
-    const name = theme.command(hook.name);
-    return {
-      Status: formatHookStatus(hook),
-      Hook: emoji ? `${emoji} ${name}` : name,
-      Description: theme.muted(hook.description),
-      Source: hook.managedByPlugin ? `plugin:${hook.pluginId ?? "unknown"}` : hook.source,
-      Missing: opts.verbose ? theme.warn(formatHookMissingSummary(hook)) : "",
-    };
+  return formatCliStatusTable({
+    title: "Hooks",
+    ready: hooks.filter((hook) => hook.loadable).length,
+    nameColumn: { key: "Hook", header: "Hook", minWidth: 18, flex: true },
+    sourceColumn: { key: "Source", header: "Source", minWidth: 12, flex: true },
+    verbose: opts.verbose,
+    rows: hooks.map((hook) => {
+      const emoji = hook.emoji ?? decorativeEmoji("🔗");
+      const name = theme.command(hook.name);
+      return {
+        Status: formatHookStatus(hook),
+        Hook: emoji ? `${emoji} ${name}` : name,
+        Description: theme.muted(hook.description),
+        Source: hook.managedByPlugin ? `plugin:${hook.pluginId ?? "unknown"}` : hook.source,
+        Missing: opts.verbose ? theme.warn(formatHookMissingSummary(hook)) : "",
+      };
+    }),
   });
-
-  const columns = [
-    { key: "Status", header: "Status", minWidth: 10 },
-    { key: "Hook", header: "Hook", minWidth: 18, flex: true },
-    { key: "Description", header: "Description", minWidth: 24, flex: true },
-    { key: "Source", header: "Source", minWidth: 12, flex: true },
-  ];
-  if (opts.verbose) {
-    columns.push({ key: "Missing", header: "Missing", minWidth: 18, flex: true });
-  }
-
-  return [
-    `${theme.heading("Hooks")} ${theme.muted(`(${eligible.length}/${hooks.length} ready)`)}`,
-    renderTable({
-      width: tableWidth,
-      columns,
-      rows,
-    }).trimEnd(),
-  ].join("\n");
 }
 
 export function formatHookInfo(

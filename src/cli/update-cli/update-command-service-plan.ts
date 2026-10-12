@@ -41,12 +41,12 @@ import {
   createUpdateFailureFact,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
-import {
-  createFreeBsdPkgOwnershipInspection,
-  type FreeBsdPkgOwnershipInspection,
-} from "../../infra/update-freebsd-pkg-ownership.js";
 import type { UPDATE_PREFLIGHT_DETAILS } from "../../infra/update-preflight-details.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
+import {
+  createSystemPackageOwnershipInspection,
+  type SystemPackageOwnershipInspection,
+} from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { resolveNodeRunner } from "./shared.js";
@@ -54,6 +54,7 @@ import type {
   ManagedGatewayUpdateVerdict,
   ManagedServicePackageUpdatePlan,
 } from "./update-command-service-context-types.js";
+import { resolveUpdateServiceHeapEnv } from "./update-command-service-env.js";
 
 export class GatewayServiceUpdateOwnershipError extends Error {
   readonly failureFacts: UpdateFailureFact[];
@@ -308,17 +309,22 @@ export function readGatewayServiceStateForUpdate(
       loadForInspection,
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       timeoutMs,
-    }).catch((error: unknown) => {
-      if (error instanceof ServiceStartRefusalError) {
-        throw new GatewayServiceUpdateOwnershipError(
-          error.message,
-          error,
-          undefined,
-          "service-mutation-refused",
-        );
-      }
-      throw error;
-    });
+    })
+      .then((state) => ({
+        ...state,
+        env: resolveUpdateServiceHeapEnv(state.env, env, state.command?.programArguments),
+      }))
+      .catch((error: unknown) => {
+        if (error instanceof ServiceStartRefusalError) {
+          throw new GatewayServiceUpdateOwnershipError(
+            error.message,
+            error,
+            undefined,
+            "service-mutation-refused",
+          );
+        }
+        throw error;
+      });
   if (process.platform !== "linux" || inspection?.managerUid === undefined) {
     return read();
   }
@@ -334,6 +340,19 @@ export function readGatewayServiceStateForUpdate(
     assertCurrent();
     return state;
   });
+}
+
+/** Manager availability is distinct from a loaded unit; uncertain cleanup remains fatal. */
+export function isUpdateServiceManagerAvailable(inspect: Promise<boolean>): Promise<boolean> {
+  return inspect.then(
+    () => true,
+    (error: unknown) => {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
+      return false;
+    },
+  );
 }
 
 /** Recorded launchers cannot select an update's package, Node, or state without live inspection. */
@@ -368,15 +387,7 @@ export async function readManagedGatewayServiceForUpdate(
       }
       if (error instanceof GatewayServiceUpdateOwnershipError && service) {
         // Probe only the invoker's manager; rejected record selectors must not route it.
-        const available = await service.isLoaded({ env }).then(
-          () => true,
-          (probeError: unknown) => {
-            if (hasCommandProcessCleanupError(probeError)) {
-              throw probeError;
-            }
-            return false;
-          },
-        );
+        const available = await isUpdateServiceManagerAvailable(service.isLoaded({ env }));
         if (available) {
           throw error;
         }
@@ -392,11 +403,11 @@ export async function tryRealpathOrResolve(value: string): Promise<string> {
 
 export async function resolveManagedServicePackageUpdatePlan(params: {
   root: string;
-  pkgOwnership?: FreeBsdPkgOwnershipInspection;
+  pkgOwnership?: SystemPackageOwnershipInspection;
   rebind?: boolean;
 }): Promise<ManagedServicePackageUpdatePlan> {
   const pkgOwnership =
-    params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS);
+    params.pkgOwnership ?? createSystemPackageOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS);
   await pkgOwnership.assertUnowned(params.root);
   const plan: ManagedServicePackageUpdatePlan = {
     rootRedirect: null,

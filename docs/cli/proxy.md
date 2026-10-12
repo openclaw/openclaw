@@ -35,7 +35,7 @@ By default it runs:
 - one **allowed** check against `https://example.com/` (override/add with `--allowed-url`, repeatable)
 - one **denied** check against a temporary loopback canary (override with `--denied-url`, repeatable)
 
-Custom `--denied-url` targets are fail-closed: both HTTP responses and ambiguous transport failures count as failures unless you can independently verify a deployment-specific denial signal. The built-in loopback canary is the only target where a transport error is treated as proof of blocking.
+Custom `--denied-url` targets need a verified denial signal: both HTTP responses and ambiguous transport failures count as failures unless you can independently verify a deployment-specific denial signal. The built-in loopback canary is the only target where a transport error is treated as proof of blocking.
 
 Add `--apns-reachable` to also open an APNs HTTP/2 CONNECT tunnel through the proxy and confirm sandbox APNs responds. The check sends an intentionally invalid provider token, so an APNs `403 InvalidProviderToken` response counts as a successful reachability signal (not a failure).
 
@@ -60,9 +60,9 @@ See [Network Proxy](/security/network-proxy) for deployment guidance and denial 
 
 `start` launches a local capturing proxy and prints its URL, CA cert path, and capture DB path. Stop it with Ctrl+C. Defaults to binding `127.0.0.1` unless `--host` is set.
 
-`run` starts a local debug proxy, then runs `<cmd...>` (after `--`) with the proxy env applied, under its own capture session.
+`run` starts a local debug proxy, then runs `<cmd...>` (after `--`) with the proxy env applied, under its own capture session. An OpenClaw child forwards instrumented HTTPS and WebSocket payloads to the parent through an ephemeral, session-bound capture token in its debug endpoint URL. Normal HTTP proxy variables and stored capture URLs remain credential-free. The parent remains the only persistence client; the child does not open a capture database. The private capture endpoint cannot read or purge captures and closes with the proxy. For child commands that mutate other OpenClaw state, run the Gateway first so those commands can route their writes. Offline capture retains exclusive parent ownership until the child exits.
 
-Capture persistence uses asynchronous worker operations. On orderly shutdown,
+Capture persistence uses asynchronous worker operations. When a local Gateway owns the state directory, the CLI keeps the proxy listener and child command local and routes capture reads and writes through that Gateway. With the Gateway stopped, the CLI holds exclusive offline ownership through capture cleanup. A failed or uncertain Gateway request is never replayed locally. Older Gateways without capture routing require an update or an orderly stop before offline capture. On orderly shutdown,
 `start` and `run` wait for admitted capture writes and session cleanup. Capture
 failures remain reportable during cleanup even when the original HTTP response
 was already delivered to its caller.

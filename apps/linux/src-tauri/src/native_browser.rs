@@ -173,6 +173,13 @@ impl BrowserHost {
             .ok_or_else(|| "This browser tab has closed.".into())
     }
 
+    fn current_tab(&mut self, label: &str, clock: &AtomicU64, event: u64) -> Option<&mut Tab> {
+        if clock.load(Ordering::SeqCst) != event {
+            return None;
+        }
+        self.tabs.iter_mut().find(|tab| tab.label == label)
+    }
+
     fn view(&self, app: &AppHandle, id: &str) -> Result<Webview, String> {
         app.get_webview(&self.tab(id)?.label)
             .ok_or_else(|| "This browser tab is unavailable.".into())
@@ -350,10 +357,7 @@ impl NativeBrowserState {
                 let url = url.to_string();
                 tauri::async_runtime::spawn(async move {
                     let mut host = owner.inner.lock().await;
-                    if clock.load(Ordering::SeqCst) != event {
-                        return;
-                    }
-                    if let Some(tab) = host.tabs.iter_mut().find(|tab| tab.label == label) {
+                    if let Some(tab) = host.current_tab(&label, &clock, event) {
                         if tab.initial_finished && tab.url != url {
                             tab.initial_alias = None;
                         }
@@ -380,10 +384,7 @@ impl NativeBrowserState {
                 let event = clock.fetch_add(1, Ordering::SeqCst) + 1;
                 tauri::async_runtime::spawn(async move {
                     let mut host = owner.inner.lock().await;
-                    if clock.load(Ordering::SeqCst) != event {
-                        return;
-                    }
-                    if let Some(tab) = host.tabs.iter_mut().find(|tab| tab.label == view.label()) {
+                    if let Some(tab) = host.current_tab(view.label(), &clock, event) {
                         // An engine can finish its initial empty document after
                         // the requested page has already begun navigating.
                         if url == "about:blank" && tab.url != "about:blank" {
@@ -482,10 +483,7 @@ impl NativeBrowserState {
                     let label = failure_label.clone();
                     tauri::async_runtime::spawn(async move {
                         let mut host = owner.inner.lock().await;
-                        if clock.load(Ordering::SeqCst) != event {
-                            return;
-                        }
-                        if let Some(tab) = host.tabs.iter_mut().find(|tab| tab.label == label) {
+                        if let Some(tab) = host.current_tab(&label, &clock, event) {
                             tab.navigation_failed();
                             host.publish(&app);
                         }
@@ -520,10 +518,7 @@ impl NativeBrowserState {
             return;
         }
         let mut host = self.inner.lock().await;
-        if clock.load(Ordering::SeqCst) != event {
-            return;
-        }
-        if let Some(tab) = host.tabs.iter_mut().find(|tab| tab.label == label) {
+        if let Some(tab) = host.current_tab(label, &clock, event) {
             if browser_url(&url).is_ok() {
                 if tab.initial_finished && tab.url != url.as_str() {
                     tab.initial_alias = None;

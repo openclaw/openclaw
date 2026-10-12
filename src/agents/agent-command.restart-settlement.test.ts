@@ -2,6 +2,7 @@ import path from "node:path";
 import { beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -22,6 +23,7 @@ import * as modelSelection from "./command/model-selection.js";
 import { markSessionCompletedAfterRecoveryCheckpoint } from "./main-session-recovery/main-session-restart-recovery-checkpoint.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-recovery/main-session-restart-recovery-marking.js";
 import { recoverStore } from "./main-session-recovery/main-session-restart-recovery-store.js";
+import { createAgentRunDirectAbortError } from "./run-termination.js";
 
 const {
   loadSessionEntry,
@@ -37,6 +39,84 @@ let persistGatewaySessionLifecycleEvent: typeof import("../gateway/session-lifec
 beforeAll(async () => {
   ({ persistGatewaySessionLifecycleEvent } = await import("../gateway/session-lifecycle-state.js"));
 });
+
+it.each(["visible", "internal", "coordination"] as const)(
+  "declares the %s command admission and accepts its interruption only once",
+  async (visibility) => {
+    const sessionKey = "agent:main:admitted-stop";
+    const sessionId = "admitted-stop-session";
+    const runId = "admitted-stop-command";
+    const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
+    await replaceSessionEntry(target, { sessionId, updatedAt: 100 });
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const reason = createAgentRunDirectAbortError();
+    using _ = vi
+      .spyOn(modelSelection, "resolveEmbeddedModelSelection")
+      .mockImplementationOnce(async (params) => {
+        entered.resolve();
+        await resume.promise;
+        expect(params.opts.abortSignal?.reason).toBe(reason);
+        params.opts.abortSignal?.throwIfAborted();
+        throw new Error("command did not observe Stop");
+      });
+    const command = agentCommandFromGatewayIngress(
+      {
+        sessionKey,
+        sessionId,
+        runId,
+        message: "Stop before provider selection",
+        allowModelOverride: false,
+        ...(visibility === "internal" ? { sessionEffects: "internal" as const } : {}),
+        ...(visibility === "coordination"
+          ? {
+              inputProvenance: {
+                kind: "inter_session" as const,
+                sourceTool: "sessions_send",
+                sourceRole: "subagent" as const,
+              },
+            }
+          : {}),
+      },
+      ...GATEWAY_INGRESS_ARGS,
+    );
+    void command.catch(() => {});
+    const interruptionTarget = { scope: target.storePath, identities: [sessionKey, sessionId] };
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        command,
+        "command did not reach model selection",
+      );
+      const captured = sessionAdmission.captureSessionWorkRunInterruptions({
+        ...interruptionTarget,
+        accept: () => true,
+      });
+      expect(captured.map(({ run }) => run)).toEqual([
+        {
+          runId,
+          sessionKey,
+          sessionId,
+          agentId: "main",
+          controlUiVisible: visibility === "visible",
+        },
+      ]);
+      expect(captured[0]!.interrupt(reason)).toBe(true);
+      const second = sessionAdmission.startSessionWorkAdmissionInterruption({
+        ...interruptionTarget,
+        reason: new Error("later Stop"),
+      });
+      expect([...second.interruptedRunIds]).toEqual([]);
+      resume.resolve();
+      await expect(command).rejects.toBe(reason);
+      await second.released;
+      expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+    } finally {
+      resume.resolve();
+      await command.catch(() => {});
+    }
+  },
+);
 
 it.each([
   "stopped",
@@ -226,6 +306,95 @@ it("preserves a stopped source claim when generation retires before post-run per
   });
   expect(loadSessionEntry(target)?.restartRecoveryTerminalRunIds ?? []).not.toContain(runId);
 });
+
+it.each(["command", "cleanup"] as const)(
+  "retains the %s failure when completion source-release also fails",
+  async (phase) => {
+    const sessionKey = `agent:main:completion-settlement-${phase}`;
+    const sessionId = `completion-settlement-${phase}`;
+    const runId = `announce:completion-settlement-${phase}`;
+    const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
+    const claim: HarnessCompletionRecovery = {
+      taskId: "completed-child",
+      taskRunId: "completed-child-run",
+      taskStatus: "succeeded",
+      sourceRunId: runId,
+      requesterSessionKey: sessionKey,
+      requesterAgentId: "main",
+      sessionId,
+      lifecycleRevision: "initial",
+    };
+    await replaceSessionEntry(target, {
+      sessionId,
+      updatedAt: Date.now(),
+      lifecycleRevision: claim.lifecycleRevision,
+      restartRecoveryHarnessCompletion: claim,
+      restartRecoveryDeliveryRunId: runId,
+      restartRecoveryDeliverySourceRunId: runId,
+      restartRecoverySourceIngress: "internal",
+    });
+    const primary = new Error(`${phase} failed before source release`);
+    const releaseFailure = new Error("completion source release failed");
+    const enteredCleanup = createDeferred();
+    const finishCleanup = createDeferred();
+    const sourceRelease = vi.fn(async () => {
+      throw releaseFailure;
+    });
+    const prepareSource = vi.fn(async () => ({
+      assertCurrent: () => {},
+      checks: [],
+      release: sourceRelease,
+    }));
+    const beforeTerminalDelivery = vi.fn(async () => {
+      enteredCleanup.resolve();
+      await finishCleanup.promise;
+      if (phase === "cleanup") {
+        throw primary;
+      }
+    });
+    if (phase === "command") {
+      state.runAgentAttemptMock.mockRejectedValue(primary);
+    } else {
+      state.runAgentAttemptMock.mockResolvedValue(
+        makeCompactionResult({ sessionId, text: "done", runner: "embedded" }),
+      );
+      beforeTerminalDelivery.mockResolvedValueOnce(undefined);
+    }
+    const run = agentCommandFromGatewayIngress(
+      {
+        sessionKey,
+        sessionId,
+        runId,
+        message: "Finish the saved completion",
+        allowModelOverride: false,
+        assertSourceCurrent: Object.assign(() => {}, { prepareSessionSourceScope: prepareSource }),
+        beforeTerminalDelivery,
+      },
+      ...GATEWAY_INGRESS_ARGS,
+    );
+    const rejected = expect(run).rejects.toMatchObject({
+      name: "AggregateError",
+      cause: primary,
+      errors: [primary, releaseFailure],
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        enteredCleanup.promise,
+        run,
+        "command skipped terminal cleanup",
+      );
+      expect(sourceRelease).not.toHaveBeenCalled();
+      finishCleanup.resolve();
+      await rejected;
+      expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
+      expect(prepareSource).toHaveBeenCalledOnce();
+      expect(sourceRelease).toHaveBeenCalledOnce();
+    } finally {
+      finishCleanup.resolve();
+      await run.catch(() => {});
+    }
+  },
+);
 
 it.each([false, true])(
   "queues image follow-up and revalidates session replacement=%s",

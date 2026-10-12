@@ -61,24 +61,10 @@ export function parseTargetedGatewayRestart(
   if (!isRecord(target)) {
     return null;
   }
-  if (
-    typeof target.pid !== "number" ||
-    !Number.isSafeInteger(target.pid) ||
-    target.pid <= 0 ||
-    typeof target.ownerId !== "string" ||
-    !target.ownerId.trim() ||
-    typeof target.port !== "number" ||
-    !Number.isInteger(target.port) ||
-    target.port <= 0 ||
-    target.port > 65_535
-  ) {
-    return null;
-  }
-  return {
-    pid: target.pid,
-    ownerId: target.ownerId.trim(),
-    port: target.port,
-  };
+  const pid = asSafeIntegerInRange(target.pid, { min: 1 });
+  const ownerId = normalizeOptionalString(target.ownerId);
+  const port = asSafeIntegerInRange(target.port, { min: 1, max: 65_535 });
+  return pid !== undefined && ownerId && port !== undefined ? { pid, ownerId, port } : null;
 }
 
 export function parseTargetedGatewayRestartIntent(

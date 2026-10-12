@@ -4,15 +4,8 @@ import { GENERATED_BUNDLED_CHANNEL_IDS } from "./bundled-channel-ids.generated.j
 
 export type ChatChannelId = string;
 
-type BundledChatChannelEntry = {
-  id: ChatChannelId;
-  aliases: readonly string[];
-  label?: string;
-  order: number;
-};
-
-function listBundledChatChannelEntries(): BundledChatChannelEntry[] {
-  return GENERATED_BUNDLED_CHANNEL_IDS.filter((entry) => entry.configurable !== false)
+const BUNDLED_CHAT_CHANNEL_ENTRIES = Object.freeze(
+  GENERATED_BUNDLED_CHANNEL_IDS.filter((entry) => entry.configurable !== false)
     .map((entry) => ({
       id: normalizeOptionalLowercaseString(entry.channelId) ?? entry.channelId,
       aliases: entry.aliases ?? [],
@@ -22,10 +15,8 @@ function listBundledChatChannelEntries(): BundledChatChannelEntry[] {
     .toSorted(
       (left, right) =>
         left.order - right.order || left.id.localeCompare(right.id, "en", { sensitivity: "base" }),
-    );
-}
-
-const BUNDLED_CHAT_CHANNEL_ENTRIES = Object.freeze(listBundledChatChannelEntries());
+    ),
+);
 const CHAT_CHANNEL_ID_SET = new Set(BUNDLED_CHAT_CHANNEL_ENTRIES.map((entry) => entry.id));
 
 /**

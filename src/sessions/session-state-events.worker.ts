@@ -66,14 +66,9 @@ export function executeSessionStateCommand(
     }, options);
   }
   if (command.type === "sessionState.sweep") {
-    const { cursors, now, sessionEntryCurrentSources } = command.input;
-    const admit = (stage: "transaction" | "commit") =>
-      requestSessionEntriesCurrentAdmission(sessionEntryCurrentSources, {
-        stage,
-        facts: undefined,
-      });
+    const { cursors, now } = command.input;
     return runOpenClawStateWriteTransaction(({ db }) => {
-      admit("transaction");
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
       const notices: SessionStateNotice[] = [];
       for (const { watcherSessionKey, targetSessionKey, watcherStorePath } of cursors) {
         const row = readCursor(db, watcherSessionKey, targetSessionKey);
@@ -101,7 +96,7 @@ export function executeSessionStateCommand(
           queueOnly: isAmbientGroupWatchCursor(row),
         });
       }
-      admit("commit");
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       return notices;
     }, options);
   }

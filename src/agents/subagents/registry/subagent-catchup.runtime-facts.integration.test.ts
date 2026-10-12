@@ -25,7 +25,10 @@ import { closeStateDatabaseForTest } from "../../../test-utils/database-cleanup.
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -39,6 +42,10 @@ import {
 const PARENT = "agent:main:main";
 const CHILD = "agent:main:subagent:catchup-child";
 const RESULT = "Retained child result: the requested check found three actionable failures.";
+const temporalFact = {
+  kind: "conversation-data",
+  text: expect.stringContaining("## Temporal Context\n"),
+};
 
 describe("parent runtime facts from retained completion obligations", () => {
   const fixture = useSubagentRestartRecoveryFixture();
@@ -151,7 +158,7 @@ describe("parent runtime facts from retained completion obligations", () => {
           }
           expect(JSON.parse(encoded)).toBe(result.slice(0, 2_000));
         } else {
-          expect(facts).toEqual([]);
+          expect(facts).toEqual([temporalFact]);
         }
       }
       expect(subagentRuns.size).toBe(0);
@@ -267,7 +274,7 @@ describe("parent runtime facts from retained completion obligations", () => {
     };
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     try {
-      expect(await buildRuntimeFactsContext(params)).toEqual([]);
+      expect(await buildRuntimeFactsContext(params)).toEqual([temporalFact]);
       const child = makeRestartRecoveryRun({
         runId: "catchup-other-writer",
         childSessionKey: CHILD,
@@ -420,7 +427,7 @@ describe("parent runtime facts from retained completion obligations", () => {
     expect(await read(PARENT)).toContain(RESULT);
     expect(await read(controller)).toContain(RESULT);
     expect(await read("agent:main:other-parent")).not.toContain(RESULT);
-    await addSubagentRunForTests(child);
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly: true });
     await mutateSubagentRuns([child.runId], (rows) => {
       const current = rows.get(child.runId);
       if (!current) {

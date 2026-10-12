@@ -11,6 +11,7 @@ import {
 import { shouldClearFailedCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
 import { withAdmittedCliCandidate } from "../../agents/embedded-agent-runner/run-entry-cli.js";
+import type { CompactionAccountingTarget } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -40,11 +41,13 @@ import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
+import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 
 export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
     cliExecutionProvider: string;
     lifecycleGeneration: string;
+    onSessionWriter: (writer: CompactionAccountingTarget) => void;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
   const turn = params.turn;
@@ -164,7 +167,7 @@ export async function runCliFallbackCandidate(
           lifecycleGeneration: params.lifecycleGeneration,
           isFinalFallbackAttempt: params.isFinalFallbackAttempt,
           abortSignal: params.runAbortSignal,
-          trigger: turn.isHeartbeat ? "heartbeat" : "user",
+          trigger: resolveReplyRunTrigger(turn),
           inputProvenance: turn.followupRun.run.inputProvenance,
         },
         provider: params.cliExecutionProvider,
@@ -262,22 +265,7 @@ export async function runCliFallbackCandidate(
                 }
               : undefined,
           preserveProgressCallbackStartOrder: params.preserveProgressCallbackStartOrder,
-          onAssistantText: async (text) => {
-            const classified = params.presentation.classifyStreamingPartial({ text });
-            if (classified.skip || !classified.text) {
-              return;
-            }
-            const textForTyping = classified.text;
-            const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
-            const onPartialReply = turn.opts?.onPartialReply;
-            return await params.presentation.presentWithTyping(
-              turn.typingSignals.signalTextDelta(textForTyping),
-              () =>
-                sanitized.skip || !sanitized.text || !onPartialReply
-                  ? false
-                  : onPartialReply({ text: sanitized.text }),
-            );
-          },
+          onAssistantText: (text) => params.presentation.presentPartialReply({ text }, "cli"),
           onCompletedReply: async (text, assistantMessageIndex) => {
             params.runAbortSignal?.throwIfAborted();
             assertSettlementCurrent();
@@ -433,7 +421,6 @@ export async function runCliFallbackCandidate(
             replyToMode: cliReplyToMode,
             currentInboundAudio: hasInboundAudio(turn.sessionCtx),
             agentAccountId: turn.followupRun.run.agentAccountId,
-            skillWorkshopProposalRevision: params.candidateRun.skillWorkshopProposalRevision,
             skillLibraryAuthoring: params.candidateRun.skillLibraryAuthoring,
             toolAuthorityFingerprint,
             // Native input is already host-authored. Keep its stable delivery
@@ -443,6 +430,14 @@ export async function runCliFallbackCandidate(
             onExecutionPhase: params.signalExecutionPhaseForTyping,
           },
         });
+        if (sessionTarget && sessionEntry) {
+          // History preparation publishes its committed writer into this candidate's detached row.
+          params.onSessionWriter({
+            ...sessionTarget,
+            lifecycleRevision: sessionEntry.lifecycleRevision,
+            activeWriterRunId: sessionEntry.activeWriterRunId,
+          });
+        }
         if (droppedCliSessionReplacement) {
           // The room-event transform removed native continuity; only its guarded
           // invalidation remains, and failure must retain the returned turn.

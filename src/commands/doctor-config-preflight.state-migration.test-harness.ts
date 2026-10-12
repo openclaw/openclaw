@@ -178,7 +178,7 @@ const inspectPluginMigrationAvailability = vi.hoisted(() =>
     pending: [],
     requiredPluginIds: [],
     inspectionRequiredPluginIds: [],
-    statelessPluginIds: [],
+    statelessPlugins: [],
     runtimePluginAliases: [],
   })),
 );
@@ -259,6 +259,7 @@ vi.mock("./doctor/shared/plugin-metadata-snapshot-scope.js", () => ({
     run: (_scope: unknown, operation: () => unknown) =>
       runWithPluginMetadataSnapshot(params.getBaseSnapshot(), operation),
     invalidate: vi.fn(),
+    [Symbol.asyncDispose]: async () => {},
   }),
 }));
 
@@ -298,7 +299,7 @@ export function resetStateMigrationPreflightMocks(): void {
     pending: [],
     requiredPluginIds: [],
     inspectionRequiredPluginIds: [],
-    statelessPluginIds: [],
+    statelessPlugins: [],
     runtimePluginAliases: [],
   });
   pluginMigrationFingerprint.mockReset();

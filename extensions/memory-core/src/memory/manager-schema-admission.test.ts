@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it } from "vitest";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -24,6 +25,7 @@ describe("memory index schema admission", () => {
     let manager: Awaited<ReturnType<typeof getMemorySearchManager>>["manager"] = null;
     try {
       const result = await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
         cfg: fixture.createConfig({
           cacheEnabled: true,
           sources: ["memory", "sessions"],
@@ -104,7 +106,12 @@ describe("memory index schema admission", () => {
     await manager.close();
     const { db } = openOpenClawAgentDatabase({ agentId: "main" });
     db.exec("ALTER TABLE memory_index_sources ADD COLUMN unexpected TEXT");
-    const result = await getMemorySearchManager({ cfg, agentId: "main", purpose: "cli" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+      purpose: "cli",
+    });
     expect(result.manager).toBeNull();
     expect(result.error).toContain("canonical memory source identity schema is invalid");
     expect(db.prepare("SELECT name FROM pragma_table_info('memory_index_sources')").all()).toEqual(

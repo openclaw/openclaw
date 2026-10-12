@@ -136,26 +136,13 @@ export function createFaceTimeCallControl(params: {
       call.carrierHangupRetryTimer = undefined;
     }
     call.beginClosing();
-    await call.audioRouting?.catch((error: unknown) => {
-      params.logger.debug?.(
-        `[facetime] audio routing cancellation for active call: ${formatErrorMessage(error)}`,
-      );
-    });
-    await call.talkStarting?.catch((error: unknown) => {
-      params.logger.debug?.(
-        `[facetime] talk startup cancellation for active call: ${formatErrorMessage(error)}`,
-      );
-    });
-    await call.talk?.close(reason).catch((error: unknown) => {
-      params.logger.debug?.(
-        `[facetime] talk close ignored for active call: ${formatErrorMessage(error)}`,
-      );
-    });
-    await call.talkActivation?.catch((error: unknown) => {
-      params.logger.debug?.(
-        `[facetime] talk activation cancellation for active call: ${formatErrorMessage(error)}`,
-      );
-    });
+    const logCleanupFailure = (stage: string) => (error: unknown) => {
+      params.logger.debug?.(`[facetime] ${stage} for active call: ${formatErrorMessage(error)}`);
+    };
+    await call.audioRouting?.catch(logCleanupFailure("audio routing cancellation"));
+    await call.talkStarting?.catch(logCleanupFailure("talk startup cancellation"));
+    await call.talk?.close(reason).catch(logCleanupFailure("talk close ignored"));
+    await call.talkActivation?.catch(logCleanupFailure("talk activation cancellation"));
     call.audioReady = false;
     call.audioTransport = undefined;
     params.calls.close(call);
@@ -196,34 +183,22 @@ export function createFaceTimeCallControl(params: {
             return undefined;
           }
         };
-        try {
-          const muted = await runCarrierActionAcrossAliases({
-            call,
-            generation,
-            action: "safe-mute",
-            run: async (callUUID) => await params.helper.safetyMute(callUUID),
-          });
-          retainHelperResultPeers(call, muted);
-        } catch (error) {
-          if (readCompleteAbsenceGeneration(error) === undefined) {
-            params.logger.warn(
-              `[facetime] failed to confirm carrier safety mute: ${formatErrorMessage(error)}`,
-            );
-          }
-        }
-        try {
-          const leave = await runCarrierActionAcrossAliases({
-            call,
-            generation,
-            action: "terminate",
-            run: async (callUUID) => await params.helper.leaveCall(callUUID),
-          });
-          retainHelperResultPeers(call, leave);
-        } catch (error) {
-          if (readCompleteAbsenceGeneration(error) === undefined) {
-            params.logger.warn(
-              `[facetime] carrier termination request failed: ${formatErrorMessage(error)}`,
-            );
+        for (const [action, method, failure] of [
+          ["safe-mute", "safetyMute", "failed to confirm carrier safety mute"],
+          ["terminate", "leaveCall", "carrier termination request failed"],
+        ] as const) {
+          try {
+            const result = await runCarrierActionAcrossAliases({
+              call,
+              generation,
+              action,
+              run: async (callUUID) => await params.helper[method](callUUID),
+            });
+            retainHelperResultPeers(call, result);
+          } catch (error) {
+            if (readCompleteAbsenceGeneration(error) === undefined) {
+              params.logger.warn(`[facetime] ${failure}: ${formatErrorMessage(error)}`);
+            }
           }
         }
         // Action replies cover connected helpers only. Closure also requires

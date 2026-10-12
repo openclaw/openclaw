@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import type { OpenClawConfig, SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -99,6 +100,30 @@ afterEach(async () => {
 afterAll(disposeSlackTestRuntime);
 
 describe("auth.test boot call", () => {
+  it("hands Socket Mode a dispatcher from its own undici copy", async () => {
+    for (const key of PROXY_ENV_KEYS) {
+      vi.stubEnv(key, undefined);
+    }
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.example.com:3128");
+    const requireFromTest = createRequire(import.meta.url);
+    const requireFromBolt = createRequire(requireFromTest.resolve("@slack/bolt/package.json"));
+    const requireFromSocketMode = createRequire(
+      requireFromBolt.resolve("@slack/socket-mode/package.json"),
+    );
+    const { EnvHttpProxyAgent } = requireFromSocketMode(
+      "undici/index.js",
+    ) as typeof import("undici");
+    const monitor = startSlackMonitor(monitorSlackProvider);
+    try {
+      await getSlackHandlerOrThrow("message");
+      expect(getSlackTestState().socketModeReceiverArgs?.dispatcher).toBeInstanceOf(
+        EnvHttpProxyAgent,
+      );
+    } finally {
+      await stopSlackMonitor(monitor);
+    }
+  });
+
   it("omits the empty body on the shipped Socket Mode startup path", async () => {
     for (const key of PROXY_ENV_KEYS) {
       vi.stubEnv(key, "");

@@ -22,7 +22,7 @@ export function tryHandleRootVersionFastPath(argv: string[]): boolean {
     } catch {
       process.stderr.write(message);
     } finally {
-      process.exit(1);
+      process.exitCode = 1;
     }
   };
 
@@ -30,7 +30,7 @@ export function tryHandleRootVersionFastPath(argv: string[]): boolean {
     .then(([{ VERSION }, { resolveCommitHash }]) => {
       const commit = resolveCommitHash({ moduleUrl: import.meta.url });
       console.log(commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`);
-      process.exit(0);
+      process.exitCode = 0;
     })
     .catch(onError);
   return true;

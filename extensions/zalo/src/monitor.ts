@@ -607,21 +607,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
         return { to: chatId };
       },
       deliver: async (payload) => {
-        await deliverZaloReply({
-          payload,
-          token,
-          chatId,
-          core,
-          config,
-          webhookUrl: params.webhookUrl,
-          webhookPath: params.webhookPath,
-          proxyUrl: account.config.proxy,
-          mediaMaxBytes: params.mediaMaxMb * 1024 * 1024,
-          canHostMedia: params.canHostMedia,
-          accountId: account.accountId,
-          statusSink,
-          fetcher,
-        });
+        await deliverZaloReply(payload, chatId, params);
       },
       onDelivered: (_payload, _info, result) => {
         if (result?.visibleReplySent !== false) {
@@ -644,36 +630,25 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   });
 }
 
-async function deliverZaloReply(params: {
-  payload: OutboundReplyPayload;
-  token: string;
-  chatId: string;
-  core: ZaloCoreRuntime;
-  config: OpenClawConfig;
-  webhookUrl?: string;
-  webhookPath?: string;
-  proxyUrl?: string;
-  mediaMaxBytes: number;
-  canHostMedia: boolean;
-  accountId?: string;
-  statusSink?: ZaloStatusSink;
-  fetcher?: ZaloFetch;
-}): Promise<void> {
+async function deliverZaloReply(
+  payload: OutboundReplyPayload,
+  chatId: string,
+  context: ZaloProcessingContext,
+): Promise<void> {
   const {
-    payload,
     token,
-    chatId,
     core,
     config,
     webhookUrl,
     webhookPath,
-    proxyUrl,
-    mediaMaxBytes,
     canHostMedia,
-    accountId,
+    account,
     statusSink,
     fetcher,
-  } = params;
+  } = context;
+  const proxyUrl = account.config.proxy;
+  const mediaMaxBytes = context.mediaMaxMb * 1024 * 1024;
+  const accountId = account.accountId;
   const reply = resolveSendableOutboundReplyParts(payload);
   const chunkMode = core.channel.text.resolveChunkMode(config, "zalo", accountId);
   const acceptedMessageIds: string[] = [];
@@ -807,6 +782,20 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     `[${account.accountId}] Zalo provider init mode=${mode} mediaMaxMb=${String(effectiveMediaMaxMb)}`,
   );
 
+  const processingContext: ZaloProcessingContext = {
+    token,
+    account,
+    config,
+    runtime,
+    core,
+    mediaMaxMb: effectiveMediaMaxMb,
+    canHostMedia,
+    webhookUrl: effectiveWebhookUrl,
+    webhookPath: effectiveWebhookPath,
+    statusSink,
+    fetcher,
+  };
+
   try {
     if (hostedMediaRoutePath) {
       const unregisterHostedMediaRoute = registerSharedHostedMediaRoute({
@@ -846,18 +835,8 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         deliver: async (update, turnAdoptionLifecycle) => {
           statusSink?.({ lastInboundAt: Date.now() });
           await processUpdate({
+            ...processingContext,
             update,
-            token,
-            account,
-            config,
-            runtime,
-            core,
-            mediaMaxMb: effectiveMediaMaxMb,
-            canHostMedia,
-            webhookUrl: effectiveWebhookUrl,
-            webhookPath: path,
-            statusSink,
-            fetcher,
             turnAdoptionLifecycle,
           });
         },
@@ -946,19 +925,9 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     }
 
     startPollingLoop({
-      token,
-      account,
-      config,
-      runtime,
-      core,
-      canHostMedia,
-      webhookUrl: effectiveWebhookUrl,
-      webhookPath: effectiveWebhookPath,
+      ...processingContext,
       abortSignal,
       isStopped: () => stopped,
-      mediaMaxMb: effectiveMediaMaxMb,
-      statusSink,
-      fetcher,
     });
 
     await waitForAbortSignal(abortSignal);

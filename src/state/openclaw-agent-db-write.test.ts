@@ -14,10 +14,10 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "./openclaw-agent-write-admission-state.js";
 import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
-  SQLITE_SESSION_WRITER_QUEUES,
 } from "./openclaw-agent-write-admission.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

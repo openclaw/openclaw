@@ -14,6 +14,7 @@ import {
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { prepareModelVisibleToolTextBlock } from "../../logging/redact.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -21,6 +22,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
+import { sessionManagerReadMessageAnchor } from "./session-manager-message-anchor.js";
 import * as metadataRuntime from "./session-manager-metadata-runtime.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -571,6 +573,8 @@ it("revalidates overtaken keyed replays while retaining fresh committed pending 
     });
     expect(pending.state).toBe("consumed");
     expect(manager.getLeafEntry()).toMatchObject({ id: newerId, parentId: pending.inputId });
+    expect(manager[sessionManagerReadMessageAnchor](newerId)).toMatchObject({ entryId: newerId });
+    expect(manager[sessionManagerReadMessageAnchor](committed.entryId)).toBeUndefined();
     expect(await loadTranscriptEvents(target)).toEqual(manager.getPersistedEntries());
   } finally {
     pending.finish("interrupted");
@@ -590,20 +594,15 @@ it("fences local navigation changes at worker commit and receipt publication", a
   const before = await loadTranscriptEvents(target);
   for (const change of ["branch", "branch-back"] as const) {
     manager.branch(tail);
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const admission = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            manager.branch(seed);
-            if (change === "branch-back") {
-              manager.branch(tail);
-            }
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        manager.branch(seed);
+        if (change === "branch-back") {
+          manager.branch(tail);
+        }
+      }
+      admit(request, grant);
+    });
     try {
       await expect(manager.appendMessageAsync(user(`refused-${change}`))).rejects.toThrow(
         "Session transcript navigation changed before publication",
@@ -735,17 +734,12 @@ it("rolls back worker promotion when pending authority retires at commit", async
     "Expected pending input custody",
   );
   const before = await loadTranscriptEvents(target);
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const admission = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          current = false;
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      current = false;
+    }
+    admit(request, grant);
+  });
   try {
     await expect(receipt.run(() => manager.appendMessageAsync(receipt.message))).rejects.toThrow(
       "Pending owner retired at commit",
