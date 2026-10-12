@@ -267,8 +267,10 @@ suite.define(() => {
           const selected = page.getByRole("radio", { name: scenario.selected, exact: true });
           const unselected = page.getByRole("radio", { name: scenario.unselected, exact: true });
           await selected.waitFor();
-          expect(await selected.getAttribute("aria-checked")).toBe("true");
-          expect(await unselected.getAttribute("aria-checked")).toBe("false");
+          expect(await selected.isChecked()).toBe(true);
+          expect(await unselected.isChecked()).toBe(false);
+          const selectedLabel = selected.locator("..");
+          const unselectedLabel = unselected.locator("..");
           if (captureUiProofEnabled) {
             await selected
               .locator(
@@ -283,7 +285,7 @@ suite.define(() => {
               });
           }
           expect(
-            await selected.evaluate((element) => {
+            await selectedLabel.evaluate((element) => {
               const style = getComputedStyle(element);
               return {
                 textDecorationLine: style.textDecorationLine,
@@ -292,7 +294,9 @@ suite.define(() => {
             }),
           ).toEqual({ textDecorationLine: "underline", textDecorationThickness: "2px" });
           expect(
-            await unselected.evaluate((element) => getComputedStyle(element).textDecorationLine),
+            await unselectedLabel.evaluate(
+              (element) => getComputedStyle(element).textDecorationLine,
+            ),
           ).toBe("none");
 
           await selected.focus();
@@ -300,7 +304,7 @@ suite.define(() => {
             true,
           );
           expect(
-            await selected.evaluate((element) => {
+            await selectedLabel.evaluate((element) => {
               const style = getComputedStyle(element);
               return {
                 outlineOffset: style.outlineOffset,
@@ -351,13 +355,12 @@ suite.define(() => {
           exact: true,
         });
         await browserSwitchRole.waitFor();
-        expect(await browserSwitchRole.getAttribute("aria-checked")).toBe("true");
-        const browserSwitch = overview.locator("wa-switch.settings-toggle").first();
+        expect(await browserSwitchRole.isChecked()).toBe(true);
+        const browserSwitchControl = browserSwitchRole.locator("+ .settings-toggle__control");
         expect(
-          await browserSwitch.evaluate((element) => {
-            const control = element.shadowRoot?.querySelector<HTMLElement>('[part="control"]');
-            return control ? getComputedStyle(control).backgroundColor : null;
-          }),
+          await browserSwitchControl.evaluate(
+            (element) => getComputedStyle(element).backgroundColor,
+          ),
         ).toBe(await resolvedBackground(page, "var(--accent)"));
 
         if (captureUiProofEnabled) {
@@ -374,8 +377,8 @@ suite.define(() => {
             });
         }
 
-        await browserSwitch.click();
-        await expect.poll(() => browserSwitchRole.getAttribute("aria-checked")).toBe("false");
+        await browserSwitchRole.click();
+        await expect.poll(() => browserSwitchRole.isChecked()).toBe(false);
       },
     );
   });
@@ -516,20 +519,17 @@ suite.define(() => {
             name: "Open links in Control UI browser",
             exact: true,
           });
-          const preferenceHost = section
-            .locator(".settings-row", { hasText: "Open links in Control UI browser" })
-            .locator("wa-switch");
           await preference.waitFor();
-          expect(await preference.getAttribute("aria-checked")).toBe("false");
-          await preferenceHost.click();
-          await expect.poll(() => preference.getAttribute("aria-checked")).toBe("true");
+          expect(await preference.isChecked()).toBe(false);
+          await preference.click();
+          await expect.poll(() => preference.isChecked()).toBe(true);
           await page.reload();
           const persistedPreference = page.getByRole("switch", {
             name: "Open links in Control UI browser",
             exact: true,
           });
           await persistedPreference.waitFor();
-          expect(await persistedPreference.getAttribute("aria-checked")).toBe("true");
+          expect(await persistedPreference.isChecked()).toBe(true);
 
           if (host === "browser") {
             await captureBrowserSettingProof(

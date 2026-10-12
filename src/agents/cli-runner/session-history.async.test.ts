@@ -167,10 +167,16 @@ it.each(["schema", "owner"] as const)(
         new DatabaseSync(target.storePath).close();
       } else {
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-        openOpenClawAgentDatabase({ agentId: "main", path: target.storePath }).db.exec(
-          "UPDATE schema_meta SET agent_id = 'different' WHERE meta_key = 'primary'",
-        );
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+        fs.renameSync(target.storePath, `${target.storePath}.template`);
+        fs.copyFileSync(
+          `${target.storePath}.template`,
+          target.storePath,
+          fs.constants.COPYFILE_EXCL,
+        );
+        const database = new DatabaseSync(target.storePath);
+        database.exec("UPDATE schema_meta SET agent_id = 'different' WHERE meta_key = 'primary'");
+        database.close();
       }
       await expect(
         loadCliSessionContextEngineMessages({ sessionTarget: target }),

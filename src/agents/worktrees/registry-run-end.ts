@@ -8,6 +8,10 @@ import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
+import {
+  readWorktreeRegistryWorkerReceipt,
+  withWorktreeRegistryPublication,
+} from "./registry-publication.js";
 import type {
   WorktreeRemovalRowInput,
   WorktreeRemovalFinalization,
@@ -180,7 +184,7 @@ export function runWorktreeRunEndCommand(
           {
             signal: authority.signal,
             assertCurrent: leases?.assertCurrent ?? assertCurrent,
-            createAdmission(operation) {
+            createAdmission: withWorktreeRegistryPublication((operation) => {
               settled = operation.settled;
               const result = leases
                 ? leases.createAdmission(operation)
@@ -199,7 +203,7 @@ export function runWorktreeRunEndCommand(
                 }
               });
               return result;
-            },
+            }, context),
           },
         );
       } catch (error) {
@@ -219,7 +223,11 @@ export function runWorktreeRunEndCommand(
       // The native receipt acknowledges this exact write without replaying a lost reply.
       if (
         failure &&
-        !(outcome?.kind === "completed" && admission?.committed?.facts === captured.input.receipt)
+        !(
+          outcome?.kind === "completed" &&
+          readWorktreeRegistryWorkerReceipt(admission?.committed?.facts)?.receipt ===
+            captured.input.receipt
+        )
       ) {
         throw failure.error;
       }

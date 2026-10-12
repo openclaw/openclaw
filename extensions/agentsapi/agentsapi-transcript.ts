@@ -1,3 +1,4 @@
+import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import {
   createAgentHarnessToolCallMessage,
   createAgentHarnessToolResultMessage,
@@ -11,6 +12,7 @@ import type { NativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-ha
 import {
   appendSessionTranscriptMessageByIdentityStrict,
   publishSessionTranscriptUpdateByIdentity,
+  withSessionTranscriptWrite,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AgentsApiFunctionCall, AgentsApiItem } from "./agentsapi-client.js";
@@ -78,6 +80,7 @@ export async function recordAgentsApiNativeToolTranscript(
     enclosingStatus?: string;
     capturedOutput?: string;
     captureTruncated?: boolean;
+    historical?: boolean;
   } = {},
 ): Promise<boolean> {
   await assertTranscriptCurrent(assertCurrent);
@@ -109,6 +112,7 @@ export async function recordAgentsApiNativeToolTranscript(
     item,
     assertCurrent,
     nextTimestamp,
+    options.historical,
   );
   await appendAgentsApiTranscriptMessage(
     params,
@@ -129,6 +133,8 @@ export async function recordAgentsApiNativeToolTranscript(
       idempotencyKey: `${id}:result`,
     },
     assertCurrent,
+    undefined,
+    options.historical,
   );
   return true;
 }
@@ -141,6 +147,7 @@ export async function recordAgentsApiNativeToolInvocation(
   item: AgentsApiItem,
   assertCurrent: () => void,
   nextTimestamp: () => number,
+  historical = false,
 ): Promise<boolean> {
   await assertTranscriptCurrent(assertCurrent);
   const tool = agentsApiNativeTool(item, params);
@@ -159,6 +166,8 @@ export async function recordAgentsApiNativeToolInvocation(
       idempotencyKey: `${id}:call`,
     },
     assertCurrent,
+    undefined,
+    historical,
   );
   return true;
 }
@@ -207,14 +216,39 @@ export async function appendAgentsApiTranscriptMessage<TMessage extends AgentMes
   message: TMessage,
   assertCurrent: TranscriptAssertion,
   assistantItemIds?: readonly string[],
+  historical = false,
 ): Promise<TMessage> {
   await assertTranscriptCurrent(assertCurrent);
   const target = requireAgentsApiSessionTarget(params);
+  // A native item can outlive its submitting OpenClaw run. Retain the stored
+  // attribution while the writer still compares every other canonical field.
+  let runId: string | undefined = historical ? undefined : params.runId;
+  let attributedMessage = message;
+  const idempotencyKey = asOptionalRecord(message)?.idempotencyKey;
+  if (typeof idempotencyKey === "string") {
+    const facts = await withSessionTranscriptWrite(target, (transcript) =>
+      transcript.readMessageFacts({ idempotencyKeys: [idempotencyKey] }),
+    );
+    await assertTranscriptCurrent(assertCurrent);
+    if (facts.existingIdempotencyKeys.has(idempotencyKey)) {
+      const stored = asOptionalRecord(facts.messagesByIdempotencyKey.get(idempotencyKey));
+      const storedRunId = asOptionalRecord(stored?.["__openclaw"])?.runId;
+      runId = typeof storedRunId === "string" ? storedRunId : undefined;
+      const metadata = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+      if (metadata) {
+        const { runId: _currentRunId, ...retained } = metadata;
+        attributedMessage = {
+          ...message,
+          __openclaw: { ...retained, ...(runId ? { runId } : {}) },
+        };
+      }
+    }
+  }
   const append = await appendSessionTranscriptMessageByIdentityStrict({
     ...target,
     config: params.config,
-    runId: params.runId,
-    message,
+    runId,
+    message: attributedMessage,
     preparation: { source: assertCurrent },
   });
   await assertTranscriptCurrent(assertCurrent);
@@ -371,4 +405,31 @@ export function joinTextParts(parts: Map<number, string>): string {
     .toSorted(([left], [right]) => left - right)
     .map(([, text]) => text)
     .join("");
+}
+
+/** Historical items keep their native identity without acquiring the current run's attribution. */
+export async function recordAgentsApiNativeHistory(
+  params: AgentHarnessAttemptParamsV2,
+  nativeSessionId: string,
+  entries: Array<{ turn: Turn; items: AgentsApiItem[] }>,
+  assertCurrent: () => void,
+): Promise<void> {
+  for (const { turn, items } of entries) {
+    for (const item of items) {
+      assertCurrent();
+      await recordAgentsApiNativeToolTranscript(
+        params,
+        nativeSessionId,
+        turn.id,
+        item,
+        assertCurrent,
+        Date.now,
+        {
+          enclosingStatus: turn.status,
+          historical: true,
+        },
+      );
+      assertCurrent();
+    }
+  }
 }

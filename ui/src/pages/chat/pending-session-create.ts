@@ -11,6 +11,7 @@ import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderCreationComposer } from "../new-session/creation-composer-render.ts";
 import { renderNewSessionBody } from "../new-session/draft-body.ts";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
@@ -20,7 +21,7 @@ import { buildLocalUserMessage } from "./user-message-content.ts";
 
 registerNewSessionSetupEnglish();
 
-/** Admission preview owns display only; real pane controllers mount after acceptance. */
+/** Draft-owned input stays local; real pane controllers mount after acceptance. */
 class PendingSessionCreate extends OpenClawLightDomElement {
   @property({ attribute: false }) context!: ApplicationContext;
   @property() sessionKey = "";
@@ -37,6 +38,10 @@ class PendingSessionCreate extends OpenClawLightDomElement {
     .watch(
       () => this.context?.chatSubmissions,
       (submissions, notify) => submissions.subscribeCreate(this.closeImageBefore(notify)),
+    )
+    .watch(
+      () => this.context?.chatSubmissions.readCreateComposer(this.sessionKey),
+      (composer, notify) => composer.subscribe(notify),
     )
     .watchStore(() => this.context?.placementStartup);
   private readonly closeImage = () => {
@@ -89,6 +94,7 @@ class PendingSessionCreate extends OpenClawLightDomElement {
           "available",
         )
       : this.context.chatSubmissions.readCreateMessage(this.sessionKey);
+    const composer = this.context.chatSubmissions.readCreateComposer(this.sessionKey);
     const agentId = parseAgentSessionKey(this.sessionKey)?.agentId ?? "";
     const agent = this.context.agents.state.agentsList?.agents.find(
       (entry) => entry.id === agentId,
@@ -171,27 +177,34 @@ class PendingSessionCreate extends OpenClawLightDomElement {
                 },
               })}
               <div class="chat-footer">
-                ${renderChatComposer({
-                  paneId: this.composerId,
-                  sessionKey: this.sessionKey,
-                  currentAgentId: agentId,
-                  assistantName: agent?.identity?.name ?? agent?.name ?? agentId,
-                  connected: snapshot.phase === "connected",
-                  canSend: false,
-                  sessionAdmitted: false,
-                  disabledReason: null,
-                  sending: submitting,
-                  messages: [],
-                  stream: null,
-                  queue: [],
-                  draft: "",
-                  modelCatalog: [],
-                  modelSwitching: false,
-                  sessions: null,
-                  onDraftChange: noAction,
-                  onSend: noAction,
-                  onQueueRemove: noAction,
-                })}
+                ${
+                  composer?.canDisplay()
+                    ? renderCreationComposer(composer, (item) => {
+                        this.closeImage();
+                        this.image = item;
+                      })
+                    : renderChatComposer({
+                        paneId: this.composerId,
+                        sessionKey: this.sessionKey,
+                        currentAgentId: agentId,
+                        assistantName: agent?.identity?.name ?? agent?.name ?? agentId,
+                        connected: snapshot.phase === "connected",
+                        canSend: false,
+                        sessionAdmitted: false,
+                        disabledReason: null,
+                        sending: submitting,
+                        messages: [],
+                        stream: null,
+                        queue: [],
+                        draft: "",
+                        modelCatalog: [],
+                        modelSwitching: false,
+                        sessions: null,
+                        onDraftChange: noAction,
+                        onSend: noAction,
+                        onQueueRemove: noAction,
+                      })
+                }
               </div>
             </div>
           </div>

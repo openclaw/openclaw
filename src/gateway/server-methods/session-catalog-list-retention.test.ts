@@ -97,7 +97,7 @@ it("expires delivery without releasing native work that ignores cancellation", a
   const before = getActiveGatewayRootWorkCount();
   const root = tryBeginGatewayRootWorkAdmission("catalog-delivery-deadline");
   const owner = new GatewayConnectionWork();
-  const lifetime = new SessionCatalogListLifetime(() => true, [], ["fixture"]);
+  const lifetime = new SessionCatalogListLifetime([], ["fixture"]);
   const release = createDeferredCore();
   let signal: AbortSignal | undefined;
   try {
@@ -139,9 +139,7 @@ it("caps pending provider keys and refuses late pages from evicted operations", 
   };
   const page = { catalogs: [catalog], instancesByCatalog: new Map([[catalog.id, new Map()]]) };
   const releases = Array.from({ length: 129 }, () => createDeferredCore<typeof page>());
-  const lifetimes = releases.map(
-    () => new SessionCatalogListLifetime(() => true, [], [catalog.id]),
-  );
+  const lifetimes = releases.map(() => new SessionCatalogListLifetime([], [catalog.id]));
   const lists = releases.map((release, index) =>
     listSessionCatalogWithinBudget(
       operations,

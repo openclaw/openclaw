@@ -35,6 +35,7 @@ export function githubPreviewView(preview: ControlUiGitHubPreview): ControlUiLin
           ? { label: "Closed", tone: "accent" }
           : { label: "Closed", tone: "negative" };
   return {
+    ...(preview.stale ? { stale: true } : {}),
     url: githubTargetUrl(preview),
     title: preview.title,
     subtitle: preview.owner + "/" + preview.repo + " #" + preview.number,

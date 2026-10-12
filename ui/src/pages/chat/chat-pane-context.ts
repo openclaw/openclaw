@@ -30,6 +30,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
+import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
 import {
   getChatHistoryLoadState,
   synchronizeInitialChatSnapshotConnection,
@@ -47,6 +48,7 @@ import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   refreshChatModelAuthStatus,
+  readChatRequiredWorkerInferenceProfileId,
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
@@ -60,13 +62,35 @@ import {
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
 import { cancelChatScroll } from "./scroll.ts";
-import { clearChatMessagesFromCache } from "./session-message-cache.ts";
+import { clearChatMessagesFromCache, readChatSessionSnapshot } from "./session-message-cache.ts";
 import { migrateLegacyDockVisibility } from "./sidebar-layout-legacy-migration.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
 import { maybeResetToolStream } from "./stream-reconciliation.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
+  protected transcriptSessionProps(selectedSession: GatewaySessionRow | undefined) {
+    const state = this.state;
+    if (!state || parseCatalogSessionKey(state.sessionKey)) {
+      return { selectedSession: undefined };
+    }
+    if (
+      !this.ownsChatSnapshot({ sessionKey: state.sessionKey }) ||
+      this.resourceSessionObservation()?.hasObserved ||
+      (selectedSession && !state.sessions.state.resultCached)
+    ) {
+      return { selectedSession };
+    }
+    const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, {
+      sessionKey: state.sessionKey,
+    });
+    return {
+      selectedSession,
+      transcriptMetadata:
+        snapshot?.sessionId === state.currentSessionId ? snapshot?.transcriptMetadata : undefined,
+    };
+  }
+
   private sessionPresentationKey: string | undefined;
   private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
   private outboxRecoveryReady = false;
@@ -85,20 +109,22 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
 
   constructor() {
     super();
-    void new SubscriptionsController(this).effect(
-      () => this.context?.gateway,
-      (gateway) =>
-        gateway.subscribeEvents((event) => {
-          const state = this.state;
-          if (!state || !modelAuthEventInvalidates(event)) {
-            return;
-          }
-          state.modelAuthStatusResult = null;
-          state.modelAuthStatusError = null;
-          this.requestUpdate();
-          void refreshChatModelAuthStatus(state).finally(() => this.requestUpdate());
-        }),
-    );
+    void new SubscriptionsController(this)
+      .watchStore(() => this.context?.navigation)
+      .effect(
+        () => this.context?.gateway,
+        (gateway) =>
+          gateway.subscribeEvents((event) => {
+            const state = this.state;
+            if (!state || !modelAuthEventInvalidates(event)) {
+              return;
+            }
+            state.modelAuthStatusResult = null;
+            state.modelAuthStatusError = null;
+            this.requestUpdate();
+            void refreshChatModelAuthStatus(state).finally(() => this.requestUpdate());
+          }),
+      );
   }
 
   protected placementComposerPresentation(
@@ -112,6 +138,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       restartingKey: this.headerPlacementRestartingKey,
       row,
       startupPending,
+      requiredWorkerInferenceProfileId: this.state
+        ? readChatRequiredWorkerInferenceProfileId(this.state)
+        : undefined,
       workspaceResultReconciling:
         (row?.placement?.state === "active" || row?.placement?.state === "draining") &&
         row.placement.workspaceResultReconciling === true,
@@ -216,6 +245,14 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     this.refreshSwarmRoster();
     const selectedSession = selectedChatSessionRow(state);
+    if (
+      (!stateValue.resultCached || this.resourceSessionObservation()?.hasObserved) &&
+      selectedSession?.sessionId &&
+      selectedSession.sessionId === state.currentSessionId &&
+      this.ownsChatSnapshot({ sessionKey: state.sessionKey })
+    ) {
+      commitCurrentChatHistorySnapshot(state, undefined, selectedSession);
+    }
     const outboxState = selectedSession
       ? JSON.stringify([
           state.sessionKey,
@@ -441,7 +478,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         // Gateway uses the same session key. Never bind its offline Stop to them.
         reconcileChatRunLifecycle(state, {
           clearLocalRun: true,
-          clearChatStream: true,
           clearToolStream: true,
           clearRunStatus: true,
           requestUpdate: false,
@@ -492,9 +528,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (readsResumed && !sourceChanged && this.presented) {
       this.markSessionRead(selectedChatSessionRow(state));
     }
-    if (wasConnected && !state.connected) {
-      // Only the connected->disconnected transition may reshape loading state;
-      // repeated disconnected snapshots must stay no-ops for pane ownership.
+    if (!state.connected && (wasConnected || sourceChanged)) {
+      // The first client can arrive after startup is already waiting for it.
+      // Preserve that loading intent; repeated disconnected snapshots stay no-ops.
       state.chatLoading = getChatHistoryLoadState(state).phase === "pending-connection";
     }
     const resumedHistory =

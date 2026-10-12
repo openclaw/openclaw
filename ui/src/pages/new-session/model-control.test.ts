@@ -383,28 +383,39 @@ describe("configured defaults", () => {
       control.reset();
     });
 
-    it("restores a deliberate same-route draft choice after agent/config hydration", async () => {
-      const { context } = setupDefaults();
-      const control = new NewSessionModelControl(() => undefined);
-      control.restoreDraftSelection({
-        agentId: "main",
-        model: "openai/other-model",
-        thinkingLevel: "low",
-      });
-      control.load(context, "main", true, {
-        agent,
-        preference,
-        initialModel: "openai/default-model",
-      });
-      await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
-      expect(control.selected).toBe("openai/other-model");
-      expect(control.thinkingLevel).toBe("low");
-      expect(control.draftSelection("main")).toMatchObject({
-        model: "openai/other-model",
-        thinkingLevel: "low",
-      });
-      control.reset();
-    });
+    it.each(["optional", "required", "required-after-hydration"])(
+      "restores a deliberate same-route draft choice after %s hydration",
+      async (placement) => {
+        const { context } = setupDefaults();
+        const control = new NewSessionModelControl(() => undefined);
+        control.restoreDraftSelection({
+          agentId: "main",
+          model: "openai/other-model",
+          thinkingLevel: "low",
+        });
+        control.load(context, "main", true, {
+          agent,
+          preference,
+          initialModel: "openai/default-model",
+          configuredDefaults: placement === "required",
+        });
+        await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
+        expect(control.selected).toBe("openai/other-model");
+        expect(control.thinkingLevel).toBe("low");
+        expect(control.draftSelection("main")).toMatchObject({
+          model: "openai/other-model",
+          thinkingLevel: "low",
+        });
+        control.load(context, "main", true, {
+          agent,
+          preference,
+          configuredDefaults: placement !== "optional",
+        });
+        expect(control.selected).toBe("openai/other-model");
+        expect(control.thinkingLevel).toBe("low");
+        control.reset();
+      },
+    );
 
     it("hydrates late Fast Mode preferences independently of a restored model", async () => {
       const { context, request } = setupDefaults();
@@ -553,11 +564,13 @@ it.each(["blue", "red"])(
     ]);
     const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
-    await waitForFast(() =>
+    await waitForFast(() => {
+      const container = renderControl(control, context);
       expect(
-        renderControl(control, context).querySelector('[data-chat-speed-option="on"]'),
-      ).not.toBeNull(),
-    );
+        container.querySelector('[data-chat-model-option="openai/' + id + '"]'),
+      ).not.toBeNull();
+      expect(container.querySelector('[data-chat-speed-option="on"]')).not.toBeNull();
+    });
     renderControl(control, context)
       .querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!
       .click();
@@ -712,7 +725,7 @@ describe("runtime choices", () => {
       }
     });
 
-    it("drops a saved runtime that is no longer offered instead of running it through the base harness", async () => {
+    it("blocks a saved runtime that is no longer offered instead of silently selecting the default", async () => {
       const { runtimeChoices: _choices, ...base } = models[0]!;
       const { context } = contextWith([base]);
       const changed = vi.fn();
@@ -723,10 +736,11 @@ describe("runtime choices", () => {
       });
       try {
         await vi.waitFor(() =>
-          expect(changed).toHaveBeenCalledWith({ model: "", agentRuntime: "", thinkingLevel: "" }),
+          expect(control.modelSelectionBlockedReason(agent)).toBe("Models unavailable"),
         );
-        expect(control.agentRuntime).toBeUndefined();
-        expect(control.modelForSubmission()).toBe("");
+        expect(control.agentRuntime).toBe("codex");
+        expect(control.modelForSubmission()).toBe("openai/gpt-5.6-sol");
+        expect(changed).not.toHaveBeenCalled();
       } finally {
         control.reset();
       }

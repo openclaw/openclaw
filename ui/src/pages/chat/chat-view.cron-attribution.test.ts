@@ -3,8 +3,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { createChatProps } from "./chat-view.test-helpers.ts";
+import { createChatProps, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
 import {
   installTranscriptDomMocks,
@@ -14,7 +15,7 @@ import {
 beforeEach(installTranscriptDomMocks);
 
 function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]>) {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   const props = createChatProps(overrides);
   onTestFinished(async () => {
     await vi.dynamicImportSettled();
@@ -23,7 +24,7 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]>) {
     resetChatViewState();
     resetTranscriptTestDom();
   });
-  render(renderChat(props), container);
+  renderChatPropsInto(container, props);
   return container;
 }
 

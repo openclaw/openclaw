@@ -1,17 +1,28 @@
+import {
+  captureIncognitoSessionBinding,
+  withIncognitoSessionBinding,
+} from "../config/sessions/session-incognito-binding.js";
 import { captureOperatorToolGatewayContinuationContext } from "../gateway/server-plugin-in-process-dispatch.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   getCanonicalGatewayContextResolver,
   getGatewayContextResolver,
+  getInProcessGatewayRequestContext,
   withPluginRuntimeGatewayContextResolver,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuationScope } from "../process/gateway-work-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   assertAgentHarnessCompletionScope,
   type AgentHarnessCompletionScope,
 } from "./agent-harness-completion-scope.js";
-import { loadRequesterSessionEntry } from "./subagents/announce/subagent-announce-delivery.js";
+import {
+  captureRequesterSessionEntryCurrent,
+  withSubagentRequesterSource,
+} from "./subagents/announce/subagent-announce-delivery.runtime.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 /** A host-issued hold on one requester's accepted completion work, never arbitrary tools. */
 export type AgentHarnessCompletionCustody = {
@@ -57,28 +68,96 @@ export function captureAgentHarnessCompletionCustody(
   scope: AgentHarnessCompletionScope,
 ): Promise<AgentHarnessCompletionCustody | undefined> {
   assertAgentHarnessCompletionScope(scope);
-  const entry = loadRequesterSessionEntry(scope.requesterSessionKey, scope.requesterAgentId).entry;
-  const expected = { sessionId: entry?.sessionId, lifecycleRevision: entry?.lifecycleRevision };
-  return captureAgentHarnessCompletionCustodyOwner(scope, () => {
-    const current = loadRequesterSessionEntry(
-      scope.requesterSessionKey,
-      scope.requesterAgentId,
-    ).entry;
-    if (
-      current?.sessionId !== expected.sessionId ||
-      current?.lifecycleRevision !== expected.lifecycleRevision
-    ) {
-      throw new Error("Harness completion requester lifecycle was replaced");
-    }
-  });
+  const context = getInProcessGatewayRequestContext(
+    getGatewayToolCallerIdentity()?.gatewayContextResolver ?? getGatewayContextResolver(scope),
+  );
+  if (!context) {
+    return Promise.resolve(undefined);
+  }
+  const root = retainGatewayRootWorkAdmissionContinuationScope();
+  const released = createDeferredCore();
+  const ready = createDeferredCore<AgentHarnessCompletionCustody | undefined>();
+  let handedOff = false;
+  let selectedRequester = false;
+  // The Gateway joins source release after the synchronous custody handoff.
+  const work = context
+    .trackExecution(() =>
+      withSubagentRequesterSource(
+        scope.requesterSessionKey,
+        scope.requesterAgentId,
+        async (isCurrent) => {
+          selectedRequester = isCurrent !== undefined;
+          const readCurrent = captureRequesterSessionEntryCurrent(
+            scope.requesterSessionKey,
+            scope.requesterAgentId,
+          );
+          const entry = readCurrent();
+          const expected = {
+            sessionId: entry?.sessionId,
+            lifecycleRevision: entry?.lifecycleRevision,
+          };
+          if (isCurrent && !entry) {
+            return;
+          }
+          const custody = await captureAgentHarnessCompletionCustodyOwner(
+            scope,
+            () => {
+              const current = readCurrent();
+              if (
+                current?.sessionId !== expected.sessionId ||
+                current?.lifecycleRevision !== expected.lifecycleRevision
+              ) {
+                throw new Error("Harness completion requester lifecycle was replaced");
+              }
+            },
+            () => released.resolve(),
+            root,
+          );
+          if (custody) {
+            handedOff = true;
+            ready.resolve(custody);
+            if (selectedRequester) {
+              await released.promise;
+            }
+          }
+        },
+      ),
+    )
+    .finally(() => {
+      // Native execution custody keeps its root until settleExecution; rejected
+      // admission never enters the callback and must release its unclaimed hold.
+      if (!handedOff || selectedRequester) {
+        root?.release();
+      }
+    });
+  void work.then(
+    () => ready.resolve(undefined),
+    (error: unknown) => {
+      ready.reject(error);
+      if (handedOff) {
+        context.logGateway.warn(
+          `Harness completion requester settlement failed: ${formatErrorMessage(error)}`,
+        );
+      }
+    },
+  );
+  return ready.promise;
 }
 
 /** Capture during admission; assignment/recovery owners retain their own holds before yielding. */
 async function captureAgentHarnessCompletionCustodyOwner(
   scopeInput: AgentHarnessCompletionScope,
   assertRequesterCurrent: () => void,
+  releaseRequester: () => void,
+  root: ReturnType<typeof retainGatewayRootWorkAdmissionContinuationScope>,
 ): Promise<AgentHarnessCompletionCustody | undefined> {
   const scope = assertAgentHarnessCompletionScope(scopeInput);
+  const requesterBinding = captureIncognitoSessionBinding({
+    sessionKey: scope.requesterSessionKey,
+    agentId: scope.requesterAgentId,
+  });
+  const runInRequester = <T>(run: () => T): T =>
+    requesterBinding ? withIncognitoSessionBinding(requesterBinding, run) : run();
   const resolver = getGatewayContextResolver(scope);
   const capture = () =>
     captureOperatorToolGatewayContinuationContext({
@@ -91,7 +170,6 @@ async function captureAgentHarnessCompletionCustodyOwner(
   if (!preparation) {
     return undefined;
   }
-  const root = retainGatewayRootWorkAdmissionContinuationScope();
   const captured = await preparation.catch((error: unknown) => {
     root?.release();
     throw error;
@@ -138,6 +216,7 @@ async function captureAgentHarnessCompletionCustodyOwner(
         settleExecution();
         if (--references === 0) {
           captured.release();
+          releaseRequester();
         }
       },
     };
@@ -146,15 +225,15 @@ async function captureAgentHarnessCompletionCustodyOwner(
       run(run) {
         assertCurrent();
         return !executionSettled && root
-          ? root.runSync(() => captured.run(run))
-          : captured.run(run);
+          ? root.runSync(() => captured.run(() => runInRequester(run)))
+          : captured.run(() => runInRequester(run));
       },
       emit(run) {
         assertCurrent();
         if (executionSettled) {
           throw new Error("Harness execution custody was settled");
         }
-        captured.run(() => (root ? root.runSync(run) : run()));
+        captured.run(() => runInRequester(() => (root ? root.runSync(run) : run())));
       },
     });
     return custody;

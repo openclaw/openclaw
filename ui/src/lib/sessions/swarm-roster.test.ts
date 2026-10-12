@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { childSessionListQuery } from "./child-session-data.ts";
 import type { SessionCapability, SessionListOptions } from "./index.ts";
 import {
   createGatewayHarness,
@@ -310,43 +311,6 @@ describe("SwarmRosterHydrator", () => {
     }
   });
 
-  it("rechecks a parent after an invalidated denial without clearing newer intent", async () => {
-    vi.useFakeTimers();
-    const stale = createDeferred<GatewaySessionRow>();
-    const initial = swarmParent([row(0)]);
-    const current = swarmParent([row(1)]);
-    const readParent = vi
-      .fn()
-      .mockResolvedValueOnce(initial)
-      .mockReturnValueOnce(stale.promise)
-      .mockResolvedValue(current);
-    const sessions = sessionSource(vi.fn(async () => result([], 0, 0)));
-    const hydrator = new SwarmRosterHydrator();
-    try {
-      hydrator.update({
-        sessions,
-        readParent,
-        parentKey: initial.key,
-        sourceEpoch: 1,
-        currentRows: () => [],
-        onRows: () => undefined,
-      });
-      await vi.advanceTimersByTimeAsync(250);
-      sessions.invalidateParent();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(readParent).toHaveBeenCalledTimes(2);
-      sessions.invalidateParent();
-      stale.reject(
-        new GatewayRequestError({ code: "INVALID_REQUEST", message: "Old parent read denied" }),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      expect(readParent).toHaveBeenCalledTimes(3);
-      expect(hydrator.rows).toEqual([current]);
-    } finally {
-      hydrator.dispose();
-    }
-  });
-
   it("queues fresh parent membership when a child-only change overlaps an older describe", async () => {
     vi.useFakeTimers();
     const stale = createDeferred<GatewaySessionRow>();
@@ -515,6 +479,135 @@ describe("SwarmRosterHydrator", () => {
       sessions.invalidateParent();
       await vi.advanceTimersByTimeAsync(0);
       expect(list.mock.calls.length).toBe(reads + 1);
+    } finally {
+      hydrator.dispose();
+    }
+  });
+
+  it.each([0, 1, 2])(
+    "keeps the roster incomplete when a new child is named during a read holding %i children",
+    async (count) => {
+      vi.useFakeTimers();
+      let children = Array.from({ length: count }, (_, index) => row(index));
+      let held = createDeferred();
+      held.resolve();
+      const list = vi.fn(async () => {
+        const answer = result(children, 0, children.length);
+        await held.promise;
+        return answer;
+      });
+      const sessions = sessionSource(list);
+      const hydrator = new SwarmRosterHydrator();
+      const hydration: boolean[] = [];
+      try {
+        hydrator.update({
+          sessions,
+          readParent: async () => ({
+            ...parentRow(),
+            childSessions: children.map((child) => child.key),
+          }),
+          parentKey: parentRow().key,
+          sourceEpoch: 1,
+          currentRows: () => [],
+          onRows: () => hydration.push(hydrator.hydrated && !hydrator.pendingChildRead),
+        });
+        await vi.advanceTimersByTimeAsync(250);
+        expect(hydrator.hydrated).toBe(true);
+
+        const previousRead = createDeferred();
+        held = previousRead;
+        const refresh = sessions.refreshList({
+          ...childSessionListQuery(parentRow().key, 10_000),
+          force: true,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        const reads = list.mock.calls.length;
+
+        children = [...children, row(count)];
+        held = createDeferred();
+        sessions.invalidateParent();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(hydrator.hydrated).toBe(false);
+        expect(list).toHaveBeenCalledTimes(reads);
+
+        hydration.length = 0;
+        previousRead.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(list).toHaveBeenCalledTimes(reads + 1);
+        expect(hydrator.hydrated).toBe(true);
+        expect(hydrator.pendingChildRead).toBe(true);
+        expect(hydration.length).toBeGreaterThan(0);
+        expect(hydration.every((loaded) => !loaded)).toBe(true);
+        expect(hydrator.childrenRead).toBe(true);
+
+        held.resolve();
+        await refresh;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(hydrator.hydrated).toBe(true);
+        expect(hydrator.pendingChildRead).toBe(false);
+        expect(hydrator.rows.map((child) => child.key)).toContain(row(count).key);
+      } finally {
+        hydrator.dispose();
+      }
+    },
+  );
+
+  it("keeps a newer read's retry when older pagination finishes after that read fails", async () => {
+    vi.useFakeTimers();
+    const firstPage = createDeferred<SessionsListResult>();
+    const lastPage = createDeferred<SessionsListResult>();
+    let children = [row(0), row(1)];
+    let firstPageReads = 0;
+    const list = vi.fn(async (options: SessionListOptions = {}) => {
+      if (options.offset === 1) {
+        return lastPage.promise;
+      }
+      firstPageReads += 1;
+      if (firstPageReads === 2) {
+        return firstPage.promise;
+      }
+      if (firstPageReads === 3) {
+        throw new Error("Child list temporarily unavailable");
+      }
+      return result(children, 0, children.length);
+    });
+    const sessions = sessionSource(list);
+    const hydrator = new SwarmRosterHydrator();
+    try {
+      hydrator.update({
+        sessions,
+        readParent: async () => ({
+          ...parentRow(),
+          childSessions: children.map((child) => child.key),
+        }),
+        parentKey: parentRow().key,
+        sourceEpoch: 1,
+        currentRows: () => [],
+        onRows: () => undefined,
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(hydrator.hydrated).toBe(true);
+
+      const refresh = sessions.refreshList({
+        ...childSessionListQuery(parentRow().key, 10_000),
+        force: true,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      children = [...children, row(2)];
+      sessions.invalidateParent();
+      await vi.advanceTimersByTimeAsync(0);
+      firstPage.resolve(result([row(0)], 0, 2));
+      await refresh;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(firstPageReads).toBe(3);
+
+      lastPage.resolve(result([row(1)], 1, 2));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hydrator.pendingChildRead).toBe(true);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(firstPageReads).toBe(4);
+      expect(hydrator.hydrated).toBe(true);
+      expect(hydrator.rows.map((child) => child.key)).toContain(row(2).key);
     } finally {
       hydrator.dispose();
     }

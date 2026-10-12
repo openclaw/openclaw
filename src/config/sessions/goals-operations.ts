@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
 import { SessionsGoalMutationResultSchema } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import {
@@ -24,6 +23,14 @@ import {
   ensureSessionGoalOperationsSchema,
   SESSION_GOAL_OPERATIONS_TABLE,
 } from "../../state/openclaw-agent-goal-operations-schema.js";
+import {
+  applySessionGoalOperation,
+  assertSessionGoalOperationTime,
+  createSessionGoalOperationResult,
+  MAX_SESSION_RECEIPTS,
+  OPERATION_VALIDITY_MS,
+  operationFingerprint,
+} from "./goals-operation-policy.js";
 import { SessionGoalOperationError } from "./goals-operations.types.js";
 import type {
   SessionGoalManagementInput,
@@ -33,12 +40,6 @@ import type {
   SessionGoalOperationResult,
   SessionTranscriptTurnMutationResult,
 } from "./goals-operations.types.js";
-import {
-  SessionGoalTransitionError,
-  buildCreatedSessionGoal,
-  buildUpdatedSessionGoalObjective,
-  buildUpdatedSessionGoalStatus,
-} from "./goals-transitions.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
@@ -65,45 +66,7 @@ export type { SessionGoalOperation, SessionGoalOperationResult } from "./goals-o
 
 const validateReceipt = lazyCompile<SessionGoalOperationResult>(SessionsGoalMutationResultSchema);
 
-const OPERATION_VALIDITY_MS = 24 * 60 * 60 * 1000;
-const OPERATION_FUTURE_SKEW_MS = 5 * 60 * 1000;
-const MAX_SESSION_RECEIPTS = 4096;
-
 export { SessionGoalOperationError } from "./goals-operations.types.js";
-
-export function assertSessionGoalOperationTime(operation: SessionGoalOperation, now: number): void {
-  if (
-    !Number.isSafeInteger(operation.issuedAtMs) ||
-    operation.issuedAtMs > now + OPERATION_FUTURE_SKEW_MS
-  ) {
-    throw new SessionGoalOperationError(
-      "invalid",
-      "Goal operation time is invalid; refresh and try again.",
-    );
-  }
-  // Reject the original timestamp even after pruning its receipt: an expired retry must never
-  // recreate a cleared Goal. Clients retain the operation identity unchanged on retry.
-  if (operation.issuedAtMs + OPERATION_VALIDITY_MS <= now) {
-    throw new SessionGoalOperationError(
-      "expired",
-      "Goal operation expired; review the current Goal before trying again.",
-    );
-  }
-}
-
-function operationFingerprint(operation: SessionGoalOperation): string {
-  return sha256Hex(
-    JSON.stringify([
-      operation.issuedAtMs,
-      operation.requestFingerprint,
-      operation.action,
-      "goalId" in operation ? operation.goalId : null,
-      "objective" in operation ? operation.objective : null,
-      "tokenBudget" in operation ? operation.tokenBudget : null,
-      "note" in operation ? operation.note : null,
-    ]),
-  );
-}
 
 /** Read the receipt and its session generation from one admitted snapshot. */
 export function readSessionGoalOperationInDatabase(
@@ -188,51 +151,6 @@ export function readSessionGoalOperationReceipt(
   return result;
 }
 
-/** Apply the same policy used by text commands to the fresh row inside the commit section. */
-export function applySessionGoalOperation(
-  entry: SessionEntry,
-  operation: SessionGoalOperation,
-  now: number,
-): SessionGoal | undefined {
-  try {
-    if (operation.action === "start") {
-      return buildCreatedSessionGoal(entry, operation, now);
-    }
-    if (!entry.goal || entry.goal.id !== operation.goalId) {
-      throw new SessionGoalOperationError(
-        "goal-rebound",
-        "Goal changed or was cleared; refresh before trying again.",
-      );
-    }
-    if (operation.action === "clear") {
-      return undefined;
-    }
-    if (operation.action === "edit") {
-      return buildUpdatedSessionGoalObjective(entry, operation.objective, now);
-    }
-    return buildUpdatedSessionGoalStatus(
-      entry,
-      {
-        status:
-          operation.action === "resume"
-            ? "active"
-            : operation.action === "pause"
-              ? "paused"
-              : operation.action === "block"
-                ? "blocked"
-                : "complete",
-        note: operation.note,
-      },
-      now,
-    );
-  } catch (error) {
-    if (error instanceof SessionGoalTransitionError) {
-      throw new SessionGoalOperationError("invalid", error.message);
-    }
-    throw error;
-  }
-}
-
 /** Called only after every Goal/turn/lifecycle write succeeds, in that same transaction. */
 export function writeSessionGoalOperationReceipt(
   db: DatabaseSync,
@@ -264,19 +182,7 @@ export function writeSessionGoalOperationReceipt(
       "Too many recent Goal operations; wait for older requests to expire before trying again.",
     );
   }
-  const goalId = goal?.id ?? ("goalId" in operation ? operation.goalId : undefined);
-  if (!goalId) {
-    throw new Error("Goal creation did not produce a Goal identity.");
-  }
-  const result: SessionGoalOperationResult = {
-    operationId: operation.operationId,
-    action: operation.action,
-    sessionId,
-    goalId,
-    status: runId ? "started" : operation.action === "clear" ? "cleared" : "updated",
-    ...(goal ? { goal } : {}),
-    ...(runId ? { runId } : {}),
-  };
+  const result = createSessionGoalOperationResult(sessionId, operation, goal, runId);
   executeSqliteQuerySync(
     db,
     kysely.insertInto(SESSION_GOAL_OPERATIONS_TABLE).values({

@@ -558,7 +558,17 @@ suite.define(() => {
           await page.keyboard.press("Home");
         }
         await expect
-          .poll(async () => Math.round((await shellNav.boundingBox())?.width ?? 0))
+          .poll(() =>
+            shellNav.evaluate((element) => {
+              const rail = element.querySelector(".sidebar-rail");
+              if (!rail) {
+                throw new Error("Expected the persistent rail");
+              }
+              return Math.round(
+                element.getBoundingClientRect().width - rail.getBoundingClientRect().width,
+              );
+            }),
+          )
           .toBe(sidebarWidth);
         await page.mouse.move(900, 400);
         if (captureUiProofEnabled) {

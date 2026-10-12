@@ -1,9 +1,24 @@
 import fs from "node:fs";
+import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
+import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
+import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
-import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
+import { createNonExitingRuntime, defaultRuntime, type RuntimeEnv } from "../runtime.js";
+
+export const showDoctorIntro = (message: string) =>
+  clackIntro(stylePromptTitle(message) ?? message);
+export const showDoctorOutro = (message: string) =>
+  clackOutro(stylePromptTitle(message) ?? message);
+
+export function exitDoctorHealthFlow(runtime: RuntimeEnv, code: number): void {
+  if (runtime === defaultRuntime) {
+    exitCliAfterOutput(runtime, code);
+  }
+  runtime.exit(code);
+}
 
 function stateDirectoryExistsAtDoctorStart(): boolean {
   try {
@@ -16,7 +31,7 @@ function stateDirectoryExistsAtDoctorStart(): boolean {
 export async function prepareDoctorHealthFlow(
   runtime: RuntimeEnv | undefined,
   options: DoctorOptions,
-  intro: (message: string) => void,
+  showIntro: (message: string) => void,
 ) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
   const repairRuntime: RuntimeEnv = {
@@ -26,7 +41,7 @@ export async function prepareDoctorHealthFlow(
   // Config loading can initialize SQLite-backed state before integrity runs.
   // Preserve the entry fact so doctor can report that automatic initialization.
   const stateDirExistedAtStart = stateDirectoryExistsAtDoctorStart();
-  intro("OpenClaw doctor");
+  showIntro("OpenClaw doctor");
   const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
   const root = await resolveOpenClawPackageRoot({
     moduleUrl: import.meta.url,
@@ -68,7 +83,7 @@ export async function prepareDoctorInteractiveMaintenance(params: {
   databasePreflight: DoctorDatabasePreflight | undefined;
   root: string | null;
   outro: (message: string) => void;
-}): Promise<"handled" | "accepted" | "declined"> {
+}): Promise<"handled" | "accepted" | { diagnosticExitCode: number }> {
   const { createDoctorPrompter } = await import("../commands/doctor-prompter.js");
   const { prepareDoctorDatabasePreflight } =
     await import("../commands/doctor-database-preflight.js");
@@ -99,9 +114,17 @@ export async function prepareDoctorInteractiveMaintenance(params: {
     initialValue: true,
     requiresInteractiveConfirmation: true,
   });
-  if (!accepted) {
-    params.outro("Doctor repairs cancelled. Run openclaw doctor --lint for read-only diagnosis.");
-    return "declined";
+  if (accepted) {
+    return "accepted";
   }
-  return "accepted";
+  params.runtime.log("Doctor repairs skipped. Continuing read-only diagnosis.");
+  // Suppressing repair prompts does not suppress migrations. Lint owns the
+  // read-only state scope; return its outcome for settlement after outer custody.
+  const { runDoctorLintCli } = await import("../commands/doctor-lint.js");
+  return {
+    diagnosticExitCode: await runDoctorLintCli(params.runtime, {
+      allowExec: params.options.allowExec,
+      deep: params.options.deep,
+    }),
+  };
 }

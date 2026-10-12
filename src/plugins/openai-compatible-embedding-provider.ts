@@ -8,11 +8,9 @@ import {
   debugEmbeddingsLog,
   embeddingResponseLogMeta,
 } from "../../packages/memory-host-sdk/src/host/embeddings-debug.js";
+import { extractEmbeddingUsage } from "../../packages/memory-host-sdk/src/host/embeddings-remote-fetch.js";
 import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
-import {
-  MEMORY_SEARCH_DEADLINE_CONTROL,
-  type MemorySearchDeadlineControl,
-} from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
+import { MEMORY_SEARCH_DEADLINE_CONTROL } from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
 import {
   createProviderHttpError,
   readProviderJsonResponse,
@@ -198,7 +196,7 @@ async function resolveConfiguredProviderApiKey(params: {
   if (!agentDir) {
     return apiKey;
   }
-  const { resolveScopedAuthProfileStore, resolveProviderEntryApiKeyAuth } =
+  const { resolveScopedAuthProfileStoreAsync, resolveProviderEntryApiKeyAuth } =
     await import("../agents/model-auth-provider.js");
   const authParams = {
     provider: params.providerId,
@@ -206,7 +204,7 @@ async function resolveConfiguredProviderApiKey(params: {
     cfg: params.options.config,
     agentDir,
   };
-  const store = resolveScopedAuthProfileStore(authParams);
+  const store = await resolveScopedAuthProfileStoreAsync(authParams);
   // Only explicit profile bindings enter model auth. General discovery would
   // replace literal/runtime-resolved keys with unrelated profile or env credentials.
   const auth = await resolveProviderEntryApiKeyAuth({ ...authParams, store });
@@ -314,14 +312,13 @@ const fetchWithCallerDeadline: typeof fetchWithRuntimeDispatcher = (url, init) =
 async function postEmbeddingRequest(params: {
   client: OpenAICompatibleEmbeddingClient;
   input: string[];
-  signal?: AbortSignal;
-  inputType?: EmbeddingProviderCallOptions["inputType"];
-  deadlineControl?: MemorySearchDeadlineControl;
+  callOptions?: EmbeddingProviderCallOptions;
 }): Promise<number[][]> {
-  const { client, input, deadlineControl } = params;
+  const { client, input, callOptions } = params;
+  const deadlineControl = callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL];
   const errorPrefix = "openai-compatible embeddings failed";
   const context = `${client.providerId} embeddings failed (model: ${client.model}, batch size: ${input.length})`;
-  const inputType = resolveRequestInputType(client, params.inputType);
+  const inputType = resolveRequestInputType(client, callOptions?.inputType);
   const body = {
     model: client.model,
     input,
@@ -340,7 +337,7 @@ async function postEmbeddingRequest(params: {
                 }
               : {}),
           },
-          params.signal,
+          callOptions?.signal,
         )
       : undefined;
   try {
@@ -355,8 +352,8 @@ async function postEmbeddingRequest(params: {
         headers: client.headers,
         body: JSON.stringify(body),
       },
-      signal: params.signal,
-      fetchImpl: params.signal ? fetchWithCallerDeadline : undefined,
+      signal: callOptions?.signal,
+      fetchImpl: callOptions?.signal ? fetchWithCallerDeadline : undefined,
       ssrfPolicy: client.ssrfPolicy,
       auditContext: "embedding-provider:openai-compatible",
       onResponse: async (response) => {
@@ -369,9 +366,15 @@ async function postEmbeddingRequest(params: {
             throw await createEmbeddingHttpError(response, client.headers, errorPrefix);
           }
           const payload = await readProviderJsonResponse<unknown>(response, errorPrefix);
-          return readEmbeddingVectors(asOptionalRecord(payload)?.data, input.length, context);
+          const vectors = readEmbeddingVectors(
+            asOptionalRecord(payload)?.data,
+            input.length,
+            context,
+          );
+          callOptions?.onUsage?.(extractEmbeddingUsage(payload));
+          return vectors;
         } catch (error) {
-          if (params.signal?.aborted) {
+          if (callOptions?.signal?.aborted) {
             throw error;
           }
           throw addEmbeddingErrorContext(error, errorPrefix, context);
@@ -463,9 +466,7 @@ export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter 
       return await postEmbeddingRequest({
         client,
         input: inputs.map(embeddingInputToText),
-        signal: callOptions?.signal,
-        inputType: callOptions?.inputType,
-        deadlineControl: callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL],
+        callOptions,
       });
     };
     const cacheHeaders = sanitizeCacheHeaders(client.headers);

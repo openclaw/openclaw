@@ -1,6 +1,8 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
 import { describe, expect, it, vi } from "vitest";
+import { createCodexAppServerBindingStore } from "./app-server/session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./app-server/session-binding.sqlite.test-helpers.js";
 import {
   transcriptMirrorMocks,
   continueLocalCodexSession,
@@ -211,7 +213,13 @@ describe("Codex supervision actions", () => {
   it("rolls back the session when its pending binding cannot be committed", async () => {
     const { runtime, entries, createSessionEntry } = createRuntime();
     const { api } = createGatewayApi(runtime);
-    const inner = createCodexTestBindingStore();
+    const inner = createCodexAppServerBindingStore(
+      createCodexSqliteTestBindingStateStore({
+        namespace: "adoption-rollback",
+        maxEntries: 10,
+        env: { ...process.env },
+      }),
+    );
     let rejectBinding = true;
     const mutate = vi.fn(async (...args: Parameters<CodexAppServerBindingStore["mutate"]>) => {
       if (rejectBinding && args[1].kind === "set") {

@@ -1,15 +1,14 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsSnapshot, ExecSecurity } from "../../lib/nodes/page-operations.ts";
 import { createDevicesViewProps } from "../../test-helpers/devices-fixtures.ts";
 import {
   renderDevicesContainer,
+  renderDevicesInto,
   getDevicesSection as getSection,
   getDeviceSettingsRow as getSettingsRow,
-} from "../../test-helpers/devices-view.ts";
-import { renderDevices } from "./view.ts";
+} from "../../test-helpers/devices-view.tsx";
 
 afterEach(() => document.body.replaceChildren());
 
@@ -31,6 +30,9 @@ describe("devices exec approvals rendering", () => {
     });
     const section = getSection(container, "Exec approvals");
 
+    expect(section.textContent).toContain(
+      "Allowlist and approval policy for exec host=gateway/node.",
+    );
     expect(
       getSettingsRow(section, "Security").querySelector<HTMLSelectElement>("select")?.value,
     ).toBe("full");
@@ -103,6 +105,32 @@ describe("devices exec approvals rendering", () => {
       "",
       "editable",
     ]);
+  });
+
+  it("keeps the selected node until its owner accepts a target change", () => {
+    const onExecApprovalsTargetChange = vi.fn();
+    const props = {
+      nodes: ["first", "second"].map((nodeId) => ({
+        nodeId,
+        commands: ["system.execApprovals.get", "system.execApprovals.set"],
+      })),
+      execApprovalsTarget: "node" as const,
+      execApprovalsTargetNodeId: "first",
+      execApprovalsDirty: true,
+      onExecApprovalsTargetChange,
+    };
+    const container = renderDevicesContainer(props);
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="Node"]')!;
+    select.value = "second";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onExecApprovalsTargetChange).toHaveBeenCalledWith("node", "second");
+    expect(select.value).toBe("first");
+    renderDevicesInto(container, props);
+    expect(select.value).toBe("first");
+
+    renderDevicesInto(container, { ...props, execApprovalsTargetNodeId: "second" });
+    expect(select.value).toBe("second");
   });
 
   it("renders defaults, configured agents, and approval-only agents in the avatar picker", async () => {
@@ -191,15 +219,13 @@ describe("devices exec approvals rendering", () => {
       agents: Record<string, { security: ExecSecurity }>,
       selected: string,
     ) => {
-      render(
-        renderDevices(
-          createDevicesViewProps({
-            execApprovalsSnapshot: snapshot,
-            execApprovalsForm: { version: 1, agents },
-            execApprovalsSelectedAgent: selected,
-          }),
-        ),
+      renderDevicesInto(
         container,
+        createDevicesViewProps({
+          execApprovalsSnapshot: snapshot,
+          execApprovalsForm: { version: 1, agents },
+          execApprovalsSelectedAgent: selected,
+        }),
       );
       return expectDefined(
         getSettingsRow(
@@ -217,9 +243,8 @@ describe("devices exec approvals rendering", () => {
     document.body.append(container);
 
     // Picking an option marks it dirty, so the browser ignores later `selected`
-    // attribute changes. `?selected` still seeds the first paint (Lit sets
-    // select.value before its options exist); `live()` re-writes the value on
-    // later renders so scope switches show the stored policy.
+    // attribute changes. The controlled value restores the stored policy when
+    // switching scopes even after the operator changed native selection.
     let security = renderScope(
       container,
       { alpha: { security: "allowlist" }, beta: { security: "deny" } },
@@ -336,11 +361,9 @@ describe("devices agent bindings", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const renderBindings = (inventory: Array<Record<string, unknown>>, unavailable: boolean) => {
-      render(
-        renderDevices(
-          createDevicesViewProps({ nodes: inventory, configForm, onBindDefault, onBindAgent }),
-        ),
+      renderDevicesInto(
         container,
+        createDevicesViewProps({ nodes: inventory, configForm, onBindDefault, onBindAgent }),
       );
       const section = getSection(container, "Exec node binding");
       ["Default binding", "Research (research)"].forEach((title, index) => {

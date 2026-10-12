@@ -9,12 +9,16 @@ import {
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { prepareOpenClawStateDirectReader } from "../state/openclaw-state-db-read-connection.js";
 import {
   executeExistingOpenClawStateRead,
+  getActiveOpenClawStateDatabaseReadSnapshot,
+  isArtifactPreservingStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -45,6 +49,10 @@ import {
   ExecApprovalsMigrationRequiredError,
 } from "./exec-approvals-migration-gate.js";
 import type { ExecApprovalsUpdate as ExecApprovalsMutation } from "./exec-approvals-mutation.kernel.js";
+import {
+  execApprovalsPublication,
+  withExecApprovalsPublication,
+} from "./exec-approvals-publication.js";
 import type { RemovedExecApprovalPolicies } from "./exec-approvals-retirement.worker.js";
 import {
   snapshotFromExecApprovalsDatabase,
@@ -62,6 +70,79 @@ class ExecApprovalsStoreUnavailableError extends Error {
   constructor(cause: unknown) {
     super(`Exec approvals SQLite state is unavailable: ${String(cause)}`, { cause });
     this.name = "ExecApprovalsStoreUnavailableError";
+  }
+}
+
+const preparedSnapshots = resolveGlobalMap<
+  string,
+  { identity: string; path: string; snapshot: Promise<ExecApprovalsSnapshot> }
+>(Symbol.for("openclaw.execApprovalsPreparedSnapshots"), "close-and-restart");
+
+execApprovalsPublication.subscribeFacts((change) => {
+  const identity = change.kind === "committed" ? change.receipt.source.identity : change.identity;
+  for (const [key, entry] of preparedSnapshots) {
+    if (entry.identity === identity) {
+      preparedSnapshots.delete(key);
+    }
+  }
+});
+registerOpenClawStateDatabaseLifecycleListener((event) => {
+  if (event.kind !== "opened") {
+    for (const [key, entry] of preparedSnapshots) {
+      if (entry.path === (event.identity?.canonicalPath ?? event.path)) {
+        preparedSnapshots.delete(key);
+      }
+    }
+  }
+});
+
+/** Preparation reuses policy facts; execution retains its direct current-row guard. */
+async function readPreparedExecApprovals(
+  context: OpenClawStateWorkerContext,
+): Promise<ExecApprovalsSnapshot> {
+  const options = { path: context.admission.databasePath, env: context.environment };
+  const read = async () => {
+    const reply = await executeExistingOpenClawStateRead(
+      options,
+      { type: "exec-approvals.read" },
+      { context, current: true },
+    );
+    context.admission.assertCurrent();
+    return snapshotFromReadReply(reply, () => resolveExecApprovalsDisplayPath(context.environment));
+  };
+  if (
+    isArtifactPreservingStateRead() ||
+    getOpenClawDatabaseMaintenanceScope() ||
+    getActiveOpenClawStateDatabaseReadSnapshot(options)
+  ) {
+    return read();
+  }
+  const key = context.admission.coordinationKey;
+  let entry = preparedSnapshots.get(key);
+  if (entry && entry.identity !== context.admission.identity.key) {
+    preparedSnapshots.delete(key);
+    entry = undefined;
+  }
+  if (!entry) {
+    entry = {
+      identity: context.admission.identity.key,
+      path: context.admission.identity.canonicalPath,
+      snapshot: read(),
+    };
+    preparedSnapshots.set(key, entry);
+    if (preparedSnapshots.size > 64) {
+      preparedSnapshots.delete(preparedSnapshots.keys().next().value!);
+    }
+  }
+  try {
+    const snapshot = await entry.snapshot;
+    context.admission.assertCurrent();
+    return structuredClone(snapshot);
+  } catch (error) {
+    if (preparedSnapshots.get(key) === entry) {
+      preparedSnapshots.delete(key);
+    }
+    throw error;
   }
 }
 
@@ -98,13 +179,7 @@ export async function readExecApprovalsSnapshotAsync(
 ): Promise<ExecApprovalsSnapshot> {
   try {
     assertNoPendingLegacyExecApprovals({ env: context.environment });
-    const reply = await executeExistingOpenClawStateRead(
-      { path: context.admission.databasePath, env: context.environment },
-      { type: "exec-approvals.read" },
-      { context, current: true },
-    );
-    context.admission.assertCurrent();
-    return snapshotFromReadReply(reply, () => resolveExecApprovalsDisplayPath(context.environment));
+    return await readPreparedExecApprovals(context);
   } catch (error) {
     if (error instanceof ExecApprovalsMigrationRequiredError) {
       throw error;
@@ -177,8 +252,15 @@ export async function readExecApprovalsPolicyReadOnlyAsync(
   };
   try {
     assertNoPendingLegacyExecApprovals({ env: owner.env });
-    const reply = await executeExistingOpenClawStateRead(owner, { type: "exec-approvals.read" });
-    const snapshot = snapshotFromReadReply(reply, () => resolveExecApprovalsDisplayPath(owner.env));
+    const snapshot =
+      isArtifactPreservingStateRead() ||
+      getOpenClawDatabaseMaintenanceScope() ||
+      getActiveOpenClawStateDatabaseReadSnapshot(owner)
+        ? snapshotFromReadReply(
+            await executeExistingOpenClawStateRead(owner, { type: "exec-approvals.read" }),
+            () => resolveExecApprovalsDisplayPath(owner.env),
+          )
+        : await readPreparedExecApprovals(captureOpenClawStateWorkerContext(owner));
     return { file: snapshot.file, revision: JSON.stringify([stateDbPath, snapshot.hash]) };
   } catch (error) {
     if (error instanceof ExecApprovalsMigrationRequiredError) {
@@ -254,7 +336,7 @@ async function mutateExecPolicy<Key extends keyof PolicyMutationOperations>(
   try {
     return await runOpenClawStateWorkerOperation(context, (scope) => scope.execute(captured), {
       assertCurrent: assertPreparationCurrent,
-      createAdmission(operation) {
+      createAdmission: withExecApprovalsPublication((operation, onCommitAdmitted) => {
         let transaction = false;
         let staged: unknown;
         let release: (() => void) | undefined;
@@ -282,6 +364,9 @@ async function mutateExecPolicy<Key extends keyof PolicyMutationOperations>(
           if (!grant()) {
             throw new Error("Exec policy mutation lost admission");
           }
+          if (request.stage === "commit") {
+            onCommitAdmitted();
+          }
         });
         publicationSettled = operation.settled.then((settlement) => {
           const receipt = admission.committed?.facts;
@@ -295,7 +380,7 @@ async function mutateExecPolicy<Key extends keyof PolicyMutationOperations>(
         });
         void publicationSettled.catch(() => undefined);
         return { admission, nativeLocations: [context.admission.databasePath] };
-      },
+      }, context),
     });
   } finally {
     await publicationSettled;
@@ -424,9 +509,19 @@ function enqueueExecAuthorization(
       },
       {
         assertCurrent: assertBatchCurrent,
-        createAdmission: createSqliteWorkerWriteAdmission(assertBatchCurrent, [
-          context.admission.databasePath,
-        ]),
+        createAdmission: withExecApprovalsPublication(
+          (operation, onCommitAdmitted) =>
+            createSqliteWorkerWriteAdmission(
+              (admissionRequest) => {
+                assertBatchCurrent();
+                if (admissionRequest.stage === "commit") {
+                  onCommitAdmitted();
+                }
+              },
+              [context.admission.databasePath],
+            )(operation),
+          context,
+        ),
       },
     ).then(
       (settlements) => settlements.forEach((settle) => settle()),
@@ -454,6 +549,7 @@ export async function withAgentExecApprovalsRemoved<T>(
     let committed = false;
     let uncertain = false;
     let releasePublication: (() => void) | undefined;
+    let publication: ReturnType<typeof execApprovalsPublication.begin> | undefined;
     try {
       return await authority.runWithWorker(
         (scope, guard) => {
@@ -468,6 +564,10 @@ export async function withAgentExecApprovalsRemoved<T>(
         },
         {
           onAdmission(request, identityKey) {
+            publication ??= execApprovalsPublication.begin({
+              identity: identityKey,
+              assertCurrent: authority.assertCurrentHost,
+            });
             if (request.stage !== "commit") {
               return;
             }
@@ -504,6 +604,7 @@ export async function withAgentExecApprovalsRemoved<T>(
               throw new Error("Exec approval retirement receipt differs from its command");
             }
             committed = true;
+            publication?.committed(facts.execFacts);
           },
         },
       );
@@ -519,6 +620,7 @@ export async function withAgentExecApprovalsRemoved<T>(
       }
       throw error;
     } finally {
+      publication?.finish(committed && !uncertain);
       if (!uncertain) {
         releasePublication?.();
       }

@@ -8,6 +8,7 @@ import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
 import { copyFileHandle, sameFileMutationFingerprint } from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createVerifiedSqliteSnapshot } from "../infra/sqlite-snapshot.js";
 import { isSqlitePathOnBtrfs, setSqliteDirectoryNoCow } from "../infra/sqlite-wal-filesystem.js";
@@ -199,7 +200,7 @@ function assertNoOpenFiles(paths: readonly string[]) {
   }
   if (inspectionError) {
     throw new Error(
-      `fuser could not establish that all handles are closed: ${inspectionError}; ensure fuser is installed and can inspect processes using this store`,
+      `fuser could not establish that all handles are closed: ${inspectionError}; check that fuser is installed and can inspect processes using this store`,
     );
   }
 }
@@ -307,6 +308,10 @@ export async function repairDoctorSqliteNoCow(params: {
           .filter((pathname) => !sourceLinks.has(pathname))
           .map((pathname) => [pathname, readAcl(pathname)]),
       );
+      for (const pathname of sqlitePaths) {
+        params.assertCurrent();
+        retireSqliteDatabaseAdmissionForPath(pathname, { requireSoleDescriptor: true });
+      }
       // fuser follows links, so inspect only regular files owned by this tree.
       assertNoOpenFiles(regularPaths);
       const size = [...inventory.values()].reduce((total, stat) => total + stat.size, 0n);
@@ -401,6 +406,10 @@ export async function repairDoctorSqliteNoCow(params: {
       const observedFiles = readStoreEntries(directory).map((entry) =>
         path.join(entry.parentPath, entry.name),
       );
+      for (const pathname of sqlitePaths) {
+        params.assertCurrent();
+        retireSqliteDatabaseAdmissionForPath(pathname, { requireSoleDescriptor: true });
+      }
       assertNoOpenFiles(observedFiles.filter((pathname) => fs.lstatSync(pathname).isFile()));
       // A file can appear while fuser checks the previously observed inventory.
       const currentIdentity = fs.statSync(directory, { bigint: true });

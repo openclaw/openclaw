@@ -938,7 +938,7 @@ describe("handleChatGatewayEvent", () => {
     expectTextMessage(state.chatMessages[3], "assistant", "Final answer.");
   });
 
-  it("keeps the complete terminal reply above a steer when no later delta arrived", () => {
+  it("keeps the complete terminal reply after an accepted steer when no later delta arrived", () => {
     const state = createState({
       chatRunId: "run-1",
       chatStream: "Before steer.",
@@ -966,7 +966,7 @@ describe("handleChatGatewayEvent", () => {
     expectTextMessage(state.chatMessages[1], "user", "Steer");
     expectTextMessage(state.chatMessages[2], "assistant", "Before steer. Final unseen suffix.");
     const rendered = buildChatItems({
-      paneId: "terminal-above-steer",
+      paneId: "terminal-after-steer",
       sessionKey: state.sessionKey,
       runId: state.chatRunId,
       messages: state.chatMessages,
@@ -978,7 +978,7 @@ describe("handleChatGatewayEvent", () => {
     }).flatMap((item) =>
       item.kind === "group" ? item.messages.map(({ message }) => extractText(message)) : [],
     );
-    expect(rendered).toEqual(["Ask", "Before steer. Final unseen suffix.", "Steer"]);
+    expect(rendered).toEqual(["Ask", "Steer", "Before steer. Final unseen suffix."]);
   });
 
   it("clears keyed commentary when chatPersistCommentary is false", () => {

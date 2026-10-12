@@ -16,6 +16,8 @@ import type {
   SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.types.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import { prepareIncognitoSessionHistoryRead } from "../config/sessions/session-incognito-history-read.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { SessionTranscriptContextProjectionSource } from "../config/sessions/session-transcript-context-read.js";
 import type { SessionTranscriptContextReader } from "../config/sessions/session-transcript-context-reader.js";
 import {
@@ -29,7 +31,10 @@ import type {
   TranscriptEntryAnchor,
 } from "../config/sessions/transcript-entry-anchor.js";
 import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
-import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  withSessionTranscriptWriteAssertion,
+} from "../config/sessions/transcript-write-context.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -91,12 +96,15 @@ export function captureCodexSessionContextReader(
       const { bindIncognitoSessionComputeReader } =
         await import("../config/sessions/session-incognito-compute-read.js");
       assertCurrent();
-      return bindIncognitoSessionComputeReader({
-        actor,
-        authority: { assertCurrent },
-        target: input,
+      const prepared = prepareIncognitoSessionHistoryRead(
+        { actor, authority: { assertCurrent }, target: input },
+        { ...readTarget, env: target.env },
         signal,
-      }).nativeContext(readTarget, read);
+      );
+      return bindIncognitoSessionComputeReader({ ...prepared, signal }).nativeContext(
+        { ...readTarget, storePath: actor.path },
+        read,
+      );
     });
     assertCurrent();
     actor.assertReadable();
@@ -177,21 +185,23 @@ export async function readCodexSessionTranscriptEventsBeforeAdmission(
   );
 }
 
-export type CodexSessionTranscriptMirrorWriteLockContext =
-  InternalSessionTranscriptWriteLockContext & {
-    appendMessageWithMessageSequence: <TMessage>(
-      options: Omit<LockedTranscriptMessageAppendOptions<TMessage>, "config">,
-    ) => Promise<{
-      lifecycleRevision?: string;
-      messageSeq?: number;
-      result: TranscriptMessageAppendResult<TMessage> | undefined;
-    }>;
-    readMessageFacts: (params: { idempotencyKeys: readonly string[] }) => Promise<{
-      anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
-      existingIdempotencyKeys: Set<string>;
-      messagesByIdempotencyKey: Map<string, AgentMessage>;
-    }>;
-  };
+export type CodexSessionTranscriptMirrorWriteLockContext = Omit<
+  InternalSessionTranscriptWriteLockContext,
+  "readMessageFacts"
+> & {
+  appendMessageWithMessageSequence: <TMessage>(
+    options: Omit<LockedTranscriptMessageAppendOptions<TMessage>, "config">,
+  ) => Promise<{
+    lifecycleRevision?: string;
+    messageSeq?: number;
+    result: TranscriptMessageAppendResult<TMessage> | undefined;
+  }>;
+  readMessageFacts: (params: { idempotencyKeys: readonly string[] }) => Promise<{
+    anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
+    existingIdempotencyKeys: Set<string>;
+    messagesByIdempotencyKey: Map<string, AgentMessage>;
+  }>;
+};
 
 /** @deprecated Use withCodexSessionTranscriptMirrorWrite. Removed at the next Plugin SDK major. */
 export async function withCodexSessionTranscriptMirrorWriteLock<T>(
@@ -201,7 +211,10 @@ export async function withCodexSessionTranscriptMirrorWriteLock<T>(
   return withMirrorWrite(params, run, "lock");
 }
 
-export type CodexSessionTranscriptMirrorWriteContext = SessionTranscriptWriteContext & {
+export type CodexSessionTranscriptMirrorWriteContext = Omit<
+  SessionTranscriptWriteContext,
+  "readMessageFacts"
+> & {
   readMessageFacts: CodexSessionTranscriptMirrorWriteLockContext["readMessageFacts"];
   appendMessageWithMessageSequence: <TMessage>(
     options: Omit<
@@ -218,12 +231,21 @@ export type CodexSessionTranscriptMirrorWriteContext = SessionTranscriptWriteCon
   }>;
 };
 
-/** Runs ordered optimistic mirror writes and returns each committed message's sequence. */
+/**
+ * Runs ordered optimistic mirror writes and returns each committed message's sequence.
+ * `assertCurrent` guards every commit; it is prepared before the writer is reserved,
+ * because its session-row reads cannot run while this write holds the database.
+ */
 export async function withCodexSessionTranscriptMirrorWrite<T>(
-  params: InternalSessionTranscriptWriteLockParams,
+  params: InternalSessionTranscriptWriteLockParams & { assertCurrent?: SessionSourceAssertion },
   run: (context: CodexSessionTranscriptMirrorWriteContext) => Promise<T> | T,
 ): Promise<T> {
-  return withMirrorWrite(params, run, "sequence");
+  const { assertCurrent, ...scope } = params;
+  return assertCurrent
+    ? withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
+        withMirrorWrite(scope, run, "sequence"),
+      )
+    : withMirrorWrite(scope, run, "sequence");
 }
 
 async function withMirrorWrite<T>(

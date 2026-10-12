@@ -37,7 +37,6 @@ import {
 } from "./refresh-state.js";
 import { isIgnoredSkillsWatchPath, isSkillDiscoveryFileWatchPath } from "./refresh-watch-path.js";
 import {
-  clearWorkspaceWatchTargets,
   disposeWorkspacePathWatchState,
   evictWorkspaceWatchStates,
   nextSkillsWatchGeneration,
@@ -48,6 +47,7 @@ import {
   pathWatchers,
   publishRecoveredCoverage,
   publishSkillsWatchChanges,
+  releaseSkillsWatchers,
   setWorkspaceWatchTargets,
   settleWorkspaceWatchTargetsPlan,
   unsubscribeWorkspaceFromPath,
@@ -725,15 +725,9 @@ export async function closeSkillsWatchers(resetState = false): Promise<void> {
   if (resetState) {
     resetSkillsRefreshStateForTest();
   }
-  const active = Array.from(pathWatchers.values());
   nativeWatchCapacityFailed = false;
-  pathWatchers.clear();
-  clearWorkspaceWatchTargets();
+  releaseSkillsWatchers("close");
   clearSkillRootRecordsCache();
-  workspaceWatchOwners.clear();
-  workspaceWatchTargetCache.clear();
-  workspaceWatchLastEnsuredAt.clear();
-  active.forEach((state) => void state.close());
   const results = await Promise.allSettled([
     ...replacingWatchers,
     ...retiringWatchers,
@@ -744,4 +738,13 @@ export async function closeSkillsWatchers(resetState = false): Promise<void> {
     throw new AggregateError(errors, "Skills watcher shutdown failed");
   }
   watchersClosing = false;
+}
+
+/** Fence observation without native retirement for a process-owning Gateway stop. */
+export async function detachSkillsWatchers(): Promise<void> {
+  watchersClosing = true;
+  nativeWatchCapacityFailed = false;
+  releaseSkillsWatchers("detach");
+  clearSkillRootRecordsCache();
+  await closeRemoteSkillsWatchers();
 }

@@ -35,6 +35,7 @@ export type InternalSessionTranscriptWriteLockContext = {
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   readEvents: () => Promise<unknown[]>;
+  readMessageFacts: SessionTranscriptWriteLockAccessorContext["readMessageFacts"];
   target: InternalSessionTranscriptTarget;
 };
 
@@ -109,6 +110,7 @@ export async function withProjectedSessionTranscriptWriteLock<
         {
           target,
           readEvents: () => whileOpen(locked.readEvents),
+          readMessageFacts: (query) => whileOpen(() => locked.readMessageFacts(query)),
           appendMessage: (options) =>
             whileOpen(() =>
               locked.appendMessage({

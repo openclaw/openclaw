@@ -99,8 +99,14 @@ function installCommittedState(
 }
 
 /** Use the same phase ordering for an already committed worker receipt. */
-export function publishSqliteCommittedState(publication: SqliteCommittedPublication): void {
-  installCommittedState([committedPublicationState(publication)], [publication.notify]);
+export function publishSqliteCommittedState(
+  publication: SqliteCommittedPublication | readonly SqliteCommittedPublication[],
+): void {
+  const publications = "installFacts" in publication ? [publication] : publication;
+  installCommittedState(
+    publications.map(committedPublicationState),
+    publications.map((entry) => entry.notify),
+  );
 }
 
 /** Stage a complete owner publication; native savepoints share the outer commit. */
@@ -226,7 +232,7 @@ export function discardSqliteTransactionState(db: DatabaseSync, error: unknown):
 
 /** Nested rollback restores staged state and discards observers; savepoints wait for outer commit. */
 export function withSqlitePostCommitPublications<T>(db: DatabaseSync, transaction: () => T): T {
-  const nested = db.isTransaction;
+  const nested = db.isTransaction || pendingPublications.has(db);
   const publications = nested ? pendingPublications.get(db) : [];
   const transactionState = nested ? pendingTransactionState.get(db) : [];
   const publicationStart = publications?.length ?? 0;

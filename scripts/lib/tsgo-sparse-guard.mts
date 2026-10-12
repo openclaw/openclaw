@@ -9,30 +9,7 @@ import {
   TSGO_TARGETED_TEST_SHARED_SHARDS,
 } from "./tsgo-core-test-shards.mts";
 
-const MANIFEST_TEST_SPARSE_ROOTS = new Map(
-  [...TSGO_CORE_TEST_SHARDS, ...TSGO_TARGETED_TEST_SHARED_SHARDS].flatMap((shard) =>
-    "sparseRoots" in shard ? ([[path.basename(shard.config), shard.sparseRoots]] as const) : [],
-  ),
-);
-const CORE_TEST_CONFIGS = new Set([
-  "tsconfig.core.test.json",
-  ...TSGO_CORE_TEST_SHARDS.map((shard) => path.basename(shard.config)).filter(
-    (config) => !MANIFEST_TEST_SPARSE_ROOTS.has(config),
-  ),
-]);
-
-const CORE_PROD_CONFIGS = new Set(["tsconfig.core.json"]);
-const UI_PROD_CONFIGS = new Set(["tsconfig.ui.json"]);
-const GUARDED_CONFIGS = new Set([
-  ...CORE_PROD_CONFIGS,
-  ...UI_PROD_CONFIGS,
-  ...CORE_TEST_CONFIGS,
-  ...MANIFEST_TEST_SPARSE_ROOTS.keys(),
-]);
 const TSGO_SPARSE_SKIP_ENV_KEY = "OPENCLAW_TSGO_SPARSE_SKIP";
-const CORE_PROD_SPARSE_ROOTS = ["packages"];
-const UI_PROD_SPARSE_ROOTS = ["packages", "src", "ui/config", "ui/src"];
-const CORE_TEST_SPARSE_ROOTS = ["packages", "ui/config", "ui/src"];
 
 const CORE_PROD_REQUIRED_PATHS = [
   {
@@ -78,7 +55,29 @@ const CORE_TEST_REQUIRED_PATHS = [
 ];
 
 type FileExists = typeof fs.existsSync;
-type RequiredPath = (typeof CORE_PROD_REQUIRED_PATHS)[number];
+type ProjectRequirements = {
+  roots: readonly string[];
+  paths: readonly { path: string; whenPresent?: string }[];
+};
+const CORE_TEST_REQUIREMENTS: ProjectRequirements = {
+  roots: ["packages", "ui/config", "ui/src"],
+  paths: CORE_TEST_REQUIRED_PATHS.map((requiredPath) => ({ path: requiredPath })),
+};
+const PROJECT_REQUIREMENTS = new Map<string, ProjectRequirements>([
+  ["tsconfig.core.json", { roots: ["packages"], paths: CORE_PROD_REQUIRED_PATHS }],
+  [
+    "tsconfig.ui.json",
+    { roots: ["packages", "src", "ui/config", "ui/src"], paths: UI_PROD_REQUIRED_PATHS },
+  ],
+  ["tsconfig.core.test.json", CORE_TEST_REQUIREMENTS],
+  ...[...TSGO_CORE_TEST_SHARDS, ...TSGO_TARGETED_TEST_SHARED_SHARDS].map(
+    (shard) =>
+      [
+        path.basename(shard.config),
+        "sparseRoots" in shard ? { roots: shard.sparseRoots, paths: [] } : CORE_TEST_REQUIREMENTS,
+      ] as const,
+  ),
+]);
 type SparseGuardOptions = {
   cwd?: string;
   fileExists?: FileExists;
@@ -122,7 +121,7 @@ export function getSparseTsgoGuardError(
   const missingPaths = [
     ...new Set(
       projectNames
-        .flatMap(getRequiredSparseRootsForProject)
+        .flatMap((project) => PROJECT_REQUIREMENTS.get(project)?.roots ?? [])
         .filter((relativePath) =>
           sparsePatterns ? !isSparseRootCovered(relativePath, sparsePatterns) : false,
         ),
@@ -144,41 +143,13 @@ export function getSparseTsgoGuardError(
   ].join("\n");
 }
 
-function getRequiredSparseRootsForProject(projectName: string) {
-  const manifestTestRoots = MANIFEST_TEST_SPARSE_ROOTS.get(projectName);
-  if (manifestTestRoots) {
-    return manifestTestRoots;
-  }
-  if (CORE_PROD_CONFIGS.has(projectName)) {
-    return CORE_PROD_SPARSE_ROOTS;
-  }
-  if (UI_PROD_CONFIGS.has(projectName)) {
-    return UI_PROD_SPARSE_ROOTS;
-  }
-  if (CORE_TEST_CONFIGS.has(projectName)) {
-    return CORE_TEST_SPARSE_ROOTS;
-  }
-  return [];
-}
-
 function getRequiredPathsForProject(projectName: string, cwd: string, fileExists: FileExists) {
-  const requiredPaths: string[] = [];
-  if (CORE_PROD_CONFIGS.has(projectName)) {
-    requiredPaths.push(...conditionalRequiredPaths(CORE_PROD_REQUIRED_PATHS, cwd, fileExists));
-  }
-  if (UI_PROD_CONFIGS.has(projectName)) {
-    requiredPaths.push(...conditionalRequiredPaths(UI_PROD_REQUIRED_PATHS, cwd, fileExists));
-  }
-  if (CORE_TEST_CONFIGS.has(projectName)) {
-    requiredPaths.push(...CORE_TEST_REQUIRED_PATHS);
-  }
-  return [...new Set(requiredPaths)].toSorted((left, right) => left.localeCompare(right));
-}
-
-function conditionalRequiredPaths(entries: RequiredPath[], cwd: string, fileExists: FileExists) {
-  return entries
-    .filter((entry) => fileExists(path.join(cwd, entry.whenPresent)))
+  const requiredPaths = (PROJECT_REQUIREMENTS.get(projectName)?.paths ?? [])
+    .filter(
+      (entry) => entry.whenPresent === undefined || fileExists(path.join(cwd, entry.whenPresent)),
+    )
     .map((entry) => entry.path);
+  return [...new Set(requiredPaths)].toSorted((left, right) => left.localeCompare(right));
 }
 
 function readGitOutput(args: string[], cwd: string): string | null {
@@ -240,7 +211,7 @@ function readProjectNames(args: readonly string[]) {
     ...new Set(
       candidates
         .map((candidate) => path.basename(candidate))
-        .filter((config) => GUARDED_CONFIGS.has(config)),
+        .filter((config) => PROJECT_REQUIREMENTS.has(config)),
     ),
   ];
 }

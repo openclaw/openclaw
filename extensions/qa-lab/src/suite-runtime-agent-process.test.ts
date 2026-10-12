@@ -35,6 +35,7 @@ vi.mock("./suite-runtime-agent-session.js", () => ({
 import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 import { runQaCli } from "./qa-cli-process.js";
 import {
+  forceMemoryIndex,
   findManagedDreamingCronJob,
   listCronJobs,
   readDoctorMemoryStatus,
@@ -338,6 +339,45 @@ describe("qa suite runtime agent process helpers", () => {
     await expect(pending).rejects.toThrow(
       `qa cli stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes; refusing to parse truncated output`,
     );
+  });
+
+  it("indexes memory offline before searching through the restarted Gateway", async () => {
+    let gatewayRunning = true;
+    const operations: string[] = [];
+    const result = { results: [{ text: "ORBIT-10" }] };
+    const env = {
+      ...QA_CLI_ENV,
+      gateway: {
+        ...QA_CLI_ENV.gateway,
+        restartAfterStateMutation: async (mutateState: () => Promise<void>) => {
+          gatewayRunning = false;
+          operations.push("stop");
+          await mutateState();
+          gatewayRunning = true;
+          operations.push("restart");
+        },
+      },
+    } as Parameters<typeof forceMemoryIndex>[0]["env"];
+    spawnMock.mockImplementation((_executable: string, args: string[]) => {
+      const command = args[2];
+      expect(args[1]).toBe("memory");
+      expect(gatewayRunning, `${command} Gateway ownership`).toBe(command === "search");
+      operations.push(...args.slice(2, 3));
+      const child = createSpawnedProcess();
+      queueMicrotask(() => {
+        child.stdout.emit(
+          "data",
+          Buffer.from(command === "search" ? JSON.stringify(result) : "indexed"),
+        );
+        child.emit("close", 0);
+      });
+      return child;
+    });
+
+    await expect(
+      forceMemoryIndex({ env, query: "orbit", expectedNeedle: "ORBIT-10" }),
+    ).resolves.toEqual(result);
+    expect(operations).toEqual(["stop", "index", "restart", "search"]);
   });
 
   it("starts an agent run with transport-derived delivery metadata", async () => {

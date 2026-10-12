@@ -16,6 +16,7 @@ import {
   writeWorkspaceFileCache,
 } from "./workspace-file-cache.js";
 import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
+import { workspaceStateFactKey, workspaceStatePublication } from "./workspace-state-publication.js";
 import {
   clearExpiredWorkspaceStateForVanishedWorkspace,
   deleteWorkspaceState,
@@ -69,6 +70,56 @@ function insertPersistedAttestationHash(filename: string, sha256: string): void 
 }
 
 describe("workspace state store", () => {
+  it("publishes complete hash replacement and exact alias/setup/attestation tombstones", async () => {
+    const dir = workspaceDir();
+    const identity = resolveWorkspaceStateIdentity(dir);
+    const observed = new Map<string, unknown>();
+    const unsubscribe = workspaceStatePublication.subscribeFacts((change) => {
+      if (change.kind === "committed") {
+        for (const [key, fact] of change.receipt.facts) {
+          observed.set(key, fact);
+        }
+      }
+    });
+    try {
+      await mergeWorkspaceSetupState(dir, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1000);
+      const alias = testState!.path("receipt-workspace-link");
+      fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
+      await readWorkspaceStateSnapshot(alias);
+      await replaceWorkspaceAttestation({
+        workspaceDir: dir,
+        attestedAtMs: 1000,
+        nowMs: 1000,
+        generatedHashes: new Map([
+          ["AGENTS.md", "a".repeat(64)],
+          ["TOOLS.md", "b".repeat(64)],
+        ]),
+      });
+      await replaceWorkspaceAttestation({
+        workspaceDir: dir,
+        attestedAtMs: 2000,
+        nowMs: 2000,
+        generatedHashes: new Map([["AGENTS.md", "c".repeat(64)]]),
+      });
+      expect(observed.get(workspaceStateFactKey("hashes", identity.workspaceKey))).toEqual({
+        kind: "postimage",
+        value: {
+          kind: "hashes",
+          workspaceKey: identity.workspaceKey,
+          hashes: [["AGENTS.md", "c".repeat(64)]],
+        },
+      });
+      expect([...observed.keys()].filter((key) => key.startsWith('["alias",'))).toHaveLength(2);
+      await deleteState(alias);
+      expect([...observed.values()]).toEqual(Array.from({ length: 4 }, () => ({ kind: "absent" })));
+      const deleted = await readWorkspaceStateSnapshot(dir, { readOnly: true });
+      expect(deleted.setupExists).toBe(false);
+      expect(deleted.attestation).toBeUndefined();
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("does not create shared state for a read-only snapshot", async () => {
     const statePath = resolveOpenClawStateSqlitePath(testState!.env);
     expect(fs.existsSync(statePath)).toBe(false);

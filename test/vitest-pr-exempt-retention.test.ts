@@ -7,7 +7,10 @@ import {
   createUiTestShardGroups,
   resolveCanonicalNodeTestConfig,
 } from "../scripts/lib/ci-node-test-plan.mts";
-import { listPrExemptRuntimeTestFiles } from "../scripts/lib/ci-proof-test-inventory.mts";
+import {
+  listPrExemptRuntimeTestFiles,
+  RELEASE_ONLY_UI_TEST_FILES,
+} from "../scripts/lib/ci-proof-test-inventory.mts";
 import {
   createExtensionTestShards,
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
@@ -53,7 +56,7 @@ function createPrExemptCensus() {
       for (const config of JSON.parse(process.argv[1])) {
         const module = await import(pathToFileURL(path.resolve(config)).href);
         const root = config === "test/vitest/vitest.ui-e2e.config.ts"
-          ? module.createUiE2eVitestConfig({ ...process.env, OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" }, [])
+          ? module.createUiE2eVitestConfig({ ...process.env, OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "0" }, [])
           : module.default;
         projects[config] = (root.test.projects ?? [root]).map(project => {
           if (!project || typeof project !== "object" || !project.test) {
@@ -213,5 +216,32 @@ it.each(["hourly", "release"] as const)(
         ).toHaveLength(1);
       }
     }
+    for (const file of RELEASE_ONLY_UI_TEST_FILES) {
+      expect(prExemptFiles, file).not.toContain(file);
+      const kind = isUiTestTarget(file) ? "ui" : "e2e";
+      expect(
+        uiOwners[kind].filter((group) => group.includePatterns.includes(file)),
+        file,
+      ).toHaveLength(mode === "release" ? 1 : 0);
+    }
   },
 );
+
+it("keeps release-only UI files out of ordinary owner-selected plans", () => {
+  const { dedicatedGroups } = getPrExemptCensus();
+  const owners = dedicatedGroups(
+    createUiTestShardGroups({
+      includeReleaseOnlyTests: false,
+      includePrExemptRuntimeTests: false,
+      changedPaths: ["ui/vite.config.ts"],
+      uiE2eFiles: [...RELEASE_ONLY_UI_TEST_FILES].filter((file) => !isUiTestTarget(file)),
+    }),
+  );
+  for (const file of RELEASE_ONLY_UI_TEST_FILES) {
+    const kind = isUiTestTarget(file) ? "ui" : "e2e";
+    expect(
+      owners[kind].filter((group) => group.includePatterns.includes(file)),
+      file,
+    ).toHaveLength(0);
+  }
+});

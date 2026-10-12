@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 import type { Transferable } from "node:worker_threads";
@@ -23,21 +22,17 @@ import { restoreSessionColdTranscript } from "../config/sessions/session-cold-st
 import { listDurableSqliteTargetPathsForSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { createMemoryTranscriptProjectionSource } from "../config/sessions/session-transcript-reconcile-memory.js";
-import { withSessionCostUsageWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
-import { isOpenClawAgentDatabasePathCurrent } from "../state/openclaw-agent-db-identity.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
-  type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import type { OpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution-contract.js";
 import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
@@ -60,6 +55,7 @@ import {
 } from "./session-cost-usage-pricing-context.js";
 import type { UsageCostResolver } from "./session-cost-usage-pricing.js";
 import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
+import { withSessionCostUsageWorkerDatabases } from "./session-cost-usage-worker-scope.js";
 import {
   UsageCostWorkerReplyError,
   type UsageCostWorkerHostEffects,
@@ -309,81 +305,12 @@ async function runPreparedUsageCostWorker(
         options,
         memory,
         database: memory && !incognito ? getOpenClawAgentDatabaseIfOpen(options) : undefined,
-        identity: memory
-          ? undefined
-          : fs.statSync(options.path, { bigint: true, throwIfNoEntry: false }),
       };
     });
-    const cacheBinding = bindings.find(
-      (binding) =>
-        binding.options.agentId === location.agentId &&
-        binding.options.path === location.databasePath,
-    );
-    if (!cacheBinding) {
-      throw new Error("Usage cache database has no captured owner");
-    }
-    const assertBindingCurrent = (
-      binding: (typeof bindings)[number],
-      admittedDatabase?: OpenClawAgentDatabase,
-      execution?: OpenClawAgentDatabaseExecution,
-      opening?: boolean,
-    ) => {
-      const admittedCache =
-        admittedDatabase &&
-        binding === cacheBinding &&
-        admittedDatabase.agentId === binding.options.agentId &&
-        admittedDatabase.path === binding.options.path &&
-        getOpenClawAgentDatabaseIfOpen(binding.options) === admittedDatabase &&
-        isOpenClawAgentDatabasePathCurrent(admittedDatabase);
-      if (incognito?.owns(binding.options.agentId, binding.options.path)) {
-        return;
-      }
-      if (binding.memory) {
-        const current = getOpenClawAgentDatabaseIfOpen(binding.options);
-        if (!binding.database && current && admittedCache) {
-          binding.database = current;
-        }
-        if (current !== binding.database || (binding.database && !binding.database.db.isOpen)) {
-          throw new Error("Usage memory database changed during worker operation");
-        }
-        return;
-      }
-      const current = fs.statSync(binding.options.path, { bigint: true, throwIfNoEntry: false });
-      const admittedFile =
-        binding === cacheBinding &&
-        execution?.agentId === binding.options.agentId &&
-        execution.path === binding.options.path &&
-        execution.fileIdentity?.physicalIdentity === (current && `${current.dev}:${current.ino}`);
-      if (!binding.identity && current && (admittedCache || admittedFile)) {
-        binding.identity = current;
-      }
-      if (!binding.identity && opening && execution && !execution.fileIdentity) {
-        execution.assertCurrent();
-        return;
-      }
-      if (
-        binding.identity
-          ? !current || current.dev !== binding.identity.dev || current.ino !== binding.identity.ino
-          : current !== undefined
-      ) {
-        throw new Error("Usage database changed during worker operation");
-      }
-    };
-    const assertCurrent = (
-      admittedDatabase?: OpenClawAgentDatabase,
-      execution?: OpenClawAgentDatabaseExecution,
-      opening?: boolean,
-    ) => {
+    const assertCurrent = () => {
       incognito?.assertCurrent();
       scope.assertCurrent();
       signal?.throwIfAborted();
-      for (const binding of bindings) {
-        if (binding !== cacheBinding) {
-          assertBindingCurrent(binding);
-        }
-      }
-      // Only the lock owner's admitted writer may create a previously absent cache.
-      assertBindingCurrent(cacheBinding, admittedDatabase, execution, opening);
     };
     const resolveBinding = (
       target: Pick<SqliteSessionFileMarker, "agentId" | "storePath">,
@@ -399,6 +326,9 @@ async function runPreparedUsageCostWorker(
       }
       if (memoryOnly && !binding.memory) {
         throw new Error("Usage worker requested an unowned memory database");
+      }
+      if (binding.memory && !incognito) {
+        binding.database ??= getOpenClawAgentDatabaseIfOpen(binding.options);
       }
       return binding;
     };

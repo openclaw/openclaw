@@ -375,7 +375,7 @@ describe("collectPluginClawHubReleasePlan", () => {
     expect(retryDelays).toEqual([1_000]);
   });
 
-  it("falls back to the bounded retry schedule for an excessive Retry-After header", async () => {
+  it("reports an excessive Retry-After without retrying before the server permits", async () => {
     const repoDir = createTempPluginRepo();
     let trustedPublisherRequests = 0;
     const retryDelays: number[] = [];
@@ -407,18 +407,20 @@ describe("collectPluginClawHubReleasePlan", () => {
       throw new Error(`Unexpected ClawHub request to ${pathname}`);
     };
 
-    await collectPluginClawHubReleasePlan({
-      rootDir: repoDir,
-      selection: ["@openclaw/demo-plugin"],
-      fetchImpl,
-      registryBaseUrl: "https://clawhub.ai",
-      sleep: async (ms) => {
-        retryDelays.push(ms);
-      },
-    });
+    await expect(
+      collectPluginClawHubReleasePlan({
+        rootDir: repoDir,
+        selection: ["@openclaw/demo-plugin"],
+        fetchImpl,
+        registryBaseUrl: "https://clawhub.ai",
+        sleep: async (ms) => {
+          retryDelays.push(ms);
+        },
+      }),
+    ).rejects.toThrow("429 HTTP 429 [retry-after=999999999999]");
 
-    expect(trustedPublisherRequests).toBe(2);
-    expect(retryDelays).toEqual([1_000]);
+    expect(trustedPublisherRequests).toBe(1);
+    expect(retryDelays).toEqual([]);
   });
 
   it("keeps ClawHub trusted publisher timeouts active while reading response bodies", async () => {

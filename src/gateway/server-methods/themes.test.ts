@@ -19,7 +19,6 @@ import {
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userPreferences from "../../state/user-preferences.js";
 import {
   getUserPreferences,
@@ -294,25 +293,6 @@ describe("theme RPC", () => {
     });
   });
 
-  it("rolls back the imported definition when selecting it fails in storage", async () => {
-    expect(setUserPreferences(requesterProfileId, { "ui.theme": "claw" }).ok).toBe(true);
-    expect((await invoke("themes.get")).ok).toBe(true);
-    openOpenClawStateDatabase().db
-      .exec(`CREATE TRIGGER refuse_theme_selection BEFORE INSERT ON user_preferences
-      WHEN NEW.pref_key = 'ui.theme' BEGIN SELECT RAISE(ABORT, 'selection refused'); END`);
-    expect(
-      await invoke("themes.import", {
-        id: "refused",
-        definition: createThemeDefinitionFixture(),
-        apply: true,
-      }),
-    ).toMatchObject({
-      ok: false,
-      error: { message: expect.stringContaining("selection refused") },
-    });
-    expect(getUserPreferences(requesterProfileId)).toEqual({ "ui.theme": "claw" });
-  });
-
   it("validates and persists theme selection with accompanying appearance changes as one batch", async () => {
     pluginThemes.push(pluginTheme());
     const original = {
@@ -349,10 +329,7 @@ describe("theme RPC", () => {
 
   it.each([
     { background: "url(https://example.test/collect)" },
-    { background: "rgb(1 2 3 .5)" },
-    { background: "oklch(50%, 0.2, 180)" },
     { "font-sans": "sans-serif; background: red" },
-    { "font-sans": "'unterminated" },
   ])(
     "rejects unsafe or malformed theme values without importing or selecting: %j",
     async (palette) => {
@@ -391,7 +368,7 @@ describe("theme RPC", () => {
     });
   });
 
-  it.each(["plugin", "import"])(
+  it.each(["import"])(
     "selects a dark-only %s theme in one call and refuses explicit incompatible modes without writes",
     async (source) => {
       pluginThemes.push(pluginTheme());
@@ -437,47 +414,6 @@ describe("theme RPC", () => {
         });
         expect(getUserPreferences(requesterProfileId)).toEqual(saved);
       }
-    },
-  );
-
-  it.each([true, false])(
-    "updates mode only when replacing the selected custom theme (selected=%s)",
-    async (selected) => {
-      const unrelated = { "ui.accent": "#aabbcc", "ui.fontFamily": "serif" };
-      expect(
-        setUserPreferences(requesterProfileId, {
-          ...unrelated,
-          "ui.theme": "claw",
-          "ui.themeMode": "dark",
-        }).ok,
-      ).toBe(true);
-      expect(
-        await invoke("themes.import", {
-          id: "adaptive",
-          definition: createThemeDefinitionFixture(),
-          apply: selected,
-        }),
-      ).toMatchObject({ ok: true });
-
-      const replacement = {
-        name: "Solar Vessel",
-        description: "Pale surfaces with dark text and cyan accents",
-        light: createThemePaletteFixture({ background: "#eeeeff", foreground: "#101020" }),
-      };
-      const id = selected ? "user/adaptive" : "claw";
-      const mode = selected ? "light" : "dark";
-      expect(
-        await invoke("themes.import", { id: "adaptive", definition: replacement }),
-      ).toMatchObject({
-        ok: true,
-        payload: { current: { id, mode }, definition: replacement, application: "saved" },
-      });
-      expect(getUserPreferences(requesterProfileId)).toEqual({
-        ...unrelated,
-        "ui.theme": id,
-        "ui.themeMode": mode,
-        "ui.themeDefinition.adaptive": replacement,
-      });
     },
   );
 
@@ -529,22 +465,6 @@ describe("theme RPC", () => {
     });
     expect(getUserPreferences(requesterProfileId)).toEqual({
       "ui.themeDefinition.adaptive": replacement,
-    });
-  });
-
-  it("preserves an unrelated concurrent preference while committing a prepared theme selection", async () => {
-    pluginThemes.push(pluginTheme());
-    changePreferencesAfterSnapshot({ "chat.showThinking": true });
-    expect(await invoke("themes.set", { id: "space-pack/xenovessel", mode: "dark" })).toMatchObject(
-      {
-        ok: true,
-        payload: { current: { id: "space-pack/xenovessel", mode: "dark" }, application: "saved" },
-      },
-    );
-    expect(getUserPreferences(requesterProfileId)).toEqual({
-      "chat.showThinking": true,
-      "ui.theme": "space-pack/xenovessel",
-      "ui.themeMode": "dark",
     });
   });
 

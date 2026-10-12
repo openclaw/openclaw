@@ -33,7 +33,7 @@ const retryingCompactionEnd = () =>
   }) as const;
 
 type StreamUsage = AssistantMessage["usage"] & { reasoningTokens?: number };
-type UsageCall = {
+type UsageCall = Pick<AssistantMessage, "responseId" | "turnId"> & {
   usage: StreamUsage;
   streamedUsage?: StreamUsage;
   text?: string;
@@ -132,6 +132,8 @@ async function runUsageCalls(
         api: model.api,
         provider: model.provider,
         model: model.id,
+        responseId: call.responseId,
+        turnId: call.turnId,
         usage: call.usage,
         stopReason: call.stopReason ?? "stop",
         ...(call.stopReason && call.stopReason !== "stop"
@@ -302,11 +304,13 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       [
         {
           text: "First reply.",
+          responseId: "first-provider-response",
           streamedUsage: makeUsage({ input: 100, output: 12, cost: 0.125, billed: true }),
           usage: makeUsage(),
         },
         {
           text: "Second reply.",
+          turnId: "second-runtime-turn",
           streamedUsage: makeUsage({ input: 200, output: 8, cost: 0.5, billed: true }),
           usage: makeUsage(),
         },
@@ -334,8 +338,11 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         { input: 200, output: 8, totalTokens: 208, cost: { total: 0.5 } },
       ]);
       expect(onModelUsage.mock.calls).toMatchObject([
-        [{ input: 100, output: 12, cacheRead: 0, cacheWrite: 0 }],
-        [{ input: 200, output: 8, cacheRead: 0, cacheWrite: 0 }],
+        [
+          { input: 100, output: 12, cacheRead: 0, cacheWrite: 0 },
+          { responseId: "first-provider-response" },
+        ],
+        [{ input: 200, output: 8, cacheRead: 0, cacheWrite: 0 }, { turnId: "second-runtime-turn" }],
       ]);
       expect(subscription.getUsageTotals()).toMatchObject({
         input: 300,

@@ -144,6 +144,19 @@ stays in the live tail until an identity-bearing commit can own it or the run
 terminates. Such a producer can temporarily show a duplicate durable row;
 the Gateway favors preserving unsaved text over guessing which occurrence to hide.
 
+### Channel delivery mirrors
+
+For a settled `channel-final` delivery, `appendAssistantMirrorMessageByIdentity`
+accepts an optional `sourceRunId` from the producing run. Pass it when a queued
+answer can settle after another assistant message has been committed. The helper
+correlates matching text with an uncorrelated assistant occurrence in that run,
+in transcript order, so repeated answers retain distinct identities.
+
+The delivery receipt remains stored, but `chat.history` presents the correlated
+answer once. This does not change provider replay. A run ID is provenance, not
+write authorization; the existing session checks still apply. If no source run
+is supplied, correlation retains the latest-message behavior.
+
 ## Bounded model context
 
 Use `await SessionManager.openModelContextAsync(...)` from
@@ -290,10 +303,10 @@ the provider's own awaited work.
     for (const { sessionKey, entry } of api.runtime.agent.session.listSessionEntries({ agentId })) {
       // Iterate session rows without depending on the legacy sessions.json shape.
     }
-    await api.runtime.agent.session.patchSessionEntry({
+    await api.runtime.agent.session.prepareSessionEntryPatch({
       agentId,
       sessionKey,
-      update: (entry) => ({ thinkingLevel: "high" }),
+      prepare: () => ({ thinkingLevel: "high" }),
     });
 
     const created = await api.runtime.agent.session.createSessionEntry({
@@ -318,7 +331,7 @@ the provider's own awaited work.
     );
     ```
 
-    Prefer `getSessionEntryAsync(...)`, `getSessionEntryByIdAsync(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. Doctor and migration paths can combine `fallbackEntry`, `skipMaintenance`, and `requireWriteSuccess` for one atomic canonical-store repair.
+    Prefer `getSessionEntryAsync(...)`, `getSessionEntryByIdAsync(...)`, `prepareSessionEntryPatch(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. Doctor and migration paths can combine `fallbackEntry`, `skipMaintenance`, and `requireWriteSuccess` for one atomic canonical-store repair.
 
     Both async getters are also exported from the existing `openclaw/plugin-sdk/session-store-runtime` subpath. They return the complete public entry projection, excluding host-private fields, or `undefined` for a missing entry. The by-ID result includes `{ sessionKey, entry }` from the same selected owner. An explicit `storePath` selects that physical store; an omitted path inside a host-supplied incognito scope retains that scope. Managed runtime calls reject if their plugin owner retires while the read is pending. Returned metadata does not authorize a later effect; revalidate the caller's current authority at that boundary. The SDK and runtime `getSessionEntry(...)` getters are deprecated in favor of `getSessionEntryAsync(...)` and will be removed at the next Plugin SDK major. Their synchronous behavior remains unchanged during the migration window. The existing `readSessionUpdatedAt(...)` deprecation follows the same removal window; await `readSessionUpdatedAtAsync(...)` instead.
 
@@ -326,9 +339,11 @@ the provider's own awaited work.
 
     Incognito actor support is inactive preparation: ordinary unbound incognito calls still use the existing host-owned store and allocate no actor. Explicit host bindings exercise the actor arm; fresh selected absence remains distinct from an ended retained actor. `rethrowIncognitoSessionError(error)` preserves those typed refusals in optional-read error handlers. Active Memory awaits entry, eligibility, and status preparation and does not turn actor loss into empty recall. No schema, retention, or update migration is introduced.
 
-    When patch authority can change while `update` awaits, pass `assertCommitAllowed: () => void`. The storage owner calls this synchronous guard inside the commit transaction; throw to reject the entire patch. Keep network requests and other asynchronous work in `update`.
+    When patch authority can change while preparation awaits, use `authority: { kind: "host", assertCurrent }` for a live, database-free owner check, or pass the host-provided prepared source as `authority: { kind: "source", source }`. The worker compares the captured entry and rechecks authority before commit; conflicts reject without replaying preparation. The legacy `patchSessionEntry` and transaction-local callback guard remain deprecated compatibility adapters. See [session entry migration](/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes) for data-only patches and the retained incognito/cross-store routes.
 
     For native conversation controls, `getConversationSession(...)` from `openclaw/plugin-sdk/session-store-runtime` reads the current recorded binding for one transport address. Supply `agentId`, `channel`, `accountId`, `kind` (`direct`, `group`, or `channel`), and the ingress `peerId`; optional `threadId` selects an exact thread. Optional `storePath` and `env` select the same agent store as other session helpers. It returns `{ sessionKey, sessionId }`, or `undefined` when no current binding exists, and follows session resets without creating a session. It does not list active runs or infer a parent address. Targeted Stop dispatch can provide `replyOptions.isCommandTargetCurrent`, a synchronous in-process owner check carried to the cancellation boundary. A false result rejects a stale target; cancelled owners cannot mark a replacement session aborted.
+
+    `captureSessionEntryCurrentCheck(...)` from `openclaw/plugin-sdk/session-binding-runtime` prepares public entry metadata and its original source together. Supply `fields` for the exact policy values the operation consumes, and call the returned synchronous `assertCurrent()` at the effect boundary after awaited work. Session identity and lifecycle remain part of the predicate unless `matchGeneration: false` is explicitly selected. An optional `expected` entry rejects a changed selection during preparation. The returned entry is descriptive data; mutating it does not alter the retained guard.
 
     `createSessionEntry(...)` creates a new canonical session row and transcript. Its trusted `initialEntry` surface is deliberately narrow. A plugin may select an owned `agentHarnessId`; seed an owned CLI backend with `cliBackendId`, `model`, and `cliSessionBinding`; or seed a persistent ACP session with `acpBackendId` and `acpSessionBinding: { acpAgentId, agentSessionId }`. The ACP variant persists the supplied native agent session id through the canonical SQLite ACP metadata owner so the first turn resumes that external session. The injected runtime restricts plugin-owned CLI and ACP sessions to the calling plugin's `plugin:<id>:` namespace; harness ids must be owned through `registerAgentHarness(...)`. These are ownership invariants, not a sandbox between in-process plugins. Creation rejects an existing row; `label`, `displayName`, and `spawnedCwd` are separate creation fields rather than trusted-entry patches.
 
@@ -364,7 +379,13 @@ the provider's own awaited work.
 
     `readLatestAssistantTextByIdentity(...)` preserves the selected assistant text's whitespace and includes optional validated `openclawDelivery` facts from that same persisted message. Recovery consumers can retain reply, voice, media, and TTS intent without reparsing removed directives. These facts do not grant delivery authority; callers still apply their current-turn and reply-policy checks.
 
+    `withSessionTranscriptWrite(...)` exposes `readMessageFacts({ idempotencyKeys })` for exact-key lookups without loading the complete transcript. Facts and writes retain the context’s captured session and store; retained callbacks reject after the context closes. Native-history repair can preserve an existing message’s original run attribution while leaving the append owner’s strict payload comparison intact. A returned identity is evidence, not new execution authority.
+
     `appendSessionTranscriptMessageByIdentity(...)` is a low-level append of an already canonical message. Plugins must not synthesize media-bearing user rows with top-level `MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, or `MediaTypes`. Channel ingress should pass ordered facts through `MsgContext.media` and let the host own user-turn persistence. A host-prepared persisted user message carries canonical ordered facts under `message.__openclaw.media`; the generic append API does not infer or repair legacy parallel arrays.
+
+    Native command adapters that deliver outside the reply dispatcher use `recordDeliveredCommandExchange(...)` from `openclaw/plugin-sdk/session-transcript-runtime` **after confirmed delivery**. Pass the owning `sessionKey`, optional `agentId`, `config` or `storePath`, the literal `commandText`, the visible `replyText`, a stable `commandId`, and a stable per-reply `replyId`. Capture `expectedSessionId` before sending; optional lifecycle/writer expectations and `assertCurrent` preserve the bound target. The helper appends replayable user/assistant rows, initializes a previously absent session through the session creation owner, deduplicates input across replies, redacts login URLs and credential codes, and leaves `/btw` and `/side` ephemeral. It returns the transcript append result (`ok: true` with the target/message ID, or `ok: false` with a reason); it does not send a message. Never use it for previews, failed sends, or ordinary model replies that already own their transcript rows.
+
+    When a native interaction also dispatches a command, use `scopeCommandTranscriptId(messageId, { channelId, accountId, conversationId })` for both replies so the command is stored once. Use the dispatcher's message identity and conversation route, not a separate trigger identity; distinguish the delivered replies with `replyId`.
 
     A harness that supports `sessions_yield` uses `appendSessionYieldContext(...)` after successful yield settlement to retain private resume context in the canonical session transcript. Pass the session target, `message`, and an `assertCurrent` callback that checks the current run and settlement authority. The writer checks that callback again before appending the hidden context entry. Failed or revoked settlement must not append context; public tool results and display projections must omit the private message.
 

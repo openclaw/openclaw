@@ -44,7 +44,7 @@ import {
 } from "../agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../auth-profiles/session-override.js";
-import { ensureAuthProfileStore } from "../auth-profiles/store-runtime.js";
+import { ensureAuthProfileStoreAsync } from "../auth-profiles/store-runtime.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
@@ -64,7 +64,6 @@ import { resolveOperatorModelDefault } from "../operator-model-policy.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
 import {
-  needsThinkHydration,
   normalizeThinkingCatalogProviders,
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
@@ -427,7 +426,7 @@ export async function resolveEmbeddedModelSelection(params: {
       metadataSnapshot: params.pluginsEnabled ? params.manifestMetadataSnapshot : { plugins: [] },
     });
     const agentDir = resolveAgentDir(params.cfg, params.sessionAgentId);
-    const store = ensureAuthProfileStore(agentDir, {
+    const store = await ensureAuthProfileStoreAsync(agentDir, {
       profileId: authProfileId,
       config: params.cfg,
       allowKeychainPrompt: false,
@@ -527,10 +526,9 @@ export async function resolveEmbeddedModelSelection(params: {
       : params.configuredThinkingCatalog;
   if (
     params.pluginsEnabled &&
-    (primaryConfiguredThinkLevel !== "off" || thinkingRuntime !== "openclaw") &&
-    needsThinkHydration(catalogForThinking, provider, model, thinkingRuntime)
+    (primaryConfiguredThinkLevel !== "off" || thinkingRuntime !== "openclaw")
   ) {
-    // Thinking capability is a per-model fact; never materialize the full live catalog here.
+    // Read the admitted observation even when static/configured reasoning is already known.
     const { loadProviderScopedThinkingCatalog } = await import("../model-catalog.runtime.js");
     const runtimeCatalog = normalizeThinkingCatalogProviders(
       await loadProviderScopedThinkingCatalog({

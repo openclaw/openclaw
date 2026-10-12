@@ -27,6 +27,7 @@ export function subscribeChatPaneStartup(
 
 export function subscribeChatPaneSnapshotInvalidation(
   getState: () => ChatPageHost | undefined,
+  onInvalidate?: () => void,
 ): () => void {
   return subscribeSnapshotInvalidation(({ sessionKey, scopePrefix, reason }) => {
     // Cache eviction must preserve the active transcript and its completed load.
@@ -40,6 +41,7 @@ export function subscribeChatPaneSnapshotInvalidation(
     ) {
       return;
     }
+    onInvalidate?.();
     resetChatHistoryProjection(state);
     state.requestUpdate?.();
   });

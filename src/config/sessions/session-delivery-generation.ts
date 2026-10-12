@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasPendingSqliteNativeExecution } from "../../infra/sqlite-native-observer.js";
 import {
   readSqliteNativeMutationRevision,
   registerSqliteSchemaMutationListener,
@@ -15,10 +16,6 @@ import {
   type SessionRowChange,
 } from "../../sessions/session-row-changes.js";
 import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
-import {
-  isOpenClawAgentDatabaseRegistryChange,
-  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
-} from "../../state/openclaw-agent-db-registry-listing.js";
 import {
   registerOpenClawAgentDatabaseAsyncResource,
   registerOpenClawAgentDatabaseReadCandidateResource,
@@ -46,11 +43,7 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "./session-source-authority.js";
-import { isSessionStoreReadCandidateCurrent } from "./session-store-read-candidates.js";
-import {
-  captureSessionStoreReadCandidates,
-  createSessionStoreRegistryMutationFilter,
-} from "./session-store-target-inventory.js";
+import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 
 class SessionDeliveryGenerationRevokedError extends Error {
   readonly code = "SESSION_DELIVERY_GENERATION_REVOKED";
@@ -140,7 +133,6 @@ async function prepareSessionGenerationLease(
   let databaseIdentity: string | undefined;
   let retained: ReturnType<typeof retainPreparedSessionGenerationFacts> | undefined;
   let observeIncognito: (() => void) | undefined;
-  let assertRegistryPublication: (() => void) | undefined;
   const release = () => {
     if (!active) {
       return;
@@ -181,16 +173,8 @@ async function prepareSessionGenerationLease(
   const changed = (change: SessionRowChange) => {
     if ("all" in change) {
       if (isSessionStoreTopologyChange(change)) {
-        // Only canonical registry evidence can prove a topology publication irrelevant.
-        if (isOpenClawAgentDatabaseRegistryChange(change) && assertRegistryPublication) {
-          try {
-            assertRegistryPublication();
-          } catch {
-            invalidated = true;
-          }
-        } else {
-          invalidated = true;
-        }
+        // Registration changes do not retarget an in-flight delivery. Its selected
+        // store, current permissions, and actual closure remain checked below.
         return;
       }
       if (typeof change.scope === "object") {
@@ -336,51 +320,6 @@ async function prepareSessionGenerationLease(
           readDatabasePathIdentitySync(candidate.physicalPath),
         ]),
       );
-      const preparedSources: Array<{
-        agentId: string;
-        path: string;
-        identity: string;
-        birthtime: string;
-      }> = [];
-      // Capture registry selection before worker I/O; keep its witness for the lease lifetime.
-      const unchangedByRegistry = createSessionStoreRegistryMutationFilter({
-        captured: candidates.map((candidate) => ({
-          candidate,
-          identity: originalSources.get(path.resolve(candidate.physicalPath))!.key,
-          birthtime: originalSources.get(path.resolve(candidate.physicalPath))!.birthtime,
-        })),
-        preparedSources,
-      });
-      const registryRead = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
-        {},
-        (mutation, entries) => {
-          // Until selection completes, canonical candidates have no verified physical owner.
-          // Do not consume a relevant transition before preparedSources can fence it.
-          if (
-            preparedSources.length === 0 &&
-            mutation.sources.some(
-              (source) =>
-                originalSources.has(source.path) ||
-                originalSources.has(source.physicalPath) ||
-                [...originalSources.values()].some((identity) => identity.key === source.identity),
-            )
-          ) {
-            return false;
-          }
-          return unchangedByRegistry(mutation, entries);
-        },
-      );
-      const assertCandidatePaths = () => {
-        for (const candidate of candidates) {
-          if (!isSessionStoreReadCandidateCurrent(candidate)) {
-            throw new SessionDeliveryGenerationUnavailableError();
-          }
-        }
-      };
-      assertRegistryPublication = () => {
-        registryRead.assertCurrent();
-        assertCandidatePaths();
-      };
       for (const candidate of candidates) {
         paths.add(path.resolve(candidate.path));
         paths.add(path.resolve(candidate.physicalPath));
@@ -433,11 +372,6 @@ async function prepareSessionGenerationLease(
                 throw new SessionDeliveryGenerationUnavailableError();
               }
               source = { path: sharing.source.path, identity: sharing.databaseIdentity };
-              preparedSources.push({
-                agentId: read!.database.agentId,
-                ...source,
-                birthtime: identity.birthtime,
-              });
             } else {
               const pathname = path.resolve(read!.database.path);
               const original = originalSources.get(pathname);
@@ -482,6 +416,10 @@ async function prepareSessionGenerationLease(
               if (!native) {
                 return;
               }
+              // Native callbacks and unfinished cursors cannot certify a committed write set.
+              if (hasPendingSqliteNativeExecution(native.db)) {
+                throw new SessionDeliveryGenerationUnavailableError();
+              }
               const revision = readSqliteNativeMutationRevision(native.db);
               if (revision === undefined) {
                 throw new SessionDeliveryGenerationUnavailableError();
@@ -490,7 +428,7 @@ async function prepareSessionGenerationLease(
                 return;
               }
               const committed = !native.db.isTransaction;
-              // Raw same-handle commits do not advance data_version or publish entry facts.
+              // Raw same-handle commits do not publish complete entry facts.
               // Keep their final native guard until managed raw settlement is complete.
               try {
                 const observed = checkEntry(
@@ -520,8 +458,6 @@ async function prepareSessionGenerationLease(
       }
       const assertSourceCurrent = () => {
         assertActive();
-        registryRead.assertCurrent();
-        assertCandidatePaths();
         if (!source || readDatabasePathIdentitySync(source.path).key !== source.identity) {
           throw new SessionDeliveryGenerationUnavailableError();
         }

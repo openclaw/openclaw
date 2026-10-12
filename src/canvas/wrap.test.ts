@@ -94,9 +94,9 @@ describe("buildWidgetDocument", () => {
       '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
     );
 
-    expect(Buffer.byteLength(html)).toBe(17747);
+    expect(Buffer.byteLength(html)).toBe(17765);
     expect(createHash("sha256").update(html).digest("hex")).toBe(
-      "ce1bccdce31139aee6dd75936219737417d19332f04d43ae656a0c9c80beea48",
+      "e8c709f66c308ddf94d310ad2a29375a1edff39b9d82328464146045640e72f0",
     );
   });
 });

@@ -119,6 +119,18 @@ separate cache identities. Advisory calls still retain only nonempty results.
 Custom live builders can use `runLiveProviderCatalog` at their catalog hook
 to report successful acquisition and convert acquisition errors into outcomes.
 Returning provider configuration alone does not establish a live discovery outcome.
+
+Catalog hooks should omit `contextWindow` when the provider does not report it;
+keep a reported `contextTokens` prompt limit separately. Cached catalogs preserve
+that omission. Runtime construction supplies an estimate and marks it with
+`contextWindowSource: "synthetic"`; dynamic runtime resolvers may mark their own
+unknown-model estimates the same way. This marker is runtime-only, never config
+or persisted catalog metadata. Accepted account discovery can replace that
+estimate for the same provider,
+exact model ID, and transport API (and endpoint, when the fallback binds one).
+Do not mark curated static limits or authored caps as synthetic. Failed discovery
+keeps the estimate unless the catalog owner can retain the same account's inventory.
+
 For compatibility, nonempty rows returned by a legacy catalog hook without an
 outcome survive provider-wide failures under the same credentials. This does not
 establish a successful discovery origin or retain unrelated configured and
@@ -297,10 +309,14 @@ The private `createUpstreamProviderCatalog` helper keeps this snapshot lifecycle
 owner. Supply the trusted seed, provider routes, metadata and model-list
 endpoints, discovery and starter-model audit labels, static-entry eligibility,
 and any model decoration. An optional
-`upstreamSeed` controls which seed lifecycle facts survive an upstream refresh.
+`upstreamSeed` controls which seed lifecycle facts survive an upstream refresh,
+and an optional `projectRows` replaces the default selection of listed rows
+(`projectProviderCatalogSnapshotRows`) when the plugin admits listed IDs the
+metadata does not describe. Model-list requests carry the provider's attribution
+headers from the same owner inference uses.
 The owner exposes `getSnapshot`, `refreshMetadata`, `buildStaticProvider`, and
 `buildLiveProvider`; credentials belong to each build call. Live builds refresh
-metadata before deriving static eligibility and intersecting advertised IDs.
+metadata before deriving static eligibility and projecting advertised IDs.
 Metadata acquisition failure retains the previous snapshot; model-list failures
 and empty results remain strict. `refreshMetadata` returns `undefined` when the
 feed lacks the provider, so explicit model preparation cannot mistake retained

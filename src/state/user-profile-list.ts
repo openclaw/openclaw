@@ -168,7 +168,7 @@ type ProfileMutationPublication = {
       };
     }
   >;
-  catalogs: Map<ProfileCatalog, symbol>;
+  catalogs: Set<ProfileCatalog>;
 };
 const profileMutationPublications = new Set<ProfileMutationPublication>();
 let stopCatalogEvents: (() => void) | undefined;
@@ -246,11 +246,7 @@ function retainProfileMutationPublicationCatalog(
   if (!catalog.valid || catalog.identity.key !== publication.identity.key) {
     return;
   }
-  if (!publication.catalogs.has(catalog)) {
-    const lease = Symbol("pending profile mutation publication");
-    publication.catalogs.set(catalog, lease);
-    catalog.leases.add(lease);
-  }
+  publication.catalogs.add(catalog);
   let witness = publication.witnesses.get(catalog.rows);
   if (!witness) {
     witness = {
@@ -305,7 +301,7 @@ export function retainUserProfileMutationPublication(
     emailBindings: new Map(emailBindings.map((change) => [change.email, change.before])),
     supersededBindings: new Set(),
     witnesses: new Map(),
-    catalogs: new Map(),
+    catalogs: new Set(),
   };
   profileMutationPublications.add(publication);
   for (const catalog of profileCatalogs.values()) {
@@ -318,7 +314,7 @@ export function retainUserProfileMutationPublication(
     settled?: () => void,
   ) => {
     let changed = false;
-    for (const catalog of publication.catalogs.keys()) {
+    for (const catalog of publication.catalogs) {
       const witness = publication.witnesses.get(catalog.rows);
       if (!catalog.valid || catalog.identity.key !== identity.key || !witness) {
         continue;
@@ -424,9 +420,6 @@ export function retainUserProfileMutationPublication(
     },
     release(this: void) {
       profileMutationPublications.delete(publication);
-      for (const [catalog, lease] of publication.catalogs) {
-        releaseProfileCatalog(catalog, lease);
-      }
       publication.catalogs.clear();
       stopUnusedProfileCatalogObservers();
     },

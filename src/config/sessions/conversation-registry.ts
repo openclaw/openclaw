@@ -6,7 +6,6 @@ import {
   withOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly.js";
-import { withOpenClawAgentDatabaseWrite } from "../../state/openclaw-agent-db-write.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
@@ -46,19 +45,6 @@ export type PreparedConversationRegistryScope = {
   env: NodeJS.ProcessEnv;
   storePath: string;
 };
-
-export function resolveConversationRegistryScope(params: {
-  agentId: string;
-  config: OpenClawConfig;
-}): PreparedConversationRegistryScope {
-  const scope = {
-    agentId: params.agentId,
-    storePath: resolveSessionStorePathCore(params.config.session?.store, {
-      agentId: params.agentId,
-    }),
-  };
-  return pinConversationDatabaseScope(scope).scope;
-}
 
 export async function prepareConversationRegistryScope(params: {
   agentId: string;
@@ -147,15 +133,6 @@ export function pinConversationDatabaseScope(input: ConversationRegistryScope) {
     options: { ...options, path: storePath },
     scope: { ...input, databaseAgentId: options.agentId, storePath, env },
   };
-}
-
-/** Keep the logical agent and physical store fixed while its synchronous write waits. */
-export function runConversationDatabaseWrite<T>(
-  input: ConversationRegistryScope,
-  operation: (scope: PreparedConversationRegistryScope) => T,
-): Promise<T> {
-  const { options, scope } = pinConversationDatabaseScope(input);
-  return withOpenClawAgentDatabaseWrite(options, () => operation(scope));
 }
 
 function selectConversationRows(
@@ -369,6 +346,21 @@ export function resolveCurrentConversationSession(
     conversationRef,
     currentBindingOnly: true,
     currentSession,
+    limit: 1,
+  });
+  return conversation?.sessionKey && conversation.sessionId
+    ? { sessionKey: conversation.sessionKey, sessionId: conversation.sessionId }
+    : undefined;
+}
+
+/** Reads an address's current binding through the existing session reader worker. */
+export async function resolveCurrentConversationSessionAsync(
+  scope: ConversationRegistryScope,
+  conversationRef: string,
+): Promise<{ sessionKey: string; sessionId: string } | undefined> {
+  const [conversation] = await selectConversationRowsInWorker(scope, {
+    conversationRef,
+    currentBindingOnly: true,
     limit: 1,
   });
   return conversation?.sessionKey && conversation.sessionId

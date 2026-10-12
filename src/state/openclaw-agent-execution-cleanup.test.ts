@@ -143,6 +143,7 @@ it("revokes retired reader validation when shared cleanup admission fails", asyn
   const receipt = {
     agentId: target.agentId,
     identity: "synthetic-agent",
+    birthtime: "synthetic-birthtime",
     receiptId: "reader-recovery-proof",
     valid,
     canonicalReady,

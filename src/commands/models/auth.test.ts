@@ -1354,24 +1354,15 @@ describe("modelsAuthLoginCommand", () => {
 
   it("does not persist a cancelled manual token entry", async () => {
     const runtime = createRuntime();
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((
-      code?: string | number | null,
-    ) => {
-      throw new Error(`exit:${String(code ?? "")}`);
-    }) as typeof process.exit);
-    try {
-      mocks.clackPassword.mockResolvedValue(CANCEL_SYMBOL);
+    mocks.clackPassword.mockResolvedValue(CANCEL_SYMBOL);
 
-      await expect(modelsAuthPasteTokenCommand({ provider: "openai" }, runtime)).rejects.toThrow(
-        "exit:0",
-      );
+    await expect(
+      modelsAuthPasteTokenCommand({ provider: "openai" }, runtime),
+    ).rejects.toMatchObject({ name: "ExitError", code: 0 });
 
-      expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
-      expect(mocks.updateConfig).not.toHaveBeenCalled();
-      expect(mocks.logConfigUpdated).not.toHaveBeenCalled();
-    } finally {
-      exitSpy.mockRestore();
-    }
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+    expect(mocks.logConfigUpdated).not.toHaveBeenCalled();
   });
 
   it("writes pasted Anthropic setup-tokens and logs the preference note", async () => {

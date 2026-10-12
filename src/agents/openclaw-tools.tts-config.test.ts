@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import type { MediaGenerateToolOptions } from "./tools/media-generate-background.js";
@@ -153,8 +153,11 @@ describe("createOpenClawTools context wiring", () => {
     ],
   ])(
     "passes a separate durable requester key for background media from %s",
-    (agentSessionKey, runSessionKey, taskSessionKey) => {
-      createTools({
+    async (agentSessionKey, runSessionKey, taskSessionKey) => {
+      await createOpenClawToolsAsync({
+        disableMessageTool: true,
+        disablePluginTools: true,
+        authProfileStore: { version: 1, profiles: {} },
         config: mediaConfig,
         agentSessionKey,
         runSessionKey,
@@ -166,6 +169,7 @@ describe("createOpenClawTools context wiring", () => {
             agentSessionKey: taskSessionKey,
             requesterRunSessionKey: runSessionKey,
           }),
+          true,
         );
       }
     },

@@ -3,6 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { hasRevokedOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import type { OpenClawDatabaseVerifyTarget } from "./openclaw-database-verify.worker.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -35,6 +36,27 @@ function integrityCheckQueue(env: NodeJS.ProcessEnv): IntegrityCheckQueue {
     integrityCheckQueues.set(key, queue);
   }
   return queue;
+}
+
+/** Deferral belongs to a running verifier, never a queue without a consumer. */
+export function captureOpenClawDatabaseIntegrityVerifier(database: {
+  databasePath: string;
+  environment: NodeJS.ProcessEnv;
+}): (() => void) | undefined {
+  if (hasRevokedOpenClawAgentDatabaseValidation(database.databasePath)) {
+    return undefined;
+  }
+  const queue = integrityCheckQueues.get(
+    path.resolve(resolveOpenClawStateSqlitePath(database.environment)),
+  );
+  const owner = queue?.subscribers.values().next().value;
+  return owner && queue
+    ? () => {
+        if (!queue.subscribers.has(owner)) {
+          throw new Error("Agent admission lost its background integrity verifier");
+        }
+      }
+    : undefined;
 }
 
 function wakeSubscribers(queue: IntegrityCheckQueue): void {

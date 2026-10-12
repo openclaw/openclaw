@@ -12,6 +12,8 @@ import type { InputProvenance } from "../sessions/input-provenance.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import { resolveEffectiveToolPolicy, resolveTrustedGroupId } from "./agent-tools.policy.js";
+import type { DelegatedToolDenyFloor } from "./delegated-tool-policy.js";
+import { normalizeInheritedToolDenylist } from "./inherited-tool-deny.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
@@ -28,6 +30,7 @@ import type {
 import {
   collectExplicitAllowlist,
   collectExplicitDenylist,
+  hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
@@ -178,11 +181,13 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
     inheritedToolPolicy,
     runtimeToolPolicy,
   ];
+  const inheritedToolPolicyForSpawn =
+    requesterPolicies.inheritedToolPolicyForSpawn ?? inheritedToolPolicy;
   const inheritancePolicies = [
     profilePolicy,
     providerProfilePolicy,
     ...configuredOverridePolicies,
-    inheritedToolPolicy,
+    inheritedToolPolicyForSpawn,
     runtimeToolPolicyForInheritance,
   ];
 
@@ -232,6 +237,8 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       sandboxSessionRenameOnly,
       subagentPolicy,
       inheritedToolPolicy,
+      inheritedToolPolicyForSpawn,
+      delegatedToolPolicy: requesterPolicies.delegatedToolPolicy,
       inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
       delegated: requesterPolicies.delegated,
       requesterPolicySource: requesterPolicies.requesterPolicySource,
@@ -248,3 +255,50 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
 export type ResolvedConversationCapabilityProfile = ReturnType<
   typeof resolveConversationCapabilityProfile
 >;
+
+/** Prepare before flattening: duplicate nonlocal denies survive the local exception. */
+export function prepareDelegatedToolDenyFloor(
+  profile: ResolvedConversationCapabilityProfile,
+  additionalDeny: readonly string[] = [],
+): DelegatedToolDenyFloor | undefined {
+  const policy = profile.policy;
+  const continuation = policy.delegatedToolPolicy;
+  if (
+    !policy.agentId ||
+    policy.inheritedToolPolicySource === "sender" ||
+    policy.runtimeToolPolicyForInheritance?.allow.length === 0 ||
+    (!continuation && policy.inheritancePolicies.some(hasRestrictiveAllowPolicy))
+  ) {
+    return undefined;
+  }
+  if (!continuation && !policy.agentPolicy?.deny?.length) {
+    return undefined;
+  }
+  return {
+    policyAgentId: policy.agentId,
+    deny: normalizeInheritedToolDenylist([
+      ...collectExplicitDenylist([
+        policy.globalPolicy,
+        policy.globalProviderPolicy,
+        // A grantee's own local policy is never waived by the original requester's grant.
+        continuation ? policy.agentPolicy : undefined,
+        policy.agentProviderPolicy,
+        policy.groupPolicy,
+        policy.senderPolicy,
+        policy.sandboxPolicy,
+        policy.subagentPolicy,
+        continuation ? policy.inheritedToolPolicy : policy.inheritedToolPolicyForSpawn,
+        policy.runtimeToolPolicyForInheritance,
+      ]),
+      ...additionalDeny,
+    ]),
+    ...(continuation
+      ? {
+          continuation: {
+            requesterSessionKey: continuation.requesterSessionKey,
+            targetAgentId: continuation.targetAgentId,
+          },
+        }
+      : {}),
+  };
+}

@@ -110,21 +110,27 @@ export type SidebarRecentSession = {
   renameValue: string;
   /** Compact repo/branch/node line for work sessions. */
   subtitle?: string;
+  /** Admitted display slot used only while restoring a sidebar snapshot. */
+  snapshotSubtitle?: { subtitle?: string; narration?: string; toolName?: string };
   workContext?: SessionWorkContext;
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
   /** Raw Gateway liveness used for operations even when display status is terminal. */
   gatewayHasActiveRun?: boolean;
+  hasActiveSubagentRun?: boolean;
   activeRunIds?: readonly string[];
   modelSelectionLocked: boolean;
   kind?: string;
   pinned: boolean;
   pinnable: boolean;
+  sidebarRoot?: boolean;
   snoozedUntil?: number;
   archived?: boolean;
   visibility?: SessionVisibility;
   sharingRole?: GatewaySessionRow["sharingRole"];
+  communication?: GatewaySessionRow["communication"];
+  effectiveCommunication?: GatewaySessionRow["effectiveCommunication"];
   draftOwnedBySelf?: boolean;
   category?: string;
   icon?: string;
@@ -313,7 +319,16 @@ export type SidebarCatalogSessionMutationScope = SidebarSessionMutationScope & {
 
 export type SidebarSessionPatch = Pick<
   SessionsPatchMutation,
-  "archived" | "pinned" | "snoozedUntil" | "unread" | "label" | "icon" | "color" | "category"
+  | "archived"
+  | "pinned"
+  | "sidebarRoot"
+  | "snoozedUntil"
+  | "unread"
+  | "label"
+  | "icon"
+  | "color"
+  | "category"
+  | "communication"
 >;
 
 export const SIDEBAR_SESSION_PAGE_SIZE = 10;
@@ -383,14 +398,17 @@ export function loadStoredSidebarSessionOwnerFilter(
     const stored = getSafeLocalStorage()?.getItem(
       sidebarSessionOwnerFilterStorageKey(gatewayUrl, selfUserId),
     );
+    if (stored === null || stored === undefined) {
+      return { ownerId: selfUserId, involvingMe: false };
+    }
     const ownerId = stored?.startsWith("owner:") ? stored.slice("owner:".length).trim() : "";
     return {
       ownerId: stored === "involving-me" ? null : ownerId || null,
       involvingMe: stored === "involving-me",
     };
   } catch {
-    // Privacy mode or a disabled store should not break sidebar rendering.
-    return { ownerId: null, involvingMe: false };
+    // A disabled store still uses the signed-in owner default.
+    return { ownerId: selfUserId, involvingMe: false };
   }
 }
 
@@ -474,12 +492,8 @@ export function storeSidebarSessionOwnerFilter(
       ? "involving-me"
       : filter.ownerId
         ? `owner:${filter.ownerId}`
-        : null;
-    if (value === null) {
-      storage?.removeItem(key);
-    } else {
-      storage?.setItem(key, value);
-    }
+        : "all";
+    storage?.setItem(key, value);
   } catch {
     // Keep the in-memory filter when persistence is unavailable.
   }

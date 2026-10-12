@@ -385,6 +385,7 @@ describe("resolveNonInteractiveApiKey", () => {
     const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
     expect(payload).toEqual({
       ok: false,
+      error: { type: "cli_error", message: expect.stringContaining(testCase.expectedMessage) },
       phase: "options",
       message: expect.stringContaining(testCase.expectedMessage),
     });

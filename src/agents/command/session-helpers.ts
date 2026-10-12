@@ -84,7 +84,7 @@ export async function prepareCurrentRunDelivery(params: {
     opts.deliveryTargetMode ??
     deliveryPlan.deliveryTargetMode ??
     ((opts.replyTo ?? opts.to) ? "explicit" : "implicit");
-  const resolved = resolveAgentOutboundTarget({
+  const resolved = await resolveAgentOutboundTarget({
     cfg,
     plan: deliveryPlan,
     targetMode,

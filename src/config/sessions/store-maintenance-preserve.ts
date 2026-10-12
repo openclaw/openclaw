@@ -1,12 +1,11 @@
 // Maintenance preserve providers protect runtime-owned sessions from pruning/capping.
-import type { SubagentMaintenanceDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import { iterateProjectedAgentRunSessionKeys } from "../../infra/agent-run-projection.js";
 import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import {
   collectActiveSessionWorkAdmissions,
   collectActiveSessionLifecycleMutationIdentities,
 } from "../../sessions/session-lifecycle-admission.js";
-import { SessionMaintenancePreservationConflictError } from "./session-mutation-conflict-error.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   addSessionMaintenancePreserveKeys,
   collectSessionWorkAdmissionKeysFromSnapshot,
@@ -20,7 +19,6 @@ type PreparedSessionMaintenancePreserveKeys = {
   refreshCandidates?(sessionKeys: readonly string[]): Iterable<string> | undefined;
   /** Release prepared source custody; this must not throw. */
   dispose(): void;
-  readonly subagentRunBasis?: SubagentMaintenanceDurableBasis;
 };
 
 type PrepareSessionMaintenancePreserveKeys = (options: {
@@ -34,7 +32,6 @@ export type PreparedSessionMaintenancePreservation = {
     sessionKeys: readonly string[],
   ): SessionMaintenancePreservationSnapshot;
   dispose(this: void): void;
-  readonly subagentRunBasis?: SubagentMaintenanceDurableBasis;
 };
 
 const preserveKeysProviders = new Set<{ prepare: PrepareSessionMaintenancePreserveKeys }>();
@@ -86,21 +83,13 @@ export async function prepareSessionMaintenancePreservation(
       preserveKeysProviders.size !== registrations.length ||
       registrations.some((registration) => !preserveKeysProviders.has(registration))
     ) {
-      throw new SessionMaintenancePreservationConflictError(
-        "Session maintenance providers changed during preparation",
-      );
+      throw new SqliteSessionMutationConflictError("session maintenance");
     }
   };
   try {
     for (const registration of registrations) {
       prepared.push(await registration.prepare(options));
       assertProvidersCurrent();
-    }
-    const bases = prepared.flatMap((facts) =>
-      facts.subagentRunBasis ? [facts.subagentRunBasis] : [],
-    );
-    if (bases.length > 1) {
-      throw new Error("Session maintenance has competing subagent registry providers");
     }
     const capture = (sessionKeys?: readonly string[]): SessionMaintenancePreservationSnapshot => {
       assertProvidersCurrent();
@@ -124,7 +113,6 @@ export async function prepareSessionMaintenancePreservation(
       };
     };
     return {
-      subagentRunBasis: bases[0],
       dispose,
       capture: () => capture(),
       refreshCandidates: capture,

@@ -46,10 +46,9 @@ vi.mock("../../acp/runtime/session-meta-readonly.js", () => ({
   readAcpSessionMetaForEntry: hoisted.readAcpSessionMetaForEntryMock,
 }));
 
-vi.mock("../../config/sessions/paths.js", () => ({
+vi.mock("../../config/sessions/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/paths.js")>()),
   resolveDefaultSessionStorePath: hoisted.resolveDefaultSessionStorePathMock,
-  resolveSessionFilePathCore: hoisted.resolveSessionFilePathMock,
-  resolveSessionFilePathOptions: hoisted.resolveSessionFilePathOptionsMock,
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => {
@@ -198,10 +197,6 @@ describe("buildExportSessionReply", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hoisted.resolveDefaultSessionStorePathMock.mockReturnValue("/tmp/target-store/sessions.json");
-    hoisted.resolveSessionFilePathMock.mockReturnValue("/tmp/target-store/session.jsonl");
-    hoisted.resolveSessionFilePathOptionsMock.mockImplementation(
-      (params: { agentId: string; storePath: string }) => params,
-    );
     hoisted.loadSessionStoreMock.mockReturnValue({
       "agent:target:session": {
         sessionId: "session-1",

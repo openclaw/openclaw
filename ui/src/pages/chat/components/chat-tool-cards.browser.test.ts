@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import { renderToolCard } from "./chat-tool-cards.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
 let container: HTMLDivElement | undefined;
@@ -15,7 +16,7 @@ afterEach(() => {
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("narrow tool activity rows", () => {
-  it("truncates long progress receipts while keeping tool identity visible", () => {
+  it("truncates long progress receipts while keeping tool identity visible", async () => {
     container = document.body.appendChild(document.createElement("div"));
     container.style.width = "220px";
     const step = "Verify the implementation and report the result. ".repeat(12).slice(0, 512);
@@ -39,6 +40,7 @@ describe.runIf("__vitest_browser__" in globalThis)("narrow tool activity rows", 
       container,
     );
 
+    await settleToolBridges(container);
     const receipt = container.querySelector<HTMLElement>('[role="status"]')!;
     const text = receipt.querySelector<HTMLElement>(":scope > span:last-child")!;
     expect(receipt.textContent).toContain(step);

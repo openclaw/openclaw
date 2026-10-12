@@ -16,12 +16,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
+import { convertToOllamaMessages } from "./stream-messages.js";
 import {
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
-  convertToOllamaMessages,
   buildAssistantMessage,
   parseNdjsonStream,
 } from "./stream.runtime.js";
@@ -1118,9 +1118,7 @@ describe("createOllamaStreamFn streaming events", () => {
     const done = events.at(-1);
     assert(done?.type === "done", "Expected done event");
     expect(done.message.content).toEqual([
-      ...(visible
-        ? [{ type: "text", text: "Visible answer", textSignature: expect.any(String) }]
-        : []),
+      ...(visible ? [{ type: "text", text: "Visible answer" }] : []),
       { type: "toolCall", id: expect.any(String), name: "bash", arguments: { command: "ls" } },
     ]);
   });

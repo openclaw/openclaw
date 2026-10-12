@@ -1,4 +1,3 @@
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   ErrorCodes,
   errorShape,
@@ -33,7 +32,6 @@ import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
   withGatewaySessionStoreTarget,
-  prepareGatewaySessionStoreTargetsReadOnly,
   resolveGatewaySessionStoreTargetWithStore,
   type GatewaySessionStoreCache,
 } from "./session-utils-store-lookup.js";
@@ -228,27 +226,6 @@ function toSessionSharingTarget(
     : null;
 }
 
-/** Prepare one synchronous batch while retaining each target's failure for ordered consumption. */
-export function prepareSessionSharingTargets(params: {
-  cfg: OpenClawConfig;
-  targets: readonly { sessionKey: string; agentId?: string }[];
-}): Array<Result<SessionSharingTarget | null, unknown>> {
-  return prepareGatewaySessionStoreTargetsReadOnly({
-    cfg: params.cfg,
-    targets: params.targets.map(({ sessionKey, agentId }) => ({ key: sessionKey, agentId })),
-    projection: "list",
-  }).map((result) => {
-    if (!result.ok) {
-      return result;
-    }
-    try {
-      return ok(toSessionSharingTarget(result.value));
-    } catch (error) {
-      return err(error);
-    }
-  });
-}
-
 export type SessionSharingRoleParams = {
   cfg?: OpenClawConfig;
   client: GatewayClient | null;
@@ -404,6 +381,7 @@ export function authorizePreparedSessionMutation(
   prepared: {
     policy: GatewayOperatorRoleDefinition | undefined;
     aliases: ReadonlySet<string>;
+    authorizesAgentRun?: boolean;
   },
 ): ErrorShape | null {
   return authorizeSessionMutationTarget(params, () => facts.target, {
@@ -419,16 +397,18 @@ function authorizeSessionMutationTarget(
     policy: GatewayOperatorRoleDefinition | undefined;
     aliases: ReadonlySet<string>;
     membership: ReadonlySet<string>;
+    authorizesAgentRun?: boolean;
   },
 ): ErrorShape | null {
-  if (isGatewayAdmin(params.client) && !params.cfg.gateway?.roles) {
+  const authorizesAgentRun = prepared?.authorizesAgentRun !== false;
+  if (isGatewayAdmin(params.client) && (!authorizesAgentRun || !params.cfg.gateway?.roles)) {
     return null;
   }
   if (isGatewayClientProfilePending(params.client)) {
     return authenticatedProfileUnavailableError();
   }
   const target = readTarget();
-  if (target) {
+  if (target && authorizesAgentRun) {
     const agentError = authorizeSessionAgentRun(
       { cfg: params.cfg, client: params.client, target },
       prepared,
@@ -524,7 +504,7 @@ export function authorizeSessionAgentRun(
 }
 
 export function authorizeSessionSharingTarget(
-  params: SessionSharingRoleParams & { requireOwner?: boolean },
+  params: SessionSharingRoleParams & { requireOwner?: boolean; ownerAction?: string },
   prepared?: { value: ReturnType<typeof operatorSessionCap>; role: SessionSharingRole },
 ): ErrorShape | null {
   const visibility = resolveSessionVisibility(params.target.entry);
@@ -538,7 +518,7 @@ export function authorizeSessionSharingTarget(
   if (params.requireOwner && !canManageSessionSharing(role)) {
     return errorShape(
       ErrorCodes.FORBIDDEN,
-      "Only the session creator or an admin can archive or restore this session.",
+      `Only the session creator or an admin can ${params.ownerAction ?? "archive or restore this session"}.`,
     );
   }
   const capped = sessionCap === "view" || sessionCap === "suggest";

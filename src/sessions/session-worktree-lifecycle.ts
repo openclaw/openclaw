@@ -21,7 +21,10 @@ import {
 } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord, WorktreeWorkerAuthority } from "../agents/worktrees/types.js";
 import { loadSessionEntry, type SessionAccessScope } from "../config/sessions/session-accessor.js";
-import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
+import {
+  captureSessionEntryMetadataRead,
+  captureSessionEntrySourceAssertion,
+} from "../config/sessions/session-entry-source-authority.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -143,11 +146,12 @@ export async function restoreSessionWorktree(params: {
     ...requestedScope,
     env: { ...(requestedScope.env ?? process.env), ...context.environment },
   };
+  const metadata = captureSessionEntryMetadataRead(scope);
   const accept = captureWorktreeRegistryReadGuard(context, "session-owner");
   const record = await readRegistryWorktree(context, id);
   const assertWorktreeCurrent = accept(record);
   const assertSessionCurrent = () => {
-    const current = loadSessionEntry(scope);
+    const current = metadata ? metadata.readCurrent() : loadSessionEntry(scope);
     if (
       current?.sessionId !== entry.sessionId ||
       current?.lifecycleRevision !== entry.lifecycleRevision ||

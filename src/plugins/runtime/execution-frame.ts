@@ -19,6 +19,10 @@ export const PluginRuntimeExecutionFrame = resolveGlobalSingleton(
         super(scopes, invocation);
       }
 
+      override get runtimePluginId(): string | undefined {
+        return this.gatewayScope?.pluginId;
+      }
+
       override withScopes(scopes: PluginExecutionScopes): RuntimeFrame {
         return new RuntimeFrame(scopes, this.gatewayScope, this.generationRegistry);
       }

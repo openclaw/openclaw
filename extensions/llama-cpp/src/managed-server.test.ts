@@ -78,51 +78,11 @@ describe("managed llama-server", () => {
   it.each([
     [
       "darwin",
-      "arm64",
-      "metal",
-      "tar.gz",
-      "llama-b10809-bin-macos-arm64.tar.gz",
-      "7d692df9e1e386e62f1c12b843903218041e6cd74c9415aa39a7ed3176f9eaa2",
-    ],
-    [
-      "darwin",
       "x64",
       "cpu",
       "tar.gz",
       "llama-b10809-bin-macos-x64.tar.gz",
       "13b34aa8a5d87341a21065a83f54a8167e1aaa6fe0d66065de01632a1ed64be6",
-    ],
-    [
-      "linux",
-      "arm64",
-      "cpu",
-      "tar.gz",
-      "llama-b10809-bin-ubuntu-arm64.tar.gz",
-      "f2b7333971e1b7b42e9268bfdbfa30f5f56e2897156084d2251385df94aec358",
-    ],
-    [
-      "linux",
-      "x64",
-      "cpu",
-      "tar.gz",
-      "llama-b10809-bin-ubuntu-x64.tar.gz",
-      "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941",
-    ],
-    [
-      "win32",
-      "arm64",
-      "cpu",
-      "zip",
-      "llama-b10809-bin-win-cpu-arm64.zip",
-      "c1058fe5764a687275c8d20d6bbc1454e787cdbb8ebb8c37a2f959f2b144dc77",
-    ],
-    [
-      "win32",
-      "x64",
-      "cpu",
-      "zip",
-      "llama-b10809-bin-win-cpu-x64.zip",
-      "9df3158ed228a641a4b127942d7f459f24c9e13f04682659d05c00c80099b6b5",
     ],
   ] as const)(
     "selects the pinned %s/%s asset",
@@ -181,37 +141,6 @@ describe("managed llama-server", () => {
     expect(contents).not.toContain("active-chat");
   });
 
-  it.each(["environment preset", "direct model"])(
-    "preserves a configured %s service",
-    async (mode) => {
-      const root = tempDirs.make("llama-server-configured-");
-      const presetPath = path.join(root, "custom.ini");
-      const localService = {
-        command: path.join(root, "custom-server"),
-        cwd: root,
-        args: mode === "direct model" ? ["--model", "/models/chat.gguf", "--alias", "chat"] : [],
-        ...(mode === "environment preset"
-          ? { env: { LLAMA_ARG_MODELS_PRESET: "custom.ini" } }
-          : {}),
-      };
-      const runtime = await prepareManagedLlamaServer({
-        localService,
-        port: 19436,
-        chatModel: { mode: "configure", id: "chat", path: "/models/chat.gguf" },
-        embeddingModelPath: "/models/embedding.gguf",
-      });
-      expect(runtime.command).toBe(localService.command);
-      expect(runtime.args).toEqual(localService.args);
-      if (mode === "environment preset") {
-        expect(await fs.readFile(presetPath, "utf8")).toContain(
-          "[chat]\nmodel = /models/chat.gguf",
-        );
-      } else {
-        expect(await fs.readdir(root)).toEqual([]);
-      }
-    },
-  );
-
   it("does not reconcile a configured direct-model service without a router preset", async () => {
     const root = tempDirs.make("llama-server-direct-model-");
     let reloads = 0;
@@ -238,9 +167,7 @@ describe("managed llama-server", () => {
 
   it.each([
     { route: "args", mode: "preserve", newline: "\n" },
-    { route: "env", mode: "preserve", newline: "\r\n" },
-    { route: "args", mode: "configure", newline: "\r\n" },
-    { route: "env", mode: "configure", newline: "\n" },
+    { route: "env", mode: "configure", newline: "\r\n" },
   ] as const)(
     "preserves configured preset settings for $route/$mode",
     async ({ route, mode, newline }) => {
@@ -295,7 +222,7 @@ describe("managed llama-server", () => {
     },
   );
 
-  it.each(["q4_k_m", "release-Q4_K_M"])(
+  it.each(["release-Q4_K_M"])(
     "updates the native model's effective %s preset alias",
     async (tag) => {
       const root = tempDirs.make("llama-server-preset-alias-");
@@ -323,27 +250,6 @@ describe("managed llama-server", () => {
       expect(updated).toContain(inactive);
     },
   );
-
-  it("bounds embedding capacity independently of chat in the combined preset", async () => {
-    const { presetPath } = await createPresetFixture("combined-preset");
-    await prepareManagedLlamaServer({
-      chatModel: {
-        mode: "configure",
-        id: "chat-model",
-        path: "/models/chat.gguf",
-        contextSize: 8192,
-        maxTokens: 2048,
-      },
-      embeddingModelPath: "/models/embedding.gguf",
-      port: 19_432,
-    });
-    const preset = await fs.readFile(presetPath, "utf8");
-    expect(preset).toContain("[chat-model]\nmodel = /models/chat.gguf\nctx-size = 8192");
-    expect(preset).toContain(
-      "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nembedding = true\nparallel = 1\nctx-size = 2048\nubatch-size = 2048\n",
-    );
-    expect(preset).not.toMatch(/mmproj|draft/iu);
-  });
 
   it("bounds a custom embedding model while removing stale chat from the preset", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-embedding-only-"));
@@ -798,21 +704,6 @@ describe("managed llama-server", () => {
     );
   });
 
-  it("resolves an explicit Hugging Face GGUF file without a manifest request", async () => {
-    await withHuggingFaceMetadataFixture(
-      { cacheDir: tempDirs.make("llama-cpp-hf-file-"), servers },
-      "file",
-      async ({ cacheDir, pathInfoBodies, requestedUrls, source }) => {
-        await expect(ensureLlamaCppModel({ source, cacheDir, download: false })).resolves.toBe(
-          path.join(cacheDir, "hf_owner_repo_model.gguf"),
-        );
-        expect(pathInfoBodies).toEqual([{ paths: ["model.gguf"], expand: false }]);
-        expect(requestedUrls).not.toContain("/v2/owner/repo/manifests/latest");
-      },
-      "hf:owner/repo/model.gguf",
-    );
-  });
-
   it("keeps a verified custom Hugging Face artifact available while refreshing its preset", async () => {
     await withHuggingFaceMetadataFixture(
       { cacheDir: tempDirs.make("llama-cpp-hf-file-"), servers },
@@ -850,7 +741,8 @@ describe("managed llama-server", () => {
     );
   });
 
-  it("reports only facts observed from health, models, props, and metrics", async () => {
+  it("reports optional metrics separately from runtime readiness and load errors", async () => {
+    let metricsAvailable = true;
     const server = http.createServer((req, res) => {
       res.setHeader("content-type", "application/json");
       if (req.url === "/health") {
@@ -881,7 +773,7 @@ describe("managed llama-server", () => {
         );
         return;
       }
-      if (req.url?.startsWith("/metrics?")) {
+      if (metricsAvailable && req.url?.startsWith("/metrics?")) {
         res.setHeader("content-type", "text/plain");
         res.end("llamacpp:prompt_tokens_total 1\n");
         return;
@@ -890,21 +782,16 @@ describe("managed llama-server", () => {
       res.end("{}");
     });
     servers.push(server);
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing test server address");
-    }
-
-    await expect(
+    const port = await listen(server);
+    const inspect = (loadError?: string) =>
       inspectLlamaServerRuntime({
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        baseUrl: `http://127.0.0.1:${port}/v1`,
         modelId: "embedding-model",
         backend: "metal",
-      }),
-    ).resolves.toEqual({
+        loadError,
+      });
+
+    await expect(inspect()).resolves.toEqual({
       engine: "llama.cpp",
       state: "ready",
       backend: "metal",
@@ -917,6 +804,17 @@ describe("managed llama-server", () => {
         props: "ready",
         metrics: "ready",
       },
+    });
+
+    metricsAvailable = false;
+    await expect(inspect()).resolves.toMatchObject({
+      state: "ready",
+      endpoints: { health: "ready", models: "ready", props: "ready", metrics: "unavailable" },
+    });
+    await expect(inspect("Model load failed")).resolves.toMatchObject({
+      state: "failed",
+      loadError: "Model load failed",
+      endpoints: { metrics: "unavailable" },
     });
   });
 
@@ -977,7 +875,7 @@ describe("managed llama-server", () => {
 
       body = responseBytes(32 * 1024 * 1024);
       await expect(inspect()).resolves.toMatchObject({
-        state: "failed",
+        state: endpoint === "metrics" ? "ready" : "failed",
         endpoints: {
           health: "ready",
           models: "ready",

@@ -23,11 +23,12 @@ export const streamSimpleOpenAICompletions: StreamFunction<
   const clampedReasoning = options?.reasoning
     ? clampThinkingLevel(model, options.reasoning)
     : undefined;
-  const toolChoice = (options as OpenAICompletionsOptions | undefined)?.toolChoice;
+  const completionsOptions = options as OpenAICompletionsOptions | undefined;
 
   return streamOpenAICompletions(model, context, {
     ...base,
     reasoningEffort: clampedReasoning,
-    toolChoice,
+    toolChoice: completionsOptions?.toolChoice,
+    streaming: completionsOptions?.streaming,
   } satisfies OpenAICompletionsOptions);
 };

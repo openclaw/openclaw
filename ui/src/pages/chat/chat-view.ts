@@ -7,13 +7,7 @@ import type {
   SessionSuggestion,
   SessionSuggestionResolution,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type {
-  ControlUiSessionBranch,
-  ControlUiSessionPullRequest,
-  ControlUiSessionPullRequestSnapshot,
-} from "../../../../src/gateway/control-ui-contract.js";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type { ApplicationGateway } from "../../app/gateway.ts";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
@@ -66,6 +60,7 @@ import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-co
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { renderChatComposerQueue } from "./components/chat-composer-view.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
+import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import { renderChatSelectionAnnotations } from "./components/chat-selection-annotations.ts";
@@ -109,6 +104,7 @@ export type ChatProps = Omit<
   | "onSend"
 > &
   Omit<ChatComposerProps, "notices" | "footerContent" | "disabled" | "onOpenImage"> &
+  ChatDetailsProps &
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
     onCompanionStageAttachment?: (attachment: ChatAttachment, sourceSessionKey: string) => boolean;
@@ -153,7 +149,6 @@ export type ChatProps = Omit<
       }>;
       defaultId?: string;
     } | null;
-    onSessionSelect?: (sessionKey: string) => void;
     sessionSuggestions?: readonly SessionSuggestion[];
     sessionSuggestionRole?: SessionSharingRole;
     sessionSuggestionBusyIds?: ReadonlySet<string>;
@@ -163,16 +158,7 @@ export type ChatProps = Omit<
       suggestion: SessionSuggestion,
       resolution: SessionSuggestionResolution,
     ) => void;
-    pullRequests?: ControlUiSessionPullRequest[];
-    pullRequestsGateway?: ApplicationGateway;
-    pullRequestsSessionId?: string;
-    pullRequestsBranch?: ControlUiSessionBranch;
-    pullRequestsBranchDismissed?: boolean;
-    pullRequestsStatus?: ControlUiSessionPullRequestSnapshot["status"];
-    onOpenSessionDiff?: () => void;
-    onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
-    onDismissPullRequestsBranch?: (branch: ControlUiSessionBranch) => void;
-    githubPublication?: import("../../lib/sessions/github-publication-controller.ts").GitHubPublicationView;
+    detailsEnabled?: boolean;
   };
 
 // renderChat runs on every pane render and the chat-item cache keys the queue by
@@ -407,20 +393,24 @@ export function renderChat(props: ChatProps) {
         </div>`
       : nothing
   }
-  ${renderChatPullRequests({
-    pullRequests: props.pullRequests ?? [],
-    gateway: props.pullRequestsGateway,
-    sessionId: props.pullRequestsSessionId,
-    sessionKey: scopedSessionArtifactKey(props.sessionKey, props.currentAgentId ?? undefined),
-    presented: props.presented ?? true,
-    branch: props.pullRequestsBranch,
-    branchDismissed: props.pullRequestsBranchDismissed,
-    status: props.pullRequestsStatus ?? "ready",
-    onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
-    onDismissBranch: props.onDismissPullRequestsBranch,
-    onOpenSessionDiff: props.onOpenSessionDiff,
-    publication: props.githubPublication,
-  })}
+  ${
+    props.detailsEnabled
+      ? nothing
+      : renderChatPullRequests({
+          pullRequests: props.pullRequests ?? [],
+          gateway: props.pullRequestsGateway,
+          sessionId: props.pullRequestsSessionId,
+          sessionKey: scopedSessionArtifactKey(props.sessionKey, props.currentAgentId ?? undefined),
+          presented: props.presented ?? true,
+          branch: props.pullRequestsBranch,
+          branchDismissed: props.pullRequestsBranchDismissed,
+          status: props.pullRequestsStatus ?? "ready",
+          onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
+          onDismissBranch: props.onDismissPullRequestsBranch,
+          onOpenSessionDiff: props.onOpenSessionDiff,
+          publication: props.githubPublication,
+        })
+  }
   ${renderChatSessionSuggestions({
     suggestions: props.sessionSuggestions ?? [],
     role: props.sessionSuggestionRole,
@@ -434,7 +424,7 @@ export function renderChat(props: ChatProps) {
   // The composer keeps the outbox queue; only the transcript includes the
   // placement initial turn, whose retry action belongs to startup.
   const notices = renderChatComposerNotices(props);
-  // Transcript invalidation replaces its render context; bind submission afterward.
+  // The outer view owns submission callbacks across deferred transcript commits.
   questionState.transcriptRenderContext.onAsyncQuestionSubmit = props.onAsyncQuestionSubmit;
   questionState.transcriptRenderContext.onAsyncQuestionDiscard = asyncQuestions.discard;
   const inputDisplay = selectChatInputDisplay(
@@ -449,6 +439,10 @@ export function renderChat(props: ChatProps) {
   const composerProps = { ...props, displayQueue };
   const defaultComposer = renderChatComposer({
     ...props,
+    // Full conversation panes have one progress owner: Details. Catalog and
+    // compact embedded composers retain their existing standalone presentation.
+    progressCard: props.detailsEnabled ? null : props.progressCard,
+    progressCardInitialLoading: props.detailsEnabled ? false : props.progressCardInitialLoading,
     asyncQuestions,
     displayQueue,
     footerContent,
@@ -496,10 +490,17 @@ export function renderChat(props: ChatProps) {
   );
   const taskSuggestionTray = renderChatTaskSuggestionTray(props);
   const gutterStack =
-    taskSuggestionTray === nothing
+    !props.detailsEnabled && taskSuggestionTray === nothing
       ? nothing
-      : html`<div class="chat-gutter-stack">${taskSuggestionTray}</div>`;
-  // Keep the affordance mounted so visibility changes can finish their exit transition.
+      : html`<div
+          class="chat-gutter-stack ${props.detailsEnabled ? "chat-gutter-stack--details" : ""}"
+        >
+          <div class="chat-gutter-header" ?hidden=${!props.detailsEnabled}>
+            ${props.detailsEnabled ? renderChatTopbarNotices(props) : nothing}
+          </div>
+          ${taskSuggestionTray}
+        </div>`;
+  // Keep the affordance mounted so showing it never changes the transcript layout.
   const scrollToBottomButton = props.onScrollToBottom
     ? html`
         <div class="chat-scroll-to-bottom-wrap">
@@ -559,7 +560,7 @@ export function renderChat(props: ChatProps) {
 
   return html`
     <section
-      class="chat"
+      class="chat ${props.chatBubbleMode ? "chat--bubbles" : ""}"
       style=${styleMap(
         props.chatMessageMaxWidth
           ? {
@@ -617,7 +618,8 @@ export function renderChat(props: ChatProps) {
           <div class="chat-split-container">
             <div class="chat-main">
               <div class="chat-main__conversation-column">
-                ${renderChatTopbarNotices(props)} ${renderContributions("header")}
+                ${props.detailsEnabled ? nothing : renderChatTopbarNotices(props)}
+                ${renderContributions("header")}
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
                 <div class="chat-main__conversation-frame">
                   <!-- Chromium can crash when DevTools inspects a blocking Lit object listener. -->

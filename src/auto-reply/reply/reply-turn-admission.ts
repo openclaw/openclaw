@@ -1,4 +1,5 @@
 import { addAbortListener } from "node:events";
+import { COMMAND_ADMISSION_OWNER } from "../../agents/agent-command-admission-owner.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
@@ -121,6 +122,7 @@ function rejectLifecycleInvalidatedWork(params: {
   throw new Error(params.message);
 }
 
+/** Waits for or claims the per-session reply run slot. */
 export async function admitReplyTurn(
   params: ReplyTurnAdmissionParams,
 ): Promise<ReplyTurnAdmission> {
@@ -248,6 +250,7 @@ export async function admitReplyTurn(
               isSettling: () =>
                 operation !== undefined &&
                 (operation.result !== null || hasCommittedReplyOperationOutcome(operation)),
+              getAbortReason: () => operation?.abortSignal.reason,
               resolveGatewayContext,
               identities: [params.sessionKey],
               storeWriterIdentities:
@@ -358,12 +361,32 @@ export async function admitReplyTurn(
                   });
                 }
                 sessionId = currentEntry?.sessionId ?? sessionId;
+                params.captureRunSelection?.();
               },
             })
           : undefined;
         try {
           if (isReplyRunSuccessorAdmissionBlocked(params.sessionKey)) {
             throw new ReplyRunSuccessorAdmissionBlockedError(params.sessionKey);
+          }
+          const commandOwnerRelease =
+            params.kind === "queued_followup" &&
+            storePath &&
+            !replyRunRegistry.get(params.sessionKey)
+              ? getSessionWorkAdmissionOwnerRelease({
+                  scope: storePath,
+                  identities: [params.sessionKey, sessionId],
+                  owner: COMMAND_ADMISSION_OWNER,
+                  phase: "acquired",
+                })
+              : undefined;
+          if (commandOwnerRelease) {
+            // Direct commands retain execution fences through durable cleanup.
+            // Only detached followups wait here; a visible dispatch may still hold
+            // the pre-dispatch reply lease that the command needs to finish.
+            admission?.release();
+            await racePromiseWithAbortSignal(commandOwnerRelease, params.upstreamAbortSignal);
+            continue;
           }
           const mayWaitForRecoveryOwner =
             storePath && !params.resetTriggered && params.allowRestartTombstoneParentFork !== true;
@@ -473,6 +496,9 @@ export async function admitReplyTurn(
             // Reacquire the full admission; its session ID alone grants no authority.
             throw new ReplyOperationChangedDuringAdmissionError();
           }
+          if (!storePath) {
+            params.captureRunSelection?.();
+          }
           if (params.adoptOperation) {
             // The dispatch closures own this object's abort/delivery lifecycle,
             // so the reservation must move rather than be recreated. Throws
@@ -519,7 +545,12 @@ export async function admitReplyTurn(
           throw error;
         }
         const { operationAdmission, releaseWorkerDatabaseClaim } =
-          bindReplyOperationDatabaseAdmission(operation, params, admission, admittedDatabaseClaim);
+          bindReplyOperationDatabaseAdmission(
+            operation,
+            { sessionKey: params.sessionKey, workSignal },
+            admission,
+            admittedDatabaseClaim,
+          );
         if (releaseWorkerDatabaseClaim) {
           const admittedOperation = operation;
           let releasingForRestart = false;

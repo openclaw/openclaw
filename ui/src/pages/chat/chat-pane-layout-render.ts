@@ -1,12 +1,14 @@
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import { html, nothing } from "lit";
 import "./chat-outbox-recovery.ts";
+import "./components/chat-details.tsx";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { icons } from "../../components/icons.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
+import { renderSessionBackground } from "../../components/session-background-view.ts";
 import { t } from "../../i18n/index.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
@@ -153,8 +155,22 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     // Only a full pane has a Subagents panel of its own. Elsewhere a subagent's
     // name still opens its session and their count stays text.
     const ownsSubagentsPanel = !catalog && !this.compact;
-    const chat = renderChat({
+    const paneChatProps: ChatProps = {
       ...chatProps,
+      detailsEnabled: !catalog && !this.compact,
+      detailsWorkspace: {
+        ...resolveSessionWorkspace({
+          session: selectedSession,
+          agentWorkspace,
+          worktreePath: selectedSession?.worktree
+            ? this.headerWorktreePaths.get(selectedSession.worktree.id)?.path
+            : undefined,
+        }),
+        branch:
+          selectedSession?.repository?.branch ??
+          selectedSession?.worktree?.branch ??
+          chatProps.pullRequestsBranch?.branch,
+      },
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
       onOpenSubagents: ownsSubagentsPanel ? () => this.showSubagents(null) : undefined,
       composerRecovery: recovery,
@@ -167,7 +183,14 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       transcriptVisible: slotPresentation("conversation"),
       latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
-    });
+    };
+    const chat = renderChat(paneChatProps);
+    const headerDetails = ownsSubagentsPanel
+      ? html`<openclaw-chat-details
+          .props=${paneChatProps}
+          .presented=${livePresentation(paneChatProps.transcriptVisible ?? this.presented)}
+        ></openclaw-chat-details>`
+      : nothing;
     const subagentStop =
       chatProps.disabledBanner?.presentation &&
       chatProps.canAbort &&
@@ -191,7 +214,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
             <strong class="chat-subagent-detail__title"
               >${this.resolveHeaderSessionTitle(selectedSession)}</strong
             >
-            ${subagentStop}
+            ${subagentStop} ${headerDetails}
           </div>
         </header>`
       : nothing;
@@ -330,6 +353,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
                 savedLayout,
                 panelDefinitions,
                 subagentStop,
+                headerDetails,
               )}
               <openclaw-plugin-contributions
                 .kind=${"session-header"}
@@ -366,6 +390,13 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
       header,
       primary: html`<div class="chat-pane-primary-column">${chat}</div>`,
+      background: renderSessionBackground(
+        this.context,
+        "session",
+        this.presented &&
+          this.visuallyPresented &&
+          isSidebarSlotVisible(sidebarLayout, "conversation"),
+      ),
       requestUpdate: state.requestUpdate!,
     });
     const overlays = presentedContent(

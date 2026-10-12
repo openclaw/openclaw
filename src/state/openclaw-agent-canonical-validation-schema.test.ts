@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { constants, DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
@@ -32,6 +32,10 @@ import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js
 import { OPENCLAW_AGENT_SCHEMA_V21_SQL } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "./openclaw-agent-schema-v24.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import {
+  assertOpenClawMigrationWitnessPreserved,
+  captureOpenClawMigrationWitness,
+} from "./openclaw-migration-witness.js";
 
 const key = "agent:main:target";
 const sibling = "agent:main:sibling";
@@ -165,7 +169,9 @@ DatabaseSync.prototype.prepare = function(sql) {
               carry ? "" : "comparison-ddl\nexpected-definitions\n",
             );
             if (carry) {
-              const changed = new DatabaseSync(pathname);
+              const driftedPath = state.path("canonical-handoff-drifted.sqlite");
+              copyFileSync(pathname, driftedPath);
+              const changed = new DatabaseSync(driftedPath);
               try {
                 changed.exec(
                   "CREATE TRIGGER unexpected_node_validation AFTER UPDATE ON session_nodes BEGIN SELECT 1; END",
@@ -173,9 +179,26 @@ DatabaseSync.prototype.prepare = function(sql) {
               } finally {
                 changed.close();
               }
-              await expect(read()).rejects.toThrow(
-                /canonical validation schema is missing or drifted/u,
+              const driftedReader = retainSessionHistoryWorkerDatabase(
+                { agentId: "main", path: driftedPath, env: state.env },
+                maintenanceLane,
               );
+              try {
+                await expect(
+                  driftedReader.owner.readTrajectoryRetention(
+                    {
+                      input: { sessionId: "retained" },
+                      now: 1,
+                      schemaContract: contract,
+                      expectedIdentity: readDatabasePathIdentitySync(driftedPath),
+                      env: { ...state.env, ...preloadEnv },
+                    },
+                    { signal, timeoutMs: 60_000 },
+                  ),
+                ).rejects.toThrow(/canonical validation schema is missing or drifted/u);
+              } finally {
+                driftedReader.release();
+              }
             }
           } finally {
             setEnvironmentData(factKey, inherited);
@@ -470,9 +493,18 @@ describe("agent schema 21 migration", () => {
             path: pathname,
           });
         });
-        expect(database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all()).toEqual(
-          before,
-        );
+        expect(
+          database
+            .prepare("SELECT * FROM session_nodes ORDER BY session_key")
+            .all()
+            .map(
+              ({
+                session_started_at: _sessionStartedAt,
+                has_optional_references: _hasOptionalReferences,
+                ...row
+              }) => row,
+            ),
+        ).toEqual(before);
         expect(pendingKeys(database)).toEqual([key, sibling].toSorted());
         expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
           OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -554,6 +586,7 @@ describe("agent schema 25 migration", () => {
         const pathname = state.path("canonical-v24.sqlite");
         const database = new DatabaseSync(pathname);
         try {
+          database.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
           database.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
           database.exec(`PRAGMA user_version = 24;
             INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
@@ -571,6 +604,38 @@ describe("agent schema 25 migration", () => {
           }
           if (outcome === "drift") {
             database.exec("DROP TRIGGER session_nodes_canonical_pending_after_update");
+          }
+          database.exec(`
+            INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+            VALUES ('target', '${key}', 1, 2), ('previous-target', '${key}', 1, 1);
+            INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at)
+            VALUES ('target', 'current-generation', 2), ('previous-target', 'previous-generation', 1);
+            INSERT INTO session_entry_snapshots (session_key, field, value_json)
+            VALUES ('${key}', 'skillsSnapshot', '{"skills":[]}');
+            CREATE VIEW retained_session_view AS SELECT session_key, current_session_id FROM session_nodes;
+            PRAGMA wal_checkpoint(TRUNCATE);
+            INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+            VALUES ('target', 1, '{"id":"migration-wal-sentinel","type":"message"}', 2),
+              ('previous-target', 1, '{"id":"previous-generation-history","type":"message"}', 1);
+            DELETE FROM session_canonical_validation_pending;
+          `);
+          expect(readFileSync(pathname).includes(Buffer.from("migration-wal-sentinel"))).toBe(
+            false,
+          );
+          let original;
+          const reader = new DatabaseSync(pathname, { readOnly: true });
+          try {
+            original =
+              outcome === "drift"
+                ? undefined
+                : captureOpenClawMigrationWitness(reader, { role: "agent", agentId: "main" });
+          } finally {
+            reader.close();
+          }
+          if (outcome === "drift") {
+            expect(() =>
+              captureOpenClawMigrationWitness(database, { role: "agent", agentId: "main" }),
+            ).toThrow(/trigger/u);
           }
           const before = {
             schema: database.prepare("SELECT name, sql FROM sqlite_schema ORDER BY name").all(),
@@ -601,7 +666,45 @@ describe("agent schema 25 migration", () => {
           database.setAuthorizer(null);
           expect(
             database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all(),
-          ).toEqual(before.nodes);
+          ).toMatchObject(before.nodes);
+          if (original) {
+            const current = captureOpenClawMigrationWitness(database, {
+              role: "agent",
+              agentId: "main",
+            });
+            expect(assertOpenClawMigrationWitnessPreserved(original, current).warnings).toEqual([
+              "Preexisting session history gap: missingWindows (1)",
+            ]);
+            expect(() =>
+              assertOpenClawMigrationWitnessPreserved(original, { ...current, version: 2 }),
+            ).toThrow();
+            if (outcome === "commit") {
+              for (const mutation of [
+                "DELETE FROM transcript_events WHERE session_id = 'previous-target'",
+                "UPDATE transcript_events SET event_json = '{}' WHERE session_id = 'target'",
+                "DELETE FROM session_entry_snapshots",
+                "UPDATE transcript_rewrite_watermarks SET generation = 'replacement-generation'",
+                "DROP VIEW retained_session_view",
+              ]) {
+                database.exec("SAVEPOINT lost_history");
+                database.exec(mutation);
+                expect(() =>
+                  assertOpenClawMigrationWitnessPreserved(
+                    original,
+                    captureOpenClawMigrationWitness(database, { role: "agent", agentId: "main" }),
+                  ),
+                ).toThrow(/changed or lost/u);
+                database.exec("ROLLBACK TO lost_history; RELEASE lost_history");
+              }
+              database.exec(`SAVEPOINT retired_trigger;
+                CREATE TRIGGER session_nodes_entry_valid_after_insert
+                AFTER INSERT ON session_nodes BEGIN SELECT 1; END`);
+              expect(() =>
+                captureOpenClawMigrationWitness(database, { role: "agent", agentId: "main" }),
+              ).toThrow(/trigger/u);
+              database.exec("ROLLBACK TO retired_trigger; RELEASE retired_trigger");
+            }
+          }
           if (outcome === "rollback" || outcome === "drift") {
             expect(
               database.prepare("SELECT name, sql FROM sqlite_schema ORDER BY name").all(),

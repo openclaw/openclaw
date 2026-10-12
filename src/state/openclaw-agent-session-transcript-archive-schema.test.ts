@@ -126,12 +126,13 @@ describe("session transcript archive schema", () => {
     },
   );
 
-  it("repairs foreign index removal and local companion-table removal on the next use", () => {
+  it("repairs a missing index on first admission and local companion-table removal on the next use", () => {
     const filename = path.join(tempDirs.make("archive-schema-refresh-"), "agent.sqlite");
-    const database = openArchiveDatabase(filename);
-    ensureSessionTranscriptArchiveSchema(database);
     const peer = openArchiveDatabase(filename, false);
+    ensureSessionTranscriptArchiveSchema(peer);
     peer.exec("DROP INDEX idx_agent_session_transcript_archives_pending");
+    peer.close();
+    const database = openArchiveDatabase(filename);
     ensureSessionTranscriptArchiveSchema(database);
     expect(
       database

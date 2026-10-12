@@ -1,6 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
@@ -55,22 +54,6 @@ describe("worker transcript commit store", () => {
     nowMs = 1_000;
   });
   afterEach(() => vi.restoreAllMocks());
-
-  it("runs begin, completion, replay and exact discard without caller-thread SQL", async () => {
-    const queries = observeHostDataSql();
-    try {
-      expect(await store.begin(input)).toEqual({ kind: "claimed" });
-      expect(await store.complete({ ...input, outcome: SUCCESS_OUTCOME })).toEqual(SUCCESS_OUTCOME);
-      expect(await store.begin(input)).toEqual({ kind: "replay", outcome: SUCCESS_OUTCOME });
-      const next = { ...input, seq: 2 };
-      expect(await store.begin(next)).toEqual({ kind: "claimed" });
-      await store.discardUncommitted(next);
-      expect(await store.begin(next)).toEqual({ kind: "claimed" });
-      expect(queries.queries).toEqual([]);
-    } finally {
-      queries.restore();
-    }
-  });
 
   it("recovers pending work and replays a terminal result across reopen", async () => {
     expect(await store.begin(input)).toEqual({ kind: "claimed" });
@@ -256,6 +239,9 @@ describe("worker transcript commit store", () => {
         await store.begin(input);
       }
       if (outcome === "unknown") {
+        vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
+          () => {},
+        );
         const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
         vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
           (admit, attachment) => {

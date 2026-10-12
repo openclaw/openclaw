@@ -27,7 +27,6 @@ const observed = vi.hoisted(() => ({
   closeResources: vi.fn<(key?: string) => Promise<void>>().mockResolvedValue(undefined),
   unregister: vi.fn<() => void>(),
   resources: [] as Resource[],
-  replaceWorkers: [] as Array<() => () => Promise<void>>,
 }));
 
 vi.mock("../../infra/worker-task-capacity.js", async (importOriginal) => {
@@ -65,8 +64,13 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   };
 });
 
-// Transport controls normally represent an admitted store; the cold-admission
-// regression below exercises the real writer queue before such facts exist.
+// Transport controls model settled native preparation and its published format facts;
+// cold-admission regressions exercise the real writer queue before either exists.
+vi.mock("../../infra/sqlite-database-admission.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/sqlite-database-admission.js")>()),
+  hasSqliteDatabaseSchemaAdmissionForPath: () => observed.preparedDatabase,
+}));
+
 vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>()),
   captureExistingOpenClawAgentDatabaseExecution: (options: { path: string }) => {
@@ -122,11 +126,6 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
       Promise.resolve(),
     );
     let nextSlot = 0;
-    observed.replaceWorkers.push(() => {
-      const previous = worker;
-      worker = poolOptions.prepareWorker?.();
-      return async () => previous?.releaseResources?.();
-    });
     return {
       async run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
         const execute = async () => {

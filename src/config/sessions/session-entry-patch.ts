@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok } from "@openclaw/normalization-core/result";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   SqliteWorkerError,
@@ -94,6 +95,7 @@ export async function patchSessionEntryInWorker(params: {
       if (candidate.entry !== null) {
         params.guard?.assertCurrent?.();
         source?.assertCurrent();
+        params.guard?.assertMutationAllowed?.();
         if (ensureIdentitySource) {
           if (!transactionFacts) {
             throw new Error("Entry ensure omitted its transaction authority facts");
@@ -103,6 +105,9 @@ export async function patchSessionEntryInWorker(params: {
       }
     },
     onTransactionFacts: (value) => {
+      if (isRecord(value) && value.kind === "session-entry-patch-validated") {
+        params.guard?.assertMutationAllowed?.();
+      }
       if (source && isRecord(value) && value.kind === "session-entry-patch-validated") {
         // SAFETY: The paired kernel supplies the source indices from this transaction.
         acceptSessionSourceValidation(source, value.sourceValidation as SessionSourceValidation);
@@ -295,21 +300,25 @@ export async function runSessionEntryWorkerOperation<
           receiver = undefined;
           transferred = false;
           committing = true;
-          const outcome = await send().then(
-            (value) => ({ ok: true as const, value }),
-            (error: unknown) => ({ ok: false as const, error }),
-          );
+          const outcome = await send().then(ok, err);
           let acknowledged = outcome.ok && matchesReceipt(outcome.value);
           let unknown = !outcome.ok && hasSqliteWorkerOutcomeUnknown(outcome.error);
           if (settlement.admitted) {
             await settlement.admitted.retained.settled;
             acknowledged ||= matchesReceipt(settlement.admitted.admission.committed?.facts);
-            unknown = settlement.admitted.admission.settlement?.kind !== "completed";
+            unknown =
+              settlement.admitted.admission.settlement?.kind !== "completed" ||
+              (unknown && !acknowledged);
           }
           const nativeOutcome = await params.nativeSettlement?.settle(outcome, acknowledged);
+          // Completed native failure without a receipt is rollback, not an unknown write.
           unknown ||=
             nativeOutcome === "unknown" ||
-            Boolean(settlement.admitted && !acknowledged && nativeOutcome !== "rolled-back");
+            (!acknowledged &&
+              (outcome.ok ||
+                Boolean(
+                  settlement.admitted?.admission.committed && nativeOutcome !== "rolled-back",
+                )));
           const committed = acknowledged ? settlement.candidate : undefined;
           let publicationError: unknown;
           let publishedResult: { value: Result } | undefined;
@@ -351,7 +360,10 @@ export async function runSessionEntryWorkerOperation<
             }
             publicationError = error;
           }
-          if (unknown) {
+          if (!unknown && !outcome.ok && !committed) {
+            throw outcome.error;
+          }
+          if (unknown || !publishedResult) {
             const error = new SqliteWorkerError(
               "Session patch has no confirmed native completion and commit receipt",
               "outcome-unknown",
@@ -361,15 +373,6 @@ export async function runSessionEntryWorkerOperation<
               params.nativeSettlement?.failure ??
               (outcome.ok ? undefined : outcome.error);
             throw error;
-          }
-          if (!outcome.ok && !committed) {
-            throw outcome.error;
-          }
-          if (!publishedResult) {
-            throw new SqliteWorkerError(
-              "Session operation omitted its committed result",
-              "outcome-unknown",
-            );
           }
           return publishedResult.value;
         }),

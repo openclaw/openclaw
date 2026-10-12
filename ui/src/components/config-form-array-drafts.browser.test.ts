@@ -67,7 +67,8 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
         { enabled: false, values: initial },
       );
       try {
-        const inputs = () => Array.from(container.querySelectorAll<HTMLInputElement>("input"));
+        const inputs = () =>
+          Array.from(container.querySelectorAll<HTMLInputElement>(".cfg-array input"));
         const second = inputs()[1]!;
         await page.elementLocator(second).fill("x");
         expect(second.getAttribute("aria-invalid")).toBe("true");
@@ -75,7 +76,9 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
           second.addEventListener("blur", () => resolve(), { once: true });
         });
         const action = container.querySelector<HTMLElement>(
-          scenario === "unrelated edit" ? "wa-switch" : "button[aria-label='Remove item']",
+          scenario === "unrelated edit"
+            ? '.settings-toggle__input[role="switch"]'
+            : "button[aria-label='Remove item']",
         )!;
         await page.elementLocator(action).click();
         await blurred;

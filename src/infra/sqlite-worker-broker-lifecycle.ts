@@ -5,6 +5,7 @@ import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
+import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
@@ -120,16 +121,12 @@ export function createSqliteWorkerLifecycle({
     operations,
     waiters,
   }: {
-    inputAdmission: Pick<
-      SqliteWorkerInputAdmission,
-      "invalidatePreparations" | "joinOpens" | "joinPreparations"
-    >;
+    inputAdmission: Pick<SqliteWorkerInputAdmission, "joinOpens" | "joinPreparations">;
     operations: Iterable<Promise<void>>;
     waiters: Iterable<Iterable<(error?: unknown) => void>>;
   }): Promise<void> {
     const epoch = ++closeEpoch;
     // Seal clients and pending dispatch before the first await; accepted scopes still settle.
-    inputAdmission.invalidatePreparations();
     for (const waiting of waiters) {
       for (const resume of waiting) {
         resume(new SqliteWorkerError("SQLite worker host is closing", "overloaded"));
@@ -323,6 +320,7 @@ export function createSqliteWorkerLifecycle({
       }),
       exited: createDeferredCore(),
     }));
+    trackSqliteDatabaseAdmissionWorker(worker);
     const slot: Slot = {
       ...(options.target ? { ephemeral: true as const } : {}),
       runtimeGeneration: options.runtimeGeneration,

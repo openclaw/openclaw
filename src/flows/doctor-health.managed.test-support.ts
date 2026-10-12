@@ -343,6 +343,14 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           }
         });
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        if (declined) {
+          mocks.lint.mockImplementation(async (diagnosticRuntime) => {
+            expect(running).toBe(true);
+            expect(events).toEqual([]);
+            diagnosticRuntime.log("Synthetic diagnostic finding; repairs remain pending.");
+            return 1;
+          });
+        }
         const archiveTransform = archiveVerification
           ? vi.spyOn(mediaArchiveTransform, "transformMediaArchiveContent")
           : undefined;
@@ -470,7 +478,11 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             expect(events).toEqual([]);
             expect(stop).not.toHaveBeenCalled();
             expect(restart).not.toHaveBeenCalled();
-            expect(mocks.outro).toHaveBeenCalledWith(expect.stringContaining("--lint"));
+            expect(runtime.log).toHaveBeenCalledWith(
+              "Synthetic diagnostic finding; repairs remain pending.",
+            );
+            expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+            expect(mocks.lint).toHaveBeenCalledBefore(runtime.exit);
             expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
             expect(fs.readFileSync(initial.path)).toEqual(agentBefore);
             return;

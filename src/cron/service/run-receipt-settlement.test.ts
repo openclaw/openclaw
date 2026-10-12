@@ -19,13 +19,11 @@ import { setupCronServiceSuite } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { loadCronRows, loadedCronStoreFromRows } from "../store/row-codec.js";
-import {
-  prepareCronRunReceiptClaim,
-  releaseLocalCronRunReceiptOwnership,
-} from "../store/run-receipt-store.js";
+import { releaseLocalCronRunReceiptOwnership } from "../store/run-receipt-store.js";
 import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
+  prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.test-support.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
@@ -150,7 +148,6 @@ describe("cron run receipt settlement", () => {
       const { storePath } = await makeStorePath();
       const context = new AsyncLocalStorage<"caller" | "scheduler">();
       const observed: Array<string | undefined> = [];
-      let schedulerEntries = 0;
       const runPayload = async () => {
         await Promise.resolve();
         observed.push(context.getStore());
@@ -163,10 +160,7 @@ describe("cron run receipt settlement", () => {
         log: logger,
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
-        runSchedulerOwned: (run) => {
-          schedulerEntries += 1;
-          return context.run("scheduler", run);
-        },
+        runSchedulerOwned: (run) => context.run("scheduler", run),
         onEvent: (event) => {
           if (event.action === "started" || event.action === "finished") {
             observed.push(`${event.action}:${context.getStore()}`);
@@ -221,9 +215,7 @@ describe("cron run receipt settlement", () => {
           expect(outcome).toEqual(source === "startup" ? undefined : { ok: true, ran: true });
           expect(context.getStore()).toBe("caller");
         });
-        const owner = source === "manual" ? "caller" : "scheduler";
-        expect(observed).toEqual([`started:${owner}`, owner, `finished:${owner}`]);
-        expect(schedulerEntries).toBe(source === "manual" ? 0 : 1);
+        expect(observed).toEqual(["started:scheduler", "scheduler", "finished:scheduler"]);
       } finally {
         service.stop();
       }
@@ -594,6 +586,18 @@ describe("cron run receipt settlement", () => {
         manualStarted.resolve();
         return await releaseManual.promise;
       }
+      const database = openOpenClawStateDatabase().db;
+      const activated = loadedCronStoreFromRows(loadCronRows(database, cronStoreKey(storePath)))
+        .store.jobs[0]!;
+      expect(
+        database
+          .prepare(
+            "SELECT config_revision FROM cron_run_receipts WHERE store_key = ? AND job_id = ? AND status = 'running'",
+          )
+          .get(cronStoreKey(storePath), job.id),
+      ).toEqual({
+        config_revision: resolveCronJobConfigRevision(activated),
+      });
       return { status: "ok" as const };
     });
     const clock = createGatewaySchedulerClock(Date.now());
@@ -617,24 +621,25 @@ describe("cron run receipt settlement", () => {
         )
         .get(cronStoreKey(storePath), job.id) as { config_revision: string; status: string };
       expect(receipt).toEqual({
-        config_revision: resolveCronJobConfigRevision(persisted!),
+        // The request records the accepted definition; activation captures the consumed arm.
+        config_revision: resolveCronJobConfigRevision({ ...persisted!, enabled: true }),
         status: "running",
       });
     });
-    const observedExit = service.runOnExit(job.id, {
-      schedule: onExitSchedule,
-      signal: controller.signal,
-      commitGuard: () => {
-        manual ??= service.run(job.id, "force");
-      },
-      onReserved,
-      payload: (current) =>
-        current.payload.kind === "command"
-          ? { ...current.payload, argv: [...current.payload.argv, "exit-observed"] }
-          : undefined,
-    });
+    let observedExit: ReturnType<CronService["runOnExit"]> | undefined;
     try {
+      manual = service.run(job.id, "force");
       await manualStarted.promise;
+      observedExit = service.runOnExit(job.id, {
+        schedule: onExitSchedule,
+        signal: controller.signal,
+        commitGuard: () => {},
+        onReserved,
+        payload: (current) =>
+          current.payload.kind === "command"
+            ? { ...current.payload, argv: [...current.payload.argv, "exit-observed"] }
+            : undefined,
+      });
       const current = await service.readJob(job.id);
       expect(current?.enabled).toBe(true);
       expect(current?.state.nextRunAtMs).toBeUndefined();

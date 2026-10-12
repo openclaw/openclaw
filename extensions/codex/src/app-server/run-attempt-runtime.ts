@@ -18,6 +18,7 @@ import {
   resolveCodexAppServerHookChannelId,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
+import { prepareCodexNativeExecutionPolicyForRun } from "./native-execution-policy.js";
 import {
   assertCodexNativeHookRelayAllowed,
   CodexManagedHooksOnlyError,
@@ -253,10 +254,21 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     });
   preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig, sandbox);
+  const nativeExecutionPolicy = await prepareCodexNativeExecutionPolicyForRun(runtimeParams, {
+    agentId: policyAgentId,
+    runtimeSessionKey: sandboxSessionKey,
+    sandbox,
+  });
+  connection.assertCurrent();
   let nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
     runtimeParams,
     sandbox,
-    { agentId: policyAgentId, runtimeSessionKey: sandboxSessionKey, sandboxExecServerEnabled },
+    {
+      agentId: policyAgentId,
+      runtimeSessionKey: sandboxSessionKey,
+      sandboxExecServerEnabled,
+      nativeExecutionPolicy,
+    },
   );
   if (
     nativeToolSurfaceEnabled &&
@@ -337,16 +349,18 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
         : undefined,
       modelProviderOverride: usesSupervisionConnection
         ? undefined
-        : resolveCodexAppServerThreadModelSelection({
-            homeScope: appServer.start.homeScope,
-            provider: params.provider,
-            model: params.modelId,
-            binding: mutable.startupBinding,
-            authProfileId: startupAuthProfileId,
-            authProfileStore: attemptAuthProfileStore,
-            agentDir,
-            config: params.config,
-          }).modelProvider,
+        : (
+            await resolveCodexAppServerThreadModelSelection({
+              homeScope: appServer.start.homeScope,
+              provider: params.provider,
+              model: params.modelId,
+              binding: mutable.startupBinding,
+              authProfileId: startupAuthProfileId,
+              authProfileStore: attemptAuthProfileStore,
+              agentDir,
+              config: params.config,
+            })
+          ).modelProvider,
       signal: runAbortController.signal,
     });
   }
@@ -363,6 +377,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   }
   const hookChannelId = resolveCodexAppServerHookChannelId(params, sandboxSessionKey);
   preDynamicStartupStages.mark("context-engine-support");
+  nativeExecutionPolicy.assertCurrent();
   return {
     connection,
     clientOptions,
@@ -383,6 +398,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     codexMcpToolOverrides,
     sandboxExecServerEnabled,
     nativeToolSurfaceEnabled,
+    nativeExecutionPolicy,
     nativeProviderWebSearchSupport,
     hookChannelId,
   };

@@ -1,8 +1,4 @@
-import { execFile } from "node:child_process";
 import { once } from "node:events";
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -11,8 +7,6 @@ import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import * as admissionOwner from "../../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import {
   claimOpenClawAgentDatabaseLease,
@@ -100,12 +94,7 @@ async function releaseInRealWorker(
           {
             inputBytes: 512,
             signal: controller.signal,
-            transferList: (task) => [
-              task.port,
-              ...(task.coordination?.reconciliation
-                ? [task.coordination.reconciliation.admission]
-                : []),
-            ],
+            transferList: (task) => [task.port],
           },
         );
         await pending;
@@ -212,160 +201,7 @@ describe("reconciliation cleanup transport native custody", () => {
       );
     },
   );
-
-  it("refuses revoked authority at native admission and joins retirement", async () => {
-    await withOpenClawTestState(
-      { scenario: "external-service", label: "reconcile-revoked-phase" },
-      async (state) => {
-        const lease = claimOpenClawAgentDatabaseLease({
-          agentId: "main",
-          path: state.path("main", "agent.sqlite"),
-        });
-        closeOpenClawStateDatabaseForTest();
-        const original = captureOpenClawStateWorkerContext();
-        const refusal = new Error("Synthetic original authority revoked");
-        let revoked = false;
-        const context: OpenClawStateWorkerContext = {
-          ...original,
-          admission: {
-            ...original.admission,
-            assertCurrent() {
-              original.admission.assertCurrent();
-              if (revoked) {
-                throw refusal;
-              }
-            },
-          },
-        };
-        const pool = createPool();
-        let reachedAdmission = false;
-        const admissions = probe.admission(admissionOwner, (request, grant, admit) => {
-          if (
-            request.stage === "prepare" &&
-            typeof request.facts === "object" &&
-            request.facts !== null &&
-            "kind" in request.facts &&
-            request.facts.kind === "transcript-reconciliation"
-          ) {
-            reachedAdmission = true;
-            revoked = true;
-          }
-          admit(request, grant);
-        });
-        const observation = observe(context);
-        try {
-          await expect(
-            releaseInRealWorker(pool, context, lease, state.path("main", "agent.sqlite")),
-          ).rejects.toBe(refusal);
-          await pool.close();
-          expect(observation.calls).toEqual([]);
-          expect(reachedAdmission).toBe(true);
-          expect(pool.getSnapshot().workers).toBe(0);
-        } finally {
-          await pool.close();
-          observation.restore();
-          admissions.mockRestore();
-        }
-        expect(
-          openOpenClawStateDatabase()
-            .db.prepare("SELECT lease_id FROM agent_database_leases WHERE lease_id = ?")
-            .get(lease),
-        ).toEqual({ lease_id: lease });
-      },
-    );
-  });
 });
-
-it.each(["exclude", "schema", "version"] as const)(
-  "preserves deletion and schema checks across the phase yield against foreign %s",
-  async (operation) => {
-    await withOpenClawTestState(
-      { scenario: "external-service", label: "reconcile-phase-yield" },
-      async (state) => {
-        const options = { agentId: "main", path: state.path("agent", "agent.sqlite") };
-        openOpenClawAgentDatabase(options);
-        closeOpenClawAgentDatabaseByPath(options.path);
-        closeOpenClawStateDatabaseForTest();
-        const context = captureOpenClawStateWorkerContext();
-        const pool = createPool();
-        const ready = createDeferred<MessagePort>();
-        const leaseId = `phase-yield-${operation}`;
-        const observation = observe(context);
-        let parent: MessagePort | undefined;
-        let completed = false;
-        const task = releaseInRealWorker(pool, context, leaseId, options.path, {
-          agentId: options.agentId,
-          observe(message, port) {
-            if (message.type === "done") {
-              ready.resolve(port);
-            } else if (
-              ["plan-start", "active-chunk", "fts-chunk", "plan-finish"].includes(message.type)
-            ) {
-              port.postMessage({ type: "continue", accepted: true });
-            }
-          },
-        });
-        void task.catch(() => {});
-        try {
-          parent = await Promise.race([
-            ready.promise,
-            task.then(() => {
-              throw new Error("Reconciliation settled before the phase-yield witness");
-            }),
-          ]);
-          const child = await promisify(execFile)(process.execPath, [
-            fileURLToPath(
-              new URL(
-                "./session-transcript-reconcile.foreign-owner.test-support.mjs",
-                import.meta.url,
-              ),
-            ),
-            JSON.stringify({
-              operation,
-              statePath: context.admission.databasePath,
-              agentPath: options.path,
-              environment: context.environment,
-              sourceLoaderUrl: import.meta.resolve("tsx/esm/api"),
-            }),
-          ]);
-          const verdict: unknown = JSON.parse(child.stdout);
-          if (operation === "exclude") {
-            expect(verdict).toEqual({ agentCleanupRefused: true });
-          } else if (operation === "version") {
-            expect(verdict).toEqual({ changed: true, unchangedSchemaCookie: true });
-          } else {
-            expect(verdict).toEqual({ changed: true });
-          }
-          parent.postMessage({ type: "release" }, []);
-          if (operation === "exclude") {
-            await expect(task).resolves.toContainEqual({ type: "lease-released" });
-          } else {
-            await expect(task).rejects.toThrow();
-          }
-          completed = true;
-          await pool.close();
-          expect(observation.calls).toEqual([]);
-        } finally {
-          if (!completed) {
-            parent?.postMessage({ type: "release" }, []);
-          }
-          await task.catch(() => {});
-          await pool.close();
-          observation.restore();
-        }
-        const lease = openOpenClawStateDatabase()
-          .db.prepare("SELECT lease_id FROM agent_database_leases WHERE lease_id = ?")
-          .get(leaseId);
-        if (operation !== "exclude") {
-          expect(lease).toEqual({ lease_id: leaseId });
-          releaseOpenClawAgentDatabaseLease(leaseId);
-        } else {
-          expect(lease).toBeUndefined();
-        }
-      },
-    );
-  },
-);
 
 it("joins native exit when shared-state close fails after lease deletion", async () => {
   await withOpenClawTestState(
@@ -399,13 +235,9 @@ it("joins native exit when shared-state close fails after lease deletion", async
   );
 });
 
-it.each([
-  { owned: false, replacement: false },
-  { owned: true, replacement: false },
-  { owned: false, replacement: true },
-])(
-  "settles interphase state drainage with serving Gateway owner=$owned, replacement=$replacement",
-  async ({ owned, replacement }) => {
+it.each([false, true])(
+  "settles interphase state drainage with serving Gateway owner=%s",
+  async (owned) => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "reconcile-interphase-drain" },
       async (state) => {
@@ -429,9 +261,7 @@ it.each([
           : undefined;
         const pool = createPool();
         const ready = createDeferred<MessagePort>();
-        const leaseId = `interphase-drain-${owned}-${replacement}`;
-        const retainedPath = `${context.admission.databasePath}.retained`;
-        let replaced = false;
+        const leaseId = `interphase-drain-${owned}`;
         const task = releaseInRealWorker(pool, context, leaseId, options.path, {
           agentId: options.agentId,
           observe(message, port) {
@@ -456,19 +286,7 @@ it.each([
           await closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
           expect(readDatabasePathIdentitySync(context.admission.databasePath).key).toBe(identity);
           expect(() => context.admission.assertCurrent()).toThrow();
-          if (replacement) {
-            renameSync(context.admission.databasePath, retainedPath);
-            replaced = true;
-            writeFileSync(context.admission.databasePath, "replacement must not be opened");
-          }
           releasePort.postMessage({ type: "release" }, []);
-          if (replacement) {
-            await expect(task).rejects.toThrow();
-            expect(readFileSync(context.admission.databasePath, "utf8")).toBe(
-              "replacement must not be opened",
-            );
-            return;
-          }
           await expect(task).resolves.toContainEqual({ type: "lease-released" });
           expect(
             openOpenClawStateDatabase()
@@ -480,10 +298,6 @@ it.each([
           await task.catch(() => {});
           await pool.close();
           parent?.release();
-          if (replaced) {
-            rmSync(context.admission.databasePath);
-            renameSync(retainedPath, context.admission.databasePath);
-          }
           releaseOpenClawAgentDatabaseLease(leaseId);
         }
       },

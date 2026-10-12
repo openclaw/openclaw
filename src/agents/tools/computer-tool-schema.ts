@@ -39,6 +39,20 @@ export function availableComputerActions(
     : available;
 }
 
+function describedString(description: string) {
+  return Type.Optional(Type.String({ description }));
+}
+
+function coordinatePair(description: string, integer = true) {
+  return Type.Optional(
+    Type.Array(integer ? Type.Integer({ minimum: 0 }) : Type.Number({ minimum: 0 }), {
+      minItems: 2,
+      maxItems: 2,
+      description,
+    }),
+  );
+}
+
 export function createComputerToolSchema(
   actions: readonly ComputerUseV2ActionName[],
   targetScope: "paired" | "session" = "paired",
@@ -59,49 +73,25 @@ export function createComputerToolSchema(
             description:
               "Computer host. Defaults to the Gateway desktop when configured, otherwise a paired node. Later calls retain the selected host.",
           }),
-          node: Type.Optional(
-            Type.String({
-              description:
-                "Paired node id or display name; implies target=node. Omit when selecting the sole connected computer-capable node.",
-            }),
+          node: describedString(
+            "Paired node id or display name; implies target=node. Omit when selecting the sole connected computer-capable node.",
           ),
-          environmentId: Type.Optional(
-            Type.String({
-              description:
-                "Conversation-attached environment ID returned by the environment tool. Selects its desktop; later calls retain that target. Cannot combine with target, node, or Gateway overrides.",
-            }),
+          environmentId: describedString(
+            "Conversation-attached environment ID returned by the environment tool. Selects its desktop; later calls retain that target. Cannot combine with target, node, or Gateway overrides.",
           ),
         }
       : {}),
     // Codex accepts a single schema in array `items`, not tuple item arrays.
     // Fixed bounds preserve the coordinate-pair contract across runtimes.
-    coordinate: Type.Optional(
-      Type.Array(Type.Integer({ minimum: 0 }), {
-        minItems: 2,
-        maxItems: 2,
-        description: "[x, y] target in pixels of the most recent screenshot.",
-      }),
+    coordinate: coordinatePair("[x, y] target in pixels of the most recent screenshot."),
+    startCoordinate: coordinatePair("left_click_drag: [x, y] drag origin in screenshot pixels."),
+    destinationCoordinate: coordinatePair(
+      "browser_pointer drag destination [x, y] in viewport CSS pixels.",
+      false,
     ),
-    startCoordinate: Type.Optional(
-      Type.Array(Type.Integer({ minimum: 0 }), {
-        minItems: 2,
-        maxItems: 2,
-        description: "left_click_drag: [x, y] drag origin in screenshot pixels.",
-      }),
-    ),
-    destinationCoordinate: Type.Optional(
-      Type.Array(Type.Number({ minimum: 0 }), {
-        minItems: 2,
-        maxItems: 2,
-        description: "browser_pointer drag destination [x, y] in viewport CSS pixels.",
-      }),
-    ),
-    text: Type.Optional(
-      Type.String({
-        description:
-          `type: text to type; ${supportsHold ? "key/hold_key" : "key"}: key combo such as "cmd+shift+t" or "Return"; ` +
-          'click/scroll actions: modifier keys to hold ("shift", "ctrl", "alt", "cmd").',
-      }),
+    text: describedString(
+      `type: text to type; ${supportsHold ? "key/hold_key" : "key"}: key combo such as "cmd+shift+t" or "Return"; ` +
+        'click/scroll actions: modifier keys to hold ("shift", "ctrl", "alt", "cmd").',
     ),
     scrollDirection: optionalStringEnum(COMPUTER_SCROLL_DIRECTIONS),
     scrollAmount: optionalPositiveIntegerSchema({
@@ -116,45 +106,27 @@ export function createComputerToolSchema(
         : `Seconds. wait: 0 to ${MAX_WAIT_SECONDS}; this does not extend a key tap.`,
     }),
     screenIndex: optionalNonNegativeIntegerSchema(),
-    frameId: Type.Optional(
-      Type.String({
-        description:
-          "Desktop coordinate actions: exact frame id returned by the most recent screenshot result.",
-      }),
+    frameId: describedString(
+      "Desktop coordinate actions: exact frame id returned by the most recent screenshot result.",
     ),
-    windowRef: Type.Optional(
-      Type.String({
-        description:
-          "Opaque window reference from list_windows; required for browser_prepare. To discover browser pages, call get_browser_state with windowRef, then pass the returned browserRef and pageRef together for page snapshots and browser actions. Window actions also use windowRef; screenshot and wait do not.",
-      }),
+    windowRef: describedString(
+      "Opaque window reference from list_windows; required for browser_prepare. To discover browser pages, call get_browser_state with windowRef, then pass the returned browserRef and pageRef together for page snapshots and browser actions. Window actions also use windowRef; screenshot and wait do not.",
     ),
-    browserRef: Type.Optional(
-      Type.String({ description: "From get_browser_state(windowRef); requires pageRef." }),
-    ),
-    pageRef: Type.Optional(
-      Type.String({ description: "From get_browser_state(windowRef); requires browserRef." }),
-    ),
-    elementRef: Type.Optional(
-      Type.String({ description: "Opaque accessibility element reference from observation." }),
-    ),
-    observationId: Type.Optional(
-      Type.String({
-        description:
-          "Window/browser input: observation id from the latest targeted observation; a desktop frameId cannot replace it.",
-      }),
+    browserRef: describedString("From get_browser_state(windowRef); requires pageRef."),
+    pageRef: describedString("From get_browser_state(windowRef); requires browserRef."),
+    elementRef: describedString("Opaque accessibility element reference from observation."),
+    observationId: describedString(
+      "Window/browser input: observation id from the latest targeted observation; a desktop frameId cannot replace it.",
     ),
     deliveryMode: optionalStringEnum(["background", "foreground"] as const, {
       description:
         "Window-targeted input delivery. This does not turn desktop input into background window input.",
     }),
-    query: Type.Optional(
-      Type.String({
-        description:
-          `${accessibilityTarget}: text filter.` +
-          (actions.includes("get_browser_state")
-            ? " get_browser_state: requires snapshotFormat=semantic_v2 with browserRef and pageRef."
-            : ""),
-      }),
+    query: describedString(
+      `${accessibilityTarget}: text filter.` +
+        (actions.includes("get_browser_state")
+          ? " get_browser_state: requires snapshotFormat=semantic_v2 with browserRef and pageRef."
+          : ""),
     ),
     depth: Type.Optional(
       Type.Integer({
@@ -192,9 +164,7 @@ export function createComputerToolSchema(
     dialogAction: optionalStringEnum(["inspect", "accept", "dismiss"] as const),
     dialogRef: Type.Optional(Type.String()),
     promptText: Type.Optional(Type.String()),
-    resourceHandle: Type.Optional(
-      Type.String({ description: "Opaque host-owned Computer Use resource handle." }),
-    ),
+    resourceHandle: describedString("Opaque host-owned Computer Use resource handle."),
     resourceHandles: Type.Optional(
       Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 32 }),
     ),

@@ -9,6 +9,7 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { createNativeSessionBindingAuthority } from "../agents/harness/native-session/binding-authority.js";
 import { recordChannelFeedbackEvent } from "../channels/feedback-reflection.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -157,12 +158,26 @@ it("rechecks the Codex prepared guard at the worker commit grant", async () => {
         inCommit = false;
       }
     });
-    const guard = composeSessionTranscriptWriteAssertion([], () => {
-      checkedCommit ||= inCommit;
-      if (!current) {
-        throw new Error("Codex write authority revoked");
-      }
-    });
+    const source = createNativeSessionBindingAuthority(
+      [
+        {
+          read: scope,
+          sessionId: scope.sessionId,
+          createSupersededError: () => new Error("Codex lineage superseded"),
+        },
+      ],
+      () => {},
+    );
+    const guard = composeSessionTranscriptWriteAssertion(
+      [source.assertLegacyCurrent],
+      (assertSources) => {
+        assertSources();
+        checkedCommit ||= inCommit;
+        if (!current) {
+          throw new Error("Codex write authority revoked");
+        }
+      },
+    );
     const sql = observeHostDataSql();
     try {
       await expect(
@@ -228,6 +243,17 @@ it.each(["physical", "logical"] as const)(
           sessionKey: scope.sessionKey,
         });
       });
+      let retainedFacts: SessionTranscriptWriteLockContext["readMessageFacts"] | undefined;
+      await withSessionTranscriptWrite(scope, async (transcript) => {
+        retainedFacts = transcript.readMessageFacts;
+        const facts = await transcript.readMessageFacts(query);
+        expect([...facts.existingIdempotencyKeys]).toEqual(["captured"]);
+        expect(facts.messagesByIdempotencyKey.get("captured")).toMatchObject({
+          content: "captured target",
+        });
+      });
+      assert(retainedFacts);
+      await expect(retainedFacts(query)).rejects.toThrow("Transcript write context is closed");
     });
   },
 );

@@ -1,10 +1,10 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type {
   ThemeMascot,
   ThemeWorkingIndicator,
 } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import { icons } from "../../../components/icons.ts";
-import "../../../components/elapsed-time.ts";
+import "../../../components/elapsed-time.tsx";
 import "../../../components/working-phrase.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { renderThemeBrandIcon } from "../../../components/theme-brand-icon.ts";
@@ -16,6 +16,28 @@ import type { TurnRecap } from "../chat-progress.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
+export function renderChatBubbleDots(working = false) {
+  return html`<span
+    class="chat-bubble-dots ${working ? "chat-bubble-dots--working" : ""}"
+    aria-hidden="true"
+    ><span></span><span></span><span></span
+  ></span>`;
+}
+
+/** Local disclosure state stays on the native element while status text streams. */
+export function renderChatBubbleActivity(content: unknown, label: string, working = false) {
+  return html`<details class="chat-bubble-activity chat-bubble-activity--working">
+    <summary
+      class="chat-bubble-activity__summary"
+      aria-label=${label}
+      title=${t("chat.view.activityDetails")}
+    >
+      ${renderChatBubbleDots(working)}
+    </summary>
+    <div class="chat-bubble-activity__details">${content}</div>
+  </details>`;
+}
+
 // 0 is valid; only null/undefined means "unknown".
 function outputTokensLabel(outputTokens: number): string {
   return outputTokens === 1
@@ -26,6 +48,7 @@ function outputTokensLabel(outputTokens: number): string {
 export function renderChatWorkingIndicator(
   part: Extract<ChatItem, { kind: "reading-indicator" }>,
   options: {
+    bubbleMode?: boolean;
     mascot?: ThemeMascot;
     workingIndicator?: ThemeWorkingIndicator;
     workingPhrases?: readonly string[];
@@ -33,6 +56,7 @@ export function renderChatWorkingIndicator(
     waitingSubagents?: ChatSubagentWait;
     /** Unfinished subagents to mention while the session itself is still working. */
     runningSubagents?: number;
+    subagentActivity?: TemplateResult;
     /** Shows one subagent; without it a waited-on subagent's name is plain text. */
     onOpenSubagent?: (key: string) => void;
     /** Shows the session's subagents; without it their count is plain text. */
@@ -116,7 +140,7 @@ export function renderChatWorkingIndicator(
   const startedAt = waitingSubagents ? waitingSubagents.startedAt : part.startedAt;
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
-  return html`
+  const status = html`
     <div
       class="chat-working-indicator ${continuation ? "chat-working-indicator--continuation" : ""} ${waitingSubagents ? "chat-working-indicator--subagents" : ""}"
       role="status"
@@ -197,6 +221,13 @@ export function renderChatWorkingIndicator(
       </span>
     </div>
   `;
+  // Keep the live activity slot stable when the parent yields or resumes.
+  const content = html`${waitingSubagents && options.subagentActivity ? nothing : status}
+  ${options.subagentActivity ?? nothing}`;
+  // Human-action and child-wait states keep their existing visible controls.
+  return options.bubbleMode && working && runningSubagents === 0
+    ? renderChatBubbleActivity(content, t("chat.view.workingDetails"), true)
+    : content;
 }
 
 /** Post-turn recap row: once the run settles, the parked claw reports how

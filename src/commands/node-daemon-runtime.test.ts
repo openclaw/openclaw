@@ -1,10 +1,23 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as DeviceAuthStoreModule from "../infra/device-auth-store.js";
+import type * as DeviceIdentityModule from "../infra/device-identity.js";
+import type * as NodeHostConfigModule from "../node-host/config.js";
 
-const { runExec, access, stat } = vi.hoisted(() => ({
+const {
+  runExec,
+  access,
+  stat,
+  loadNodeHostConfig,
+  loadDeviceIdentityIfPresent,
+  loadDeviceAuthTokenReadOnly,
+} = vi.hoisted(() => ({
   runExec: vi.fn(),
   access: vi.fn(),
   stat: vi.fn(),
+  loadNodeHostConfig: vi.fn(),
+  loadDeviceIdentityIfPresent: vi.fn(),
+  loadDeviceAuthTokenReadOnly: vi.fn(),
 }));
 vi.mock("../process/exec.js", () => ({ runExec }));
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -14,6 +27,18 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     default: { ...actual, access, stat, realpath: async (value: string) => value },
   };
 });
+vi.mock("../node-host/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof NodeHostConfigModule>()),
+  loadNodeHostConfig,
+}));
+vi.mock("../infra/device-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof DeviceIdentityModule>()),
+  loadDeviceIdentityIfPresent,
+}));
+vi.mock("../infra/device-auth-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof DeviceAuthStoreModule>()),
+  loadDeviceAuthTokenReadOnly,
+}));
 
 import { buildNodeInstallPlan } from "./node-daemon-install-helpers.js";
 
@@ -33,6 +58,9 @@ beforeEach(() => {
     throw new Error("ENOENT");
   });
   stat.mockResolvedValue({ isFile: () => true });
+  loadNodeHostConfig.mockResolvedValue(null);
+  loadDeviceIdentityIfPresent.mockReturnValue(null);
+  loadDeviceAuthTokenReadOnly.mockResolvedValue(null);
 });
 afterEach(() => {
   process.execPath = originalExecPath;
@@ -72,6 +100,45 @@ describe.skipIf(process.platform === "win32")("node-host runtime install boundar
       "18789",
     ]);
   });
+
+  it.each([false, true])(
+    "persists ambient auth only when explicitly selected for a paired node (explicit=%s)",
+    async (explicit) => {
+      runExec.mockResolvedValue({
+        stdout: JSON.stringify({
+          nodeVersion: "26.8.1",
+          sqliteVersion: "3.53.4",
+          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+        }),
+        stderr: "",
+      });
+      loadNodeHostConfig.mockResolvedValue({
+        version: 1,
+        nodeId: "paired-node",
+        gateway: { host: "gateway.example", port: 18789 },
+      });
+      loadDeviceIdentityIfPresent.mockReturnValue({ deviceId: "paired-device" });
+      loadDeviceAuthTokenReadOnly.mockResolvedValue({ token: "paired-node-token" });
+      const plan = await buildNodeInstallPlan({
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "unrelated-gateway-token",
+          OPENCLAW_GATEWAY_PASSWORD: "unrelated-gateway-password",
+        },
+        host: "gateway.example",
+        port: 18789,
+        runtime: "node",
+        devMode: false,
+        gatewayAuthFromEnv: explicit,
+      });
+      expect(plan.environment.OPENCLAW_GATEWAY_TOKEN).toBe(
+        explicit ? "unrelated-gateway-token" : undefined,
+      );
+      expect(plan.environment.OPENCLAW_GATEWAY_PASSWORD).toBe(
+        explicit ? "unrelated-gateway-password" : undefined,
+      );
+      expect(plan.programArguments.includes("--auth-from-env")).toBe(explicit);
+    },
+  );
 
   it("surfaces an exec failure through the install plan without Node upgrade advice", async () => {
     runExec.mockRejectedValue(new Error("spawn EACCES"));

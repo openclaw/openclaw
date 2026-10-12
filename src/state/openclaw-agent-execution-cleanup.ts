@@ -19,10 +19,16 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   stopped: Promise<void>;
   assertOwned(): void;
   lease: OpenClawAgentDatabaseWorkerLeaseReceipt;
+  closed?: () => ReturnType<typeof readAgentDatabaseClosedReceipt>;
 }): Promise<void> {
   params.assertOwned();
   await params.stopped;
   params.assertOwned();
+  // A confirmed native close already released its lease; exit alone still needs recovery.
+  if (params.closed?.()) {
+    assertExistingDatabaseIdentity(params.lease.sharedStatePath, params.lease.sharedStateIdentity);
+    return;
+  }
   const observed = await readDatabasePathIdentity(params.lease.sharedStatePath);
   if (observed.key !== params.lease.sharedStateIdentity) {
     throw new Error("Retired agent cleanup cannot adopt a replacement shared database");

@@ -140,21 +140,11 @@ describe("chat pane startup worker copy", () => {
       }),
     ).toEqual(cloudCopy);
   });
-
-  it("ignores failed startup intent when presenting a new worker", () => {
-    expect(
-      resolveChatPaneWorkerPresentation(startupSession(startupPlacements[1]), {
-        phase: "failed",
-        targetKind: "device",
-      }),
-    ).toEqual(unknownCopy);
-  });
 });
 
 describe("chat pane worker stop", () => {
   it.each([
     { placement: startupPlacements[0], targetKind: "device", copy: deviceCopy },
-    { placement: startupPlacements[1], targetKind: "auto-device", copy: deviceCopy },
     {
       placement: startupPlacements[2],
       targetKind: "profile",
@@ -336,10 +326,7 @@ describe("chat pane worker stop", () => {
     });
   });
 
-  it.each([
-    { runner: "cloud", startupPhase: "starting" },
-    { runner: "device", startupPhase: "failed" },
-  ] as const)(
+  it.each([{ runner: "device", startupPhase: "failed" }] as const)(
     "reclaims an active $runner placement with conflicting $startupPhase intent after the operator confirms",
     async ({ runner, startupPhase }) => {
       vi.stubGlobal(

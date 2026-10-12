@@ -227,7 +227,11 @@ describe("pending Gateway credentials", () => {
       const fetchMock = vi.fn<typeof fetch>(async () =>
         Response.json({ bootstrapToken: "owner-bootstrap", bootstrapProfile: "owner" }),
       );
-      vi.stubGlobal("fetch", fetchMock);
+      vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
+        input === "/control-ui-config.json"
+          ? Promise.resolve(new Response(null, { status: 401 }))
+          : fetchMock(input, init),
+      );
       runtime = bootstrapApplication();
       vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
       await runtime.start();
@@ -307,7 +311,11 @@ describe("pending Gateway credentials", () => {
       const fetchMock = vi.fn<typeof fetch>(async () =>
         Response.json({ bootstrapToken: "owner-bootstrap", bootstrapProfile: "owner" }),
       );
-      vi.stubGlobal("fetch", fetchMock);
+      vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
+        input === "/control-ui-config.json"
+          ? Promise.resolve(new Response(null, { status: 401 }))
+          : fetchMock(input, init),
+      );
       runtime = bootstrapApplication();
       vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
       await runtime.start();
@@ -399,11 +407,9 @@ describe("pending Gateway credentials", () => {
         expect(methods).toContain("update.status");
         expect(methods).toContain("exec.approval.list");
       });
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledOnce();
 
-      // Native plugin activation requests its grant before unrelated queued
-      // startup RPCs finish; the connected Gateway already owns its credential.
-      await expect(runtime.context.config.refresh()).resolves.toMatchObject({
+      await expect(runtime.context.config.refresh({ ifNeeded: true })).resolves.toMatchObject({
         serverVersion: "paired",
         pluginFrameGrants: [{ pluginId: "fixture" }],
       });

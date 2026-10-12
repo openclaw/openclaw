@@ -531,12 +531,7 @@ export function createSubagentResumeReader(params: {
             if (check === null || typeof check === "string") {
               reason = check;
             } else {
-              try {
-                reason = (await check.read(assertCurrent)).orphanReason;
-              } catch {
-                // A failed read cannot establish orphanhood; authority is rechecked below.
-                reason = null;
-              }
+              reason = (await check.read(assertCurrent)).orphanReason;
             }
             if (!isReadCurrent()) {
               return;

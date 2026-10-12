@@ -7,6 +7,9 @@ import {
   isUiGlobalScopeConfigured,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
+import { resetChatViewState } from "./chat-view-state.ts";
 import { renderChat } from "./chat-view.ts";
 import {
   prepareChatMessageRender,
@@ -129,7 +132,7 @@ export function stubAnimationFrames() {
 type ChatProps = Parameters<typeof renderChat>[0];
 
 export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
-  const transcript = createTestTranscript();
+  const transcript = overrides.transcript ?? createTestTranscript();
   const sessionKey = overrides.sessionKey ?? "main";
   const sessionHost = overrides.sessionHost;
   const exactSelectedSession = overrides.sessions?.sessions.find((row) =>
@@ -144,7 +147,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
           )
         : undefined));
   return {
-    transcript,
     paneId: "single",
     sessionKey,
     showThinking: false,
@@ -206,20 +208,52 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onChatScroll: () => undefined,
     basePath: "",
     ...overrides,
+    transcript,
   };
 }
 
 export function renderChatView(overrides: Partial<ChatProps> = {}) {
-  const container = document.createElement("div");
-  onTestFinished(() => {
-    render(nothing, container);
-  });
-  render(renderChat(createChatProps(overrides)), container);
+  const container = createComposerContainer();
+  renderChatInto(container, overrides);
   return container;
 }
 
+const renderedTranscripts = new WeakMap<HTMLElement, ChatTranscriptController>();
+
+export function renderChatPropsInto(container: HTMLElement, props: ChatProps) {
+  const previous = renderedTranscripts.get(container);
+  if (!previous) {
+    const attached = !container.parentNode;
+    if (attached) {
+      document.body.append(container);
+    }
+    onTestFinished(() => {
+      render(nothing, container);
+      renderedTranscripts.get(container)?.hostDisconnected();
+      renderedTranscripts.delete(container);
+      if (attached) {
+        container.remove();
+      }
+    });
+  } else if (previous !== props.transcript) {
+    previous.hostDisconnected();
+  }
+  renderedTranscripts.set(container, props.transcript);
+  render(renderChat(props), container);
+  flush();
+  props.transcript.hostConnected();
+  props.transcript.hostUpdated();
+  flush();
+}
+
 export function renderChatInto(container: HTMLElement, overrides: Partial<ChatProps> = {}) {
-  render(renderChat(createChatProps(overrides)), container);
+  renderChatPropsInto(
+    container,
+    createChatProps({
+      ...overrides,
+      transcript: overrides.transcript ?? renderedTranscripts.get(container),
+    }),
+  );
 }
 
 export function getChatModelSelect(container: Element): HTMLElement {
@@ -316,7 +350,7 @@ export function createReactiveDraftHarness({
   let draft = "";
   let currentOverrides = overrides;
   let active = true;
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   onTestFinished(() => {
     active = false;
     render(nothing, container);
@@ -355,5 +389,54 @@ export function createSlashRerenderHarness() {
       return renderCurrent();
     },
     renderCurrent,
+  };
+}
+
+export function createReplyPane(paneId: string, draft: string, quote: string) {
+  const container = createComposerContainer();
+  const host: Pick<ChatProps, "draft" | "replyTarget"> = {
+    draft,
+    replyTarget: { messageId: `${paneId}-message`, text: quote, senderLabel: "User" },
+  };
+  const onSend = vi.fn();
+  const onAbort = vi.fn();
+  const onDraftChange = vi.fn((next: string) => {
+    host.draft = next;
+  });
+  const onRequestUpdate = vi.fn(() => redraw());
+  const onClearReply = vi.fn(() => {
+    host.replyTarget = null;
+    redraw();
+  });
+  function redraw() {
+    renderChatInto(container, {
+      paneId,
+      sessionKey: `agent:main:${paneId}`,
+      draft: host.draft,
+      getDraft: () => host.draft,
+      replyTarget: host.replyTarget,
+      canAbort: true,
+      runActive: true,
+      onDraftChange,
+      onRequestUpdate,
+      onClearReply,
+      onSend,
+      onAbort,
+    });
+  }
+  return {
+    container,
+    host,
+    redraw,
+    onDraftChange,
+    onRequestUpdate,
+    onClearReply,
+    onSend,
+    onAbort,
+    dispose: () => {
+      render(null, container);
+      container.remove();
+      resetChatViewState(paneId, container);
+    },
   };
 }

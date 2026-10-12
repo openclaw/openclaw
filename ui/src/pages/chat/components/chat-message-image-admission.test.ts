@@ -4,6 +4,7 @@ import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import {
   releaseChatMediaResourceSubscriber,
@@ -102,6 +103,7 @@ it("replaces failed remote images with an unavailable card while preserving loca
   const remoteImage = container.querySelector<HTMLImageElement>('img[alt="Remote image"]')!;
   expect(remoteImage.getAttribute("src")).toBe(remote.url);
   remoteImage.dispatchEvent(new Event("error"));
+  flush();
   expect(container.querySelector('img[alt="Remote image"]')).toBeNull();
   const card = container.querySelector(
     ".chat-image-frame--compact .chat-assistant-attachment-card",
@@ -112,6 +114,7 @@ it("replaces failed remote images with an unavailable card while preserving loca
   const replacement = { ...remote, url: "https://images.example.test/replacement.png" };
   draw([replacement, local]);
   intersections.at(-1)!();
+  flush();
   expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
   expect(container.querySelector('img[alt="Remote image"]')?.getAttribute("src")).toBe(
     replacement.url,
@@ -272,6 +275,7 @@ it("admits on focus without replacing the pending control or opening an empty pr
   expect(fetch).not.toHaveBeenCalled();
 
   button.focus();
+  flush();
   expect(fetch).toHaveBeenCalledOnce();
   button.click();
   expect(onOpenImage).not.toHaveBeenCalled();
@@ -351,6 +355,7 @@ it("ignores replaced observers and aborts detached artifact resolution before bl
   intersections[0]!();
   expect(resolveArtifactDownload).not.toHaveBeenCalled();
   intersections[1]!();
+  flush();
   expect(resolveArtifactDownload).toHaveBeenCalledOnce();
   render(nothing, container);
   artifact.resolve({ url: second });

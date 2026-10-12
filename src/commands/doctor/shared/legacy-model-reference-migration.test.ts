@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -232,6 +232,8 @@ describe("canonical model-reference migration", () => {
   });
 
   it("canonicalizes a seeded legacy Claude CLI allowlist in one doctor pass", () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
     // Reporter path (#124952): the doctor spec migration copies an unmarked legacy
     // model map into modelPolicy.allow first, so the normalizer must rewrite the
     // allowlist and the model map in the same pass, not on a later run.
@@ -255,9 +257,17 @@ describe("canonical model-reference migration", () => {
 
     const res = normalizeCompatibilityConfigValues(seeded.next);
     expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/*": { agentRuntime: { id: "claude-cli" } },
       "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
       "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
     });
+    expect(
+      resolveModelRuntimePolicy({
+        config: res.config,
+        provider: "anthropic",
+        modelId: "unseeded-claude-model",
+      }).policy,
+    ).toEqual({ id: "claude-cli" });
     expect(res.config.agents?.defaults?.modelPolicy).toEqual({
       allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
     });

@@ -1,4 +1,9 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import type {
+  ApplyTranscriptCommitResult,
+  CommittedAgentMessage,
+  TranscriptCommitInput,
+} from "../../gateway/worker-environments/transcript-commit.types.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type {
   SessionGoalManagementInput,
@@ -18,7 +23,7 @@ import type {
   TranscriptReportSelection,
   TranscriptReportWorkerOperations,
 } from "./session-accessor.sqlite-transcript-reports.types.js";
-import type { readClosedTranscriptTurnInDatabase } from "./session-accessor.transcript-range.js";
+import type { readClosedTranscriptTurnInDatabase } from "./session-accessor.transcript-range.worker.js";
 import type { ResolvedSessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import {
   isIncognitoManagerCommand,
@@ -63,6 +68,13 @@ export type IncognitoTranscriptOperations = IncognitoManagerOperations &
       output: TranscriptReportWorkerOperations[Key]["output"];
     };
   } & {
+    "session.workerTranscript.commit": {
+      input: IncognitoTranscriptTarget & {
+        batch: Omit<TranscriptCommitInput, "scope">;
+        preparedMessages: readonly CommittedAgentMessage[];
+      };
+      output: { result: ApplyTranscriptCommitResult; projectionNeedsReconcile: boolean };
+    };
     "session.goal.mutate": {
       input: IncognitoTranscriptTarget &
         SessionGoalManagementInput & { sources: SessionSourcePredicate[] };
@@ -196,7 +208,8 @@ export function isIncognitoTranscriptCommand(command: {
     command.type === "session.goalReceipt.read" ||
     command.type === "session.event.append" ||
     command.type === "session.message.append" ||
-    command.type === "session.turn.read"
+    command.type === "session.turn.read" ||
+    command.type === "session.workerTranscript.commit"
   );
 }
 
@@ -224,6 +237,7 @@ export function isIncognitoTranscriptReceiptCommand(
   type: string,
 ): type is
   | "session.lock.replace"
+  | "session.workerTranscript.commit"
   | "session.goal.mutate"
   | "session.manualCompact.commit"
   | "session.rewrite.commit"
@@ -231,6 +245,7 @@ export function isIncognitoTranscriptReceiptCommand(
   | "session.correction.commit" {
   return (
     type === "session.lock.replace" ||
+    type === "session.workerTranscript.commit" ||
     type === "session.goal.mutate" ||
     type === "session.manualCompact.commit" ||
     type === "session.rewrite.commit" ||

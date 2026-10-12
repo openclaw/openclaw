@@ -7,10 +7,7 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  ResponseCreateParamsStreaming,
-  ResponseInput,
-} from "openai/resources/responses/responses.js";
+import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import {
   getAiTransportHost,
   resolveAiTransportHeaderSentinels,
@@ -101,7 +98,6 @@ import {
   scheduleSessionWebSocketExpiry,
   setOwnedWebSocketSession,
   type CachedWebSocketConnection,
-  type CachedWebSocketContinuationState,
   type OpenAICodexWebSocketRuntimeState,
   type RequestBody,
   type WebSocketLike,
@@ -150,6 +146,8 @@ const WEBSOCKET_TRANSPORT_ERROR_CODE = "ERR_WEBSOCKET_TRANSPORT";
 const RETRYABLE_WEBSOCKET_CLOSE_CODES = new Set([1001, 1005, 1006, 1011, 1012, 1013, 1014, 1015]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reached";
+const WEBSOCKET_REPLAY_REJECTION =
+  "Codex error: Persisted response contains hosted-tool, compaction, or unverifiable hidden reasoning state that Rustponses cannot replay. Start a new response or use the Python Responses service for this continuation.";
 const OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES = 16 * 1024;
 
 interface OpenAICodexResponsesOptions extends BaseOpenAIStreamOptions {
@@ -379,12 +377,11 @@ export const streamOpenAICodexResponses: StreamFunction<
 
       if (websocketAuthority && !websocketDisabledForSession) {
         let websocketStarted = false;
-        let websocketRequestSent = false;
-        let retriedWebSocketConnectionLimit = false;
+        let retriedWebSocketRejection = false;
         while (true) {
           const activeAttempt = semanticAttempt;
+          const dispatch: { request?: RequestBody } = {};
           websocketStarted = false;
-          websocketRequestSent = false;
           try {
             const terminal = await processWebSocketStream(
               websocketState,
@@ -403,8 +400,8 @@ export const streamOpenAICodexResponses: StreamFunction<
               processStream,
               observePromptEgress,
               activeAttempt.kind,
-              () => {
-                websocketRequestSent = true;
+              (request) => {
+                dispatch.request = request;
               },
               options?.signal,
             );
@@ -416,7 +413,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             // be classified as provider rejection of encrypted replay state.
             const nextSemanticAttempt =
               !aborted &&
-              websocketRequestSent &&
+              dispatch.request &&
               !websocketStarted &&
               error instanceof CodexApiError &&
               isInvalidEncryptedContentError(error)
@@ -426,13 +423,19 @@ export const streamOpenAICodexResponses: StreamFunction<
                 : undefined;
             if (nextSemanticAttempt) {
               semanticAttempt = nextSemanticAttempt;
-              retriedWebSocketConnectionLimit = false;
+              retriedWebSocketRejection = false;
               continue;
             }
-            const connectionLimitBeforeStart =
-              !websocketStarted && isWebSocketConnectionLimitReachedError(error);
-            if (!aborted && connectionLimitBeforeStart && !retriedWebSocketConnectionLimit) {
-              retriedWebSocketConnectionLimit = true;
+            // Releasing the rejected socket discards its continuation. Retry the
+            // retained full input, including completed tools, without stripping state.
+            const reconnectBeforeStart =
+              !websocketStarted &&
+              (isWebSocketConnectionLimitReachedError(error) ||
+                (dispatch.request?.previous_response_id &&
+                  error instanceof CodexApiError &&
+                  error.message === WEBSOCKET_REPLAY_REJECTION));
+            if (!aborted && reconnectBeforeStart && !retriedWebSocketRejection) {
+              retriedWebSocketRejection = true;
               continue;
             }
             // After output starts, the runner must continue the transcript instead of replaying.
@@ -613,9 +616,8 @@ export const streamOpenAICodexResponses: StreamFunction<
         requestTimedOut && requestTimeoutMs !== undefined
           ? formatRequestTimeoutError(requestTimeoutMs, error)
           : error;
-      for (const block of output.content) {
-        // partialJson is only a streaming scratch buffer; never persist it.
-        delete (block as { partialJson?: string }).partialJson;
+      for (const block of output.content.filter((candidate) => candidate.type === "toolCall")) {
+        delete block.partialJson;
       }
       const providerRefusal = readCodexProviderRefusal(normalizedError);
       if (providerRefusal) {
@@ -1182,31 +1184,6 @@ function serializeRequestContext(body: RequestBody): string {
   return JSON.stringify(rest);
 }
 
-function getCachedWebSocketInputDelta(
-  body: RequestBody,
-  continuation: CachedWebSocketContinuationState,
-): ResponseInput | undefined {
-  if (serializeRequestContext(body) !== serializeRequestContext(continuation.lastRequestBody)) {
-    return undefined;
-  }
-
-  const currentInput = body.input ?? [];
-  const baseline = [
-    ...(continuation.lastRequestBody.input ?? []),
-    ...continuation.lastResponseItems,
-  ];
-  if (currentInput.length < baseline.length) {
-    return undefined;
-  }
-
-  const prefix = currentInput.slice(0, baseline.length);
-  if (JSON.stringify(prefix) !== JSON.stringify(baseline)) {
-    return undefined;
-  }
-
-  return currentInput.slice(baseline.length);
-}
-
 function buildCachedWebSocketRequestBody(
   entry: CachedWebSocketConnection,
   body: RequestBody,
@@ -1215,9 +1192,17 @@ function buildCachedWebSocketRequestBody(
   if (!continuation) {
     return body;
   }
-
-  const delta = getCachedWebSocketInputDelta(body, continuation);
-  if (!delta || !continuation.lastResponseId) {
+  const currentInput = body.input ?? [];
+  const baseline = [
+    ...(continuation.lastRequestBody.input ?? []),
+    ...continuation.lastResponseItems,
+  ];
+  if (
+    !continuation.lastResponseId ||
+    serializeRequestContext(body) !== serializeRequestContext(continuation.lastRequestBody) ||
+    currentInput.length < baseline.length ||
+    JSON.stringify(currentInput.slice(0, baseline.length)) !== JSON.stringify(baseline)
+  ) {
     entry.continuation = undefined;
     return body;
   }
@@ -1225,7 +1210,7 @@ function buildCachedWebSocketRequestBody(
   return {
     ...body,
     previous_response_id: continuation.lastResponseId,
-    input: delta,
+    input: currentInput.slice(baseline.length),
   };
 }
 
@@ -1242,7 +1227,7 @@ async function processWebSocketStream(
   processStream: ProcessCodexStream,
   observePromptEgress?: ObserveResponsesPromptEgress,
   payloadVariant: ResponsesEncryptedContentAttempt<RequestBody>["kind"] = "initial",
-  onRequestSent?: () => void,
+  onRequestSent?: (request: RequestBody) => void,
   activitySignal?: AbortSignal,
 ): Promise<CompletedResponse | null | undefined> {
   const { socket, entry, release } = await acquireWebSocket(
@@ -1296,7 +1281,7 @@ async function processWebSocketStream(
       lifecycle.assertCurrent();
     }
     socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
-    onRequestSent?.();
+    onRequestSent?.(requestBody);
     const terminal = await processStream(acceptedEvents(), options, activitySignal);
     if (options?.signal?.aborted) {
       keepConnection = false;

@@ -235,7 +235,7 @@ export async function hydrateChatHistory(
         currentRunProjections: historyProjection.runs,
         resetStream: !state.chatRunId || state.chatRunId === previousRunId,
       });
-      commitCurrentChatHistorySnapshot(state, response.deltaCursor ?? null);
+      commitCurrentChatHistorySnapshot(state, response.deltaCursor ?? null, response.sessionInfo);
       recordTiming("applied", {
         messageCount: response.messages.length,
         visibleMessageCount: response.messages.length,
@@ -269,7 +269,8 @@ export async function hydrateChatHistory(
       sessionKey,
       visibleMessages,
     });
-    const nextDisplayedLeafEntryId = Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")
+    const hasActiveLeafEntryId = Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId");
+    const nextDisplayedLeafEntryId = hasActiveLeafEntryId
       ? res.sessionInfo?.activeLeafEntryId?.trim() || null
       : (previousDisplayedLeafEntryId ?? null);
     const retainsTranscriptIdentity =
@@ -290,9 +291,7 @@ export async function hydrateChatHistory(
       sessionKey,
       agentId: requestAgentId,
       sessionId: nextSessionId,
-      ...(Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")
-        ? { activeLeafEntryId: nextDisplayedLeafEntryId }
-        : {}),
+      ...(hasActiveLeafEntryId ? { activeLeafEntryId: nextDisplayedLeafEntryId } : {}),
     });
     state.chatSubmissions?.observeInitialSession(sessionKey, client, nextSessionId);
     // Only the pane-owned reducer proves which live and pending rows survive;
@@ -315,7 +314,7 @@ export async function hydrateChatHistory(
             : undefined,
       },
     );
-    if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
+    if (hasActiveLeafEntryId) {
       state.chatDisplayedLeafEntryId = nextDisplayedLeafEntryId;
     }
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
@@ -325,7 +324,7 @@ export async function hydrateChatHistory(
       receipts:
         !previousSessionId || previousSessionId === nextSessionId ? res.inputReceipts : undefined,
     });
-    commitCurrentChatHistorySnapshot(state, res.deltaCursor ?? null);
+    commitCurrentChatHistorySnapshot(state, res.deltaCursor ?? null, res.sessionInfo);
     if (
       state.reconnectResumeSessionId &&
       state.reconnectResumeSessionId !== state.currentSessionId

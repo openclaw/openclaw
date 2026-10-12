@@ -524,8 +524,8 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
           : pollMessage(chatId, scenario.type, scenario.name, thread);
       if (scenario.name === "write-failure") {
         const state = getTelegramRuntime().state;
-        const open = state.openKeyedStore;
-        vi.spyOn(state, "openKeyedStore").mockImplementation((options) => {
+        const open = state.openKeyedStoreV2.bind(state);
+        vi.spyOn(state, "openKeyedStoreV2").mockImplementation((options) => {
           const store = open(options);
           return options.namespace === "telegram.poll-registry"
             ? {

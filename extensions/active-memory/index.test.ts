@@ -40,8 +40,17 @@ import {
   setMinimumTimeoutMsForTests,
   setSetupGraceTimeoutMsForTests,
 } from "./config.js";
+import { registerActiveMemoryDiagnosticTests } from "./index.diagnostics.test-support.js";
 import plugin from "./index.js";
 import { registerActiveMemoryProviderTests } from "./index.memory-provider.test-support.js";
+import {
+  assistantRecord,
+  expectSingleTranscriptArtifact,
+  memoryToolRecord,
+  usableMemoryTranscriptRecord,
+  writeTranscriptJsonl,
+  writeUsableMemoryTranscript,
+} from "./index.transcript.test-support.js";
 import * as recallRun from "./recall-run.js";
 import {
   buildCacheKey,
@@ -65,12 +74,6 @@ import { resetTriggerRecallRunsForTests } from "./trigger-recall.js";
 const UNPAIRED_SURROGATE_RE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
-async function expectSingleTranscriptArtifact(directory: string): Promise<string> {
-  const files = await fs.readdir(directory);
-  expect(files).toEqual([expect.stringMatching(/^active-memory-[a-z0-9]+-[a-f0-9]{8}\.jsonl$/)]);
-  return path.join(directory, expectDefined(files[0], "transcript artifact"));
-}
-
 const hoisted = vi.hoisted(() => {
   const sessionStore: Record<string, Record<string, unknown>> = {
     "agent:main:main": {
@@ -83,7 +86,7 @@ const hoisted = vi.hoisted(() => {
     getActiveMemorySearchManager: vi.fn(async () => ({ manager: null })),
     getActiveMemoryProvider: vi.fn(async () => ({ provider: null })),
     cleanupSessionLifecycleArtifacts: vi.fn(),
-    patchSessionEntry: vi.fn(),
+    prepareSessionEntryPatch: vi.fn(),
     rawDeltaReads: [] as Array<{ maxBytes?: number; maxEvents?: number; sessionId: string }>,
     runtimeTranscriptFiles: {} as Record<string, string>,
     sessionStore,
@@ -130,7 +133,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   return {
     ...actual,
     cleanupSessionLifecycleArtifacts: hoisted.cleanupSessionLifecycleArtifacts,
-    patchSessionEntry: hoisted.patchSessionEntry,
+    prepareSessionEntryPatch: hoisted.prepareSessionEntryPatch,
     updateSessionStore: hoisted.updateSessionStore,
   };
 });
@@ -335,7 +338,7 @@ describe("active-memory plugin", () => {
     runtime: {
       agent: {
         runEmbeddedAgent: runtimeRunEmbeddedAgent,
-        resolveCliBackendDispatchEligibility,
+        resolveCliBackendDispatchEligibilityAsync: resolveCliBackendDispatchEligibility,
         session: {
           resolveStorePath: vi.fn(() => path.join(stateDir, "sessions.json")),
           getSessionEntryAsync: vi.fn(
@@ -354,11 +357,11 @@ describe("active-memory plugin", () => {
               return match ? { sessionKey: match[0], entry: match[1] } : undefined;
             },
           ),
-          patchSessionEntry: vi.fn(
+          prepareSessionEntryPatch: vi.fn(
             async (params: {
               sessionKey: string;
               fallbackEntry?: Record<string, unknown>;
-              update: (entry: Record<string, unknown>) => Record<string, unknown> | null;
+              prepare: (entry: Record<string, unknown>) => Record<string, unknown> | null;
             }) => {
               let result: Record<string, unknown> | null = null;
               await hoisted.updateSessionStore(
@@ -368,7 +371,7 @@ describe("active-memory plugin", () => {
                   if (!existing) {
                     return;
                   }
-                  const patch = params.update({ ...existing });
+                  const patch = params.prepare({ ...existing });
                   if (!patch) {
                     result = existing;
                     return;
@@ -422,14 +425,6 @@ describe("active-memory plugin", () => {
   const expectLinesNotToContain = (lines: string[], text: string) => {
     expect(lines.join("\n")).not.toContain(text);
   };
-  const writeTranscriptJsonl = async (sessionFile: string, records: unknown[]) => {
-    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-    await fs.writeFile(
-      sessionFile,
-      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
-      "utf8",
-    );
-  };
   let runtimeTranscriptCounter = 0;
   const writeRuntimeTranscript = async (
     records: Array<{ type?: string; message: Record<string, unknown> }>,
@@ -444,26 +439,6 @@ describe("active-memory plugin", () => {
       await appendSessionTranscriptMessageByIdentity({ ...target, message });
     }
     return target;
-  };
-  const memoryToolRecord = (
-    toolName: string,
-    details: Record<string, unknown>,
-    content?: unknown,
-  ) => ({
-    message: {
-      role: "toolResult",
-      toolName,
-      details,
-      ...(content === undefined ? {} : { content }),
-    },
-  });
-  const assistantRecord = (content: unknown) => ({ message: { role: "assistant", content } });
-  const usableMemoryTranscriptRecord = (text: string) =>
-    memoryToolRecord("memory_search", { results: [{ text }] }, [
-      { type: "text", text: JSON.stringify({ results: [{ text }] }) },
-    ]);
-  const writeUsableMemoryTranscript = async (sessionFile: string, text: string) => {
-    await writeTranscriptJsonl(sessionFile, [usableMemoryTranscriptRecord(text)]);
   };
   const waitForAbort = async (abortSignal?: AbortSignal): Promise<never> => {
     if (abortSignal?.aborted) {
@@ -634,6 +609,17 @@ describe("active-memory plugin", () => {
     registerPluginConfig({ timeoutMs, logging: true, ...overrides });
   };
 
+  registerActiveMemoryDiagnosticTests({
+    logger: api.logger,
+    getActiveMemorySearchManager: hoisted.getActiveMemorySearchManager,
+    runPromptBuild,
+    runActiveMemoryCommand,
+    configure: (logging, remember = true) => {
+      syncRuntimePluginConfig({ agents: ["sandbox"], mode: "off", logging });
+      configFile = { ...configFile, session: { dmScope: remember ? "main" : "per-peer" } };
+    },
+  });
+
   registerActiveMemoryProviderTests({
     memoryCapability: hoisted.memoryCapability,
     getActiveMemoryProvider: hoisted.getActiveMemoryProvider,
@@ -723,13 +709,13 @@ describe("active-memory plugin", () => {
         payloads: [{ text: "- lemon pepper wings\n- blue cheese" }],
       };
     });
-    hoisted.patchSessionEntry.mockImplementation(
+    hoisted.prepareSessionEntryPatch.mockImplementation(
       async (params: {
         fallbackEntry?: Record<string, unknown>;
         replaceEntry?: boolean;
         sessionKey: string;
         skipMaintenance?: boolean;
-        update: (
+        prepare: (
           entry: Record<string, unknown>,
           context: { existingEntry?: Record<string, unknown> },
         ) => Record<string, unknown> | null;
@@ -739,7 +725,7 @@ describe("active-memory plugin", () => {
         if (!entry) {
           return null;
         }
-        const patch = params.update({ ...entry }, { existingEntry });
+        const patch = params.prepare({ ...entry }, { existingEntry });
         if (!patch) {
           return existingEntry ?? entry;
         }
@@ -964,7 +950,7 @@ describe("active-memory plugin", () => {
       sessionId,
       sessionFile: runtimeSessionFile,
     });
-    expect(hoisted.patchSessionEntry).toHaveBeenCalledWith(
+    expect(hoisted.prepareSessionEntryPatch).toHaveBeenCalledWith(
       expect.objectContaining({
         fallbackEntry: expect.objectContaining({
           pluginOwnerId: "active-memory",
@@ -1468,7 +1454,7 @@ describe("active-memory plugin", () => {
       args: "status",
     });
 
-    expect(statusResult.text).toBe("Active Memory: off for this session.");
+    expect(statusResult.text).toContain("Active Memory: off for this session.");
 
     const disabledResult = await runPromptBuild(
       { prompt: "what wings should i order? active memory toggle" },
@@ -1497,20 +1483,6 @@ describe("active-memory plugin", () => {
     );
 
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports session status off when the current agent is outside the active-memory allowlist (#78986)", async () => {
-    registerPluginConfig({
-      agents: ["sandbox"],
-      logging: true,
-    });
-
-    const statusResult = await runActiveMemoryCommand({
-      sessionKey: "agent:main:main",
-      args: "status",
-    });
-
-    expect(statusResult.text).toBe("Active Memory: off for this session.");
   });
 
   it.each([
@@ -1748,7 +1720,7 @@ describe("active-memory plugin", () => {
       resume.resolve(expectDefined(hoisted.sessionStore["agent:main:main"], "main session"));
       expect(await pending).toBeUndefined();
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
-      expect(hoisted.patchSessionEntry).not.toHaveBeenCalled();
+      expect(hoisted.prepareSessionEntryPatch).not.toHaveBeenCalled();
     } finally {
       resume.resolve(expectDefined(hoisted.sessionStore["agent:main:main"], "main session"));
       await Promise.allSettled([pending]);
@@ -2262,10 +2234,10 @@ describe("active-memory plugin", () => {
       const prepared = createDeferred<void>();
       const resume = createDeferred<void>();
       const patch = expectDefined(
-        hoisted.patchSessionEntry.getMockImplementation(),
+        hoisted.prepareSessionEntryPatch.getMockImplementation(),
         "recall creation",
       );
-      hoisted.patchSessionEntry.mockImplementationOnce(async (...args) => {
+      hoisted.prepareSessionEntryPatch.mockImplementationOnce(async (...args) => {
         const result = await patch(...args);
         prepared.resolve();
         await resume.promise;
@@ -2861,7 +2833,9 @@ describe("active-memory plugin", () => {
     const transcriptRuntime = await vi.importActual<
       typeof import("openclaw/plugin-sdk/session-transcript-runtime")
     >("openclaw/plugin-sdk/session-transcript-runtime");
-    hoisted.patchSessionEntry.mockImplementationOnce(sessionRuntime.patchSessionEntry);
+    hoisted.prepareSessionEntryPatch.mockImplementationOnce(
+      sessionRuntime.prepareSessionEntryPatch,
+    );
     hoisted.cleanupSessionLifecycleArtifacts.mockImplementationOnce(
       sessionRuntime.cleanupSessionLifecycleArtifacts,
     );
@@ -4270,7 +4244,7 @@ describe("active-memory plugin", () => {
 
     const childKey = lastEmbeddedSessionKey();
     expect(childKey).toMatch(/^agent:main:subagent:incognito-[a-f0-9]{12}$/);
-    expect(hoisted.patchSessionEntry).toHaveBeenCalledWith(
+    expect(hoisted.prepareSessionEntryPatch).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: childKey,
         fallbackEntry: expect.objectContaining({ incognito: true }),

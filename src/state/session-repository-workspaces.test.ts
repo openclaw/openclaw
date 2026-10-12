@@ -19,7 +19,11 @@ import {
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import * as stateWorker from "./openclaw-state-worker-store.js";
 import { createSessionRepositoryWorkspaceStore } from "./session-repository-workspaces.js";
-import { createSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
+import {
+  bindSessionRepositoryWorkspaceBaseInDatabase,
+  createSessionRepositoryWorkspaceInDatabase,
+  deleteSessionRepositoryWorkspaceInDatabase,
+} from "./session-repository-workspaces.kernel.js";
 
 const roots: string[] = [];
 const subscriptions: (() => void)[] = [];
@@ -106,6 +110,71 @@ it("returns the committed workspace identity when ordinary result delivery fails
   } finally {
     unsubscribe();
   }
+});
+
+it("publishes native base changes and deletion before returning without exposing rollback", async () => {
+  const { database, store } = await fixture();
+  const initial = await store.create(source);
+  const prepared = await store.prepare(initial.workspaceId);
+  const bind = () =>
+    bindSessionRepositoryWorkspaceBaseInDatabase(
+      database.db,
+      {
+        workspaceId: initial.workspaceId,
+        expectedRevision: initial.revision,
+        baseCommit,
+        baseManifestHash,
+      },
+      2,
+    );
+  expect(() =>
+    runOpenClawStateWriteTransaction(
+      () => {
+        bind();
+        expect(prepared.current()).toEqual(initial);
+        throw new Error("rollback workspace base");
+      },
+      { database },
+    ),
+  ).toThrow("rollback workspace base");
+  expect(prepared.current()).toEqual(initial);
+  runOpenClawStateWriteTransaction(bind, { database });
+  expect(prepared.current()).toMatchObject({ baseCommit, baseManifestHash, revision: 1 });
+  runOpenClawStateWriteTransaction(
+    () => deleteSessionRepositoryWorkspaceInDatabase(database.db, initial.workspaceId),
+    { database },
+  );
+  expect(prepared.current()).toBeUndefined();
+});
+
+it("fences detached absence while a successor settles and never revives it after a commit", async () => {
+  const { store } = await fixture();
+  const workspaceId = "00000000-0000-4000-8000-000000000000";
+  const absent = await store.prepare(workspaceId);
+  expect(absent.current()).toBeUndefined();
+  let refused = false;
+  const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+    if (request.stage !== "commit") {
+      admit(request, grant);
+      return;
+    }
+    admit(request, () => {
+      expect(() => absent.current()).toThrow("mutation has not settled");
+      refused = true;
+      throw new Error("workspace successor refused before commit");
+    });
+  });
+  await expect(store.delete({ workspaceId, assertCurrent })).rejects.toThrow(
+    "workspace successor refused before commit",
+  );
+  admission.mockRestore();
+  expect(refused).toBe(true);
+  expect(absent.current()).toBeUndefined();
+  const created = await store.create(source);
+  expect(() => absent.current()).toThrow("absence changed");
+  await store.delete({ workspaceId: created.workspaceId, assertCurrent });
+  expect(() => absent.current()).toThrow("absence changed");
+  expect((await store.prepare(workspaceId)).current()).toBeUndefined();
 });
 
 async function fixture() {
