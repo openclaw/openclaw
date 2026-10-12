@@ -175,6 +175,21 @@ describe("setup inference discovery concurrency", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("reports a provider discovery failure without waiting for CLI detection", async () => {
+    const detection = detectSetupInference(
+      {
+        resolveManifestProviderAuthChoices: () => [choice],
+        resolvePluginProviders: () => {
+          throw new Error("synthetic provider load failure");
+        },
+        detectInferenceBackends: () => new Promise(() => {}),
+      },
+      "main",
+    );
+    await expect(detection).rejects.toThrow("synthetic provider load failure");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("aborts pending provider probes when local detection fails", async () => {
     const hookStarted = createDeferred<AbortSignal | undefined>();
     const detection = detectWithProvider(

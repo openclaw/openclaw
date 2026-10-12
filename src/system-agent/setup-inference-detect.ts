@@ -309,15 +309,13 @@ async function discoverSetupInference(
   // Provider services, saved sign-ins, and CLI version probes are independent.
   // Overlap them so cold detection waits for the slowest probe instead of their sum.
   const appGuided = discoverAppGuidedCandidates({ cfg, workspace, authChoices, deps, signal });
-  // Awaited below; this only keeps an earlier local failure from leaving it unobserved.
-  appGuided.catch(() => undefined);
   const partial: SetupInferenceDetection = {
     ...manual,
     candidates: [],
     unavailableCandidates: [],
     recommendedInstalls: listRecommendedToolInstalls(),
   };
-  const [savedCandidates, detected] = await Promise.all([
+  const local = Promise.all([
     listSavedSetupInferenceCandidates({
       cfg,
       agentId: targetAgentId,
@@ -340,6 +338,8 @@ async function discoverSetupInference(
       return await detect({ config: cfg, agentId: targetAgentId });
     })(),
   ]);
+  // Wait for local probes, but fail as soon as provider discovery fails.
+  const [savedCandidates, detected] = await Promise.race([local, appGuided.then(() => local)]);
   signal.throwIfAborted();
   const configuredModel = detected.find(
     (candidate) => candidate.kind === "existing-model",
