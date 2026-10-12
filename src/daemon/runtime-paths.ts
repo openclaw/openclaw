@@ -1,4 +1,3 @@
-/** Selects stable runtime executable paths for daemon installs across platforms. */
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -297,7 +296,6 @@ async function resolveRuntimeInfo(
   }
 }
 
-/** Probes whether a Bun executable satisfies the managed daemon runtime contract. */
 export function resolveBunRuntimeInfo(
   bunPath: string,
   execFileImpl: ExecFileAsync = execFileAsync,
@@ -348,7 +346,6 @@ async function isVersionManagedRealNodePath(
   }
 }
 
-/** True when a Node path lives under a known user version-manager root. */
 export function isVersionManagedNodePath(
   nodePath: string,
   platform: NodeJS.Platform = process.platform,
@@ -357,7 +354,6 @@ export function isVersionManagedNodePath(
   return matchesVersionManagerPath(normalized, "daemon-runtime");
 }
 
-/** True when a Node path matches known system install candidates for the platform. */
 export function isSystemNodePath(
   nodePath: string,
   env: Record<string, string | undefined> = process.env,
@@ -370,7 +366,6 @@ export function isSystemNodePath(
   });
 }
 
-/** Resolves the first available system Node candidate for the platform. */
 export async function resolveSystemNodePath(
   env: Record<string, string | undefined> = process.env,
   platform: NodeJS.Platform = process.platform,
@@ -380,9 +375,7 @@ export async function resolveSystemNodePath(
     try {
       await fs.access(candidate);
       return candidate;
-    } catch {
-      // keep going
-    }
+    } catch {}
   }
   return null;
 }
@@ -418,16 +411,12 @@ export async function resolveSystemNodeInfo(params: {
   return firstAvailable;
 }
 
-/** Renders a warning when the system Node exists but is unsuitable for the daemon. */
 export function renderSystemNodeWarning(
   systemNode: SystemNodeInfo | null,
   selectedNodePath?: string,
 ): string | null {
-  if (!systemNode) {
-    return null;
-  }
-  if (systemNode.status === "supported") {
-    return systemNode.note ?? null;
+  if (!systemNode || systemNode.status === "supported") {
+    return systemNode?.note ?? null;
   }
   const selectedLabel = selectedNodePath ? ` Using ${selectedNodePath} for the daemon.` : "";
   if (systemNode.status === "probe-failed") {
@@ -438,7 +427,7 @@ export function renderSystemNodeWarning(
     systemNode.capabilityError &&
     (!systemNode.sqliteProbe.text || systemNode.sqliteProbe.error)
   ) {
-    return `${systemNode.capabilityError}${selectedLabel}`;
+    return `System Node ${versionLabel} at ${systemNode.path} failed its SQLite capability check: ${systemNode.capabilityError}${selectedLabel}`;
   }
   if (isSupportedNodeVersion(systemNode.version)) {
     const sqliteLabel = systemNode.sqliteVersion ?? "unknown";
@@ -460,7 +449,6 @@ type RuntimePathOptions = {
   execPath?: string;
 };
 
-/** Resolves the Node binary the daemon should use for a node runtime. */
 export async function resolvePreferredNodePath(
   params: RuntimePathOptions & { preferCurrentExecPath?: boolean },
 ): Promise<string | undefined> {
@@ -499,7 +487,6 @@ export async function resolvePreferredNodePath(
   return undefined;
 }
 
-/** Resolves a stable Bun binary that satisfies the daemon runtime contract. */
 export async function resolvePreferredBunPath(
   params: RuntimePathOptions,
 ): Promise<string | undefined> {

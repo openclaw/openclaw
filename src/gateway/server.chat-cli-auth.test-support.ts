@@ -13,6 +13,7 @@ if (process.argv.includes("--version")) {
   process.exit(0);
 }
 if (process.argv.includes("auth")) {
+  appendFileSync(join(nativeRoot, "auth-status.log"), "probe\n");
   send({ loggedIn: nativeLogin });
   process.exit(0);
 }

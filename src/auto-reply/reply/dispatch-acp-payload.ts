@@ -81,17 +81,7 @@ export async function maybeApplyAcpTts(params: {
     return params.payload;
   }
   const { maybeApplyTtsToPayload } = await dispatchAcpTtsRuntimeLoader.load();
-  const applied = await maybeApplyTtsToPayload({
-    payload: params.payload,
-    preparedTtsPreferences: params.preparedTtsPreferences,
-    cfg: params.cfg,
-    channel: params.channel,
-    kind: params.kind,
-    inboundAudio: params.inboundAudio,
-    ttsAuto: params.ttsAuto,
-    agentId: params.agentId,
-    accountId: params.accountId,
-  });
+  const applied = await maybeApplyTtsToPayload(params);
   return copyReplyPayloadMetadata(params.payload, applied);
 }
 
@@ -184,7 +174,7 @@ export async function recoverAcpBlockText(
   if (
     state.deliveredAnswerFinalToUser ||
     (!params.shouldRouteToOriginating &&
-      state.queuedUntrackedVisibleTextDeliveries > 0 &&
+      state.untrackedVisibleText !== "none" &&
       !params.suppressBlockUserDelivery &&
       state.deliveredVisibleText &&
       !state.failedVisibleTextDelivery)

@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import { OpenClawSSEClientTransport } from "./mcp-http-transport.js";
 
@@ -109,8 +110,23 @@ it.each([
       supportsParallelToolCalls: true,
     }));
     const runtime = createSessionMcpRuntime({ sessionId: "legacy", workspaceDir: "/workspace" });
+    const toolBytes = async () => {
+      const materialized = await materializeBundleMcpToolsForRun({ runtime });
+      try {
+        return JSON.stringify(
+          materialized.tools.map(({ name, description, parameters }) => ({
+            name,
+            description,
+            parameters,
+          })),
+        );
+      } finally {
+        await materialized.dispose();
+      }
+    };
     try {
       expect((await runtime.getCatalog()).tools).toHaveLength(1);
+      const originalTools = await toolBytes();
       rejectNextRequest = true;
       if (failureMethod === "tools/call") {
         await expect(runtime.callTool("legacy", "probe", { attempt: "expired" })).rejects.toThrow(
@@ -118,8 +134,7 @@ it.each([
         );
         if (reconnects) {
           expect(runtime.peekCatalog()?.diagnostics?.[0]?.message).toBe("expired HTTP session");
-          expect(runtime.peekCatalog()?.tools).toEqual([]);
-          expect(runtime.peekCatalog()?.servers).toEqual({});
+          expect(await toolBytes()).toBe(originalTools);
         } else {
           expect(runtime.peekCatalog()?.diagnostics).toBeUndefined();
         }
@@ -133,7 +148,8 @@ it.each([
           );
         await vi.advanceTimersByTimeAsync(0);
         const failedCatalog = await runtime.getCatalog();
-        expect(failedCatalog.tools).toEqual([]);
+        expect(failedCatalog.tools).toHaveLength(1);
+        expect(await toolBytes()).toBe(originalTools);
         expect(failedCatalog.diagnostics?.[0]?.message).toContain(`HTTP ${status}`);
         expect(streams.size).toBe(reconnects ? 0 : 1);
         await vi.advanceTimersByTimeAsync(5_000);
@@ -155,6 +171,7 @@ it.each([
         expect(lists).toEqual(["/messages/1", "/messages/1", activeEndpoint]);
       }
       expect(sessionCount).toBe(reconnects ? 2 : 1);
+      expect(await toolBytes()).toBe(originalTools);
     } finally {
       await runtime.dispose();
       await runtime.joinCleanup?.();

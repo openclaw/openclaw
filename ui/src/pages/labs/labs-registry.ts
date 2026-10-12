@@ -1,8 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { t } from "../../i18n/index.ts";
 import { registerLabsEnglish } from "../../i18n/locales/en-labs.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 
-registerLabsEnglish();
+registerEnglishCatalog(registerLabsEnglish);
 
 /** What a lab row writes at its gate. Most gates are booleans; some are modes. */
 type LabFeatureValue = boolean | string;
@@ -43,80 +43,81 @@ const BOOLEAN_GATE = {
   resetScope: "gate",
 } as const;
 
-export const LAB_FEATURES = [
-  {
-    ...BOOLEAN_GATE,
-    id: "decisionAssistance",
-    title: () => t("labsPage.decisionAssistance.title"),
-    description: () => t("labsPage.decisionAssistance.description"),
-    docsUrl: "https://docs.openclaw.ai/concepts/experimental-features#decision-assistance",
-    configPath: ["agents", "defaults", "experimental", "decisionAssistance"],
-  },
-  {
-    ...BOOLEAN_GATE,
-    id: "codeMode",
-    title: () => t("labsPage.codeMode.title"),
-    description: () => t("labsPage.codeMode.description"),
-    docsUrl: "https://docs.openclaw.ai/tools/code-mode",
-    configPath: ["tools", "codeMode", "enabled"],
-    // The on position writes the "auto" tier, never `true`: Labs offers
-    // Auto/Off, and force-on for unevaluated models stays a config-only choice.
-    onValue: "auto",
-    activeValues: [true, "auto"],
-    // Mirrors resolveCodeModeConfig: absence inherits auto; authored objects opt in.
-    readEnabled: (raw) =>
-      raw === undefined ||
-      raw === true ||
-      raw === "auto" ||
-      (isRecord(raw) && (raw.enabled === true || raw.enabled === "auto")),
-  },
-  {
-    ...BOOLEAN_GATE,
-    id: "toolSearch",
-    title: () => t("labsPage.toolSearch.title"),
-    description: () => t("labsPage.toolSearch.description"),
-    docsUrl: "https://docs.openclaw.ai/tools/tool-search",
-    configPath: ["tools", "toolSearch", "enabled"],
-    // Mirrors resolveToolSearchConfig: unauthored config is on, while explicit
-    // booleans and objects retain their own enablement semantics.
-    readEnabled: (raw) =>
-      raw === undefined ||
-      raw === true ||
-      (isRecord(raw) &&
-        (typeof raw.enabled === "boolean" || typeof raw.enabled === "string"
-          ? raw.enabled === true
-          : Object.keys(raw).some((key) => key !== "enabled"))),
-    // Explicit objects without a mode retain the legacy "code" surface.
-    // Pin structured calls when writing an enabled override from Labs.
-    enableAlso: { mode: "tools" },
-    resetScope: "parent",
-  },
-  {
-    ...BOOLEAN_GATE,
-    id: "customPluginUi",
-    title: () => t("labsPage.customPluginUi.title"),
-    description: () => t("labsPage.customPluginUi.description"),
-    docsUrl: "https://docs.openclaw.ai/plugins/feature-plugins",
-    configPath: ["gateway", "controlUi", "experimental", "customPlugins"],
-  },
-  {
-    ...BOOLEAN_GATE,
-    id: "hostDesktop",
-    title: () => t("labsPage.hostDesktop.title"),
-    description: () => t("labsPage.hostDesktop.description"),
-    docsUrl: "https://docs.openclaw.ai/gateway/configuration-reference#desktop",
-    configPath: ["desktop", "host", "enabled"],
-    resetScope: null,
-  },
-  {
-    ...BOOLEAN_GATE,
-    id: "workerDesktop",
-    title: () => t("labsPage.workerDesktop.title"),
-    description: () => t("labsPage.workerDesktop.description"),
-    docsUrl: "https://docs.openclaw.ai/gateway/cloud-workers#desktop-interactive",
-    configPath: ["cloudWorkers", "desktop"],
-  },
-] as const satisfies readonly LabFeature[];
+export const LAB_FEATURES = (
+  [
+    {
+      ...BOOLEAN_GATE,
+      id: "decisionAssistance",
+      docsUrl: "https://docs.openclaw.ai/concepts/experimental-features#decision-assistance",
+      configPath: ["agents", "defaults", "experimental", "decisionAssistance"],
+    },
+    {
+      ...BOOLEAN_GATE,
+      id: "codeMode",
+      docsUrl: "https://docs.openclaw.ai/tools/code-mode",
+      configPath: ["tools", "codeMode", "enabled"],
+      // The on position writes the "auto" tier, never `true`: Labs offers
+      // Auto/Off, and force-on for unevaluated models stays a config-only choice.
+      onValue: "auto",
+      activeValues: [true, "auto"],
+      // Mirrors resolveCodeModeConfig: absence inherits auto; authored objects opt in.
+      readEnabled: (raw) =>
+        raw === undefined ||
+        raw === true ||
+        raw === "auto" ||
+        (isRecord(raw) && (raw.enabled === true || raw.enabled === "auto")),
+    },
+    {
+      ...BOOLEAN_GATE,
+      id: "toolSearch",
+      docsUrl: "https://docs.openclaw.ai/tools/tool-search",
+      configPath: ["tools", "toolSearch", "enabled"],
+      // Mirrors resolveToolSearchConfig: unauthored config is on, while explicit
+      // booleans and objects retain their own enablement semantics.
+      readEnabled: (raw) =>
+        raw === undefined ||
+        raw === true ||
+        (isRecord(raw) &&
+          (typeof raw.enabled === "boolean" || typeof raw.enabled === "string"
+            ? raw.enabled === true
+            : Object.keys(raw).some((key) => key !== "enabled"))),
+      // Explicit objects without a mode retain the legacy "code" surface.
+      // Pin structured calls when writing an enabled override from Labs.
+      enableAlso: { mode: "tools" },
+      resetScope: "parent",
+    },
+    {
+      ...BOOLEAN_GATE,
+      id: "chatBubbles",
+      docsUrl: "https://docs.openclaw.ai/web/control-ui/chat",
+      configPath: ["gateway", "controlUi", "experimental", "chatBubbles"],
+    },
+    {
+      ...BOOLEAN_GATE,
+      id: "customPluginUi",
+      docsUrl: "https://docs.openclaw.ai/plugins/feature-plugins",
+      configPath: ["gateway", "controlUi", "experimental", "customPlugins"],
+    },
+    {
+      ...BOOLEAN_GATE,
+      id: "hostDesktop",
+      docsUrl: "https://docs.openclaw.ai/gateway/configuration-reference#desktop",
+      configPath: ["desktop", "host", "enabled"],
+      resetScope: null,
+    },
+    {
+      ...BOOLEAN_GATE,
+      id: "workerDesktop",
+      docsUrl: "https://docs.openclaw.ai/gateway/cloud-workers#desktop-interactive",
+      configPath: ["cloudWorkers", "desktop"],
+    },
+  ] as const satisfies readonly Omit<LabFeature, "title" | "description">[]
+).map((feature) =>
+  Object.assign({}, feature, {
+    title: () => t(`labsPage.${feature.id}.title`),
+    description: () => t(`labsPage.${feature.id}.description`),
+  }),
+);
 
 function recordAtPath(config: Record<string, unknown>, path: readonly string[]): unknown {
   let current: unknown = config;

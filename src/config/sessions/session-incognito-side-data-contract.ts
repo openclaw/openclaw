@@ -11,6 +11,16 @@ import type { MessageToolRunOutcomeInsert } from "../../infra/message-tool-run-o
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { readSessionProgressCard } from "../../session-cards/progress-card-store.js";
 import type { ProgressCardWorkerOperations } from "../../session-cards/progress-card-store.worker.js";
+import type {
+  TrajectoryRuntimeRetentionInput,
+  TrajectoryRuntimeRetentionPlan,
+} from "../../trajectory/runtime-retention.contract.js";
+import type { deleteTrajectoryRuntimeRetention } from "../../trajectory/runtime-retention.sqlite.js";
+import type {
+  SqliteTrajectoryRuntimeAppend,
+  SqliteTrajectoryRuntimeReadScope,
+} from "../../trajectory/runtime-store.contract.js";
+import type { TrajectoryEvent } from "../../trajectory/types.js";
 import type { readLegacyAcpMigrationContextInDatabase } from "./session-accessor.sqlite-acp-provenance.js";
 import type { SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
@@ -22,7 +32,7 @@ import type {
   SessionReactionWrite,
 } from "./session-reaction-store.types.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
-import type { SessionMember } from "./session-sharing-store.kernel.js";
+import type { SessionMembersSnapshot } from "./session-sharing-store.kernel.js";
 import type {
   SessionCollaborationMutation,
   SessionSharingWorkerOperations,
@@ -69,7 +79,7 @@ export type IncognitoSideDataOperations = {
     output: SessionSharingWorkerOperations["category.apply"]["output"];
   };
   "session.category.keys": { input: { name: string }; output: string[] };
-  "session.members.read": { input: { sessionKey: string }; output: SessionMember[] };
+  "session.members.read": { input: { sessionKey: string }; output: SessionMembersSnapshot };
   "session.suggestions.read": {
     input: { sessionKey: string; params: SessionSuggestionListParams };
     output: StoredSessionSuggestion[];
@@ -90,6 +100,29 @@ export type IncognitoSideDataOperations = {
   "session.heartbeat.persist": HeartbeatOutcomeWorkerOperations["persist"];
   "session.heartbeat.claim": HeartbeatOutcomeWorkerOperations["claim"];
   "session.messageToolOutcome.record": { input: MessageToolRunOutcomeInsert; output: void };
+  "session.trajectory.read": {
+    input: Omit<SqliteTrajectoryRuntimeReadScope, "agentId" | "env" | "storePath"> & {
+      sessionKey: string;
+    };
+    output: TrajectoryEvent[];
+  };
+  "session.trajectory.append": {
+    input: SqliteTrajectoryRuntimeAppend & { sessionKey: string; lifecycleRevision?: string };
+    output: void;
+  };
+  "session.trajectory.retention.prepare": {
+    input: TrajectoryRuntimeRetentionInput & { sessionKey: string; now: number };
+    output: { sweepId: string; snapshot: TrajectoryRuntimeRetentionPlan } | undefined;
+  };
+  "session.trajectory.retention.delete": {
+    input: {
+      sessionKey: string;
+      now: number;
+      sweepId: string;
+      snapshot?: TrajectoryRuntimeRetentionPlan;
+    };
+    output: ReturnType<typeof deleteTrajectoryRuntimeRetention>;
+  };
   "session.progressCard.get": {
     input: { sessionKey: string };
     output: ReturnType<typeof readSessionProgressCard>;
@@ -106,6 +139,8 @@ export function isIncognitoSideDataWrite(type: keyof IncognitoSideDataOperations
     type === "session.category.apply" ||
     type === "session.reaction.set" ||
     type === "session.messageToolOutcome.record" ||
+    type === "session.trajectory.append" ||
+    type === "session.trajectory.retention.delete" ||
     type === "session.progressCard.put" ||
     type === "session.boards.applyOps" ||
     type === "session.boards.putWidget" ||

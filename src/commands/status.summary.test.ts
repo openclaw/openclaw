@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveContextTokensForModelFromCache } from "../agents/context-resolution.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
@@ -14,9 +15,13 @@ import {
 } from "./status.summary.test-support.js";
 
 const statusSummaryMocks = vi.hoisted(() => ({
-  hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
+  hasConfiguredChannelsForReadOnlyScopeAsync: vi.fn<
+    typeof import("../plugins/channel-plugin-ids.js").hasConfiguredChannelsForReadOnlyScopeAsync
+  >(async () => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
   resolveProviderStaticModel: vi.fn(),
+  getPreparedModelCatalogSnapshot:
+    vi.fn<typeof import("../agents/prepared-model-catalog.js").getPreparedModelCatalogSnapshot>(),
   listSessionEntriesCore: vi.fn<
     (scope?: { agentId?: string; storePath?: string }) => Array<{
       sessionKey: string;
@@ -27,40 +32,51 @@ const statusSummaryMocks = vi.hoisted(() => ({
     vi.fn<typeof import("../config/sessions/session-accessor.js").loadExactSessionEntryReadOnly>(),
 }));
 
+// mock-isolation: Keep plugin discovery outside this status aggregation fixture.
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
-  hasConfiguredChannelsForReadOnlyScope: statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope,
+  hasConfiguredChannelsForReadOnlyScopeAsync:
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync,
 }));
 
-vi.mock("../status/summary.runtime.js", () => ({
-  statusSummaryRuntime: {
-    classifySessionKey: vi.fn(() => "direct"),
-    resolveConfiguredStatusModelRef: vi.fn(() => ({
-      provider: "openai",
-      model: "gpt-5.5",
-    })),
-    resolveSessionModelRef: vi.fn(() => ({
-      provider: "openai",
-      model: "gpt-5.5",
-    })),
-    resolveSessionRuntime: vi.fn(() => ({ id: "openclaw", label: "OpenClaw Default" })),
-    resolveStatusModelLookupRef: vi.fn(({ provider, model }) =>
-      typeof model === "string" && model.length > 0
-        ? {
-            provider: typeof provider === "string" && provider.length > 0 ? provider : "openai",
-            model,
-          }
-        : null,
-    ),
-    resolveStatusModelComparisonLabel: vi.fn(({ provider, model }) =>
-      typeof model === "string" && model.length > 0
-        ? `${typeof provider === "string" && provider.length > 0 ? provider : "openai"}/${model}`
-        : null,
-    ),
-    resolveAuthoredModelContextTokens: vi.fn(() => undefined),
-    resolveContextTokensForModel: vi.fn(() => 200_000),
-    waitForContextWindowCacheLoad: vi.fn(async () => "idle" as const),
-  },
+// mock-isolation: Exercise catalog projection without preparing runtime owners or provider I/O.
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  getPreparedModelCatalogSnapshot: statusSummaryMocks.getPreparedModelCatalogSnapshot,
 }));
+
+vi.mock("../status/summary.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../status/summary.runtime.js")>();
+  return {
+    ...actual,
+    statusSummaryRuntime: {
+      ...actual.statusSummaryRuntime,
+      classifySessionKey: vi.fn(() => "direct"),
+      resolveConfiguredStatusModelRef: vi.fn(() => ({
+        provider: "openai",
+        model: "gpt-5.5",
+      })),
+      resolveSessionModelRef: vi.fn(() => ({
+        provider: "openai",
+        model: "gpt-5.5",
+      })),
+      resolveSessionRuntime: vi.fn(() => ({ id: "openclaw", label: "OpenClaw Default" })),
+      resolveStatusModelLookupRef: vi.fn(({ provider, model }) =>
+        typeof model === "string" && model.length > 0
+          ? {
+              provider: typeof provider === "string" && provider.length > 0 ? provider : "openai",
+              model,
+            }
+          : null,
+      ),
+      resolveStatusModelComparisonLabel: vi.fn(({ provider, model }) =>
+        typeof model === "string" && model.length > 0
+          ? `${typeof provider === "string" && provider.length > 0 ? provider : "openai"}/${model}`
+          : null,
+      ),
+      resolveAuthoredModelContextTokens: vi.fn(() => undefined),
+      resolveContextTokensForModel: vi.fn(() => 200_000),
+    },
+  };
+});
 
 vi.mock("../agents/defaults.js", () => ({
   DEFAULT_CONTEXT_TOKENS: 200_000,
@@ -197,7 +213,7 @@ describe("getStatusSummary", () => {
     setActiveDegradedPlugins([]);
     clearActiveCredentialDegradedOwner("account", "telegram:work");
     setActiveDegradedSecretOwners([]);
-    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync.mockResolvedValue(true);
     statusSummaryMocks.resolveProviderStaticModel.mockReset();
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue([]);
     vi.mocked(peekSystemEvents).mockReset().mockReturnValue([]);
@@ -210,6 +226,11 @@ describe("getStatusSummary", () => {
         : undefined;
     });
     vi.mocked(statusSummaryRuntime.resolveAuthoredModelContextTokens).mockReturnValue(undefined);
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    statusSummaryMocks.getPreparedModelCatalogSnapshot.mockReturnValue(undefined);
     vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(200_000);
     vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
       id: "openclaw",
@@ -302,7 +323,7 @@ describe("getStatusSummary", () => {
 
     const summary = await getStatusSummary({ includeSensitive: false });
 
-    expect(statusSummaryRuntime.waitForContextWindowCacheLoad).not.toHaveBeenCalled();
+    expect(statusSummaryMocks.getPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
     expect(statusSummaryRuntime.resolveConfiguredStatusModelRef).not.toHaveBeenCalled();
     expect(statusSummaryRuntime.resolveSessionRuntime).not.toHaveBeenCalled();
     expect(statusSummaryMocks.resolveProviderStaticModel).not.toHaveBeenCalled();
@@ -401,13 +422,13 @@ describe("getStatusSummary", () => {
   });
 
   it("skips channel summary imports when no channels are configured", async () => {
-    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(false);
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync.mockResolvedValue(false);
 
     const summary = await getStatusSummary();
 
     expect(summary.channelSummary).toStrictEqual([]);
     expect(summary.linkChannel).toBeUndefined();
-    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).toHaveBeenCalledWith({
+    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync).toHaveBeenCalledWith({
       config: {},
     });
     expect(buildChannelSummary).not.toHaveBeenCalled();
@@ -453,6 +474,48 @@ describe("getStatusSummary", () => {
       allowAsyncLoad: false,
     });
   });
+
+  it.each([32_768, undefined])(
+    "uses admitted local capacity (%s) ahead of a previous model's window",
+    async (capacity) => {
+      vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockImplementation(
+        resolveContextTokensForModelFromCache,
+      );
+      vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+        provider: "ollama",
+        model: "qwen3:4b",
+      });
+      statusSummaryMocks.getPreparedModelCatalogSnapshot.mockReturnValue({
+        entries:
+          capacity === undefined
+            ? []
+            : [
+                {
+                  provider: "ollama",
+                  id: "qwen3:4b",
+                  name: "qwen3:4b",
+                  contextWindow: 262_144,
+                  contextTokens: capacity,
+                },
+              ],
+        routeVariants: [],
+      });
+      setSession({
+        modelProvider: "ollama",
+        model: "qwen3:8b",
+        agentHarnessId: "openclaw",
+        contextTokens: 128_000,
+        contextTokensSource: "resolved-v1",
+      });
+
+      const summary = await getStatusSummary();
+
+      expect(summary.sessions.recent[0]).toMatchObject({
+        model: "qwen3:4b",
+        contextTokens: capacity ?? null,
+      });
+    },
+  );
 
   it.each([
     {

@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import { getSessionEntry } from "./bot-message-dispatch.runtime.js";
+import { getSessionEntryAsync } from "./bot-message-dispatch.runtime.js";
 import type {
   CurrentTurnTranscriptFinal,
   FreshTelegramSessionEntryLoader,
@@ -21,37 +21,36 @@ export function createFreshTelegramSessionEntryLoader(params: {
   cfg: OpenClawConfig;
   telegramDeps: TelegramBotDeps;
 }): FreshTelegramSessionEntryLoader {
-  const entriesByPathAndKey = new Map<string, ReturnType<typeof getSessionEntry>>();
-  const load = ((agentId: string, sessionKey: string) => {
+  const entriesByPathAndKey = new Map<string, ReturnType<typeof getSessionEntryAsync>>();
+  const load = async (agentId: string, sessionKey: string) => {
     const storePath = params.telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
     const cacheKey = `${storePath}\0${sessionKey}`;
     if (entriesByPathAndKey.has(cacheKey)) {
-      return { storePath, entry: entriesByPathAndKey.get(cacheKey) };
+      return { storePath, entry: await entriesByPathAndKey.get(cacheKey) };
     }
-    const entry = (params.telegramDeps.getSessionEntry ?? getSessionEntry)({
+    const entry = (params.telegramDeps.getSessionEntryAsync ?? getSessionEntryAsync)({
       storePath,
       sessionKey,
       readConsistency: "latest",
     });
     entriesByPathAndKey.set(cacheKey, entry);
-    return { storePath, entry };
-  }) as FreshTelegramSessionEntryLoader;
-  load.clear = () => entriesByPathAndKey.clear();
-  return load;
+    return { storePath, entry: await entry };
+  };
+  return Object.assign(load, { clear: () => entriesByPathAndKey.clear() });
 }
 
-export function resolveTelegramReasoningLevel(params: {
+export async function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   agentId: string;
   loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
-}): TelegramReasoningLevel {
+}): Promise<TelegramReasoningLevel> {
   const configDefault = resolveTelegramConfigReasoningDefault(params.cfg, params.agentId);
   if (!params.sessionKey) {
     return configDefault;
   }
   try {
-    const { entry } = params.loadFreshSessionEntry(params.agentId, params.sessionKey);
+    const { entry } = await params.loadFreshSessionEntry(params.agentId, params.sessionKey);
     const level = entry?.reasoningLevel;
     return level === "on" || level === "stream" || level === "off" ? level : configDefault;
   } catch {
@@ -87,7 +86,7 @@ export function createTelegramTranscriptMirror(turn: Turn, sequenceOwner: Turn =
       return;
     }
     const agentId = turn.context.route.agentId;
-    const { entry, storePath } = turn.loadFreshSessionEntry(agentId, sessionKey);
+    const { entry, storePath } = await turn.loadFreshSessionEntry(agentId, sessionKey);
     const sessionId = entry?.sessionId?.trim();
     if (!sessionId) {
       return;
@@ -96,6 +95,7 @@ export function createTelegramTranscriptMirror(turn: Turn, sequenceOwner: Turn =
       agentId,
       config: turn.cfg,
       idempotencyKey,
+      ...(turn.transcriptMirrorRunId ? { sourceRunId: turn.transcriptMirrorRunId } : {}),
       deliveryMirror: { kind: "channel-final", sourceMessageId: idempotencyKey },
       sessionId,
       sessionKey,
@@ -119,7 +119,10 @@ export function createCurrentTurnTranscriptFinalResolver(params: {
       return undefined;
     }
     try {
-      const { entry, storePath } = params.loadFreshSessionEntry(params.agentId, params.sessionKey);
+      const { entry, storePath } = await params.loadFreshSessionEntry(
+        params.agentId,
+        params.sessionKey,
+      );
       if (!entry?.sessionId) {
         return undefined;
       }

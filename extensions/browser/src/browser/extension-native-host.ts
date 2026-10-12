@@ -143,15 +143,11 @@ export async function runBrowserNativeHost(params: {
         params.write(encodeBrowserNativeResponse(response));
         return response;
       }
-      if (decoded.request.op === "ensure_relay") {
-        try {
+      try {
+        if (decoded.request.op === "ensure_relay") {
           const relay = await params.ensureRelay(decoded.request.relayPort);
           response = { v: 1, ok: true, nonce: decoded.request.nonce, relay };
-        } catch {
-          response = { v: 1, ok: false, code: "relay_unavailable" };
-        }
-      } else {
-        try {
+        } else {
           const pairing = await params.buildPairing(boundProfile);
           response =
             pairing.topology === "direct-remote"
@@ -162,16 +158,18 @@ export async function runBrowserNativeHost(params: {
                   nonce: decoded.request.nonce,
                   pairingString: pairing.pairingString,
                 };
-        } catch (error) {
-          response = {
-            v: 1,
-            ok: false,
-            code:
-              error instanceof Error && error.message.includes("--gateway-url")
+        }
+      } catch (error) {
+        response = {
+          v: 1,
+          ok: false,
+          code:
+            decoded.request.op === "ensure_relay"
+              ? "relay_unavailable"
+              : error instanceof Error && error.message.includes("--gateway-url")
                 ? "manual_required"
                 : "pairing_unavailable",
-          };
-        }
+        };
       }
     }
   } catch {

@@ -409,11 +409,6 @@ function replaceLocalCronJob(state: CronState, updatedJob: CronJob) {
   state.cronJobs = state.cronJobs.map((job) => (job.id === updatedJob.id ? updatedJob : job));
 }
 
-function isCronJobChangedError(error: unknown): boolean {
-  const details = isRecord(error) && isRecord(error.details) ? error.details : null;
-  return details?.code === "CRON_JOB_CHANGED";
-}
-
 export function updateCronJobsFilter(
   state: CronState,
   patch: Partial<
@@ -475,6 +470,7 @@ function isReadOnlyCronPayload(payload: CronPayload | null, declarationKey?: str
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = typeof job.failureAlert === "object" ? job.failureAlert : undefined;
   const payload = getCronJobPayload(job);
+  const agentTurn = payload?.kind === "agentTurn" ? payload : undefined;
   const payloadLocked = isReadOnlyCronPayload(payload, job.declarationKey);
   if (!isCronFormSessionTarget(job.sessionTarget)) {
     throw new TypeError(`Invalid cron session target: ${job.sessionTarget}`);
@@ -511,9 +507,9 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
             : payload?.kind === "script"
               ? payload.script
               : "",
-    payloadModel: payload?.kind === "agentTurn" ? (payload.model ?? "") : "",
-    payloadThinking: payload?.kind === "agentTurn" ? (payload.thinking ?? "") : "",
-    payloadLightContext: payload?.kind === "agentTurn" ? payload.lightContext === true : false,
+    payloadModel: agentTurn?.model ?? "",
+    payloadThinking: agentTurn?.thinking ?? "",
+    payloadLightContext: agentTurn?.lightContext === true,
     deliveryMode: hasCanonicalCronDeliveryMode(job.delivery) ? (job.delivery?.mode ?? "none") : "",
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",
@@ -534,24 +530,17 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     failureAlertDeliveryMode: failureAlert?.mode ?? "",
     failureAlertAccountId: failureAlert?.accountId ?? "",
     timeoutSeconds:
-      payload?.kind === "agentTurn" && typeof payload.timeoutSeconds === "number"
-        ? String(payload.timeoutSeconds)
-        : "",
+      typeof agentTurn?.timeoutSeconds === "number" ? String(agentTurn.timeoutSeconds) : "",
   };
 
   if (job.schedule.kind === "at") {
     next.scheduleAt = formatDateTimeLocal(job.schedule.at);
   } else if (job.schedule.kind === "every") {
-    const parsed = parseEverySchedule(job.schedule.everyMs);
-    next.everyAmount = parsed.everyAmount;
-    next.everyUnit = parsed.everyUnit;
+    Object.assign(next, parseEverySchedule(job.schedule.everyMs));
   } else if (job.schedule.kind === "cron") {
     next.cronExpr = job.schedule.expr;
     next.cronTz = job.schedule.tz ?? "";
-    const staggerFields = parseStaggerSchedule(job.schedule.staggerMs);
-    next.scheduleExact = staggerFields.scheduleExact;
-    next.staggerAmount = staggerFields.staggerAmount;
-    next.staggerUnit = staggerFields.staggerUnit;
+    Object.assign(next, parseStaggerSchedule(job.schedule.staggerMs));
   }
   // Process-backed schedule kinds are shown read-only in the list and have no
   // editable schedule form fields; leave the cron/at/every fields at their defaults.
@@ -616,11 +605,8 @@ function normalizePersistedDeliveryChannel(
   options: { preserveLast?: boolean } = {},
 ) {
   const channel = value.trim();
-  if (!channel) {
+  if (!channel || (channel === CRON_CHANNEL_LAST && !options.preserveLast)) {
     return undefined;
-  }
-  if (channel === CRON_CHANNEL_LAST) {
-    return options.preserveLast ? CRON_CHANNEL_LAST : undefined;
   }
   return channel;
 }
@@ -696,9 +682,6 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     }
 
     const editingJob = state.cronEditingJob;
-    const expectedConfigRevision = editingJob
-      ? requireCronConfigRevision(editingJob.configRevision)
-      : undefined;
     const sourceJob = editingJob ?? state.cronCloningJob;
     const sourcePayload = sourceJob ? getCronJobPayload(sourceJob) : null;
     // Form fields cannot represent process commands, anchors, or full timestamp precision.
@@ -724,39 +707,37 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       selectedDeliveryMode === "announce"
         ? normalizedDeliveryAccountId || (editingJob?.delivery?.accountId ? null : undefined)
         : undefined;
-    const delivery =
-      selectedDeliveryMode && selectedDeliveryMode !== "none"
-        ? {
-            mode: selectedDeliveryMode,
-            channel:
-              selectedDeliveryMode === "announce"
-                ? normalizePersistedDeliveryChannel(form.deliveryChannel, {
-                    preserveLast: Boolean(editingJob?.delivery?.channel),
-                  })
-                : undefined,
-            to:
-              form.deliveryTo.trim() ||
-              (selectedDeliveryMode === "announce" && editingJob?.delivery?.to ? null : undefined),
-            accountId: deliveryAccountId,
-            bestEffort: form.deliveryBestEffort,
-            ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
-            ...(selectedDeliveryMode === "announce" && form.deliveryCompletionDestination
-              ? { completionDestination: form.deliveryCompletionDestination }
-              : {}),
-            ...(form.deliveryFailureDestination
-              ? { failureDestination: form.deliveryFailureDestination }
-              : {}),
-          }
-        : selectedDeliveryMode === "none"
-          ? ({
-              mode: "none",
-              ...(form.deliveryBestEffort ? { bestEffort: true } : {}),
-              ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
-              ...(form.deliveryFailureDestination
-                ? { failureDestination: form.deliveryFailureDestination }
-                : {}),
-            } as const)
-          : undefined;
+    const delivery = selectedDeliveryMode
+      ? {
+          mode: selectedDeliveryMode,
+          ...(selectedDeliveryMode === "none"
+            ? form.deliveryBestEffort
+              ? { bestEffort: true }
+              : {}
+            : {
+                channel:
+                  selectedDeliveryMode === "announce"
+                    ? normalizePersistedDeliveryChannel(form.deliveryChannel, {
+                        preserveLast: Boolean(editingJob?.delivery?.channel),
+                      })
+                    : undefined,
+                to:
+                  form.deliveryTo.trim() ||
+                  (selectedDeliveryMode === "announce" && editingJob?.delivery?.to
+                    ? null
+                    : undefined),
+                accountId: deliveryAccountId,
+                bestEffort: form.deliveryBestEffort,
+              }),
+          ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
+          ...(selectedDeliveryMode === "announce" && form.deliveryCompletionDestination
+            ? { completionDestination: form.deliveryCompletionDestination }
+            : {}),
+          ...(form.deliveryFailureDestination
+            ? { failureDestination: form.deliveryFailureDestination }
+            : {}),
+        }
+      : undefined;
     const failureAlert = buildFailureAlert(form, sourceJob?.failureAlert, Boolean(editingJob));
     const triggerScript = form.triggerScript.trim();
     const trigger = form.triggerEnabled
@@ -801,47 +782,10 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       job.payload = payload;
     }
     if (editingJob) {
-      const editedJobId = editingJob.id;
-      // History navigation can replace the editor while its accepted save is pending.
-      const ownsEditor = () => state.cronEditingJob === editingJob && state.cronForm === form;
-      try {
-        const updatedJob = await client.request<CronJob>("cron.update", {
-          id: editedJobId,
-          expectedConfigRevision,
-          patch: job,
-        });
-        replaceLocalCronJob(state, updatedJob);
-        if (ownsEditor()) {
-          startCronEdit(state, updatedJob);
-        }
-      } catch (error) {
-        if (!isCronJobChangedError(error)) {
-          if (ownsEditor()) {
-            throw error;
-          }
-          return;
-        }
-        await reloadCronJobsSnapshot(state);
-        if (!ownsEditor()) {
-          return;
-        }
-        try {
-          const latestJob = await client.request<CronJob>("cron.get", { id: editedJobId });
-          if (!ownsEditor()) {
-            return;
-          }
-          startCronEdit(state, latestJob);
-          state.cronError =
-            "This automation changed on the Gateway. The latest definition is loaded; review it before retrying.";
-        } catch {
-          if (ownsEditor()) {
-            state.cronError =
-              "This automation changed on the Gateway, but the latest definition could not be loaded. Refresh before retrying.";
-          }
-        }
+      if (!(await updateCronJobDefinition(state, client, editingJob, job, "save"))) {
         return;
       }
-      result = { saved: true, jobId: editedJobId };
+      result = { saved: true, jobId: editingJob.id };
     } else {
       const response = await client.request("cron.add", job);
       resetCronFormToDefaults(state, agentId);
@@ -850,6 +794,60 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     await reloadCronJobsSnapshot(state);
   });
   return result;
+}
+
+async function updateCronJobDefinition(
+  state: CronState,
+  client: GatewayBrowserClient,
+  job: CronJob,
+  patch: Record<string, unknown>,
+  operation: "save" | "toggle",
+): Promise<boolean> {
+  const form = state.cronForm;
+  const selectedJob = state.cronEditingJob;
+  const ownsEditor = () => state.cronEditingJob === job && state.cronForm === form;
+  try {
+    const updatedJob = await client.request<CronJob>("cron.update", {
+      id: job.id,
+      expectedConfigRevision: requireCronConfigRevision(job.configRevision),
+      patch,
+    });
+    replaceLocalCronJob(state, updatedJob);
+    if (ownsEditor()) {
+      if (operation === "toggle") {
+        setCronEditState(state, updatedJob, { ...form, enabled: updatedJob.enabled });
+      } else {
+        startCronEdit(state, updatedJob);
+      }
+    }
+    return true;
+  } catch (error) {
+    const details = isRecord(error) && isRecord(error.details) ? error.details : null;
+    if (details?.code !== "CRON_JOB_CHANGED" || selectedJob !== job) {
+      if (operation === "toggle" || ownsEditor()) {
+        throw error;
+      }
+      return false;
+    }
+    await reloadCronJobsSnapshot(state);
+    if (!ownsEditor()) {
+      return false;
+    }
+    try {
+      const latestJob = await client.request<CronJob>("cron.get", { id: job.id });
+      if (ownsEditor()) {
+        startCronEdit(state, latestJob);
+        state.cronError =
+          "This automation changed on the Gateway. The latest definition is loaded; review it before retrying.";
+      }
+    } catch {
+      if (ownsEditor()) {
+        state.cronError =
+          "This automation changed on the Gateway, but the latest definition could not be loaded. Refresh before retrying.";
+      }
+    }
+    return false;
+  }
 }
 
 // Mutations reload the list and scheduler status so both canonical views stay current.
@@ -867,20 +865,10 @@ export async function toggleCronJob(
   // can be queued or fail without invalidating the confirmed toggle.
   let updated = false;
   await withCronBusy(state, job, async (client) => {
-    const updatedJob = await client.request<CronJob>("cron.update", {
-      id: job.id,
-      expectedConfigRevision: requireCronConfigRevision(job.configRevision),
-      patch: { enabled },
-    });
-    replaceLocalCronJob(state, updatedJob);
-    if (state.cronEditingJob?.id === updatedJob.id) {
-      setCronEditState(state, updatedJob, {
-        ...state.cronForm,
-        enabled: updatedJob.enabled,
-      });
+    updated = await updateCronJobDefinition(state, client, job, { enabled }, "toggle");
+    if (updated) {
+      await reloadCronJobsSnapshot(state);
     }
-    updated = true;
-    await reloadCronJobsSnapshot(state);
   });
   return updated;
 }
@@ -951,17 +939,11 @@ export function startCronEdit(state: CronState, job: CronJob) {
 
 function buildCloneName(name: string, existingNames: Set<string>) {
   const base = name.trim() || "Job";
-  const first = `${base} copy`;
-  if (!existingNames.has(normalizeLowercaseStringOrEmpty(first))) {
-    return first;
-  }
-  let index = 2;
-  while (index < 1000) {
-    const next = `${base} copy ${index}`;
+  for (let index = 1; index < 1000; index += 1) {
+    const next = index === 1 ? `${base} copy` : `${base} copy ${index}`;
     if (!existingNames.has(normalizeLowercaseStringOrEmpty(next))) {
       return next;
     }
-    index += 1;
   }
   return `${base} copy ${Date.now()}`;
 }

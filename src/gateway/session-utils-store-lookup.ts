@@ -8,7 +8,7 @@ import { listSessionChildEntriesReadOnly } from "../config/sessions/session-acce
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
 import { SessionEntryChangedDuringReadError } from "../config/sessions/session-entry-read-errors.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import type { SessionMember } from "../config/sessions/session-sharing-store.kernel.js";
+import type { SessionMember } from "../config/sessions/session-membership-facts.types.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,7 +23,6 @@ import {
   prepareSessionRowPublicationScope,
   sessionChangeAffectsStoredRow,
 } from "../sessions/session-row-facts.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import {
   resolveSessionStoreIdentity,
   resolveStoredSessionKeyForAgentStore,
@@ -34,15 +33,19 @@ import {
   type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-candidates.js";
 import { GatewaySessionFactsChangedDuringReadError } from "./session-utils-store-errors.js";
+import { prepareIncognitoGatewaySessionStoreTarget } from "./session-utils-store-incognito.js";
 import {
   loadGatewaySessionStoreReads,
+  gatewaySessionStoreReadOptions,
   readGatewaySessionStore,
   type GatewaySessionStoreRead,
   type GatewaySessionStoreCache,
 } from "./session-utils-store-read.js";
 import {
   captureGatewaySessionReadSource,
+  captureGatewaySessionStoreSelection,
   withIncognitoGatewaySessionStoreTarget,
+  type GatewaySessionStoreSelection,
 } from "./session-utils-store-retained.js";
 import {
   resolveGatewaySessionStoreReadResults,
@@ -74,21 +77,6 @@ type GatewaySessionStoreLookupParams = {
   readStore?: typeof readGatewaySessionStore;
 };
 
-function storeReadOptions(
-  params: GatewaySessionStoreLookupParams,
-  keys: string[],
-  readOnly: boolean | undefined,
-): GatewaySessionStoreRead["options"] {
-  return {
-    env: params.env,
-    readOnly,
-    ...(params.exactRead || params.preserveQualifiedAddress ? { exactKeys: keys } : {}),
-    ...(params.projection ? { projection: params.projection } : {}),
-    ...(params.readConsistency ? { readConsistency: params.readConsistency } : {}),
-    ...(params.storeCache ? { cache: params.storeCache } : {}),
-  };
-}
-
 function prepareGatewaySessionStoreLookup(
   params: GatewaySessionStoreLookupParams & { canonicalKey: string; agentId: string },
   scanTargets: string[],
@@ -105,7 +93,11 @@ function prepareGatewaySessionStoreLookup(
     storePath: target.storePath,
     agentId: target.agentId,
     clone: params.clone,
-    options: storeReadOptions(params, scanTargets, configured ? params.readOnly : true),
+    options: gatewaySessionStoreReadOptions(
+      params,
+      scanTargets,
+      configured ? params.readOnly : true,
+    ),
     result:
       index === 0 && target.storePath === fallback.storePath && params.store !== undefined
         ? ok(params.store)
@@ -160,7 +152,7 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
       storePath: target.storePath,
       clone: params.clone,
       agentId: target.agentId,
-      options: storeReadOptions(params, lookupSeeds, true),
+      options: gatewaySessionStoreReadOptions(params, lookupSeeds, true),
     }));
   return {
     reads,
@@ -210,31 +202,7 @@ function prepareGatewaySessionStoreTarget(
     preserveQualifiedAddress: params.preserveQualifiedAddress,
   });
   if (isIncognitoSessionKey(canonicalKey)) {
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: params.env });
-    const read: GatewaySessionStoreRead = {
-      storePath,
-      agentId,
-      clone: params.clone,
-      // Arbitrary stale keys must not materialize process-lifetime incognito state.
-      options: storeReadOptions(params, [canonicalKey], true),
-    };
-    return {
-      reads: [read],
-      resolve: () => ({
-        agentId,
-        storePath,
-        canonicalKey,
-        storeKeys: [canonicalKey],
-        store: (params.readStore ?? readGatewaySessionStore)(read),
-        ...(read.readSource ? { readSource: read.readSource } : {}),
-        ...(read.capturedReadSource
-          ? {
-              capturedReadSource: read.capturedReadSource,
-              capturedReadSources: [read.capturedReadSource],
-            }
-          : {}),
-      }),
-    };
+    return prepareIncognitoGatewaySessionStoreTarget({ ...params, agentId, canonicalKey });
   }
   const storeKeys = params.preserveQualifiedAddress
     ? [canonicalKey]
@@ -321,6 +289,7 @@ export async function withGatewaySessionStoreTarget<T>(
     membership: ReadonlyMap<string, readonly SessionMember[]>,
     assertCurrent: () => void,
     relatedTargets: readonly GatewaySessionStoreTargetWithStore[],
+    selection?: GatewaySessionStoreSelection,
   ) => T,
 ): Promise<T> {
   const normalized = {
@@ -474,6 +443,10 @@ export async function withGatewaySessionStoreTarget<T>(
               }
               assertCurrent();
               const target = plans[0]!.resolve();
+              const selection =
+                related.length === 0 && reads.length === 1
+                  ? captureGatewaySessionStoreSelection(inventory, target, normalized.key)
+                  : undefined;
               const memberships = new Map<string, readonly SessionMember[]>();
               for (const owner of prepared) {
                 if (owner.database.path === target.readSource?.path) {
@@ -488,6 +461,7 @@ export async function withGatewaySessionStoreTarget<T>(
                 memberships,
                 assertCurrent,
                 plans.slice(1).map((plan) => plan.resolve()),
+                selection,
               );
             },
             {
@@ -554,6 +528,7 @@ export async function prepareGatewaySessionStoreTargetReadPlan(
     targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
   },
   prepareReads: <T>(reads: readonly GatewaySessionStoreRead[], select: () => T) => Promise<T>,
+  onSelected?: (target: GatewaySessionStoreTargetWithStore) => void,
 ): Promise<{
   target: GatewaySessionStoreTargetWithStore;
   plan: GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore>;
@@ -569,6 +544,7 @@ export async function prepareGatewaySessionStoreTargetReadPlan(
     legacy: prepareExplicitDeletedLegacyMainStoreTarget(normalized),
     prepareCurrent: () => prepareGatewaySessionStoreTarget(normalized),
     prepareReads,
+    onSelected,
   });
 }
 
@@ -596,44 +572,8 @@ function resolveGatewaySessionStoreTargetsReadOnly(params: {
   targets: readonly { key: string; agentId?: string }[];
   projection?: SessionEntryReadScope["projection"];
 }): GatewaySessionStoreTargetWithStore[] {
-  return readGatewaySessionStoreTargets(params, "eager").map((result) => {
-    if (!result.ok) {
-      throw result.error;
-    }
-    return result.value;
-  });
-}
-
-/** Read exact groups now, retaining logical errors for the caller's ordered visitor. */
-export function prepareGatewaySessionStoreTargetsReadOnly(params: {
-  env?: NodeJS.ProcessEnv;
-  cfg: OpenClawConfig;
-  targets: readonly { key: string; agentId?: string }[];
-  projection: SessionEntryReadScope["projection"];
-}): Array<Result<GatewaySessionStoreTargetWithStore, unknown>> {
-  return readGatewaySessionStoreTargets(params, "prepared");
-}
-
-function readGatewaySessionStoreTargets(
-  params: Parameters<typeof resolveGatewaySessionStoreTargetsReadOnly>[0],
-  mode: "eager" | "prepared",
-): Array<Result<GatewaySessionStoreTargetWithStore, unknown>> {
-  const resolve = <T, U>(items: Result<T, unknown>[], read: (value: T) => U) =>
-    items.map((item): Result<U, unknown> => {
-      if (!item.ok) {
-        return item;
-      }
-      try {
-        return ok(read(item.value));
-      } catch (error) {
-        if (mode === "eager") {
-          throw error;
-        }
-        return err(error);
-      }
-    });
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  const requests = resolve(params.targets.map(ok), (target) => {
+  const requests = params.targets.map((target) => {
     const lookup: GatewaySessionStoreLookupParams = {
       ...target,
       key: normalizeOptionalString(target.key) ?? "",
@@ -642,23 +582,19 @@ function readGatewaySessionStoreTargets(
       clone: false,
       readOnly: true,
       exactRead: true,
-      projection: mode === "eager" ? (params.projection ?? "list") : params.projection,
+      projection: params.projection ?? "list",
       targetDiscoveryCache,
     };
     return { lookup, legacy: prepareExplicitDeletedLegacyMainStoreTarget(lookup) };
   });
-  loadGatewaySessionStoreReads(
-    requests.flatMap((request) => (request.ok ? (request.value.legacy?.reads ?? []) : [])),
-  );
-  const selected = resolve(requests, ({ lookup, legacy }) => {
+  loadGatewaySessionStoreReads(requests.flatMap((request) => request.legacy?.reads ?? []));
+  const selected = requests.map(({ lookup, legacy }) => {
     // Only a legacy miss permits fallback; a logical error must stay with its target.
     const target = legacy?.resolve();
     return target ? { reads: [], resolve: () => target } : prepareGatewaySessionStoreTarget(lookup);
   });
-  loadGatewaySessionStoreReads(
-    selected.flatMap((selection) => (selection.ok ? selection.value.reads : [])),
-  );
-  return resolve(selected, (selection) => selection.resolve());
+  loadGatewaySessionStoreReads(selected.flatMap((selection) => selection.reads));
+  return selected.map((selection) => selection.resolve());
 }
 
 function includeDirectChildEntries(

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
@@ -24,6 +24,10 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { handleGatewayRequest } from "../server-methods.js";
 import * as sessionReads from "../session-utils-store.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
+import {
+  registerMetadataCallerCases,
+  registerMetadataRevocationCases,
+} from "./chat-metadata-ownership.test-support.js";
 import {
   connectChatMetadataAccount,
   createChatMetadataHarness,
@@ -147,13 +151,17 @@ describe("chat metadata ownership", () => {
       getRuntimeConfig: () => config,
       readChatMetadata: harness.runtime.read,
     });
-    const request = async (includeModels?: boolean) => {
+    const request = async (includeModels?: boolean, ifRevision?: string) => {
       const respond = vi.fn<RespondFn>();
       await expectDefined(
         chatHistoryHandlers["chat.metadata"],
         "metadata handler",
       )({
-        params: { agentId: "main", ...(includeModels === false ? { includeModels } : {}) },
+        params: {
+          agentId: "main",
+          ...(includeModels === false ? { includeModels } : {}),
+          ...(ifRevision ? { ifRevision } : {}),
+        },
         context,
         client: null,
         respond,
@@ -168,6 +176,23 @@ describe("chat metadata ownership", () => {
       expect(compact).toHaveBeenCalledWith(true, {
         commands: [{ name: "command-1-1" }],
         swarmEnabled: true,
+        revision: expect.any(String),
+      });
+      const payload = compact.mock.calls[0]?.[1];
+      assert(payload && typeof payload === "object" && "revision" in payload);
+      const { revision } = payload;
+      assert(typeof revision === "string");
+      expect(await request(false, revision)).toHaveBeenCalledWith(true, {
+        revision,
+        unchanged: true,
+        swarmEnabled: true,
+      });
+      harness.setSkillsVersion(2);
+      await harness.runtime.refresh();
+      expect(await request(false, revision)).toHaveBeenCalledWith(true, {
+        commands: [{ name: "command-2-1" }],
+        swarmEnabled: true,
+        revision: expect.not.stringContaining(revision),
       });
       expect(harness.buildProjection).not.toHaveBeenCalled();
       const legacy = await request();
@@ -175,7 +200,7 @@ describe("chat metadata ownership", () => {
         true,
         expect.objectContaining({
           models: [expect.objectContaining({ id: "first" })],
-          commands: [{ name: "command-1-1" }],
+          commands: [{ name: "command-2-1" }],
         }),
       );
     } finally {
@@ -268,50 +293,7 @@ describe("chat metadata ownership", () => {
     },
   );
 
-  it.each([
-    "foreign admin",
-    "unidentified admin",
-    "anonymous",
-    "synthetic owner",
-    "forged locator",
-  ] as const)(
-    "rejects a personal draft preview from %s before projecting credentials",
-    async (caller) => {
-      await withOpenClawTestState({ layout: "state-only" }, async () => {
-        const { owner, client, authProfileId, readChatMetadata, request } =
-          createPersonalMetadataFixture();
-        client.connect.scopes = ["operator.admin"];
-        let requestedProfile = authProfileId;
-        if (caller === "foreign admin") {
-          const other = ensureProfileForEmail("metadata-other@example.test");
-          client.authenticatedUserProfile = {
-            profileId: other.id,
-            displayName: other.displayName,
-            hasAvatar: false,
-            updatedAt: other.updatedAt,
-          };
-        } else if (caller === "unidentified admin") {
-          delete client.authenticatedUserProfile;
-        } else if (caller === "synthetic owner") {
-          client.internal = { syntheticClient: true };
-        } else if (caller === "forged locator") {
-          requestedProfile = `personal:${owner.id}:${randomUUID()}`;
-        }
-
-        const respond = await request(
-          { agentId: "main", authProfileId: requestedProfile },
-          caller === "anonymous" ? { client: null } : {},
-        );
-
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "FORBIDDEN" }),
-        );
-        expect(readChatMetadata).not.toHaveBeenCalled();
-      });
-    },
-  );
+  registerMetadataCallerCases(createPersonalMetadataFixture);
 
   it("rejects combining a personal draft preview with a persisted session selector", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async () => {
@@ -331,44 +313,7 @@ describe("chat metadata ownership", () => {
     });
   });
 
-  it.each(["disconnect", "role loss", "abort"] as const)(
-    "rejects a personal draft preview after %s during the metadata read",
-    async (loss) => {
-      await withOpenClawTestState({ layout: "state-only" }, async () => {
-        const { client, clients, authProfileId, config, metadata, readChatMetadata, request } =
-          createPersonalMetadataFixture();
-        const entered = createDeferred();
-        const release = createDeferred();
-        const abort = new AbortController();
-        readChatMetadata.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return metadata;
-        });
-        const pending = request({ agentId: "main", authProfileId }, { signal: abort.signal });
-        try {
-          await Promise.race([entered.promise, pending]);
-          expect(readChatMetadata).toHaveBeenCalledOnce();
-          if (loss === "disconnect") {
-            clients.delete(client);
-          } else if (loss === "role loss") {
-            config.gateway.roles.definitions.reader.scopes = [];
-          } else {
-            abort.abort();
-          }
-        } finally {
-          release.resolve();
-          await pending;
-        }
-        const respond = await pending;
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "FORBIDDEN" }),
-        );
-      });
-    },
-  );
+  registerMetadataRevocationCases(createPersonalMetadataFixture);
 
   it("reads saved and neutral metadata without host SQL or sharing the saved profile", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

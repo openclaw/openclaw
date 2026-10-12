@@ -1,4 +1,3 @@
-// ClickClack API module exposes the plugin secret contract.
 export {
   channelSecrets,
   collectRuntimeConfigAssignments,

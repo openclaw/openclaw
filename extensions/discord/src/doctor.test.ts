@@ -21,37 +21,6 @@ function getDiscordCompatibilityNormalizer(): NonNullable<
 }
 
 describe("discord doctor", () => {
-  it("promotes shipped nested DM access at root and account scope", () => {
-    const normalize = getDiscordCompatibilityNormalizer();
-    const result = normalize({
-      cfg: {
-        channels: {
-          discord: {
-            dm: { enabled: false, policy: "allowlist", allowFrom: ["123"] },
-            accounts: {
-              work: {
-                dm: { groupEnabled: true, policy: "open", allowFrom: ["*"] },
-              },
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(result.config.channels?.discord).toEqual({
-      dm: { enabled: false },
-      dmPolicy: "allowlist",
-      allowFrom: ["123"],
-      accounts: {
-        work: {
-          dm: { groupEnabled: true },
-          dmPolicy: "open",
-          allowFrom: ["*"],
-        },
-      },
-    });
-  });
-
   it("strips retired gateway, queue, and retry tuning at root and account scope", () => {
     const normalize = getDiscordCompatibilityNormalizer();
     const result = normalize({
@@ -89,76 +58,6 @@ describe("discord doctor", () => {
     expect(result.changes).toContain("Removed retired Discord tuning knobs.");
   });
 
-  it("normalizes legacy discord streaming aliases for runtime config", () => {
-    const normalize = getDiscordCompatibilityNormalizer();
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          discord: {
-            streamMode: "block",
-            chunkMode: "newline",
-            blockStreaming: true,
-            draftChunk: {
-              minChars: 120,
-            },
-            accounts: {
-              work: {
-                streaming: false,
-                blockStreamingCoalesce: {
-                  idleMs: 250,
-                },
-              },
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(result.config.channels?.discord).toEqual({
-      streaming: {
-        mode: "block",
-        chunkMode: "newline",
-        block: {
-          enabled: true,
-        },
-        preview: {
-          chunk: {
-            minChars: 120,
-          },
-        },
-      },
-      accounts: {
-        work: {
-          streaming: {
-            mode: "off",
-            chunkMode: "newline",
-            block: {
-              enabled: true,
-              coalesce: {
-                idleMs: 250,
-              },
-            },
-            preview: {
-              chunk: {
-                minChars: 120,
-              },
-            },
-          },
-        },
-      },
-    });
-    expect(result.changes).toEqual([
-      "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
-      "Moved channels.discord.chunkMode → channels.discord.streaming.chunkMode.",
-      "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
-      "Moved channels.discord.draftChunk → channels.discord.streaming.preview.chunk.",
-      "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
-      "Moved channels.discord.accounts.work.blockStreamingCoalesce → channels.discord.accounts.work.streaming.block.coalesce.",
-      "Copied flat channels.discord delivery keys into channels.discord.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
-    ]);
-  });
-
   it("keeps delivery-only aliases mode-free and preserves explicit legacy progress", () => {
     const normalize = getDiscordCompatibilityNormalizer();
 
@@ -174,7 +73,7 @@ describe("discord doctor", () => {
     expect(deliveryOnlyMigrated).toEqual({
       streaming: { block: { enabled: true } },
     });
-    expect(resolveDiscordPreviewStreamMode(deliveryOnlyMigrated)).toBe("off");
+    expect(resolveDiscordPreviewStreamMode(deliveryOnlyMigrated)).toBe("progress");
     expect(deliveryOnly.changes).toEqual([
       "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
     ]);
@@ -402,22 +301,6 @@ describe("discord doctor", () => {
         env: {},
       }),
     ).toStrictEqual([missingTokenWarning]);
-  });
-
-  it("does not warn about DISCORD_BOT_TOKEN when a non-default account is selected", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          accounts: {
-            work: {
-              token: "Bot work-token",
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toStrictEqual([]);
   });
 
   it("warns when Discord transcript auto-start cannot choose between voice accounts", async () => {

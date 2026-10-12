@@ -489,6 +489,28 @@ describe("update run report", () => {
       patch: { reason: "preflight-insufficient-space" },
       contains: ["Free space on the preflight staging"],
     },
+    ...[
+      { reason: "state-migrated-no-rollback" },
+      {
+        reason: "post-install-verify",
+        verification: {
+          rollbackOutcome: {
+            status: "not-attempted" as const,
+            reason: "state-migrated-no-rollback",
+          },
+        },
+      },
+    ].map((patch) => ({
+      label: `migration rollback refusal without saved guidance (${patch.reason})`,
+      patch,
+      contains: [
+        "State may have changed during migration, so rolling back code alone is unsafe.",
+        "Keep the new installation and backups",
+        "openclaw update status",
+        "openclaw doctor",
+      ],
+      excludes: ["Run openclaw triage"],
+    })),
     ...(
       [
         ["requester-revoked", "A current command owner must start a new update"],
@@ -502,19 +524,22 @@ describe("update run report", () => {
       },
       contains: [reason, guidance],
     })),
-    ...[null, "requester-revoked"].map((reason) => ({
+    ...[null, "requester-revoked", "state-migrated-no-rollback"].map((reason) => ({
       label: `saved profile after ${reason}`,
       patch: { reason, origin: { nextAction: originAction } },
       historical: true,
       contains: [
         "Historical recovery advice:",
         originAction,
-        ...(reason ? ["Further recovery requires a current command owner."] : []),
+        ...(reason === "requester-revoked"
+          ? ["Further recovery requires a current command owner."]
+          : []),
       ],
       excludes: [
         "Run openclaw triage",
         "run openclaw doctor --fix",
         "operator can run openclaw triage locally",
+        "State may have changed during migration",
       ],
     })),
     {

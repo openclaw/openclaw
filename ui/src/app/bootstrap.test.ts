@@ -34,6 +34,25 @@ describe("bootstrapApplication", () => {
     saveSettings(previousSettings);
   });
 
+  it.each(["chat", "dashboard"])(
+    "gives the initial %s transcript priority over bulk reads",
+    async (face) => {
+      window.history.replaceState({}, "", `/${face}/main/mission-control-12345678`);
+      const runtime = bootstrapApplication();
+      const read = vi.fn(async () => {});
+      try {
+        runtime.context.connectionBootstrap.synchronize({ client: {}, connected: true });
+        const pending = runtime.context.connectionBootstrap.run("bulk", read, { background: true });
+        expect(read).not.toHaveBeenCalled();
+        runtime.context.connectionBootstrap.setForegroundRoute(null);
+        await pending;
+        expect(read).toHaveBeenCalledOnce();
+      } finally {
+        runtime.stop();
+      }
+    },
+  );
+
   it("owns native health reporting across startup and stop", async () => {
     window.history.replaceState({}, "", "/focus/terminal");
     const postMessage = vi.fn();
@@ -591,7 +610,7 @@ describe("bootstrapApplication", () => {
       expect(
         [...readinessSubscriptions].filter((listener) => activeSubscriptions.has(listener)),
       ).toHaveLength(0);
-      expect(configRefresh).not.toHaveBeenCalled();
+      expect(configRefresh).toHaveBeenCalledWith({ ifNeeded: true });
       expect(routerStart).not.toHaveBeenCalled();
     } finally {
       runtime.stop();

@@ -14,6 +14,7 @@ import type {
   resolveInboundSessionEnvelopeContext,
   resolveInboundSessionEnvelopeContextAsync,
 } from "./channel-inbound.js";
+import type { inspectConversationBinding } from "./conversation-binding-inspection-runtime.js";
 import type {
   createInboundEnvelopeBuilder,
   resolveInboundRouteEnvelopeBuilder,
@@ -21,13 +22,33 @@ import type {
 } from "./inbound-envelope.js";
 import type { ReplyDispatchRuntimeInfo } from "./reply-runtime.js";
 import type { PluginRuntime } from "./runtime-store.js";
+import type { SessionBindingRecord, SessionBindingService } from "./session-binding-runtime.js";
 import type { readSessionUpdatedAt, readSessionUpdatedAtAsync } from "./session-store-runtime.js";
 import {
   createLegacyCompatChannelDmPolicy,
   promptLegacyChannelAllowFromForAccount,
 } from "./setup-runtime.js";
+import type {
+  AccountScopedConversationBindingManager,
+  AccountScopedConversationBindingRecord,
+} from "./thread-bindings-runtime.js";
 
 describe("shipped external channel compatibility", () => {
+  it("retains the synchronous binding selectors shipped in 2026.9.8", () => {
+    expectTypeOf<SessionBindingService["listBySession"]>().toEqualTypeOf<
+      (targetSessionKey: string) => SessionBindingRecord[]
+    >();
+    expectTypeOf<
+      SessionBindingService["resolveByConversation"]
+    >().returns.toEqualTypeOf<SessionBindingRecord | null>();
+    expectTypeOf<AccountScopedConversationBindingManager["getByConversationId"]>().toEqualTypeOf<
+      (conversationId: string) => AccountScopedConversationBindingRecord | undefined
+    >();
+    expectTypeOf<typeof inspectConversationBinding>().returns.toEqualTypeOf<
+      { status: "available"; binding: SessionBindingRecord | null } | { status: "unavailable" }
+    >();
+  });
+
   it("retains synchronous envelope results and timestamp callbacks shipped in 2026.9.8", () => {
     type RuntimeSession = PluginRuntime["channel"]["session"];
     type TimestampCallback = (params: {

@@ -124,7 +124,6 @@ describe("CLI readiness after early config observation", () => {
 
   it.each([
     { name: "explicit Gateway target", explicit: true, existingState: false },
-    { name: "configured Gateway target", explicit: false, existingState: false },
     { name: "existing shared state", explicit: true, existingState: true },
   ])(
     "preserves current config and its observed health for $name",

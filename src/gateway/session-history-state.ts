@@ -26,11 +26,13 @@ import {
   readSessionHistorySubagentLookup,
 } from "./session-history-delta-visibility.js";
 import {
-  buildPaginatedSessionHistory,
   readSessionHistorySnapshotKernel,
   type IncognitoSessionHistoryReader,
 } from "./session-history-snapshot.js";
-import { readChatHistoryMessageSeq as resolveMessageSeq } from "./session-history-tail.js";
+import {
+  buildPaginatedSessionHistory,
+  readChatHistoryMessageSeq as resolveMessageSeq,
+} from "./session-history-tail.js";
 import {
   readTranscriptMessageIdempotencyKey,
   attachOpenClawTranscriptMeta,
@@ -203,6 +205,13 @@ export class SessionHistorySseState {
     let subagentCoordination: SubagentCoordinationDisplayResolver | undefined =
       this.incognito?.readers.subagentCoordination;
     const lookup = readSessionHistorySubagentLookup(message);
+    if (this.incognito && lookup) {
+      // Shared ACP visibility custody ends with the prepared history operation.
+      return () => {
+        this.incognito?.assertCurrent();
+        return { shouldRefresh: true };
+      };
+    }
     if (
       lookup &&
       this.target.storePath &&

@@ -136,6 +136,11 @@ describe("gateway caller context wrapper", () => {
     await withGatewayToolCallerIdentity(
       {
         ...identity,
+        sessionEventToolsAllow: ["read", "process"],
+        sessionEventSettings: {
+          permissionMode: "workspace",
+          toolOverrides: { webSearch: false },
+        },
         assertToolAllowed: (name) => {
           if (name === "exec") {
             throw new Error("exec denied");
@@ -146,6 +151,11 @@ describe("gateway caller context wrapper", () => {
         withGatewayToolCallerIdentity(
           {
             ...identity,
+            sessionEventToolsAllow: ["read", "exec"],
+            sessionEventSettings: {
+              permissionMode: "full",
+              toolOverrides: { mcpServers: { fixture: false } },
+            },
             assertToolAllowed: (name) => {
               if (name === "process") {
                 throw new Error("process denied");
@@ -155,6 +165,11 @@ describe("gateway caller context wrapper", () => {
           () =>
             withGatewayToolCallerIdentity(identity, () => {
               const caller = getGatewayToolCallerIdentity();
+              expect(caller?.sessionEventToolsAllow).toEqual(["read"]);
+              expect(caller?.sessionEventSettings).toEqual({
+                permissionMode: "workspace",
+                toolOverrides: { webSearch: false, mcpServers: { fixture: false } },
+              });
               expect(() => caller?.assertToolAllowed?.("exec")).toThrow("exec denied");
               expect(() => caller?.assertToolAllowed?.("process")).toThrow("process denied");
               expect(() => caller?.assertToolAllowed?.("read")).not.toThrow();
@@ -162,6 +177,51 @@ describe("gateway caller context wrapper", () => {
         ),
     );
   });
+
+  it.each(["full", "guarded"] as const)(
+    "retains a captured default posture through a nested %s permission wrapper",
+    async (permissionMode) => {
+      const identity = { agentId: "main", sessionKey: "agent:main:default-permission" };
+      const execute = vi.fn(() => getGatewayToolCallerIdentity()?.sessionEventSettings);
+      const wrapped = withGatewayToolCallerIdentity({ ...identity, sessionEventSettings: {} }, () =>
+        withGatewayToolCallerIdentity(
+          { ...identity, sessionEventSettings: { permissionMode } },
+          () => withGatewayToolCallerIdentity(identity, execute),
+        ),
+      );
+      if (permissionMode === "guarded") {
+        await expect(wrapped).rejects.toThrow("changed between default and explicit permissions");
+        expect(execute).not.toHaveBeenCalled();
+      } else {
+        await expect(wrapped).resolves.toEqual({ permissionMode: undefined });
+        expect(execute).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it.each(["outer", "inner"] as const)(
+    "preserves the %s caller's automatic-delivery restriction through delegation",
+    async (restricted) => {
+      const identity = { agentId: "main", sessionKey: "agent:main:private-followup" };
+      await withGatewayToolCallerIdentity(
+        {
+          ...identity,
+          ...(restricted === "outer" ? { sessionEventDelivery: false as const } : {}),
+        },
+        () =>
+          withGatewayToolCallerIdentity(
+            {
+              ...identity,
+              ...(restricted === "inner" ? { sessionEventDelivery: false as const } : {}),
+            },
+            () =>
+              withGatewayToolCallerIdentity(identity, () => {
+                expect(getGatewayToolCallerIdentity()?.sessionEventDelivery).toBe(false);
+              }),
+          ),
+      );
+    },
+  );
 
   it("preserves tool metadata used by policy and presentation layers", () => {
     const tool: AnyAgentTool = {

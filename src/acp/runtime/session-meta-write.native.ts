@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { patchSessionEntryWithKey } from "../../config/sessions/session-accessor.js";
 import { readLegacyAcpMigrationContext } from "../../config/sessions/session-accessor.sqlite-acp-provenance.js";
 import {
@@ -22,18 +21,6 @@ import { rowToAcpSessionMeta } from "./session-meta-readonly.js";
 import { readSessionEntryFromStore } from "./session-meta-store.js";
 import { applyAcpSessionMutation } from "./session-meta-write.kernel.js";
 import type { AcpSessionMutationCommit } from "./session-meta-write.types.js";
-
-function sessionStoreUpdateOptions(params: {
-  sessionKey: string;
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-}) {
-  return {
-    activeSessionKey: normalizeLowercaseStringOrEmpty(params.sessionKey),
-    ...(params.skipMaintenance === true ? { skipMaintenance: true } : {}),
-    ...(params.takeCacheOwnership === true ? { takeCacheOwnership: true } : {}),
-  };
-}
 
 function consumeLegacyAcpMigrationSources(params: {
   database: DatabaseSync;
@@ -145,7 +132,7 @@ export async function upsertAcpSessionMetaNative(params: {
           env: params.env,
           now: updatedAt,
         });
-        applyAcpSessionMutation(database.db, {
+        const facts = applyAcpSessionMutation(database.db, {
           agentId: storeEntry.agentId,
           storageSessionKey,
           sessionKey: publishedSessionKey,
@@ -154,7 +141,13 @@ export async function upsertAcpSessionMetaNative(params: {
           decision,
         });
         sessionChanges.emit(
-          { agentId: storeEntry.agentId, sessionKey: publishedSessionKey },
+          {
+            agentId: storeEntry.agentId,
+            sessionKey: publishedSessionKey,
+            storePath,
+            scope: "acp",
+            facts,
+          },
           database.db,
         );
       },
@@ -165,61 +158,42 @@ export async function upsertAcpSessionMetaNative(params: {
   if (metaToPersist === undefined) {
     return current ? mergeSessionEntry(entry, { acp: current }) : (entry ?? null);
   }
+  const patchEntry = () =>
+    patchSessionEntryWithKey(
+      {
+        agentId: storeEntry.agentId,
+        storePath: storeEntry.storePath,
+        sessionKey: storageSessionKey,
+      },
+      (currentEntry, context) => {
+        assertAcpSessionMutationEntry(
+          context.existingEntry,
+          entry ?? null,
+          params.expectedControlBinding,
+          "entry mutation",
+        );
+        const next =
+          metaToPersist === null
+            ? { ...currentEntry }
+            : mergeSessionEntry(currentEntry, { updatedAt });
+        delete next.acp;
+        return next;
+      },
+      {
+        ...(params.skipMaintenance === true ? { skipMaintenance: true } : {}),
+        ...(params.takeCacheOwnership === true ? { takeCacheOwnership: true } : {}),
+        ...(metaToPersist === null ? {} : { fallbackEntry: preparedEntry }),
+        replaceEntry: true,
+        assertCommitAllowed: params.assertCommitAllowed,
+      },
+    );
+  const persisted = metaToPersist === null && !entry ? null : await patchEntry();
   if (metaToPersist === null) {
-    const patched = entry
-      ? await patchSessionEntryWithKey(
-          {
-            agentId: storeEntry.agentId,
-            storePath: storeEntry.storePath,
-            sessionKey: storageSessionKey,
-          },
-          (currentEntry, context) => {
-            assertAcpSessionMutationEntry(
-              context.existingEntry,
-              entry ?? null,
-              params.expectedControlBinding,
-              "entry mutation",
-            );
-            const next = { ...currentEntry };
-            delete next.acp;
-            return next;
-          },
-          {
-            ...sessionStoreUpdateOptions({ ...params, sessionKey: storageSessionKey }),
-            replaceEntry: true,
-            assertCommitAllowed: params.assertCommitAllowed,
-          },
-        )
-      : null;
-    publish(patched?.sessionKey ?? storageSessionKey, patched?.entry ?? entry, { kind: "clear" });
-    return patched?.entry ?? null;
+    publish(persisted?.sessionKey ?? storageSessionKey, persisted?.entry ?? entry, {
+      kind: "clear",
+    });
+    return persisted?.entry ?? null;
   }
-  const persisted = await patchSessionEntryWithKey(
-    {
-      agentId: storeEntry.agentId,
-      storePath: storeEntry.storePath,
-      sessionKey: storageSessionKey,
-    },
-    (currentEntry, context) => {
-      assertAcpSessionMutationEntry(
-        context.existingEntry,
-        entry ?? null,
-        params.expectedControlBinding,
-        "entry mutation",
-      );
-      const next = mergeSessionEntry(currentEntry, {
-        updatedAt,
-      });
-      delete next.acp;
-      return next;
-    },
-    {
-      ...sessionStoreUpdateOptions({ ...params, sessionKey: storageSessionKey }),
-      fallbackEntry: preparedEntry,
-      replaceEntry: true,
-      assertCommitAllowed: params.assertCommitAllowed,
-    },
-  );
   if (!persisted) {
     return null;
   }

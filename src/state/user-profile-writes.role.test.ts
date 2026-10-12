@@ -8,7 +8,7 @@ import {
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { onUserProfilesChanged } from "./user-profile-events.js";
-import { readUserProfileIdentity, retainUserProfileCatalog } from "./user-profile-list.js";
+import { readUserProfileIdentity, prepareUserProfileCatalog } from "./user-profile-list.js";
 import { setCanonicalUserProfileRole } from "./user-profile-writes.js";
 import { setUserProfileRole } from "./user-profile-writes.worker.js";
 import { ensureProfileForEmail, getUserProfileRole } from "./user-profiles.js";
@@ -65,7 +65,7 @@ it.each(["ordered", "reversed", "recovery first", "native successor", "native AB
     let release = () => {};
     try {
       const profile = ensureProfileForEmail("role-order@example.test");
-      release = retainUserProfileCatalog();
+      release = (await prepareUserProfileCatalog()).release;
       delivery.afterResult = async (index) => {
         const gate = gates[index]!;
         gate.received.resolve();
@@ -133,7 +133,7 @@ it.each(["delivered", "lost during close"] as const)(
     try {
       const profile = ensureProfileForEmail("role-placement@example.test");
       const pathname = openOpenClawStateDatabase().path;
-      release = retainUserProfileCatalog();
+      release = (await prepareUserProfileCatalog()).release;
       const observed: Array<string | null | undefined> = [];
       stop = onUserProfilesChanged(() => {
         observed.push(readUserProfileIdentity(profile.id)?.role);

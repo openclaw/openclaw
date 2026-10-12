@@ -1,19 +1,30 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
+import type { SessionCatalogContinueProviderResult } from "./session-catalog.js";
 import { mapRegistryProviders } from "./web-provider-resolution-shared.js";
 
-function createOwner() {
-  const builder = createTestPluginRegistry();
+function createOwner(nativeCatalog = false, id = "factory-owner") {
+  const runtime = nativeCatalog ? createPluginRuntime() : undefined;
+  if (runtime) {
+    runtime.config.current = () => ({
+      plugins: { entries: { "factory-owner": { config: { sessionCatalog: { enabled: true } } } } },
+    });
+  }
+  const builder = createTestPluginRegistry(runtime);
   const record = createPluginRecord({
-    id: "factory-owner",
+    id,
+    ...(nativeCatalog
+      ? { nativeSessionCatalog: { label: "Factory catalog", nodeCommands: [] } }
+      : {}),
     source: "/synthetic/factory-owner.ts",
     origin: "global",
     enabled: true,
@@ -63,6 +74,40 @@ function createTools(expectScope: () => void) {
 }
 
 describe("registered plugin factory bindings", () => {
+  it.each(["sync", "callback"] as const)(
+    "attributes a retained %s store's deprecation to the opening plugin",
+    async (kind) => {
+      await withOpenClawTestState({ label: `runtime-store-warning-${kind}` }, async ({ env }) => {
+        const pluginId = `runtime-store-warning-${kind}`;
+        const { api, instance } = createOwner(false, pluginId);
+        const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+        try {
+          const useLegacyStore = instance.run(() => {
+            const options = { namespace: "warning", maxEntries: 2, env };
+            if (kind === "sync") {
+              const store = api.runtime.state.openSyncKeyedStore<number>(options);
+              return () => store.lookup("missing");
+            }
+            const store = api.runtime.state.openKeyedStore<number>(options);
+            const update = store.update;
+            assert(update);
+            return () => update("counter", (current) => (current ?? 0) + 1);
+          });
+          expect(emitWarning).not.toHaveBeenCalled();
+          await useLegacyStore();
+          await useLegacyStore();
+          expect(emitWarning).toHaveBeenCalledExactlyOnceWith(
+            expect.stringContaining(`Plugin ${pluginId}:`),
+            expect.objectContaining({ type: "DeprecationWarning", code: "DEP_PLUGIN_SDK" }),
+          );
+        } finally {
+          emitWarning.mockRestore();
+          await instance.dispose();
+        }
+      });
+    },
+  );
+
   it.each([
     { kind: "static", shape: "single" } as const,
     { kind: "version 2", shape: "array" } as const,
@@ -157,6 +202,68 @@ describe("registered plugin factory bindings", () => {
         );
       } finally {
         consumer?.release();
+        await instance.dispose();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps catalog continuation data native and its callback scoped (native gate: %s)",
+    async (nativeCatalog) => {
+      const { builder, api, instance, expectScope } = createOwner(nativeCatalog);
+      const consumer = instance.retainConsumer();
+      const upstream = {
+        kind: "codex-app-server" as const,
+        ref: { threadId: "synthetic-thread", nested: ["source"] },
+        marker: { lastTurnId: "synthetic-turn" },
+      };
+      const conversationBinding = { data: { source: "synthetic-binding" } };
+      const plain = { sessionKey: "synthetic-session", upstream, conversationBinding };
+      const result: SessionCatalogContinueProviderResult = {
+        ...plain,
+        async afterConversationBound() {
+          expectScope();
+          await Promise.resolve();
+          expectScope();
+        },
+      };
+      let next = result;
+      try {
+        api.registerSessionCatalog({
+          id: "factory-catalog",
+          label: "Factory catalog",
+          supportsProcessHomeIsolation: true,
+          list: async () => [],
+          read: async () => ({ hostId: "synthetic-host", threadId: "synthetic-thread", items: [] }),
+          async continueSession() {
+            expectScope();
+            return next;
+          },
+        });
+        expect(builder.registry.diagnostics).toEqual([]);
+        const provider = builder.registry.sessionCatalogs[0]!.provider;
+        const request = { hostId: "synthetic-host", threadId: "synthetic-thread" };
+        const root = await provider.continueSession!(request);
+        const retained = await consumer.wrap(provider).continueSession!(request);
+        for (const value of [root, retained]) {
+          expect(value.upstream).toBe(upstream);
+          expect(value.conversationBinding).toBe(conversationBinding);
+          expect(structuredClone(value.upstream)).toEqual(upstream);
+          expect(structuredClone(value.conversationBinding)).toEqual(conversationBinding);
+        }
+        const rootCallback = root.afterConversationBound!;
+        const consumerCallback = retained.afterConversationBound!;
+        await consumerCallback();
+        next = plain;
+        expect(await provider.continueSession!(request)).toBe(plain);
+        consumer.release();
+        expect(() => consumerCallback()).toThrow("consumer is closed");
+        await rootCallback();
+        await instance.dispose();
+        expect(() => rootCallback()).toThrow("reloaded or disabled");
+        expect(structuredClone(upstream)).toEqual(upstream);
+      } finally {
+        consumer.release();
         await instance.dispose();
       }
     },

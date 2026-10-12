@@ -14,6 +14,7 @@ import {
   NODE_WORKER_PORTAL_STREAM_VERSION,
   NODE_WORKER_PREPARED_WORKSPACE_VERSION,
   NODE_WORKER_NATIVE_INFERENCE_VERSION,
+  NODE_WORKER_PROMPT_CONTEXT_VERSION,
   NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   type NodeWorkerCapacitySnapshot,
@@ -71,7 +72,6 @@ type NodeOptionalPublicationState = {
   retryDelayMs: number;
   retryPending: boolean;
   retryTimer?: NodeJS.Timeout;
-  inFlightParams?: Record<string, unknown>;
   inFlight?: Promise<void>;
 };
 
@@ -104,14 +104,6 @@ export function startNodeHostConnection({
     NodeOptionalPublicationMethod,
     NodeOptionalPublicationState
   >();
-  const retireOptionalPublications = () => {
-    for (const state of optionalPublicationStates.values()) {
-      if (state.retryTimer) {
-        clearTimeout(state.retryTimer);
-      }
-    }
-    optionalPublicationStates.clear();
-  };
   const retireGatewayConnection = () => {
     gatewayConnectionGeneration += 1;
     gatewayHelloReceived = false;
@@ -121,7 +113,12 @@ export function startNodeHostConnection({
       clearInterval(hostStatsTimer);
       hostStatsTimer = undefined;
     }
-    retireOptionalPublications();
+    for (const state of optionalPublicationStates.values()) {
+      if (state.retryTimer) {
+        clearTimeout(state.retryTimer);
+      }
+    }
+    optionalPublicationStates.clear();
   };
 
   const startHostStatsPublication = () => {
@@ -173,14 +170,6 @@ export function startNodeHostConnection({
     const connectionIsCurrent = () =>
       connectionGeneration === gatewayConnectionGeneration &&
       optionalPublicationStates.get(method) === state;
-    if (isDeepStrictEqual(state.inFlightParams, params)) {
-      // The latest desired value remains authoritative even when it matches the
-      // active request. Replace a newer pending value so A -> B -> A cannot publish B.
-      if (state.pendingParams) {
-        state.pendingParams = params;
-      }
-      return;
-    }
     if (
       state.unsupported ||
       isDeepStrictEqual(state.rejectedParams, params) ||
@@ -207,22 +196,20 @@ export function startNodeHostConnection({
           return;
         }
         const nextParams = state.pendingParams;
-        state.pendingParams = undefined;
         if (isDeepStrictEqual(state.publishedParams, nextParams)) {
+          state.pendingParams = undefined;
           continue;
         }
-        if (state.rejectedParams && !isDeepStrictEqual(state.rejectedParams, nextParams)) {
-          // A different value reopens publication. Keeping the old rejection
-          // would drop a later return to that value while this request is in flight.
-          state.rejectedParams = undefined;
-        }
-        state.inFlightParams = nextParams;
+        state.rejectedParams = undefined;
         try {
           await connectionClient.request(method, nextParams);
           // Request settlement races reconnect teardown. Stale completions must
           // not mutate or report against the retired connection.
           if (!connectionIsCurrent()) {
             return;
+          }
+          if (isDeepStrictEqual(state.pendingParams, nextParams)) {
+            state.pendingParams = undefined;
           }
           state.publishedParams = nextParams;
           state.rejectedParams = undefined;
@@ -262,43 +249,39 @@ export function startNodeHostConnection({
               }
             }
           }
-        } finally {
-          state.inFlightParams = undefined;
         }
       }
     };
     const inFlight = publish().finally(() => {
-      if (state.inFlight === inFlight) {
-        state.inFlight = undefined;
-        if (
-          state.pendingParams &&
-          !state.unsupported &&
-          gatewayHelloReceived &&
-          connectionIsCurrent()
-        ) {
-          const pendingParams = state.pendingParams;
-          const retryPending = state.retryPending;
-          state.retryPending = false;
-          if (retryPending) {
-            const retryDelayMs = state.retryDelayMs;
-            state.retryDelayMs = Math.min(retryDelayMs * 2, NODE_OPTIONAL_PUBLICATION_RETRY_MAX_MS);
-            state.retryTimer = setTimeout(() => {
-              state.retryTimer = undefined;
-              if (
-                state.pendingParams &&
-                isDeepStrictEqual(state.pendingParams, pendingParams) &&
-                gatewayHelloReceived &&
-                connectionIsCurrent()
-              ) {
-                state.pendingParams = undefined;
-                queueOptionalPublication(method, pendingParams, label, true);
-              }
-            }, retryDelayMs);
-            state.retryTimer.unref?.();
-          } else {
-            state.pendingParams = undefined;
-            queueOptionalPublication(method, pendingParams, label);
-          }
+      state.inFlight = undefined;
+      if (
+        state.pendingParams &&
+        !state.unsupported &&
+        gatewayHelloReceived &&
+        connectionIsCurrent()
+      ) {
+        const pendingParams = state.pendingParams;
+        const retryPending = state.retryPending;
+        state.retryPending = false;
+        if (retryPending) {
+          const retryDelayMs = state.retryDelayMs;
+          state.retryDelayMs = Math.min(retryDelayMs * 2, NODE_OPTIONAL_PUBLICATION_RETRY_MAX_MS);
+          state.retryTimer = setTimeout(() => {
+            state.retryTimer = undefined;
+            if (
+              state.pendingParams &&
+              isDeepStrictEqual(state.pendingParams, pendingParams) &&
+              gatewayHelloReceived &&
+              connectionIsCurrent()
+            ) {
+              state.pendingParams = undefined;
+              queueOptionalPublication(method, pendingParams, label, true);
+            }
+          }, retryDelayMs);
+          state.retryTimer.unref?.();
+        } else {
+          state.pendingParams = undefined;
+          queueOptionalPublication(method, pendingParams, label);
         }
       }
     });
@@ -373,6 +356,9 @@ export function startNodeHostConnection({
                 : {}),
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES)
                 ? { launchToolNames: [...CORE_WORKER_LAUNCH_TOOL_NAMES] }
+                : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_PROMPT_CONTEXT)
+                ? { promptContext: NODE_WORKER_PROMPT_CONTEXT_VERSION }
                 : {}),
               ...(prepared.nativeInferenceEnabled &&
               gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_NATIVE_INFERENCE)

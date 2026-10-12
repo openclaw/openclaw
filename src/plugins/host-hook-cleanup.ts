@@ -2,9 +2,9 @@ import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { cleanupPluginHostSessionStore } from "../config/sessions/session-accessor.js";
+import { resolveAllAgentSessionStoreTargetsAsync } from "../config/sessions/targets-runtime.js";
 import {
   isConfiguredSessionStoreAgentId,
-  resolveAllAgentSessionStoreTargetsSync,
   type SessionStoreTarget,
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -34,7 +34,7 @@ import { getActivePluginRegistry } from "./runtime.js";
 
 const log = createSubsystemLogger("plugins/cleanup");
 
-type ResolveCleanupSessionStoreTargets = () => readonly SessionStoreTarget[];
+type ResolveCleanupSessionStoreTargets = () => Promise<readonly SessionStoreTarget[]>;
 
 function shouldCleanPlugin(pluginId: string, filterPluginId?: string): boolean {
   return !filterPluginId || pluginId === filterPluginId;
@@ -60,8 +60,8 @@ async function clearPluginSessionStores(params: {
   }
   const storeTargets =
     params.storeTargets ??
-    params.resolveStoreTargets?.() ??
-    resolveAllAgentSessionStoreTargetsSync(params.cfg);
+    (await params.resolveStoreTargets?.()) ??
+    (await resolveAllAgentSessionStoreTargetsAsync(params.cfg));
   let retainedAgentIds: ReadonlySet<string> = new Set();
   if (storeTargets.some((target) => !isConfiguredSessionStoreAgentId(params.cfg, target.agentId))) {
     try {
@@ -141,6 +141,54 @@ function collectAgentHarnessIds(
   return harnessIds;
 }
 
+/** Release callbacks before module disposal, independently of persistent-state retirement. */
+export async function runPluginHostLifecycleCleanup(params: {
+  registry: PluginRegistry;
+  pluginId?: string;
+  reason: PluginHostCleanupReason;
+  sessionKey?: string;
+  runId?: string;
+  shouldCleanup?: () => boolean;
+}): Promise<PluginHostCleanupResult> {
+  return withPluginRunContextCleanup(params, async () => {
+    const failures: PluginHostCleanupFailure[] = [];
+    let cleanupCount = 0;
+    const context = { reason: params.reason, sessionKey: params.sessionKey };
+    // Session extensions release state before runtime teardown; one failed hook must not skip its siblings.
+    const cleanups = [
+      ...params.registry.sessionExtensions.map(({ pluginId, extension }) => ({
+        pluginId,
+        hookId: `session:${extension.namespace}`,
+        cleanup: extension.cleanup,
+        context,
+      })),
+      ...params.registry.runtimeLifecycles.map(({ pluginId, lifecycle }) => ({
+        pluginId,
+        hookId: `runtime:${lifecycle.id}`,
+        cleanup: lifecycle.cleanup,
+        context: { ...context, runId: params.runId },
+      })),
+    ];
+    for (const { pluginId, hookId, cleanup, context: cleanupContext } of cleanups) {
+      if (params.shouldCleanup?.() === false) {
+        break;
+      }
+      if (!cleanup || !shouldCleanPlugin(pluginId, params.pluginId)) {
+        continue;
+      }
+      try {
+        await withPluginHostCleanupTimeout(hookId, () =>
+          runPluginCleanup(cleanup, () => cleanup(cleanupContext)),
+        );
+        cleanupCount += 1;
+      } catch (error) {
+        failures.push({ pluginId, hookId, error });
+      }
+    }
+    return { cleanupCount, failures };
+  });
+}
+
 /** Runs persistent and in-memory cleanup for a plugin, session, or host lifecycle event. */
 export async function runPluginHostCleanup(params: {
   cfg?: OpenClawConfig;
@@ -199,37 +247,11 @@ export async function runPluginHostCleanup(params: {
       }
     }
     if (registry) {
-      const context = { reason: params.reason, sessionKey: params.sessionKey };
-      // Session extensions release state before runtime teardown; one failed hook must not skip its siblings.
-      const cleanups = [
-        ...registry.sessionExtensions.map(({ pluginId, extension }) => ({
-          pluginId,
-          hookId: `session:${extension.namespace}`,
-          cleanup: extension.cleanup,
-          context,
-        })),
-        ...registry.runtimeLifecycles.map(({ pluginId, lifecycle }) => ({
-          pluginId,
-          hookId: `runtime:${lifecycle.id}`,
-          cleanup: lifecycle.cleanup,
-          context: { ...context, runId: params.runId },
-        })),
-      ];
-      for (const { pluginId, hookId, cleanup, context: cleanupContext } of cleanups) {
-        if (!shouldCleanup()) {
-          return { cleanupCount, failures };
-        }
-        if (!cleanup || !shouldCleanPlugin(pluginId, params.pluginId)) {
-          continue;
-        }
-        try {
-          await withPluginHostCleanupTimeout(hookId, () =>
-            runPluginCleanup(cleanup, () => cleanup(cleanupContext)),
-          );
-          cleanupCount += 1;
-        } catch (error) {
-          failures.push({ pluginId, hookId, error });
-        }
+      const lifecycle = await runPluginHostLifecycleCleanup({ ...params, registry });
+      cleanupCount += lifecycle.cleanupCount;
+      failures.push(...lifecycle.failures);
+      if (!shouldCleanup()) {
+        return { cleanupCount, failures };
       }
       const schedulerFailures = await cleanupPluginSessionSchedulerJobs({
         pluginId: params.pluginId,
@@ -351,10 +373,10 @@ export function createPluginHostRegistryRetirement(params: {
     ...previousRegistry.plugins.map((record) => record.id),
     ...hostPluginIds,
   ]);
-  let sessionStoreTargets: readonly SessionStoreTarget[] | undefined;
+  let sessionStoreTargets: Promise<readonly SessionStoreTarget[]> | undefined;
   // Discover stores after admitted writes finish, using the retiring configuration.
   const resolveSessionStoreTargets = () =>
-    (sessionStoreTargets ??= resolveAllAgentSessionStoreTargetsSync(cfg ?? getRuntimeConfig()));
+    (sessionStoreTargets ??= resolveAllAgentSessionStoreTargetsAsync(cfg ?? getRuntimeConfig()));
   const waits: PluginHostRegistryRetirement[] = [];
   for (const pluginId of previousPluginIds) {
     const record = previousRegistry.plugins.find((entry) => entry.id === pluginId);

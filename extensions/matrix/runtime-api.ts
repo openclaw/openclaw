@@ -1,4 +1,3 @@
-// Matrix API module exposes the plugin public contract.
 import { chunkTextForOutbound as chunkTextForOutboundSdk } from "openclaw/plugin-sdk/text-chunking";
 
 export {
@@ -41,7 +40,9 @@ export {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 export {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
+  setMatrixThreadBindingIdleTimeoutBySessionKeyAsync,
   setMatrixThreadBindingMaxAgeBySessionKey,
+  setMatrixThreadBindingMaxAgeBySessionKeyAsync,
 } from "./src/matrix/thread-bindings-shared.js";
 export { setMatrixRuntime } from "./src/runtime.js";
 export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";

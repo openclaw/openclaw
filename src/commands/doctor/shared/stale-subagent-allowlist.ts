@@ -13,24 +13,15 @@ type StaleSubagentAllowlistHit = {
 
 function collectConfiguredSubagentTargetIds(cfg: OpenClawConfig): Set<string> {
   const ids = new Set<string>(listAgentIds(cfg));
-  for (const agent of listAgentEntries(cfg)) {
-    if (agent.runtime?.type !== "acp") {
-      continue;
-    }
-    const acpAgent = normalizeOptionalAgentId(agent.runtime.acp?.agent);
-    if (acpAgent) {
-      ids.add(acpAgent);
-    }
-  }
-  const defaultAcpAgent = normalizeOptionalAgentId(cfg.acp?.defaultAgent);
-  if (defaultAcpAgent) {
-    ids.add(defaultAcpAgent);
-  }
-  for (const entry of cfg.acp?.allowedAgents ?? []) {
-    if (entry.trim() === "*") {
-      continue;
-    }
-    const acpAgent = normalizeOptionalAgentId(entry);
+  const targets = [
+    ...listAgentEntries(cfg).flatMap((agent) =>
+      agent.runtime?.type === "acp" ? [agent.runtime.acp?.agent] : [],
+    ),
+    cfg.acp?.defaultAgent,
+    ...(cfg.acp?.allowedAgents ?? []).filter((entry) => entry.trim() !== "*"),
+  ];
+  for (const target of targets) {
+    const acpAgent = normalizeOptionalAgentId(target);
     if (acpAgent) {
       ids.add(acpAgent);
     }
@@ -57,10 +48,7 @@ function collectStaleAllowlistEntries(params: {
       continue;
     }
     const normalizedAgentId = normalizeAgentId(trimmed);
-    if (params.configuredTargetIds.has(normalizedAgentId)) {
-      continue;
-    }
-    if (seen.has(normalizedAgentId)) {
+    if (params.configuredTargetIds.has(normalizedAgentId) || seen.has(normalizedAgentId)) {
       continue;
     }
     seen.add(normalizedAgentId);

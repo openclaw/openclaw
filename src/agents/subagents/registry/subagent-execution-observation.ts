@@ -7,6 +7,7 @@ import {
   hasSubagentRunEnded,
   isSubagentRunLive,
   isSubagentRunQueued,
+  isYieldedSubagentRun,
 } from "./subagent-run-liveness.js";
 
 export type SubagentExecutionObservation = {
@@ -18,16 +19,6 @@ export type SubagentExecutionObservation = {
     pendingCount?: number;
   };
 };
-
-function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
-  return (
-    entry.pauseReason === "sessions_yield" &&
-    !entry.killIntent &&
-    !entry.killReconciliation &&
-    entry.suppressAnnounceReason !== "killed" &&
-    entry.endedReason !== "subagent-killed"
-  );
-}
 
 /** Project recorded execution separately from completion and requester delivery. */
 export function observeSubagentExecution(
@@ -105,8 +96,5 @@ export function observeSubagentExecution(
     const tool = activity?.tools.at(-1);
     return { state: "running", ...(tool ? { currentTool: { name: tool.name } } : {}) };
   }
-  if (isSubagentRunQueued(current)) {
-    return { state: "queued" };
-  }
-  return { state: "unknown" };
+  return { state: isSubagentRunQueued(current) ? "queued" : "unknown" };
 }

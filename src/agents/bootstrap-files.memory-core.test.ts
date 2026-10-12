@@ -13,9 +13,11 @@ import {
 } from "./memory-write-provenance.js";
 
 // Load the real public plugin API without pulling bundled implementation into core type graphs.
-const { memoryRuntime } = await vi.importActual<{ memoryRuntime: MemoryPluginRuntime }>(
-  "../../extensions/memory-core/runtime-api.js",
-);
+const { createMemoryRuntime } = await vi.importActual<{
+  createMemoryRuntime: (host: {
+    runInBackgroundContext: <T>(run: () => T) => T;
+  }) => MemoryPluginRuntime;
+}>("../../extensions/memory-core/runtime-api.js");
 
 afterEach(() => {
   clearMemoryPluginState();
@@ -25,7 +27,9 @@ afterEach(() => {
 describe("personal bootstrap with the real Memory Core runtime", () => {
   it("loads owner-controlled personal files and quarantines a later untrusted tool write", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      registerMemoryCapability("memory-core", { runtime: memoryRuntime });
+      registerMemoryCapability("memory-core", {
+        runtime: createMemoryRuntime({ runInBackgroundContext: (run) => run() }),
+      });
       const workspaceDir = state.statePath("workspace");
       const profile = ensureProfileForEmail("person@example.test");
       ensureProfileForEmail("other@example.test");

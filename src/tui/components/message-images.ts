@@ -112,26 +112,21 @@ class ImagePreview extends Container {
       this.started = true;
       this.addChild(new Text(theme.dim("Loading image…"), 0, 0));
       void this.load(this.controller.signal).then(
-        (image) => {
-          if (this.controller.signal.aborted) {
-            return;
-          }
-          this.clear();
-          this.addChild(createPreviewImage(image));
-          this.requestRender();
-        },
-        () => {
-          if (this.controller.signal.aborted) {
-            return;
-          }
-          this.clear();
-          // Source paths, URLs, and transport errors can contain private data.
-          this.addChild(new Text(theme.dim("Image preview unavailable."), 0, 0));
-          this.requestRender();
-        },
+        (image) => this.showPreview(() => createPreviewImage(image)),
+        // Source paths, URLs, and transport errors can contain private data.
+        () => this.showPreview(() => new Text(theme.dim("Image preview unavailable."), 0, 0)),
       );
     }
     return super.render(width);
+  }
+
+  private showPreview(create: () => Component): void {
+    if (this.controller.signal.aborted) {
+      return;
+    }
+    this.clear();
+    this.addChild(create());
+    this.requestRender();
   }
 
   dispose(message?: string): void {

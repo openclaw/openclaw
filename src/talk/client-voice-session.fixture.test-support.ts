@@ -7,7 +7,29 @@ import {
   normalizeSessionDeliveryState,
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
-import { registerClientVoiceConsultRun } from "./client-voice-session.js";
+import {
+  createOrResumeClientVoiceSession,
+  flushClientVoiceSessionWrites,
+  registerClientVoiceConsultRun,
+} from "./client-voice-session.js";
+
+export function createVoiceSession(
+  params: { sessionKey?: string; voiceSessionId?: string; now?: number } = {},
+): Promise<string> {
+  return createOrResumeClientVoiceSession({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    origin: "client",
+    ...params,
+  });
+}
+
+export async function createCompletedMutationSession(): Promise<string> {
+  const voiceSessionId = await createVoiceSession();
+  await recordMutation(voiceSessionId);
+  await completeRun(`run-${voiceSessionId}`);
+  return voiceSessionId;
+}
 
 export async function seedSession(
   sessionKey: string,
@@ -23,8 +45,11 @@ export async function seedSession(
   );
 }
 
-export function recordMutation(voiceSessionId: string, runId = `run-${voiceSessionId}`): void {
-  registerClientVoiceConsultRun({
+export async function recordMutation(
+  voiceSessionId: string,
+  runId = `run-${voiceSessionId}`,
+): Promise<void> {
+  await registerClientVoiceConsultRun({
     agentId: "main",
     sessionKey: "agent:main:main",
     voiceSessionId,
@@ -44,6 +69,7 @@ export function recordMutation(voiceSessionId: string, runId = `run-${voiceSessi
     toolName: "message",
     durationMs: 5,
   });
+  await flushClientVoiceSessionWrites({ agentId: "main", voiceSessionId });
 }
 
 export async function completeRun(runId: string): Promise<void> {

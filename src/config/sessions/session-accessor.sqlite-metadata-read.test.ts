@@ -1,5 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -21,9 +23,46 @@ import {
   advanceTranscriptMutationAtInTransaction,
   readTranscriptMutationStateInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
+import {
+  readTranscriptStatsBatchFromDatabase,
+  readTranscriptStatsFromDatabase,
+} from "./session-accessor.sqlite-transcript-stats.js";
+import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
+import { createTranscriptEventInserter } from "./transcript-payload.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("preserves hot, cold, missing and repeated IDs across metadata batch boundaries", async () => {
+  await withOpenClawTestState({ label: "transcript-stats-batches" }, async (state) => {
+    const { database } = createFixture(state);
+    const expected = [
+      {
+        eventCount: 1,
+        maxSeq: 0,
+        sizeBytes: Buffer.byteLength('{"type":"session"}'),
+        lastObservedMutationAtMs: 10,
+        lastMutationAtMs: 20,
+      },
+      {
+        eventCount: 1,
+        maxSeq: 0,
+        sizeBytes: 1,
+        lastObservedMutationAtMs: 30,
+        lastMutationAtMs: 40,
+      },
+      { eventCount: 0, maxSeq: 0, sizeBytes: 0, lastObservedMutationAtMs: 1 },
+      { eventCount: 0, maxSeq: 0, sizeBytes: 0 },
+    ];
+    const names = ["hot", "cold", "empty", "missing"];
+    for (const count of [4, 11, 401]) {
+      const ids = Array.from({ length: count }, (_, index) => names[index % names.length]!);
+      expect(readTranscriptStatsBatchFromDatabase(database, ids)).toEqual(
+        Array.from({ length: count }, (_, index) => expected[index % expected.length]),
+      );
+    }
+    expect(readTranscriptStatsBatchFromDatabase(database, [])).toEqual([]);
+  });
+});
 
 function createFixture(state: OpenClawTestState, agentId = "main") {
   const options = { agentId, env: state.env };
@@ -37,9 +76,15 @@ function createFixture(state: OpenClawTestState, agentId = "main") {
     replaceSessionEntrySync(scope(sessionId), { sessionId, updatedAt: 1 });
   }
   const database = openOpenClawAgentDatabase(options);
+  createTranscriptEventInserter(
+    database.db,
+    "hot",
+  )({
+    seq: 0,
+    eventJson: '{"type":"session"}',
+    createdAt: 1,
+  });
   database.db.exec(`
-    INSERT INTO transcript_events (session_id, seq, event_json, created_at)
-      VALUES ('hot', 0, '{"type":"session"}', 1);
     INSERT INTO session_transcript_cold_archives
       (session_id, generation, archive_name, archive_sha256, event_count, raw_bytes,
        archive_bytes, last_seq, archived_at, storage)
@@ -51,6 +96,39 @@ function createFixture(state: OpenClawTestState, agentId = "main") {
   `);
   return { database, options, scope };
 }
+
+it("reads physical hot and cold presence with mutation pairs off-thread without restoring payloads", async () => {
+  await withOpenClawTestState({ label: "worker-transcript-metadata" }, async (state) => {
+    const { scope } = createFixture(state);
+    const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      const values = [];
+      for (const sessionId of ["hot", "cold", "empty", "missing"]) {
+        values.push(
+          (
+            await readSessionTranscriptAnchorsAsync(scope(sessionId), {
+              entryIds: [],
+              includeMetadata: true,
+            })
+          ).metadata,
+        );
+      }
+      expect(values).toEqual([
+        { present: true, observedAt: 10, updatedAt: 20 },
+        { present: true, observedAt: 30, updatedAt: 40 },
+        { present: false, observedAt: 1, updatedAt: null },
+        { present: false, observedAt: null, updatedAt: null },
+      ]);
+      expect(
+        observation.queries.filter((query) =>
+          /\b(?:transcript_events|session_windows|session_transcript_cold_archives)\b/i.test(query),
+        ),
+      ).toEqual([]);
+    } finally {
+      observation.restore();
+    }
+  });
+});
 
 it.each(["presence", "mutation"] as const)(
   "keeps fresh bindings and rows without recompiling warm transcript %s reads",
@@ -73,6 +151,7 @@ it.each(["presence", "mutation"] as const)(
       for (const [index, id] of ids.entries()) {
         expect(read(scope(id))).toEqual(expected[index]);
       }
+      const inserts = ["cold", "empty"].map((id) => createTranscriptEventInserter(database.db, id));
       const compile = vi.spyOn(getSessionKysely(database.db).getExecutor(), "compileQuery");
       for (let repeat = 0; repeat < 2; repeat += 1) {
         for (const [index, id] of ids.entries()) {
@@ -83,13 +162,12 @@ it.each(["presence", "mutation"] as const)(
         db.exec(`
           DELETE FROM transcript_events WHERE session_id = 'hot';
           DELETE FROM session_transcript_cold_archives WHERE session_id = 'cold';
-          INSERT INTO transcript_events (session_id, seq, event_json, created_at)
-            VALUES ('cold', 0, '{"type":"session"}', 1);
-          INSERT INTO transcript_events (session_id, seq, event_json, created_at)
-            VALUES ('empty', 0, '{"type":"session"}', 1);
           UPDATE session_windows SET transcript_observed_at = NULL, transcript_updated_at = 50
             WHERE session_id = 'hot';
         `);
+        for (const insert of inserts) {
+          insert({ seq: 0, eventJson: '{"type":"session"}', createdAt: 1 });
+        }
       }, options);
       if (kind === "presence") {
         expect(ids.map((id) => read(scope(id)))).toEqual([false, true, true, false]);
@@ -109,6 +187,20 @@ it("reads each in-transaction fence advance and restores the prior pair on rollb
     expect(read()).toEqual({ observedAt: 10, updatedAt: 20 });
     expect(() =>
       runOpenClawAgentWriteTransaction((current) => {
+        advanceTranscriptMutationAtInTransaction(current, "hot", 1);
+        expect(read()).toEqual({ observedAt: 10, updatedAt: 20 });
+        advanceTranscriptMutationAtInTransaction(current, "hot", 25.9);
+        expect(read()).toEqual({ observedAt: 10, updatedAt: 25 });
+        advanceTranscriptMutationAtInTransaction(current, "empty", 0);
+        expect(readTranscriptMutationStateInTransaction(current, "empty")).toEqual({
+          observedAt: 1,
+          updatedAt: 0,
+        });
+        advanceTranscriptMutationAtInTransaction(current, "empty", 0, { strictly: true });
+        expect(readTranscriptMutationStateInTransaction(current, "empty")).toEqual({
+          observedAt: 1,
+          updatedAt: 2,
+        });
         current.db
           .prepare("UPDATE session_windows SET transcript_observed_at = 100 WHERE session_id = ?")
           .run("hot");

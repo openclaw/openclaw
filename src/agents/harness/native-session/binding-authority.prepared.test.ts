@@ -8,11 +8,14 @@ import { testing } from "../../../auto-reply/reply/reply-run-registry.test-suppo
 import { prepareReplyToolAuthority } from "../../../auto-reply/reply/reply-tool-authority.js";
 import {
   loadSessionEntryReadOnly,
+  updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import * as sessionReads from "../../../config/sessions/session-entry-read-runtime.js";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
@@ -49,6 +52,13 @@ it.each([
       { agentId: "policy", sessionKey: policyKey },
       { sessionId: "policy", updatedAt: 1, sandboxMode: "off" },
     );
+    // Drain seed maintenance before measuring the final authority read.
+    for (const agentId of ["main", "policy"]) {
+      await closeOpenClawAgentDatabaseByPathAsync(
+        resolveOpenClawAgentSqlitePath({ agentId, env: state.env }),
+        agentId,
+      );
+    }
     const run = createQueueTestRun({ prompt: "authority" });
     Object.assign(run.run, {
       sessionKey: "agent:main:authority-execution",
@@ -164,23 +174,34 @@ it.each([
     try {
       await awaitGateBeforeSettlement(entered.promise, outcome, "Final admission was not reached");
       calls.expectIdle();
-      if (change === "policy" || change === "metadata" || change === "malformed") {
-        const foreign = new DatabaseSync(
-          resolveOpenClawAgentSqlitePath({ agentId: "policy", env: state.env }),
+      if (change === "policy" || change === "metadata") {
+        await updateSessionEntry({ agentId: "policy", sessionKey: policyKey }, () =>
+          change === "policy" ? { sandboxMode: undefined } : { label: "renamed" },
         );
-        try {
-          foreign
-            .prepare(
-              change === "policy"
-                ? "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?"
-                : change === "metadata"
-                  ? "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', 'renamed') WHERE session_key = ?"
-                  : "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.sessionId', 42) WHERE session_key = ?",
-            )
-            .run(policyKey);
-        } finally {
-          foreign.close();
-        }
+        calls.clear();
+      } else if (change === "malformed") {
+        await runOpenClawAgentWriteAdmission(
+          { agentId: "policy", env: state.env },
+          ({ canonicalPath }) => {
+            const corrupted = new DatabaseSync(canonicalPath);
+            try {
+              corrupted
+                .prepare(
+                  "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.sessionId', 42) WHERE session_key = ?",
+                )
+                .run(policyKey);
+            } finally {
+              corrupted.close();
+            }
+            // Exercise malformed-row parsing rather than a warmed fact or revoked source.
+            sessionChanges.invalidate({
+              agentId: "policy",
+              sessionKey: policyKey,
+              storePath: canonicalPath,
+              factsInvalidated: true,
+            });
+          },
+        );
         calls.clear();
       } else if (change === "route") {
         await operation.bindToolAuthorityRouteAsync({
@@ -198,6 +219,14 @@ it.each([
         expect(consumed).toHaveBeenCalledOnce();
       } else {
         expect(result).toBeInstanceOf(Error);
+        if (change === "malformed") {
+          expect(result).toHaveProperty(
+            "message",
+            expect.stringContaining(
+              `invalid persisted session row requires repair for ${policyKey}`,
+            ),
+          );
+        }
         expect(consumed).not.toHaveBeenCalled();
       }
       expect(compatAssertCurrent).toHaveBeenCalledTimes(

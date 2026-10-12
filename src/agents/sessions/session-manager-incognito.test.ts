@@ -1,23 +1,31 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { inspect } from "node:util";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
+import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-context-read.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as workerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { applyLoggingConfig, resetLogger } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
+import { useIncognitoActorProbe } from "../../state/openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
 import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
 import { withSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
@@ -34,6 +42,7 @@ import {
 } from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
 
+const probe = useIncognitoActorProbe();
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
@@ -74,11 +83,35 @@ async function create(name: string) {
   return target;
 }
 
+async function captureCommitRevocation(
+  message: string,
+  operation: (assertCurrent: () => void) => Promise<unknown>,
+): Promise<unknown> {
+  let current = true;
+  const spy = workerProbe.admission(workerAdmission, (request, grant, admit) => {
+    admit(request, grant);
+    if (request.stage === "commit") {
+      current = false;
+    }
+  });
+  try {
+    await operation(() => {
+      if (!current) {
+        throw new Error(message);
+      }
+    });
+  } catch (error) {
+    return error;
+  } finally {
+    spy.mockRestore();
+  }
+  return undefined;
+}
+
 it("keeps manager reads and writes on the original actor outside its opening scope", async () => {
   const target = await create("retained-manager");
   const manager = await withIncognitoSessionActor(actor, () => SessionManager.openAsync(target));
-  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+  const sql = observeMainThreadSql();
   try {
     const first = await manager.appendMessageAsync(makeUserMessage("retained owner", 1));
     assert(first);
@@ -101,12 +134,12 @@ it("keeps manager reads and writes on the original actor outside its opening sco
       },
       admission.signal,
     );
-    expect(
-      await bounded[sessionManagerPrepareCurrentTurnReplay](
-        () => false,
-        (entry) => entry?.id === first,
-      ),
-    ).toMatchObject({ anchor: { entryId: first } });
+    const replay = await bounded[sessionManagerPrepareCurrentTurnReplay](
+      () => false,
+      (entry) => entry?.id === first,
+    );
+    expect(replay).toMatchObject({ entryId: first });
+    replay?.assertCurrent();
     const rewrite = await manager.prepareTranscriptRewriteAsync();
     await rewrite.sessionManager.resetLeafAsync();
     const replacement = await rewrite.sessionManager.appendMessageAsync(
@@ -116,11 +149,9 @@ it("keeps manager reads and writes on the original actor outside its opening sco
     await rewrite.commit(new Map([[first, replacement]]));
     await manager.reloadPersistedTranscriptAsync();
     expect(manager.buildSessionContext().messages).toMatchObject([{ content: "rewritten" }]);
-    expect(prepare).not.toHaveBeenCalled();
-    expect(exec).not.toHaveBeenCalled();
+    sql.expectIdle();
   } finally {
-    prepare.mockRestore();
-    exec.mockRestore();
+    sql.restore();
   }
 });
 
@@ -172,11 +203,16 @@ it("retargets another session on its retained actor outside the opening scope", 
   expect(manager.buildSessionContext().messages).toMatchObject([
     { role: "user", content: "destination history" },
   ]);
+  const otherEnv = { OPENCLAW_STATE_DIR: tempDirs.make("retarget-other-namespace-") };
   await expect(
     manager.setSessionTargetAsync(
       captureSessionTranscriptTargetBinding({
         ...destination,
-        env: { OPENCLAW_STATE_DIR: tempDirs.make("retarget-other-namespace-") },
+        env: otherEnv,
+        storePath: resolveIncognitoOpenClawAgentSqlitePath({
+          agentId: actor.agentId,
+          env: otherEnv,
+        }),
       }),
     ),
   ).rejects.toThrow("another incognito actor");
@@ -187,12 +223,7 @@ it("retargets another session on its retained actor outside the opening scope", 
     { role: "user", content: "destination history" },
     { role: "user", content: "retained destination write" },
   ]);
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const held = actor.run(authority, async () => {
-    entered.resolve();
-    await release.promise;
-  });
+  const { entered, release, held } = probe.hold(actor, authority);
   let reloading: Promise<void> | undefined;
   try {
     await entered.promise;
@@ -255,7 +286,63 @@ it("settles accepted branch hydration after its retained admission closes", asyn
   }
 });
 
-it("reads full context without caller SQL and rejects a changed source after an awaited consumer", async () => {
+it("reads missing actor context as empty and rejects a row created during consumption", async () => {
+  const target = {
+    agentId: "main",
+    env,
+    storePath: actor.path,
+    sessionKey: "agent:main:dashboard:incognito-missing-context",
+    sessionId: "missing-context",
+  };
+  await withIncognitoSessionActor(actor, async () => {
+    const sql = observeMainThreadSql();
+    try {
+      expect(
+        await SessionManager.readSessionContextAsync(target, (messages, header) => ({
+          messages: [...messages],
+          header,
+        })),
+      ).toEqual({ messages: [], header: undefined });
+      expect(await readSessionManagerModelContextAsync(target, {}, (context) => context)).toEqual({
+        events: [],
+        version: { generation: null, rawSeq: null, updatedAt: null },
+      });
+      expect(await readSessionTranscriptModelContextAsync(target, (context) => context)).toEqual({
+        events: [],
+        version: { generation: null, rawSeq: null, updatedAt: null },
+      });
+      for (const kind of ["full", "model"] as const) {
+        const current = {
+          ...target,
+          sessionKey: `${target.sessionKey}-${kind}`,
+          sessionId: `${target.sessionId}-${kind}`,
+        };
+        const createDuringRead = async () => {
+          await actor.sessions.create(authority, {
+            sessionKey: current.sessionKey,
+            entry: { sessionId: current.sessionId, updatedAt: 1, incognito: true },
+          });
+        };
+        const reading =
+          kind === "full"
+            ? SessionManager.readSessionContextAsync(current, async (messages) => {
+                expect([...messages]).toEqual([]);
+                await createDuringRead();
+              })
+            : readSessionManagerModelContextAsync(current, {}, async (context) => {
+                expect(context.events).toEqual([]);
+                await createDuringRead();
+              });
+        await expect(reading).rejects.toThrow("generation is no longer current");
+      }
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+  });
+});
+
+it("reads full context without caller SQL and retains its prefix across an awaited append", async () => {
   const target = await create("context-consumer");
   await withIncognitoSessionActor(actor, async () => {
     const manager = await SessionManager.openAsync(target);
@@ -264,8 +351,7 @@ it("reads full context without caller SQL and rejects a changed source after an 
         __openclaw: { upstreamUserText: "synthetic-private-native-text" },
       }),
     );
-    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    const sql = observeMainThreadSql();
     try {
       let retained: Iterable<unknown> | undefined;
       const messages = await SessionManager.readSessionContextAsync(
@@ -288,16 +374,14 @@ it("reads full context without caller SQL and rejects a changed source after an 
       ]);
       expect([...retained!]).toEqual([]);
       await expect(
-        SessionManager.readSessionContextAsync(target, async () => {
+        SessionManager.readSessionContextAsync(target, async (context) => {
           await manager.appendMessageAsync(makeUserMessage("changed during consumption", 2));
-          return "stale result";
+          return [...context];
         }),
-      ).rejects.toThrow("changed during context read");
-      expect(prepare).not.toHaveBeenCalled();
-      expect(exec).not.toHaveBeenCalled();
+      ).resolves.toEqual(messages);
+      sql.expectIdle();
     } finally {
-      prepare.mockRestore();
-      exec.mockRestore();
+      sql.restore();
     }
   });
 });
@@ -359,7 +443,7 @@ it("publishes model context before following work enters its actor", async () =>
     const forward: typeof history = async (grant, command, signal, onRead) => {
       const result = await history(grant, command, signal, onRead);
       if (onRead) {
-        await actor.run(authority, async () => {
+        await probe.read(actor, authority, () => {
           order.push("following actor work");
         });
       }
@@ -389,8 +473,7 @@ it("persists messages, metadata, suffixes, rewrites and branches on the actor wi
     ...(await create("maintenance")),
     storePath: path.join(path.dirname(path.dirname(actor.path)), "sessions", "sessions.json"),
   };
-  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+  const sql = observeMainThreadSql();
   try {
     await withIncognitoSessionActor(actor, async () => {
       const manager = await SessionManager.openAsync(target);
@@ -450,12 +533,84 @@ it("persists messages, metadata, suffixes, rewrites and branches on the actor wi
       expect(reopened.getBranch()).toEqual(manager.getBranch());
       expect(actor.sessions.readSharing(target.sessionKey)?.entry?.sessionId).toBe(branchedId);
     });
-    expect(prepare).not.toHaveBeenCalled();
-    expect(exec).not.toHaveBeenCalled();
+    sql.expectIdle();
   } finally {
-    prepare.mockRestore();
-    exec.mockRestore();
+    sql.restore();
   }
+});
+
+it("advances the captured CLI writer boundary through actor metadata commits", async () => {
+  const target = await create("cli-metadata");
+  const historyTarget = {
+    sessionKey: target.sessionKey,
+    sessionId: target.sessionId,
+    lifecycleRevision: "initial",
+  };
+  await withIncognitoSessionActor(actor, async () => {
+    const manager = await SessionManager.openAsync(target);
+    const { watermark } = await actor.sessions.history(authority, {
+      type: "session.history.watermark",
+      input: historyTarget,
+    });
+    const runId = "synthetic-cli-run";
+    const authFingerprint = "a".repeat(64);
+    await patchSessionEntryCore(target, () => ({
+      activeWriterRunId: runId,
+      cliHistoryBoundary: {
+        version: 1,
+        sessionId: target.sessionId,
+        state: "known",
+        ...watermark,
+        authFingerprint,
+        writerRunId: runId,
+      },
+    }));
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("CLI writer revoked");
+      }
+    };
+    await runWithCliHistoryWriter(
+      {
+        target,
+        runId,
+        authFingerprint,
+        lifecycleRevision: "initial",
+        assertCurrent,
+        assertReadable: assertCurrent,
+      },
+      async () => {
+        await manager.appendCustomEntryAsync("cli-metadata", { synthetic: true });
+        const after = await actor.sessions.history(authority, {
+          type: "session.history.watermark",
+          input: historyTarget,
+        });
+        const entry = (await actor.sessions.read(authority, { sessionKey: target.sessionKey }))
+          .entry;
+        expect(entry).toMatchObject({
+          cliHistoryBoundary: {
+            ...after.watermark,
+            writerRunId: runId,
+            authFingerprint,
+          },
+        });
+        expect(after.watermark.maxSeq).toBe((watermark.maxSeq ?? -1) + 1);
+        current = false;
+        await expect(manager.appendCustomEntryAsync("refused", {})).rejects.toThrow(
+          "CLI writer revoked",
+        );
+        expect(
+          (
+            await actor.sessions.history(authority, {
+              type: "session.history.watermark",
+              input: historyTarget,
+            })
+          ).watermark,
+        ).toEqual(after.watermark);
+      },
+    );
+  });
 });
 
 it("rolls back fresh-message refusal and fences queued authority before mutation", async () => {
@@ -470,12 +625,7 @@ it("rolls back fresh-message refusal and fences queued authority before mutation
       }),
     ).rejects.toThrow("fresh grant revoked");
     expect((await SessionManager.openAsync(target)).getEntries()).toEqual([]);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const held = actor.run(authority, async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const { entered, release, held } = probe.hold(actor, authority);
     await entered.promise;
     let current = true;
     const refused = withSessionManagerWriteAssertion(
@@ -510,44 +660,20 @@ it.each(["append", "persist"] as const)(
     await withIncognitoSessionActor(actor, async () => {
       const manager = await SessionManager.openAsync(target);
       await manager.appendCustomEntryAsync("before-revocation");
-      let current = true;
-      const original = workerAdmission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          original((request, grant) => {
-            admit(request, grant);
-            if (request.stage === "commit") {
-              current = false;
-            }
-          }, attachment),
-        );
-      let failure: unknown;
-      try {
-        await withSessionManagerWriteAssertion(
-          manager,
-          () => {
-            if (!current) {
-              throw new Error("retired after commit grant");
-            }
-          },
-          () =>
-            method === "append"
-              ? manager.appendCustomEntryAsync("committed-once")
-              : manager.persistAsync({
-                  type: "custom",
-                  id: "committed-once",
-                  parentId: null,
-                  timestamp: new Date().toISOString(),
-                  customType: "committed-once",
-                  data: {},
-                }),
-        );
-      } catch (error) {
-        failure = error;
-      } finally {
-        spy.mockRestore();
-      }
+      const failure = await captureCommitRevocation("retired after commit grant", (assertCurrent) =>
+        withSessionManagerWriteAssertion(manager, assertCurrent, () =>
+          method === "append"
+            ? manager.appendCustomEntryAsync("committed-once")
+            : manager.persistAsync({
+                type: "custom",
+                id: "committed-once",
+                parentId: null,
+                timestamp: new Date().toISOString(),
+                customType: "committed-once",
+                data: {},
+              }),
+        ),
+      );
       expect(failure).toBeInstanceOf(Error);
       expect(isRecordedModelFallbackStop(failure)).toBe(true);
       expect(() => manager.getEntries()).toThrow();
@@ -576,22 +702,17 @@ it.each(["registry", "pattern"] as const)(
     applyLoggingConfig({ redactPatterns: patterns });
     resetSecretRedactionRegistryForTest();
     let changed = false;
-    const original = workerAdmission.createSqliteWorkerOperationAdmission;
-    const spy = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        original((request, grant) => {
-          if (request.stage === "commit" && !changed) {
-            changed = true;
-            if (policy === "registry") {
-              registerSecretValueForRedaction(marker);
-            } else {
-              patterns.push(marker);
-            }
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const spy = workerProbe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit" && !changed) {
+        changed = true;
+        if (policy === "registry") {
+          registerSecretValueForRedaction(marker);
+        } else {
+          patterns.push(marker);
+        }
+      }
+      admit(request, grant);
+    });
     try {
       await withIncognitoSessionActor(actor, async () => {
         await expect(appendSessionTranscriptNote(target, note)).rejects.toThrow(
@@ -619,37 +740,15 @@ it.each(["registry", "pattern"] as const)(
 it("retains the static note message receipt after acknowledged actor authority loss", async () => {
   const target = await create("static-acknowledged");
   await withIncognitoSessionActor(actor, async () => {
-    let current = true;
-    const original = workerAdmission.createSqliteWorkerOperationAdmission;
-    const spy = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        original((request, grant) => {
-          admit(request, grant);
-          if (request.stage === "commit") {
-            current = false;
-          }
-        }, attachment),
-      );
-    let failure: unknown;
-    try {
-      await withSessionTranscriptWriteAssertion(
-        target,
-        () => {
-          if (!current) {
-            throw new Error("static note authority retired after commit grant");
-          }
-        },
-        () =>
+    const failure = await captureCommitRevocation(
+      "static note authority retired after commit grant",
+      (assertCurrent) =>
+        withSessionTranscriptWriteAssertion(target, assertCurrent, () =>
           appendSessionTranscriptNote(target, makeUserMessage("acknowledged static note", 1), {
             config: { logging: { redactPatterns: [] } },
           }),
-      );
-    } catch (error) {
-      failure = error;
-    } finally {
-      spy.mockRestore();
-    }
+        ),
+    );
     expect(failure).toBeInstanceOf(SessionTranscriptMessageCommittedError);
     assert(failure instanceof SessionTranscriptMessageCommittedError);
     expect(isRecordedModelFallbackStop(failure)).toBe(true);
@@ -678,34 +777,13 @@ it("keeps acknowledged rewrite content out of error diagnostics", async () => {
     const marker = "synthetic-incognito-private-receipt-content";
     const replacement = await rewrite.sessionManager.appendMessageAsync(makeUserMessage(marker, 2));
     assert(replacement);
-    let current = true;
-    const original = workerAdmission.createSqliteWorkerOperationAdmission;
-    const spy = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        original((request, grant) => {
-          admit(request, grant);
-          if (request.stage === "commit") {
-            current = false;
-          }
-        }, attachment),
-      );
-    let failure: unknown;
-    try {
-      await withSessionManagerWriteAssertion(
-        manager,
-        () => {
-          if (!current) {
-            throw new Error("rewrite owner retired after commit grant");
-          }
-        },
-        () => rewrite.commit(new Map([[source, replacement]])),
-      );
-    } catch (error) {
-      failure = error;
-    } finally {
-      spy.mockRestore();
-    }
+    const failure = await captureCommitRevocation(
+      "rewrite owner retired after commit grant",
+      (assertCurrent) =>
+        withSessionManagerWriteAssertion(manager, assertCurrent, () =>
+          rewrite.commit(new Map([[source, replacement]])),
+        ),
+    );
     expect(failure).toBeInstanceOf(Error);
     expect(inspect(failure, { depth: null })).not.toContain(marker);
     expect(() => manager.getEntries()).toThrow();
@@ -820,8 +898,7 @@ it("refuses synchronous actor SDK access before SQL, view mutation, and tool-res
   assert(id);
   const before = structuredClone(manager.getEntries());
   const beforeTarget = manager.getSessionTarget();
-  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+  const sql = observeMainThreadSql();
   const read = vi.fn();
   const beforeWrite = vi.fn();
   const reject = (run: () => unknown, replacement: string) => {
@@ -868,11 +945,9 @@ it("refuses synchronous actor SDK access before SQL, view mutation, and tool-res
       );
     });
     expect(read).not.toHaveBeenCalled();
-    expect(prepare).not.toHaveBeenCalled();
-    expect(exec).not.toHaveBeenCalled();
+    sql.expectIdle();
   } finally {
-    prepare.mockRestore();
-    exec.mockRestore();
+    sql.restore();
   }
   await manager.appendCustomEntryAsync("still writable", {});
 });

@@ -311,11 +311,13 @@ describe("agent schema 22 storage cutover", () => {
           db.close();
           db = new DatabaseSync(pathname);
           const before = legacySnapshot(db);
-          // These entries have no cold fields: migration only adds their initial revision.
+          // These entries have no cold fields, start time, or optional references.
           const expectedPreserved = {
             ...before.preserved,
             session_nodes: db
-              .prepare("SELECT *, 0 AS snapshot_revision FROM session_nodes ORDER BY rowid")
+              .prepare(
+                "SELECT *, 0 AS snapshot_revision, NULL AS session_started_at, 0 AS has_optional_references FROM session_nodes ORDER BY rowid",
+              )
               .all(),
           };
           expect(

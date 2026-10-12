@@ -6,13 +6,17 @@ import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as workspaceBootstrap from "./workspace-bootstrap-publish.js";
 import { holdWorkspacePreparationSnapshot } from "./workspace-preparation-queue.test-support.js";
 import { WorkspaceAliasRepointedError } from "./workspace-state-identity.js";
-import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
+import {
+  readWorkspaceStateSnapshot,
+  replaceWorkspaceAttestation,
+} from "./workspace-state-store.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   ensureAgentWorkspace,
   seedWorkspaceBootstrap,
+  WORKSPACE_VANISHED_ERROR_CODE,
 } from "./workspace.js";
 
 export function registerWorkspacePreparationTests({
@@ -27,6 +31,28 @@ export function registerWorkspacePreparationTests({
   expectPathMissing: (filePath: string) => Promise<void>;
 }) {
   describe("workspace preparation ownership", () => {
+    it("does not mistake the shipped template for user content after other workspace files disappear", async () => {
+      const { tempDir } = getFixture();
+      const historicalAgents = await fs.readFile(
+        new URL("../../test/fixtures/agents-template-v2026.9.9.md", import.meta.url),
+        "utf8",
+      );
+      await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), historicalAgents);
+      await replaceWorkspaceAttestation({
+        workspaceDir: tempDir,
+        attestedAtMs: Date.now(),
+        generatedHashes: new Map(),
+      });
+
+      await expect(
+        ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+      ).rejects.toMatchObject({ code: WORKSPACE_VANISHED_ERROR_CODE });
+      await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+      expect(await fs.readFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "utf8")).toBe(
+        historicalAgents,
+      );
+    });
+
     it("keeps each queued caller's options and result while another workspace finishes", async ({
       signal,
     }) => {

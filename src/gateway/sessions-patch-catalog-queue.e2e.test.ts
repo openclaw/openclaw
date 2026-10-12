@@ -17,7 +17,7 @@ import {
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";

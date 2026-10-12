@@ -78,14 +78,20 @@ export async function drainNativeHookRelayWork(params: {
   }
 }
 
+function assertNativeHookRelayRegistrationCurrent(
+  registration: ActiveNativeHookRelayRegistration,
+): void {
+  if (relays.get(registration.relayId) !== registration || Date.now() > registration.expiresAtMs) {
+    throw new Error("native hook relay registration is inactive");
+  }
+}
+
 export function assertNativeHookRelayForegroundCurrent(
   registration: ActiveNativeHookRelayRegistration,
   lifetime: { foregroundOpen: boolean; foregroundToken: symbol },
   foregroundToken: symbol,
 ): void {
-  if (relays.get(registration.relayId) !== registration || Date.now() > registration.expiresAtMs) {
-    throw new Error("native hook relay registration is inactive");
-  }
+  assertNativeHookRelayRegistrationCurrent(registration);
   registration.signal?.throwIfAborted();
   registration.assertActive?.();
   if (!lifetime.foregroundOpen || lifetime.foregroundToken !== foregroundToken) {
@@ -109,21 +115,14 @@ export async function resolveNativeHookRelayInvocationBinding(
   // Gateway fallback shares policy readiness without depending on HTTP locator publication.
   await racePromiseWithAbortSignal(lifetime.policyReady, signal);
   signal?.throwIfAborted();
-  if (relays.get(registration.relayId) !== registration || Date.now() > registration.expiresAtMs) {
-    throw new Error("native hook relay registration is inactive");
-  }
+  assertNativeHookRelayRegistrationCurrent(registration);
   const claim = lifetime.retention?.readClaim(rawPayload);
   if (claim && event === "pre_tool_use" && lifetime.retained && lifetime.retention) {
     const retained = lifetime.retained;
     const retention = lifetime.retention;
     let assertAdmission: (() => boolean) | undefined;
     const assertRetainedAuthority = () => {
-      if (
-        relays.get(registration.relayId) !== registration ||
-        Date.now() > registration.expiresAtMs
-      ) {
-        throw new Error("native hook relay registration is inactive");
-      }
+      assertNativeHookRelayRegistrationCurrent(registration);
       registration.signal?.throwIfAborted();
       retained.assertActive();
       if (assertAdmission && !assertAdmission()) {

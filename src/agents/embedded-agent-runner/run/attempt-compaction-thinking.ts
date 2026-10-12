@@ -24,22 +24,19 @@ export function createAttemptCompactionThinkingResolver(
         ...(compat ? { compat } : {}),
       },
     ];
+    const route = { provider: model.provider, catalog, agentRuntime: "openclaw" } as const;
     const level = resolveEmbeddedCompactionThinkingLevel({
+      ...route,
       config: attempt.config,
-      provider: model.provider,
       modelId: model.id,
       inheritedLevel,
       compactionThinkingDefault: model.compactionThinkingDefault,
-      catalog,
       agentId,
       sessionKey: attempt.sessionKey ?? attempt.sandboxSessionKey,
-      agentRuntime: "openclaw",
     });
     const providerLevel = resolveProviderThinkingLevel({
-      provider: model.provider,
+      ...route,
       model: model.id,
-      catalog,
-      agentRuntime: "openclaw",
       level,
     });
     // Summaries take the chat turn's concrete conversion, so provider-native Adaptive runs as high.

@@ -1418,9 +1418,7 @@ describe("CLI attempt execution", () => {
     });
     expect(hasClaudeSessionMock).toHaveBeenCalledWith({
       backendId: "claude-cli",
-      agentAccountId: undefined,
       agentId: "main",
-      authProfileId: "anthropic:claude-cli",
       sessionId: "openclaw-sid",
       sessionKey,
     });
@@ -1521,7 +1519,7 @@ describe("CLI attempt execution", () => {
         sessionStore,
       });
     if (error) {
-      expect(run).toThrow(error);
+      await expect(run()).rejects.toThrow(error);
       expect(runCliAgentMock).not.toHaveBeenCalled();
     } else {
       await run();
@@ -1536,7 +1534,6 @@ describe("CLI attempt execution", () => {
     const sessionId = `internal-${visibleSessionId}`;
     const sessionKey = `agent:main:internal-session-effects:${visibleSessionId}`;
     setTestEnvValue("HOME", tmpDir);
-    setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tmpDir, "state"));
     const internalSessionFile = formatSqliteSessionFileMarker({
       agentId: "main",
       sessionId,

@@ -14,7 +14,6 @@ import {
   controlUiSessionUrl,
   navigateToControlUiSession,
 } from "../../../ui/src/test-helpers/control-ui-e2e.ts";
-import { resolveQaGatewayChildCommand } from "./gateway-child-command.ts";
 import { createQaLiveLaneGateway } from "./live-transports/shared/live-gateway.runtime.ts";
 
 const suite = createControlUiE2eSuite({
@@ -117,7 +116,10 @@ suite.define(() => {
     const gateway = await gatewayOwner.start({
       repoRoot: process.cwd(),
       command: {
-        ...resolveQaGatewayChildCommand(process.cwd()),
+        executablePath: process.execPath,
+        // The test runner prepares this runtime once; restarts must not rebuild the dirty checkout.
+        argsPrefix: [path.join(process.cwd(), "openclaw.mjs")],
+        cwd: process.cwd(),
         usePackagedPlugins: false,
       },
       providerMode: "mock-openai",
@@ -362,7 +364,12 @@ suite.define(() => {
       try {
         const gateway = await gatewayOwner.start({
           repoRoot: process.cwd(),
-          command: resolveQaGatewayChildCommand(process.cwd()),
+          command: {
+            executablePath: process.execPath,
+            argsPrefix: [path.join(process.cwd(), "openclaw.mjs")],
+            cwd: process.cwd(),
+            usePackagedPlugins: true,
+          },
           providerMode: "mock-openai",
           primaryModel: "mock-openai/gpt-5.6-luna",
           alternateModel: "mock-openai/gpt-5.6-luna-alt",

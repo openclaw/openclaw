@@ -1,19 +1,12 @@
 import { createHash } from "node:crypto";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parsePostContent } from "./post.js";
 
 type FeishuMessageDedupeInput = Pick<FeishuMessageEvent, "message" | "sender">;
-
-function parseContentRecord(content: string): Record<string, unknown> | null {
-  try {
-    return readRecord(JSON.parse(content));
-  } catch {
-    return null;
-  }
-}
 
 function resolvePostMediaParts(content: string): string[] {
   const { attachments } = parsePostContent(content, { includeTopLevelFiles: false });
@@ -32,7 +25,7 @@ function resolveMessageMediaParts(messageType: string, content: string): string[
     return resolvePostMediaParts(content);
   }
 
-  const parsed = parseContentRecord(content);
+  const parsed = readRecord(safeParseJson(content));
   if (!parsed) {
     return [];
   }

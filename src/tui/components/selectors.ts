@@ -7,8 +7,18 @@ export function createSearchableSelectList(items: SearchableSelectItem[], maxVis
   return new SearchableSelectList(items, maxVisible, searchableSelectListTheme);
 }
 
-export function modelSelectItems(models: readonly TuiModelChoice[]): SearchableSelectItem[] {
-  return models.map((model) => {
+/**
+ * Lists the current model and recommended models first; other models of a
+ * provider that recommends any wait behind an "All models" row.
+ */
+export function modelSelectItems(
+  models: readonly TuiModelChoice[],
+  currentRef?: string,
+): SearchableSelectItem[] {
+  const recommendingProviders = new Set(
+    models.filter((model) => model.recommended).map((model) => model.provider),
+  );
+  const items = models.map((model) => {
     const ref = modelKey(model.provider, model.id);
     return {
       value: ref,
@@ -19,6 +29,18 @@ export function modelSelectItems(models: readonly TuiModelChoice[]): SearchableS
       ]
         .filter(Boolean)
         .join(" · "),
+      ...(recommendingProviders.has(model.provider) && !model.recommended && ref !== currentRef
+        ? { collapsed: true }
+        : {}),
     };
   });
+  const collapsed = items.filter((item) => item.collapsed);
+  if (collapsed.length === 0) {
+    return items;
+  }
+  return [
+    ...items.filter((item) => !item.collapsed),
+    { value: "all-models", label: `All models (${collapsed.length})`, expandsCollapsed: true },
+    ...collapsed,
+  ];
 }

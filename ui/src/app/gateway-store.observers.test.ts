@@ -520,7 +520,7 @@ describe("createApplicationGateway connection ownership", () => {
     expect(gateway.snapshot.suspensionPhase).toBe("prepared");
   });
 
-  it.each(["suspension", "restart"])(
+  it.each(["suspension", "restart", "restart after connected drain"])(
     "expires %s evidence at its deadline into stable offline",
     async (kind) => {
       vi.useFakeTimers();
@@ -536,12 +536,18 @@ describe("createApplicationGateway connection ownership", () => {
         current().opts.onEvent?.(
           createGatewayEvent("shutdown", {
             reason: "gateway restart",
-            restartExpectedMs: 8_000,
+            restartExpectedMs: kind === "restart" ? 8_000 : 1_500,
           }),
         );
+        if (kind === "restart after connected drain") {
+          await vi.advanceTimersByTimeAsync(10 * 60_000);
+          expect(gateway.snapshot.phase).toBe("connected");
+          expect(gateway.snapshot.restartPending).toBe(true);
+          expect(gateway.snapshot.offlineStable).toBe(false);
+        }
         current().opts.onClose?.({ code: 1012, reason: "gateway restarting", willRetry: true });
       }
-      await vi.advanceTimersByTimeAsync(kind === "suspension" ? 14_999 : 23_999);
+      await vi.advanceTimersByTimeAsync(kind === "restart" ? 23_999 : 14_999);
       if (kind === "suspension") {
         expect(gateway.snapshot.suspensionPhase).toBe("prepared");
       } else {
@@ -555,6 +561,11 @@ describe("createApplicationGateway connection ownership", () => {
         expect(gateway.snapshot.restartPending).toBe(false);
       }
       expect(gateway.snapshot.offlineStable).toBe(true);
+      current().opts.onHello?.(HELLO);
+      expect(gateway.snapshot.phase).toBe("connected");
+      expect(gateway.snapshot.restartPending).toBe(false);
+      expect(gateway.snapshot.suspensionPhase).toBeUndefined();
+      expect(gateway.snapshot.offlineStable).toBe(false);
     },
   );
 

@@ -171,8 +171,12 @@ preparation, polling, renewal, resume, or lease expiry.
 Poll `gateway.suspend.status` with the returned `suspensionId`, honoring
 `retryAfterMs`. While blockers remain, status returns `status: "draining"`
 together with `expiresAtMs`, `retryAfterMs`, `activeCount`, and `blockers`.
-Each status call refreshes the active-work snapshot. Once every blocker has
-finished, the same lease transitions to `{"status":"ready","expiresAtMs":...}`.
+Each status call refreshes the active-work snapshot. If protected lifecycle or
+final-chat writes are pending, the RPC waits up to 15 seconds for them to settle,
+then returns a fresh observation. Writes still pending at that deadline remain
+reported; polling never cancels work, releases custody, or renews the lease.
+Once every blocker has finished, the same lease transitions to
+`{"status":"ready","expiresAtMs":...}`.
 Status preserves the original response shape by default for published validators.
 Opt into lifecycle metadata with `includeLifecycle: true` to receive `ownerId`,
 the original `requestId`; draining status also includes `phase: "draining"`.

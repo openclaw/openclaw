@@ -1,12 +1,18 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as backoff from "../infra/backoff.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import { resolveSqliteBrokerWorkerCount } from "../infra/worker-pool-sizing.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+} from "./openclaw-agent-db.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
@@ -170,31 +176,20 @@ const source: AgentDatabaseRequestExecutionSource = {
   },
 };
 
-async function failFirstOperation(
-  first: ReturnType<typeof captureOpenClawAgentDatabaseExecution>,
-  mode = 1,
-): Promise<unknown> {
-  Atomics.store(new Int32Array(fault.enabled), 0, mode);
-  const failure: unknown = await first
-    .runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: fault.marker } }),
-    )
-    .catch((error: unknown) => error);
-  Atomics.store(new Int32Array(fault.enabled), 0, 0);
-  return failure;
-}
-
-it.each([
-  { mode: 1, close: "failed" },
-  { mode: 2, close: "successful" },
-])("recovers after a failed operation with $close native close", async ({ mode }) => {
+it("recovers after a failed operation with successful native close", async () => {
   const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-close-wedge-")) };
   const first = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
   await first.prepare(source);
   expect(await first.runExisting(source, async () => "healthy")).toBe("healthy");
 
   // 1. The operation fails because the native store becomes unavailable mid-run.
-  const failure = await failFirstOperation(first, mode);
+  Atomics.store(new Int32Array(fault.enabled), 0, 2);
+  const failure: unknown = await first
+    .runExisting(source, (scope) =>
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: [fault.marker] } }),
+    )
+    .catch((error: unknown) => error);
+  Atomics.store(new Int32Array(fault.enabled), 0, 0);
   expect(failure).toBeInstanceOf(Error);
   console.log(`[close-wedge] operation failure: ${formatErrorMessageWithCode(failure)}`);
   await first.release().catch((error: unknown) => {
@@ -202,7 +197,7 @@ it.each([
   });
 
   // 2. The fault is gone. A fresh capture for the same agent must be admitted again;
-  //    on 2026.9.6 (and current main) it throws
+  //    on 2026.9.6 it throws
   //    "Agent database execution admission is closed" until the gateway restarts.
   const retry = await Promise.resolve()
     .then(async () => {
@@ -216,54 +211,48 @@ it.each([
     });
   expect(
     await retry.runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: "recovered" } }),
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: ["recovered"] } }),
     ),
-  ).toBeUndefined();
+  ).toMatchObject({ entries: [] });
   await retry.release();
 });
 
-it.each(["prepare", "runExisting"] as const)(
-  "%s reopens a native generation lost between operations before dispatch",
-  async (entryPoint) => {
-    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-native-preflight-")) };
-    const execution = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
-    await execution.prepare(source);
-    expect(
-      await execution.runExisting(source, (scope) =>
-        scope.execute({ type: "session.entry.read", input: { sessionKey: "healthy" } }),
-      ),
-    ).toBeUndefined();
-    const claim = execution.captureGenerationClaim();
-    expect(() => claim.assertCurrent()).not.toThrow();
+it("reopens a native generation lost between operations before dispatch", async () => {
+  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-native-preflight-")) };
+  const execution = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
+  await execution.prepare(source);
+  expect(
+    await execution.runExisting(source, (scope) =>
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: ["healthy"] } }),
+    ),
+  ).toMatchObject({ entries: [] });
+  const claim = execution.captureGenerationClaim();
+  expect(() => claim.assertCurrent()).not.toThrow();
 
-    const agentWorker = [...fault.workers].at(-1);
-    expect(agentWorker).toBeDefined();
-    await agentWorker!.terminate();
-    expect(() => claim.assertCurrent()).toThrow("Agent database execution lost its native owner");
-    if (entryPoint === "prepare") {
-      expect(execution.capturePreparedGenerationClaim()).toBeUndefined();
-      await execution.prepare(source);
-    }
-    let dispatched = 0;
-    expect(
-      await execution.runExisting(source, (scope) => {
-        dispatched += 1;
-        return scope.execute({ type: "session.entry.read", input: { sessionKey: "recovered" } });
-      }),
-    ).toBeUndefined();
-    expect(dispatched).toBe(1);
-    const replacement = execution.capturePreparedGenerationClaim();
-    expect(replacement?.identity).toBe(claim.identity);
-    expect(replacement?.incarnation).not.toBe(claim.incarnation);
-    expect(() => claim.assertCurrent()).toThrow("Agent database execution generation was replaced");
-    expect(
-      await execution.runExisting(source, (scope) =>
-        scope.execute({ type: "session.entry.read", input: { sessionKey: "still-healthy" } }),
-      ),
-    ).toBeUndefined();
-    await execution.release();
-  },
-);
+  const agentWorker = [...fault.workers].at(-1);
+  expect(agentWorker).toBeDefined();
+  await agentWorker!.terminate();
+  expect(() => claim.assertCurrent()).toThrow("Agent database execution lost its native owner");
+
+  let dispatched = 0;
+  expect(
+    await execution.runExisting(source, (scope) => {
+      dispatched += 1;
+      return scope.execute({ type: "session.entry.read", input: { sessionKeys: ["recovered"] } });
+    }),
+  ).toMatchObject({ entries: [] });
+  expect(dispatched).toBe(1);
+  const replacement = execution.capturePreparedGenerationClaim();
+  expect(replacement?.identity).toBe(claim.identity);
+  expect(replacement?.incarnation).not.toBe(claim.incarnation);
+  expect(() => claim.assertCurrent()).toThrow("Agent database execution generation was replaced");
+  expect(
+    await execution.runExisting(source, (scope) =>
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: ["still-healthy"] } }),
+    ),
+  ).toMatchObject({ entries: [] });
+  await execution.release();
+});
 
 it("surfaces the native cleanup cause while the close still fails, then recovers once it clears", async () => {
   const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-close-wedge-scope-")) };
@@ -274,7 +263,7 @@ it("surfaces the native cleanup cause while the close still fails, then recovers
   Atomics.store(new Int32Array(fault.enabled), 0, 1);
   const failure: unknown = await first
     .runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: fault.marker } }),
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: [fault.marker] } }),
     )
     .catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(Error);
@@ -316,9 +305,95 @@ it("surfaces the native cleanup cause while the close still fails, then recovers
   const recovered = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
   expect(
     await recovered.runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: "recovered" } }),
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: ["recovered"] } }),
     ),
-  ).toBeUndefined();
+  ).toMatchObject({ entries: [] });
   expect(recovered.capturePreparedGenerationClaim()).toBeDefined();
   await recovered.release();
+});
+
+it("keeps another agent's admitted database usable after a deleted agent refuses preparation", async () => {
+  const options = {
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-deletion-refusal-")) },
+  };
+  const retained = captureOpenClawAgentDatabaseExecution(options);
+  const victimOptions = { agentId: "removed", env: options.env };
+  const initial = captureOpenClawAgentDatabaseExecution(victimOptions);
+  const peers = Array.from({ length: resolveSqliteBrokerWorkerCount() - 1 }, (_, index) =>
+    captureOpenClawAgentDatabaseExecution({ agentId: `peer-${index}`, env: options.env }),
+  );
+  await retained.prepare(source);
+  for (const peer of peers) {
+    await peer.prepare(source);
+  }
+  await initial.prepare(source);
+  await initial.release();
+  await closeOpenClawAgentDatabaseByPathAsync(initial.path, victimOptions.agentId);
+  beginAgentDeletionJournal(
+    {
+      agentId: victimOptions.agentId,
+      operationId: "deletion-refusal-fixture",
+      deleteFiles: true,
+      agentDir: path.dirname(initial.path),
+      workspaceDir: path.join(options.env.OPENCLAW_STATE_DIR, "removed-workspace"),
+      sessionsDir: path.join(options.env.OPENCLAW_STATE_DIR, "removed-sessions"),
+    },
+    { env: options.env },
+  );
+  const refused = captureOpenClawAgentDatabaseExecution(victimOptions);
+  let survivors: Promise<PromiseSettledResult<unknown>[]> | undefined;
+  const refusingSource: AgentDatabaseRequestExecutionSource = {
+    ...source,
+    createAdmission(binding) {
+      return source.createAdmission({
+        ...binding,
+        authorize(request) {
+          if (
+            !survivors &&
+            request.stage === "prepare" &&
+            request.facts &&
+            typeof request.facts === "object" &&
+            "kind" in request.facts &&
+            request.facts.kind === "shared-owner"
+          ) {
+            survivors = Promise.allSettled(
+              [retained, ...peers].map((survivor) =>
+                survivor.runExisting(source, (scope) =>
+                  scope.execute({ type: "session.entry.read", input: { sessionKeys: [] } }),
+                ),
+              ),
+            );
+          }
+          binding.authorize(request);
+        },
+      });
+    },
+  };
+  try {
+    await expect(refused.prepare(refusingSource)).rejects.toThrow("agent removed is deleted");
+    expect(survivors).toBeDefined();
+    const results = await survivors;
+    for (const survivor of [retained, ...peers]) {
+      survivor.assertCurrent();
+    }
+    expect(results).toEqual(
+      [retained, ...peers].map(() => ({
+        status: "fulfilled",
+        value: expect.objectContaining({ kind: "session-exact-entries", entries: [] }),
+      })),
+    );
+    const repeated = captureOpenClawAgentDatabaseExecution(victimOptions);
+    try {
+      await expect(repeated.prepare(source)).rejects.toThrow("agent removed is deleted");
+    } finally {
+      await repeated.release();
+    }
+  } finally {
+    await Promise.allSettled([
+      retained.release(),
+      refused.release(),
+      ...peers.map((peer) => peer.release()),
+    ]);
+  }
 });

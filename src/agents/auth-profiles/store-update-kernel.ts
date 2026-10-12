@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { MessageChannel } from "node:worker_threads";
 import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
+import { isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
 import type { RuntimeExternalOAuthProfile } from "./oauth-shared.js";
 import {
   loadPersistedAuthProfileStoreAtDatabasePath,
@@ -38,12 +39,6 @@ export type AuthStoreUpdateCommitted = {
   store: AuthProfileStore;
   publication: AuthStoreUpdatePublication;
 };
-export type AuthStoreUpdateCommittedWire = {
-  store: AuthProfileStore;
-  publication: Omit<AuthStoreUpdatePublication, "oauthRefreshClaimIds"> & {
-    oauthRefreshClaimIds: Array<[string, string | null]>;
-  };
-};
 export type AuthStoreUpdateResponse =
   | { save: false }
   | {
@@ -61,6 +56,40 @@ export type AuthStoreUpdateResponse =
         pruneOrderProfileIds?: string[];
       };
     };
+
+/** A definite mismatch needs no write lock; possible matches reread inside the transaction. */
+export function authProfilePeerGenerationMayMatch(
+  database: DatabaseSync,
+  input: AuthStoreUpdateInput,
+): boolean {
+  const peer = input.peerGeneration;
+  if (!peer) {
+    return true;
+  }
+  const text = readAuthProfileJsonCellText(database, "store", "agent");
+  if (text === undefined) {
+    return false;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw new AuthProfileStoreUnreadableError(input.owner.databasePath);
+  }
+  const store = mergePersistedAuthProfileState(raw, () => null);
+  if (!store) {
+    throw new AuthProfileStoreUnreadableError(input.owner.databasePath);
+  }
+  const credential = store.profiles[peer.profileId];
+  return (
+    credential?.type === "oauth" &&
+    isSameOAuthRefreshGeneration({
+      profileId: peer.profileId,
+      left: credential,
+      right: peer.generation,
+    })
+  );
+}
 
 /** Run under the owning transaction: callbacks see its current rows exactly once. */
 export function updateAuthProfileStoreInDatabase(
@@ -154,14 +183,8 @@ export function updateAuthProfileStoreInDatabase(
     }
     sendAuthProfileUpdateValue(port1, {
       store: markRuntimePersistedProfiles(next),
-      publication: {
-        ...publication,
-        oauthRefreshClaimIds: Array.from(
-          publication.oauthRefreshClaimIds,
-          ([profileId, claimId]): [string, string | null] => [profileId, claimId ?? null],
-        ),
-      },
-    } satisfies AuthStoreUpdateCommittedWire);
+      publication,
+    } satisfies AuthStoreUpdateCommitted);
   } finally {
     port1.close();
     port2.close();

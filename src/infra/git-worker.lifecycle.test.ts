@@ -165,6 +165,52 @@ function waitForLifecyclePoint(
 }
 
 describe("Git operation host lifecycle", () => {
+  it("uses local PR statistics when Git supports disabling lazy fetches", async () => {
+    const root = tempDirs.make("openclaw-pr-facts-partial-clone-");
+    const localOnly = (await gitResult(root, ["--no-lazy-fetch", "version"])).code === 0;
+    const { clone, commit } = await partialClone(root);
+    const blob = await git(clone, "rev-parse", `${commit}:README.md`);
+    await git(clone, "read-tree", commit);
+    const feature = await git(
+      clone,
+      "commit-tree",
+      `${commit}^{tree}`,
+      "-p",
+      commit,
+      "-m",
+      "feature",
+    );
+    await git(clone, "update-ref", "refs/heads/feature", feature);
+    await git(clone, "symbolic-ref", "HEAD", "refs/heads/feature");
+    await git(clone, "update-ref", "refs/remotes/origin/feature", feature);
+    // Same-size dirty content also exercises Git's stat-unmatch refresh path.
+    await fs.writeFile(path.join(clone, "README.md"), "work\n");
+    const trace = path.join(root, "git-trace.jsonl");
+    vi.stubEnv("GIT_TRACE2_EVENT", trace);
+    const readFacts = () =>
+      runGitWorkerOperation({
+        type: "pull-request.branch-facts",
+        input: {
+          root: clone,
+          branch: "feature",
+          defaultBranch: "main",
+          mergedHeads: [],
+          refreshIndex: true,
+        },
+      });
+
+    const stats = { additions: 1, deletions: 1, changedFiles: 1 };
+    expect(await readFacts()).toEqual({ creatable: true, stats: localOnly ? null : stats });
+    expect(await traceStarts(trace, "fetch")).toHaveLength(localOnly ? 0 : 1);
+
+    await git(clone, "fetch", "--no-tags", "--no-write-fetch-head", "origin", blob);
+    expect(await readFacts()).toEqual({
+      creatable: true,
+      stats,
+    });
+    expect(await traceStarts(trace, "fetch")).toHaveLength(localOnly ? 0 : 1);
+  });
+
   it("bounds ignored dependency output during snapshot without losing private staged inputs", async () => {
     const root = tempDirs.make("openclaw-ignored-inventory-");
     const repo = await repository(root);

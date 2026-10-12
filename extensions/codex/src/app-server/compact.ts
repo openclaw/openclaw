@@ -8,6 +8,7 @@ import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-h
 import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -28,7 +29,6 @@ import {
 } from "./client.js";
 import {
   clearContextEngineProjectionBeforeNativeCompaction,
-  resolveCodexCompactionExecutionBlock,
   settleCodexCompactionSubscription,
   warnIfIgnoringOpenClawCompactionOverrides,
   isCodexThreadNotFoundError,
@@ -47,6 +47,7 @@ import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js"
 import type { JsonObject } from "./protocol.js";
 import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
 import { CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
+import { prepareCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import {
   CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
   sessionBindingIdentity,
@@ -81,7 +82,7 @@ type CodexAppServerCompactOptions = {
  * reports why Codex-owned automatic compaction should handle the trigger.
  */
 export async function maybeCompactCodexAppServerSession(
-  params: AgentHarnessCompactParams<2>,
+  params: AgentHarnessCompactParams<2> & { sandbox?: SandboxContext | null },
   options: CodexAppServerCompactOptions,
 ): Promise<EmbeddedAgentCompactResult | undefined> {
   params.hostCapabilities.assertActive();
@@ -105,9 +106,18 @@ export async function maybeCompactCodexAppServerSession(
       },
     });
   }
-  const nativeExecutionBlock = resolveCodexCompactionExecutionBlock(params);
-  if (nativeExecutionBlock) {
-    return { ok: false, compacted: false, reason: nativeExecutionBlock };
+  const nativeExecutionGuard = await prepareCodexNativeExecutionBlock({
+    config: params.config,
+    sessionKey: params.sandboxSessionKey ?? params.sessionKey,
+    sessionId: params.sessionId,
+    agentId: params.sandboxAgentId ?? params.agentId,
+    storePath: params.sessionTarget?.storePath,
+    sessionTarget: params.sessionTarget,
+    sandbox: params.sandbox,
+    surface: "native compaction",
+  });
+  if (nativeExecutionGuard.block) {
+    return { ok: false, compacted: false, reason: nativeExecutionGuard.block };
   }
   const bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,
@@ -118,7 +128,7 @@ export async function maybeCompactCodexAppServerSession(
   const abortedResult = (
     attempt: AgentHarnessCompactParams<2>,
     expectedThreadId?: string,
-    currentThreadId = expectedThreadId,
+    currentThreadId?: string,
   ) =>
     options.allowNonManualNativeRequest
       ? skippedCodexNativeCompactionResult(attempt, {
@@ -145,10 +155,14 @@ export async function maybeCompactCodexAppServerSession(
     if (!params.abortSignal?.aborted) {
       throw error;
     }
-    return abortedResult(params, options.bindingStore.read(bindingIdentity)?.threadId);
+    const threadId = (await options.bindingStore.readAsync(bindingIdentity))?.threadId;
+    return abortedResult(params, threadId, threadId);
   }
   const { binding: initialBinding, authority } = resolvedBinding;
-  const assertCurrent = authority.assertCurrent;
+  const assertCurrent = () => {
+    authority.assertCurrent();
+    nativeExecutionGuard.assertCurrent();
+  };
   // Native admission uses caller authority; terminal settlement keeps captured
   // lineage after cancellation without reusing the caller's aborted signal.
   const settlementAuthority = createNativeSessionBindingAuthority(authority.lineage, () => {});
@@ -381,7 +395,7 @@ export async function maybeCompactCodexAppServerSession(
               if (bindingCleared) {
                 return;
               }
-              const currentBinding = options.bindingStore.read(bindingIdentity);
+              const currentBinding = await options.bindingStore.readAsync(bindingIdentity);
               if (
                 currentBinding?.threadId !== binding.threadId ||
                 currentBinding.clientId !== binding.clientId
@@ -441,13 +455,7 @@ export async function maybeCompactCodexAppServerSession(
                   }
                   return {
                     started: false as const,
-                    result: skippedCodexNativeCompactionResult(attempt, {
-                      reason: "codex app-server compaction aborted before native compaction",
-                      code: "aborted_before_native_compaction",
-                      request: options.nativeCompactionRequest ?? "after_context_engine",
-                      expectedThreadId: binding.threadId,
-                      currentThreadId: currentBinding?.threadId,
-                    }),
+                    result: abortedResult(attempt, binding.threadId, currentBinding?.threadId),
                   };
                 }
                 assertCurrent();

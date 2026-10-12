@@ -40,8 +40,6 @@ const MAX_SUPERSEDED_RUNS = 256;
 const MAX_DORMANT_RUNS = 256;
 const MAX_DISABLED_RUNS = 512;
 
-export const SESSION_OBSERVER_MODEL_MAX_TOKENS = 300;
-
 export type SessionObserverRead = {
   assertCurrent: () => void;
   withRead: <T>(consume: (session: SessionEntry | undefined) => T) => Promise<T>;
@@ -374,6 +372,7 @@ export async function defaultPersistDigest(params: {
           sessionKey: params.sessionKey,
           agentId: params.agentId,
           storePath: params.storePath,
+          scope: "runtime",
           facts: { kind: "unchanged" },
         }),
     },

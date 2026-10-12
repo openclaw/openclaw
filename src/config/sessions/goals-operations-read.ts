@@ -2,8 +2,8 @@ import path from "node:path";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { assertSessionGoalOperationTime } from "./goals-operation-policy.js";
 import {
-  assertSessionGoalOperationTime,
   readSessionGoalOperationInDatabase,
   SessionGoalOperationError,
 } from "./goals-operations.js";
@@ -17,6 +17,11 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import {
+  captureIncognitoSessionOperation,
+  captureIncognitoSessionSource,
+} from "./session-incognito-binding.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
@@ -24,6 +29,20 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 export async function lookupSessionGoalOperation(
   options: SessionAccessScope & SessionGoalOperationLookup,
 ): Promise<SessionGoalOperationResult | undefined> {
+  const memory = getSessionActorStorageBinding(options);
+  if (memory) {
+    return memory.actor.storage!.read(
+      {
+        type: "session.goal.receipt",
+        input: {
+          sessionKey: memory.actor.target.sessionKey,
+          expectedSessionId: options.expectedSessionId,
+          operation: options.operation,
+        },
+      },
+      memory.authority,
+    );
+  }
   const captured = {
     ...options,
     ...(options.storePath ? { storePath: path.resolve(options.storePath) } : {}),
@@ -31,6 +50,33 @@ export async function lookupSessionGoalOperation(
     env: captureSessionTranscriptStorageEnvironment(options.env ?? process.env),
   };
   assertSessionGoalOperationTime(captured.operation, Date.now());
+  const source = captureIncognitoSessionSource(options);
+  if (source && "kind" in source) {
+    source.assertCurrent();
+    return undefined;
+  }
+  const incognito = captureIncognitoSessionOperation(options);
+  if (incognito) {
+    const target = resolveSqliteScope({
+      ...options,
+      agentId: incognito.actor.agentId,
+      storePath: incognito.actor.path,
+    });
+    return incognito.actor.sessions.transcript(
+      incognito.authority,
+      {
+        type: "session.goalReceipt.read",
+        input: {
+          sessionKey: target.sessionKey,
+          sessionId: captured.expectedSessionId,
+          expectedSessionId: captured.expectedSessionId,
+          operation: captured.operation,
+          fence: {},
+        },
+      },
+      incognito.admissionSignal,
+    );
+  }
   if (isIncognitoSessionKey(captured.sessionKey)) {
     // Process-held incognito databases cannot be reopened in a worker.
     const target = resolveSqliteScope(captured);

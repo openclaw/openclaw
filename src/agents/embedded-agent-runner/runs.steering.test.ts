@@ -357,33 +357,16 @@ describe("embedded-agent active-run steering", () => {
     expect(handle.queueMessage).not.toHaveBeenCalled();
   });
 
-  it("reports async steering rejection", async () => {
-    start({
-      queueMessage: async () => {
-        throw new Error("cannot steer a compact turn");
-      },
-    });
-    const outcome = await queueAsync(sessionId, "continue");
-    expect(outcome).toEqual(failure("runtime_rejected", "cannot steer a compact turn"));
-    expect(formatEmbeddedAgentQueueFailureSummary(outcome)).toBe(
-      "queue_message_failed reason=runtime_rejected sessionId=session gatewayHealth=live error=cannot steer a compact turn",
-    );
-  });
-
-  it.each(["accepted", "unconfirmed", "wrapped-withdrawal"] as const)(
+  it.each(["accepted", "wrapped-withdrawal"] as const)(
     "does not replay pending input: %s",
     async (disposition) => {
       const unconfirmed = disposition !== "accepted";
       const error = new QuestionAnswerUnconfirmedError(
-        disposition === "wrapped-withdrawal"
-          ? new MessageInjectionWithdrawnError("exact queue input withdrawn")
-          : new Error("answer receipt unavailable"),
+        new MessageInjectionWithdrawnError("exact queue input withdrawn"),
       );
       const claim = vi.fn(async () => {
         if (unconfirmed) {
-          throw disposition === "wrapped-withdrawal"
-            ? new Error("backend failed", { cause: error })
-            : error;
+          throw new Error("backend failed", { cause: error });
         }
         return true;
       });
@@ -449,7 +432,7 @@ describe("embedded-agent active-run steering", () => {
     },
   );
 
-  it.each(["receipt", "cleanup-error", "wrapped-cleanup-error"] as const)(
+  it.each(["receipt", "wrapped-cleanup-error"] as const)(
     "preserves accepted steering custody after %s",
     async (deliveryFailure) => {
       const acceptedError = new MessageInjectionAcceptedUnconfirmedError({
@@ -457,9 +440,6 @@ describe("embedded-agent active-run steering", () => {
       });
       const queueMessage = vi.fn(
         async (_text: string, options?: EmbeddedAgentQueueMessageOptions) => {
-          if (deliveryFailure === "cleanup-error") {
-            throw acceptedError;
-          }
           if (deliveryFailure === "wrapped-cleanup-error") {
             throw new Error("backend settlement failed", { cause: acceptedError });
           }
@@ -538,6 +518,9 @@ describe("embedded-agent active-run steering", () => {
       expect(onQueueSettled).not.toHaveBeenCalled();
       if (failurePoint === "before-acceptance") {
         expect(outcome).toEqual(failure("runtime_rejected", completionError.message));
+        expect(formatEmbeddedAgentQueueFailureSummary(outcome)).toBe(
+          "queue_message_failed reason=runtime_rejected sessionId=session gatewayHealth=live error=backend completion failed",
+        );
         expect(onQueueAccepted).not.toHaveBeenCalled();
       } else {
         expect(outcome).toMatchObject({

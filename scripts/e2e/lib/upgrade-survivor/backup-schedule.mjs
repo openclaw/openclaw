@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { readJson } from "../fixtures/common.mjs";
+import { readDatabase } from "./observations.mjs";
 
 const root = process.env.OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT;
 const artifacts = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
@@ -13,10 +14,6 @@ const repository = path.join(root, "git-backups");
 const archive = path.join(root, "archive-backup.tar.gz");
 const beforePath = path.join(artifacts, "backup-schedule-before.json");
 const declarationKey = "openclaw-backup-scheduled";
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
 
 function writeJson(file, value) {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
@@ -66,17 +63,14 @@ function schedule(label) {
 }
 
 function ledgerRows() {
-  const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), { readOnly: true });
-  try {
-    return db
+  return readDatabase(path.join(stateDir, "state", "openclaw.sqlite"), (db) =>
+    db
       .prepare(
         "SELECT id, created_at, archive_path, status, manifest_json FROM backup_runs ORDER BY created_at, id",
       )
       .all()
-      .map((row) => Object.assign({}, row));
-  } finally {
-    db.close();
-  }
+      .map((row) => Object.assign({}, row)),
+  );
 }
 
 function doctorErrors(label) {

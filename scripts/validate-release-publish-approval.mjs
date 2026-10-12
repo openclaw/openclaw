@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Validates that a referenced release-publish workflow run is usable for approval.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { verifyAndroidNativeCi } from "./android-native-ci.mjs";

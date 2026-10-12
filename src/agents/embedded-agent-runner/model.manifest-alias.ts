@@ -40,35 +40,6 @@ function resolveConfiguredModelCatalogProviderRoute(params: {
   };
 }
 
-function hasUnconditionalManifestModelCatalogSuppression(params: {
-  provider: string;
-  modelId?: string;
-  plugin: Pick<PluginManifestRecord, "id" | "providers" | "modelCatalog">;
-}): boolean {
-  const provider = normalizeProviderId(params.provider);
-  const modelId = params.modelId?.trim();
-  if (!provider || !modelId) {
-    return false;
-  }
-  return planManifestModelCatalogSuppressions({
-    registry: { plugins: [params.plugin] },
-    providerFilter: provider,
-    modelFilter: modelId,
-  }).suppressions.some(
-    (suppression) => !suppression.when && normalizeProviderId(suppression.provider) === provider,
-  );
-}
-
-type ManifestModelCatalogAliasPlugin = Pick<
-  PluginManifestRecord,
-  | "id"
-  | "origin"
-  | "enabledByDefault"
-  | "enabledByDefaultOnPlatforms"
-  | "providers"
-  | "modelCatalog"
->;
-
 type ManifestModelCatalogProviderTransport = Readonly<Pick<ModelCatalogAlias, "api" | "baseUrl">>;
 
 export type ManifestModelCatalogProviderAliasMetadata = {
@@ -78,7 +49,7 @@ export type ManifestModelCatalogProviderAliasMetadata = {
 };
 
 function resolveManifestAliasTargetApi(params: {
-  plugin: ManifestModelCatalogAliasPlugin;
+  plugin: Pick<PluginManifestRecord, "modelCatalog">;
   provider: string;
   modelId?: string;
 }): ModelCatalogAlias["api"] {
@@ -102,19 +73,39 @@ function resolveManifestAliasTargetApi(params: {
   return model?.api ?? providerCatalog.api;
 }
 
-function resolveManifestModelCatalogProviderAlias(params: {
+export function resolveManifestModelCatalogProviderAliasMetadata(params: {
   provider: string;
   modelId?: string;
   cfg?: OpenClawConfig;
-  plugins: readonly ManifestModelCatalogAliasPlugin[];
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): ManifestModelCatalogProviderAliasMetadata {
   const provider = normalizeProviderId(params.provider);
   if (!provider) {
     return { provider: params.provider };
   }
+  const env = params.env ?? process.env;
+  // Gateway plugin metadata is process-stable. Reuse its lifecycle-owned snapshot
+  // so every model turn does not rediscover the same manifest alias table.
+  const currentPlugins =
+    env === process.env
+      ? getCurrentPluginMetadataSnapshot({
+          config: params.cfg,
+          workspaceDir: params.workspaceDir,
+          env,
+          ...(params.cfg === undefined ? { requireDefaultDiscoveryContext: true } : {}),
+        })?.plugins
+      : undefined;
+  const plugins =
+    currentPlugins ??
+    loadPluginManifestRegistryCore({
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env,
+    }).plugins;
   const claims: ManifestModelCatalogProviderAliasMetadata[] = [];
   const normalizedConfig = normalizePluginsConfig(params.cfg?.plugins);
-  for (const plugin of params.plugins) {
+  for (const plugin of plugins) {
     if (
       !isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: params.cfg }) ||
       !(
@@ -135,14 +126,17 @@ function resolveManifestModelCatalogProviderAlias(params: {
       ) {
         continue;
       }
-      const hasModelId = Boolean(params.modelId?.trim());
+      const modelId = params.modelId?.trim();
       const hasApplicableSuppression =
-        hasModelId &&
-        hasUnconditionalManifestModelCatalogSuppression({
-          provider,
-          modelId: params.modelId,
-          plugin,
-        });
+        modelId &&
+        planManifestModelCatalogSuppressions({
+          registry: { plugins: [plugin] },
+          providerFilter: provider,
+          modelFilter: modelId,
+        }).suppressions.some(
+          (suppression) =>
+            !suppression.when && normalizeProviderId(suppression.provider) === provider,
+        );
       const configuredRoute = resolveConfiguredModelCatalogProviderRoute({
         provider,
         modelId: params.modelId,
@@ -178,40 +172,4 @@ function resolveManifestModelCatalogProviderAlias(params: {
   return claims.length > 1
     ? { provider: params.provider, ambiguous: true }
     : (claims[0] ?? { provider: params.provider });
-}
-
-export function resolveManifestModelCatalogProviderAliasMetadata(params: {
-  provider: string;
-  modelId?: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): ManifestModelCatalogProviderAliasMetadata {
-  const provider = normalizeProviderId(params.provider);
-  if (!provider) {
-    return { provider: params.provider };
-  }
-  const env = params.env ?? process.env;
-  // Gateway plugin metadata is process-stable. Reuse its lifecycle-owned snapshot
-  // so every model turn does not rediscover the same manifest alias table.
-  const currentPlugins =
-    env === process.env
-      ? getCurrentPluginMetadataSnapshot({
-          config: params.cfg,
-          workspaceDir: params.workspaceDir,
-          env,
-          ...(params.cfg === undefined ? { requireDefaultDiscoveryContext: true } : {}),
-        })?.plugins
-      : undefined;
-  const plugins =
-    currentPlugins ??
-    loadPluginManifestRegistryCore({
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      env,
-    }).plugins;
-  return resolveManifestModelCatalogProviderAlias({
-    ...params,
-    plugins,
-  });
 }

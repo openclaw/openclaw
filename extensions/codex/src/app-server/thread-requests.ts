@@ -25,7 +25,6 @@ import {
   type CodexDynamicToolSpec,
   type CodexThreadResumeParams,
   type CodexThreadStartParams,
-  type CodexTurnEnvironmentParams,
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
@@ -183,15 +182,15 @@ export function buildCodexThreadConfiguration(
   };
 }
 
-export function buildThreadStartParams(
+export async function buildThreadStartParams(
   params: AgentHarnessSessionRuntimeParamsV1,
   options: CodexThreadConfigurationOptions & { cwd: string; dynamicTools: CodexDynamicToolSpec[] },
-): CodexThreadStartParams {
-  const resolvedModelProvider = resolveCodexAppServerModelProvider({
+): Promise<CodexThreadStartParams> {
+  const resolvedModelProvider = await resolveCodexAppServerModelProvider({
     ...params,
     homeScope: options.appServer.start.homeScope,
   });
-  const modelSelection = resolveCodexAppServerRequestModelSelection({
+  const modelSelection = await resolveCodexAppServerRequestModelSelection({
     ...params,
     homeScope: options.appServer.start.homeScope,
     model: options.model ?? params.modelId,
@@ -207,9 +206,11 @@ export function buildThreadStartParams(
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
     threadSource: "openclaw",
-    ...resolveCodexThreadEnvironmentSelection(
-      params.requireWorkspaceOnly === true ? { nativeCodeModeEnabled: false } : options,
-    ),
+    ...(params.requireWorkspaceOnly === true || options.nativeCodeModeEnabled === false
+      ? { environments: [] }
+      : options.environmentSelection
+        ? { environments: options.environmentSelection }
+        : {}),
     // Codex 0.146 accepts canonical typed function and namespace specs natively.
     dynamicTools: [...options.dynamicTools],
     experimentalRawEvents: true,
@@ -220,27 +221,27 @@ export function buildThreadStartParams(
   };
 }
 
-export function buildThreadResumeParams(
+export async function buildThreadResumeParams(
   params: AgentHarnessSessionRuntimeParamsV1,
   options: CodexThreadConfigurationOptions & {
     threadId: string;
     authProfileId?: string;
     preserveNativeModel?: boolean;
   },
-): CodexThreadResumeParams & { developerInstructions: string } {
+): Promise<CodexThreadResumeParams & { developerInstructions: string }> {
   const modelSelection = options.preserveNativeModel
     ? undefined
-    : resolveCodexAppServerRequestModelSelection({
+    : await resolveCodexAppServerRequestModelSelection({
         ...params,
         homeScope: options.appServer.start.homeScope,
         model: options.model ?? params.modelId,
         modelProvider:
           options.modelProvider ??
-          resolveCodexAppServerModelProvider({
+          (await resolveCodexAppServerModelProvider({
             ...params,
             homeScope: options.appServer.start.homeScope,
             authProfileId: options.authProfileId ?? params.authProfileId,
-          }),
+          })),
         authProfileId: options.authProfileId ?? params.authProfileId,
       });
   return {
@@ -365,6 +366,7 @@ export function buildCodexRuntimeThreadConfigForRun(
     restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
     shellEnvironment?: Readonly<Record<string, string>>;
     shellPathPrepend?: readonly string[];
+    shellGitConfigParameters?: string;
     disableLoginShell?: boolean;
   } = {},
 ): JsonObject {
@@ -455,6 +457,7 @@ export function buildCodexRuntimeThreadConfigForRun(
     options.shellEnvironment,
     options.disableLoginShell,
     options.shellPathPrepend,
+    options.shellGitConfigParameters,
   );
 }
 
@@ -687,17 +690,4 @@ export function codexThreadSandboxOrPermissions(
     return {};
   }
   return { sandbox: appServer.sandbox };
-}
-
-function resolveCodexThreadEnvironmentSelection(options: {
-  nativeCodeModeEnabled?: boolean;
-  environmentSelection?: CodexTurnEnvironmentParams[];
-}): Pick<CodexThreadStartParams, "environments"> {
-  if (options.nativeCodeModeEnabled === false) {
-    return { environments: [] };
-  }
-  if (options.environmentSelection) {
-    return { environments: options.environmentSelection };
-  }
-  return {};
 }

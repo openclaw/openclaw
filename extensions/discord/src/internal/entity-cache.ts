@@ -1,8 +1,4 @@
 import { GatewayDispatchEvents } from "discord-api-types/v10";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { getGuild, getGuildMember } from "./api.guild.js";
 import { getChannel } from "./api.messages.js";
 import { getUser } from "./api.users.js";
@@ -91,38 +87,27 @@ export class DiscordEntityCache {
         this.entries.delete(`user:${user.id}`);
       }
     } else {
-      this.deleteId(kind, kind === "guild-emojis" ? raw.guild_id : raw.id);
-    }
-  }
-
-  private deleteId(prefix: string, id: unknown): void {
-    if (typeof id === "string") {
-      this.entries.delete(`${prefix}:${id}`);
+      const id = kind === "guild-emojis" ? raw.guild_id : raw.id;
+      if (typeof id === "string") {
+        this.entries.delete(`${kind}:${id}`);
+      }
     }
   }
 
   private async fetchCached<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
-    const rawNow = Date.now();
-    const now = asDateTimestampMs(rawNow);
+    const now = Date.now();
     const cached = this.entries.get(key) as CacheEntry<T> | undefined;
-    if (cached && now !== undefined && cached.expiresAt > now) {
+    if (cached && cached.expiresAt > now) {
       return cached.value;
     }
     if (cached) {
       this.entries.delete(key);
     }
     const value = await fetcher();
-    const expiresAt = resolveExpiresAtMsFromDurationMs(DEFAULT_REST_CACHE_TTL_MS, {
-      nowMs: rawNow,
-    });
-    if (expiresAt !== undefined) {
-      if (now !== undefined) {
-        this.maybeSweepExpired(now);
-      }
-      this.entries.set(key, { expiresAt, value });
-      if (this.entries.size > DEFAULT_MAX_ENTRIES) {
-        this.entries.delete(this.entries.keys().next().value!);
-      }
+    this.maybeSweepExpired(now);
+    this.entries.set(key, { expiresAt: now + DEFAULT_REST_CACHE_TTL_MS, value });
+    if (this.entries.size > DEFAULT_MAX_ENTRIES) {
+      this.entries.delete(this.entries.keys().next().value!);
     }
     return value;
   }

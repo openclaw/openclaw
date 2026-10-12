@@ -128,11 +128,20 @@ describe.skipIf(process.platform === "win32")("gateway hard-kill recovery", () =
       // Kill the owned process group so no gateway or descendant can drain.
       expect(signalQaPosixProcessGroup(pid!, "SIGKILL")).toBeUndefined();
       await waitForQaTransportCondition(
-        () => (!isQaPosixProcessGroupAlive(pid!) ? true : undefined),
+        () =>
+          !isQaPosixProcessGroupAlive(pid!) &&
+          gateway
+            .logs()
+            .includes("gateway child exited unexpectedly (exitCode=null, signal=SIGKILL)")
+            ? true
+            : undefined,
         30_000,
         25,
       );
       await gateway.restartAfterStateMutation(async () => {
+        expect(gateway.logs()).toContain(
+          "gateway child exited unexpectedly (exitCode=null, signal=SIGKILL)",
+        );
         const orphan = (await readRawQaSessionStore({ gateway }))[sessionKey];
         expect(orphan).toMatchObject({
           sessionId: pending.entry.sessionId,

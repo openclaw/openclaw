@@ -2,7 +2,6 @@ import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core
 import { resolveCommandConversationResolution } from "../../channels/conversation-resolution.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import type { MsgContext } from "../templating.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -44,12 +43,6 @@ export function resolveConversationBindingAccountIdFromMessage(params: {
     normalizeStringifiedOptionalString(plugin?.config.defaultAccountId?.(params.cfg)) ??
     "default"
   );
-}
-
-export function resolveConversationBindingThreadIdFromMessage(
-  ctx: Pick<BindingMsgContext, "MessageThreadId">,
-): string | undefined {
-  return stringifyRouteThreadId(ctx.MessageThreadId);
 }
 
 export function resolveConversationBindingContextFromMessage(params: {

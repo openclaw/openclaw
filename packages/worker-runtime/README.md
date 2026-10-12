@@ -118,6 +118,15 @@ unadmitted data. Losing the task channel is a transport
 failure, never an execution or cleanup receipt. Ordinary SDK workers keep their
 parent-port transport.
 
+Workers whose task failure leaves native state uncertain opt into
+`retireOnError`. The server revokes task admission without publishing a reusable
+failed-task response, rejects queued resource-close receipts, and joins those
+receipts outside the execution promise they depend on. It then joins the host
+`onRetire` hook, records a failing exit status, and closes both the task port and
+parent port (once when they are the same port). The host hook releases
+application-owned diagnostics; native exit remains the execution receipt.
+Ordinary task failures keep their existing reusable response.
+
 Private served transports declare `requiresReady` on the host and acknowledge
 readiness only after the task server installs its message listener. A native
 failure before that acknowledgment stops further worker construction for the
@@ -149,6 +158,17 @@ requests a cooperative checkpoint. The host operation retains its own lifetime;
 queue pressure does not grant permission to cancel its underlying work. A
 checkpoint releases the task's execution slot through the ordinary settlement
 path, and continuation work rejoins admission.
+
+The caller's execution deadline also bounds host exchanges. Responses may
+shorten that deadline, never renew it. Code Mode explicitly uses
+`hostTimeout: "owner"` because its host budget already accounts for approval
+pauses; its response rearms the pool clock with the remaining execution budget.
+Timeout aborts the host signal without claiming that accepted host effects have
+settled. Those effects remain under their existing owner's cleanup contract.
+The abort reason preserves the task failure. A pending host callback timeout
+also emits `WORKER_HOST_CALLBACK_TIMEOUT` with a bounded operation label; callback
+payloads are never included. Host adapters must carry that signal into their
+queue and I/O owners so cancellation removes waiting work before admission.
 
 ### Async context lifetime
 

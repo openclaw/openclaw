@@ -39,8 +39,7 @@ export function trackBlockMedia(
   acceptedMediaUrls: readonly string[],
 ): void {
   for (const { url, sourceUrls } of collectReplyMediaEntries(payload, acceptedMediaUrls)) {
-    sentBlockMediaUrls.add(url);
-    for (const source of sourceUrls ?? []) {
+    for (const source of [url, ...(sourceUrls ?? [])]) {
       sentBlockMediaUrls.add(source);
     }
   }

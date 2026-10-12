@@ -35,6 +35,16 @@ scenario:
         qaImpact: P1
         action: execute native file-write behavior separately from OpenClaw dynamic tool parity
         reason: Codex has no dedicated write tool; its native command contract owns file writes without requiring OpenClaw dynamic write exposure.
+      happyPrompt: >-
+        tool search qa check target=write. Use the write tool exactly once with
+        path="runtime-tool-fixture-write.txt" and content="runtime tool fixture\n".
+        If discovery is needed, discover write and then call it; discovery
+        alone does not complete this task. Summarize the actual tool result.
+      failurePrompt: >-
+        tool search qa failure target=write. Use the write tool exactly once
+        with path="runtime-tool-fixture-edit.txt/child.txt" and content="blocked".
+        The parent path is an existing regular file. Report the resulting
+        error; do not remove the parent, use another tool, or retry.
       promptSnippet: "target=write"
       failurePromptSnippet: "failure target=write"
 

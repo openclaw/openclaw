@@ -65,40 +65,6 @@ describe("MascotAnimator", () => {
     }
   });
 
-  it("produces identical pose streams from the same seed", () => {
-    const first = new MascotAnimator(0x5eed);
-    const second = new MascotAnimator(0x5eed);
-    first.setMood("thinking", 0);
-    second.setMood("thinking", 0);
-
-    for (let frame = 0; frame <= 20 * 30; frame += 1) {
-      const time = frame / 30;
-      expect(first.poseAt(time)).toEqual(second.poseAt(time));
-    }
-  });
-
-  it("runs the working hard-hat, hammer, impact, and brow-wipe cycle", () => {
-    const animator = new MascotAnimator(42);
-    animator.setMood("working", 0);
-    const rightClawAngles: number[] = [];
-    const effects = new Set<string>();
-    let seatedHat = 0;
-
-    for (let frame = 0; frame <= 30 * 30; frame += 1) {
-      const pose = animator.poseAt(frame / 30);
-      rightClawAngles.push(pose.rightClawDegrees);
-      effects.add(pose.effect);
-      if (frame >= 33) {
-        seatedHat = Math.max(seatedHat, pose.hardHat);
-      }
-    }
-
-    expect(seatedHat).toBe(1);
-    expect(Math.max(...rightClawAngles) - Math.min(...rightClawAngles)).toBeGreaterThan(25);
-    expect(effects).toContain("sparks");
-    expect(effects).toContain("sweat");
-  });
-
   it("cancels stale gestures when the mood changes", () => {
     // Begin as idle (queues the hello wave at +0.9s), then switch mood before
     // it fires — mirrors the element lifecycle where firstUpdated precedes the
@@ -113,16 +79,6 @@ describe("MascotAnimator", () => {
       // (claw ~0°) or a scheduled claw snap (-8°) can produce.
       expect(pose.rightClawDegrees).toBeGreaterThan(-15);
     }
-  });
-
-  it("keeps sleepy z's visible through its yawn entrance", () => {
-    const animator = new MascotAnimator(7);
-    animator.setMood("sleepy", 0);
-    const pose = animator.poseAt(0.8);
-
-    expect(pose.effect).toBe("zzz");
-    expect(pose.mouthRound).toBeGreaterThan(0.8);
-    expect(pose.leftEyeOpenness).toBeLessThan(0.1);
   });
 
   it("overlays and clears the composer tease expression", () => {

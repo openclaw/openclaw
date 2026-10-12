@@ -340,11 +340,17 @@ describe("CronService one-shot lifecycle", () => {
         expect(stored?.state.consecutiveErrors).toBe(1);
         if (executionStarted) {
           expect(stored?.state.nextRunAtMs).toBeUndefined();
+          expect(deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+            expect.stringContaining('Automation "one-shot" failed 1 times'),
+            expect.objectContaining({ contextKey: `cron:${job.id}:failure-alert` }),
+          );
+          expect(deps.requestHeartbeat).toHaveBeenCalledOnce();
         } else {
           expect(stored?.state.nextRunAtMs).toBeTypeOf("number");
+          expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+          expect(deps.requestHeartbeat).not.toHaveBeenCalled();
         }
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+        expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
       } finally {
         await cleanup();
       }
@@ -356,9 +362,9 @@ describe("CronService one-shot lifecycle", () => {
     try {
       await expect(
         cron.add(mainJob({ payload: { kind: "agentTurn", message: "nope" } })),
-      ).rejects.toThrow(/main cron jobs require/);
+      ).rejects.toThrow(/sessionTarget "main" requires/);
       await expect(cron.add(mainJob({ sessionTarget: "isolated" }))).rejects.toThrow(
-        /isolated.*cron jobs require/,
+        /sessionTarget "isolated" requires/,
       );
     } finally {
       await cleanup();

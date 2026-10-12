@@ -4,8 +4,10 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -131,7 +133,8 @@ describe("managed handoff database publication", () => {
 
   it("publishes a complete private single-link database", () => {
     const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-    const umask = process.umask(0o777);
+    // Windows privacy comes from the DACL; masking owner-write makes the stage read-only.
+    const umask = process.umask(process.platform === "win32" ? 0o077 : 0o777);
     try {
       withDatabase(true, (db) => insertRow(db, root, "first"));
     } finally {
@@ -207,8 +210,16 @@ describe("managed handoff database publication", () => {
   });
 
   it("retains an exclusively created inode after a durability failure for ordinary recovery", () => {
-    vi.spyOn(fs, "fsyncSync").mockImplementationOnce(() => {
-      throw new Error("fixture sync failed");
+    const sync = fs.fsyncSync;
+    vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+      if (
+        fs.existsSync(databasePath) &&
+        fs.fstatSync(descriptor, { bigint: true }).ino ===
+          fs.statSync(databasePath, { bigint: true }).ino
+      ) {
+        throw new Error("fixture sync failed");
+      }
+      sync(descriptor);
     });
     const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
     expect(() => withDatabase(true, () => undefined)).toThrow("fixture sync failed");
@@ -228,7 +239,16 @@ describe("managed handoff database publication", () => {
       const retained = dirs.make("retained-initialization-");
       const originalParent = fs.statSync(root);
       let originalFile: fs.Stats | undefined;
-      vi.spyOn(fs, "fsyncSync").mockImplementationOnce((descriptor) => {
+      vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+        if (
+          originalFile ||
+          !fs.existsSync(databasePath) ||
+          fs.fstatSync(descriptor, { bigint: true }).ino !==
+            fs.statSync(databasePath, { bigint: true }).ino
+        ) {
+          sync(descriptor);
+          return;
+        }
         originalFile = fs.fstatSync(descriptor);
         if (target === "file") {
           fs.renameSync(databasePath, path.join(retained, "original.sqlite"));
@@ -348,6 +368,90 @@ describe("managed handoff database publication", () => {
     }
   });
 
+  it.skipIf(process.platform !== "win32")(
+    "waits for private publication before admitting a competing first writer",
+    async ({ signal }) => {
+      const gate = new Int32Array(new SharedArrayBuffer(4));
+      const source = `
+        const fs = require("node:fs");
+        const { parentPort, workerData } = require("node:worker_threads");
+        (async () => {
+          const { register } = await import(workerData.loader);
+          register({ tsconfig: workerData.tsconfig });
+          const { createManagedHandoffLeaseDatabase } = await import(workerData.module);
+          const target = workerData.databasePath;
+          if (workerData.first) {
+            const link = fs.linkSync;
+            fs.linkSync = (from, to) => {
+              link(from, to);
+              if (to === target) {
+                parentPort.postMessage("published");
+                Atomics.wait(new Int32Array(workerData.gate), 0, 0);
+              }
+            };
+          } else {
+            const open = fs.openSync;
+            fs.openSync = (file, ...args) => {
+              try {
+                return open(file, ...args);
+              } catch (error) {
+                if (file === target + ".lock" && error.code === "EEXIST") {
+                  parentPort.postMessage("contended");
+                }
+                throw error;
+              }
+            };
+          }
+          const owner = workerData.first ? "first" : "second";
+          createManagedHandoffLeaseDatabase(target)(true, db => db.prepare(
+            "INSERT INTO managed_update_handoffs " +
+            "(install_root, owner, payload_json, updated_at) VALUES (?, ?, '{}', 1)"
+          ).run(owner, owner));
+          parentPort.close();
+        })().catch(error => { throw error; });
+      `;
+      const launch = (first: boolean) => {
+        const worker = new Worker(source, {
+          eval: true,
+          execArgv: [],
+          workerData: {
+            first,
+            gate: gate.buffer,
+            databasePath,
+            module: databaseModule,
+            loader: import.meta.resolve("tsx/esm/api"),
+            tsconfig: path.resolve("tsconfig.json"),
+          },
+        });
+        const exited = once(worker, "exit");
+        void exited.catch(() => undefined);
+        const ready = withinTest(
+          awaitGateBeforeSettlement(once(worker, "message"), exited, "Publication worker exited"),
+          signal,
+        );
+        return { worker, exited, ready };
+      };
+      const first = launch(true);
+      let second: ReturnType<typeof launch> | undefined;
+      try {
+        expect(await first.ready).toEqual(["published"]);
+        expect(fs.statSync(databasePath).nlink).toBe(2);
+        second = launch(false);
+        expect(await second.ready).toEqual(["contended"]);
+        Atomics.store(gate, 0, 1);
+        Atomics.notify(gate, 0);
+        expect(await first.exited).toEqual([0]);
+        expect(await second.exited).toEqual([0]);
+        expect(readOwners()).toEqual(["first", "second"]);
+        expect(fs.statSync(databasePath).nlink).toBe(1);
+      } finally {
+        Atomics.store(gate, 0, 1);
+        Atomics.notify(gate, 0);
+        await Promise.all([first.worker.terminate(), second?.worker.terminate()]);
+      }
+    },
+  );
+
   it("ordinary readers observe no lease while a real peer initializes the schema", async () => {
     const script = `
       const { createManagedHandoffLeaseDatabase } = await import(${JSON.stringify(databaseModule)});
@@ -363,7 +467,6 @@ describe("managed handoff database publication", () => {
           if (process.platform !== "win32") {
             expect(stat.mode & 0o777).toBe(0o600);
           }
-          expect(stat.nlink).toBe(1);
         }
         await new Promise((resolve) => {
           setTimeout(resolve, 1);
@@ -371,6 +474,7 @@ describe("managed handoff database publication", () => {
       } while (writer.child.exitCode === null && writer.child.signalCode === null);
       expect(await writer.closed).toEqual([0, null]);
       expect(writer.output().stderr).toBe("");
+      expect(fs.statSync(databasePath).nlink).toBe(1);
       expect(readOwners()).toEqual([]);
     } finally {
       await stopChildProcess(writer.child, 5_000);
@@ -380,7 +484,14 @@ describe("managed handoff database publication", () => {
   it("recovers the same inode when its first writer crashes before schema initialization", async () => {
     const script = `
       import fs from "node:fs";
-      fs.fsyncSync = () => {
+      const sync = fs.fsyncSync;
+      fs.fsyncSync = (descriptor) => {
+        if (!fs.existsSync(process.argv[1]) ||
+            fs.fstatSync(descriptor, { bigint: true }).ino !==
+            fs.statSync(process.argv[1], { bigint: true }).ino) {
+          sync(descriptor);
+          return;
+        }
         fs.writeSync(1, "before-schema\\n");
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
       };
@@ -442,7 +553,7 @@ describe("managed handoff database publication", () => {
 
 it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const)(
   "admits a %s grant and fences parent replacement",
-  (version) => {
+  async (version) => {
     const identityLess = version === "9.4 identity-less";
     const numeric = version === "9.6 numeric" || version === "9.6 bridge";
     const directory = root;
@@ -487,6 +598,16 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
         throw readError;
       }
       const stat = lstat(...args);
+      if (stat && String(args[0]) === directory) {
+        Object.defineProperty(stat, "ino", {
+          value: typeof stat.ino === "bigint" ? parentInode : Number(parentInode),
+        });
+      }
+      return stat;
+    });
+    const statSync = fs.statSync;
+    vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      const stat = statSync(...args);
       if (stat && String(args[0]) === directory) {
         Object.defineProperty(stat, "ino", {
           value: typeof stat.ino === "bigint" ? parentInode : Number(parentInode),
@@ -541,7 +662,7 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
             originalChildKey: childKey,
           }),
     };
-    const admitted = resolveUpdateCommandChildBinding(grant, runId, root);
+    const admitted = await resolveUpdateCommandChildBinding(grant, runId, root);
     assert(admitted.databaseIdentity);
     expect(admitted.databaseIdentity.parentIdentity).toMatch(new RegExp(`^\\d+:${initialInode}$`));
     expect(admitted.store.read(root)).toMatchObject({ kind: "current" });
@@ -574,7 +695,7 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
       originalChildKey: descendantKey,
       childKey: descendantKey,
     };
-    const resolveDescendant = () => {
+    const resolveDescendant = async () => {
       // Model the next receiver's parent PID without booting another source runtime.
       const descriptor = Object.getOwnPropertyDescriptor(process, "ppid");
       assert(descriptor);
@@ -583,12 +704,12 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
         value: admitted.child.executor.pid,
       });
       try {
-        return resolveUpdateCommandChildBinding(descendantGrant, runId, root);
+        return await resolveUpdateCommandChildBinding(descendantGrant, runId, root);
       } finally {
         Object.defineProperty(process, "ppid", descriptor);
       }
     };
-    expect(resolveDescendant().child.key).toBe(descendantKey);
+    expect((await resolveDescendant()).child.key).toBe(descendantKey);
     parentInode += identityLess ? 1n : -1n;
     expect(numericIdentity(directory)).toMatch(
       identityLess ? /:9007199254740992$/ : /:168040561096346660$/,
@@ -596,20 +717,22 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
     expect(() => admitted.store.acquire(root, "replacement", { kind: "update" })).toThrow(
       "identity changed",
     );
-    expect(resolveDescendant).toThrow("identity changed");
+    await expect(resolveDescendant()).rejects.toThrow("identity changed");
     if (version === "9.7 exact") {
-      expect(() => resolveUpdateCommandChildBinding(grant, runId, root)).toThrow(
+      await expect(resolveUpdateCommandChildBinding(grant, runId, root)).rejects.toThrow(
         "identity changed",
       );
     }
     parentInode += 4096n;
     if (!identityLess) {
-      expect(() => resolveUpdateCommandChildBinding(grant, runId, root)).toThrow(
+      await expect(resolveUpdateCommandChildBinding(grant, runId, root)).rejects.toThrow(
         "identity changed",
       );
     }
     readError = new Error("lease parent metadata unavailable");
-    expect(() => resolveUpdateCommandChildBinding(grant, runId, root)).toThrow(readError.message);
+    await expect(resolveUpdateCommandChildBinding(grant, runId, root)).rejects.toThrow(
+      readError.message,
+    );
     readError = undefined;
     parentInode = initialInode;
     const damaged = new DatabaseSync(databasePath);
@@ -618,7 +741,7 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
     } finally {
       damaged.close();
     }
-    expect(() => resolveUpdateCommandChildBinding(grant, runId, root)).toThrow(
+    await expect(resolveUpdateCommandChildBinding(grant, runId, root)).rejects.toThrow(
       /lease is unreadable:.*no such table/i,
     );
   },

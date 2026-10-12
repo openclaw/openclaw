@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import type { OpenClawStateIntegrityAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
 
@@ -15,6 +16,7 @@ export type SqliteWorkerStateContext = {
   initializationAgentPaths?: readonly string[];
   existingSchemaPath?: string;
   stateIntegrity?: OpenClawStateIntegrityAdmission;
+  artifactPreservingReads?: true;
 };
 
 export function captureSqliteWorkerStateContext(
@@ -30,6 +32,7 @@ export function captureSqliteWorkerStateContext(
       : {}),
     existingSchemaPath: context.existingSchemaPath,
     stateIntegrity: context.stateIntegrity,
+    artifactPreservingReads: context.artifactPreservingReads,
   };
 }
 
@@ -97,11 +100,15 @@ export function runWithSqliteWorkerStateContext<T>(
   context: SqliteWorkerStateContext,
   operation: () => T,
 ): T {
-  return stateContexts.run(context, () =>
-    context.existingSchemaPath === undefined
-      ? operation()
-      : withExistingOpenClawStateSchema({ path: context.existingSchemaPath }, operation),
-  );
+  const run = () =>
+    stateContexts.run(context, () =>
+      context.existingSchemaPath === undefined
+        ? operation()
+        : withExistingOpenClawStateSchema({ path: context.existingSchemaPath }, operation),
+    );
+  return context.artifactPreservingReads
+    ? withArtifactPreservingStateReads(run, { agentDatabases: true })
+    : run();
 }
 
 export function getSqliteWorkerStateContext(): SqliteWorkerStateContext {

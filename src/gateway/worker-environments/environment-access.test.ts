@@ -1,4 +1,6 @@
 import { createServer } from "node:http";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "../../../packages/gateway-client/src/websocket.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -26,6 +28,21 @@ describe("worker environment service", () => {
   afterEach(() => vi.restoreAllMocks());
 
   registerRecordedInferenceAccessTests();
+
+  it("releases the publisher after desktop policy cancellation settles", async () => {
+    support.testState.config.cloudWorkers!.desktop = true;
+    const workerService = support.createService(support.createProvider());
+    class RetiredPublisher {
+      publish() {
+        support.testState.config.cloudWorkers!.desktop = false;
+        return workerService.reconcileDesktopPolicy();
+      }
+    }
+    await new RetiredPublisher().publish();
+    await nextTurn();
+    expect(queryObjects(RetiredPublisher)).toBe(0);
+    expect(workerService.list()).toEqual([]);
+  });
 
   it("drains all tunnel owners before reporting an independent shutdown failure", async () => {
     const shutdownError = new Error("SSH tunnel shutdown failed");

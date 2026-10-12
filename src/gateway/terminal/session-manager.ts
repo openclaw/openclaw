@@ -45,18 +45,28 @@ export { DEFAULT_TERMINAL_DETACH_SECONDS } from "./session-limits.js";
 
 const log = createSubsystemLogger("gateway/terminal");
 
+function killTerminalBackend(backend: TerminalBackend): void {
+  try {
+    backend.kill();
+  } catch {
+    // Teardown is best effort; callers retain any required exit observation.
+  }
+}
+
 /** Owns PTYs and indexes their connections for bounded disconnect cleanup. */
 export class TerminalSessionManager {
   private readonly sessions = new Map<string, TerminalSession>();
   private readonly pendingOpens = new Map<TerminalPendingOpen, TerminalOwner>();
   private readonly agentSessionDrain = new AgentTerminalSessionDrainTracker();
-  private readonly connections = new TerminalConnectionIndex();
+  private readonly sessionConnections = new TerminalConnectionIndex<string>();
+  private readonly pendingConnections = new TerminalConnectionIndex<TerminalPendingOpen>();
   // Connection-backed opens still awaiting spawn. A disconnect flips their
   // abort flag so the resumed open kills the PTY instead of registering an
   // orphan for a dead connection.
   private readonly emit: TerminalEventSink;
   private readonly getBufferedAmount: (connId: string) => number | undefined;
   private readonly spawn: typeof spawnTerminalPty;
+  private readonly withOpenAdmission: TerminalSessionManagerOptions["withOpenAdmission"];
   private readonly maxSessions: number;
   private detachGraceMs: number;
   private readonly maxDetachedSessions: number;
@@ -74,6 +84,7 @@ export class TerminalSessionManager {
     this.emit = options.emit;
     this.getBufferedAmount = options.getBufferedAmount ?? (() => undefined);
     this.spawn = options.spawn ?? spawnTerminalPty;
+    this.withOpenAdmission = options.withOpenAdmission;
     this.maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
     this.detachGraceMs = options.detachGraceMs ?? 0;
     this.maxDetachedSessions = options.maxDetachedSessions ?? DEFAULT_MAX_DETACHED_SESSIONS;
@@ -85,10 +96,16 @@ export class TerminalSessionManager {
   }
 
   async open(request: TerminalOpenRequest): Promise<TerminalOpenOutcome> {
+    return this.withOpenAdmission
+      ? await this.withOpenAdmission(request, (admitted) => this.openAdmitted(admitted))
+      : await this.openAdmitted(request);
+  }
+
+  private async openAdmitted(request: TerminalOpenRequest): Promise<TerminalOpenOutcome> {
     if (request.signal?.aborted) {
       return { ok: false, code: "closed", message: this.openAbortMessage(request.signal) };
     }
-    if (request.owner.kind === "agent" && this.agentSessionDrain.isActive(request.owner)) {
+    if (this.agentSessionDrain.isActive(request.owner, request.agentId)) {
       return { ok: false, code: "closed", message: "terminal session is closing" };
     }
     if (this.spawning >= this.maxSessions * 2) {
@@ -98,17 +115,18 @@ export class TerminalSessionManager {
         message: `terminal spawn limit reached (${this.maxSessions * 2})`,
       };
     }
+    const sessionLimitReached = (): TerminalOpenOutcome => ({
+      ok: false,
+      code: "limit",
+      message: `terminal session limit reached (${this.maxSessions})`,
+    });
     // Agent shells outlive commands. Under pressure, reserve an idle viewer-free
     // victim, but keep it alive until its replacement backend successfully spawns.
     let evictionCandidate: TerminalSession | undefined;
     if (this.sessions.size + this.opening >= this.maxSessions) {
       evictionCandidate = this.claimLongestIdleAgentSession();
       if (!evictionCandidate) {
-        return {
-          ok: false,
-          code: "limit",
-          message: `terminal session limit reached (${this.maxSessions})`,
-        };
+        return sessionLimitReached();
       }
     }
     const releaseEvictionClaim = () => {
@@ -174,21 +192,15 @@ export class TerminalSessionManager {
       // A cancelled spawn cannot register an orphaned PTY.
       releaseEvictionClaim();
       backend.onExit(() => this.untrackPendingOpen(request.owner, pending, request.viewerConnId));
-      try {
-        backend.kill();
-      } catch {
-        // Keep the open tracked: archive must time out instead of committing
-        // before an unobserved backend exit.
-      }
+      // Keep tracking until exit even if kill fails; archive must not commit early.
+      killTerminalBackend(backend);
       return { ok: false, code: "closed", message: pending.abortMessage };
     }
     this.untrackPendingOpen(request.owner, pending, request.viewerConnId);
     if (evictionCandidate) {
       // Revalidate the victim after spawn: it may have exited or gained a viewer.
       // Eviction and replacement registration stay in one synchronous window.
-      const claimed = evictionCandidate;
-      evictionCandidate = undefined;
-      claimed.evictionClaimed = false;
+      releaseEvictionClaim();
       // Include outstanding reservations: out-of-order spawns must not exceed the cap,
       // even if a reserved replacement later fails.
       if (this.sessions.size + this.opening >= this.maxSessions) {
@@ -196,16 +208,8 @@ export class TerminalSessionManager {
         // rejoins the pool and may still be selected.
         const victim = this.claimLongestIdleAgentSession();
         if (!victim) {
-          try {
-            backend.kill();
-          } catch {
-            // Best-effort; the process may already be gone.
-          }
-          return {
-            ok: false,
-            code: "limit",
-            message: `terminal session limit reached (${this.maxSessions})`,
-          };
+          killTerminalBackend(backend);
+          return sessionLimitReached();
         }
         victim.evictionClaimed = false;
         log.info(
@@ -257,10 +261,10 @@ export class TerminalSessionManager {
     };
     this.sessions.set(session.id, session);
     if (request.owner.kind === "conn") {
-      this.connections.addSession(request.owner.connId, session.id);
+      this.sessionConnections.add(request.owner.connId, session.id);
     }
     if (request.viewerConnId) {
-      this.connections.addSession(request.viewerConnId, session.id);
+      this.sessionConnections.add(request.viewerConnId, session.id);
     }
     if (request.owner.kind === "conn" || request.viewerConnId) {
       session.output.push(composeTerminalIntroBanner());
@@ -273,7 +277,6 @@ export class TerminalSessionManager {
       }
     });
     backend.onExit((event) => {
-      const owner = session.owner?.kind === "agent" ? session.owner : undefined;
       this.agentSessionDrain.observeExit(session);
       const signal = event.signal && event.signal !== 0 ? event.signal : null;
       this.finalize(
@@ -286,9 +289,7 @@ export class TerminalSessionManager {
         },
         { backendExited: true },
       );
-      if (owner) {
-        this.resolveAgentSessionDrainIfIdle(owner);
-      }
+      this.agentSessionDrain.settleIfIdle(session.owner, session.agentId);
     });
 
     return {
@@ -301,11 +302,7 @@ export class TerminalSessionManager {
   }
 
   write(connId: string, sessionId: string, data: string): boolean {
-    const session = this.interactiveSession(connId, sessionId);
-    if (!session) {
-      return false;
-    }
-    return this.writeSession(session, data);
+    return this.updateSession(connId, sessionId, ["write", data]).ok;
   }
 
   /** Writes agent input after proving exact agent-session ownership. */
@@ -314,31 +311,11 @@ export class TerminalSessionManager {
     sessionId: string,
     data: string,
   ): TerminalAgentActionOutcome {
-    const session = this.agentOwnedSession(owner, sessionId);
-    if (!session) {
-      return { ok: false, code: "session_unavailable" };
-    }
-    return this.writeSession(session, data) ? { ok: true } : { ok: false, code: "backend_failed" };
-  }
-
-  private writeSession(session: TerminalSession, data: string): boolean {
-    try {
-      session.lastActivityAtMs = Date.now();
-      session.output.noteInput();
-      session.backend.write(data);
-      return true;
-    } catch {
-      this.finalize(session, "error", { error: "write failed" });
-      return false;
-    }
+    return this.updateSession(owner, sessionId, ["write", data]);
   }
 
   resize(connId: string, sessionId: string, cols: number, rows: number): boolean {
-    const session = this.interactiveSession(connId, sessionId);
-    if (!session) {
-      return false;
-    }
-    return this.resizeSession(session, cols, rows);
+    return this.updateSession(connId, sessionId, ["resize", cols, rows]).ok;
   }
 
   /** Resizes an agent-owned PTY after proving exact agent-session ownership. */
@@ -348,22 +325,30 @@ export class TerminalSessionManager {
     cols: number,
     rows: number,
   ): TerminalAgentActionOutcome {
-    const session = this.agentOwnedSession(owner, sessionId);
+    return this.updateSession(owner, sessionId, ["resize", cols, rows]);
+  }
+
+  private updateSession(
+    owner: string | AgentTerminalOwner,
+    sessionId: string,
+    action: ["write", string] | ["resize", number, number],
+  ): TerminalAgentActionOutcome {
+    const session = this.ownedSession(owner, sessionId);
     if (!session) {
       return { ok: false, code: "session_unavailable" };
     }
-    return this.resizeSession(session, cols, rows)
-      ? { ok: true }
-      : { ok: false, code: "backend_failed" };
-  }
-
-  private resizeSession(session: TerminalSession, cols: number, rows: number): boolean {
     try {
-      session.backend.resize(cols, rows);
-      return true;
+      if (action[0] === "write") {
+        session.lastActivityAtMs = Date.now();
+        session.output.noteInput();
+        session.backend.write(action[1]);
+      } else {
+        session.backend.resize(action[1], action[2]);
+      }
+      return { ok: true };
     } catch {
-      this.finalize(session, "error", { error: "resize failed" });
-      return false;
+      this.finalize(session, "error", { error: `${action[0]} failed` });
+      return { ok: false, code: "backend_failed" };
     }
   }
 
@@ -374,15 +359,15 @@ export class TerminalSessionManager {
     file: TerminalUploadFile,
   ): Promise<TerminalUploadResult | undefined> {
     // Co-attached viewers of an agent-owned session may upload, matching their
-    // write/resize authorization; interactiveSession covers owner and viewer.
-    const session = this.interactiveSession(connId, sessionId);
+    // write/resize authorization; ownedSession covers owner and viewer.
+    const session = this.ownedSession(connId, sessionId);
     if (!session) {
       return undefined;
     }
     const result = await session.stageUpload(file);
     // Upload can outlive a socket or take-over. Do not return a usable path to
     // a connection that no longer interacts with the terminal after the await.
-    return this.interactiveSession(connId, sessionId) === session ? result : undefined;
+    return this.ownedSession(connId, sessionId) === session ? result : undefined;
   }
 
   close(connId: string, sessionId: string): boolean {
@@ -411,7 +396,7 @@ export class TerminalSessionManager {
 
   /** Closes an agent-owned PTY after proving session-key ownership. */
   closeAgent(owner: AgentTerminalOwner, sessionId: string): TerminalAgentActionOutcome {
-    const session = this.agentOwnedSession(owner, sessionId);
+    const session = this.ownedSession(owner, sessionId);
     if (!session) {
       return { ok: false, code: "session_unavailable" };
     }
@@ -419,21 +404,17 @@ export class TerminalSessionManager {
     return { ok: true };
   }
 
-  /** Fences and closes one durable agent-session incarnation through archive commit. */
-  beginAgentSessionDrain(owner: AgentTerminalOwner): AgentTerminalSessionDrain {
-    const drain = this.agentSessionDrain.begin(owner, () => this.hasAgentSessionWork(owner));
-    for (const [pending, pendingOwner] of this.pendingOpens) {
-      if (agentTerminalOwnerMatches(pendingOwner, owner)) {
-        pending.abort("terminal closed because its session was archived");
-      }
-    }
-    for (const session of Array.from(this.sessions.values())) {
-      if (!session.closed && agentTerminalOwnerMatches(session.owner, owner)) {
-        this.finalize(session, "closed", {});
-      }
-    }
-    this.resolveAgentSessionDrainIfIdle(owner);
-    return drain;
+  /** Exact session for Stop/archive; an agent ID includes every terminal during deletion. */
+  beginAgentSessionDrain(
+    owner: AgentTerminalOwner | string,
+    assertCurrent?: () => void,
+  ): AgentTerminalSessionDrain {
+    return this.agentSessionDrain.begin(owner, {
+      pendingOpens: this.pendingOpens,
+      sessions: this.sessions,
+      closeSession: (session) => this.finalize(session, "closed", {}, { assertCurrent }),
+      assertCurrent,
+    });
   }
 
   /**
@@ -452,7 +433,7 @@ export class TerminalSessionManager {
       // snapshot. This prevents the newcomer from receiving those bytes twice.
       session.output.prepareViewerAttach();
       session.viewers.add(connId);
-      this.connections.addSession(connId, session.id);
+      this.sessionConnections.add(connId, session.id);
       return terminalAttachSummary(session);
     }
     if (session.reaper) {
@@ -463,7 +444,7 @@ export class TerminalSessionManager {
     session.detachedAtMs = null;
     const previousConnId = session.owner?.kind === "conn" ? session.owner.connId : null;
     if (previousConnId !== null && previousConnId !== connId) {
-      this.connections.removeSession(previousConnId, session.id);
+      this.sessionConnections.remove(previousConnId, session.id);
       this.emit(previousConnId, TERMINAL_EVENT_EXIT, {
         sessionId: session.id,
         exitCode: null,
@@ -472,7 +453,7 @@ export class TerminalSessionManager {
       });
     }
     session.owner = { kind: "conn", connId };
-    this.connections.addSession(connId, session.id);
+    this.sessionConnections.add(connId, session.id);
     return terminalAttachSummary(session);
   }
 
@@ -486,15 +467,12 @@ export class TerminalSessionManager {
 
   snapshot(sessionId: string): string | undefined {
     const session = this.sessions.get(sessionId);
-    if (!session || session.closed) {
-      return undefined;
-    }
-    return session.buffer.snapshot();
+    return session && !session.closed ? session.buffer.snapshot() : undefined;
   }
 
   /** Raw buffer for an agent-owned session, guarded by the caller session key. */
   snapshotAgent(owner: AgentTerminalOwner, sessionId: string): string | undefined {
-    return this.agentOwnedSession(owner, sessionId)?.buffer.snapshot();
+    return this.ownedSession(owner, sessionId)?.buffer.snapshot();
   }
 
   listAgent(owner: AgentTerminalOwner): TerminalSessionSummary[] {
@@ -511,26 +489,9 @@ export class TerminalSessionManager {
   ): void {
     this.pendingOpens.set(pending, owner);
     const connId = owner.kind === "conn" ? owner.connId : viewerConnId;
-    if (!connId) {
-      return;
+    if (connId) {
+      this.pendingConnections.add(connId, pending);
     }
-    this.connections.addPendingOpen(connId, pending);
-  }
-
-  private hasAgentSessionWork(owner: AgentTerminalOwner): boolean {
-    return (
-      [...this.pendingOpens.values()].some((pendingOwner) =>
-        agentTerminalOwnerMatches(pendingOwner, owner),
-      ) ||
-      [...this.sessions.values()].some(
-        (session) => !session.closed && agentTerminalOwnerMatches(session.owner, owner),
-      ) ||
-      this.agentSessionDrain.hasExiting(owner)
-    );
-  }
-
-  private resolveAgentSessionDrainIfIdle(owner: AgentTerminalOwner): void {
-    this.agentSessionDrain.resolveIfIdle(owner, () => this.hasAgentSessionWork(owner));
   }
 
   private openAbortMessage(signal: AbortSignal | undefined): string {
@@ -543,14 +504,11 @@ export class TerminalSessionManager {
     viewerConnId?: string,
   ): void {
     this.pendingOpens.delete(pending);
-    if (owner.kind === "agent") {
-      this.resolveAgentSessionDrainIfIdle(owner);
-    }
+    this.agentSessionDrain.settleIfIdle(owner, pending.agentId);
     const connId = owner.kind === "conn" ? owner.connId : viewerConnId;
-    if (!connId) {
-      return;
+    if (connId) {
+      this.pendingConnections.remove(connId, pending);
     }
-    this.connections.removePendingOpen(connId, pending);
   }
 
   /**
@@ -562,13 +520,10 @@ export class TerminalSessionManager {
     // Abort opens still awaiting spawn so they don't register orphaned PTYs.
     // These stay kill-on-disconnect even with detach enabled: the open RPC
     // never answered, so the client has no session id to reattach.
-    const opens = this.connections.pendingFor(connId);
-    if (opens) {
-      for (const pending of opens) {
-        pending.abort("connection closed during open");
-      }
+    for (const pending of this.pendingConnections.get(connId) ?? []) {
+      pending.abort("connection closed during open");
     }
-    const ids = this.connections.sessionIds(connId);
+    const ids = this.sessionConnections.get(connId);
     if (!ids) {
       return;
     }
@@ -595,7 +550,7 @@ export class TerminalSessionManager {
         this.finalize(session, "disconnected", {}, { silent: true });
       }
     }
-    this.connections.clearSessions(connId);
+    this.sessionConnections.clear(connId);
   }
 
   /** Closes live and pending sessions whose agent no longer permits a host shell. */
@@ -705,7 +660,7 @@ export class TerminalSessionManager {
     if (!session.viewers.delete(connId)) {
       return false;
     }
-    this.connections.removeSession(connId, session.id);
+    this.sessionConnections.remove(connId, session.id);
     if (session.viewers.size === 0) {
       // With no socket pressure left, resume immediately. Buffered bytes stay
       // in the replay ring and the next viewer starts at its high-water mark.
@@ -717,28 +672,23 @@ export class TerminalSessionManager {
     return true;
   }
 
-  private interactiveSession(connId: string, sessionId: string): TerminalSession | undefined {
+  /** Browser viewers and exact agent owners share the same adoption boundary. */
+  private ownedSession(
+    owner: string | AgentTerminalOwner,
+    sessionId: string,
+  ): TerminalSession | undefined {
     const session = this.sessions.get(sessionId);
     if (!session || session.closed) {
       return undefined;
     }
-    if (session.owner?.kind === "conn") {
-      return session.owner.connId === connId ? session : undefined;
+    if (typeof owner === "string" && session.owner?.kind === "conn") {
+      return session.owner.connId === owner ? session : undefined;
     }
-    if (session.owner?.kind !== "agent" || !session.viewers.has(connId)) {
-      return undefined;
-    }
-    delete session.unadoptedViewerConnId;
-    return session;
-  }
-
-  /** Agents may operate only PTYs created by their exact trusted session key. */
-  private agentOwnedSession(
-    owner: AgentTerminalOwner,
-    sessionId: string,
-  ): TerminalSession | undefined {
-    const session = this.sessions.get(sessionId);
-    if (!session || session.closed || !agentTerminalOwnerMatches(session.owner, owner)) {
+    const authorized =
+      typeof owner === "string"
+        ? session.owner?.kind === "agent" && session.viewers.has(owner)
+        : agentTerminalOwnerMatches(session.owner, owner);
+    if (!authorized) {
       return undefined;
     }
     delete session.unadoptedViewerConnId;
@@ -749,32 +699,32 @@ export class TerminalSessionManager {
     session: TerminalSession,
     reason: TerminalExitReason,
     detail: { exitCode?: number | null; signal?: number | null; error?: string },
-    opts?: { silent?: boolean; backendExited?: boolean },
+    opts?: { silent?: boolean; backendExited?: boolean; assertCurrent?: () => void },
   ): void {
     if (session.closed) {
       return;
     }
     const recipients = terminalSessionRecipientIds(session);
-    session.output.dispose({ flush: !opts?.silent && recipients.length > 0 });
+    if (!opts?.silent && recipients.length > 0) {
+      session.output.flush();
+    }
+    opts?.assertCurrent?.();
+    session.output.dispose();
     session.closed = true;
     if (session.reaper) {
       clearTimeout(session.reaper);
       session.reaper = null;
     }
-    if (!opts?.backendExited && session.owner?.kind === "agent") {
+    if (!opts?.backendExited) {
       this.agentSessionDrain.trackExit(session);
     }
-    try {
-      session.backend.kill();
-    } catch {
-      // Process may already be gone; the kill is best-effort teardown.
-    }
+    killTerminalBackend(session.backend);
     this.sessions.delete(session.id);
     if (session.owner?.kind === "conn") {
-      this.connections.removeSession(session.owner.connId, session.id);
+      this.sessionConnections.remove(session.owner.connId, session.id);
     }
     for (const viewerConnId of session.viewers) {
-      this.connections.removeSession(viewerConnId, session.id);
+      this.sessionConnections.remove(viewerConnId, session.id);
     }
     session.viewers.clear();
     // A disconnect already dropped the socket, so emitting there is pointless;

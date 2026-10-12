@@ -6,12 +6,18 @@ export type AgentDatabaseReadCandidate = { path: string; scope?: "sibling-family
 
 /** Close retained readers; a deletion also refuses later opens until the database is revived. */
 export type AgentDatabaseReaderRequest =
-  | { kind: "close"; candidates: AgentDatabaseReadCandidate[]; deleted: false }
+  | {
+      kind: "close";
+      candidates: AgentDatabaseReadCandidate[];
+      deleted: false;
+      retainedPaths?: string[];
+    }
   | { kind: "close"; candidates: AgentDatabaseReadCandidate[]; deleted: true; agentId: string }
   | { kind: "revive"; agentIds: string[] };
 
 type AgentDatabaseReaderCloser = (
   candidates: readonly AgentDatabaseReadCandidate[],
+  retainedPaths?: ReadonlySet<string>,
 ) => void | Promise<void>;
 
 const readers = resolveGlobalSingleton(Symbol.for("openclaw.agentDatabaseReaders"), () => ({
@@ -86,8 +92,11 @@ export async function applyAgentDatabaseReaderRequest(
       readers.deleted.set(path.resolve(candidate.path), request.agentId);
     }
   }
+  const retainedPaths = request.deleted
+    ? undefined
+    : new Set(request.retainedPaths?.map((entry) => path.resolve(entry)));
   const results = await Promise.allSettled(
-    [...readers.closers].map(async (closer) => closer(request.candidates)),
+    [...readers.closers].map(async (closer) => closer(request.candidates, retainedPaths)),
   );
   const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
   if (errors.length === 1) {
@@ -122,7 +131,11 @@ export function encodeAgentDatabaseReaderRequest(request: AgentDatabaseReaderReq
   const candidates = normalizeCandidates(request.candidates) ?? [];
   return request.deleted
     ? JSON.stringify({ deleted: candidates, agentId: request.agentId })
-    : JSON.stringify(candidates);
+    : JSON.stringify(
+        request.retainedPaths?.length
+          ? { candidates, retainedPaths: request.retainedPaths }
+          : candidates,
+      );
 }
 
 /** Worker resource keys that name agent databases; other keys belong to their worker's own closer. */
@@ -144,6 +157,15 @@ export function decodeAgentDatabaseReaderRequest(
   }
   if (!isRecord(parsed)) {
     return undefined;
+  }
+  if ("candidates" in parsed && !("deleted" in parsed)) {
+    const candidates = normalizeCandidates(parsed.candidates);
+    const retainedPaths = parsed.retainedPaths;
+    return candidates &&
+      Array.isArray(retainedPaths) &&
+      retainedPaths.every((entry) => typeof entry === "string")
+      ? { kind: "close", candidates, retainedPaths, deleted: false }
+      : undefined;
   }
   if ("deleted" in parsed) {
     const candidates = normalizeCandidates(parsed.deleted);

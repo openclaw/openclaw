@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "./protocol-json.js";
+import type { CodexCursorPage, JsonObject, JsonValue } from "./protocol-json.js";
 
 export type CodexMcpServerStatus = {
   name: string;
@@ -20,10 +20,7 @@ export type CodexMcpServerStatus = {
   authStatus?: "unsupported" | "notLoggedIn" | "bearerToken" | "oAuth";
 };
 
-export type CodexListMcpServerStatusResponse = {
-  data: CodexMcpServerStatus[];
-  nextCursor?: string | null;
-};
+export type CodexListMcpServerStatusResponse = CodexCursorPage<CodexMcpServerStatus>;
 
 export type ResourceReadParams = {
   threadId?: string | null;

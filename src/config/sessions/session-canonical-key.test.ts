@@ -1,6 +1,7 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -24,7 +25,10 @@ import { listSessionEntryRows } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
+import {
+  markCanonicalSessionValidationPending,
+  setCanonicalSqliteSessionMainKey,
+} from "./session-canonical-key.js";
 import type { SessionEntry } from "./types.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cold-session-keys-");
@@ -120,12 +124,13 @@ describe("cold canonical session validation", () => {
         pending.db.exec(
           "UPDATE session_nodes SET entry_json = entry_json || ' '; UPDATE session_nodes SET entry_valid = 1",
         );
+        markCanonicalSessionValidationPending(pending, [scope.sessionKey]);
         closeOpenClawAgentDatabaseByPath(scope.storePath);
       } else {
         closeOpenClawAgentDatabasesForTest();
       }
       openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
-      const writer = new DatabaseSync(scope.storePath);
+      const writer = openNodeSqliteDatabase(scope.storePath);
       const originalParse = JSON.parse;
       let committed = false;
       const parse = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
@@ -141,6 +146,9 @@ describe("cold canonical session validation", () => {
           writer
             .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
             .run(scope.sessionKey);
+          markCanonicalSessionValidationPending({ agentId: scope.agentId, db: writer }, [
+            scope.sessionKey,
+          ]);
           writer.exec("COMMIT");
         }
         return value;
@@ -238,13 +246,16 @@ describe("cold canonical session validation", () => {
           ),
         { ...scope, path: scope.storePath },
       );
-    // A separate writer changes policy without clearing this reader's warm validation.
+    // Config publication invalidates the previously admitted policy before another write.
     const external = new DatabaseSync(scope.storePath);
     try {
-      external.prepare("UPDATE session_key_contract SET main_key = ? WHERE id = 1").run("custom");
+      setCanonicalSqliteSessionMainKey(database, "custom");
+      external.exec("BEGIN IMMEDIATE");
       external
         .prepare("UPDATE session_nodes SET entry_json = '{' WHERE session_key = ?")
         .run(otherKey);
+      markCanonicalSessionValidationPending({ agentId: scope.agentId, db: external }, [otherKey]);
+      external.exec("COMMIT");
       expect(append).toThrow(
         "invalid persisted session row requires repair for agent:main:z-later",
       );

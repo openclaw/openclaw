@@ -78,6 +78,34 @@ remove this delivery fence: older runtimes must refuse migrated state. Restoring
 a pre-upgrade backup loses later receipt facts and does not undo external sends;
 reconcile those effects before retrying an automation.
 
+### Skill Workshop proposal retirement (state schema 20, same version)
+
+Skill Workshop no longer stores proposals. The optional `skill_workshop_proposals`,
+`skill_workshop_proposal_events`, `skill_workshop_proposal_rollbacks`, and
+`skill_workshop_collection_reviews` tables leave the canonical schema without a
+version bump; they were lazy additive tables, so older same-version readers
+already tolerated their absence. Opening a database that still has them is
+unchanged: the tables are no longer validated, and a runtime open never drops
+them.
+
+`openclaw doctor --fix`, including the Doctor run that `openclaw update` starts,
+first repairs the known malformed
+`idx_skill_workshop_collection_reviews_workspace_time` index during its schema
+prelude. Its final Workshop step then writes every `pending` or `quarantined`
+proposal draft, plus its support files, to
+`<agentDir>/workshop-skills/.archive/.retired-proposals/<proposalId>/SKILL.md`
+for the recorded owner agent, or the default agent when none was recorded.
+Pre-SQLite bundles under `<state-dir>/skill-workshop/proposals/<id>/` with a
+`proposal.json` are exported the same way. An existing export is never
+overwritten. After every export succeeds, Doctor drops the four tables and their
+indexes in one write transaction, then removes the legacy proposal files. Any
+failure keeps the tables and files and records a warning; rerunning Doctor
+resumes. Applied, rejected, and stale proposals, event history, rollback
+metadata, and collection-review outcomes are discarded.
+
+Downgrading to a build that still reads proposals needs the pre-upgrade backup;
+the exported drafts remain plain files that can be recreated as skills.
+
 ### State schema 19
 
 Schema 19 adds nullable `authorization_id TEXT` and
@@ -194,8 +222,8 @@ absent. Per-agent schemas and native companion tables do not change; native
 clients can continue validating and reading their existing owned tables at
 state schema 17 without performing migrations.
 
-Startup and `openclaw doctor --fix` apply the schema-16 Skill Workshop migration
-before the prepared-worker migration when opening a schema-15 database. A
+Startup and `openclaw doctor --fix` apply the prepared-worker migration when
+opening a schema-15 or schema-16 database. A
 schema-16 database receives only the prepared-worker migration. The tuple
 constraint belongs to the last added column, so migration scans existing
 environments once and preserves the table instead of rebuilding it. Leases,
@@ -207,8 +235,7 @@ database changes from that attempt. Both published markers normally advance to
 17 in that transaction. When an older updater still owns trailing ledger reads,
 the existing [version-publication deferral](/reference/database-schemas/versioning#schema-bumps-and-older-updaters)
 keeps the published markers at their earlier version and records applied content
-17 separately. Reopening does not repeat that content migration. Workshop
-directory relocation runs afterward, outside the schema transaction.
+17 separately. Reopening does not repeat that content migration.
 
 Before upgrading, stop older writers and create a verified, WAL-aware backup.
 Builds supporting state schema 16 or earlier refuse the published schema 17.
@@ -226,6 +253,10 @@ Schema 16 removes `workspace_dir` and `claim_released_time` from
 history and adds `owner_agent_id` plus its owner/time index. Proposal rows remain intact. A proposal whose claim a
 collection review had released becomes `stale` with a status reason, so the
 skill path it once created stays user-owned and Doctor never relocates it.
+
+The same-version proposal retirement above removes this migration. A schema-15
+database keeps its legacy Workshop columns until Doctor exports its pending
+drafts and drops the proposal tables.
 
 Skill Workshop ownership is now the physical
 `<state-dir>/agents/<agentId>/agent/workshop-skills` directory. Startup and `openclaw doctor --fix`

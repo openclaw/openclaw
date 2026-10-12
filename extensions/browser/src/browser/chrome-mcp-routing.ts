@@ -25,6 +25,7 @@ import { redactChromeMcpProfileLabelForDiagnostic } from "./chrome-mcp-diagnosti
 import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 import {
   extractChromeMcpToolError,
+  extractSnapshot,
   extractStructuredPages,
   formatChromeMcpToolErrorMessage,
 } from "./chrome-mcp-result.js";
@@ -122,7 +123,10 @@ async function withChromeMcpOperationLock<T>(
 
 /** UID-only MCP actions cannot distinguish collisions between renderer documents. */
 function validateChromeMcpSnapshotRefs(root: ChromeMcpSnapshotNode) {
-  const documents = new Map<string, { document: ChromeMcpSnapshotNode; documentUid?: string }>();
+  const documents = new Map<
+    string,
+    { document: ChromeMcpSnapshotNode; documentUid?: string; nodes: ChromeMcpSnapshotNode[] }
+  >();
   const pending = [{ node: root, document: root, documentUid: normalizeOptionalString(root.id) }];
   for (let current = pending.pop(); current; current = pending.pop()) {
     const role = current.node.role?.trim().toLowerCase();
@@ -139,9 +143,13 @@ function validateChromeMcpSnapshotRefs(root: ChromeMcpSnapshotNode) {
             "Use a managed browser profile for this page; ref-free screenshots remain available.",
         );
       }
-      documents.set(uid, { document, documentUid });
+      if (previous) {
+        previous.nodes.push(current.node);
+      } else {
+        documents.set(uid, { document, documentUid, nodes: [current.node] });
+      }
     }
-    for (const child of current.node.children ?? []) {
+    for (const child of current.node.children?.toReversed() ?? []) {
       pending.push({
         node: child,
         document: role === "iframe" ? current.node : document,
@@ -155,52 +163,29 @@ function validateChromeMcpSnapshotRefs(root: ChromeMcpSnapshotNode) {
 export function registerChromeMcpSnapshot(
   session: ChromeMcpSession,
   targetId: string,
-  root: ChromeMcpSnapshotNode,
+  result: ChromeMcpToolResult,
 ): { root: ChromeMcpSnapshotNode; documentUid: string } {
+  const root = extractSnapshot(result);
   const documentUid = normalizeOptionalString(root.id);
   if (!documentUid || root.role?.trim().toLowerCase() !== "rootwebarea") {
     throw new Error("Chrome MCP snapshot did not contain a top-level document uid");
   }
   const documents = validateChromeMcpSnapshotRefs(root);
   const routing = getChromeMcpRoutingState(session);
-  const wrappedByUid = new Map<string, string>();
   const refs = new Map<string, { uid: string; documentUid?: string }>();
 
-  // Copy and rewrite iteratively; the renderer owns depth truncation.
-  const wrappedRoot = { ...root };
-  const stack = [wrappedRoot];
-  for (let node = stack.pop(); node; node = stack.pop()) {
-    const rawUid = normalizeOptionalString(node.id);
-    if (rawUid) {
-      let id = wrappedByUid.get(rawUid);
-      if (!id) {
-        id = `${CHROME_MCP_SNAPSHOT_REF_PREFIX}${routing.sessionNonce}:${routing.nextSnapshotRefId}`;
-        routing.nextSnapshotRefId += 1;
-        wrappedByUid.set(rawUid, id);
-        refs.set(id, {
-          uid: rawUid,
-          documentUid: documents.get(rawUid)?.documentUid,
-        });
-      }
+  // Validation collects aliases in snapshot order before claiming ref IDs.
+  // Normalization created this operation-owned tree; rewrite all aliases together.
+  for (const [uid, binding] of documents) {
+    const id = `${CHROME_MCP_SNAPSHOT_REF_PREFIX}${routing.sessionNonce}:${routing.nextSnapshotRefId}`;
+    routing.nextSnapshotRefId += 1;
+    refs.set(id, { uid, documentUid: binding.documentUid });
+    for (const node of binding.nodes) {
       node.id = id;
-    }
-    const sourceChildren = node.children;
-    if (!sourceChildren) {
-      continue;
-    }
-    const wrappedChildren: ChromeMcpSnapshotNode[] = [];
-    node.children = wrappedChildren;
-    for (let index = sourceChildren.length - 1; index >= 0; index -= 1) {
-      const child = sourceChildren[index];
-      if (child) {
-        const wrapped = { ...child };
-        wrappedChildren[index] = wrapped;
-        stack.push(wrapped);
-      }
     }
   }
   routing.snapshotsByTarget.set(targetId, { documentUid, refs });
-  return { root: wrappedRoot, documentUid };
+  return { root, documentUid };
 }
 
 export function resolveChromeMcpSnapshotRef(
@@ -217,7 +202,7 @@ export function resolveChromeMcpSnapshotRef(
   return resolved;
 }
 
-export async function callTool(
+async function callTool(
   profileName: string,
   profileOptions: NormalizedChromeMcpProfileOptions,
   name: string,
@@ -289,21 +274,25 @@ export async function callTargetTool(
   args: Record<string, unknown> | ((session: ChromeMcpSession) => Record<string, unknown>),
 ): Promise<ChromeMcpToolResult> {
   return await withChromeMcpTarget(params, async (target) => {
-    const resolvedArgs = typeof args === "function" ? args(target.lease.session) : args;
-    return await callTool(
-      params.profileName,
-      target.profileOptions,
-      name,
-      { ...resolvedArgs, pageId: target.pageId },
-      params,
-      target.lease,
-    );
+    const resolvedArgs = typeof args === "function" ? args(target.session) : args;
+    return await target.callTool(name, { ...resolvedArgs, pageId: target.pageId });
   });
 }
 
-export type ChromeMcpPinnedTarget = {
-  lease: ChromeMcpSessionLease;
+type ChromeMcpOperation = {
+  session: ChromeMcpSession;
   profileOptions: NormalizedChromeMcpProfileOptions;
+  callTool: (
+    name: string,
+    args: Record<string, unknown>,
+    options?: ChromeMcpCallOptions,
+  ) => Promise<ChromeMcpToolResult>;
+  listTargets: (
+    options?: ChromeMcpCallOptions,
+  ) => Promise<Array<{ page: ChromeMcpStructuredPage; targetId: string }>>;
+};
+
+export type ChromeMcpPinnedTarget = ChromeMcpOperation & {
   pageId: number;
 };
 
@@ -311,10 +300,7 @@ export async function withChromeMcpLease<T>(
   profileName: string,
   profileOptions: ChromeMcpOptionsInput | undefined,
   options: ChromeMcpCallOptions,
-  operation: (
-    lease: ChromeMcpSessionLease,
-    normalizedProfileOptions: NormalizedChromeMcpProfileOptions,
-  ) => Promise<T>,
+  operation: (operation: ChromeMcpOperation) => Promise<T>,
 ): Promise<T> {
   const normalizedProfileOptions = normalizeChromeMcpOptions(profileOptions);
   options.signal?.throwIfAborted();
@@ -331,28 +317,22 @@ export async function withChromeMcpLease<T>(
           `Chrome MCP session for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}" changed before the operation could start. Run the browser command again to reconnect.`,
         );
       }
-      return await operation(lease, normalizedProfileOptions);
+      const call: ChromeMcpOperation["callTool"] = (name, args, callOptions = options) =>
+        callTool(profileName, normalizedProfileOptions, name, args, callOptions, lease);
+      return await operation({
+        session: lease.session,
+        profileOptions: normalizedProfileOptions,
+        callTool: call,
+        listTargets: async (callOptions = options) =>
+          registerChromeMcpTargets(
+            lease.session,
+            extractStructuredPages(await call("list_pages", {}, callOptions)),
+          ),
+      });
     });
   } finally {
     await lease.release();
   }
-}
-
-export async function listChromeMcpTargetsWithLease(params: {
-  profileName: string;
-  profileOptions: NormalizedChromeMcpProfileOptions;
-  lease: ChromeMcpSessionLease;
-  options: ChromeMcpCallOptions;
-}): Promise<Array<{ page: ChromeMcpStructuredPage; targetId: string }>> {
-  const result = await callTool(
-    params.profileName,
-    params.profileOptions,
-    "list_pages",
-    {},
-    params.options,
-    params.lease,
-  );
-  return registerChromeMcpTargets(params.lease.session, extractStructuredPages(result));
 }
 
 export function registerChromeMcpTargets(
@@ -396,19 +376,15 @@ export async function withChromeMcpTarget<T>(
     params.profileName,
     params.profile,
     params,
-    async (lease, normalizedProfileOptions) => {
-      const routing = getChromeMcpRoutingState(lease.session);
+    async (sessionOperation) => {
+      const routing = getChromeMcpRoutingState(sessionOperation.session);
       const pageId = [...routing.targetIdByPageId].find(
         ([, targetId]) => targetId === params.targetId,
       )?.[0];
       if (pageId === undefined) {
         throw new BrowserTabNotFoundError({ input: params.targetId });
       }
-      return await operation({
-        lease,
-        profileOptions: normalizedProfileOptions,
-        pageId,
-      });
+      return await operation({ ...sessionOperation, pageId });
     },
   );
 }

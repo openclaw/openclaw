@@ -109,7 +109,6 @@ export type AcpElicitationHandler = (
   context: AcpElicitationContext,
 ) => Promise<AcpElicitationResponse>;
 
-/** Per-turn payload delivered to ACP adapters. */
 export type AcpRuntimeTurnInput = {
   handle: AcpRuntimeHandle;
   text: string;
@@ -160,7 +159,6 @@ export type AcpRuntimeDoctorReport = {
   details?: string[];
 };
 
-/** Streaming event union produced by ACP adapters while a turn is running. */
 export type AcpRuntimeEvent =
   | {
       type: "text_delta";

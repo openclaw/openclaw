@@ -174,6 +174,7 @@ describe("cron history wire codec", () => {
         action: "finished",
         status: "error",
         error: "upstream unavailable: 503 overloaded",
+        provider: "anthropic",
       },
       1,
     );

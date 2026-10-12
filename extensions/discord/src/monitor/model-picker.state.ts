@@ -103,24 +103,17 @@ export type DiscordModelPickerPage<T> = {
   hasNext: boolean;
 };
 
-export type DiscordModelPickerModelPage = DiscordModelPickerPage<string> & {
-  provider: string;
+type DiscordModelPickerBucketPage<T> = DiscordModelPickerPage<T> & {
+  bucket: DiscordModelPickerBucket | null;
+  buckets: DiscordModelPickerBucket[];
 };
 
 const loadModelsProviderRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/models-provider-runtime"),
 );
 
-function isValidCommandContext(value: string): value is DiscordModelPickerCommandContext {
-  return (COMMAND_CONTEXTS as readonly string[]).includes(value);
-}
-
-function isValidPickerAction(value: string): value is DiscordModelPickerAction {
-  return (PICKER_ACTIONS as readonly string[]).includes(value);
-}
-
-function isValidPickerView(value: string): value is DiscordModelPickerView {
-  return (PICKER_VIEWS as readonly string[]).includes(value);
+function isPickerValue<T extends string>(value: string, values: readonly T[]): value is T {
+  return values.some((candidate) => candidate === value);
 }
 
 export function normalizeModelPickerPage(value: number | undefined): number {
@@ -128,16 +121,13 @@ export function normalizeModelPickerPage(value: number | undefined): number {
 }
 
 function parseRawPage(value: unknown): number {
-  if (typeof value === "number") {
-    return normalizeModelPickerPage(value);
-  }
-  if (typeof value === "string") {
-    const parsed = parseStrictInteger(value);
-    if (parsed !== undefined) {
-      return normalizeModelPickerPage(parsed);
-    }
-  }
-  return 1;
+  return normalizeModelPickerPage(
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? parseStrictInteger(value)
+        : undefined,
+  );
 }
 
 function coerceString(value: unknown): string {
@@ -188,47 +178,30 @@ export function buildDiscordModelPickerCustomId(
     `u=${encodeCustomIdComponent(userId)}`,
     `g=${String(page)}`,
   ];
-  if (normalizedProvider) {
-    parts.push(`p=${encodeCustomIdComponent(normalizedProvider)}`);
-  }
-  const runtime = params.runtime?.trim();
-  if (runtime) {
-    parts.push(`r=${encodeCustomIdComponent(runtime)}`);
-  }
+  const append = (key: string, value: string | number | undefined) => {
+    if (value) {
+      parts.push(`${key}=${typeof value === "string" ? encodeCustomIdComponent(value) : value}`);
+    }
+  };
+  append("p", normalizedProvider);
+  append("r", params.runtime?.trim());
   const runtimeToken = params.runtimeToken?.trim();
   if (runtimeToken && !DISCORD_MODEL_PICKER_TOKEN_PATTERN.test(runtimeToken)) {
     throw new Error("Discord model picker runtime token is invalid");
   }
-  if (runtimeToken) {
-    parts.push(`rt=${runtimeToken}`);
-  }
-  const runtimeIndex = normalizeOptionalModelPickerIndex(params.runtimeIndex);
-  if (runtimeIndex) {
-    parts.push(`ri=${String(runtimeIndex)}`);
-  }
-  if (providerPage) {
-    parts.push(`pp=${String(providerPage)}`);
-  }
+  append("rt", runtimeToken);
+  append("ri", normalizeOptionalModelPickerIndex(params.runtimeIndex));
+  append("pp", providerPage);
   if (modelToken) {
     parts.push(`m=${modelToken}`);
   } else {
     // Legacy positional state is accepted until the next render. New model
     // components use the stable token so catalog reordering cannot retarget them.
-    if (modelIndex) {
-      parts.push(`mi=${String(modelIndex)}`);
-    }
-    if (recentSlot) {
-      parts.push(`rs=${String(recentSlot)}`);
-    }
+    append("mi", modelIndex);
+    append("rs", recentSlot);
   }
-  const providerBucket = params.providerBucket?.trim().toLowerCase();
-  if (providerBucket) {
-    parts.push(`pb=${encodeCustomIdComponent(providerBucket)}`);
-  }
-  const modelBucket = params.modelBucket?.trim().toLowerCase();
-  if (modelBucket) {
-    parts.push(`mb=${encodeCustomIdComponent(modelBucket)}`);
-  }
+  append("pb", params.providerBucket?.trim().toLowerCase());
+  append("mb", params.modelBucket?.trim().toLowerCase());
 
   // Page one is already the parser default. A model token also identifies its provider.
   if (parts.join(";").length > DISCORD_CUSTOM_ID_MAX_CHARS) {
@@ -283,7 +256,11 @@ export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPi
   const providerBucketRaw = decodeCustomIdComponent(coerceString(data.pb)).trim().toLowerCase();
   const modelBucketRaw = decodeCustomIdComponent(coerceString(data.mb)).trim().toLowerCase();
 
-  if (!isValidCommandContext(command) || !isValidPickerAction(action) || !isValidPickerView(view)) {
+  if (
+    !isPickerValue(command, COMMAND_CONTEXTS) ||
+    !isPickerValue(action, PICKER_ACTIONS) ||
+    !isPickerValue(view, PICKER_VIEWS)
+  ) {
     return null;
   }
 
@@ -373,32 +350,11 @@ function computeAlphaBuckets(sortedItems: string[]): DiscordModelPickerBucket[] 
 }
 
 // Derive navigation from catalog state to conserve Discord's custom-id budget.
-export function findProviderBucketId(
-  data: ModelsProviderData,
-  provider: string,
-): string | undefined {
-  return findProviderBucketLocation(data, provider)?.bucket;
-}
-
 export function findProviderBucketLocation(
   data: ModelsProviderData,
   provider: string,
 ): { bucket?: string; page: number } | undefined {
-  return findModelPickerBucketLocation(
-    [...data.providers].toSorted(),
-    normalizeProviderId(provider),
-  );
-}
-
-export function findModelBucketId(
-  data: ModelsProviderData,
-  provider: string,
-  model: string,
-): string | undefined {
-  const modelSet = data.byProvider.get(normalizeProviderId(provider));
-  return modelSet
-    ? findModelPickerBucketLocation([...modelSet].toSorted(compareBucketItems), model)?.bucket
-    : undefined;
+  return findModelPickerBucketLocation(data.providers.toSorted(), normalizeProviderId(provider));
 }
 
 function findModelPickerBucketLocation(
@@ -423,10 +379,7 @@ function paginateDiscordModelPickerBucket<T>(params: {
   itemLabels: string[];
   page?: number;
   bucket?: string;
-}): DiscordModelPickerPage<T> & {
-  bucket: DiscordModelPickerBucket | null;
-  buckets: DiscordModelPickerBucket[];
-} {
+}): DiscordModelPickerBucketPage<T> {
   const buckets = computeAlphaBuckets(params.itemLabels);
   const bucket = buckets.find((entry) => entry.id === params.bucket) ?? buckets[0] ?? null;
   const items = bucket ? params.items.slice(bucket.start, bucket.end) : params.items;
@@ -452,11 +405,8 @@ export function getDiscordModelPickerProviderPage(params: {
   data: ModelsProviderData;
   page?: number;
   bucket?: string;
-}): DiscordModelPickerPage<DiscordModelPickerProviderItem> & {
-  bucket: DiscordModelPickerBucket | null;
-  buckets: DiscordModelPickerBucket[];
-} {
-  const providers = [...params.data.providers].toSorted();
+}): DiscordModelPickerBucketPage<DiscordModelPickerProviderItem> {
+  const providers = params.data.providers.toSorted();
   return paginateDiscordModelPickerBucket({
     ...params,
     itemLabels: providers,
@@ -472,12 +422,7 @@ export function getDiscordModelPickerModelPage(params: {
   provider: string;
   page?: number;
   bucket?: string;
-}):
-  | (DiscordModelPickerModelPage & {
-      bucket: DiscordModelPickerBucket | null;
-      buckets: DiscordModelPickerBucket[];
-    })
-  | null {
+}): (DiscordModelPickerBucketPage<string> & { provider: string }) | null {
   const provider = normalizeProviderId(params.provider);
   const modelSet = params.data.byProvider.get(provider);
   if (!modelSet) {
@@ -503,4 +448,12 @@ export function resolveDiscordModelPickerPageForModel(params: {
   }
   const sorted = [...modelSet].toSorted(compareBucketItems);
   return findModelPickerBucketLocation(sorted, params.model) ?? { page: 1 };
+}
+
+export function getDiscordModelPickerRecentModelRefs(
+  data: ModelsProviderData,
+  quickModels: string[],
+): string[] {
+  const defaultModelRef = `${data.resolvedDefault.provider}/${data.resolvedDefault.model}`;
+  return [defaultModelRef, ...quickModels.filter((modelRef) => modelRef !== defaultModelRef)];
 }

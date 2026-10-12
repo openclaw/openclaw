@@ -1,13 +1,9 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
-import { html, nothing } from "lit";
 import { TERMINAL_UPLOAD_RETENTION_MS } from "../../../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { renderDockDestinations } from "../dock-destination-controls.ts";
-import { icons } from "../icons.ts";
-import { renderPanelIconButton } from "../panel-icon-button.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   encodeTerminalUpload,
@@ -377,10 +373,7 @@ export class TerminalPanelUploadController {
     if (this.batch !== batch) {
       return;
     }
-    batch.abortController.abort();
-    this.batch = null;
-    this.dragActive = false;
-    this.dragDepth = 0;
+    this.dispose();
     this.host.requestUpdate();
   }
 
@@ -390,170 +383,4 @@ export class TerminalPanelUploadController {
     this.dragActive = false;
     this.dragDepth = 0;
   }
-}
-
-export function renderTerminalPanelActions(params: {
-  fullscreen: boolean;
-  embedded?: boolean;
-  dock: "bottom" | "right" | "main";
-  upload: TerminalPanelUploadController;
-  sessionPicker: unknown;
-  onDock: (dock: "bottom" | "right" | "main") => void;
-  onOpenFullscreen: () => void;
-  onHide: () => void;
-}) {
-  return html`<div class="rail-header__actions tp-actions">
-    ${
-      params.upload.uploadsEnabled()
-        ? renderPanelIconButton({
-            className: "rail-header__action tp-icon tp-upload",
-            label: t("terminal.addFiles"),
-            icon: icons.paperclip,
-            disabled: params.upload.hasPendingBatch() || !params.upload.hasActiveTab(),
-            onClick: params.upload.chooseFiles,
-          })
-        : nothing
-    }
-    ${
-      params.fullscreen
-        ? nothing
-        : html`${params.sessionPicker}${
-            params.embedded
-              ? renderPanelIconButton({
-                  className: "rail-header__action tp-icon",
-                  label: t("terminal.dockBottom"),
-                  icon: icons.panelBottomOpen,
-                  onClick: () => params.onDock("bottom"),
-                })
-              : html`${renderDockDestinations({
-                  current: params.dock,
-                  groupClass: "tp-dock-modes",
-                  groupLabel: t("terminal.dockMode"),
-                  destinations: [
-                    {
-                      dock: "bottom",
-                      label: t("terminal.dockBottom"),
-                      icon: icons.panelBottomOpen,
-                      className: "tp-icon",
-                    },
-                    {
-                      dock: "right",
-                      label: t("terminal.dockRight"),
-                      icon: icons.panelRightOpen,
-                      className: "tp-icon",
-                    },
-                    {
-                      dock: "main",
-                      label: t("terminal.dockMain"),
-                      icon: icons.columns2,
-                      className: "tp-icon",
-                    },
-                  ],
-                  onSelect: params.onDock,
-                })}
-                ${renderPanelIconButton({
-                  className: "rail-header__action tp-icon tp-open-fullscreen",
-                  label: t("terminal.openWindow"),
-                  icon: icons.maximize,
-                  newTab: true,
-                  onClick: params.onOpenFullscreen,
-                })}
-                ${renderPanelIconButton({
-                  className: "rail-header__action tp-icon",
-                  label: t("terminal.hide"),
-                  icon: icons.x,
-                  onClick: params.onHide,
-                })}`
-          }`
-    }
-  </div>`;
-}
-
-export function renderTerminalUploadLayer(upload: TerminalPanelUploadController) {
-  const progress = upload.progress;
-  const progressLabel =
-    progress &&
-    (progress.state === "failed"
-      ? t("terminal.uploadFailed")
-      : t("terminal.uploadProgress", {
-          current: String(progress.current),
-          total: String(progress.total),
-        }));
-  return html`${
-    upload.dragActive
-      ? html`<div class="tp-drop-overlay">${t("terminal.dropFiles")}</div>`
-      : nothing
-  }
-  ${
-    progress
-      ? html`<div
-          class="tp-upload-card ${progress.state === "failed" ? "tp-upload-card--failed" : ""}"
-          role=${progress.state === "failed" ? "alert" : "status"}
-          aria-live=${progress.state === "failed" ? "assertive" : "polite"}
-        >
-          <div class="tp-upload-card__header">
-            <div class="tp-upload-card__copy">
-              <div class="tp-upload-card__title">${progressLabel}</div>
-              <div class="tp-upload-card__file">${progress.fileName}</div>
-            </div>
-            <div class="tp-upload-card__actions">
-              ${
-                progress.state === "failed" && progress.retryable
-                  ? html`<button
-                      class="tp-upload-card__action tp-upload-retry"
-                      type="button"
-                      @click=${upload.retry}
-                    >
-                      ${t("terminal.retryUpload")}
-                    </button>`
-                  : nothing
-              }
-              <button
-                class="tp-upload-card__action tp-upload-cancel"
-                type="button"
-                @click=${upload.cancel}
-              >
-                ${t("common.cancel")}
-              </button>
-            </div>
-          </div>
-          <div
-            class="tp-upload-progress"
-            role="progressbar"
-            aria-label=${progressLabel}
-            aria-valuemin="0"
-            aria-valuemax=${String(progress.total)}
-            aria-valuenow=${String(progress.completed)}
-          >
-            <span
-              class="tp-upload-progress__fill"
-              style=${`width:${(progress.completed / progress.total) * 100}%`}
-            ></span>
-            ${
-              progress.state === "uploading"
-                ? html`<span class="tp-upload-progress__activity"></span>`
-                : nothing
-            }
-          </div>
-          ${
-            progress.error
-              ? html`<div class="tp-upload-card__error">${progress.error}</div>`
-              : nothing
-          }
-          ${
-            progress.state === "failed" && progress.canInsert
-              ? html`<div class="tp-upload-card__recovery">
-                  <button
-                    class="tp-upload-card__action tp-upload-insert"
-                    type="button"
-                    @click=${upload.insertCompleted}
-                  >
-                    ${t("terminal.insertUploadedPaths")}
-                  </button>
-                </div>`
-              : nothing
-          }
-        </div>`
-      : nothing
-  }`;
 }

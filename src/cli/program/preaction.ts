@@ -3,7 +3,6 @@ import type { Command } from "commander";
 import type { StartupConfigPreflightOptions } from "../../commands/startup-config-preflight.js";
 import { setVerbose } from "../../globals.js";
 import type { LogLevel } from "../../logging/levels.js";
-import { resolvePluginInstallInvalidConfigPolicy } from "../../plugins/install-config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { getVerboseFlag, isHelpOrVersionInvocation } from "../argv.js";
@@ -16,7 +15,6 @@ import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import { resolveCliStartupPolicy } from "../command-startup-policy.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import { isModelsPlainMachineOutput } from "../models-output-mode.js";
-import { resolvePluginInstallPreactionRequest } from "../plugin-install-config-policy.js";
 import { getCommanderCommandPath, hasCommanderOptionToken } from "./commander-parse-facts.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 import { isParentDefaultHelpAction } from "./parent-default-help.js";
@@ -30,19 +28,6 @@ function setProcessTitleForCommand() {
   if (process.title !== CLI_NAME) {
     process.title = CLI_NAME;
   }
-}
-
-function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
-  return (
-    commandPath[0] === "update" ||
-    resolvePluginInstallInvalidConfigPolicy(
-      resolvePluginInstallPreactionRequest({
-        actionCommand,
-        commandPath,
-        argv: process.argv,
-      }),
-    ) === "allow-plugin-recovery"
-  );
 }
 
 function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
@@ -170,7 +155,16 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     let beforeStatePreparation: StartupConfigPreflightOptions["beforeStatePreparation"];
-    let allowInvalid = shouldAllowInvalidConfigForAction(actionCommand, commandPath);
+    const [{ resolvePluginInstallInvalidConfigPolicy }, { resolvePluginInstallPreactionRequest }] =
+      await Promise.all([
+        import("../../plugins/install-config.js"),
+        import("../plugin-install-config-policy.js"),
+      ]);
+    let allowInvalid =
+      commandPath[0] === "update" ||
+      resolvePluginInstallInvalidConfigPolicy(
+        resolvePluginInstallPreactionRequest({ actionCommand, commandPath, argv: process.argv }),
+      ) === "allow-plugin-recovery";
     const isGatewayRun =
       commandPath[0] === "gateway" &&
       (commandPath.length === 1 || (commandPath.length === 2 && commandPath[1] === "run"));

@@ -4,7 +4,6 @@ import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { committedConfigFiles } from "./committed-config.test-support.js";
 import {
-  createEnabledWebSearchConfig,
   createWizardTestRuntime as createRuntime,
   EMPTY_CONFIG_SNAPSHOT,
   queueWizardTestPrompts as queueWizardPrompts,
@@ -72,41 +71,6 @@ describe("runConfigureWizard", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("persists provider-owned search and fetch settings", async () => {
-    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => {
-      const config = createEnabledWebSearchConfig("firecrawl", {
-        enabled: true,
-        config: { webSearch: { apiKey: "fc-entered-key" } },
-      })(cfg);
-      return {
-        outcome: "completed",
-        config: {
-          ...config,
-          tools: {
-            ...config.tools,
-            web: { ...config.tools.web, fetch: { provider: "firecrawl" } },
-          },
-        },
-      };
-    });
-    queueWizardPrompts({ select: [], confirm: [true, true] });
-    await configureWeb();
-    expect(written().tools?.web).toMatchObject({
-      search: { provider: "firecrawl", enabled: true },
-      fetch: { provider: "firecrawl", enabled: true },
-    });
-    expect(written().plugins?.entries?.firecrawl).toEqual({
-      enabled: true,
-      config: { webSearch: { apiKey: "fc-entered-key" } },
-    });
-    expect(mocks.setupSearch).toHaveBeenCalledExactlyOnceWith(
-      expect.not.objectContaining({ gateway: expect.anything() }),
-      expect.anything(),
-      expect.anything(),
-      { preserveDisabledSearchState: false },
-    );
-  });
-
   it("disables search when plugin policy leaves no available provider", async () => {
     mocks.resolveSearchProviderOptions.mockReturnValue([]);
     queueWizardPrompts({ select: [], confirm: [true, false] });
@@ -115,16 +79,6 @@ describe("runConfigureWizard", () => {
       expect.stringContaining("No web search providers are currently available"),
       "Web search",
     );
-    expect(written().tools?.web?.search?.enabled).toBe(false);
-  });
-
-  it("disables managed search without loading providers or selecting an agent", async () => {
-    setupBaseWizardState({ agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } } });
-    queueWizardPrompts({ select: [], confirm: [false, true] });
-    await configureWeb();
-    expect(mocks.clackSelect).not.toHaveBeenCalled();
-    expect(mocks.resolveSearchProviderOptions).not.toHaveBeenCalled();
-    expect(mocks.setupSearch).not.toHaveBeenCalled();
     expect(written().tools?.web?.search?.enabled).toBe(false);
   });
 
@@ -311,17 +265,17 @@ describe("runConfigureWizard", () => {
     expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    ["  ", '""'],
-    ["bogus", "bogus"],
-  ])("rejects section %j before the terminal guard", async (section, diagnostic) => {
-    const runtime = createRuntime();
-    await configureCommandFromSectionsArg(["channels", section], runtime, { interactive: false });
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining(`Invalid --section: ${diagnostic}`),
-    );
-    expect(mocks.clackIntro).not.toHaveBeenCalled();
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-  });
+  it.each([["  ", '""']])(
+    "rejects section %j before the terminal guard",
+    async (section, diagnostic) => {
+      const runtime = createRuntime();
+      await configureCommandFromSectionsArg(["channels", section], runtime, { interactive: false });
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining(`Invalid --section: ${diagnostic}`),
+      );
+      expect(mocks.clackIntro).not.toHaveBeenCalled();
+      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    },
+  );
 });

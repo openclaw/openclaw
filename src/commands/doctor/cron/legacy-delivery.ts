@@ -7,27 +7,25 @@ import {
   parseOptionalField,
 } from "../../../cron/delivery-field-schemas.js";
 
-function parseLegacyDeliveryHintsInput(payload: Record<string, unknown>) {
-  return {
-    deliver: parseOptionalField(z.boolean(), payload.deliver),
-    bestEffortDeliver: parseOptionalField(z.boolean(), payload.bestEffortDeliver),
-    channel: parseOptionalField(LowercaseNonEmptyStringFieldSchema, payload.channel),
-    provider: parseOptionalField(LowercaseNonEmptyStringFieldSchema, payload.provider),
-    to: parseOptionalField(TrimmedNonEmptyStringFieldSchema, payload.to),
-    threadId: parseOptionalField(
-      DeliveryThreadIdFieldSchema.transform((value) => String(value)),
-      payload.threadId,
-    ),
-  };
-}
-
 /** Normalize delivery and strip consumed legacy delivery fields from the payload. */
 export function normalizeLegacyDeliveryInput(params: {
   delivery?: Record<string, unknown> | null;
   payload?: Record<string, unknown> | null;
 }) {
   const { payload } = params;
-  const hints = payload ? parseLegacyDeliveryHintsInput(payload) : undefined;
+  const hints = payload
+    ? {
+        deliver: parseOptionalField(z.boolean(), payload.deliver),
+        bestEffortDeliver: parseOptionalField(z.boolean(), payload.bestEffortDeliver),
+        channel: parseOptionalField(LowercaseNonEmptyStringFieldSchema, payload.channel),
+        provider: parseOptionalField(LowercaseNonEmptyStringFieldSchema, payload.provider),
+        to: parseOptionalField(TrimmedNonEmptyStringFieldSchema, payload.to),
+        threadId: parseOptionalField(
+          DeliveryThreadIdFieldSchema.transform((value) => String(value)),
+          payload.threadId,
+        ),
+      }
+    : undefined;
   if (!payload || !hints || !Object.values(hints).some((value) => value !== undefined)) {
     return {
       delivery: params.delivery ?? undefined,
@@ -42,11 +40,10 @@ export function normalizeLegacyDeliveryInput(params: {
   if (hints.channel ?? hints.provider) {
     next.channel = hints.channel ?? hints.provider;
   }
-  if (hints.to) {
-    next.to = hints.to;
-  }
-  if (hints.threadId) {
-    next.threadId = hints.threadId;
+  for (const key of ["to", "threadId"] as const) {
+    if (hints[key]) {
+      next[key] = hints[key];
+    }
   }
   if (hints.bestEffortDeliver !== undefined) {
     next.bestEffort = hints.bestEffortDeliver;

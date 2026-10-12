@@ -1,4 +1,3 @@
-/** Shared Playwright download capture and output handling. */
 import crypto from "node:crypto";
 import path from "node:path";
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";

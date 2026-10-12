@@ -29,9 +29,9 @@ export async function handleDryRunPreflightError(
   ) {
     // A best-effort preview reports incomplete admission; it never authorizes mutation.
     notes.push(error.message.replace(/^Update refused:/u, "Would refuse update:"));
-    return { incompatible: [], indeterminate: [] };
+  } else {
+    await refuseUpdate(error.reason, error.message, error.failureFacts, error.recoverySteps);
   }
-  await refuseUpdate(error.reason, error.message, error.failureFacts, error.recoverySteps);
   return { incompatible: [], indeterminate: [] };
 }
 
@@ -179,18 +179,16 @@ export async function printUpdateDryRun(params: {
       defaultRuntime.log(theme.warn("  Downgrade confirmation would be required in a real run."));
     }
 
-    defaultRuntime.log("");
-    defaultRuntime.log(theme.heading("Planned actions:"));
-    for (const action of preview.actions) {
-      defaultRuntime.log(`  - ${action}`);
-    }
-
-    if (preview.notes.length > 0) {
+    const printSection = (heading: string, lines: string[], format = (line: string) => line) => {
       defaultRuntime.log("");
-      defaultRuntime.log(theme.heading("Notes:"));
-      for (const note of preview.notes) {
-        defaultRuntime.log(`  - ${theme.muted(note)}`);
+      defaultRuntime.log(theme.heading(heading));
+      for (const line of lines) {
+        defaultRuntime.log(`  - ${format(line)}`);
       }
+    };
+    printSection("Planned actions:", preview.actions);
+    if (preview.notes.length > 0) {
+      printSection("Notes:", preview.notes, theme.muted);
     }
     await printResult(
       {

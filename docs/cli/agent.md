@@ -72,7 +72,7 @@ openclaw agent exec "Inspect this repository" \
 
 `--code-mode direct` disables Code Mode, `auto` uses model capability metadata, and `code` forces the generic Code Mode surface for tool-capable runs. `--local-model-lean` removes high-latency and channel-dependent tools and enables the bounded Tool Search defaults for the isolated run.
 
-The timeout defaults to 600 seconds for `agent exec`; this does not change the existing embedded `agent --local` default. A successful run exits `0`, any model or result error exits `1`, and a timeout exits `2`. Failure includes `meta.error`, aborted runs, exhausted model fallbacks, an error stop reason, and any error payload.
+The timeout defaults to 600 seconds per model attempt for `agent exec`, with a fresh budget for each configured fallback; this does not change the existing embedded `agent --local` default. A successful run exits `0`, any model or result error exits `1`, and a timeout exits `2`. Failure includes `meta.error`, aborted runs, exhausted model fallbacks, an error stop reason, and any error payload.
 
 If cleanup fails after a run error or timeout, the original result and exit code are preserved and the cleanup failure is reported on stderr. A cleanup failure after a successful run exits `1`.
 
@@ -132,7 +132,7 @@ The default remains two tasks (`read` and `dependent-read-write`), three modes, 
 | `parallel-independent-reads` | Read three independent files, requesting parallel calls where supported, and compose their values in specified order rather than completion order.                                                       |
 | `dependent-chain`            | Follow two file-path references from `start.json` to a payload, awaiting each dependency before selecting the next path.                                                                                 |
 
-The three file-workflow tasks above require an exact final answer and matching `result.txt`. Inputs are deterministic and identical across models/modes for a given repetition. The prompts request file tools and readback, but the oracle verifies outcomes and aggregate tool execution, not a full call trace: it cannot prove pagination strategy, actual concurrency, dependency ordering, or readback. Those require separate runtime/trajectory proof.
+The three file-workflow tasks above require an exact final answer and matching `result.txt`. Inputs are fixed and identical across models/modes for a given repetition. The prompts request file tools and readback, but the oracle verifies outcomes and aggregate tool execution, not a full call trace: it cannot prove pagination strategy, actual concurrency, dependency ordering, or readback. Those require separate runtime/trajectory proof.
 
 Preview a six-cell direct/Code Mode comparison without building or calling any model:
 
@@ -143,9 +143,9 @@ pnpm qa:code-mode-models -- --model ollama/qwen3.5:9b \
   --task dependent-chain --dry-run
 ```
 
-Remove `--dry-run` only for an explicitly intended model run; provider charges may apply. A dry run writes the plan and empty canonical evidence, not passing task results. Offline harness coverage runs with `pnpm test extensions/qa-lab/src/code-mode-model-matrix.test.ts` and uses a synthetic CLI with no provider calls; it is not live Code Mode performance evidence.
+Remove `--dry-run` only for an explicitly intended model run; provider charges may apply. A dry run writes the plan and empty QA evidence, not passing task results. Offline harness coverage runs with `pnpm test extensions/qa-lab/src/code-mode-model-matrix.test.ts` and uses a synthetic CLI with no provider calls; it is not live Code Mode performance evidence.
 
-The output directory contains canonical QA Lab `qa-evidence.json`. `summary.json` and `results.jsonl` are supporting aggregate and per-cell artifacts; `manifest.json` records the requested matrix and source identity.
+The output directory contains standard QA Lab `qa-evidence.json`. `summary.json` and `results.jsonl` are supporting aggregate and per-cell artifacts; `manifest.json` records the requested matrix and source identity.
 
 Each summary group retains pass rate, first-pass/eventual success, failure categories, and `p50WallMs`. Its additive `metrics` object summarizes assistant turns, outer tool calls, bridge search/describe/tool calls, and reported USD cost as `{ samples, total, p50 }`. Only present envelope values count as samples; missing telemetry is not zero (`total` and `p50` are null with no samples). Observed zeros remain zeros. Medians use the upper middle sample for even counts, matching the existing wall-time summary. All repetitions, including failed ones with telemetry, contribute.
 
@@ -334,7 +334,7 @@ These are observations, not statistical speed guarantees.
 - `--reply-account <id>`: delivery account override
 - `--local`: run the embedded agent directly (after plugin registry preload)
 - `--deliver`: send the reply back to the selected channel/target
-- `--timeout <seconds>`: override this command's agent-turn deadline (default 600, or `agents.defaults.timeoutSeconds`); `0` disables the overall deadline. The 600-second fallback belongs to this CLI command, not ordinary Gateway turns, whose default is 48 hours.
+- `--timeout <seconds>`: override the execution budget for each model attempt (default 600, or `agents.defaults.timeoutSeconds`); each configured fallback gets a fresh budget, and `0` disables the attempt deadline. The Gateway client waits for the run's terminal result across fallback attempts, with cancellation and connection failures still applying. The 600-second default belongs to this CLI command, not ordinary Gateway turns, whose default is 48 hours per attempt.
 - `--json`: output JSON
 
 Gateway commands using OpenClaw's managed agent loop return their completed reply before optional memory
@@ -368,10 +368,11 @@ openclaw agent --agent ops --message "Run locally" --local
 - `--local` runs are one-shot: bundled MCP loopback resources and warm Claude stdio sessions opened for the run are retired after the reply, so scripted invocations do not leave local child processes running. Gateway-backed runs keep Gateway-owned MCP loopback resources under the running Gateway process instead.
 - `--local` requires exclusive ownership of the configured state directory. It refuses to start while a Gateway or another `agent --local` run owns that directory, then holds the same state lock for the full embedded turn. Run without `--local` to use the active Gateway, or stop it first with `openclaw gateway stop`.
 - Standalone embedded execution with `--local` refuses to reuse an existing main session while restart recovery is pending. Run the turn through a healthy Gateway, or reset it there with `/new` or `/reset`; an independent embedded process cannot safely coordinate that recovery owner with the Gateway scanner.
-- With `--agent`, `--channel` and `--to` together, session routing follows the channel's canonical recipient and `session.dmScope`. Channels with a stable outbound-only recipient identity use a provider-owned session isolated from the agent's main session. `--reply-channel` and `--reply-account` affect delivery only.
+- With `--agent`, `--channel` and `--to` together, session routing follows the channel's resolved recipient and `session.dmScope`. Channels with a stable outbound-only recipient identity use a provider-owned session isolated from the agent's main session. `--reply-channel` and `--reply-account` affect delivery only.
 - `--session-key` selects an explicit session key. Agent-prefixed keys must use `agent:<agent-id>:<session-key>`, and `--agent` must match the key's agent id when both are given. Bare non-sentinel keys scope to `--agent` when supplied, or to the configured default agent otherwise; for example `--agent ops --session-key incident-42` routes to `agent:ops:incident-42`. The literal keys `global` and `unknown` stay unscoped only when no `--agent` is supplied.
 - `--json` reserves stdout for the JSON response; Gateway, plugin, and `--local` diagnostics go to stderr so scripts can parse stdout directly.
-- After transient handshake retries are exhausted, a Gateway timeout or closed connection fails the command; the CLI never silently reruns the turn embedded. Transport loss is ambiguous — the Gateway may have accepted and may still finish the turn — so the stderr hint says to check `openclaw gateway status` and the session transcript before retrying or rerunning with `--local`, to avoid executing the turn twice. When the Gateway accepted the run before the transport error, the hint names the accepted run ID, and `--json` failures keep the canonical `ok: false` envelope with `runId` and `origin: "gateway"` fields alongside `error.type`/`error.message`.
+- If a queued input reaches `--timeout` before its turn starts, the Gateway withdraws it. A confirmed withdrawal returns `reason: "input_withdrawn_before_turn"` and `pendingInputId` with a nonzero exit status. The input was not delivered; raise `--timeout` and retry. This differs from a transport timeout, whose outcome remains unknown.
+- After transient handshake retries are exhausted, a Gateway timeout or closed connection fails the command; the CLI never silently reruns the turn embedded. Transport loss is ambiguous — the Gateway may have accepted and may still finish the turn — so the stderr hint says to check `openclaw gateway status` and the session transcript before retrying or rerunning with `--local`, to avoid executing the turn twice. When the Gateway accepted the run before the transport error, the hint names the accepted run ID, and `--json` failures keep the standard `ok: false` envelope with `runId` and `origin: "gateway"` fields alongside `error.type`/`error.message`.
 - `SIGTERM`/`SIGINT` interrupt a waiting Gateway-backed request; if the Gateway already accepted the run, the CLI also sends `chat.abort` for that run id before exiting. `--local` runs receive the same signal but do not send `chat.abort`. On Unix, startup wrappers preserve the runtime child's actual termination signal, including `SIGKILL` after shutdown escalation; shells report `SIGINT` and `SIGTERM` as statuses 130 and 143. Explicit numeric returns stay numeric, including a handled shutdown returning `0`. Windows retains its numeric termination behavior. If the internal run-dedup key already has an active run for this session, the response reports `status: "in_flight"` and the non-JSON CLI prints a stderr diagnostic instead of an empty reply. For external cron/systemd wrappers, keep a hard-kill backstop such as `timeout -k 60 600 openclaw agent ...` so the supervisor can reap the process if shutdown cannot drain.
 - When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), never resolved secret plaintext. Marker writes come from the active source config snapshot, not from resolved runtime secret values.
 
@@ -387,7 +388,7 @@ after acceptance.
 or stopped. After transport loss, check the session transcript before retrying.
 Omitted provenance means the CLI observed no Gateway run identity, not that no
 run happened. Local errors and rejections without a Gateway run ID omit these
-fields. A locally generated idempotency key alone is not Gateway provenance.
+fields. A locally generated request key alone is not Gateway provenance.
 
 ## JSON delivery status
 

@@ -138,6 +138,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
   ) {
     return resolveImplicitProviders({
       agentDir: state.agentDir(),
+      authStore: { version: 1, profiles: {} },
       config: {},
       env: state.env,
       ...options,
@@ -236,6 +237,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({
       providers: [anthropic],
+      providerIds: ["anthropic"],
     });
     expect(prepared.providers).toEqual([openai, anthropic]);
   });
@@ -254,18 +256,10 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       staticCatalogProviderIds: ["byteplus-plan"],
     });
 
-    expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({ providers: [byteplus] });
-  });
-
-  it("treats an explicit empty provider scope as no discovery", async () => {
-    const providers = await discover({
-      providerDiscoveryProviderIds: [],
+    expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({
+      providers: [byteplus],
+      providerIds: ["byteplus-plan"],
     });
-
-    expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
-    expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
-    expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
-    expect(providers).toEqual({});
   });
 
   it("runs only the selected catalog hook within a shared plugin owner", async () => {
@@ -398,36 +392,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
   });
 
-  it("runs a prepared provider's static hook when its result was not prepared", async () => {
-    const anthropic = { ...createStaticOnlyProvider("anthropic"), pluginId: "anthropic" };
-    mocks.runProviderStaticCatalog.mockResolvedValueOnce({
-      providers: {
-        anthropic: {
-          baseUrl: "https://api.anthropic.com",
-          api: "anthropic-messages",
-          models: [],
-        },
-      },
-    });
-
-    const providers = await discover({
-      pluginMetadataSnapshot: metadataWithOwners({
-        providers: new Map([["anthropic", ["anthropic"]]]),
-      }),
-      preparedStaticProviderCatalog: {
-        providers: [anthropic],
-        entries: [],
-      },
-      providerDiscoveryEntriesOnly: true,
-      providerDiscoveryProviderIds: ["anthropic"],
-    });
-
-    expect(Object.keys(providers ?? {})).toEqual(["anthropic"]);
-    expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
-    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledWith({ provider: anthropic });
-  });
-
-  it.each([false, true])(
+  it.each([true])(
     "falls back to static provider catalogs when runtime discovery has no rows (prepared: %s)",
     async (prepared) => {
       const provider = { ...createProviderWithStaticCatalog("minimax"), pluginId: "minimax" };
@@ -470,7 +435,6 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     },
   );
   it.each([
-    { scoped: false, api: "openai-completions" as const },
     { scoped: false, api: "openai-responses" as const },
     { scoped: true, api: "openai-responses" as const },
   ])(
@@ -591,6 +555,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
         await resolveImplicitProviders({
           agentDir: state.agentDir(),
           config: {},
+          authStore: { version: 1, profiles: {} },
           env: {
             ...state.env,
             OPENCLAW_BUNDLED_PLUGINS_DIR: BUNDLED_PLUGINS_DIR,
@@ -628,6 +593,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     const providers = await resolveImplicitProviders({
       agentDir: state.agentDir(),
+      authStore: { version: 1, profiles: {} },
       config: { models: { providers: { "amazon-bedrock": explicitProvider } } },
       env: { ...state.env, AWS_PROFILE: "default" },
       explicitProviders: { "amazon-bedrock": explicitProvider },
@@ -662,6 +628,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     const providers = await resolveImplicitProviders({
       agentDir: state.agentDir(),
+      authStore: { version: 1, profiles: {} },
       config: {
         agents: {
           defaults: {

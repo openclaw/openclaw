@@ -36,10 +36,7 @@ export function resolveTelegramNamedAccountBaseSessionKey(
     accountId: params.route.accountId,
     peer: {
       kind: "direct",
-      id: resolveTelegramDirectPeerId({
-        chatId: params.chatId,
-        senderId: params.senderId,
-      }),
+      id: resolveTelegramDirectPeerId(params),
     },
     dmScope: "per-account-channel-peer",
     identityLinks: params.cfg.session?.identityLinks,

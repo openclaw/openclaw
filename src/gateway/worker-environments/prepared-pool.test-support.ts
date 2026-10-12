@@ -192,7 +192,7 @@ export function usePreparedPoolFixture() {
     const placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
     const requested = await placements.startDispatch(identity);
     const assigned = record.preparation
-      ? placements.bindPreparedEnvironment({
+      ? (await placements.bindPreparedEnvironment({
           ...identity,
           expectedGeneration: requested.generation,
           environmentId: record.environmentId,
@@ -204,7 +204,7 @@ export function usePreparedPoolFixture() {
           leaseId: record.leaseId!,
           bundleHash: BUNDLE_HASH,
           assertCurrent: () => {},
-        })!
+        }))!
       : await placements.transition({
           sessionId,
           from: "requested",

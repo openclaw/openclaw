@@ -21,12 +21,11 @@ const spec = {
 const cachePath = (assigned: typeof spec) => assigned.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH;
 
 describe("Vitest cache slot ownership", () => {
-  it.skipIf(process.platform === "win32").each(["root", "default"] as const)(
-    "reuses separately warmed configs through %s in serial, reordered, and parallel project runs",
-    async (mode) => {
+  it.skipIf(process.platform === "win32")(
+    "reuses separately warmed configs through the default root in serial, reordered, and parallel project runs",
+    async () => {
       const root = tempDirs.make("vitest-cache-layout-");
-      const env: NodeJS.ProcessEnv =
-        mode === "root" ? { OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: root } : {};
+      const env: NodeJS.ProcessEnv = {};
       const run = async (configs: string[], parallel: boolean, seed = false) => {
         const lease = createVitestCacheSlots("linux");
         const specs = applyDefaultVitestCachePaths(
@@ -231,27 +230,6 @@ describe("Vitest cache slot ownership", () => {
           return { groupJoined: true };
         });
       }
-    },
-  );
-
-  it.each(["caller", "unassigned", "watch", "windows"])(
-    "preserves the %s cache owner",
-    async (mode) => {
-      const input = {
-        ...spec,
-        watchMode: mode === "watch",
-        cacheAssignment:
-          mode === "unassigned"
-            ? undefined
-            : mode === "caller"
-              ? { kind: "caller" as const }
-              : spec.cacheAssignment,
-      };
-      const run = createVitestCacheSlots(mode === "windows" ? "win32" : "linux");
-      await run(input, async (assigned) => {
-        expect(assigned).toBe(input);
-        return { groupJoined: false };
-      });
     },
   );
 });

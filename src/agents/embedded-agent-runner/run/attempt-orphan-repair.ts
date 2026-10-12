@@ -40,56 +40,41 @@ function findTrailingMessageEntryForOrphanRepair(
     : undefined;
 }
 
-async function appendTrailingEntryForOrphanRepair(
-  sessionManager: OrphanRepairSessionManager,
-  entry: SessionManagerEntry,
-  replayedEntryIds: Map<string, string>,
-): Promise<void> {
-  if (entry.type === "thinking_level_change") {
-    replayedEntryIds.set(
-      entry.id,
-      await sessionManager.appendThinkingLevelChange(entry.thinkingLevel),
-    );
-    return;
-  }
-  if (entry.type === "model_change") {
-    replayedEntryIds.set(
-      entry.id,
-      await sessionManager.appendModelChange(entry.provider, entry.modelId),
-    );
-    return;
-  }
-  if (entry.type === "custom") {
-    replayedEntryIds.set(
-      entry.id,
-      await sessionManager.appendCustomEntryAsync(entry.customType, entry.data),
-    );
-    return;
-  }
-  if (entry.type === "session_info") {
-    replayedEntryIds.set(entry.id, await sessionManager.appendSessionInfoAsync(entry.name ?? ""));
-    return;
-  }
-  if (entry.type === "label") {
-    const replayedTargetId = replayedEntryIds.get(entry.targetId);
-    if (!replayedTargetId && !sessionManager.getEntry(entry.targetId)) {
-      return;
-    }
-    const targetId = replayedTargetId ?? entry.targetId;
-    replayedEntryIds.set(
-      entry.id,
-      await sessionManager.appendLabelChangeAsync(targetId, entry.label),
-    );
-  }
-}
-
 export async function replayTrailingEntriesForOrphanRepair(
   sessionManager: OrphanRepairSessionManager,
   trailingEntries: SessionManagerEntry[],
 ): Promise<void> {
   const replayedEntryIds = new Map<string, string>();
   for (const entry of trailingEntries) {
-    await appendTrailingEntryForOrphanRepair(sessionManager, entry, replayedEntryIds);
+    let replayedId: string;
+    switch (entry.type) {
+      case "thinking_level_change":
+        replayedId = await sessionManager.appendThinkingLevelChange(entry.thinkingLevel);
+        break;
+      case "model_change":
+        replayedId = await sessionManager.appendModelChange(entry.provider, entry.modelId);
+        break;
+      case "custom":
+        replayedId = await sessionManager.appendCustomEntryAsync(entry.customType, entry.data);
+        break;
+      case "session_info":
+        replayedId = await sessionManager.appendSessionInfoAsync(entry.name ?? "");
+        break;
+      case "label": {
+        const replayedTargetId = replayedEntryIds.get(entry.targetId);
+        if (!replayedTargetId && !sessionManager.getEntry(entry.targetId)) {
+          continue;
+        }
+        replayedId = await sessionManager.appendLabelChangeAsync(
+          replayedTargetId ?? entry.targetId,
+          entry.label,
+        );
+        break;
+      }
+      default:
+        continue;
+    }
+    replayedEntryIds.set(entry.id, replayedId);
   }
 }
 

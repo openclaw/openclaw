@@ -26,7 +26,7 @@ async function initializeRepository(repo: string): Promise<void> {
 
 async function addRemote(root: string, repo: string): Promise<string> {
   const remote = path.join(root, "remote.git");
-  await git(root, "init", "--bare", remote);
+  await git(root, "init", "--bare", "-b", "main", remote);
   await git(repo, "remote", "add", "origin", remote);
   await git(repo, "push", "-u", "origin", "main");
   return await fs.realpath(repo);
@@ -80,6 +80,7 @@ type ManagedWorktreeFixtureParams = {
   ownerKind?: ManagedWorktreeOwnerKind;
   ownerId?: string;
   provisionedPaths?: readonly string[];
+  repoFingerprint?: string;
   repoRoot: string;
   stateDir: string;
 };
@@ -87,12 +88,13 @@ type ManagedWorktreeFixtureParams = {
 export async function materializeManagedWorktreeFixtures(
   params: Omit<ManagedWorktreeFixtureParams, "name"> & { names: string[] },
 ): Promise<ManagedWorktreeRecord[]> {
+  const repoFingerprint = params.repoFingerprint ?? "downstream-fixture";
   const records = params.names.map((name): ManagedWorktreeRecord => ({
     id: `fixture-${name}`,
     name,
-    repoFingerprint: "downstream-fixture",
+    repoFingerprint,
     repoRoot: params.repoRoot,
-    path: path.join(params.stateDir, "worktrees", "downstream-fixture", name),
+    path: path.join(params.stateDir, "worktrees", repoFingerprint, name),
     branch: `openclaw/${name}`,
     baseRef: "HEAD",
     ownerKind: params.ownerKind ?? "manual",

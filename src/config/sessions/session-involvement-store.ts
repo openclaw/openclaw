@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
+import { deferOpenClawAgentPostCommitPublication } from "../../state/openclaw-agent-db.js";
 import {
   prepareUserProfileCatalog,
   readUserProfileAliases,
@@ -47,17 +48,19 @@ export async function updateSessionProfileInvolvementAsync(
       { type: "involvement", input: { scope, params: captured, profiles: [] } },
       // Personal involvement never writes process-held incognito stores.
       () => false,
-      (result, location, database) => {
-        if (result.changed && database) {
+      (result, location, database, currentKeys) => {
+        if (result.changed && database && (!currentKeys || currentKeys.has(location.sessionKey))) {
           publishSessionEntryCacheInvalidation(database, {
             sessionKey: location.sessionKey,
             facts: { kind: "unchanged" },
           });
-          emitSessionLifecycleEvent({
-            agentId: location.agentId,
-            sessionKey: location.sessionKey,
-            reason: "involvement",
-          });
+          deferOpenClawAgentPostCommitPublication(database, () =>
+            emitSessionLifecycleEvent({
+              agentId: location.agentId,
+              sessionKey: location.sessionKey,
+              reason: "involvement",
+            }),
+          );
         }
         return result.accepted;
       },

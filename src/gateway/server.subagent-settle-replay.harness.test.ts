@@ -9,7 +9,10 @@ import type { AgentDeliveryEvidence } from "../agents/embedded-agent-runner/deli
 import { buildMainSessionRecoveryClearPatch } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
-import { settleRequesterCompletionBatch } from "../agents/subagents/completion/subagent-completion-admission.store.js";
+import {
+  mutateRequesterCompletionBatch,
+  SubagentCompletionSourceChangedError,
+} from "../agents/subagents/completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
@@ -145,10 +148,16 @@ describe("public yielded settle replay with real Gateway admission", () => {
       Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0]["completeBatch"]
     >(async (batch, _generation, outcome, onCommitted) => {
       expect(outcome).toBeDefined();
-      await settleRequesterCompletionBatch({
-        entries: batch.map((subagent) => ({ subagent })),
-        outcome: outcome!,
-        isCurrent: () => subagentRuns.get(child.runId) === child,
+      await mutateRequesterCompletionBatch({
+        entries: batch,
+        operation: { kind: "settle", outcome: outcome! },
+        assertCurrent: () => {
+          if (subagentRuns.get(child.runId) !== child) {
+            throw new SubagentCompletionSourceChangedError(
+              "Subagent completion owner changed before settlement",
+            );
+          }
+        },
       });
       onCommitted?.();
     });

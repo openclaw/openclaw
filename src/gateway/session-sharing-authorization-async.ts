@@ -36,12 +36,24 @@ export async function resolveSessionMutationAuthorizationAsync(
     return { error: input.error };
   }
   const cfg = params.context.getRuntimeConfig();
-  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [target]);
   const preparedProfiles = await prepareSessionSharingProfiles(params.client);
   params.assertInvocationCurrent?.();
   return withSessionSharingTarget(
     { cfg, sessionKey: target.sessionKey, agentId: input.value },
     (read) => {
+      const selectedSource = read.selection?.source;
+      const selection = read.selection &&
+        selectedSource && {
+          ...read.selection,
+          source: {
+            ...selectedSource,
+            assertCurrent() {
+              selectedSource.assertCurrent();
+              assertRoutingCurrent(params.context.getRuntimeConfig());
+            },
+          },
+        };
       const assertCurrent = () => {
         params.assertInvocationCurrent?.();
         preparedProfiles.readCurrent();
@@ -52,7 +64,7 @@ export async function resolveSessionMutationAuthorizationAsync(
       return resolveSessionMutationAuthorization({
         ...params,
         preparedProfiles,
-        preparedSharing: { ...read, assertCurrent },
+        preparedSharing: { ...read, selection, assertCurrent },
       });
     },
   );

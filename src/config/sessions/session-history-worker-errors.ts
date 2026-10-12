@@ -1,5 +1,5 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget.js";
+import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,

@@ -4,9 +4,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
-import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import {
+  historyLane,
+  targetDiscoveryLane,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withAgentDatabaseMaintenanceLease } from "../../state/openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db-schema.js";
@@ -126,7 +129,8 @@ it("rejects a persisted quarantine through the history worker without retargetin
     manager.appendMessage(makeUserMessage("keep the original view", 2));
     const before = manager.getPersistedEntries();
     const priorTarget = manager.getSessionTarget();
-    const dispatch = vi.spyOn(historyLane.pool, "run");
+    // The closed database makes this a cold read, which runs on the target-discovery lane.
+    const dispatch = vi.spyOn(targetDiscoveryLane.pool, "run");
     try {
       const failure = await manager.setSessionTargetAsync(target).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(Error);
@@ -143,7 +147,10 @@ it("rejects a persisted quarantine through the history worker without retargetin
       expect(manager.getSessionTarget()).toEqual(priorTarget);
       expect(manager.getCwd()).toBe("/retained");
       expect(manager.isPersisted()).toBe(false);
-      expect(historyLane.pool.getSnapshot()).toMatchObject({ activeTasks: 0, pendingTasks: 0 });
+      expect(targetDiscoveryLane.pool.getSnapshot()).toMatchObject({
+        activeTasks: 0,
+        pendingTasks: 0,
+      });
     } finally {
       dispatch.mockRestore();
       expect(clearOpenClawDatabaseQuarantine(target.storePath, { env: state.env })).toBe(true);

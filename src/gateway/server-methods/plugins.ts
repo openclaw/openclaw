@@ -52,6 +52,14 @@ function pluginReadError(error: unknown) {
   );
 }
 
+function pluginCatalogError(subject: "discovery is" | "categories are" | "details are") {
+  return (error: unknown) =>
+    errorShape(
+      ErrorCodes.UNAVAILABLE,
+      `Plugin ${subject} unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
+    );
+}
+
 export const pluginsHandlers: GatewayRequestHandlers = {
   ...catalogHandlers,
   ...pluginCredentialHandlers,
@@ -324,11 +332,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         );
       }
     },
-    (error) =>
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `Plugin discovery is unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
-      ),
+    pluginCatalogError("discovery is"),
   ),
   "plugins.catalog.categories": defineValidatedGatewayHandler(
     "plugins.catalog.categories",
@@ -336,11 +340,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     async ({ respond }) => {
       respond(true, { categories: await fetchClawHubPluginCategories() }, undefined);
     },
-    (error) =>
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `Plugin categories are unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
-      ),
+    pluginCatalogError("categories are"),
   ),
   "plugins.catalog.get": defineValidatedGatewayHandler(
     "plugins.catalog.get",
@@ -419,10 +419,6 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       }
       respond(true, result, undefined);
     },
-    (error) =>
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `Plugin details are unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
-      ),
+    pluginCatalogError("details are"),
   ),
 };

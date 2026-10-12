@@ -1,7 +1,11 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { asRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
@@ -125,7 +129,7 @@ export function createWorkboardDispatchHandler(params: {
   store: WorkboardStore;
 }) {
   return async (
-    { params: requestParams, client, context }: GatewayMethodContext,
+    { params: requestParams, client, context, sessionMutationCommitGuard }: GatewayMethodContext,
     options: { supportsMaxStarts: boolean; directCard?: boolean },
   ) => {
     const cardId = options.directCard ? readId(requestParams) : undefined;
@@ -136,16 +140,10 @@ export function createWorkboardDispatchHandler(params: {
     const maxStarts = options.supportsMaxStarts
       ? readOptionalPositiveInteger(rawMaxStarts, "maxStarts")
       : undefined;
-    const provider =
-      options.directCard &&
-      typeof requestParams.provider === "string" &&
-      requestParams.provider.trim()
-        ? requestParams.provider.trim()
-        : undefined;
-    const model =
-      options.directCard && typeof requestParams.model === "string" && requestParams.model.trim()
-        ? requestParams.model.trim()
-        : undefined;
+    const provider = options.directCard
+      ? normalizeOptionalString(requestParams.provider)
+      : undefined;
+    const model = options.directCard ? normalizeOptionalString(requestParams.model) : undefined;
     const result = await dispatchAndStartWorkboardCards({
       store: params.store,
       subagent: params.api.runtime.subagent,
@@ -157,6 +155,7 @@ export function createWorkboardDispatchHandler(params: {
         ...(provider ? { provider } : {}),
         ...(model ? { model } : {}),
         materializeWorktree: true,
+        assertOwnerCurrent: sessionMutationCommitGuard,
         resolveAgentWorkspace: (agentId) =>
           resolveWorkboardAgentWorkspace(context.getRuntimeConfig(), agentId),
         resolveAgentWorkspaceRuntime: (

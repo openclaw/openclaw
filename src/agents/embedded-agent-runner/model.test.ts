@@ -102,12 +102,13 @@ vi.mock("../model-suppression.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Fixture snapshot lifetimes exclude process-wide auth publication and runtime owners.
 vi.mock("../prepared-model-runtime.js", async () => {
   const discovery = await import("../agent-model-discovery.js");
   const discoveryContext = await import("../model-discovery-context.js");
   const { PreparedModelRuntimeOwnerNotPublishedError } =
     await import("../prepared-model-runtime.errors.js");
-  const createSnapshot = (input: {
+  const createSnapshot = async (input: {
     agentId?: string;
     agentDir: string;
     config?: OpenClawConfig;
@@ -123,7 +124,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
     if (current) {
       return current;
     }
-    const { authStorage } = discovery.discoverAuthStorageFacts(input.agentDir);
+    const { authStorage } = await discovery.discoverAuthStorageFacts(input.agentDir);
     const modelRegistry = discovery.discoverModels(authStorage, input.agentDir, {
       ...(input.config ? { config: input.config } : {}),
       ...(workspaceDir ? { workspaceDir } : {}),
@@ -157,7 +158,16 @@ vi.mock("../prepared-model-runtime.js", async () => {
     PreparedModelRuntimeOwnerNotPublishedError,
     getPreparedModelRuntimeSnapshot: (input: Parameters<typeof createSnapshot>[0]) => {
       preparedSnapshotState.getInputs.push(input);
-      return preparedSnapshotState.enabled ? createSnapshot(input) : undefined;
+      if (!preparedSnapshotState.enabled) {
+        return undefined;
+      }
+      const workspaceDir = discoveryContext.resolveModelWorkspaceDir(
+        input.config,
+        input.workspaceDir,
+        input.agentId,
+      );
+      const key = `${input.agentId ?? ""}\u0000${input.agentDir}\u0000${workspaceDir ?? ""}`;
+      return preparedSnapshotState.snapshots.get(key);
     },
     loadPreparedModelRuntimeSnapshot: async (input: Parameters<typeof createSnapshot>[0]) =>
       createSnapshot(input),
@@ -186,11 +196,7 @@ import type { Model } from "../../llm/types.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { expectUnknownModelErrorResult } from "./model.forward-compat.test-support.js";
-import {
-  createEmptyAgentDiscoveryStores,
-  resolveModelAsync,
-  resolveModelWithRegistry,
-} from "./model.js";
+import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
 import type { ProviderRuntimeHooks } from "./model.provider-hooks.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
@@ -823,12 +829,8 @@ describe("resolveModel", () => {
         },
       ],
     });
-    const resolved = await resolveModelWithRegistry({
-      provider: "custom",
-      modelId: "Model",
-      cfg,
-      modelRegistry: createEmptyAgentDiscoveryStores().modelRegistry,
-      agentDir: state.agentDir(),
+    const { model: resolved } = await resolveModelAsync("custom", "Model", state.agentDir(), cfg, {
+      ...createEmptyAgentDiscoveryStores(),
       runtimeHooks: createRuntimeHooks(),
     });
     expect.soft(resolved).toMatchObject({

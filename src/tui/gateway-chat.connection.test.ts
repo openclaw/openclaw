@@ -45,11 +45,12 @@ vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../infra/device-identity.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/device-identity.js")>();
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-identity-async.js")>();
   return {
     ...actual,
-    loadDeviceIdentityIfPresent: (...args: unknown[]) => loadDeviceIdentityIfPresentMock(...args),
+    loadDeviceIdentityIfPresentAsync: (...args: unknown[]) =>
+      loadDeviceIdentityIfPresentMock(...args),
   };
 });
 
@@ -240,5 +241,15 @@ describe("GatewayChatClient connections", () => {
   it("keeps configured remote auth required when no origin device token exists", async () => {
     setGateway({ mode: "remote", remote: { url: "wss://remote.example/rpc" } });
     await expect(resolveGatewayConnection({})).rejects.toThrow("Missing gateway auth credentials.");
+  });
+
+  it("points to local chat instead of a token when no local Gateway is running", async () => {
+    loadConfig.mockReturnValue({});
+    await expect(resolveGatewayConnection({})).rejects.toThrow(
+      /No Gateway is running on this machine\.\nFix: run `openclaw chat`/,
+    );
+    // A running Gateway without stored pairing still needs a credential.
+    readActiveGatewayLockPortMock.mockResolvedValue(18789);
+    await expect(resolveGatewayConnection({})).rejects.toThrow("Missing gateway auth token.");
   });
 });

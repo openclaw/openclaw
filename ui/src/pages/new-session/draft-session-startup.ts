@@ -3,13 +3,9 @@ import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 
-type DraftSessionStartupIntent = {
-  params: SessionCreateParams;
+type DraftSessionStartupIntent = DraftStartupResumption & {
   scope: string;
-  startedAt: number;
-  deadline: number;
   interrupted: boolean;
-  background: boolean;
 };
 
 /** A creation attempt the submission flow resumes after reconnecting. */
@@ -45,7 +41,6 @@ export class DraftSessionStartup {
         params: Object.freeze({ ...params, idempotencyKey: generateUUID() }),
         scope,
         startedAt,
-        deadline: startedAt + SESSION_CREATE_RETRY_WINDOW_MS,
         interrupted: false,
         background,
       };
@@ -78,7 +73,7 @@ export class DraftSessionStartup {
     if (!this.pending?.interrupted) {
       return { kind: "wait" };
     }
-    if (Date.now() >= this.pending.deadline) {
+    if (Date.now() >= this.pending.startedAt + SESSION_CREATE_RETRY_WINDOW_MS) {
       this.clear();
       return { kind: "expired" };
     }

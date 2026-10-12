@@ -3,11 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../../src/shared/non-packaged-plugin-dirs.ts";
-import {
-  BUNDLED_PLUGIN_ROOT_DIR,
-  bundledDistPluginFile,
-  bundledPluginFile,
-} from "./bundled-plugin-paths.mjs";
+import { BUNDLED_PLUGIN_ROOT_DIR, bundledDistPluginFile } from "./bundled-plugin-paths.mjs";
 import {
   OPTIONAL_BUNDLED_BUILD_ENV,
   shouldBuildBundledCluster,
@@ -144,19 +140,10 @@ export function mapPluginCatalogEntries(manifest, mapEntry) {
 
 /** Collect plugin source entry files declared by package and manifest metadata. */
 export function collectPluginSourceEntries(packageJson, manifest = {}) {
-  let packageEntries = Array.isArray(packageJson?.openclaw?.extensions)
-    ? packageJson.openclaw.extensions.filter(
-        (entry) => typeof entry === "string" && entry.trim().length > 0,
-      )
-    : [];
-  const setupEntry =
-    typeof packageJson?.openclaw?.setupEntry === "string" &&
-    packageJson.openclaw.setupEntry.trim().length > 0
-      ? packageJson.openclaw.setupEntry
-      : undefined;
-  if (setupEntry) {
-    packageEntries = Array.from(new Set([...packageEntries, setupEntry]));
-  }
+  const packageEntries = [
+    ...(Array.isArray(packageJson?.openclaw?.extensions) ? packageJson.openclaw.extensions : []),
+    packageJson?.openclaw?.setupEntry,
+  ].filter((entry) => typeof entry === "string" && entry.trim().length > 0);
   return [
     ...new Set([
       ...(packageEntries.length > 0 ? packageEntries : ["./index.ts"]),
@@ -251,28 +238,24 @@ function collectTrackedBundledPluginFiles(cwd) {
 }
 
 function collectBundledPluginCandidates(cwd, extensionsRoot) {
-  const trackedFiles = collectTrackedBundledPluginFiles(cwd);
-  if (trackedFiles) {
-    return [...trackedFiles.entries()]
-      .map(([dirName, relativeFiles]) => ({
-        dirName,
-        pluginDir: path.join(extensionsRoot, dirName),
-        relativeFiles,
-        topLevelPublicSurfaceEntries: collectTopLevelPublicSurfaceEntriesFromFiles(relativeFiles),
-      }))
-      .toSorted((left, right) => left.dirName.localeCompare(right.dirName));
-  }
-
-  return fs
-    .readdirSync(extensionsRoot, { withFileTypes: true })
-    .filter((dirent) => dirent.isDirectory())
-    .map((dirent) => {
-      const pluginDir = path.join(extensionsRoot, dirent.name);
+  const candidates =
+    collectTrackedBundledPluginFiles(cwd) ??
+    new Map(
+      fs
+        .readdirSync(extensionsRoot, { withFileTypes: true })
+        .filter((dirent) => dirent.isDirectory())
+        .map((dirent) => [dirent.name, null]),
+    );
+  return [...candidates]
+    .map(([dirName, relativeFiles]) => {
+      const pluginDir = path.join(extensionsRoot, dirName);
       return {
-        dirName: dirent.name,
+        dirName,
         pluginDir,
-        relativeFiles: null,
-        topLevelPublicSurfaceEntries: collectTopLevelPublicSurfaceEntries(pluginDir),
+        relativeFiles,
+        topLevelPublicSurfaceEntries: relativeFiles
+          ? collectTopLevelPublicSurfaceEntriesFromFiles(relativeFiles)
+          : collectTopLevelPublicSurfaceEntries(pluginDir),
       };
     })
     .toSorted((left, right) => left.dirName.localeCompare(right.dirName));
@@ -447,22 +430,6 @@ export function collectRetainedDoctorBuildEntries(params = {}) {
     }
   }
   return entries;
-}
-
-/**
- * Return buildable bundled plugin entries with optional CLI filtering applied.
- * @internal Directly tested script implementation detail.
- */
-export function listBundledPluginBuildEntries(params = {}) {
-  return Object.fromEntries(
-    collectBundledPluginBuildEntries(params).flatMap(({ id, sourceEntries }) =>
-      sourceEntries.map((entry) => {
-        const normalizedEntry = entry.replace(/^\.\//, "");
-        const entryKey = bundledPluginFile(id, normalizedEntry.replace(/\.[^.]+$/u, ""));
-        return [entryKey, toPosixPath(path.join(BUNDLED_PLUGIN_ROOT_DIR, id, normalizedEntry))];
-      }),
-    ),
-  );
 }
 
 /**

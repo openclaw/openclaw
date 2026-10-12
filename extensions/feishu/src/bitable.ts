@@ -148,58 +148,45 @@ async function cleanupNewBitable(
 ): Promise<{ cleanedRows: number; cleanedFields: number }> {
   let cleanedRows = 0;
   let cleanedFields = 0;
+  const tablePath = { app_token: appToken, table_id: tableId };
 
   const fieldsRes = await client.bitable.appTableField.list({
-    path: { app_token: appToken, table_id: tableId },
+    path: tablePath,
   });
 
   if (fieldsRes.code === 0 && fieldsRes.data?.items) {
     const primaryField = fieldsRes.data.items.find((f) => f.is_primary);
-    if (primaryField?.field_id) {
-      try {
-        const response = await client.bitable.appTableField.update({
-          path: {
-            app_token: appToken,
-            table_id: tableId,
-            field_id: primaryField.field_id,
-          },
-          data: {
-            field_name: tableName.length <= 20 ? tableName : "Name",
-            type: 1,
-          },
-        });
-        ensureLarkSuccess(response, "bitable.appTableField.update");
-        cleanedFields++;
-      } catch (err) {
-        logger.debug(`Failed to rename primary field: ${String(err)}`);
-      }
-    }
-
     const defaultFieldsToDelete = fieldsRes.data.items.filter(
       (f) => !f.is_primary && DEFAULT_CLEANUP_FIELD_TYPES.has(f.type ?? 0),
     );
-
-    for (const field of defaultFieldsToDelete) {
-      if (field.field_id) {
-        try {
-          const response = await client.bitable.appTableField.delete({
-            path: {
-              app_token: appToken,
-              table_id: tableId,
-              field_id: field.field_id,
-            },
-          });
-          ensureLarkSuccess(response, "bitable.appTableField.delete");
-          cleanedFields++;
-        } catch (err) {
-          logger.debug(`Failed to delete default field ${field.field_name}: ${String(err)}`);
-        }
+    // Keep primary-field rename ahead of deletions, with independent failure accounting.
+    for (const field of [primaryField, ...defaultFieldsToDelete]) {
+      if (!field?.field_id) {
+        continue;
+      }
+      const isPrimary = field === primaryField;
+      const operation = isPrimary ? "update" : "delete";
+      try {
+        const path = { ...tablePath, field_id: field.field_id };
+        const response = isPrimary
+          ? await client.bitable.appTableField.update({
+              path,
+              data: { field_name: tableName.length <= 20 ? tableName : "Name", type: 1 },
+            })
+          : await client.bitable.appTableField.delete({ path });
+        ensureLarkSuccess(response, `bitable.appTableField.${operation}`);
+        cleanedFields++;
+      } catch (err) {
+        const failure = isPrimary
+          ? "rename primary field"
+          : `delete default field ${field.field_name}`;
+        logger.debug(`Failed to ${failure}: ${String(err)}`);
       }
     }
   }
 
   const recordsRes = await client.bitable.appTableRecord.list({
-    path: { app_token: appToken, table_id: tableId },
+    path: tablePath,
     params: { page_size: 100 },
   });
 
@@ -212,7 +199,7 @@ async function cleanupNewBitable(
     if (emptyRecordIds.length > 0) {
       try {
         const response = await client.bitable.appTableRecord.batchDelete({
-          path: { app_token: appToken, table_id: tableId },
+          path: tablePath,
           data: { records: emptyRecordIds },
         });
         ensureLarkSuccess(response, "bitable.appTableRecord.batchDelete");
@@ -222,7 +209,7 @@ async function cleanupNewBitable(
         for (const recordId of emptyRecordIds) {
           try {
             const response = await client.bitable.appTableRecord.delete({
-              path: { app_token: appToken, table_id: tableId, record_id: recordId },
+              path: { ...tablePath, record_id: recordId },
             });
             ensureLarkSuccess(response, "bitable.appTableRecord.delete");
             cleanedRows++;
@@ -258,8 +245,7 @@ async function createApp(
 
   const log: CleanupLogger = logger ?? { debug: () => {} };
   let tableId: string | undefined;
-  let cleanedRows = 0;
-  let cleanedFields = 0;
+  let cleanup = { cleanedRows: 0, cleanedFields: 0 };
 
   try {
     const tablesRes = await client.bitable.appTable.list({
@@ -268,9 +254,7 @@ async function createApp(
     if (tablesRes.code === 0) {
       tableId = tablesRes.data?.items?.[0]?.table_id;
       if (tableId) {
-        const cleanup = await cleanupNewBitable(client, appToken, tableId, name, log);
-        cleanedRows = cleanup.cleanedRows;
-        cleanedFields = cleanup.cleanedFields;
+        cleanup = await cleanupNewBitable(client, appToken, tableId, name, log);
       }
     }
   } catch (err) {
@@ -282,8 +266,8 @@ async function createApp(
     table_id: tableId,
     name: res.data?.app?.name,
     url: res.data?.app?.url,
-    cleaned_placeholder_rows: cleanedRows,
-    cleaned_default_fields: cleanedFields,
+    cleaned_placeholder_rows: cleanup.cleanedRows,
+    cleaned_default_fields: cleanup.cleanedFields,
     hint: tableId
       ? `Table created. Use app_token="${appToken}" and table_id="${tableId}" for other bitable tools.`
       : "Application created, but table metadata was not retrieved. Inspect the existing application using the returned app_token or URL; do not create it again.",

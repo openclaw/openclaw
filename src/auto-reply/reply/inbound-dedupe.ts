@@ -33,9 +33,6 @@ type InboundDedupeClaimResult =
   | { status: "invalid" | "duplicate" | "inflight"; commit?: never; release?: never }
   | { status: "claimed"; commit: () => void; release: () => void };
 
-const resolveInboundPeerId = (ctx: MsgContext) =>
-  ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
-
 function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
   const commandTarget = resolveCommandTurnTargetSessionKey(ctx);
   // One command event can target several sessions; dedupe each addressed operation.
@@ -43,16 +40,10 @@ function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
     return commandTarget;
   }
   const sessionKey = normalizeOptionalString(ctx.SessionKey) || "";
-  if (!sessionKey) {
-    return "";
-  }
   const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return sessionKey;
-  }
   // The same physical inbound message should never run twice for the same
   // agent, even if a routing bug presents it under both main and direct keys.
-  return `agent:${parsed.agentId}`;
+  return parsed ? `agent:${parsed.agentId}` : sessionKey;
 }
 
 function buildInboundDedupeKey(ctx: MsgContext): string | null {
@@ -62,7 +53,7 @@ function buildInboundDedupeKey(ctx: MsgContext): string | null {
   if (!provider || !messageId) {
     return null;
   }
-  const peerId = resolveInboundPeerId(ctx);
+  const peerId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
   if (!peerId) {
     return null;
   }

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { execRequestMatches, type ExecRequestOwner } from "../../../infra/exec-request-context.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import {
   isSubagentSessionKey,
@@ -15,6 +16,11 @@ import {
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
 import type { SessionCapabilityLookup } from "../spawn/subagent-session-store.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import type { ResolvedSubagentController } from "./subagent-control.types.js";
+import {
+  readSubagentExecRequestController,
+  type SubagentRequestSessionOrigin,
+} from "./subagent-exec-request-ownership.js";
 import { observeSubagentExecution } from "./subagent-execution-observation.js";
 import { captureSubagentListReadContext, type SubagentListReadContext } from "./subagent-list.js";
 import { getSubagentRunsForRequesterSession, subagentRuns } from "./subagent-registry-memory.js";
@@ -37,19 +43,12 @@ import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identit
 import {
   isSameSubagentRun,
   isSameSubagentRunOwner,
+  getSubagentRunRuntimeKey,
   latestSubagentRun,
 } from "./subagent-run-generation.js";
 
 export const DEFAULT_RECENT_MINUTES = 30;
 export const MAX_RECENT_MINUTES = 24 * 60;
-
-export type ResolvedSubagentController = {
-  controllerSessionKey: string;
-  controllerAgentId?: string;
-  callerSessionKey: string;
-  callerIsSubagent: boolean;
-  controlScope: "children" | "none";
-};
 
 /** Resolve caller routing before preparing its persisted capability facts. */
 export function resolveSubagentControllerIdentity(params: {
@@ -94,7 +93,8 @@ export function resolveSubagentController(params: {
   };
 }
 
-export function listControlledSubagentRunsForTurn(
+function listControlledSubagentRunsForTurn(
+  cfg: OpenClawConfig,
   controller: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">,
   requesterTurnRunId?: string,
 ): SubagentRunRecord[] {
@@ -102,8 +102,7 @@ export function listControlledSubagentRunsForTurn(
   const controlledRuns = listRunsForControllerFromRuns(
     subagentRuns,
     controller.controllerSessionKey,
-    controller.controllerAgentId,
-  );
+  ).filter((entry) => !ensureSubagentControllerOwnsRun({ cfg, controller, entry }));
   if (requesterTurnRunId === undefined) {
     return controlledRuns;
   }
@@ -135,6 +134,123 @@ export function listControlledSubagentRunsForTurn(
         runsById,
       }),
   );
+}
+
+export type ExecRequestSubagentSelection = {
+  runs: SubagentRunRecord[];
+  ownsRoot: (entry: SubagentRunRecord) => boolean;
+  selectPublishedRoot?: (entry: SubagentRunRecord) => boolean;
+  sessionGeneration?: SubagentRequestSessionOrigin["target"];
+};
+
+/** Freeze native owners before cancellation yields; routed IDs never grant control. */
+export function captureExecRequestSubagentSelection(params: {
+  cfg: OpenClawConfig;
+  controller: ResolvedSubagentController;
+  requesterTurnRunId?: string;
+  owners: readonly ExecRequestOwner[];
+  sessionOrigin?: SubagentRequestSessionOrigin;
+}): ExecRequestSubagentSelection {
+  const owners = new Set(params.owners);
+  const origin = params.requesterTurnRunId === undefined ? params.sessionOrigin : undefined;
+  if (
+    origin &&
+    (origin.target.sessionKey !== params.controller.controllerSessionKey ||
+      origin.target.agentId !== params.controller.controllerAgentId)
+  ) {
+    throw new Error("Native Stop origin does not match its admitted controller.");
+  }
+  const acceptsOrigin = (owner: ExecRequestOwner) =>
+    Boolean(
+      origin && execRequestMatches(owner, origin.target) && origin.acceptsRequest(owner.identity),
+    );
+  const turnIds = params.requesterTurnRunId
+    ? [
+        ...new Set([
+          params.requesterTurnRunId,
+          ...params.owners.flatMap((owner) => [...owner.turnRunIds]),
+        ]),
+      ]
+    : [undefined];
+  type ControllerIdentity = Pick<
+    ResolvedSubagentController,
+    "controllerSessionKey" | "controllerAgentId"
+  >;
+  const selected = new Map<
+    object,
+    {
+      entry: SubagentRunRecord;
+      controller: ControllerIdentity;
+      requestOwners?: ReadonlySet<ExecRequestOwner>;
+    }
+  >();
+  const capture = (
+    entry: SubagentRunRecord,
+    controller: ControllerIdentity,
+    requestOwners?: ReadonlySet<ExecRequestOwner>,
+  ) => {
+    const key = getSubagentRunRuntimeKey(entry);
+    if (selected.has(key)) {
+      return false;
+    }
+    selected.set(key, { entry, controller, requestOwners });
+    return true;
+  };
+  const selectPublishedRoot = (entry: SubagentRunRecord) => {
+    const controller = readSubagentExecRequestController(entry, (owner) => owners.has(owner));
+    return controller !== undefined && capture(entry, controller, owners);
+  };
+  let selectedByOrigin = false;
+  for (const runId of turnIds) {
+    for (const entry of listControlledSubagentRunsForTurn(params.cfg, params.controller, runId)) {
+      capture(entry, params.controller);
+    }
+  }
+  if (owners.size > 0 || origin) {
+    for (const entry of subagentRuns.values()) {
+      const controller = readSubagentExecRequestController(entry, (owner) => owners.has(owner));
+      if (controller) {
+        capture(entry, controller, owners);
+      } else if (origin) {
+        const originOwners = new Set<ExecRequestOwner>();
+        const originController = readSubagentExecRequestController(entry, (owner) => {
+          if (!acceptsOrigin(owner)) {
+            return false;
+          }
+          originOwners.add(owner);
+          return true;
+        });
+        if (originController) {
+          selectedByOrigin = capture(entry, originController, originOwners) || selectedByOrigin;
+        }
+      }
+    }
+  }
+  return {
+    runs: [...selected.values()].map(({ entry }) => entry),
+    // Late publication must prove the captured request object, never a new session match.
+    selectPublishedRoot: owners.size > 0 ? selectPublishedRoot : undefined,
+    sessionGeneration: selectedByOrigin ? origin?.target : undefined,
+    ownsRoot(entry) {
+      const captured = selected.get(getSubagentRunRuntimeKey(entry));
+      return Boolean(
+        captured &&
+        isSameSubagentRunOwner(entry, captured.entry) &&
+        // Accepted native settlement retains the published binding. Live caller
+        // and origin-generation checks belong to cancellationControl's fresh effects.
+        (!captured.requestOwners ||
+          readSubagentExecRequestController(
+            entry,
+            (owner) => captured.requestOwners?.has(owner) === true,
+          )) &&
+        !ensureSubagentControllerOwnsRun({
+          cfg: params.cfg,
+          controller: captured.controller,
+          entry,
+        }),
+      );
+    },
+  };
 }
 
 function resolveRunRequesterAgentId(

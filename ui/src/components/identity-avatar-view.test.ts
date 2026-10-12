@@ -2,16 +2,33 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveThemeBranding,
+  type ThemeBranding,
+} from "../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { currentThemeBranding, setCurrentThemeBranding } from "../app/theme-branding.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import {
   renderAgentIdentityAvatar,
   identityAvatarClass,
   renderIdentityAvatarImage,
-  resolveIdentityAvatarView,
+  renderIdentityAvatar,
   type IdentityAvatarView,
 } from "./identity-avatar-view.ts";
+
+function avatarView(identity: Parameters<typeof renderIdentityAvatar>[0]): IdentityAvatarView {
+  let resolved: IdentityAvatarView | undefined;
+  renderIdentityAvatar(identity, (view) => {
+    resolved = view;
+    return nothing;
+  });
+  if (!resolved) {
+    throw new Error("Expected an immediate view for explicit avatar metadata");
+  }
+  return resolved;
+}
 
 function renderAvatar(view: IdentityAvatarView, container: HTMLElement) {
   return render(
@@ -35,6 +52,44 @@ afterEach(() => {
 });
 
 describe("shared identity avatar view", () => {
+  it("updates reserved avatars on theme publication without rerendering their host", () => {
+    const previous = currentThemeBranding();
+    const container = document.createElement("div");
+    setCurrentThemeBranding(resolveThemeBranding(undefined));
+    const part = render(
+      renderAgentIdentityAvatar({ id: "openclaw", name: "Assistant" }),
+      container,
+    );
+    try {
+      expect(container.querySelector("img")?.getAttribute("src")).toContain("favicon.svg");
+      const publish = (url: string) => {
+        const branding = resolveThemeBranding({
+          brandIcon: "compass",
+          artwork: { icons: { compass: { url } } },
+        });
+        setCurrentThemeBranding(branding);
+        return branding;
+      };
+      const first = publish("/__openclaw__/plugin-theme-art/demo/brand/icon/compass?v=1");
+      const icon = () =>
+        container.querySelector<HTMLElement & { branding: ThemeBranding }>(
+          "openclaw-theme-brand-icon",
+        );
+      expect(icon()?.branding).toBe(first);
+      const next = publish("/__openclaw__/plugin-theme-art/demo/brand/icon/compass?v=2");
+      expect(icon()?.branding).toBe(next);
+      part.setConnected(false);
+      setCurrentThemeBranding(resolveThemeBranding(undefined));
+      expect(icon()?.branding).toBe(next);
+      part.setConnected(true);
+      expect(icon()).toBeNull();
+      expect(container.querySelector("img")?.getAttribute("src")).toContain("favicon.svg");
+    } finally {
+      render(nothing, container);
+      setCurrentThemeBranding(previous);
+    }
+  });
+
   it.each(["/favicon.svg", "/control/assets/mascot.svg?v=build-1"])(
     "preserves the public image %s through reconnect without authenticated fetching",
     (url) => {
@@ -58,7 +113,7 @@ describe("shared identity avatar view", () => {
     setAvatarGatewayOrigin("https://gateway.example.test", ["avatar-token"]);
     const fetchAvatar = vi.spyOn(globalThis, "fetch");
 
-    const view = resolveIdentityAvatarView({
+    const view = avatarView({
       id: "profile-mallory",
       name: "Mallory",
       profileAvatarUrl: "https://evil.example/api/users/profile-mallory/avatar",
@@ -81,7 +136,7 @@ describe("shared identity avatar view", () => {
     const revoke = vi.spyOn(URL, "revokeObjectURL");
     const container = document.createElement("div");
     const part = renderAvatar(
-      resolveIdentityAvatarView({
+      avatarView({
         id: "profile-ada",
         name: "Ada",
         profileAvatarUrl: "/api/users/profile-ada/avatar?v=1",
@@ -108,7 +163,7 @@ describe("shared identity avatar view", () => {
     );
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:shared-identity-avatar");
 
-    const view = resolveIdentityAvatarView({
+    const view = avatarView({
       id: "profile-ada",
       name: "Ada Lovelace",
       profileAvatarUrl: "/api/users/profile-ada/avatar?v=7",
@@ -139,7 +194,7 @@ describe("shared identity avatar view", () => {
     image.dispatchEvent(new Event("load"));
     expect(wrapper?.classList.contains("is-fallback")).toBe(false);
     renderAvatar(
-      resolveIdentityAvatarView({
+      avatarView({
         id: "profile-ada",
         name: "Ada Lovelace",
         profileAvatarUrl: "/api/users/profile-ada/avatar?v=7",
@@ -172,7 +227,7 @@ describe("shared identity avatar view", () => {
     const container = document.createElement("div");
     document.body.append(container);
     renderAvatar(
-      resolveIdentityAvatarView({
+      avatarView({
         ...identity,
         profileAvatarUrl: "/api/users/profile-ada/avatar?v=1",
       }),
@@ -187,7 +242,7 @@ describe("shared identity avatar view", () => {
     firstImage.dispatchEvent(new Event("load"));
 
     renderAvatar(
-      resolveIdentityAvatarView({
+      avatarView({
         ...identity,
         profileAvatarUrl: "/api/users/profile-ada/avatar?v=2",
       }),
@@ -231,8 +286,8 @@ describe("shared identity avatar view", () => {
     };
     const first = document.body.appendChild(document.createElement("div"));
     const second = document.body.appendChild(document.createElement("div"));
-    renderAvatar(resolveIdentityAvatarView(identity), first);
-    const part = renderAvatar(resolveIdentityAvatarView(identity), second);
+    renderAvatar(avatarView(identity), first);
+    const part = renderAvatar(avatarView(identity), second);
     const pressureLoads = Array.from({ length: 128 }, (_, index) =>
       Promise.resolve(resolveAvatarImageUrl(`/avatar/pending-${index}?v=1`)),
     );
@@ -247,11 +302,12 @@ describe("shared identity avatar view", () => {
       expect(revoke).toHaveBeenCalledWith("blob:view-0");
       part.setConnected(true);
       await vi.waitFor(() => expect(image()?.getAttribute("src")).toBe("blob:view-1"));
-      renderAvatar(resolveIdentityAvatarView(identity), second);
+      renderAvatar(avatarView(identity), second);
       expect(image()?.getAttribute("src")).toBe("blob:view-1");
+      expect(revoke).not.toHaveBeenCalledWith("blob:view-1");
       expect(avatarRequests).toBe(2);
       renderAvatar(
-        resolveIdentityAvatarView({
+        avatarView({
           ...identity,
           profileAvatarUrl: "/api/users/profile-ada/avatar?v=2",
         }),

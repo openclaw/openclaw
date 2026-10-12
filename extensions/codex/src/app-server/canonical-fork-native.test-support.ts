@@ -111,9 +111,6 @@ export async function createCanonicalForkNativeFixture(
           .spyOn(desktopGenerationRuntime, "waitForCodexDesktopGeneration")
           .mockImplementation(desktopGeneration.wait),
         vi
-          .spyOn(desktopGenerationRuntime, "isCodexDesktopGenerationCurrent")
-          .mockImplementation(desktopGeneration.isCurrent),
-        vi
           .spyOn(managedBinary, "isManagedCodexDesktopCommand")
           .mockImplementation((command) => command === process.execPath),
       ]

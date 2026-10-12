@@ -216,14 +216,19 @@ async function readUnixSocketEntries<T extends PortListener>(
   argv: string[],
   parse: (output: string) => T[],
   signal?: AbortSignal,
+  fallbackErrors?: string[],
 ) {
   const result = await readUnixSocketOutput(argv, signal);
   const entries = result.stdout === undefined ? [] : parse(result.stdout);
+  const detail = result.stdout?.trim() || undefined;
   return {
     entries,
-    detail: result.stdout?.trim() || undefined,
-    errors: result.errors,
-    unavailable: result.unavailable,
+    detail: fallbackErrors && entries.length === 0 ? undefined : detail,
+    errors:
+      fallbackErrors && entries.length === 0
+        ? [...fallbackErrors, ...result.errors]
+        : result.errors,
+    ...(fallbackErrors ? {} : { unavailable: result.unavailable }),
   };
 }
 
@@ -238,15 +243,12 @@ async function readUnixEstablishedConnections(
   if (!primary.unavailable) {
     return primary;
   }
-  const fallback = await readUnixSocketEntries(
+  return await readUnixSocketEntries(
     ["ss", "-H", "-tnp", "state", "established", `( sport = :${port} or dport = :${port} )`],
     (output) => parseSsConnections(output, port),
+    undefined,
+    primary.errors,
   );
-  return {
-    entries: fallback.entries,
-    detail: fallback.entries.length > 0 ? fallback.detail : undefined,
-    errors: fallback.entries.length > 0 ? fallback.errors : [...primary.errors, ...fallback.errors],
-  };
 }
 
 async function resolveUnixProcessInfo(
@@ -306,19 +308,12 @@ async function readUnixListeners(
     const { listeners, detail } = readLsofListenersForPort(listenerSnapshot.recordsByPort, port);
     return { entries: listeners, detail, errors: listenerSnapshot.errors };
   }
-  const fallback = await readUnixSocketEntries(
+  return await readUnixSocketEntries(
     ["ss", "-H", "-ltnp", `sport = :${port}`],
     (output) => parseSsListeners(output, port),
     signal,
+    listenerSnapshot.errors,
   );
-  return {
-    entries: fallback.entries,
-    detail: fallback.entries.length > 0 ? fallback.detail : undefined,
-    errors:
-      fallback.entries.length > 0
-        ? fallback.errors
-        : [...listenerSnapshot.errors, ...fallback.errors],
-  };
 }
 
 function parseNetstatConnections(output: string, port: number): PortConnection[] {

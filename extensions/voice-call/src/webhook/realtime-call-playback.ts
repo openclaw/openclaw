@@ -36,26 +36,22 @@ export function createRealtimeCallPlayback(params: {
 }) {
   const { ws, callRecord, callSid, adapter, harness, initialGreetingInstructions } = params;
   const callId = callRecord.callId;
-  const sendString = (message: string): boolean => {
-    if (ws.readyState !== WebSocket.OPEN) {
-      return false;
-    }
+  const checkBackpressure = (phase: "before" | "after"): boolean => {
     if (ws.bufferedAmount > MAX_REALTIME_WS_BUFFERED_BYTES) {
       console.warn(
-        `[voice-call] realtime outbound websocket backpressure before send callId=${callId} providerCallId=${callSid} bufferedBytes=${ws.bufferedAmount}`,
-      );
-      ws.close(1013, "Backpressure: send buffer exceeded");
-      return false;
-    }
-    ws.send(message);
-    if (ws.bufferedAmount > MAX_REALTIME_WS_BUFFERED_BYTES) {
-      console.warn(
-        `[voice-call] realtime outbound websocket backpressure after send callId=${callId} providerCallId=${callSid} bufferedBytes=${ws.bufferedAmount}`,
+        `[voice-call] realtime outbound websocket backpressure ${phase} send callId=${callId} providerCallId=${callSid} bufferedBytes=${ws.bufferedAmount}`,
       );
       ws.close(1013, "Backpressure: send buffer exceeded");
       return false;
     }
     return true;
+  };
+  const sendString = (message: string): boolean => {
+    if (ws.readyState !== WebSocket.OPEN || !checkBackpressure("before")) {
+      return false;
+    }
+    ws.send(message);
+    return checkBackpressure("after");
   };
   const pendingMarkAcks = new Map<string, () => void>();
   const audioPacer = new RealtimeAudioPacer({

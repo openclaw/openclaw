@@ -1,3 +1,4 @@
+import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -11,6 +12,7 @@ import {
   withUsageCostIncognitoScope,
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
+import { isSessionActorUsageRefreshRunning } from "./session-cost-usage-memory.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import {
   prepareUsageCostWorker,
@@ -36,6 +38,7 @@ type UsageCostRefreshState = {
   queueKey: string;
   env?: NodeJS.ProcessEnv;
   incognito?: UsageCostIncognitoBinding;
+  sessionActor?: SessionActorStorageBinding;
   fullRefreshRequested: boolean;
   pendingSessionFiles: Set<string>;
   pendingRebuildRows: Map<string, SessionCostUsageRollupRow>;
@@ -46,6 +49,7 @@ type UsageCostRefreshRequest = Pick<UsageCostRefreshState, "agentId" | "config" 
   databasePath?: string;
   env?: NodeJS.ProcessEnv;
   incognito?: UsageCostIncognitoBinding;
+  sessionActor?: SessionActorStorageBinding;
   sessionFiles?: string[];
   rebuildRows?: SessionCostUsageRollupRow[];
 };
@@ -55,30 +59,6 @@ const usageCostRefreshes = new Map<AbortSignal | undefined, Map<string, UsageCos
 
 function isUsageCostRefreshQueued(databasePath: string): boolean {
   return usageCostRefreshes.get(getAsyncWorkSignal())?.has(databasePath) === true;
-}
-
-async function readCostUsageSummaryFromWorker(
-  prepared: PreparedUsageCostWorker,
-  params: {
-    pricingFingerprint: string;
-    startMs: number;
-    endMs: number;
-    dayBucket?: UsageDailyBucket;
-  },
-) {
-  const result = await runUsageCostWorker(prepared, {
-    ...params,
-    kind: "summary",
-    dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
-  });
-  if (result.kind !== "summary" || !result.summary.cacheStatus) {
-    throw new Error("Usage worker returned an invalid aggregate summary");
-  }
-  return {
-    summary: result.summary,
-    cacheStatus: result.summary.cacheStatus,
-    invalidRows: result.invalidRows,
-  };
 }
 
 export async function loadCostUsageSummary(params: {
@@ -91,44 +71,14 @@ export async function loadCostUsageSummary(params: {
   const now = Date.now();
   const defaultStart = new Date(now);
   defaultStart.setDate(defaultStart.getDate() - 29);
-  const startMs = params.startMs ?? defaultStart.getTime();
-  const endMs = params.endMs ?? now;
-  const prepared = prepareUsageCostWorker(params);
-  const { databasePath, storePath } = prepared.location;
-  const result = await refreshCostUsageCacheForAgent({
-    config: params.config,
-    agentId: params.agentId,
-    agentDir: prepared.agentDir,
-    databasePath,
-    storePath,
-  });
-  const pricingFingerprint = await resolveUsageCostPricingFingerprint(
-    prepared.config,
-    prepared.agentDir,
+  return loadAggregateCostUsageSummary(
+    {
+      ...params,
+      startMs: params.startMs ?? defaultStart.getTime(),
+      endMs: params.endMs ?? now,
+    },
+    true,
   );
-  const { summary, cacheStatus, invalidRows } = await readCostUsageSummaryFromWorker(prepared, {
-    pricingFingerprint,
-    startMs,
-    endMs,
-    dayBucket: params.dayBucket,
-  });
-  if (invalidRows.length > 0) {
-    requestCostUsageCacheRefresh({
-      config: params.config,
-      agentId: params.agentId,
-      storePath,
-      rebuildRows: invalidRows,
-    });
-  }
-  if (
-    result === "busy" ||
-    isUsageCostRefreshQueued(databasePath) ||
-    (await isSessionCostUsageRefreshRunning(params.agentId, databasePath))
-  ) {
-    cacheStatus.status = "refreshing";
-  }
-  summary.updatedAt = Date.now();
-  return summary;
 }
 
 export async function loadCostUsageSummaryFromCache(params: {
@@ -139,34 +89,65 @@ export async function loadCostUsageSummaryFromCache(params: {
   agentId: string;
   requestRefresh?: boolean;
 }): Promise<CostUsageSummary> {
+  return loadAggregateCostUsageSummary(params, false);
+}
+
+async function loadAggregateCostUsageSummary(
+  params: Parameters<typeof loadCostUsageSummaryFromCache>[0],
+  refreshFirst: boolean,
+): Promise<CostUsageSummary> {
   const prepared = prepareUsageCostWorker(params);
   const { databasePath, storePath } = prepared.location;
+  const refresh = refreshFirst
+    ? await refreshCostUsageCacheForAgent({
+        config: params.config,
+        agentId: params.agentId,
+        agentDir: prepared.agentDir,
+        databasePath,
+        storePath,
+        sessionActor: prepared.sessionActor,
+      })
+    : undefined;
   const pricingFingerprint = await resolveUsageCostPricingFingerprint(
     prepared.config,
     prepared.agentDir,
   );
-  const snapshot = await readCostUsageSummaryFromWorker(prepared, {
+  const result = await runUsageCostWorker(prepared, {
     pricingFingerprint,
     startMs: params.startMs,
     endMs: params.endMs,
-    dayBucket: params.dayBucket,
+    dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
+    kind: "summary",
   });
-  if (params.requestRefresh !== false && snapshot.cacheStatus.staleFiles > 0) {
+  if (result.kind !== "summary" || !result.summary.cacheStatus) {
+    throw new Error("Usage worker returned an invalid aggregate summary");
+  }
+  const { summary, invalidRows } = result;
+  const cacheStatus = result.summary.cacheStatus;
+  if (
+    refreshFirst
+      ? invalidRows.length > 0
+      : params.requestRefresh !== false && cacheStatus.staleFiles > 0
+  ) {
     requestCostUsageCacheRefresh({
       config: params.config,
       agentId: params.agentId,
       storePath,
-      rebuildRows: snapshot.invalidRows,
+      rebuildRows: invalidRows,
+      sessionActor: prepared.sessionActor,
     });
   }
   if (
+    refresh === "busy" ||
     isUsageCostRefreshQueued(databasePath) ||
-    (await isSessionCostUsageRefreshRunning(params.agentId, databasePath))
+    (prepared.sessionActor
+      ? isSessionActorUsageRefreshRunning(prepared.sessionActor)
+      : await isSessionCostUsageRefreshRunning(params.agentId, databasePath))
   ) {
-    snapshot.cacheStatus.status = "refreshing";
+    cacheStatus.status = "refreshing";
   }
-  snapshot.summary.updatedAt = Date.now();
-  return snapshot.summary;
+  summary.updatedAt = Date.now();
+  return summary;
 }
 
 export async function loadSessionCostSummariesFromCache(params: {
@@ -221,10 +202,16 @@ async function loadCapturedSessionCostSummariesFromCache(
       databasePath,
       env: prepared.location.env,
       incognito: prepared.incognito,
+      sessionActor: prepared.sessionActor,
     });
   }
-  const refreshRunning = await isSessionCostUsageRefreshRunning(params.agentId, databasePath);
-  if (staleSessionFiles.length > 0 && (refreshRunning || refreshRequested)) {
+  if (
+    staleSessionFiles.length > 0 &&
+    (refreshRequested ||
+      (prepared.sessionActor
+        ? isSessionActorUsageRefreshRunning(prepared.sessionActor)
+        : await isSessionCostUsageRefreshRunning(params.agentId, databasePath)))
+  ) {
     cacheStatus.status = "refreshing";
     for (const summary of summaries) {
       if (summary?.staleSince !== undefined) {
@@ -240,11 +227,13 @@ function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): void {
   if (scopeSignal?.aborted) {
     return;
   }
-  const databasePath = resolveOpenClawAgentSqlitePath({
-    agentId: normalizeAgentId(params.agentId),
-    path: params.databasePath,
-    env: params.env,
-  });
+  const databasePath =
+    params.sessionActor?.path ??
+    resolveOpenClawAgentSqlitePath({
+      agentId: normalizeAgentId(params.agentId),
+      path: params.databasePath,
+      env: params.env,
+    });
   const queueKey = params.incognito
     ? `${databasePath}#${params.incognito.actor.identity.incarnation}`
     : databasePath;
@@ -262,6 +251,7 @@ function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): void {
     queueKey,
     env: params.env,
     incognito: params.incognito,
+    sessionActor: params.sessionActor,
     fullRefreshRequested: false,
     pendingSessionFiles: new Set(),
     pendingRebuildRows: new Map(),
@@ -346,6 +336,7 @@ async function runQueuedUsageCostRefresh(
             rebuildRows,
             env: state.env,
             incognito: state.incognito,
+            sessionActor: state.sessionActor,
           });
           if (signal?.aborted) {
             return;

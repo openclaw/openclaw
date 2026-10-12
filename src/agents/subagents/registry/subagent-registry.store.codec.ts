@@ -74,7 +74,6 @@ export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRe
   if (!record.runId || !record.childSessionKey || !record.requesterSessionKey) {
     return null;
   }
-  rememberSubagentRunVersion(record, subagentRunRowVersion(row)!);
   return record;
 }
 

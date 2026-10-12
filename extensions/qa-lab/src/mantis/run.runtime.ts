@@ -6,7 +6,7 @@ import { root } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import {
-  copyMantisLaneArtifact,
+  copyMantisLaneArtifacts,
   createMantisRunStaging,
   publishMantisRunOutput,
   readMantisLaneResult,
@@ -185,7 +185,6 @@ async function runLane(params: {
     timeoutMs: params.commandTimeouts["worktree-add"],
   } satisfies MantisCommandExecution;
   let worktreeOwnership: MantisDirectoryOwnership | undefined;
-  let worktreePrepared = false;
   let workloadFailed = false;
   let workloadError: unknown;
   let cleanupFailed = false;
@@ -211,7 +210,6 @@ async function runLane(params: {
       directoryPath: worktreeDir,
       repoRoot: params.repoRoot,
     });
-    worktreePrepared = true;
     assertMantisCommandNotAborted({
       command: "git",
       args: worktreeAddArgs,
@@ -277,21 +275,7 @@ async function runLane(params: {
       publishedLaneDir: stagedLaneDir,
       scenario: params.scenario,
     });
-    const copiedScreenshot = await copyMantisLaneArtifact({
-      kind: "screenshot",
-      lane: params.lane,
-      result,
-    });
-    const copiedVideo = await copyMantisLaneArtifact({
-      kind: "video",
-      lane: params.lane,
-      result,
-    });
-    stagedResult = {
-      ...result,
-      screenshotPath: copiedScreenshot ?? result.screenshotPath,
-      videoPath: copiedVideo ?? result.videoPath,
-    };
+    stagedResult = await copyMantisLaneArtifacts({ lane: params.lane, result });
   } catch (error) {
     workloadFailed = true;
     workloadError = error;
@@ -299,7 +283,7 @@ async function runLane(params: {
   // Both failures are collected before either is rethrown, so cleanup cannot
   // overwrite the workload failure or lose its diagnostic cause.
   try {
-    if (worktreePrepared) {
+    if (worktreeOwnership) {
       if (workloadError instanceof MantisCommandCleanupError) {
         throw new Error(
           `Mantis preserved ${worktreeDir}: command descendants may still be running`,

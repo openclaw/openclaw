@@ -102,6 +102,7 @@ describe("provider prompt state", () => {
 
     expect(recordEvent).toHaveBeenCalledWith("provider.prompt.observed", observation);
     expect(JSON.stringify({ calls: recordEvent.mock.calls, state })).not.toContain(marker);
+    expect(state.lastAttempt?.cachePrefix).toBeUndefined();
     clearProviderPromptState(runId);
   });
 

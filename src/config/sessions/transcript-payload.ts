@@ -18,6 +18,10 @@ import {
   projectTranscriptPayloadNavigationSql,
 } from "./session-model-context-projection.js";
 import { projectSessionTranscriptReportFacts } from "./session-transcript-report-facts.js";
+import {
+  deriveTranscriptPredicateFields,
+  type TranscriptPredicateFields,
+} from "./transcript-predicate-fields.js";
 
 export const MAX_COMPRESSED_EVENT_BYTES = 4 * 1024 * 1024;
 const MAX_NAVIGATION_BYTES = 16 * 1024;
@@ -27,7 +31,7 @@ const registeredDecoders = new WeakSet<DatabaseSync>();
 const storageEncodings = new WeakMap<DatabaseSync, string>();
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-export type TranscriptPayloadRecord = {
+export type TranscriptPayloadRecord = TranscriptPredicateFields & {
   event_json: string | null;
   event_zstd: Uint8Array | null;
   event_utf8_bytes: number | null;
@@ -56,6 +60,13 @@ export function createTranscriptEventInserter(database: DatabaseSync, sessionId:
         event_zstd: parameter((row) => row.event_zstd),
         event_utf8_bytes: parameter((row) => row.event_utf8_bytes),
         navigation_json: parameter((row) => row.navigation_json),
+        navigation_type: parameter((row) => row.navigation_type),
+        navigation_custom_type: parameter((row) => row.navigation_custom_type),
+        navigation_display: parameter((row) => row.navigation_display),
+        message_role: parameter((row) => row.message_role),
+        navigation_last_type: parameter((row) => row.navigation_last_type),
+        navigation_last_custom_type: parameter((row) => row.navigation_last_custom_type),
+        navigation_valid: parameter((row) => row.navigation_valid),
         created_at: parameter((row) => row.createdAt),
       }),
   );
@@ -85,6 +96,13 @@ export function createTranscriptPayloadUpdater(database: DatabaseSync, sessionId
         event_zstd: parameter((row) => row.event_zstd),
         event_utf8_bytes: parameter((row) => row.event_utf8_bytes),
         navigation_json: parameter((row) => row.navigation_json),
+        navigation_type: parameter((row) => row.navigation_type),
+        navigation_custom_type: parameter((row) => row.navigation_custom_type),
+        navigation_display: parameter((row) => row.navigation_display),
+        message_role: parameter((row) => row.message_role),
+        navigation_last_type: parameter((row) => row.navigation_last_type),
+        navigation_last_custom_type: parameter((row) => row.navigation_last_custom_type),
+        navigation_valid: parameter((row) => row.navigation_valid),
       })
       .where("session_id", "=", sessionId)
       .where(
@@ -220,6 +238,7 @@ export function prepareTranscriptPayload(
   const rawBytes = Buffer.byteLength(eventJson, "utf8");
   const utf8 = readTranscriptStorageEncoding(database) === "UTF-8";
   const identity: TranscriptPayloadRecord = {
+    ...deriveTranscriptPredicateFields(eventJson),
     event_json: eventJson,
     event_zstd: null,
     event_utf8_bytes: utf8 ? rawBytes : null,
@@ -279,34 +298,39 @@ function registerDecoder(database: DatabaseSync): void {
   database.function(
     DECODE_FUNCTION,
     { deterministic: true, directOnly: true },
-    (bytes, rawBytes) => {
-      if (
-        !(bytes instanceof Uint8Array) ||
-        bytes.byteLength === 0 ||
-        bytes.byteLength > MAX_COMPRESSED_EVENT_BYTES ||
-        typeof rawBytes !== "number" ||
-        !Number.isSafeInteger(rawBytes) ||
-        rawBytes < 1 ||
-        rawBytes > MAX_COMPRESSED_EVENT_BYTES
-      ) {
-        throw new Error("Invalid compressed transcript payload bounds");
-      }
-      const codec = resolveZstdCodec();
-      if (!codec) {
-        throw new Error(
-          "Cannot decode compressed transcript payload: this runtime lacks zstd support",
-        );
-      }
-      const decoded = codec.decompress(bytes, rawBytes);
-      if (decoded.byteLength !== rawBytes) {
-        throw new Error(
-          "Compressed transcript payload length does not match its recorded UTF-8 size",
-        );
-      }
-      return utf8Decoder.decode(decoded);
-    },
+    decodeCompressedTranscriptPayload,
   );
   registeredDecoders.add(database);
+}
+
+function decodeCompressedTranscriptPayload(bytes: unknown, rawBytes: unknown): string {
+  if (
+    !(bytes instanceof Uint8Array) ||
+    bytes.byteLength === 0 ||
+    bytes.byteLength > MAX_COMPRESSED_EVENT_BYTES ||
+    typeof rawBytes !== "number" ||
+    !Number.isSafeInteger(rawBytes) ||
+    rawBytes < 1 ||
+    rawBytes > MAX_COMPRESSED_EVENT_BYTES
+  ) {
+    throw new Error("Invalid compressed transcript payload bounds");
+  }
+  const codec = resolveZstdCodec();
+  if (!codec) {
+    throw new Error("Cannot decode compressed transcript payload: this runtime lacks zstd support");
+  }
+  const decoded = codec.decompress(bytes, rawBytes);
+  if (decoded.byteLength !== rawBytes) {
+    throw new Error("Compressed transcript payload length does not match its recorded UTF-8 size");
+  }
+  return utf8Decoder.decode(decoded);
+}
+
+/** Decode selected rows without copying expanded payloads back through SQLite. */
+export function readTranscriptPayload(
+  row: Pick<TranscriptPayloadRecord, "event_json" | "event_zstd" | "event_utf8_bytes">,
+): string {
+  return row.event_json ?? decodeCompressedTranscriptPayload(row.event_zstd, row.event_utf8_bytes);
 }
 
 /** Only selected bodies decode; identity TEXT remains inside SQLite for native repairs. */
@@ -342,6 +366,14 @@ export function transcriptEventNavigationSql(
       `${alias}.event_json`,
     );
   return storedProjectionSql("navigation", identity, alias);
+}
+
+export function transcriptEventRunIdSql(
+  alias: TranscriptPayloadAlias = "transcript_events",
+): RawBuilder<string | null> {
+  return /* kysely-allow-raw: Read run provenance from the canonical bounded navigation projection. */ sql<
+    string | null
+  >`json_extract(${transcriptEventNavigationSql(alias)}, '$.message.__openclaw.runId')`;
 }
 
 function storedProjectionSql(

@@ -11,7 +11,7 @@ import {
   testing as approvalsTesting,
 } from "../infra/exec-approvals-store.test-support.js";
 import type { ExecHostRequest } from "../infra/exec-host.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
@@ -22,7 +22,7 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
       await withEnvAsync(
         { OPENCLAW_HOME: dir, OPENCLAW_STATE_DIR: path.join(dir, "state") },
         async () => {
-          closeOpenClawStateDatabaseForTest();
+          await closeOpenClawStateDatabaseAsync();
           approvalsTesting.reset();
           const socketPath = path.join(dir, "host.sock");
           const token = "enforced-exec-host-test-token";
@@ -129,7 +129,7 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
               server.close((error) => (error ? reject(error) : resolve()));
             });
             approvalsTesting.reset();
-            closeOpenClawStateDatabaseForTest();
+            await closeOpenClawStateDatabaseAsync();
           }
         },
       );

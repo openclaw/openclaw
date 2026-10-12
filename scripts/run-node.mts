@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-// Development runner that rebuilds OpenClaw, runs runtime postbuild steps, and
-// restarts the CLI when watched source or metadata changes.
 import {
   spawn,
   spawnSync,
@@ -28,10 +26,10 @@ import {
   resolveGitHead,
   writeRuntimePostBuildStamp as writeDistRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mts";
+import { hasUnjoinedWork } from "./lib/managed-child-process.mts";
+import { acquireManagedCleanup } from "./lib/managed-cleanup-handoff.mts";
 import { resolveQaCodexApiKeyEnvPatch } from "./lib/qa-codex-auth-env.mts";
 import {
-  captureRunNodeInputState,
-  type RunNodeInputState,
   collectRunNodeBundledPluginBuildEntries,
   hasDirtySourceTree,
   resolveRunNodeInputSignature,
@@ -483,7 +481,6 @@ const hasMissingRequiredRuntimePostBuildOutput = (deps: RunNodeRequirementDeps) 
   );
 };
 
-/** Decides whether source changes require a new dev build. */
 export const resolveBuildRequirement = (
   deps: RunNodeRequirementDeps,
   options: { allowEquivalentInputs?: boolean } = {},
@@ -580,7 +577,6 @@ export const resolveBuildRequirement = (
   return { shouldBuild: false, reason: "clean" };
 };
 
-/** Decides whether runtime postbuild artifacts need to be regenerated. */
 export const resolveRuntimePostBuildRequirement = (
   deps: RunNodeRuntimeRequirementDeps,
   options: { requireCleanInputs?: boolean; allowEquivalentInputs?: boolean } = {},
@@ -1106,24 +1102,16 @@ const waitForSpawnedProcess = async (
 
   try {
     return await new Promise<SpawnedProcessResult>((resolve) => {
-      let settled = false;
-      const settle = (res: SpawnedProcessResult) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        resolve(res);
-      };
       const handleError = (error: Error) => {
         logRunner(`Spawn failed: ${error.message}`, deps);
-        settle({ exitCode: 1, exitSignal: null, forwardedSignal });
+        resolve({ exitCode: 1, exitSignal: null, forwardedSignal });
       };
       const handleExit = (exitCode: number | null, exitSignal: NodeJS.Signals | null) => {
         if ((forwardedSignal || exitSignal) && !cleanedForwardedSignalGroup) {
           cleanedForwardedSignalGroup = true;
           signalSpawnedProcess(childProcess, "SIGKILL", useProcessGroup, deps);
         }
-        settle({ exitCode, exitSignal, forwardedSignal });
+        resolve({ exitCode, exitSignal, forwardedSignal });
       };
       childProcess.on("error", handleError);
       childProcess.on("exit", handleExit);
@@ -1325,7 +1313,6 @@ const removeStaleBuildLock = (deps: RunNodeLockDeps, lockDir: string, staleMs: n
   }
 };
 
-/** Acquires the dev-build lock used to serialize local rebuilds. */
 export const acquireRunNodeBuildLock = async (
   deps: RunNodeLockDeps,
   signal?: AbortSignal,
@@ -1386,10 +1373,9 @@ export const acquireRunNodeBuildLock = async (
           // detection if the directory is still present.
         }
       };
-      const onExit = () => removeLockDir();
-      deps.process.on("exit", onExit);
+      deps.process.on("exit", removeLockDir);
       return () => {
-        deps.process.off("exit", onExit);
+        deps.process.off("exit", removeLockDir);
         removeLockDir();
       };
     } catch (error) {
@@ -1458,14 +1444,14 @@ const syncRuntimeArtifacts = async (deps: RunNodeDeps) => {
   return true;
 };
 
-const writeRuntimePostBuildStamp = (deps: RunNodeDeps, inputState: RunNodeInputState | null) => {
+const writeRuntimePostBuildStamp = (deps: RunNodeDeps, inputSignature: string | null) => {
   try {
     writeDistRuntimePostBuildStamp({
       cwd: deps.cwd,
       fs: deps.fs,
       env: deps.env,
       spawnSync: deps.spawnSync,
-      inputState,
+      inputSignature,
     });
     return true;
   } catch (error) {
@@ -1498,12 +1484,12 @@ const syncRuntimeArtifactsAndStamp = async (deps: RunNodeDeps) =>
           return false;
         }
         deps.cancellation.signal.throwIfAborted();
-        const inputState = captureRunNodeInputState(deps, "runtime");
+        const inputSignature = resolveRunNodeInputSignature(deps, "runtime");
         deps.fs.rmSync(deps.runtimePostBuildStampPath, { force: true });
         const synced = await syncRuntimeArtifacts(deps);
         deps.cancellation.signal.throwIfAborted();
         if (synced) {
-          return writeRuntimePostBuildStamp(deps, inputState);
+          return writeRuntimePostBuildStamp(deps, inputSignature);
         }
         return false;
       });
@@ -1585,7 +1571,10 @@ const canUseStampedGatewayClientDist = (deps: RunNodeDeps) => {
   }
   // Remote clients intentionally use existing dist. Retain metadata/output checks
   // without treating producer source cleanliness as a client rebuild requirement.
-  return !resolveRuntimePostBuildRequirement(deps, { requireCleanInputs: false }).shouldSync;
+  return !resolveRuntimePostBuildRequirement(deps, {
+    requireCleanInputs: false,
+    allowEquivalentInputs: true,
+  }).shouldSync;
 };
 
 type QaReportScript = "qa-parity-report.ts" | "qa-coverage-report.ts";
@@ -1675,7 +1664,6 @@ export function resolveRunNodePreparation(
   return { build, runtime, immutable: (build || runtime) && isImmutableGitDeployment(deps) };
 }
 
-/** Runs the dev build/watch loop and keeps the child CLI in sync with changes. */
 export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNodeExit> {
   const deps = createRunNodeDeps(params);
   if (deps.args[0] === "qa") {
@@ -1707,14 +1695,22 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
   for (const [signal, handler] of signalHandlers) {
     deps.process.on(signal, handler);
   }
+  let releaseCleanup: Awaited<ReturnType<typeof acquireManagedCleanup>>;
+  let cleanupJoined = true;
   const finishRun = async (exitCode: RunNodeExit): Promise<RunNodeExit> => {
     const outcome = await closeRunNodeOutputTee(deps, exitCode);
+    // Keep cancellation live until custody is relinquished, then choose the status.
+    const release = releaseCleanup;
+    releaseCleanup = undefined;
+    await release?.(cleanupJoined, true);
     return interruptedSignal && typeof outcome !== "string"
       ? getSignalExitCode(interruptedSignal)
       : outcome;
   };
 
   try {
+    // This owner can detach children; its shim must wait for our signal cleanup.
+    releaseCleanup = await acquireManagedCleanup(deps.cancellation.signal);
     let exitCode: RunNodeExit = 1;
     if (shouldFastPathExistingDist(deps)) {
       exitCode = await runOpenClaw(deps);
@@ -1832,14 +1828,20 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
     exitCode = await runOpenClaw(deps);
     return await finishRun(exitCode);
   } catch (error) {
+    cleanupJoined = !hasUnjoinedWork(error);
     const outcome = await finishRun(1);
     if (interruptedSignal) {
       return outcome;
     }
     throw error;
   } finally {
-    for (const [signal, handler] of signalHandlers) {
-      deps.process.off(signal, handler);
+    // Relinquish custody before callers may relay an uncatchable native signal.
+    try {
+      await releaseCleanup?.(cleanupJoined, true);
+    } finally {
+      for (const [signal, handler] of signalHandlers) {
+        deps.process.off(signal, handler);
+      }
     }
   }
 }

@@ -12,47 +12,31 @@ export type NodePresenceActivityUpdate = {
   observedAtMs?: number;
 };
 
-export function selectActiveNode<T extends NodeSession>(nodes: readonly T[]): T | undefined {
-  let active: T | undefined;
-  for (const node of nodes) {
-    if (node.lastActiveAtMs === undefined) {
-      continue;
-    }
-    if (
-      !active ||
+function preferActiveNode<T extends NodeSession>(active: T | undefined, node: T): T | undefined {
+  return node.lastActiveAtMs !== undefined &&
+    (!active ||
       node.lastActiveAtMs > (active.lastActiveAtMs ?? 0) ||
       (node.lastActiveAtMs === active.lastActiveAtMs &&
-        (node.presenceUpdatedAtMs ?? 0) > (active.presenceUpdatedAtMs ?? 0))
-    ) {
-      active = node;
-    }
-  }
-  return active;
+        (node.presenceUpdatedAtMs ?? 0) > (active.presenceUpdatedAtMs ?? 0)))
+    ? node
+    : active;
+}
+
+export function selectActiveNode<T extends NodeSession>(nodes: readonly T[]): T | undefined {
+  return nodes.reduce<T | undefined>(preferActiveNode, undefined);
 }
 
 export function selectActiveNodesByProfile<T extends NodeSession>(
   nodes: readonly T[],
 ): Map<string | undefined, T> {
-  const groups = new Map<string | undefined, T[]>();
+  const selected = new Map<string | undefined, T | undefined>();
   for (const node of nodes) {
     const authenticatedProfileId = node.client.authenticatedUserProfile?.profileId;
     const profileId =
       authenticatedProfileId === GATEWAY_OWNER_PROFILE_ID ? undefined : authenticatedProfileId;
-    const group = groups.get(profileId);
-    if (group) {
-      group.push(node);
-    } else {
-      groups.set(profileId, [node]);
-    }
+    selected.set(profileId, preferActiveNode(selected.get(profileId), node));
   }
-  const selected = new Map<string | undefined, T>();
-  for (const [profileId, group] of groups) {
-    const active = selectActiveNode(group);
-    if (active) {
-      selected.set(profileId, active);
-    }
-  }
-  return selected;
+  return new Map([...selected].flatMap(([profileId, node]) => (node ? [[profileId, node]] : [])));
 }
 
 export function updateNodePresenceActivity(

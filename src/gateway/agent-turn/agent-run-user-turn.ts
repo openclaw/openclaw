@@ -166,30 +166,24 @@ export async function prepareAgentRunUserTurn(params: {
   let claimedExecApprovalFollowupHandoffId: string | undefined;
   let durableMediaIds: string[] = [];
   try {
-    let execApprovalFollowupRuntimeHandoff =
-      params.canUseInternalRuntimeHandoff && params.execApprovalFollowupApprovalId
-        ? claimExecApprovalFollowupRuntimeHandoff({
-            handoffId: params.request.internalRuntimeHandoffId,
-            approvalId: params.execApprovalFollowupApprovalId,
-            idempotencyKey: params.runId,
-            sessionKey: params.resolvedSessionKey,
-            claimId: execApprovalFollowupHandoffClaimId,
-          })
-        : undefined;
-    if (
-      !execApprovalFollowupRuntimeHandoff &&
-      params.canUseInternalRuntimeHandoff &&
-      params.execApprovalFollowupApprovalId &&
-      params.requestedSessionKeyRaw &&
-      params.requestedSessionKeyRaw !== params.resolvedSessionKey
-    ) {
-      execApprovalFollowupRuntimeHandoff = claimExecApprovalFollowupRuntimeHandoff({
+    const claimFollowup = (sessionKey: string | undefined) =>
+      claimExecApprovalFollowupRuntimeHandoff({
         handoffId: params.request.internalRuntimeHandoffId,
         approvalId: params.execApprovalFollowupApprovalId,
         idempotencyKey: params.runId,
-        sessionKey: params.requestedSessionKeyRaw,
+        sessionKey,
         claimId: execApprovalFollowupHandoffClaimId,
       });
+    let execApprovalFollowupRuntimeHandoff: ReturnType<typeof claimFollowup>;
+    if (params.canUseInternalRuntimeHandoff && params.execApprovalFollowupApprovalId) {
+      execApprovalFollowupRuntimeHandoff = claimFollowup(params.resolvedSessionKey);
+      if (
+        !execApprovalFollowupRuntimeHandoff &&
+        params.requestedSessionKeyRaw &&
+        params.requestedSessionKeyRaw !== params.resolvedSessionKey
+      ) {
+        execApprovalFollowupRuntimeHandoff = claimFollowup(params.requestedSessionKeyRaw);
+      }
     }
     if (execApprovalFollowupRuntimeHandoff) {
       claimedExecApprovalFollowupHandoffId = params.request.internalRuntimeHandoffId;

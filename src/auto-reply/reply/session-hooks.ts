@@ -15,6 +15,7 @@ import {
   type SessionEndTranscriptSource,
 } from "../../plugins/session-end-transcript.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 
 type ReplySessionEndReason = Extract<
   PluginHookSessionEndReason,
@@ -62,9 +63,7 @@ function buildSessionHookContext(params: SessionHookContext): SessionHookContext
 }
 
 export function buildSessionStartHookPayload(
-  params: SessionHookContext & {
-    resumedFrom?: string;
-  },
+  params: SessionHookContext & PluginHookSessionStartEvent,
 ): {
   event: PluginHookSessionStartEvent;
   context: SessionHookContext;
@@ -87,21 +86,17 @@ export function emitReplySessionStartHook(
   // Lifecycle hooks outlive their requester; deferred plugin work must belong
   // to the detached scope that keeps the Gateway drain alive until completion.
   void runWithGatewayDetachedWorkContinuation(async () => {
-    await hookRunner.runSessionStart(payload.event, payload.context);
+    await runOutsideStoreWriterContext(() =>
+      hookRunner.runSessionStart(payload.event, payload.context),
+    );
   }, "hooks:session-start").catch(() => {});
 }
 
 export function buildSessionEndHookPayload(
-  params: SessionHookContext & {
-    messageCount?: number;
-    durationMs?: number;
-    reason?: PluginHookSessionEndReason;
-    sessionFile?: string;
-    transcriptArchived?: boolean;
-    nextSessionId?: string;
-    nextSessionKey?: string;
-    endedTranscript?: SessionEndTranscriptSource;
-  },
+  params: SessionHookContext &
+    Partial<PluginHookSessionEndEvent> & {
+      endedTranscript?: SessionEndTranscriptSource;
+    },
 ): {
   event: PluginHookSessionEndEvent;
   context: SessionHookContext;
@@ -150,6 +145,8 @@ export function emitReplySessionEndHook(params: {
     : { available: false as const, reason: "unsupported-source" as const };
   const payload = buildSessionEndHookPayload({ ...params, endedTranscript });
   void runWithGatewayDetachedWorkContinuation(async () => {
-    await params.hookRunner.runSessionEnd(payload.event, payload.context);
+    await runOutsideStoreWriterContext(() =>
+      params.hookRunner.runSessionEnd(payload.event, payload.context),
+    );
   }, "hooks:session-end").catch(() => {});
 }

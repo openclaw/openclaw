@@ -141,43 +141,22 @@ suite.define(() => {
   });
 
   it("uses the composer ledge and floor, then clears the floor as soon as typing starts", async () => {
-    await configureComposerPet({ mode: "offline", outcome: "ok", seed: 42 });
+    await configureComposerPet({ mode: "offline", outcome: "ok", seed: 108 });
     expect(await page.locator("openclaw-app-sidebar openclaw-lobster-pet").count()).toBe(0);
     const pet = page.locator(".new-session-page__composer openclaw-lobster-pet");
     await expect.poll(() => pet.getAttribute("data-scene-ready")).not.toBeNull();
     await page.clock.runFor(1500);
     await page.screenshot({ path: suite.artifactDir + "/top-perch.png", animations: "disabled" });
-    const hop = await pet.evaluate(async (element) => {
-      const actor = element as HTMLElement & {
-        geometry: {
-          scene: {
-            top: { start: number; end: number };
-            floor: unknown;
-            passage: [number, number] | null;
-          };
-        };
-        spotPct: number;
-        performAct: (act: string) => void;
-        updateComplete: Promise<unknown>;
-      };
-      const scene = actor.geometry.scene;
-      if (!scene.floor || !scene.passage) {
-        throw new Error("Default composer has no safe floor or passage");
-      }
-      actor.spotPct =
-        (((scene.passage[0] + scene.passage[1]) / 2 - scene.top.start) /
-          (scene.top.end - scene.top.start)) *
-        100;
-      for (let i = 0; i < 10 && actor.getAttribute("data-spot") !== "floor"; i++) {
-        actor.performAct("hop");
-        await actor.updateComplete;
-      }
-      return {
-        spot: actor.getAttribute("data-spot"),
-        hops: actor.querySelectorAll(".lobster-pet__motion--hop").length,
-      };
-    });
-    expect(hop).toEqual({ spot: "floor", hops: 1 });
+    // Seed 108 starts with two eligible hops: walk to the clear column if
+    // needed, then land on the floor. Advance its clock through the real owner.
+    for (let frame = 0; frame < 30 && (await pet.getAttribute("data-spot")) !== "floor"; frame++) {
+      await page.clock.fastForward(500);
+      await settlePet();
+    }
+    expect({
+      spot: await pet.getAttribute("data-spot"),
+      hops: await pet.locator(".lobster-pet__motion--hop").count(),
+    }).toEqual({ spot: "floor", hops: 1 });
     const landings = await pet.evaluate((element) => {
       const sprite = element.querySelector<HTMLElement>(
         ".lobster-pet__motion > .lobster-pet:not(.lobster-pet--twin)",

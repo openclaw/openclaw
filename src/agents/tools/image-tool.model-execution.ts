@@ -105,10 +105,9 @@ function matchesImageTimeoutEntry(params: {
 }): boolean {
   const configuredProvider = normalizeMediaProviderId(params.entry.provider ?? "");
   const selectedProvider = normalizeMediaProviderId(params.provider);
-  if (!configuredProvider || configuredProvider !== selectedProvider) {
-    return false;
-  }
   if (
+    !configuredProvider ||
+    configuredProvider !== selectedProvider ||
     !matchesMediaEntryCapability({
       entry: params.entry,
       capability: "image",

@@ -15,7 +15,6 @@ import {
 } from "./plugin-source-capture-directory.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
 import { isPluginSourceEntry } from "./plugin-source-file.js";
-import { verifyPluginSourceInputs, type PluginSourceInput } from "./plugin-source-verification.js";
 
 export type PluginDependencyResolution = { root: string; lookupDirectory: string };
 
@@ -215,19 +214,6 @@ export function resolvePluginModulePackageRoot(filename: string): string {
   return path.dirname(filename);
 }
 
-export function capturePluginModuleSource(
-  filename: string,
-  capture: (root: string, source: string) => void,
-): string | undefined {
-  const real = fs.realpathSync(filename);
-  if (!fs.statSync(real).isFile()) {
-    return undefined;
-  }
-  // The admitted artifact owns byte capture; package metadata only selects its layout.
-  capture(resolvePluginModulePackageRoot(real), real);
-  return real;
-}
-
 export function capturePluginPackageMetadata(
   root: string,
   destination: string,
@@ -263,7 +249,8 @@ export function capturePluginPackageMetadata(
       const filename = fileURLToPath(url);
       const prepared = resolveSource?.(filename);
       const input = prepared?.path ?? filename;
-      if (isPathInside(root, filename) && fs.statSync(input, { throwIfNoEntry: false })?.isFile()) {
+      const insideRoot = isPathInside(root, filename);
+      if (insideRoot && fs.statSync(input, { throwIfNoEntry: false })?.isFile()) {
         const real = fs.realpathSync(input);
         if (
           !isPathInside(prepared?.boundary ?? root, real) &&
@@ -388,7 +375,6 @@ function visitPluginPackageTargetFiles(params: {
 
 type PluginPackageCaptureState = "metadata" | "entry" | "body" | { error: unknown };
 export type PluginPackageCapture = {
-  destination: string;
   /** Absolute normalized root captured by the artifact producer. */
   readonly capturedRoot: string;
   sourceRoot: string;
@@ -634,7 +620,7 @@ export function withPluginSourceCaptureDirectory<T>(
 }
 
 /** Admissions and failed-input receipts belong to one source acquisition lifetime. */
-export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
+export function createPluginSourceCapture() {
   const override = sourceCaptureDirectory.getStore();
   const instance = override === undefined ? retainPluginSourceCaptureInstance() : undefined;
   let created: string | undefined;
@@ -669,8 +655,6 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     }
     throw error;
   }
-  const inputs = new Map<string, PluginSourceInput>();
-  const pendingInputs = new Set<string>();
   const additions = new Set<string>();
   const captureFailures = new Map<string, unknown>();
   let disposed = false;
@@ -680,7 +664,6 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     }
     try {
       const value = capture();
-      verifyPluginSourceInputs(inputs, pendingInputs);
       return { value, additions: [...additions] };
     } catch (error) {
       // Another specifier must not admit files from an incomplete capture transaction.
@@ -689,7 +672,6 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
       }
       throw error;
     } finally {
-      pendingInputs.clear();
       additions.clear();
     }
   };
@@ -697,10 +679,6 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     if (captureFailures.has(filename)) {
       throw captureFailures.get(filename);
     }
-  };
-  const captureAdmitted = <T>(run: () => T) => {
-    const capture = () => acquire(run);
-    return execute ? execute(capture) : capture();
   };
   const beginDisposal = () => {
     disposed = true;
@@ -716,10 +694,8 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     captureFailures.clear();
   };
   return {
-    inputs,
-    pendingInputs,
     additions,
-    capture: captureAdmitted,
+    capture: acquire,
     assertModuleAvailable,
     directory,
     outputRoot: override?.managedRoot ?? instance?.managedRoot,

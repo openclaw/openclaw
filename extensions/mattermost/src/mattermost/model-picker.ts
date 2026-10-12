@@ -1,12 +1,16 @@
 import { createHash } from "node:crypto";
 import {
-  resolveStoredModelOverride,
+  resolveStoredModelOverrideAsync,
   type ModelsProviderData,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntryAsync,
+  resolveStorePath,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import {
   asFiniteNumber,
   normalizeOptionalString,
@@ -24,7 +28,7 @@ const ACTION_IDS = {
   back: "mdlback",
 } as const;
 
-type MattermostModelPickerEntry =
+export type MattermostModelPickerEntry =
   | { kind: "summary" }
   | { kind: "providers" }
   | { kind: "models"; provider: string };
@@ -183,30 +187,30 @@ export function buildMattermostAllowedModelRefs(data: ModelsProviderData): Set<s
   return refs;
 }
 
-export function resolveMattermostModelPickerCurrentModel(params: {
+export async function resolveMattermostModelPickerCurrentModel(params: {
   cfg: OpenClawConfig;
   route: { agentId: string; sessionKey: string };
   data: ModelsProviderData;
-  readConsistency?: "latest";
-}): string {
+  sessionEntry: SessionEntry | undefined;
+}): Promise<string> {
   const fallback = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,
     });
     const loadSessionEntry = (sessionKey: string) =>
-      getSessionEntry({
+      getSessionEntryAsync({
+        agentId: params.route.agentId,
         storePath,
         sessionKey,
-        ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
       });
-    const sessionEntry = loadSessionEntry(params.route.sessionKey);
-    const override = resolveStoredModelOverride({
+    const sessionEntry = params.sessionEntry;
+    const override = await resolveStoredModelOverrideAsync({
       sessionEntry,
-      loadSessionEntry,
       sessionKey: params.route.sessionKey,
       parentSessionKey: sessionEntry?.parentSessionKey,
       defaultProvider: params.data.resolvedDefault.provider,
+      loadSessionEntry,
     });
     if (!override?.model) {
       return fallback;
@@ -295,8 +299,8 @@ export function renderMattermostModelsPickerView(params: {
     };
   }
 
-  const totalPages = Math.max(1, Math.ceil(models.length / MODELS_PAGE_SIZE));
-  const page = Math.max(1, Math.min(normalizePage(params.page), totalPages));
+  const totalPages = Math.ceil(models.length / MODELS_PAGE_SIZE);
+  const page = Math.min(normalizePage(params.page), totalPages);
   const start = (page - 1) * MODELS_PAGE_SIZE;
   const rows: MattermostInteractiveButtonInput[][] = models
     .slice(start, start + MODELS_PAGE_SIZE)

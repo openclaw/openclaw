@@ -3,12 +3,19 @@ import Synchronization
 
 public protocol WebSocketTasking: AnyObject {
     var state: URLSessionTask.State { get }
+    var response: URLResponse? { get }
     func resume()
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
     func send(_ message: URLSessionWebSocketTask.Message) async throws
     func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void)
     func receive() async throws -> URLSessionWebSocketTask.Message
     func receive(completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
+}
+
+extension WebSocketTasking {
+    public var response: URLResponse? {
+        nil
+    }
 }
 
 extension URLSessionWebSocketTask: WebSocketTasking {}
@@ -69,10 +76,19 @@ public struct WebSocketTaskBox: @unchecked Sendable {
         self.task.state
     }
 
+    public var response: URLResponse? {
+        self.task.response
+    }
+
     public func resume() {
         self.task.resume()
     }
 
+    /// URLSessionWebSocketTask cancellation can lose a race with its HTTP 101: the task completes
+    /// as canceled, then Foundation opens the upgraded socket anyway. Nothing in URLSession (task
+    /// cancel, session invalidation or reset) reclaims that socket, and its descriptor outlives
+    /// the peer's close. Callers keep it unused through socket generations and admission; the
+    /// Gateway closes its end at the preauth handshake timeout.
     public func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         self.task.cancel(with: closeCode, reason: reason)
     }

@@ -15,10 +15,8 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { workerInferenceMetadata } from "./inference-placement.js";
-import {
-  workerPlacementMoveFromRow,
-  type WorkerPlacementMoveIntent,
-} from "./placement-move-intent.js";
+import { workerPlacementMoveFromRow } from "./placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type {
   WorkerEnvironmentPlacementFacts,
   WorkerPlacementConflictBinding,
@@ -27,7 +25,11 @@ import type {
   WorkerSessionPlacementReadResult,
 } from "./placement-read-projection.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
-import { fromRow } from "./placement-row-codec.js";
+import {
+  fromRow,
+  revivePlacementProjectionInteger,
+  selectWorkerPlacementRows,
+} from "./placement-row-codec.js";
 import { parseWorkerSessionPlacementState } from "./placement-state.js";
 import { isCurrentJournalOwner } from "./placement-workspace-journal.js";
 import {
@@ -62,6 +64,7 @@ type ProjectionSchema = {
 };
 
 const projectionSchemas = new WeakMap<SqliteSchemaFacts, ProjectionSchema>();
+const PROJECTION_BATCH_SIZE = 250;
 
 function readProjectionSchema(db: DatabaseSync): ProjectionSchema {
   const schema = getAdmittedSqliteSchemaFacts(db);
@@ -95,6 +98,32 @@ function readProjectionSchema(db: DatabaseSync): ProjectionSchema {
   return projectionSchema;
 }
 
+function moveRows(db: DatabaseSync, sessionIds: readonly string[], schema: ProjectionSchema) {
+  return getNodeSqliteKysely<StateDatabase>(db)
+    .selectFrom("worker_session_placement_moves")
+    .select([
+      "operation_id",
+      "session_id",
+      "source_generation",
+      "source_environment_id",
+      "source_owner_epoch",
+      "target_kind",
+      "target_id",
+      "last_error",
+      "created_at_ms",
+      "updated_at_ms",
+    ])
+    .select((eb) => [
+      (schema.moves?.machineClass ? eb.ref("target_machine_class") : eb.val(null)).as(
+        "target_machine_class",
+      ),
+      (schema.moves?.os ? eb.ref("target_os") : eb.val(null)).as("target_os"),
+      (schema.moves?.abandonSource ? eb.ref("abandon_source") : eb.val(null)).as("abandon_source"),
+    ])
+    .where("session_id", "in", sqliteStringSet(sessionIds))
+    .$assertType<Selectable<StateDatabase["worker_session_placement_moves"]>>();
+}
+
 function readProjectionRows(
   db: DatabaseSync,
   sessionIds: readonly string[],
@@ -102,36 +131,7 @@ function readProjectionRows(
 ) {
   const query = getNodeSqliteKysely<StateDatabase>(db);
   const ids = sqliteStringSet(sessionIds);
-  const placements = query
-    .selectFrom("worker_session_placements")
-    .select([
-      "session_id",
-      "agent_id",
-      "session_key",
-      "execution_mode",
-      "state",
-      "environment_id",
-      "transition_generation",
-      "active_owner_epoch",
-      "workspace_base_manifest_ref",
-      "remote_workspace_dir",
-      "worker_bundle_hash",
-      "last_transcript_ack_cursor",
-      "last_live_event_ack_cursor",
-      "recovery_error",
-      "terminal_reason",
-      "terminal_at_ms",
-      "turn_claim_owner",
-      "turn_claim_id",
-      "turn_claim_run_id",
-      "turn_claim_generation",
-      "turn_claim_owner_epoch",
-      "created_at_ms",
-      "updated_at_ms",
-      "state_changed_at_ms",
-    ])
-    .where("session_id", "in", ids)
-    .$assertType<Selectable<StateDatabase["worker_session_placements"]>>();
+  const placements = selectWorkerPlacementRows(db, sessionIds);
   const pendingResults = query
     .selectFrom("worker_workspace_pending_results")
     .select([
@@ -158,29 +158,7 @@ function readProjectionRows(
     .selectFrom("worker_workspace_reconciliations")
     .select(["session_id", "environment_id", "owner_epoch", "placement_generation"])
     .where("session_id", "in", ids);
-  const moves = query
-    .selectFrom("worker_session_placement_moves")
-    .select([
-      "operation_id",
-      "session_id",
-      "source_generation",
-      "source_environment_id",
-      "source_owner_epoch",
-      "target_kind",
-      "target_id",
-      "last_error",
-      "created_at_ms",
-      "updated_at_ms",
-    ])
-    .select((eb) => [
-      (schema.moves?.machineClass ? eb.ref("target_machine_class") : eb.val(null)).as(
-        "target_machine_class",
-      ),
-      (schema.moves?.os ? eb.ref("target_os") : eb.val(null)).as("target_os"),
-      (schema.moves?.abandonSource ? eb.ref("abandon_source") : eb.val(null)).as("abandon_source"),
-    ])
-    .where("session_id", "in", ids)
-    .$assertType<Selectable<StateDatabase["worker_session_placement_moves"]>>();
+  const moves = moveRows(db, sessionIds, schema);
   const environments = query
     .selectFrom("worker_environments")
     .select([
@@ -228,8 +206,7 @@ function readProjectionRows(
         .select("environment_id")
         .where("session_id", "in", ids)
         .where("environment_id", "is not", null),
-    )
-    .$assertType<Selectable<StateDatabase["worker_environments"]>>();
+    );
   // Each recovery table contributes independently, including local and terminal placements.
   // The native sync executor returns JSON text without Kysely's result plugins.
   return executeSqliteQuerySync(
@@ -244,22 +221,12 @@ function readProjectionRows(
   ).rows[0]!;
 }
 
-function reviveProjectionInteger(column: string, value: unknown): unknown {
-  // These STRICT tables project INTEGER numbers; preserve native reads' refusal to round them.
-  if (typeof value === "number" && !Number.isSafeInteger(value)) {
-    throw new RangeError(
-      `Worker placement projection column ${column} is outside JavaScript's safe integer range`,
-    );
-  }
-  return value;
-}
-
 export function readWorkerSessionPlacementProjectionInDatabase(
   db: DatabaseSync,
   sessionIds: readonly string[],
   conflictBindings: readonly WorkerPlacementConflictBinding[],
 ): WorkerSessionPlacementReadResult {
-  return runSqliteDeferredTransactionSync(db, () => {
+  const read = () => {
     const schema = readProjectionSchema(db);
     const placements = new Map<string, WorkerSessionPlacementRecord>();
     const moves = new Map<string, WorkerPlacementMoveIntent>();
@@ -268,17 +235,21 @@ export function readWorkerSessionPlacementProjectionInDatabase(
     const workspaceRecoveryPendingSessionIds = new Set<string>();
     const workspaceJournalOwnerSessionIds = new Set<string>();
     const environments = new Map<string, WorkerEnvironmentPlacementFacts>();
-    for (let offset = 0; offset < sessionIds.length; offset += 250) {
-      const rows = readProjectionRows(db, sessionIds.slice(offset, offset + 250), schema);
+    for (let offset = 0; offset < sessionIds.length; offset += PROJECTION_BATCH_SIZE) {
+      const rows = readProjectionRows(
+        db,
+        sessionIds.slice(offset, offset + PROJECTION_BATCH_SIZE),
+        schema,
+      );
       // SAFETY: jsonArrayFrom serializes the $assertType-checked placement selection; fromRow validates its domain shape.
-      for (const row of JSON.parse(rows.placements, reviveProjectionInteger) as Selectable<
+      for (const row of JSON.parse(rows.placements, revivePlacementProjectionInteger) as Selectable<
         StateDatabase["worker_session_placements"]
       >[]) {
         const placement = fromRow(row);
         placements.set(placement.sessionId, placement);
       }
       // SAFETY: jsonArrayFrom serializes the typed pending-result selection, including its nullable additive column.
-      for (const row of JSON.parse(rows.pendingResults, reviveProjectionInteger) as Array<
+      for (const row of JSON.parse(rows.pendingResults, revivePlacementProjectionInteger) as Array<
         StateDatabase["worker_workspace_pending_results"]
       >) {
         const pending = pendingResultFromRow(row);
@@ -289,7 +260,7 @@ export function readWorkerSessionPlacementProjectionInDatabase(
         }
       }
       // SAFETY: jsonArrayFrom emits only the four explicitly selected journal owner columns.
-      for (const row of JSON.parse(rows.journals, reviveProjectionInteger) as Pick<
+      for (const row of JSON.parse(rows.journals, revivePlacementProjectionInteger) as Pick<
         StateDatabase["worker_workspace_reconciliations"],
         "session_id" | "environment_id" | "owner_epoch" | "placement_generation"
       >[]) {
@@ -311,16 +282,17 @@ export function readWorkerSessionPlacementProjectionInDatabase(
         }
       }
       // SAFETY: jsonArrayFrom serializes the $assertType-checked move selection (or []); workerPlacementMoveFromRow validates it.
-      for (const row of JSON.parse(rows.moves, reviveProjectionInteger) as Selectable<
+      for (const row of JSON.parse(rows.moves, revivePlacementProjectionInteger) as Selectable<
         StateDatabase["worker_session_placement_moves"]
       >[]) {
         const move = workerPlacementMoveFromRow(row);
         moves.set(move.sessionId, move);
       }
-      // SAFETY: jsonArrayFrom serializes the $assertType-checked environment selection; decodeWorkerEnvironmentRow validates it.
-      for (const row of JSON.parse(rows.environments, reviveProjectionInteger) as Selectable<
-        StateDatabase["worker_environments"]
-      >[]) {
+      for (const row of JSON.parse(
+        rows.environments,
+        revivePlacementProjectionInteger,
+        // SAFETY: jsonArrayFrom serializes the $assertType-checked environment selection; decodeWorkerEnvironmentRow validates it.
+      ) as Selectable<StateDatabase["worker_environments"]>[]) {
         const record = decodeWorkerEnvironmentRow(row, []);
         environments.set(record.environmentId, {
           environmentId: record.environmentId,
@@ -361,7 +333,11 @@ export function readWorkerSessionPlacementProjectionInDatabase(
       }
     }
     return { projection, conflictSessionIds };
-  });
+  };
+  // One SELECT has its own snapshot; multiple batches must retain the same read transaction.
+  return sessionIds.length <= PROJECTION_BATCH_SIZE
+    ? read()
+    : runSqliteDeferredTransactionSync(db, read);
 }
 
 export function readWorkerPlacementRecoveryCandidatesInDatabase(

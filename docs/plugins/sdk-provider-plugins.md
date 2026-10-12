@@ -330,6 +330,17 @@ a saved policy is not proof that the running Gateway applied it.
     timeline](/plugins/sdk-migration/removal-timeline) for the dates and gates
     that govern deprecated surfaces named on this page and its child pages.
 
+    To read runtime auth profiles, await `loadAuthProfileStoreForRuntimeAsync`
+    from `openclaw/plugin-sdk/agent-runtime`. It reads persisted profiles in a
+    database worker and preserves the optional third `env` argument for
+    service-owned state directories. The synchronous `loadAuthProfileStoreForRuntime`
+    is deprecated and will be removed at the next Plugin SDK major.
+
+    `createProviderApiKeyAuthMethod` accepts an optional `validateApiKey` callback.
+    Return an error message to reject a resolved key before any auth profile is
+    returned or saved. The check runs for interactive input, resolved SecretRefs,
+    and non-interactive flag, environment, or saved-profile credentials.
+
     Bundled custom API-key methods can use `captureProviderApiKey` and
     `persistProviderApiKey` from `openclaw/plugin-sdk/provider-auth-api-key`
     when vendor prompts or validation need to stay between auth steps.
@@ -514,6 +525,11 @@ providers:
 | `profile` | After simple  | Providers gated on auth profiles                |
 | `paired`  | After profile | Synthesize multiple related entries             |
 | `late`    | Last pass     | Override existing providers (wins on collision) |
+
+Within each phase, OpenClaw runs up to four catalog hooks concurrently. It waits
+for the phase to settle, then merges model rows and provider outcomes in provider
+label order. Hooks retain their individual discovery deadlines; completion order
+does not change catalog precedence.
 
 ## Next steps
 

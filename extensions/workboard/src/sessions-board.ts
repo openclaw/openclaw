@@ -48,7 +48,6 @@ type SourceRow = SourceSnapshot["sessions"][number];
 type Placements = Awaited<ReturnType<WorkboardBoardStore["listSessionPlacements"]>>;
 type CachedFacts = {
   source: SourceRow;
-  observation: number;
   redactionRevision: SourceSnapshot["redactionRevision"];
   facts: WorkboardSessionFacts;
   stale?: boolean;
@@ -59,7 +58,6 @@ type PreparedProjection = {
   read: Promise<{ snapshot: WorkboardSessionsBoardRead; complete: boolean }>;
   revision: WorkboardBoardStore["sessionsRevision"];
   sourceRevision: string;
-  observation: number;
   board: WorkboardSessionsBoard;
   expires: number;
   facts?: Map<string, CachedFacts>;
@@ -143,7 +141,6 @@ function createOwner(
   const projections = new Map<string, PreparedProjection>();
   const boards = new Map<string, Promise<WorkboardSessionsBoard>>();
   let revision = params.store.sessionsRevision;
-  let observation = 0;
   const now = params.now ?? Date.now;
   let stopped = false;
   let hasRead = false;
@@ -183,14 +180,11 @@ function createOwner(
     source: SourceSnapshot,
     placements: Map<string, Placements[number]>,
     admittedRevision: typeof revision,
-    admittedObservation: number,
     preparedFacts?: Map<string, CachedFacts>,
   ) => {
     if (params.store.sessionsRevision === admittedRevision) {
       for (const key of source.missingSessionKeys ?? []) {
-        if ((lastKnown.get(key)?.observation ?? 0) <= admittedObservation) {
-          lastKnown.delete(key);
-        }
+        lastKnown.delete(key);
       }
     }
     const unavailable = new Set<string>();
@@ -214,38 +208,29 @@ function createOwner(
         continue;
       }
       const { isMain: _isMain, unavailable: failure, pullRequestsStale: _stale, ...facts } = row;
+      const current: CachedFacts = {
+        source: row,
+        redactionRevision: source.redactionRevision,
+        facts,
+      };
       if (failure) {
         unavailable.add(row.key);
         reasons.add(failure);
         const previousFacts = lastKnown.get(row.key);
         const known = previousFacts?.facts.sessionId === row.sessionId ? previousFacts : undefined;
-        resolved.set(row.key, {
-          source: row,
-          observation: admittedObservation,
-          redactionRevision: source.redactionRevision,
-          facts: !known
-            ? facts
-            : known.redactionRevision === source.redactionRevision
-              ? known.facts
-              : retainSessionState(known.facts, facts),
-          stale: known?.stale,
-        });
+        current.facts = !known
+          ? facts
+          : known.redactionRevision === source.redactionRevision
+            ? known.facts
+            : retainSessionState(known.facts, facts);
+        current.stale = known?.stale;
       } else {
-        const current = {
-          source: row,
-          observation: admittedObservation,
-          redactionRevision: source.redactionRevision,
-          facts,
-          stale: row.pullRequestsStale,
-        };
-        resolved.set(row.key, current);
-        // A late read cannot replace the current generation's fallback facts.
-        if (
-          params.store.sessionsRevision === admittedRevision &&
-          (lastKnown.get(row.key)?.observation ?? 0) <= admittedObservation
-        ) {
-          lastKnown.set(row.key, current);
-        }
+        current.stale = row.pullRequestsStale;
+      }
+      resolved.set(row.key, current);
+      // Concurrent reads may leave an older fallback until the next successful refresh.
+      if (!failure && params.store.sessionsRevision === admittedRevision) {
+        lastKnown.set(row.key, current);
       }
     }
     const fallback = sessionsBoardFallback(board);
@@ -330,7 +315,6 @@ function createOwner(
     const assertReadCurrent = interactiveAuthority(caller);
     assertReadCurrent();
     hasRead = true;
-    const admittedObservation = ++observation;
     if (revision !== params.store.sessionsRevision) {
       boards.clear();
       revision = params.store.sessionsRevision;
@@ -358,9 +342,7 @@ function createOwner(
       assertReadCurrent();
       const key = JSON.stringify([id, view, source.scope ?? source.revision]);
       const current = projections.get(key);
-      const cacheable =
-        params.store.sessionsRevision === admittedRevision &&
-        (!current || current.observation <= admittedObservation);
+      const cacheable = params.store.sessionsRevision === admittedRevision;
       const admittedAt = now();
       const previous = cacheable ? current : undefined;
       let projection = previous;
@@ -377,14 +359,12 @@ function createOwner(
         const prepared: PreparedProjection = {
           revision: admittedRevision,
           sourceRevision: source.revision,
-          observation: admittedObservation,
           board,
           expires: source.activityExpiresAt ?? Infinity,
           read: Promise.resolve().then(async () => {
             const placements =
               (previous?.board === board ? previous.placements : undefined) ??
               (await params.store.listSessionPlacements(id));
-            assertReadCurrent();
             prepared.placements = placements;
             const {
               snapshot: result,
@@ -395,7 +375,6 @@ function createOwner(
               source,
               new Map(placements.map((pin) => [pin.sessionKey, pin])),
               admittedRevision,
-              admittedObservation,
               isDeepStrictEqual(previous?.board.sessions.columns, board.sessions.columns)
                 ? previous?.facts
                 : undefined,
@@ -440,9 +419,6 @@ function createOwner(
           projections.delete(key);
         }
         assertReadCurrent();
-        if (joined) {
-          return await read(id, view, caller);
-        }
         throw error;
       }
     });

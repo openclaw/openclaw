@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
@@ -7,13 +8,14 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   loadTranscriptEvents,
-  replaceTranscriptEvents,
+  stageSessionPendingInput,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as historyWorker from "../../config/sessions/session-history-worker-runtime.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -279,6 +281,121 @@ it("resolves one indexed message per worker request while hiding stale announce 
 });
 
 describe("durable tool output inspection", () => {
+  it("fetches a retained history reference without crossing conversation or pending-input ownership", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:retained-reference",
+        sessionId: "retained-reference",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const output = "Retained output\n" + "x".repeat(150_000);
+      await appendTranscriptMessage(scope, {
+        eventId: "retained-output",
+        message: { role: "toolResult", toolCallId: "read-retained", content: output },
+      });
+      const pending = expectDefined(
+        await stageSessionPendingInput(scope, {
+          runId: "retained-pending",
+          assertCurrent: () => {},
+          message: {
+            role: "user",
+            content: "Retained pending input",
+            timestamp: 1,
+            idempotencyKey: "pending:user",
+          },
+        }),
+        "pending input receipt",
+      );
+      pending.finish("cancelled");
+      await pending.settled?.();
+      const context = await createHistoryReadContext();
+      const request = async (
+        method: "chat.history" | "chat.message.get",
+        params: Record<string, unknown>,
+      ) => {
+        const respond = vi.fn<RespondFn>();
+        await expectDefined(
+          (method === "chat.history" ? chatHistoryHandlers : chatMessageGetHandlers)[method],
+          "history handler",
+        )({
+          params: { sessionKey: scope.sessionKey, ...params },
+          context,
+          req: { type: "req", id: "retained-reference", method },
+          client: null,
+          isWebchatConnect: () => false,
+          respond,
+        });
+        expect(respond).toHaveBeenCalledTimes(1);
+        return respond;
+      };
+      const preview = await request("chat.history", {
+        messageId: "retained-output",
+        maxChars: 200_000,
+      });
+      expect(preview).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          sessionId: scope.sessionId,
+          messages: [
+            expect.objectContaining({
+              __openclaw: expect.objectContaining({ id: "retained-output", truncated: true }),
+            }),
+          ],
+        }),
+      );
+      await upsertSessionEntryCore(scope, { sessionId: "current-reference", updatedAt: 2 });
+      await appendTranscriptMessage(
+        { ...scope, sessionId: "current-reference" },
+        {
+          eventId: "retained-output",
+          message: { role: "user", content: "Same ID in a different physical session" },
+        },
+      );
+      expect(
+        await request("chat.message.get", {
+          messageId: "retained-output",
+          sessionId: scope.sessionId,
+          maxChars: 200_000,
+        }),
+      ).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          ok: true,
+          message: expect.objectContaining({ content: output }),
+        }),
+      );
+      expect(
+        await request("chat.message.get", {
+          messageId: `pending:${pending.inputId}`,
+          sessionId: scope.sessionId,
+        }),
+      ).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_found" });
+
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:other-reference" },
+        {
+          sessionId: "other-reference",
+          updatedAt: 1,
+        },
+      );
+      expect(
+        await request("chat.message.get", {
+          sessionKey: "agent:main:other-reference",
+          sessionId: scope.sessionId,
+          messageId: "retained-output",
+        }),
+      ).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: "sessionId does not belong to sessionKey",
+        }),
+      );
+    });
+  });
+
   it("reopens SQLite with bounded history previews and exact recoverable tool text", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const scope = {
@@ -336,7 +453,20 @@ describe("durable tool output inspection", () => {
       const databasePath = resolveOpenClawAgentSqlitePath(
         toDatabaseOptions(resolveSqliteTranscriptReadScope(scope)),
       );
-      expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
+      const claimSoleCustody = () => {
+        const database = new DatabaseSync(databasePath);
+        try {
+          // A retained WAL connection prevents exclusive custody even between reads.
+          database.exec(
+            "PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT",
+          );
+        } finally {
+          database.close();
+        }
+      };
+      expect(claimSoleCustody).toThrow(/database is locked/);
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+      expect(claimSoleCustody).not.toThrow();
       clearSessionStoreCacheForTest();
       expect(await loadTranscriptEvents(scope)).toEqual(persisted);
       for (const fixture of fixtures) {

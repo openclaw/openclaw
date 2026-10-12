@@ -8,11 +8,18 @@ import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-ident
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
-import { isArtifactPreservingStateRead } from "../../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  isArtifactPreservingStateRead,
+} from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import { registerUserModelAuthProfileSecrets } from "../../state/user-model-accounts.js";
+import {
+  registerUserModelAuthProfileSecrets,
+  type PersonalCatalogProfiles,
+  type PersonalCatalogSelection,
+} from "../../state/user-model-accounts.js";
 import { mergePersistedAuthProfileState } from "./persisted.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import { receiveAuthProfileUpdateValue } from "./store-update-transfer.js";
@@ -60,6 +67,7 @@ export function prepareAgentAuthProfileRowsRead(options: {
   agentId: string;
   env: NodeJS.ProcessEnv;
 }): {
+  identity: string | undefined;
   read: () => Promise<AuthProfileRowRead>;
   assertCurrent: () => void;
   dispose: () => Promise<void>;
@@ -191,7 +199,12 @@ export function prepareAgentAuthProfileRowsRead(options: {
     void operation.finally(() => pending.delete(operation)).catch(() => undefined);
     return operation;
   };
-  return { read, assertCurrent, dispose };
+  return {
+    identity: identity && `${identity.key}:${identity.birthtime ?? ""}`,
+    read,
+    assertCurrent,
+    dispose,
+  };
 }
 
 /** Shared auth reads reuse the canonical actor and never request a writable open. */
@@ -274,4 +287,25 @@ export async function readUserModelAuthProfileAsync(
     registerUserModelAuthProfileSecrets(profile.credential);
   }
   return profile;
+}
+
+/** Read links and their selected credentials with one shared-reader freshness probe. */
+export async function readPersonalCatalogProfiles(
+  selection: PersonalCatalogSelection,
+  context: OpenClawStateWorkerContext,
+): Promise<PersonalCatalogProfiles> {
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "userModelAccounts.catalog", selection },
+    { context, current: true, preferIndependentWarmRead: true },
+  );
+  context.admission.assertCurrent();
+  if (reply && (!reply.ok || reply.type !== "userModelAccounts.catalog")) {
+    throw new Error(reply.ok ? "Unexpected personal model catalog reply" : reply.message);
+  }
+  const result = reply?.catalog;
+  for (const profile of Object.values(result?.profiles ?? {})) {
+    registerUserModelAuthProfileSecrets(profile.credential);
+  }
+  return result ?? { links: [], profiles: {} };
 }

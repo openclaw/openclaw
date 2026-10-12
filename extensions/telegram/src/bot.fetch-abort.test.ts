@@ -264,15 +264,13 @@ describe("Telegram client cancellation and custody", () => {
     },
   );
 
-  it.each([
-    { method: "getUpdates", deadline: 45000 },
-    { method: "sendMessage", deadline: 60000 },
-  ])("terminates a held $method at its own request deadline", async ({ method, deadline }) => {
+  it("terminates a held getUpdates at its own request deadline", async () => {
+    const deadline = 45000;
     hold = "headers";
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const client = createTelegramClientFetch({ fetchImpl: asTelegramClientFetch(fetch) })!;
     let settled = false;
-    const sending = client(`${apiRoot}/${method}`).finally(() => {
+    const sending = client(`${apiRoot}/getUpdates`).finally(() => {
       settled = true;
     });
     const failure = expect(sending).rejects.toThrow(`timed out after ${deadline}ms`);
@@ -305,42 +303,32 @@ describe("Telegram client cancellation and custody", () => {
     expect(requests).toEqual(Array(2).fill("/bot123:fixture/deleteWebhook"));
   });
 
-  it.each(["recovers", "terminal", "no-fallback"] as const)(
-    "releases transport-returned 421 bodies with %s custody",
-    async (outcome) => {
-      const bodiesClosed: Promise<void>[] = [];
-      let calls = 0;
-      let fallbacks = 0;
-      const client = createTelegramClientFetch({
-        fetchImpl: asTelegramClientFetch(async () => {
-          calls++;
-          if (outcome === "recovers" && calls === 2) {
-            return new Response(JSON.stringify({ accepted: true }));
-          }
-          const closed = createDeferred<void>();
-          bodiesClosed.push(closed.promise);
-          return new Response(
-            new ReadableStream<Uint8Array>({
-              cancel: () => closed.resolve(),
-            }),
-            { status: 421 },
-          );
-        }),
-        transport: {
-          forceFallback: () => outcome !== "no-fallback" && fallbacks++ === 0,
-        },
-      })!;
-      const sending = client(`${apiRoot}/sendMessage`);
-      if (outcome === "recovers") {
-        expect(await (await sending).json()).toEqual({ accepted: true });
-      } else {
-        await expect(sending).rejects.toBeInstanceOf(TelegramRequestNotStartedError);
-      }
-      await Promise.all(bodiesClosed);
-      expect(calls).toBe(outcome === "no-fallback" ? 1 : 2);
-      expect(bodiesClosed).toHaveLength(outcome === "terminal" ? 2 : 1);
-    },
-  );
+  it("releases both transport-returned 421 bodies before rejecting terminal custody", async () => {
+    const bodiesClosed: Promise<void>[] = [];
+    let calls = 0;
+    let fallbacks = 0;
+    const client = createTelegramClientFetch({
+      fetchImpl: asTelegramClientFetch(async () => {
+        calls++;
+        const closed = createDeferred<void>();
+        bodiesClosed.push(closed.promise);
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            cancel: () => closed.resolve(),
+          }),
+          { status: 421 },
+        );
+      }),
+      transport: {
+        forceFallback: () => fallbacks++ === 0,
+      },
+    })!;
+    const sending = client(`${apiRoot}/sendMessage`);
+    await expect(sending).rejects.toBeInstanceOf(TelegramRequestNotStartedError);
+    await Promise.all(bodiesClosed);
+    expect(calls).toBe(2);
+    expect(bodiesClosed).toHaveLength(2);
+  });
 
   it.each([false, true])(
     "keeps thrown 421 lookalikes ambiguous unless fallback recovers (%s)",

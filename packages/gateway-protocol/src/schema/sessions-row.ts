@@ -10,6 +10,10 @@ import {
   SessionParticipantIdentitySchema,
 } from "./session-participant.js";
 import { SessionActivitySummarySchema } from "./sessions-activity-summary.js";
+import {
+  SessionCommunicationPolicySchema,
+  EffectiveSessionCommunicationPolicySchema,
+} from "./sessions-communication.js";
 import { SessionProviderReviewProjectionSchema } from "./sessions-provider-review.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
@@ -23,12 +27,6 @@ export const SessionPermissionModeSchema = Type.Union([
 export const SessionRepositorySourceSchema = closedObject({
   url: Type.String({ minLength: 1, maxLength: 2048 }),
   ref: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
-});
-
-/** Channel-owned destination for returning to the conversation that launched a session. */
-export const SessionConversationLinkSchema = closedObject({
-  url: Type.String({ minLength: 1, maxLength: 2048, pattern: "^https?://" }),
-  label: Type.String({ minLength: 1, maxLength: 128 }),
 });
 
 export const SessionRunStatusSchema = Type.Union([
@@ -109,11 +107,13 @@ const SessionSwarmSummarySchema = closedObject({
 export const SessionRowSchema = Type.Object(
   {
     key: Type.String(),
-    /** Detail fields omitted in compact lists must not clear a client's full-row cache. */
-    rowMode: Type.Optional(Type.Literal("compact")),
+    /** Fields outside the requested projection must not clear a client's full-row cache. */
+    rowMode: Type.Optional(Type.Union([Type.Literal("compact"), Type.Literal("dashboard")])),
     sessionId: Type.Optional(Type.String()),
     /** Incarnation revision for invalidating session-scoped client caches after resets. */
     lifecycleRevision: Type.Optional(NonEmptyString),
+    /** Opaque saved model-selection inputs, unaffected by activity or display updates. */
+    sessionModelRevision: Type.Optional(NonEmptyString),
     incognito: Type.Optional(Type.Literal(true)),
     kind: Type.Union([
       Type.Literal("direct"),
@@ -127,7 +127,6 @@ export const SessionRowSchema = Type.Object(
     /** Named sidebar tint from SESSION_COLOR_IDS; clients map names to theme hues. */
     color: Type.Optional(Type.String()),
     channelAvatarUrl: Type.Optional(NonEmptyString),
-    conversationLink: Type.Optional(SessionConversationLinkSchema),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
     /** Prepared dashboard membership fact shared by list and change-event rows. */
     hasBoard: Type.Optional(Type.Boolean()),
@@ -162,6 +161,7 @@ export const SessionRowSchema = Type.Object(
     archivedBy: Type.Optional(SessionCreatedActorSchema),
     archiveReason: Type.Optional(SessionEntryArchiveReasonSchema),
     pinned: Type.Optional(Type.Boolean()),
+    sidebarRoot: Type.Optional(Type.Boolean()),
     pinnedAt: Type.Optional(Type.Number()),
     snoozedUntil: Type.Optional(Type.Number()),
     snoozedAt: Type.Optional(Type.Number()),
@@ -216,6 +216,8 @@ export const SessionRowSchema = Type.Object(
     /** Persisted task cwd or spawned workspace; no filesystem resolution is implied. */
     workspaceDir: Type.Optional(Type.String()),
     permissionMode: Type.Optional(SessionPermissionModeSchema),
+    communication: Type.Optional(SessionCommunicationPolicySchema),
+    effectiveCommunication: Type.Optional(EffectiveSessionCommunicationPolicySchema),
     /** Authorized per-chat containment opt-out; omission follows configured sandbox policy. */
     sandboxMode: Type.Optional(Type.Literal("off")),
     /** Administrator consent to the exact external runtime's own permissions for this incarnation. */
@@ -299,7 +301,6 @@ export const SessionEventAncestorsSchema = closedObject({
 });
 
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
-export type SessionConversationLink = Static<typeof SessionConversationLinkSchema>;
 export type SessionPermissionMode = Static<typeof SessionPermissionModeSchema>;
 export type SessionOwner = Static<typeof SessionOwnerSchema>;
 export type SessionRunStatus = Static<typeof SessionRunStatusSchema>;

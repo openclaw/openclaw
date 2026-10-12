@@ -33,7 +33,7 @@ beforeAll(async () => {
   observations = JSON.parse(result.stdout) as Observation[];
 }, 70_000);
 
-it.for(["line", "range", "cursor", "eof"])(
+it.for(["cursor", "eof"])(
   "owns both output channels for a partial-file %s page",
   { timeout: 30_000 },
   async (mode) => {

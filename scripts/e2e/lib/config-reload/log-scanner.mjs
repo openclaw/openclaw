@@ -1,25 +1,15 @@
-// Streaming log scanner for config reload E2E scenarios.
 import {
   createIncrementalLineReader,
   resolvePositiveInteger,
 } from "../incremental-line-reader.mjs";
 
-const DEFAULT_MAX_READ_BYTES = 256 * 1024;
 const DEFAULT_TAIL_LINE_LIMIT = 160;
 const RELOAD_NEEDLE = "config change detected; evaluating reload";
 const RESTART_NEEDLE = "config change requires gateway restart";
 
-function inspectConfigReloadLogLine(line) {
-  return {
-    reload: line.includes(RELOAD_NEEDLE),
-    restart: line.includes(RESTART_NEEDLE),
-  };
-}
-
 export function createConfigReloadLogScanner(logPath, options = {}) {
-  const maxReadBytes = resolvePositiveInteger(options.maxReadBytes, DEFAULT_MAX_READ_BYTES);
   const tailLineLimit = resolvePositiveInteger(options.tailLineLimit, DEFAULT_TAIL_LINE_LIMIT);
-  const reader = createIncrementalLineReader(logPath, { maxReadBytes });
+  const reader = createIncrementalLineReader(logPath, { maxReadBytes: options.maxReadBytes });
   let tailLines = [];
   const reloadLines = [];
   const restartLines = [];
@@ -35,11 +25,10 @@ export function createConfigReloadLogScanner(logPath, options = {}) {
       for (const line of lines) {
         const trimmed = line.replace(/\r$/u, "");
         tailLines.push(trimmed);
-        const match = inspectConfigReloadLogLine(trimmed);
-        if (match.reload) {
+        if (trimmed.includes(RELOAD_NEEDLE)) {
           reloadLines.push(trimmed);
         }
-        if (match.restart) {
+        if (trimmed.includes(RESTART_NEEDLE)) {
           restartLines.push(trimmed);
         }
       }

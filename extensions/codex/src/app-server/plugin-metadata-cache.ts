@@ -21,16 +21,9 @@ type CodexPluginMetadataRequest<QueryKind extends CodexPluginMetadataQueryKind> 
   params: CodexPluginMetadataRequestParams<QueryKind>,
 ) => Promise<CodexPluginMetadataResponse<QueryKind>>;
 
-type CodexPluginMetadataSnapshot<
-  QueryKind extends CodexPluginMetadataQueryKind = CodexPluginMetadataQueryKind,
-> = {
-  appCacheKey: string;
-  queryKind: QueryKind;
-  response: CodexPluginMetadataResponse<QueryKind>;
-};
-
 type CachedCodexPluginMetadataEntry = {
-  snapshot: CodexPluginMetadataSnapshot;
+  appCacheKey: string;
+  response: v2.PluginInstalledResponse | v2.PluginListResponse;
   expiresAtMs: number;
 };
 
@@ -51,14 +44,12 @@ type LoadCodexPluginMetadataParams<QueryKind extends CodexPluginMetadataQueryKin
 
 type InFlightCodexPluginMetadataLoad = {
   appCacheKey: string;
-  promise: Promise<CodexPluginMetadataSnapshot>;
+  promise: Promise<v2.PluginInstalledResponse | v2.PluginListResponse>;
 };
 
 export class CodexPluginMetadataCache {
   private readonly entries = new Map<string, CachedCodexPluginMetadataEntry>();
   private readonly inFlight = new Map<string, InFlightCodexPluginMetadataLoad>();
-  private readonly generations = new Map<string, number>();
-  private clearGeneration = 0;
 
   constructor(private readonly nowMs: () => number = Date.now) {}
 
@@ -67,7 +58,7 @@ export class CodexPluginMetadataCache {
     queryKind: QueryKind,
     requestParams?: CodexPluginMetadataRequestParams<QueryKind>,
     catalogScope?: string,
-  ): CodexPluginMetadataSnapshot<QueryKind> | undefined {
+  ): CodexPluginMetadataResponse<QueryKind> | undefined {
     const entryKey = buildMetadataCacheEntryKey(
       appCacheKey,
       queryKind,
@@ -83,13 +74,13 @@ export class CodexPluginMetadataCache {
       return undefined;
     }
     // The entry key binds the runtime, query kind, and installed request scope.
-    return entry.snapshot as CodexPluginMetadataSnapshot<QueryKind>;
+    return entry.response as CodexPluginMetadataResponse<QueryKind>;
   }
 
   /** Returns a fresh snapshot or coalesces one catalog or installed-plugin request. */
   async load<QueryKind extends CodexPluginMetadataQueryKind>(
     params: LoadCodexPluginMetadataParams<QueryKind>,
-  ): Promise<CodexPluginMetadataSnapshot<QueryKind>> {
+  ): Promise<CodexPluginMetadataResponse<QueryKind>> {
     const entryKey = buildMetadataCacheEntryKey(
       params.appCacheKey,
       params.queryKind,
@@ -107,42 +98,24 @@ export class CodexPluginMetadataCache {
     }
     const pending = this.inFlight.get(entryKey);
     if (pending) {
-      try {
-        return (await pending.promise) as CodexPluginMetadataSnapshot<QueryKind>;
-      } catch {
-        if (this.inFlight.get(entryKey) === pending) {
-          this.inFlight.delete(entryKey);
-        }
-        return await this.load(params);
-      }
+      return (await pending.promise) as CodexPluginMetadataResponse<QueryKind>;
     }
 
-    const generation = this.generations.get(params.appCacheKey) ?? 0;
-    const clearGeneration = this.clearGeneration;
     const promise = (async () => {
       const method = (
         params.queryKind === "installed" ? "plugin/installed" : "plugin/list"
       ) as CodexPluginMetadataMethod<QueryKind>;
       const response = await params.request(method, params.requestParams);
-      const snapshot = {
-        appCacheKey: params.appCacheKey,
-        queryKind: params.queryKind,
-        response,
-      } satisfies CodexPluginMetadataSnapshot<QueryKind>;
-      // Settled snapshots survive until install invalidation, identity change,
-      // TTL expiry, restart, or test reset — never a per-turn refresh.
-      if (
-        generation === (this.generations.get(params.appCacheKey) ?? 0) &&
-        clearGeneration === this.clearGeneration &&
-        response.marketplaceLoadErrors.length === 0 &&
-        (params.cacheable?.(response) ?? true)
-      ) {
+      // Invalidation during a load is best effort: a late snapshot may survive
+      // until the next invalidation or TTL expiry. This cache grants no authority.
+      if (response.marketplaceLoadErrors.length === 0 && (params.cacheable?.(response) ?? true)) {
         this.entries.set(entryKey, {
-          snapshot,
+          appCacheKey: params.appCacheKey,
+          response,
           expiresAtMs: this.nowMs() + CODEX_PLUGIN_METADATA_CACHE_TTL_MS,
         });
       }
-      return snapshot;
+      return response;
     })();
     this.inFlight.set(entryKey, { appCacheKey: params.appCacheKey, promise });
     try {
@@ -155,23 +128,16 @@ export class CodexPluginMetadataCache {
   }
 
   invalidate(appCacheKey: string): void {
-    this.generations.set(appCacheKey, (this.generations.get(appCacheKey) ?? 0) + 1);
-    for (const [entryKey, entry] of this.entries) {
-      if (entry.snapshot.appCacheKey === appCacheKey) {
-        this.entries.delete(entryKey);
-      }
-    }
-    for (const [entryKey, pending] of this.inFlight) {
-      if (pending.appCacheKey === appCacheKey) {
-        this.inFlight.delete(entryKey);
+    for (const cache of [this.entries, this.inFlight]) {
+      for (const [entryKey, entry] of cache) {
+        if (entry.appCacheKey === appCacheKey) {
+          cache.delete(entryKey);
+        }
       }
     }
   }
 
-  /** Clears snapshots and prevents late in-flight loads from repopulating them. */
   clear(): void {
-    this.clearGeneration += 1;
-    this.generations.clear();
     this.entries.clear();
     this.inFlight.clear();
   }

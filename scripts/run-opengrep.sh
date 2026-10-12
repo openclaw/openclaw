@@ -57,7 +57,6 @@ EOF
   exit 127
 fi
 
-# Pull off our own flags from the remaining args; pass everything else through to opengrep.
 EXTRA_ARGS=()
 PATHS_PASSED=0
 SAW_DOUBLE_DASH=0
@@ -91,7 +90,6 @@ while (( $# > 0 )); do
       ;;
     *)
       if (( SAW_DOUBLE_DASH )); then
-        # Treat anything after `--` as a path-positional override
         PATHS_PASSED=1
       fi
       EXTRA_ARGS+=( "$1" )

@@ -79,9 +79,6 @@ function resolveDiscordConversationIdFromTargets(
 
 function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
   const sessionKey = normalizeLowercaseStringOrEmpty(raw);
-  if (!sessionKey) {
-    return undefined;
-  }
   const match = sessionKey.match(/(?:^|:)channel:([^:]+)$/);
   return match?.[1] ? `channel:${match[1]}` : undefined;
 }

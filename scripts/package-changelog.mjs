@@ -21,9 +21,6 @@ const RELEASE_VERSION_PATTERN =
 const PRERELEASE_VERSION_PATTERN =
   /^([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)-(?:alpha|beta)\.[1-9][0-9]*$/u;
 
-/**
- * Resolves acceptable changelog headings for a package version.
- */
 export function resolvePackageChangelogVersions(packageVersion, options = {}) {
   const match = RELEASE_VERSION_PATTERN.exec(packageVersion);
   if (!match) {
@@ -51,9 +48,6 @@ function assertMeaningfulReleaseBody(section, version) {
   }
 }
 
-/**
- * Extracts the current release changelog section for package publishing.
- */
 export function extractCurrentPackageChangelog(content, packageVersion, options = {}) {
   const targetVersions = resolvePackageChangelogVersions(packageVersion, options);
   const lines = splitLines(content);
@@ -144,9 +138,6 @@ async function readPackageVersion(cwd) {
   return packageJson.version;
 }
 
-/**
- * Restores the source changelog from a package-changelog backup.
- */
 export async function restorePackageChangelog(cwd = process.cwd()) {
   const backupPath = path.join(cwd, BACKUP_PATH);
   const packagedBackupPath = path.join(cwd, PACKAGED_BACKUP_PATH);
@@ -195,9 +186,6 @@ export async function restorePackageChangelog(cwd = process.cwd()) {
   return true;
 }
 
-/**
- * Writes packaged changelog content while preserving a restorable backup.
- */
 export async function preparePackageChangelog(cwd = process.cwd(), options = {}) {
   await restorePackageChangelog(cwd);
   const changelogPath = path.join(cwd, CHANGELOG_PATH);

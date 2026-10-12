@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import { readDatabase } from "./observations.mjs";
 
 const runId = "f9bdb286-8f8a-4b72-a792-3ca83ad07605";
 const postCoreRunId = "2ff0cdf2-7fcb-4070-a901-4c4c520253bb";
@@ -415,9 +416,8 @@ function verifyDeadlineRecovery(stateDir, artifacts) {
     assert(roles.includes("update"));
     assert(!roles.includes("doctor"));
   }
-  const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), { readOnly: true });
   let warning;
-  try {
+  readDatabase(path.join(stateDir, "state", "openclaw.sqlite"), (db) => {
     const run = db
       .prepare(
         "SELECT status, reason, steps_json FROM update_runs ORDER BY created_at_ms DESC LIMIT 1",
@@ -440,9 +440,7 @@ function verifyDeadlineRecovery(stateDir, artifacts) {
         .get().n,
       0,
     );
-  } finally {
-    db.close();
-  }
+  });
   const stderr = fs.readFileSync(path.join(artifacts, "deadline-repair.err"), "utf8");
   assert(stderr.includes("Gateway restarted and verified after Doctor repair."));
   for (const line of stderr.split("\n")) {
