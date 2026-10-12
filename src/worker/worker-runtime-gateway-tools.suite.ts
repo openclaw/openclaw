@@ -58,7 +58,7 @@ export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGate
               }
             : mode === "directory"
               ? {
-                  toolName: "tool_call",
+                  toolName: "dispatch_action",
                   toolCallId: "gateway-fetch",
                   args: { id: "web_fetch", args },
                 }
@@ -102,7 +102,7 @@ export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGate
         codeMode
           ? ["exec", "wait"]
           : mode === "directory"
-            ? ["tool_search", "tool_describe", "tool_call", "read"]
+            ? ["tool_search", "tool_describe", "dispatch_action", "read"]
             : ["read", "web_fetch"],
       );
       expect(gateway.gatewayToolRequests).toEqual([

@@ -23,7 +23,7 @@ Codex's native `skills` namespace or install marketplace skills. See
 Codex dynamic tools default to `searchable` loading. OpenClaw normally does
 not expose dynamic tools that duplicate Codex-native workspace operations:
 `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
-`get_goal`, `create_goal`, `update_goal`, `tool_call`, `tool_describe`,
+`get_goal`, `create_goal`, `update_goal`, `dispatch_action`, `tool_describe`,
 and `tool_search`. Goal operations stay native to Codex,
 so OpenClaw does not project a second goal store into Codex turns. Most
 remaining OpenClaw integration tools, such as messaging, media, cron,

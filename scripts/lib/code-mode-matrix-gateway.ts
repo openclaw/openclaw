@@ -397,7 +397,7 @@ export function collectGatewayMatrixTrace(events: readonly unknown[]) {
     if (
       !call ||
       (call.name === "exec" && typeof call.args.code === "string") ||
-      ["tool_search", "tool_describe", "tool_call", "wait"].includes(call.name) ||
+      ["tool_search", "tool_describe", "dispatch_action", "wait"].includes(call.name) ||
       activities.some((item) => item.parentId === call.id && item.sessionKey === call.sessionKey)
     ) {
       continue;

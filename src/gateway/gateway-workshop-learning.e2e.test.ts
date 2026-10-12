@@ -227,9 +227,9 @@ describe("Gateway automatic Workshop learning", () => {
             await fs.writeFile(supportFile, originalSupport);
             const reason = "require the public generation to match the release";
             // The review keeps the foreground tool schemas for prompt-cache reuse, where Tool
-            // Search catalogs skill_workshop behind tool_call.
+            // Search catalogs skill_workshop behind dispatch_action.
             const workshopCall = (args: Record<string, unknown>) => ({
-              name: "tool_call",
+              name: "dispatch_action",
               args: { id: "skill_workshop", args },
             });
             reviewActions = [

@@ -13,6 +13,8 @@ export type { ToolProfileId } from "./tool-catalog.js";
 const TOOL_NAME_ALIASES = new Map<string, string>([
   ["bash", "exec"],
   ["apply-patch", "apply_patch"],
+  // v2026.10.1 policies must still govern the renamed Tool Search dispatcher.
+  ["tool_call", "dispatch_action"],
   // Permanent scheduler-tool alias (owner decision, RFC 0026), like bash -> exec.
   ["cron", "automations"],
 ]);

@@ -239,7 +239,7 @@ describe("Gateway matrix transcript evidence", () => {
         exitCode: isError ? 1 : 0,
         aggregated: isError ? "synthetic process failure" : "synthetic process complete",
       };
-      const name = surface === "tool-search" ? "tool_call" : "exec";
+      const name = surface === "tool-search" ? "dispatch_action" : "exec";
       const invocation = {
         message: {
           role: "assistant",

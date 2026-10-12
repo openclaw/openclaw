@@ -281,7 +281,7 @@ function createToolEvidenceTracker(toolName, expected) {
         }
         if (
           call.id &&
-          call.tool === "tool_call" &&
+          call.tool === "dispatch_action" &&
           dispatcherSelectsTool(call.input, toolSelectors)
         ) {
           dispatcherCalls.add(call.id);

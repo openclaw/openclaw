@@ -696,7 +696,7 @@ describe("tool-loop-detection", () => {
   it.each(["Unknown tool: missing_a", "Unknown tool id: missing_a"])(
     "preserves unknown-tool evidence across loop vetoes: %s",
     (error) => {
-      const loop = createLoop("tool_call", { tool: "missing_a" });
+      const loop = createLoop("dispatch_action", { tool: "missing_a" });
       for (let index = 0; index < UNKNOWN_TOOL_THRESHOLD; index++) {
         loop.fail(new Error(error));
       }

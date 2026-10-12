@@ -303,7 +303,7 @@ export async function startSkillLibraryWireProvider() {
           }
           advertisedCall(
             callId,
-            catalogId ? "tool_call" : "skill_workshop",
+            catalogId ? "dispatch_action" : "skill_workshop",
             catalogId ? { id: catalogId, args } : args,
           );
         };

@@ -19,7 +19,7 @@ function deferredToolTranscript() {
   const toolCall = {
     type: "toolCall",
     id: "outer-call",
-    name: "tool_call",
+    name: "dispatch_action",
     arguments: { id: "e2e_slug_probe" },
   };
   const call = {
@@ -43,7 +43,7 @@ function deferredToolTranscript() {
   const result = {
     role: "toolResult",
     toolCallId: "outer-call",
-    toolName: "tool_call",
+    toolName: "dispatch_action",
     isError: false,
     content: [
       {

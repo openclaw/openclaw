@@ -37,6 +37,7 @@
     "plugins": {"icon":"puzzle","title":"Plugins","detailKeys":["action","pluginId","packageName","query"]},
     "exec": {"icon":"squareTerminal","title":"Exec","detailKeys":["command"]},
     "tool_call": {"icon":"wrench","title":"Tool Call","detailKeys":[]},
+    "dispatch_action": {"icon":"wrench","title":"Tool Call","detailKeys":[]},
     "tool_call_update": {"icon":"wrench","title":"Tool Call","detailKeys":[]},
     "session_status": {"icon":"barChart","title":"Session Status","detailKeys":["sessionKey","model"]},
     "github_publish": {"icon":"github","title":"GitHub Publish","detailKeys":["title"]},

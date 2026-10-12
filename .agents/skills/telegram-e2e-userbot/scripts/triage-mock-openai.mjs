@@ -214,7 +214,7 @@ function functionCallResponse(name, argumentsText, suffix) {
 function toolCallEvents(sequence) {
   const args = JSON.stringify({ args: { id: "session_status", args: {} } });
   const suffix = createHash("sha256").update(`${sequence}:${args}`).digest("hex").slice(0, 10);
-  return functionCallResponse("tool_call", args, suffix);
+  return functionCallResponse("dispatch_action", args, suffix);
 }
 
 function namedToolCallEvents(name, args, sequence) {

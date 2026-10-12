@@ -150,7 +150,7 @@ describe("Tool Search MCP failures", () => {
     },
   );
 
-  it("records the outer tool_call lifecycle and transcript result as failed", async () => {
+  it("records the outer dispatch_action lifecycle and transcript result as failed", async () => {
     const { callTool, target } = await createDeferredMcpCall({
       content: [{ type: "text", text: "Backend request failed" }],
       isError: true,

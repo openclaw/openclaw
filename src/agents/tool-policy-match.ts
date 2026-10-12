@@ -55,13 +55,21 @@ export function createToolPolicyMatcher(
   });
   return (name: string) => {
     const normalized = normalizeToolPolicyName(name);
-    if (matchesAnyGlobPattern(normalized, deny)) {
+    // Shipped wildcard policies (for example tool_*) also govern the renamed dispatcher.
+    const legacyDispatcher = normalized === "dispatch_action";
+    if (
+      matchesAnyGlobPattern(normalized, deny) ||
+      (legacyDispatcher && matchesAnyGlobPattern("tool_call", deny))
+    ) {
       return false;
     }
     if (allow.length === 0) {
       return true;
     }
-    if (matchesAnyGlobPattern(normalized, allow)) {
+    if (
+      matchesAnyGlobPattern(normalized, allow) ||
+      (legacyDispatcher && matchesAnyGlobPattern("tool_call", allow))
+    ) {
       return true;
     }
     // Code Mode shipped whole skill reads under the ordinary read grant.

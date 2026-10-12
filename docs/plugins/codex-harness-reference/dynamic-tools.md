@@ -23,7 +23,7 @@ Codex's own tool-search surface:
 - `apply_patch`
 - `exec`
 - `process`
-- `tool_call`
+- `dispatch_action`
 - `tool_describe`
 - `tool_search`
 

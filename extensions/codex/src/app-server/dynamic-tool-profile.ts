@@ -14,6 +14,7 @@ const CODEX_NATIVE_TOOLS = new Map<string, "workspace" | "shell" | "goal" | "alw
   ["process", "shell"],
   ["update_plan", "always"],
   ["tool_call", "always"],
+  ["dispatch_action", "always"],
   ["tool_describe", "always"],
   ["tool_search", "always"],
   ["get_goal", "goal"],

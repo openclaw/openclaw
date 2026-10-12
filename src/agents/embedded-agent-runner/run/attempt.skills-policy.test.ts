@@ -406,7 +406,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     await run({
       sessionKey: "agent:main:main",
       sessionPrompt: async () => {
-        const toolCall = sessionTool("tool_call");
+        const toolCall = sessionTool("dispatch_action");
         outcomes = await Promise.allSettled([
           toolCall.execute("call-read", { id: "read" }),
           toolCall.execute("call-workshop", { id: "skill_workshop" }),
