@@ -32,6 +32,11 @@ function syncDataToSyncResponse(syncData: ISyncData): ISyncResponse {
   };
 }
 
+function hasToDeviceEvents(syncData: ISyncResponse): boolean {
+  const events = syncData.to_device?.events;
+  return Array.isArray(events) && events.length > 0;
+}
+
 export class SqliteBackedMatrixSyncStore extends MemoryStore {
   private readonly persistLock = createAsyncLock();
   private readonly accumulator = new SyncAccumulator();
@@ -42,6 +47,9 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   private cleanShutdown = false;
   private dirty = false;
   private frozen = false;
+  private cryptoDurabilityFence: (() => Promise<void>) | null = null;
+  private cryptoDurabilityRequired = false;
+  private cryptoDurabilityPending = false;
   private persistTimer: NodeJS.Timeout | null = null;
   private persistPromise: Promise<void> | null = null;
 
@@ -109,6 +117,11 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     }
     this.accumulator.accumulate(syncData);
     this.savedSync = this.accumulator.getJSON();
+    if (hasToDeviceEvents(syncData)) {
+      // To-device events are delivered once per cursor. Whatever crypto state
+      // they produced must be durable before this cursor can be.
+      this.cryptoDurabilityPending = true;
+    }
     this.markDirtyAndSchedulePersist();
     return Promise.resolve();
   }
@@ -151,6 +164,18 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
         store,
       });
     });
+  }
+
+  /**
+   * Registers the crypto-store persist that must succeed before a sync cursor
+   * that consumed to-device events is written. Passing null detaches the fence
+   * without lifting the requirement: such a cursor is then refused until a
+   * fence is registered again. A store that never had a fence belongs to a
+   * client without crypto state and writes its cursor unconditionally.
+   */
+  setCryptoDurabilityFence(fence: (() => Promise<void>) | null): void {
+    this.cryptoDurabilityFence = fence;
+    this.cryptoDurabilityRequired ||= fence !== null;
   }
 
   markCleanShutdown(): void {
@@ -219,7 +244,20 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
         ? { clientOptions: structuredClone(this.savedClientOptions) }
         : {}),
     };
+    // The payload is captured first: the crypto snapshot taken below is then
+    // at least as new as every to-device event behind the cursor being written.
+    const cryptoDurabilityPending = this.cryptoDurabilityPending;
+    this.cryptoDurabilityPending = false;
     try {
+      if (cryptoDurabilityPending && this.cryptoDurabilityRequired) {
+        const fence = this.cryptoDurabilityFence;
+        if (!fence) {
+          throw new Error(
+            "Matrix crypto durability fence is detached; refusing to persist a sync cursor that consumed to-device events",
+          );
+        }
+        await fence();
+      }
       await writeMatrixSyncCacheStateToStore({
         storageRootDir: this.storageRootDir,
         payload,
@@ -228,6 +266,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
       await claimCurrentTokenStorageState({ rootDir: this.storageRootDir });
     } catch (err) {
       this.dirty = true;
+      this.cryptoDurabilityPending ||= cryptoDurabilityPending;
       throw err;
     }
   }

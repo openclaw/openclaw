@@ -71,6 +71,21 @@ function createSyncResponse(nextBatch: string): ISyncResponse {
   };
 }
 
+function createSyncResponseWithRoomKey(nextBatch: string): ISyncResponse {
+  return {
+    ...createSyncResponse(nextBatch),
+    to_device: {
+      events: [
+        {
+          content: { algorithm: "m.olm.v1.curve25519-aes-sha2", ciphertext: {} },
+          sender: "@user:example.org",
+          type: "m.room.encrypted",
+        },
+      ],
+    },
+  };
+}
+
 describe("SqliteBackedMatrixSyncStore", () => {
   let storageRoot: string;
 
@@ -377,6 +392,94 @@ describe("SqliteBackedMatrixSyncStore", () => {
     const persisted = await SqliteBackedMatrixSyncStore.create(storageRoot);
     expect(persisted.hasSavedSync()).toBe(false);
     expect(persisted.hasSavedSyncFromCleanShutdown()).toBe(false);
+  });
+
+  it("persists crypto state before a cursor that consumed to-device events", async () => {
+    const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    const cursorsSeenByFence: Array<string | null> = [];
+    const fence = vi.fn(async () => {
+      const durable = await SqliteBackedMatrixSyncStore.create(storageRoot);
+      cursorsSeenByFence.push(await durable.getSavedSyncToken());
+    });
+    store.setCryptoDurabilityFence(fence);
+
+    await store.setSyncData(createSyncResponse("no-keys"));
+    await store.flush();
+    expect(fence).not.toHaveBeenCalled();
+
+    await store.setSyncData(createSyncResponseWithRoomKey("with-keys"));
+    await store.flush();
+
+    expect(fence).toHaveBeenCalledTimes(1);
+    expect(cursorsSeenByFence).toEqual(["no-keys"]);
+    const persisted = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    await expect(persisted.getSavedSyncToken()).resolves.toBe("with-keys");
+  });
+
+  it("keeps the previous cursor when crypto state cannot be made durable", async () => {
+    const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    await store.setSyncData(createSyncResponse("before-keys"));
+    await store.flush();
+
+    const fence = vi.fn<() => Promise<void>>().mockRejectedValueOnce(new Error("disk full"));
+    store.setCryptoDurabilityFence(fence);
+    await store.setSyncData(createSyncResponseWithRoomKey("with-keys"));
+    await expect(store.flush()).rejects.toThrow("disk full");
+
+    const afterFailure = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    await expect(afterFailure.getSavedSyncToken()).resolves.toBe("before-keys");
+
+    fence.mockResolvedValue(undefined);
+    await store.flush();
+
+    expect(fence).toHaveBeenCalledTimes(2);
+    const afterRetry = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    await expect(afterRetry.getSavedSyncToken()).resolves.toBe("with-keys");
+  });
+
+  it("writes a to-device cursor without a fence when none was ever registered", async () => {
+    const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
+
+    await store.setSyncData(createSyncResponseWithRoomKey("no-crypto"));
+    await store.flush();
+
+    const persisted = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    await expect(persisted.getSavedSyncToken()).resolves.toBe("no-crypto");
+  });
+
+  it("refuses a to-device cursor while the crypto fence is detached", async () => {
+    const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    const fence = vi.fn(async () => {});
+    store.setCryptoDurabilityFence(fence);
+    await store.setSyncData(createSyncResponse("before-keys"));
+    await store.flush();
+
+    store.setCryptoDurabilityFence(null);
+    await store.setSyncData(createSyncResponseWithRoomKey("with-keys"));
+    await expect(store.flush()).rejects.toThrow("crypto durability fence is detached");
+
+    expect(fence).not.toHaveBeenCalled();
+    const whileDetached = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    await expect(whileDetached.getSavedSyncToken()).resolves.toBe("before-keys");
+
+    store.setCryptoDurabilityFence(fence);
+    await store.flush();
+
+    expect(fence).toHaveBeenCalledTimes(1);
+    const afterReattach = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    await expect(afterReattach.getSavedSyncToken()).resolves.toBe("with-keys");
+  });
+
+  it("still writes a cursor without to-device events while the crypto fence is detached", async () => {
+    const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    store.setCryptoDurabilityFence(async () => {});
+    store.setCryptoDurabilityFence(null);
+
+    await store.setSyncData(createSyncResponse("no-keys"));
+    await store.flush();
+
+    const persisted = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    await expect(persisted.getSavedSyncToken()).resolves.toBe("no-keys");
   });
 
   it("coalesces background persistence until the debounce window elapses", async () => {

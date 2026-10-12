@@ -60,6 +60,29 @@ export function holdRecoveryKeyPersistence() {
   return { admitted, release, stateRuntime };
 }
 
+/** Parks the first row write of a crypto snapshot publication until released. */
+export function holdIdbSnapshotPublication() {
+  const admitted = createDeferred<void>();
+  const release = createDeferred<void>();
+  const stateRuntime: MatrixSnapshotStateRuntime = {
+    openKeyedStoreV2<T>(options: OpenAsyncKeyedStoreOptions): PluginStateKeyedStore<T, 2> {
+      const store = createPluginStateKeyedStoreForTests<T>("matrix", options);
+      if (options.namespace !== "idb-snapshot") {
+        return store;
+      }
+      return {
+        ...store,
+        register: async (...args: Parameters<PluginStateKeyedStore<T, 2>["register"]>) => {
+          admitted.resolve();
+          await release.promise;
+          await store.register(...args);
+        },
+      };
+    },
+  };
+  return { admitted, release, stateRuntime };
+}
+
 export function captureRecoveryCacheWrite(capturedOptions: unknown) {
   // SAFETY: the SDK mock captures production options; required callbacks are checked below.
   const options = capturedOptions as ICreateClientOpts;
