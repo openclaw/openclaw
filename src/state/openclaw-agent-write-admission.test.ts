@@ -44,7 +44,7 @@ it.each(["write", "replace", "remove"] as const)(
         const replacement = path.join(root, "replacement.sqlite");
         fs.writeFileSync(replacement, "replacement");
         fs.renameSync(replacement, pathname);
-        expect(assertCurrent).toThrow(/identity changed/);
+        expect(assertCurrent).toThrow("database target changed");
       } else {
         fs.unlinkSync(pathname);
         expect(assertCurrent).toThrow();
