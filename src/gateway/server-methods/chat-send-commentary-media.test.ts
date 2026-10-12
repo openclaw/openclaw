@@ -8,6 +8,7 @@ import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import type { AssistantTranscriptSource } from "../../agents/sessions/assistant-transcript-source.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream-message-shared.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -167,6 +168,9 @@ describe("webchat commentary media", () => {
           ? [mediaUrl, `${mediaUrl}/second`]
           : [mediaUrl];
       const mixed = scenario === "mixed-text" || scenario === "mixed-media";
+      const assistantTranscriptSource: {
+        -readonly [Key in keyof AssistantTranscriptSource]: AssistantTranscriptSource[Key];
+      } = { occurrenceId: "progress-assistant-occurrence" };
       const finalMediaUrl = scenario === "mixed-media" ? `${mediaUrl}/final` : undefined;
       const authoredUrls = [...mediaUrls, ...(finalMediaUrl ? [finalMediaUrl] : [])];
       const finalText = "Final result";
@@ -399,9 +403,13 @@ describe("webchat commentary media", () => {
                   message,
                 });
                 expect(appended).toMatchObject({ ok: true });
+                if (!appended.ok || !appended.value) {
+                  throw new Error("Expected committed commentary message");
+                }
+                assistantTranscriptSource.messageId = appended.value.messageId;
                 await publishTranscriptUpdate(scope, {
                   message,
-                  messageId: "progress-row",
+                  messageId: appended.value.messageId,
                   runId,
                 });
                 if (!localMedia) {
@@ -576,6 +584,7 @@ describe("webchat commentary media", () => {
                       { text: finalText, ...(finalMediaUrl ? { mediaUrls: [finalMediaUrl] } : {}) },
                       {
                         assistantMessageIndex: 1,
+                        assistantTranscriptSource,
                         ...(finalMediaUrl ? { assistantTranscriptMediaUrls: [finalMediaUrl] } : {}),
                       },
                     ),
@@ -650,7 +659,7 @@ describe("webchat commentary media", () => {
           expect(cleanupSettled).toBe(true);
         }
         if (mixed) {
-          expect(readMessage()).toMatchObject({ content: expectedContent });
+          expect(readMessage().content).toEqual(expectedContent);
           expect(
             loadTranscriptEventsSync(scope).filter(
               (event) => asOptionalRecord(event)?.type === "message",

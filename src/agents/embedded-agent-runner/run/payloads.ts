@@ -49,6 +49,7 @@ import {
 } from "../../embedded-agent-utils.js";
 import { isTimeoutErrorMessage } from "../../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
+import type { AssistantTranscriptSource } from "../../sessions/assistant-transcript-source.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import {
   hasCompletedMessagingToolDeliveryEvidence,
@@ -68,6 +69,7 @@ export function buildEmbeddedRunPayloads(params: {
   answerSegments?: EmbeddedAgentSubscribeState["answerSegments"];
   keptAnswer?: EmbeddedAgentSubscribeState["keptAnswer"];
   assistantMessageIndex?: number;
+  assistantTranscriptSource?: AssistantTranscriptSource;
   assistantTranscriptOwned?: boolean;
   assistantTranscriptIdempotencyKey?: string;
   lastAssistant: AssistantMessage | undefined;
@@ -150,10 +152,16 @@ export function buildEmbeddedRunPayloads(params: {
     lastAssistant,
     currentAssistant,
     assistantMessageIndex: terminalMessageIndex,
+    assistantTranscriptSource,
     keptAnswer,
   }: Pick<
     typeof params,
-    "assistantTexts" | "lastAssistant" | "currentAssistant" | "assistantMessageIndex" | "keptAnswer"
+    | "assistantTexts"
+    | "lastAssistant"
+    | "currentAssistant"
+    | "assistantMessageIndex"
+    | "assistantTranscriptSource"
+    | "keptAnswer"
   >) => {
     // Silence belongs to this input's answer. An earlier steered input must not
     // hide a later input that actually failed without producing an answer.
@@ -182,6 +190,9 @@ export function buildEmbeddedRunPayloads(params: {
     // lane is restored; its reasoning was emitted at its own message_end.
     const assistantForPayload = keptAnswer?.assistant ?? terminalAssistant;
     const assistantMessageIndex = keptAnswer?.messageIndex ?? terminalMessageIndex;
+    const answerSource = keptAnswer
+      ? keptAnswer.assistantTranscriptSource
+      : assistantTranscriptSource;
     // Pre-upgrade recovered messages have no stored facts, and recovery intentionally does not
     // reparse text; one in-flight reply can lose delivery or speech intent across this boundary.
     const storedDelivery = assistantForPayload?.openclawDelivery;
@@ -346,6 +357,14 @@ export function buildEmbeddedRunPayloads(params: {
         if (assistantMessageIndex !== undefined) {
           setReplyPayloadMetadata(replyPayload, { assistantMessageIndex });
         }
+        // A fallback can combine text from several physical responses. Without
+        // per-text custody, the latest answer's receipt must not own all of them.
+        if (answerSource && answerDirectives.length === 1) {
+          setReplyPayloadMetadata(replyPayload, {
+            assistantTranscriptSource: answerSource,
+            ...(shouldUseCanonicalFinalAnswer ? { assistantTranscriptAggregate: true } : {}),
+          });
+        }
         replyItems.push(
           ttsFacts ? setReplyPayloadMetadata(replyPayload, { tts: ttsFacts }) : replyPayload,
         );
@@ -361,6 +380,7 @@ export function buildEmbeddedRunPayloads(params: {
       lastAssistant: segment.lastAssistant,
       currentAssistant: segment.lastAssistant,
       assistantMessageIndex: segment.messageEnd,
+      assistantTranscriptSource: segment.assistantTranscriptSource,
       keptAnswer: segment.keptAnswer,
     });
     for (const reply of replyItems.slice(replyStart)) {

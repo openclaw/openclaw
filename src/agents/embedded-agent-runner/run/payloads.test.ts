@@ -1,5 +1,6 @@
 // Payload tests cover successful embedded run replies, final-answer selection,
 // message-tool source replies, media directives, and tool-error warning policy.
+import assert from "node:assert/strict";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { resolveHeartbeatReplyPayload } from "../../../auto-reply/heartbeat-reply-payload.js";
@@ -66,27 +67,34 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         "  </mm:think>First visible answer.  ",
         "\nSecond visible answer.\n",
       ],
+      assistantTranscriptSource: { occurrenceId: "latest-response", messageId: "latest-row" },
     });
 
     expect(payloads.map((payload) => payload.text)).toStrictEqual([
       "First visible answer.",
       "Second visible answer.",
     ]);
+    expect(
+      payloads.map((payload) => getReplyPayloadMetadata(payload)?.assistantTranscriptSource),
+    ).toEqual([undefined, undefined]);
   });
 
   it("keeps media directives while sanitizing streamed assistant text", () => {
     const payloads = buildPayloads({
       assistantTexts: ["</mm:think>MEDIA:/tmp/reply-image.png\nAttached image"],
       assistantMessageIndex: 1,
+      assistantTranscriptSource: { occurrenceId: "image-response", messageId: "image-row" },
     });
-
     expect(payloads).toHaveLength(1);
+    assert(payloads[0]);
+    expect(getReplyPayloadMetadata(payloads[0])?.assistantTranscriptAggregate).toBeUndefined();
     expect(payloads[0]?.text).toBe("Attached image");
     expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
     expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
     expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
       assistantMessageIndex: 1,
       assistantTranscriptMediaUrls: ["/tmp/reply-image.png"],
+      assistantTranscriptSource: { occurrenceId: "image-response", messageId: "image-row" },
     });
   });
 
@@ -265,10 +273,15 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
           messageEnd: (index + 1) * 2,
           finalMessageStart: (index + 1) * 2,
           lastAssistant,
+          assistantTranscriptSource: {
+            occurrenceId: `response-${index + 1}`,
+            messageId: `row-${index + 1}`,
+          },
         })),
         lastAssistant: messages[2],
         currentAssistant: messages[2],
         assistantMessageIndex: 6,
+        assistantTranscriptSource: { occurrenceId: "response-3", messageId: "row-3" },
       });
       expect(payloads.map((payload) => payload.text)).toEqual(
         answers.filter((text) => text && text !== "NO_REPLY"),
@@ -279,6 +292,52 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       expect(
         payloads.map((payload) => getReplyPayloadMetadata(payload)?.precedingInputAnswer),
       ).toEqual(middleAnswer === "Second answer." ? [true, true, undefined] : [true, undefined]);
+      expect(
+        payloads.map((payload) => getReplyPayloadMetadata(payload)?.assistantTranscriptSource),
+      ).toEqual(
+        middleAnswer !== "Second answer."
+          ? [
+              { occurrenceId: "response-1", messageId: "row-1" },
+              { occurrenceId: "response-3", messageId: "row-3" },
+            ]
+          : [
+              { occurrenceId: "response-1", messageId: "row-1" },
+              { occurrenceId: "response-2", messageId: "row-2" },
+              { occurrenceId: "response-3", messageId: "row-3" },
+            ],
+      );
+    },
+  );
+
+  it.each([true, false])(
+    "does not lend the terminal source to a kept answer (source=%s)",
+    (hasSource) => {
+      const payloads = buildPayloads({
+        assistantTexts: ["Earlier answer."],
+        lastAssistant: makeAgentAssistantMessage({ content: [{ type: "text", text: "NO_REPLY" }] }),
+        assistantMessageIndex: 2,
+        assistantTranscriptSource: { occurrenceId: "silent-response", messageId: "silent-row" },
+        keptAnswer: {
+          assistant: makeAgentAssistantMessage({
+            content: [{ type: "text", text: "Earlier answer.\nMEDIA:/tmp/kept.png" }],
+          }),
+          messageIndex: 1,
+          ...(hasSource
+            ? {
+                assistantTranscriptSource: { occurrenceId: "kept-response", messageId: "kept-row" },
+              }
+            : {}),
+        },
+      });
+      expectSinglePayloadText(payloads, "Earlier answer.");
+      assert(payloads[0]);
+      expect(payloads[0]?.mediaUrl).toBe("/tmp/kept.png");
+      expect(getReplyPayloadMetadata(payloads[0])?.assistantTranscriptSource).toEqual(
+        hasSource ? { occurrenceId: "kept-response", messageId: "kept-row" } : undefined,
+      );
+      expect(getReplyPayloadMetadata(payloads[0])?.assistantTranscriptAggregate).toBe(
+        hasSource ? true : undefined,
+      );
     },
   );
 
@@ -287,6 +346,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     // still need mirror metadata so transcript/persistence can record them.
     const payloads = buildPayloads({
       assistantTexts: ["ordinary final should stay private"],
+      assistantTranscriptSource: { occurrenceId: "private-response", messageId: "private-row" },
       didSendViaMessagingTool: true,
       messagingToolSourceReplyPayloads: [
         {
@@ -306,6 +366,8 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       mediaUrl: "/tmp/reply.png",
       mediaUrls: ["/tmp/reply.png"],
     });
+    assert(payloads[0]);
+    expect(getReplyPayloadMetadata(payloads[0])?.assistantTranscriptSource).toBeUndefined();
     expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
       deliverDespiteSourceReplySuppression: true,
       sourceReplyTranscriptMirror: {

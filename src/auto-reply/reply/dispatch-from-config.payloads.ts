@@ -106,6 +106,7 @@ export function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): stri
       channelData: payload.channelData,
     },
     identity: {
+      assistantOccurrenceId: metadata?.assistantTranscriptSource?.occurrenceId,
       assistantMessageIndex: metadata?.assistantMessageIndex,
       assistantTranscriptOwned: metadata?.assistantTranscriptOwned,
       replyToIdExplicit: metadata?.replyToIdExplicit,

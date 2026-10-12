@@ -27,7 +27,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayMetadataCloseFixture } from "../server-close.metadata.test-support.js";
 import {
   rewriteAssistantTranscriptMessageByIdempotencyKey,
-  rewriteAssistantTranscriptMessageByTurnIndexAndMedia,
+  rewriteAssistantTranscriptMessageByIdAndMedia,
   rewriteSourceReplyTranscriptMirrors,
 } from "./chat-transcript-persistence.js";
 
@@ -108,15 +108,13 @@ async function seed(
   const source = () =>
     rewriteSourceReplyTranscriptMirrors({ scope, candidates: [mirror], requests: [request] });
   const indexed = (
-    overrides: Partial<
-      Parameters<typeof rewriteAssistantTranscriptMessageByTurnIndexAndMedia>[0]
-    > = {},
+    overrides: Partial<Parameters<typeof rewriteAssistantTranscriptMessageByIdAndMedia>[0]> = {},
   ) =>
-    rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
+    rewriteAssistantTranscriptMessageByIdAndMedia({
       scope,
       content,
       afterSeq: 0,
-      assistantMessageIndex: 2,
+      messageId: "selected",
       expectedGeneration: initialGeneration,
       mediaUrls: [mediaUrl],
       rejectedMediaCount: 0,
@@ -179,7 +177,9 @@ describe("durable transcript mirror corrections", () => {
         expect(after.find((event) => isRecord(event) && event.id === "selected")).toMatchObject({
           message: {
             idempotencyKey: "delivery-key",
-            openclawDisplayContent: expect.arrayContaining(content),
+            openclawDisplayContent: expect.arrayContaining(
+              kind === "indexed" ? [{ type: "text", text: "Original delivery." }] : content,
+            ),
           },
         });
         if (kind === "keyed") {
@@ -205,12 +205,62 @@ describe("durable transcript mirror corrections", () => {
       for (const overrides of [
         { mediaUrls: ["https://example.com/another.png"] },
         { rejectedMediaCount: 1 },
-        { assistantMessageIndex: 3 },
+        { messageId: "missing" },
         { expectedGeneration: "stale-generation" },
       ]) {
         await expect(indexed(overrides)).resolves.toBeNull();
       }
       expect(snapshot()).toEqual(before);
+    });
+  });
+
+  it("preserves distinct signed completions while enriching exactly the receipted row", async () => {
+    await withFixture(async ({ append, snapshot, indexed }) => {
+      for (const messageId of ["first-response", "later-response"]) {
+        append(messageId, {
+          role: "assistant",
+          responseId: messageId,
+          content: [
+            {
+              type: "text",
+              text: `Identical answer.\nMEDIA:${mediaUrl}`,
+              textSignature: JSON.stringify({ v: 1, id: messageId, phase: "final_answer" }),
+            },
+          ],
+        });
+      }
+      const before = snapshot();
+      await expect(
+        indexed({
+          messageId: "later-response",
+          content: [
+            { type: "text", text: "answer tail" },
+            { type: "image", url: "/managed/image" },
+          ],
+        }),
+      ).resolves.toMatchObject({ messageId: "later-response" });
+      const after = snapshot();
+      expect(after).toHaveLength(before.length);
+      for (const [index, original] of before.entries()) {
+        const updated = after[index];
+        if (!isRecord(original) || original.id !== "later-response") {
+          expect(updated).toEqual(original);
+          continue;
+        }
+        if (!isRecord(original.message)) {
+          throw new Error("Expected canonical assistant fixture message");
+        }
+        expect(updated).toMatchObject({
+          message: {
+            responseId: "later-response",
+            content: original.message.content,
+            openclawDisplayContent: [
+              { type: "text", text: "Identical answer." },
+              { type: "image", url: "/managed/image" },
+            ],
+          },
+        });
+      }
     });
   });
 
@@ -232,8 +282,8 @@ describe("durable transcript mirror corrections", () => {
         const result = await indexed({
           content: [
             {
-              type: "text",
-              get text() {
+              type: "image",
+              get alt() {
                 if (!replaced) {
                   replaced = true;
                   expect(replaceTranscriptEventsSync(scope, retained)).toBe(true);
@@ -259,8 +309,8 @@ describe("durable transcript mirror corrections", () => {
         const result = await indexed({
           content: [
             {
-              type: "text",
-              get text() {
+              type: "image",
+              get alt() {
                 if (!appended) {
                   appended = true;
                   append("later", { role: "user", content: "Following turn." });
@@ -284,7 +334,7 @@ describe("durable transcript mirror corrections", () => {
         expect(after.find((event) => isRecord(event) && event.id === "selected")).toMatchObject({
           message: {
             openclawDisplayContent: expect.arrayContaining([
-              { type: "text", text: "Corrected indexed delivery." },
+              { type: "image", alt: "Corrected indexed delivery." },
             ]),
           },
         });

@@ -30,6 +30,7 @@ import type { ReplyDeliveryState } from "../../reply-completion.js";
 import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
+import type { AssistantTranscriptSource } from "../../sessions/assistant-transcript-source.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
 import type { ToolEffectReceipt } from "../../tool-effect-receipt.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
@@ -369,6 +370,8 @@ export type EmbeddedRunAttemptResult = {
   latestMcpAppChannelView?: McpAppChannelView;
   latestMcpConnectAction?: McpConnectAction;
   lastAssistantTextMessageIndex?: number;
+  /** Occurrence owned by the delivered answer, including an explicitly kept earlier answer. */
+  assistantTranscriptSource?: AssistantTranscriptSource;
   toolMetas: Array<{
     toolName: string;
     toolCallId?: string;

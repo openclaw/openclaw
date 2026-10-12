@@ -1,4 +1,7 @@
-import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../../../auto-reply/reply-payload.js";
 import { applyPreparedReplyMedia } from "../../../auto-reply/reply/reply-media-paths.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
@@ -9,6 +12,7 @@ import { sanitizeAssistantVisibleStreamText } from "../../embedded-agent-utils.j
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { isProviderModelRerouted } from "../../provider-model-route.js";
 import type { ReplyDeliveryState } from "../../reply-completion.js";
+import type { AssistantTranscriptSource } from "../../sessions/assistant-transcript-source.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import type { NormalizedUsage } from "../../usage.js";
 import {
@@ -192,6 +196,9 @@ export function prepareEmbeddedRunTerminal(input: {
   const payloads = buildEmbeddedRunPayloads({
     ...attempt,
     assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
+    assistantTranscriptSource: attempt.yieldDetected
+      ? undefined
+      : attempt.assistantTranscriptSource,
     lastAssistant: payloadAssistant,
     currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
     // A clean yield is a handoff, not a terminal tool failure. Keep the error
@@ -265,6 +272,9 @@ export function prepareEmbeddedRunTerminal(input: {
           payloads: payloadsWithToolMedia,
           assistantTexts: attempt.assistantTexts,
           recoveredText: recoveredFinalAssistantTextAfterPromptTimeout,
+          assistantTranscriptSource: attempt.keptAnswer
+            ? attempt.keptAnswer.assistantTranscriptSource
+            : attempt.assistantTranscriptSource,
         })
       : undefined;
   const hasSuccessfulFinalAssistantAfterPromptTimeout =
@@ -314,6 +324,7 @@ function replacePartialAssistantPayload(input: {
   payloads: EmbeddedAgentRunResult["payloads"];
   assistantTexts?: string[];
   recoveredText: string;
+  assistantTranscriptSource?: AssistantTranscriptSource;
 }): NonNullable<EmbeddedAgentRunResult["payloads"]> {
   const payloads = input.payloads ? [...input.payloads] : [];
   const assistantTextSignatures = new Set(
@@ -330,11 +341,25 @@ function replacePartialAssistantPayload(input: {
   );
   const partialPayload = payloads[partialPayloadIndex];
   if (!partialPayload) {
-    return [...payloads, { text: input.recoveredText }];
+    return [
+      ...payloads,
+      setReplyPayloadMetadata(
+        { text: input.recoveredText },
+        { assistantTranscriptSource: input.assistantTranscriptSource },
+      ),
+    ];
   }
-  payloads[partialPayloadIndex] = copyReplyPayloadMetadata(partialPayload, {
-    ...partialPayload,
-    text: input.recoveredText,
-  });
+  payloads[partialPayloadIndex] = setReplyPayloadMetadata(
+    copyReplyPayloadMetadata(partialPayload, {
+      ...partialPayload,
+      text: input.recoveredText,
+    }),
+    // Recovery replaces the text's source, not just its display. Missing custody
+    // cannot inherit the partial payload's unrelated occurrence.
+    {
+      assistantTranscriptSource: input.assistantTranscriptSource,
+      assistantTranscriptAggregate: undefined,
+    },
+  );
   return payloads;
 }

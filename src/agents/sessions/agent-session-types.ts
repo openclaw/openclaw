@@ -1,6 +1,7 @@
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ImageContent, Model } from "../../llm/types.js";
 import type { Agent, AgentEvent, AgentMessage, ThinkingLevel } from "../runtime/index.js";
+import type { AssistantTranscriptSource } from "./assistant-transcript-source.js";
 import type {
   ExtensionCommandContextActions,
   ExtensionErrorListener,
@@ -46,7 +47,9 @@ type AgentSessionCompactionEndEvent = {
 };
 
 export type AgentSessionEvent =
-  | Exclude<AgentEvent, { type: "agent_end" }>
+  | (Exclude<AgentEvent, { type: "agent_end" }> & {
+      assistantTranscriptSource?: AssistantTranscriptSource;
+    })
   | {
       type: "agent_end";
       messages: AgentMessage[];

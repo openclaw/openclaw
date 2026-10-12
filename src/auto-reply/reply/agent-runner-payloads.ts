@@ -291,11 +291,19 @@ export async function buildReplyPayloads(params: {
   const retryBlockedDirectPayloads = (params.directBlockDeliveries ?? [])
     .filter((delivery) => delivery.pending || !shouldRetryReplyDispatch(delivery.outcome))
     .map((delivery) => delivery.payload);
+  const sourceOccurrenceId = (payload: ReplyPayload) =>
+    getReplyPayloadMetadata(payload)?.assistantTranscriptSource?.occurrenceId;
+  const directMessageKey = (payload: ReplyPayload) =>
+    JSON.stringify([
+      sourceOccurrenceId(payload) ?? null,
+      getReplyPayloadMetadata(payload)?.assistantMessageIndex ?? null,
+    ]);
   for (const payload of dedupedPayloads) {
     const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
     const direct = (params.directBlockDeliveries ?? []).filter(
       (delivery) =>
         isReplyPayloadTerminalContent(delivery.payload) &&
+        sourceOccurrenceId(delivery.payload) === sourceOccurrenceId(payload) &&
         getReplyPayloadMetadata(delivery.payload)?.assistantMessageIndex === assistantMessageIndex,
     );
     const directSources =
@@ -311,7 +319,7 @@ export async function buildReplyPayloads(params: {
       setReplyPayloadMetadata(payload, { blockReplySources: sources });
     }
   }
-  const directTextFragmentsByAssistantMessage = new Map<number | undefined, string[]>();
+  const directTextFragmentsByAssistantMessage = new Map<string, string[]>();
   for (const sentPayload of retryBlockedDirectPayloads) {
     if (!isReplyPayloadTerminalContent(sentPayload)) {
       continue;
@@ -320,10 +328,10 @@ export async function buildReplyPayloads(params: {
     if (!sentText) {
       continue;
     }
-    const assistantMessageIndex = getReplyPayloadMetadata(sentPayload)?.assistantMessageIndex;
-    const fragments = directTextFragmentsByAssistantMessage.get(assistantMessageIndex) ?? [];
+    const key = directMessageKey(sentPayload);
+    const fragments = directTextFragmentsByAssistantMessage.get(key) ?? [];
     fragments.push(sentText);
-    directTextFragmentsByAssistantMessage.set(assistantMessageIndex, fragments);
+    directTextFragmentsByAssistantMessage.set(key, fragments);
   }
   const isDirectBlockRetryBlocked = (payload: ReplyPayload) => {
     if (getReplyPayloadMetadata(payload)?.blockReplySources) {
@@ -334,6 +342,7 @@ export async function buildReplyPayloads(params: {
     return retryBlockedDirectPayloads.some(
       (sentPayload) =>
         isReplyPayloadTerminalContent(sentPayload) &&
+        sourceOccurrenceId(sentPayload) === sourceOccurrenceId(payload) &&
         (assistantMessageIndex === undefined ||
           getReplyPayloadMetadata(sentPayload)?.assistantMessageIndex === assistantMessageIndex) &&
         createBlockReplyContentKey(sentPayload) === contentKey,
@@ -347,8 +356,9 @@ export async function buildReplyPayloads(params: {
     if (!text || !retryBlockedDirectPayloads.length) {
       return false;
     }
-    const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
-    const applicableFragments = directTextFragmentsByAssistantMessage.get(assistantMessageIndex);
+    const applicableFragments = directTextFragmentsByAssistantMessage.get(
+      directMessageKey(payload),
+    );
     return applicableFragments ? applicableFragments.join("").trim() === text : false;
   };
   const preserveUnsentMediaAfterBlockSend = (payload: ReplyPayload): ReplyPayload | null => {
@@ -413,25 +423,35 @@ export async function buildReplyPayloads(params: {
           return preserveUnsentMediaAfterBlockSend(payload) ?? [];
         })
       : dedupedPayloads;
-  const blockMediaUrlsToOmit = await normalizeSentMediaUrlsForDedupe({
-    sentMediaUrls: [
-      ...(params.blockStreamingEnabled
-        ? (params.blockReplyPipeline?.getSentMediaUrls() ?? [])
-        : []),
-      ...(params.blockReplyPipeline?.getRetryBlockedMediaUrls?.() ?? []),
-      ...retryBlockedDirectPayloads.flatMap(
-        (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
-      ),
-    ],
-    normalizeMediaPaths: params.normalizeMediaPaths,
-  });
-  const filteredPayloads =
-    blockMediaUrlsToOmit.length > 0
-      ? (await replyPayloadsDedupeRuntimeLoader.load()).filterMessagingToolMediaDuplicates({
-          payloads: contentSuppressedPayloads,
-          sentMediaUrls: blockMediaUrlsToOmit,
-        })
-      : contentSuppressedPayloads;
+  const mediaUrlsByOccurrence = new Map<string | undefined, string[]>();
+  const filteredPayloads: ReplyPayload[] = [];
+  for (const payload of contentSuppressedPayloads) {
+    const occurrenceId = sourceOccurrenceId(payload);
+    let blockMediaUrlsToOmit = mediaUrlsByOccurrence.get(occurrenceId);
+    if (!blockMediaUrlsToOmit) {
+      blockMediaUrlsToOmit = await normalizeSentMediaUrlsForDedupe({
+        sentMediaUrls: [
+          ...(params.blockStreamingEnabled
+            ? (params.blockReplyPipeline?.getSentMediaUrls(payload) ?? [])
+            : []),
+          ...(params.blockReplyPipeline?.getRetryBlockedMediaUrls?.(payload) ?? []),
+          ...retryBlockedDirectPayloads
+            .filter((sent) => sourceOccurrenceId(sent) === occurrenceId)
+            .flatMap((sent) => resolveSendableOutboundReplyParts(sent).mediaUrls),
+        ],
+        normalizeMediaPaths: params.normalizeMediaPaths,
+      });
+      mediaUrlsByOccurrence.set(occurrenceId, blockMediaUrlsToOmit);
+    }
+    filteredPayloads.push(
+      ...(blockMediaUrlsToOmit.length > 0
+        ? (await replyPayloadsDedupeRuntimeLoader.load()).filterMessagingToolMediaDuplicates({
+            payloads: [payload],
+            sentMediaUrls: blockMediaUrlsToOmit,
+          })
+        : [payload]),
+    );
+  }
   return {
     replyPayloads: filteredPayloads.filter(isRenderablePayload),
     didLogHeartbeatStrip,

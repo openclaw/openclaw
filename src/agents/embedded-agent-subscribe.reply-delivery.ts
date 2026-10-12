@@ -429,6 +429,9 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
         ? setReplyPayloadMetadata(blockPayload, {
             assistantMessageIndex: options.assistantMessageIndex,
             assistantMessageStartIndex: state.assistantMessageStartIndex,
+            ...(state.assistantTranscriptSource
+              ? { assistantTranscriptSource: state.assistantTranscriptSource }
+              : {}),
             ...(assistantTranscriptMediaUrls.length > 0 ? { assistantTranscriptMediaUrls } : {}),
           })
         : blockPayload;

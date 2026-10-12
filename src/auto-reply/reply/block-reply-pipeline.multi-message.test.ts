@@ -8,7 +8,78 @@ function blockFor(text: string, assistantMessageIndex: number) {
   return setReplyPayloadMetadata({ text }, { assistantMessageIndex });
 }
 
+function sourceBlock(text: string, occurrenceId: string, mediaUrl?: string) {
+  return setReplyPayloadMetadata(
+    { text, ...(mediaUrl ? { mediaUrl, mediaUrls: [mediaUrl] } : {}) },
+    {
+      assistantMessageIndex: 1,
+      assistantTranscriptSource: { occurrenceId },
+    },
+  );
+}
+
 describe("block reply pipeline multi-assistant-message suppression", () => {
+  it.each([
+    { coalescingEnabled: false, sourceRanges: false },
+    { coalescingEnabled: true, sourceRanges: false },
+    { coalescingEnabled: false, sourceRanges: true },
+    { coalescingEnabled: true, sourceRanges: true },
+  ])(
+    "delivers separate source occurrences that reuse an index and content (%j)",
+    async ({ coalescingEnabled, sourceRanges }) => {
+      const sent: string[] = [];
+      const pipeline = createBlockReplyPipeline({
+        onBlockReply: (payload) => {
+          sent.push(payload.text ?? "");
+        },
+        timeoutMs: 5000,
+        ...(coalescingEnabled
+          ? { coalescing: { minChars: 100, maxChars: 200, idleMs: 0, joiner: " " } }
+          : {}),
+      });
+      for (const occurrenceId of ["first", "retry"]) {
+        const payload = sourceBlock("Same answer", occurrenceId);
+        if (sourceRanges) {
+          setReplyPayloadMetadata(payload, {
+            blockSourceText: "Same answer",
+            blockSourceRange: [0, 11],
+          });
+        }
+        pipeline.enqueue(payload);
+      }
+      await pipeline.flush({ force: true });
+      expect(sent).toEqual(["Same answer", "Same answer"]);
+      expect(pipeline.hasSentPayload(sourceBlock("Same answer", "successor"))).toBe(false);
+      expect(pipeline.hasSentExactPayload?.(sourceBlock("Same answer", "successor"))).toBe(false);
+      expect(pipeline.hasSentPayload({ text: "Same answer" })).toBe(false);
+    },
+  );
+
+  it.each(["stream", "direct"] as const)(
+    "keeps a later source's caption and reused image after %s delivery",
+    async (route) => {
+      const pipeline = createBlockReplyPipeline({ onBlockReply: () => {}, timeoutMs: 5000 });
+      const earlier = sourceBlock("Same answer", "first", "/tmp/reused.png");
+      if (route === "stream") {
+        pipeline.enqueue(earlier);
+        await pipeline.flush({ force: true });
+      }
+      const { replyPayloads } = await buildReplyPayloads({
+        payloads: [sourceBlock("Same answer", "retry", "/tmp/reused.png")],
+        isHeartbeat: false,
+        didLogHeartbeatStrip: false,
+        blockStreamingEnabled: route === "stream",
+        blockReplyPipeline: route === "stream" ? pipeline : null,
+        directBlockDeliveries:
+          route === "direct" ? [{ payload: earlier, outcome: "delivered" }] : [],
+        replyToMode: "off",
+      });
+      expect(replyPayloads).toEqual([
+        expect.objectContaining({ text: "Same answer", mediaUrls: ["/tmp/reused.png"] }),
+      ]);
+    },
+  );
+
   it("recognizes each fully-streamed message across a multi-message turn", async () => {
     const sent: string[] = [];
     const pipeline = createBlockReplyPipeline({

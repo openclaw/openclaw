@@ -528,6 +528,11 @@ export function createStreamRendering({
       replyToCurrent,
     };
     addReplyPayloadMediaFailures(payload, mediaFailures);
+    if (options?.finalReply !== undefined) {
+      // Only message_end supplies the complete parsed reply. Other final flushes
+      // can belong to a single content item or an interrupted provider operation.
+      setReplyPayloadMetadata(payload, { assistantTranscriptAggregate: true });
+    }
     if (splitResult.isSilent) {
       setReplyPayloadMetadata(payload, { silentReply: true });
     }

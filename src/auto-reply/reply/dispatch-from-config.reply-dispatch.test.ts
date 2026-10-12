@@ -585,30 +585,40 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     }
   });
 
-  it("dedupes equivalent non-streaming final payload entries for one turn", async () => {
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    const dispatcher = createDispatcher();
-    const replyPayload = {
-      text: "repeat once",
-      mediaUrls: ["file:///tmp/repeat.png"],
-      channelData: { telegram: { parseMode: "MarkdownV2" } },
-    } satisfies ReplyPayload;
+  it.each(["legacy", "same-source", "distinct-sources"] as const)(
+    "dedupes non-streaming final payload entries by %s",
+    async (scope) => {
+      hookMocks.runner.hasHooks.mockReturnValue(false);
+      const dispatcher = createDispatcher();
+      const replyPayload = {
+        text: "repeat once",
+        mediaUrls: ["file:///tmp/repeat.png"],
+        channelData: { telegram: { parseMode: "MarkdownV2" } },
+      } satisfies ReplyPayload;
 
-    const result = await dispatchReplyFromConfig({
-      ctx: createHookCtx(),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver: async () => [
-        replyPayload,
-        { ...replyPayload },
-        { ...replyPayload, videoAsNote: false },
-      ],
-    });
+      const replies = [replyPayload, { ...replyPayload }, { ...replyPayload, videoAsNote: false }];
+      if (scope !== "legacy") {
+        for (const [index, reply] of replies.entries()) {
+          setReplyPayloadMetadata(reply, {
+            assistantMessageIndex: 1,
+            assistantTranscriptSource: {
+              occurrenceId: scope === "distinct-sources" && index === 1 ? "retry" : "first",
+            },
+          });
+        }
+      }
+      const result = await dispatchReplyFromConfig({
+        ctx: createHookCtx(),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver: async () => replies,
+      });
 
-    expect(result.queuedFinal).toBe(true);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(replyPayload);
-  });
+      expect(result.queuedFinal).toBe(true);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(scope === "distinct-sources" ? 2 : 1);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(replyPayload);
+    },
+  );
 
   it.each([
     {

@@ -188,6 +188,7 @@ export function completeEmbeddedAttemptResult(
     lastAssistant: settled.lastAssistant,
     currentAttemptAssistant: settled.currentAttemptAssistant,
     currentAttemptCompletedAssistant: settled.currentAttemptCompletedAssistant,
+    assistantTranscriptSource: subscription.getLastAssistantTranscriptSource(),
     hasSuccessfulModelResponse: subscription.hasSuccessfulModelResponse(),
     successfulNestedToolNames: settled.successfulNestedToolNames,
     attemptUsage: settled.attemptUsage,
