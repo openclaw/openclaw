@@ -90,6 +90,8 @@ export type NativeHookRelayRegistration = {
   approvalHost?: Pick<AgentHarnessHostCapabilities, "requestApproval" | "waitForApproval">;
   /** Revalidates the exact admitted owner after authority-bearing awaits. */
   assertActive?: AgentHarnessHostCapabilities["assertActive"];
+  /** Reads worker-owned execution policy before returning permission to the native runtime. */
+  assertActiveAsync?: () => Promise<void>;
   onPreToolUseFailure?: (failure: {
     toolName: string;
     toolCallId: string;
@@ -133,6 +135,7 @@ export type RegisterNativeHookRelayParams = {
   signal?: AbortSignal;
   runBeforeToolCall?: NativeHookRelayRegistration["runBeforeToolCall"];
   assertActive?: NativeHookRelayRegistration["assertActive"];
+  assertActiveAsync?: NativeHookRelayRegistration["assertActiveAsync"];
   onPreToolUseFailure?: NativeHookRelayRegistration["onPreToolUseFailure"];
 };
 

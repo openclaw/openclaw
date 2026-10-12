@@ -3,6 +3,10 @@ import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outco
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
+import type {
+  AsyncSessionSourceCheck,
+  SessionSourceCheck,
+} from "../config/sessions/session-source-authority.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 import type { ImageContent } from "../llm/types.js";
@@ -170,7 +174,7 @@ export type GetReplyOptions = {
   /** Abort signal for the underlying agent run. */
   abortSignal?: AbortSignal;
   /** Ephemeral channel owner check for a targeted Stop; never serialized as authority. */
-  isCommandTargetCurrent?: () => boolean;
+  isCommandTargetCurrent?: SessionSourceCheck | AsyncSessionSourceCheck;
   /** Optional inbound images (used for webchat attachments). */
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */

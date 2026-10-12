@@ -153,7 +153,6 @@ export class CodexNativeSubagentAssignmentInventory {
     }
     const custody = owner.completionCustody.retain();
     try {
-      store.assertCurrent();
       const assignments = await store.read();
       if (!this.dependencies.isCurrent(state) || !custody.isCurrent()) {
         return;
@@ -163,10 +162,10 @@ export class CodexNativeSubagentAssignmentInventory {
           continue;
         }
         const recovery = await this.dependencies.readHistory(assignment);
+        await store.assertCurrentAsync();
         if (!this.dependencies.isCurrent(state) || !custody.isCurrent()) {
           return;
         }
-        store.assertCurrent();
         if (!recovery || recovery.parentThreadId !== assignment.nativeParentThreadId) {
           continue;
         }

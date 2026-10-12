@@ -377,7 +377,6 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   }
   const hookChannelId = resolveCodexAppServerHookChannelId(params, sandboxSessionKey);
   preDynamicStartupStages.mark("context-engine-support");
-  nativeExecutionPolicy.assertCurrent();
   return {
     connection,
     clientOptions,

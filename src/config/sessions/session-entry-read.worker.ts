@@ -67,6 +67,7 @@ import type {
 } from "./session-entry-read.types.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
+import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 import type { SessionStoreProjectionWorkerInput } from "./session-store-projection.types.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
@@ -255,6 +256,22 @@ export function readExactSessionEntriesWithLifecycle(
 ): SessionExactEntriesWorkerResult {
   const { readDatabase, snapshot, assertCanonicalRead } =
     createSessionEntryReadScope(capturedDatabase);
+  if (request.sourceChecks) {
+    const result = readDatabase(
+      (database) =>
+        snapshot(database, () => ({
+          kind: "session-exact-entries" as const,
+          entries: [],
+          lifecycleTimestamps: {},
+          sourceValidation: readSessionSourceValidation(database, request.sourceChecks),
+        })),
+      { ...request.database, env: request.env },
+    );
+    if (!result.found) {
+      throw new SessionMetadataUnavailableError(result.reason);
+    }
+    return result.value;
+  }
   if (
     !request.selection &&
     (request.projection === undefined ||

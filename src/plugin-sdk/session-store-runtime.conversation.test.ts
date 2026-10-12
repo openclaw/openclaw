@@ -20,6 +20,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import {
   captureSessionEntryCurrentCheck,
+  captureSessionEntryCurrentCheckAsync,
   composeSessionEntryCommitGuards,
 } from "./session-binding-runtime.js";
 import {
@@ -51,6 +52,68 @@ describe("current conversation session binding", () => {
     // A Vitest thread cannot retire an escaped reclamation lease after this case.
     expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
   });
+
+  it.each(["policy", "conversation"] as const)(
+    "observes committed %s changes in async effect checks without host SQLite",
+    async (change) => {
+      const scope = { agentId: "main", storePath, sessionKey: "agent:main:reef:group:room" };
+      const address = {
+        ...scope,
+        channel: "reef",
+        accountId: "default",
+        kind: "group" as const,
+        peerId: "room",
+        threadId: "first",
+      };
+      const delivery = normalizeSessionDeliveryState({
+        context: { channel: "reef", accountId: "default", to: "group:room", threadId: "first" },
+      });
+      await upsertSessionEntry({
+        ...scope,
+        entry: {
+          sessionId: "original",
+          updatedAt: 100,
+          permissionMode: "workspace",
+          chatType: "group",
+          delivery,
+        },
+      });
+      const current = await captureSessionEntryCurrentCheckAsync({
+        ...scope,
+        fields: ["permissionMode"],
+        alternatives: [{ conversations: [{ ...address, sessionKey: scope.sessionKey }] }],
+      });
+      const hostSql = observeHostDataSql();
+      try {
+        await expect(current.isCurrent()).resolves.toBe(true);
+        await expect(current.assertCurrent()).resolves.toBeUndefined();
+        current.source.assertScopeCurrent();
+      } finally {
+        hostSql.restore();
+      }
+      expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+      await upsertSessionEntry({
+        ...scope,
+        sessionKey:
+          change === "conversation" ? `${scope.sessionKey}:thread:first` : scope.sessionKey,
+        entry: {
+          sessionId: change === "conversation" ? "replacement" : "original",
+          updatedAt: 200,
+          permissionMode: "full",
+          chatType: "group",
+          delivery,
+        },
+      });
+      const changedSql = observeHostDataSql();
+      try {
+        await expect(current.isCurrent()).resolves.toBe(false);
+        await expect(current.assertCurrent()).rejects.toThrow("selected session changed");
+      } finally {
+        changedSql.restore();
+      }
+      expect(changedSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+    },
+  );
 
   it("reads conversation changes inside their owning transaction and respects rollback", async () => {
     const databaseOptions = { agentId: "main", env: { OPENCLAW_STATE_DIR: tempDir } };

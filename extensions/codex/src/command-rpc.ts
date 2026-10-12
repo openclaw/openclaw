@@ -7,8 +7,9 @@ import {
 import { resolveSessionModelRef } from "openclaw/plugin-sdk/model-session-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
-  captureSessionEntryCurrentCheck,
+  captureSessionEntryCurrentCheckAsync,
   composeSessionEntryCommitGuards,
+  type PreparedSessionSourceAssertion,
 } from "openclaw/plugin-sdk/session-binding-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeCodexStartupClientBestEffort } from "./app-server/attempt-client-cleanup.js";
@@ -79,6 +80,7 @@ export type CodexControlRequestOptions = {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
   /** Owner authority applies before dispatch; accepted responses still settle. */
   assertOwnerCurrent?: () => void;
   catalogPreview?: true;
@@ -94,7 +96,12 @@ export type CodexControlRequestOptions = {
   onResponse?: (
     response: unknown,
     client: CodexAppServerClient,
-    auth: { authProfileId?: string; assertCurrent: () => void },
+    auth: {
+      authProfileId?: string;
+      assertCurrent: () => void;
+      assertCurrentAsync?: () => Promise<void>;
+      source?: PreparedSessionSourceAssertion;
+    },
   ) => Promise<void>;
 };
 
@@ -109,6 +116,7 @@ export async function prepareCodexControlSessionAuth(
     }
     return {
       authProfileId: options.authProfileId ?? undefined,
+      source: undefined,
       clientOptions: { authProfileId: options.authProfileId },
     };
   }
@@ -123,7 +131,7 @@ export async function prepareCodexControlSessionAuth(
   const storePath =
     options.storePath?.trim() ||
     resolveStorePath(config.session?.store, { agentId: sessionAgentId });
-  const current = await captureSessionEntryCurrentCheck({
+  const current = await captureSessionEntryCurrentCheckAsync({
     agentId: sessionAgentId,
     storePath,
     sessionKey: options.sessionKey,
@@ -137,20 +145,24 @@ export async function prepareCodexControlSessionAuth(
     ],
   });
   const { entry } = current;
-  const assertCurrent = composeSessionEntryCommitGuards([
-    options.assertCurrent,
-    current.assertCurrent,
-  ]);
-  assertCurrent();
+  const assertCurrent = composeSessionEntryCommitGuards([options.assertCurrent]);
+  const assertCurrentAsync = async () => {
+    await options.assertCurrentAsync?.();
+    await current.assertCurrent();
+    options.assertCurrent?.();
+  };
+  await assertCurrentAsync();
   if (entry?.sessionId !== options.sessionId) {
     throw createCodexSessionGenerationSupersededError(options.sessionId);
   }
   if (options.authProfileId === null || startOptions.homeScope === "user") {
     return {
       authProfileId: options.authProfileId ?? undefined,
+      source: current.source,
       clientOptions: {
         authProfileId: options.authProfileId,
         assertCurrent,
+        assertCurrentAsync,
         storePath,
         agentId: sessionAgentId,
       },
@@ -216,9 +228,10 @@ export async function prepareCodexControlSessionAuth(
         config,
       })
     : undefined;
-  assertCurrent();
+  await assertCurrentAsync();
   return {
     authProfileId: handoff.authProfileId,
+    source: current.source,
     clientOptions: {
       ...(handoff.preparedAuth
         ? { preparedAuth: handoff.preparedAuth }
@@ -228,6 +241,7 @@ export async function prepareCodexControlSessionAuth(
       authBindingFingerprint: binding?.fingerprint,
       agentDir,
       assertCurrent,
+      assertCurrentAsync,
       storePath,
       agentId: sessionAgentId,
     },
@@ -292,11 +306,13 @@ export async function codexControlRequest(
       ? await prepareCodexControlSessionAuth(options, startOptions)
       : {
           authProfileId: options.authProfileId ?? undefined,
+          source: undefined,
           clientOptions: { authProfileId: options.authProfileId },
         };
   const controlRequestOptions = {
     timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
     assertCurrent: options.assertCurrent,
+    assertCurrentAsync: options.assertCurrentAsync,
     startOptions,
     config: options.config,
     agentId: options.agentId,
@@ -359,6 +375,8 @@ export async function codexControlRequest(
           await options.onResponse(response, client, {
             authProfileId: auth.authProfileId,
             assertCurrent: scope.assertCurrent,
+            source: auth.source,
+            assertCurrentAsync: controlRequestOptions.assertCurrentAsync,
           });
         } else {
           scope.assertCurrent();

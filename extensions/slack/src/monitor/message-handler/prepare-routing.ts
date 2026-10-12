@@ -1,9 +1,8 @@
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
+import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   getConversationSessionAsync,
   resolveStorePath,
-  type SessionEntrySourceAuthority,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -146,8 +145,8 @@ export async function resolveSlackSessionEventRoutingContext(
   > & { ctx: SlackMonitorContext; intent: "stop" | "title" },
 ): Promise<
   SlackRoutingContext & {
-    isCurrentSession: () => boolean;
-    assertCurrentSession: SessionEntrySourceAuthority;
+    isCurrentSession: Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsync>>["isCurrent"];
+    sessionSource: Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsync>>["source"];
   }
 > {
   const { ctx, message, eventScope } = params;
@@ -228,7 +227,7 @@ export async function resolveSlackSessionEventRoutingContext(
   }
   const { route } = owner;
   const readLiveOwner = () => getSlackSessionRuns(ctx, liveAddress).at(-1);
-  const current = await captureSessionEntryCurrentCheck({
+  const current = await captureSessionEntryCurrentCheckAsync({
     agentId: route.agentId,
     sessionKey: route.sessionKey,
     storePath: resolveStorePath(ctx.cfg.session?.store, { agentId: route.agentId }),
@@ -262,6 +261,6 @@ export async function resolveSlackSessionEventRoutingContext(
     route,
     sessionKey: route.sessionKey,
     isCurrentSession: current.isCurrent,
-    assertCurrentSession: current.assertCurrent,
+    sessionSource: current.source,
   };
 }

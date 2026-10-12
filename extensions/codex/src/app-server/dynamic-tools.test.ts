@@ -319,6 +319,27 @@ afterEach(() => {
 });
 
 describe("createCodexDynamicToolBridge", () => {
+  it("awaits execution policy before dispatch and refuses a stale policy", async () => {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const execute = vi.fn(async () => textToolResult("executed"));
+    const bridge = createSingleToolBridge(createTool({ name: "synthetic", execute }), {
+      assertCurrentAsync: async () => {
+        entered.resolve();
+        await release.promise;
+        throw new Error("execution policy changed");
+      },
+    });
+    const pending = bridge.handleToolCall(createDynamicToolCall("synthetic"));
+    await entered.promise;
+    expect(execute).not.toHaveBeenCalled();
+    release.resolve();
+    const response = await pending;
+    expect(response.success).toBe(false);
+    expect(firstInputText(response)).toContain("execution policy changed");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it.each([
     { kind: "high-cardinality", message: "more violation(s) omitted", maxLength: 800 },
     { kind: "oversized detail", message: "[detail truncated]", maxLength: 260 },

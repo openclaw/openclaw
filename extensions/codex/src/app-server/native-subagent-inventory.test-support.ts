@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { Type } from "typebox";
 import { onTestFinished, vi } from "vitest";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
-import { createNativeSubagentAssignmentStore } from "./native-subagent-assignment-store.js";
+import {
+  createNativeSubagentAssignmentStore,
+  createNativeSubagentSessionAuthority,
+} from "./native-subagent-assignment-store.js";
 import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
@@ -96,25 +100,36 @@ export async function fixture() {
     });
     assert(host.agentHarnessCompletionScope);
     const completionScope = host.agentHarnessCompletionScope;
+    const parent = await captureSessionEntryCurrentCheckAsync({
+      agentId: identity.agentId,
+      sessionKey: identity.sessionKey,
+      storePath: resolveStorePath(undefined, { agentId: identity.agentId }),
+    });
+    const authority = createNativeSubagentSessionAuthority(parent);
     const assignmentStore = createNativeSubagentAssignmentStore({
       bindingStore: registrationStore,
       identity,
       owner,
+      assertLifecycleCurrentAsync: parent.assertCurrent,
+      authority,
     });
     const submissionStore: CodexNativeSubagentSubmissionStore = {
       assertCurrent: () => assignmentStore.assertCurrent(),
+      assertCurrentAsync: () => assignmentStore.assertCurrentAsync(),
       read: () => registrationStore.readNativeSubagentSubmissions(identity, owner),
       record: (receipt, assertCurrent) =>
         registrationStore.mutate(
           identity,
           { kind: "record-native-subagent-submission", owner, receipt },
           assertCurrent,
+          authority,
         ),
       consume: (receipt, assertCurrent) =>
         registrationStore.mutate(
           identity,
           { kind: "consume-native-subagent-submission", owner, receipt },
           assertCurrent,
+          authority,
         ),
     };
     ensureCodexAppServerClientRuntime(client.client, { agentDir: tempDir });
@@ -136,6 +151,7 @@ export async function fixture() {
               historyOwner: owner,
               assignmentStore,
               submissionStore,
+              assertCurrentAsync: parent.assertCurrent,
               runtime,
               configurationQualification,
               retainParentThread: options.retainParentThread,

@@ -9,7 +9,10 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveSandboxRuntimeStatus } from "openclaw/plugin-sdk/sandbox";
-import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
+import {
+  captureSessionEntryCurrentCheckAsync,
+  type PreparedSessionSourceAssertion,
+} from "openclaw/plugin-sdk/session-binding-runtime";
 import { getSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 
 type ExecHost = "sandbox" | "gateway" | "node";
@@ -32,7 +35,8 @@ export type CodexNativeExecutionPolicy = {
 
 export type PreparedCodexNativeExecutionPolicy = {
   policy: CodexNativeExecutionPolicy;
-  assertCurrent: () => void;
+  assertCurrent: () => Promise<void>;
+  source?: PreparedSessionSourceAssertion;
 };
 
 type RunPolicyOptions = {
@@ -85,9 +89,9 @@ export async function prepareCodexNativeExecutionPolicy(
   const { sourceAgentId, sourceSessionKey, canReadSessionEntry } =
     resolveSessionSelection(captured);
   if (!canReadSessionEntry || !sourceAgentId || !sourceSessionKey) {
-    return { policy: resolveCodexNativeExecutionPolicy(captured), assertCurrent() {} };
+    return { policy: resolveCodexNativeExecutionPolicy(captured), async assertCurrent() {} };
   }
-  const selected = await captureSessionEntryCurrentCheck({
+  const selected = await captureSessionEntryCurrentCheckAsync({
     agentId: sourceAgentId,
     sessionKey: sourceSessionKey,
     storePath: captured.sessionTarget?.storePath ?? captured.storePath,
@@ -101,6 +105,7 @@ export async function prepareCodexNativeExecutionPolicy(
       readRuntimeSessionEntry: false,
     }),
     assertCurrent: selected.assertCurrent,
+    source: selected.source,
   };
 }
 

@@ -44,7 +44,13 @@ export async function resolveControlTarget(ctx: PluginCommandContext) {
 
 type CommandAppServerScope = Pick<
   CodexControlRequestOptions,
-  "assertCurrent" | "authProfileId" | "sessionId" | "sessionKey" | "startOptions" | "storePath"
+  | "assertCurrent"
+  | "assertCurrentAsync"
+  | "authProfileId"
+  | "sessionId"
+  | "sessionKey"
+  | "startOptions"
+  | "storePath"
 > & { agentId: string; agentDir: string };
 
 export async function resolvePreparedCodexCommandAuthority(
@@ -92,17 +98,21 @@ export async function resolvePreparedCodexCommandAuthority(
         })
       : currentSession;
   const binding = resolvedTarget?.binding;
-  const assertCurrent = composeSessionEntryCommitGuards(
-    [assertHostCurrent, ctx.assertNativePolicyCurrent],
-    (assertSource) => {
-      assertSource();
-      if (target && !isDeepStrictEqual(deps.bindingStore.read(target.identity), binding)) {
-        throw new Error("Codex command binding changed before dispatch");
-      }
-      assertSource();
-    },
-  );
+  const assertCurrent = composeSessionEntryCommitGuards([assertHostCurrent], (assertSource) => {
+    assertSource();
+    if (target && !isDeepStrictEqual(deps.bindingStore.read(target.identity), binding)) {
+      throw new Error("Codex command binding changed before dispatch");
+    }
+    assertSource();
+  });
   assertCurrent();
+  const assertCurrentAsync = async () => {
+    await ctx.assertNativePolicyCurrent?.();
+    await resolvedTarget?.authority.withCurrent(assertCurrent);
+    if (!resolvedTarget) {
+      assertCurrent();
+    }
+  };
   return {
     target,
     binding,
@@ -112,6 +122,8 @@ export async function resolvePreparedCodexCommandAuthority(
     storePath,
     assertHostCurrent,
     assertCurrent,
+    assertCurrentAsync,
+    mutationSource: composeSessionEntryCommitGuards([assertCurrent, ctx.nativePolicySource]),
     assertMutationCurrent: composeSessionEntryCommitGuards([assertCurrent], (assertSource) => {
       assertCodexHostOwnerCurrent(ctx);
       assertSource();
@@ -150,6 +162,7 @@ export async function resolveCommandAppServerContext(
     agentDir,
     config: ctx.config,
     assertCurrent: authority.assertCurrent,
+    assertCurrentAsync: authority.assertCurrentAsync,
   });
   const scope: CommandAppServerScope = {
     agentId: target?.agentId ?? fallback.agentId,
@@ -162,6 +175,7 @@ export async function resolveCommandAppServerContext(
     ...(authority.sessionId ? { sessionId: authority.sessionId } : {}),
     ...(authority.storePath ? { storePath: authority.storePath } : {}),
     assertCurrent: authority.assertCurrent,
+    assertCurrentAsync: authority.assertCurrentAsync,
   };
   return { scope, target, binding };
 }

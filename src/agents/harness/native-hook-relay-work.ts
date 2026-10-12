@@ -155,6 +155,8 @@ export async function resolveNativeHookRelayInvocationBinding(
       registration: {
         ...registration,
         assertActive,
+        // Retained child custody replaces the foreground execution policy owner.
+        assertActiveAsync: undefined,
         runBeforeToolCall: retained.runBeforeToolCall,
         signal,
       },

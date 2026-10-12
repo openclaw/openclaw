@@ -333,8 +333,8 @@ export async function runCodexAppServerSideQuestion(
     // Existing synchronous process startup admission.
     assertCurrent: () => {
       authority.assertLegacyCurrent();
-      nativeExecutionPolicy.assertCurrent();
     },
+    assertCurrentAsync: nativeExecutionPolicy.assertCurrent,
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
     authRequirement: preparedRuntimeAuth.plan.modelRoute?.authRequirement,
@@ -467,7 +467,7 @@ export async function runCodexAppServerSideQuestion(
     );
     return {
       toolBridge: createCodexDynamicToolBridge({
-        assertCurrent: nativeExecutionPolicy.assertCurrent,
+        assertCurrentAsync: nativeExecutionPolicy.assertCurrent,
         tools: exposedTools,
         signal: runAbortController.signal,
         loading: resolveCodexDynamicToolsLoading(pluginConfig),
@@ -653,8 +653,8 @@ export async function runCodexAppServerSideQuestion(
         runBeforeToolCall: sideRunParams.hostCapabilities.runBeforeToolCall,
         assertActive: () => {
           authority.assertLegacyCurrent();
-          nativeExecutionPolicy.assertCurrent();
         },
+        assertActiveAsync: nativeExecutionPolicy.assertCurrent,
         onPreToolUseFailure: (failure) => {
           if (!nativePreToolUseFailures.active && nativeToolLifecycleProjector) {
             nativeToolLifecycleProjector.recordPreToolUseFailure(

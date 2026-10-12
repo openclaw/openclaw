@@ -34,7 +34,9 @@ export type CodexNativeSubagentSubmission = z.infer<typeof submissionSchema>;
 export type CodexNativeSubagentSubmissions = z.infer<typeof submissionsSchema>;
 
 export type CodexNativeSubagentSubmissionStore = {
+  /** In-process binding ownership; use the async check before recovered work escapes. */
   assertCurrent(): void;
+  assertCurrentAsync(): Promise<void>;
   read(): Promise<readonly CodexNativeSubagentSubmission[]>;
   record(receipt: CodexNativeSubagentSubmission, assertCurrent: () => void): Promise<boolean>;
   consume(receipt: CodexNativeSubagentSubmission, assertCurrent: () => void): Promise<boolean>;
