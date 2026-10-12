@@ -1029,7 +1029,6 @@
 }
 
 @media (max-width: 640px) {
-  .cron-toolbar__primary,
   .cron-detail-meta,
   .cron-detail-actions {
     flex-wrap: wrap;

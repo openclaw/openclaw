@@ -15,7 +15,7 @@ import { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 
-export const TEAM_SCALE_COUNTS = {
+const TEAM_SCALE_COUNTS = {
   sessions: 300,
   firstPage: 200,
   pinned: 30,
@@ -30,10 +30,10 @@ export const TEAM_SCALE_COUNTS = {
   presenceEvents: 12,
 } as const;
 
-export const TEAM_SCALE_CATALOG_PROGRESS_ID = "team-scale-progress";
+const TEAM_SCALE_CATALOG_PROGRESS_ID = "team-scale-progress";
 export const TEAM_SCALE_SELF_INSTANCE_ID = "team-scale-self";
 
-export type TeamScaleEvent =
+type TeamScaleEvent =
   | { event: "sessions.catalog.host"; payload: SessionsCatalogHostEvent }
   | { event: "presence"; payload: PresencePayload };
 

@@ -325,6 +325,8 @@ or protocol-version change.
   snapshot; lifecycle, capacity, transcript, deletion, and clearing receipts remain
   distinct. Publication rechecks row readiness after each yield. Accepted recap
   notifications outlive the compaction or scheduler work that triggered them.
+  Queued session-change notifications also survive completion or cancellation of
+  the request that committed the change, so connected clients still receive the row.
   Shutdown stops new notifications and joins admitted publications before closing
   clients and disposing their projection.
   Authorized incognito descriptions and events use the same row presentation from

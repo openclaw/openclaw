@@ -608,7 +608,6 @@ test.each(["ready", "cleared-selection"] as const)(
       await expect(fs.access(worktree.path)).rejects.toThrow();
       if (catalogMode === "cleared-selection") {
         await patchSessionEntryCore({ storePath, sessionKey: key }, () => ({
-          thinkingLevel: undefined,
           contextWindow: undefined,
         }));
       }
@@ -617,9 +616,7 @@ test.each(["ready", "cleared-selection"] as const)(
       expect(restore).toHaveBeenCalledOnce();
       expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
       const restoredEntry = loadSessionEntry({ storePath, sessionKey: key });
-      expect(restoredEntry?.thinkingLevel).toBe(
-        catalogMode === "cleared-selection" ? undefined : "off",
-      );
+      expect(restoredEntry?.thinkingLevel).toBe("off");
       expect(restoredEntry?.contextWindow).toBeUndefined();
     } finally {
       catalogRelease.resolve();

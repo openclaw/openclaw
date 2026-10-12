@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { CodeModeOutputState } from "./code-mode-json.js";
 import type { CodeModeWorkerResult } from "./code-mode-runtime.js";
-import { applyCodeModeCatalog, resolveCodeModeConfig } from "./code-mode.js";
+import {
+  applyCodeModeCatalog,
+  buildCodeModeCatalogPrompt,
+  resolveCodeModeConfig,
+} from "./code-mode.js";
 import {
   createCodeModeHarness,
   fakeTool,
@@ -615,9 +619,11 @@ describe("Code Mode swarm host bridge", () => {
       tools: [...harness.tools, ...(catalog === "empty" ? [] : [spawn])],
     });
     const execTool = harness.tools[0]!;
-    expect(execTool.description.includes("Swarm globals")).toBe(advertised);
-    harness.catalogRef.onChange?.();
-    expect(execTool.description.includes("Swarm globals")).toBe(advertised);
+    expect(
+      buildCodeModeCatalogPrompt(ctx, harness.catalogRef.current?.entries ?? []).includes(
+        "Swarm globals",
+      ),
+    ).toBe(advertised);
 
     const result = await runUntilCompleted({
       execTool,

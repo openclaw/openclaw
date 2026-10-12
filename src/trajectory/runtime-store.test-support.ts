@@ -1,5 +1,93 @@
-import { appendSqliteTrajectoryRuntimeEvents as appendSerializedTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
+import {
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import type { TrajectoryRuntimeRetentionPlan } from "./runtime-retention.contract.js";
+import {
+  beginTrajectoryRuntimeRetention,
+  selectTrajectoryRuntimeRetentionBatch,
+  deleteTrajectoryRuntimeRetention,
+  prepareTrajectoryRuntimeRetention,
+  trajectoryRuntimeRetentionDue,
+  trajectoryRuntimeRetentionState,
+} from "./runtime-retention.sqlite.js";
+import type {
+  SqliteTrajectoryRuntimeAppend,
+  SqliteTrajectoryRuntimeScope,
+} from "./runtime-store.contract.js";
+import { appendSqliteTrajectoryRuntimeEventsWithWriter } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "./types.js";
+
+const log = createSubsystemLogger("trajectory");
+
+/** Synchronous fixture writer; runtime sinks use their worker or actor owner. */
+export function appendSerializedTrajectoryRuntimeEvents(
+  scope: SqliteTrajectoryRuntimeScope & Pick<SqliteTrajectoryRuntimeAppend, "discardPrevious">,
+  events: SqliteTrajectoryRuntimeAppend["events"],
+): void {
+  if (events.length === 0) {
+    return;
+  }
+  const options = toDatabaseOptions(resolveSqliteReadScope(scope));
+  const write = <T>(label: string, operation: (database: OpenClawAgentDatabase) => T): T =>
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        scope.assertCommitAllowed?.();
+        const result = operation(database);
+        scope.assertCommitAllowed?.();
+        return result;
+      },
+      options,
+      { operationLabel: label },
+    );
+  const input = { ...scope, events };
+  const { database } = appendSqliteTrajectoryRuntimeEventsWithWriter(input, write);
+  const state = trajectoryRuntimeRetentionState(database);
+  const now = Date.now();
+  // A nested append cannot commit maintenance independently of its caller.
+  if (!database.db.isTransaction && trajectoryRuntimeRetentionDue(state, now)) {
+    const lease = new Int32Array(new SharedArrayBuffer(4));
+    Atomics.store(lease, 0, 1);
+    try {
+      let refreshes = 0;
+      let sweepId = beginTrajectoryRuntimeRetention(database.db, lease);
+      let snapshot: TrajectoryRuntimeRetentionPlan | undefined = prepareTrajectoryRuntimeRetention(
+        database.db,
+        input,
+        now,
+      );
+      for (;;) {
+        const batch = selectTrajectoryRuntimeRetentionBatch(database.db, { sweepId, snapshot });
+        snapshot = undefined;
+        const result = batch.refresh
+          ? deleteTrajectoryRuntimeRetention(database, batch)
+          : write("trajectory.runtime.retention.delete", (current) =>
+              deleteTrajectoryRuntimeRetention(current, batch),
+            );
+        if (result.complete) {
+          state.sweptAt = now;
+          break;
+        }
+        if (result.refresh) {
+          if (++refreshes > 1) {
+            break;
+          }
+          sweepId = beginTrajectoryRuntimeRetention(database.db, lease);
+          snapshot = prepareTrajectoryRuntimeRetention(database.db, input, now);
+        }
+      }
+    } catch (error) {
+      log.warn(`Trajectory retention deferred until the next append: ${String(error)}`);
+    } finally {
+      Atomics.store(lease, 0, 0);
+    }
+  }
+}
 
 export function appendSqliteTrajectoryRuntimeEvents(
   scope: Parameters<typeof appendSerializedTrajectoryRuntimeEvents>[0],

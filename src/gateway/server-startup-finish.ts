@@ -59,7 +59,6 @@ export async function finishGatewayStartup(params: {
   const {
     kernelRuntime: runtime,
     port,
-    bootId,
     opts,
     log,
     logHealth,
@@ -176,7 +175,7 @@ export async function finishGatewayStartup(params: {
       wss,
       clients,
       connectionWork: runtime.connectionWork,
-      bootId,
+      bootId: params.bootId,
       preauthConnectionBudget,
       port,
       gatewayHost: bindHost ?? undefined,
@@ -204,8 +203,10 @@ export async function finishGatewayStartup(params: {
     }),
   );
   await startupTrace.measure("http.listen", () => startListening());
-  kernel.setDispatchReady(true);
   startupTrace.mark("http.bound");
+  // Bind first so liveness works while session readers await the complete projection.
+  await runtime.ensureRequestRuntimeReady();
+  kernel.setDispatchReady(true);
   if (!minimalTestGateway && !opts.updateCanary) {
     const { startOpenClawDatabaseIntegrityVerifier } =
       await import("../state/openclaw-database-verify.js");

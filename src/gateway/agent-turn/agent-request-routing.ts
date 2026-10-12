@@ -87,16 +87,18 @@ export async function prepareAgentRequestRouting(params: {
     }
     agentId = requestedSessionAgent.agentId;
   }
-  let sessionIdTarget: ReturnType<typeof resolveExistingSessionKeyForRequest> | undefined;
+  let sessionIdTarget: Awaited<ReturnType<typeof resolveExistingSessionKeyForRequest>> | undefined;
   if (requestedSessionId && !requestedSessionKeyRaw) {
     try {
-      sessionIdTarget = resolveExistingSessionKeyForRequest({
+      params.reserveDedupe(undefined, agentId);
+      sessionIdTarget = await resolveExistingSessionKeyForRequest({
         cfg: params.cfg,
         sessionId: requestedSessionId,
         agentId,
       });
       agentId = sessionIdTarget.agentId ?? agentId;
     } catch (error) {
+      params.clearDedupe();
       return rejectInvalidRequest(formatForLog(error));
     }
   }
@@ -147,6 +149,7 @@ export async function prepareAgentRequestRouting(params: {
     requestedSessionKey,
   });
   if (expectedSessionTargetError) {
+    params.clearDedupe();
     return rejectInvalidRequest(expectedSessionTargetError);
   }
   let loaded: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>> | undefined;

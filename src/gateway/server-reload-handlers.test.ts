@@ -26,6 +26,10 @@ import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import type { ConfigWriteNotification } from "../config/config.js";
 import { applyModelDefaults } from "../config/defaults.js";
 import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
@@ -2458,6 +2462,29 @@ describe("gateway hot reload commit policy", () => {
     } finally {
       (await prepareInternalHooks({}, afterWorkspace)).commit();
     }
+  });
+
+  it("does not publish a hooks reload with an unresolved credential", async () => {
+    const { applyHotReload, setState } = createReloadHandlersForTest();
+    const plan = createHotTailPlan({
+      changedPaths: ["hooks.token"],
+      hotReasons: ["hooks.token"],
+      reloadHooks: true,
+    });
+    await applyHotReload(plan, { hooks: { enabled: true, token: "synthetic-active-secret" } });
+    const activeState = setState.mock.calls.at(-1)?.[0];
+    expect(activeState?.hooksConfig?.token).toBe("synthetic-active-secret");
+    setState.mockClear();
+    const candidate: OpenClawConfig = { hooks: { enabled: true, token: "pending-secret-value" } };
+    setConfigResolutionFacts(
+      candidate,
+      createConfigResolutionFacts([{ varName: "MISSING_HOOK_SECRET", configPath: "hooks.token" }]),
+    );
+    await expect(applyHotReload(plan, candidate)).rejects.toThrow(
+      "hooks.token has an unresolved environment reference",
+    );
+    expect(setState).not.toHaveBeenCalled();
+    expect(activeState?.hooksConfig?.token).toBe("synthetic-active-secret");
   });
 
   it("preserves the active hook transform cache across rejected and policy-only reloads", async () => {

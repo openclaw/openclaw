@@ -1,4 +1,5 @@
 import { createMemo } from "@solidjs/signals";
+import "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
 import type { JSX } from "@solidjs/web";
 import { Match, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";

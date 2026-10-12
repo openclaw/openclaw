@@ -83,9 +83,10 @@ describe("gateway method authorization", () => {
         },
       } as Parameters<typeof handleGatewayRequest>[0]["client"],
       isWebchatConnect: () => false,
-      context: { logGateway: { warn: vi.fn() } } as unknown as Parameters<
-        typeof handleGatewayRequest
-      >[0]["context"],
+      context: {
+        getRuntimeConfig: () => ({}),
+        logGateway: { warn: vi.fn() },
+      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
     });
     return respond;
   }

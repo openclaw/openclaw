@@ -83,18 +83,25 @@ class SuggestionRecoveryPane extends ChatPane {
 customElements.define("openclaw-suggestion-recovery-test", SuggestionRecoveryPane);
 
 it.each([
-  { draft: "Keep this draft", control: false },
-  { draft: "/stop", control: true },
-  { draft: "/approve approval-123 allow-once", control: true },
+  { draft: "Keep this draft", control: false, cached: false },
+  { draft: "/stop", control: true, cached: false },
+  { draft: "/approve approval-123 allow-once", control: true, cached: false },
+  { draft: "Keep the cached reader in place", control: false, cached: true },
 ])(
   "holds early input until recovery is ready, preserving live controls: $draft",
-  ({ draft, control }) => {
+  ({ draft, control, cached }) => {
     const { state, container, draw, finishRecovery } = createRecoveringComposer(draft);
+    if (cached) {
+      state.currentSessionId = "cached-session";
+      state.chatMessages = [{ role: "assistant", content: "Cached reply", timestamp: 1 }];
+      state.chatLoading = false;
+    }
     try {
       const held = draw();
       expect(held.input.disabled).toBe(false);
       expect(held.input.value).toBe(draft);
       expect(held.send.disabled).toBe(!control);
+      expect(container.querySelector(".agent-chat__composer-status")).toBeNull();
       if (!control) {
         expect(held.send.getAttribute("aria-label")).toBe(
           "Finishing connection recovery. Try sending again when it is ready.",
@@ -112,7 +119,7 @@ it.each([
 
       finishRecovery();
       const ready = draw();
-      expect(state.chatLoading).toBe(true);
+      expect(state.chatLoading).toBe(!cached);
       expect(ready.input.value).toBe(draft);
       expect(ready.send.disabled).toBe(false);
       expect(ready.send.getAttribute("aria-busy")).toBe("false");

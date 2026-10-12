@@ -25,7 +25,6 @@ src/agents/tools/message-tool.hosted-transport.test.ts	1
 src/agents/tools/message-tool.scheduled-lifetime.test.ts	1
 src/agents/tools/pdf-native-providers.test.ts	1
 src/agents/workspace.test.ts	1
-src/auto-reply/dispatch.block-streaming-recovery.test.ts	2
 src/auto-reply/dispatch.question-input.test.ts	2
 src/auto-reply/reply/agent-runner-steer-adoption.question-recovery.test.ts	2
 src/auto-reply/reply/dispatch-acp-delivery.test.ts	1
@@ -42,7 +41,7 @@ src/config/sessions/session-history-archive-pruning.admission.test.ts	4
 src/config/sessions/session-history-eviction.writer-fairness.test.ts	2
 src/config/sessions/session-transcript-reconcile-memory.test.ts	3
 src/config/sessions/session-transcript-reconcile.native-exit.test.ts	2
-src/cron/isolated-agent/model-preflight.runtime.test.ts	2
+src/cron/isolated-agent/model-preflight.runtime.test.ts	1
 src/cron/isolated-agent/model-preflight.runtime.transport.test.ts	4
 src/cron/service.wake-now-real-heartbeat.test.ts	2
 src/daemon/schtasks.env-case.real.test.ts	4

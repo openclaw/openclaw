@@ -27,12 +27,10 @@ vi.mock("../../media/store.js", async () => {
   return { ...actual, deleteMediaBuffer: mocks.deleteMediaBuffer };
 });
 
-vi.mock("../session-utils-store-worker.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils-store-worker.js")>(
-    "../session-utils-store-worker.js",
-  );
-  return { ...actual, loadGatewaySessionEntryReadOnlyInWorker: mocks.loadSessionEntry };
-});
+// mock-isolation: User-turn orchestration receives fixture session rows without starting a read worker.
+vi.mock("../session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: mocks.loadSessionEntry,
+}));
 
 vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(

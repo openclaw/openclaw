@@ -451,7 +451,7 @@ suite.define(() => {
       const selector = panel.locator(".side-panel-empty--selector");
       await selectChatLayoutAction(page, "Side panel");
       await selector.waitFor();
-      expect(await panel.locator("wa-tab").count()).toBe(0);
+      expect(await panel.locator(".tabstrip-tab").count()).toBe(0);
 
       await selectChatLayoutAction(page, "Minimize side panel");
       await selector.waitFor({ state: "hidden" });
@@ -914,10 +914,12 @@ suite.define(() => {
     await clearAction.hover();
     await expect
       .poll(() =>
-        clearTooltip.locator("wa-tooltip").evaluate((tooltip) => Reflect.get(tooltip, "open")),
+        clearTooltip
+          .locator(".tooltip-surface[popover]")
+          .evaluate((tooltip) => tooltip.matches(":popover-open")),
       )
       .toBe(true);
-    expect(await clearTooltip.locator("wa-tooltip .tooltip-content").textContent()).toContain(
+    expect(await clearTooltip.locator(".tooltip-content").textContent()).toContain(
       "Clear side chat",
     );
     await closeChatLayoutMenu(page);
@@ -930,7 +932,6 @@ suite.define(() => {
           throw new Error("Active side-panel tab must render inside the side panel");
         }
         panel.dir = dir;
-        const tabBase = node.shadowRoot?.querySelector<HTMLElement>("[part~='base']");
         const leadingGlyph = node.querySelector<HTMLElement>(".tabstrip-tab__icon svg");
         const label = node.querySelector<HTMLElement>(".tabstrip-tab__label");
         const labelClipper = node.querySelector<HTMLElement>(".tabstrip-tab__tooltip-trigger");
@@ -938,7 +939,6 @@ suite.define(() => {
         const trailingGlyph = close?.querySelector<HTMLElement>("svg");
         if (
           !(close instanceof HTMLElement) ||
-          !tabBase ||
           !leadingGlyph ||
           !label ||
           !labelClipper ||
@@ -946,14 +946,14 @@ suite.define(() => {
         ) {
           throw new Error("Active side-panel tab must render its label and both edge glyphs");
         }
-        const tabBounds = tabBase.getBoundingClientRect();
+        const tabBounds = node.getBoundingClientRect();
         const closeBounds = close.getBoundingClientRect();
         const leadingBounds = leadingGlyph.getBoundingClientRect();
         const labelBounds = label.getBoundingClientRect();
         const labelClipperBounds = labelClipper.getBoundingClientRect();
         const trailingBounds = trailingGlyph.getBoundingClientRect();
         const rtl = dir === "rtl";
-        const tabStyle = getComputedStyle(tabBase);
+        const tabStyle = getComputedStyle(node);
         const closeStyle = getComputedStyle(close);
         return {
           leading: rtl

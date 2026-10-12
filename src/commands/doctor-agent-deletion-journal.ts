@@ -84,13 +84,6 @@ export async function repairDoctorAgentDeletionJournal(params: {
     };
   }
   if (params.shouldRepair) {
-    if (params.preflight.pendingMigrations?.some((entry) => entry.kind === "state")) {
-      const { prepareLegacyStateDatabaseSchema } =
-        await import("../infra/state-migrations.doctor.js");
-      const { throwIfDoctorStateMigrationRefused } =
-        await import("../infra/state-migrations.messages.js");
-      throwIfDoctorStateMigrationRefused([await prepareLegacyStateDatabaseSchema(params.env)]);
-    }
     const recovery = await quarantineAgentDeletionJournal({
       inventory: [...discovery.targets, ...discovery.retainedTargets, ...held],
       env: params.env,

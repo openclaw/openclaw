@@ -26,7 +26,7 @@ import {
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
 } from "../bootstrap-files.js";
-import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
 import {
@@ -277,7 +277,7 @@ export async function buildPreparedCompactionRuntime(
       spawnWorkspaceDir,
       skillsSnapshot: skillsSnapshotForRun,
     };
-    const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+    const runtimeCapabilityProfile = await prepareConversationCapabilityProfile({
       ...conversationContext,
       agentId: sandboxAgentId,
       conversationToolPolicy: params.conversationToolPolicy,

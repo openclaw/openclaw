@@ -1684,7 +1684,10 @@ describe("agentCliCommand", () => {
             },
           );
 
-          const command = agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+          const command = agentCliCommand(
+            { message: "hi", sessionKey: "agent:main:retry-provenance" },
+            runtime,
+          );
           const rejection = expect(command).rejects.toBe(error);
           // Module loading is not driven by fake time; observe dispatch before advancing it.
           await gatewayStarted.promise;
