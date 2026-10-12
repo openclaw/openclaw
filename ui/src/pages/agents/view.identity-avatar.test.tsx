@@ -16,15 +16,24 @@ type AgentAvatarView = ReturnType<typeof mountSolid<AgentsProps>> & { props: Age
 
 const views: AgentAvatarView[] = [];
 const fetchAvatar = vi.fn<typeof fetch>();
+const fetchOther = vi.fn<typeof fetch>();
 const createObjectURL = vi.fn<typeof URL.createObjectURL>();
 const revokeObjectURL = vi.fn<typeof URL.revokeObjectURL>();
 
 beforeEach(() => {
   const nativeFetch = globalThis.fetch;
   fetchAvatar.mockReset();
+  fetchOther.mockReset().mockImplementation(nativeFetch);
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-    const url = input instanceof Request ? input.url : String(input);
-    return url.startsWith("data:") ? nativeFetch(input, init) : fetchAvatar(input, init);
+    const url = new URL(
+      input instanceof Request ? input.url : String(input),
+      globalThis.location.href,
+    );
+    // Other mounted UI can fetch resources while this view settles; only the
+    // persisted beta avatar belongs to this fixture's request-count contract.
+    return url.origin === globalThis.location.origin && url.pathname === "/avatar/beta"
+      ? fetchAvatar(input, init)
+      : fetchOther(input, init);
   });
   let sequence = 0;
   createObjectURL.mockReset().mockImplementation(() => `blob:settings-avatar-${++sequence}`);
@@ -76,6 +85,12 @@ function createView(overrides: Partial<ReturnType<typeof createProps>> = {}) {
   return view;
 }
 
+function avatarRequestUrls() {
+  return fetchAvatar.mock.calls.map(([input]) =>
+    input instanceof Request ? input.url : String(input),
+  );
+}
+
 function avatarImage(view: AgentAvatarView) {
   return view.container.querySelector<HTMLImageElement>(".agent-identity-editor__avatar img");
 }
@@ -105,10 +120,13 @@ function changeAvatarRevision(view: AgentAvatarView, revision: number) {
   });
 }
 
-it("fetches a persisted settings avatar with the bearer credential", async () => {
+it("fetches one persisted settings avatar alongside unrelated requests", async () => {
   const response = createDeferred<Response>();
   fetchAvatar.mockReturnValue(response.promise);
   const view = createView();
+  const assetResponse = new Response("independent asset");
+  fetchOther.mockResolvedValueOnce(assetResponse);
+  const asset = fetch(new URL("/fixture/settings-asset", globalThis.location.origin));
 
   try {
     const avatar = view.container.querySelector(
@@ -132,8 +150,11 @@ it("fetches a persisted settings avatar with the bearer credential", async () =>
     expect(avatar?.classList).toContain("is-pending");
     avatarImage(view)?.dispatchEvent(new Event("load"));
     expect(avatar?.classList).not.toContain("is-pending");
-    expect(fetchAvatar).toHaveBeenCalledOnce();
+    expect(avatarRequestUrls(), "requests after the persisted avatar loads").toEqual([
+      globalThis.location.origin + "/avatar/beta?v=1",
+    ]);
     expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(await asset).toBe(assetResponse);
   } finally {
     response.resolve(avatarResponse());
   }
