@@ -269,6 +269,11 @@ This cleanup changes no persisted data, schema, or update procedure.
 Synchronous admission exchanges carry the requested physical database's facts and
 custody, including a retained file whose original pathname now points elsewhere.
 
+A refused opener can preserve another owner's reader validation only when its
+refusal certifies that no agent handle opened and admission cleanup succeeded.
+Admission failures during native open or schema refresh cannot carry that
+certificate; retirement keeps conservative validation and lease cleanup.
+
 Quarantine guards retain their indexed durable row lookup by target pathname.
 A separate inspection process can admit a file before the Gateway's verifier
 confirms corruption and records quarantine. The inspecting process must observe

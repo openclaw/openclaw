@@ -381,7 +381,10 @@ export function createPlacementRecoveryActions(
     }
     const candidates = await placements.readRecoveryCandidates();
     if (mode === "startup") {
-      orphanCleanupPending = { rootsBySession: new Map(), completedRoots: new Set() };
+      orphanCleanupPending =
+        initialPlacements.length > 0
+          ? { placements: initialPlacements, rootsBySession: new Map(), completedRoots: new Set() }
+          : undefined;
     }
     for (const { sessionId } of candidates) {
       await admit([sessionId], () => recoverSession(sessionId, mode ?? "restart"));

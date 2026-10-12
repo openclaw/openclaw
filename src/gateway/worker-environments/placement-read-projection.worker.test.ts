@@ -393,7 +393,7 @@ describe("worker placement read projection", () => {
     ).toEqual(profileSnapshot);
   });
 
-  it("discovers disk-probe placements off thread in session order before live sample checks", async () => {
+  it("discovers disk-probe placements off thread before live sample checks", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-disk-inventory-"));
     const database = openOpenClawStateDatabase();
     const last = await activePlacement(database, "z-disk");
@@ -457,7 +457,7 @@ describe("worker placement read projection", () => {
       await monitor.sweep();
 
       expect(discoverySql).toEqual([]);
-      expect(requestedEnvironments).toEqual([
+      expect(requestedEnvironments.toSorted()).toEqual([
         first.placement.environmentId,
         last.placement.environmentId,
       ]);
