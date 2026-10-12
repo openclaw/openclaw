@@ -496,10 +496,10 @@ describe("main-session startup recovery", () => {
         const resumed = createDeferred<unknown>();
         const scanned = createDeferred();
         const releaseScan = createDeferred();
-        const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+        const admit = gatewayWorkAdmission.runWithGatewayDetachedWorkAdmission;
         let initialPass: Promise<unknown> | undefined;
         const admissionSpy = vi
-          .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
+          .spyOn(gatewayWorkAdmission, "runWithGatewayDetachedWorkAdmission")
           .mockImplementation(
             <T>(
               run: () => Promise<T>,

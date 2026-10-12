@@ -36,6 +36,7 @@ import {
   getSessionWorkAdmissionOwnerRelease,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { waitForFast } from "../subagent-test-fixtures.test-helpers.js";
@@ -448,9 +449,9 @@ describe("startup recovery admission", () => {
           }
         });
       const passFinished = createDeferred();
-      const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+      const admit = gatewayWorkAdmission.runWithGatewayDetachedWorkAdmission;
       const admissionSpy = vi
-        .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
+        .spyOn(gatewayWorkAdmission, "runWithGatewayDetachedWorkAdmission")
         .mockImplementation(
           async <T>(run: () => Promise<T>, origin?: string, abort?: AbortSignal) => {
             try {
@@ -675,10 +676,10 @@ describe("startup recovery admission", () => {
 
     const firstAttempt = createDeferred();
     const secondAttempt = createDeferred();
-    const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+    const admit = gatewayWorkAdmission.runWithGatewayDetachedWorkAdmission;
     let attempt = 0;
     const admissionSpy = vi
-      .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
+      .spyOn(gatewayWorkAdmission, "runWithGatewayDetachedWorkAdmission")
       .mockImplementation(
         async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal) => {
           const settled = attempt++ === 0 ? firstAttempt : secondAttempt;
@@ -880,6 +881,39 @@ describe("startup recovery admission", () => {
       await recovery.stop();
       admissionSpy.mockRestore();
       warn.mockRestore();
+    }
+  });
+
+  it("resumes after the startup work scope has already closed", async () => {
+    await makeMainSessionFixture({
+      pendingFinalDelivery: makePendingFinalDelivery(),
+    });
+    const scope = new AsyncWorkScope();
+    const observed = createDeferred<{ aborted: boolean | undefined }>();
+    vi.mocked(callGateway).mockImplementation(async () => {
+      observed.resolve({ aborted: getAsyncWorkSignal()?.aborted });
+      return { runId: "run-resumed", status: "ok" };
+    });
+    const hold = createDeferred();
+    let recovery: ReturnType<typeof scheduleRestartAbortedMainSessionRecovery> | undefined;
+    try {
+      recovery = scope.run(() =>
+        scheduleRestartAbortedMainSessionRecovery({
+          delayMs: 0,
+          getConfig: () => ({}),
+          maxRetries: 1,
+          stateDir: tmpDir,
+          waitForStart: () => hold.promise,
+          gatewayRuntime,
+        }),
+      );
+      scope.beginClose();
+      expect(scope.signal.aborted).toBe(true);
+      hold.resolve();
+      await expect(observed.promise).resolves.toEqual({ aborted: false });
+    } finally {
+      hold.resolve();
+      await recovery?.stop();
     }
   });
 });

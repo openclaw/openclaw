@@ -10,7 +10,10 @@ import {
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
+  runWithGatewayDetachedWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import {
   isSessionStoreTopologyChange,
   sessionChanges,
@@ -321,7 +324,12 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
     exhaustedTargets: Map<string, ExhaustedRestartRecoveryTarget>,
     agentIds?: ReadonlySet<string>,
   ): Promise<RecoveryCounts | number> => {
-    return await runWithGatewayIndependentRootWorkAdmission(
+    // Startup closes its AsyncWorkScope as soon as the listener is up. Independent
+    // admission would keep that already-aborted owner, so every resume throws
+    // AbortError and the fail-closed retry budget tombstones a recoverable session.
+    // Detached admission owns a fresh scope; abortController still cancels this
+    // Gateway's attempts, shutdown, and lifecycle rotation.
+    return await runWithGatewayDetachedWorkAdmission(
       async () => {
         const preparation = prepareRestartRecovery(params.gatewayRuntime, abortController.signal);
         const pausedUntilMs = preparation ? await preparation : undefined;

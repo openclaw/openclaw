@@ -375,25 +375,38 @@ function observeRecoveryRoots(
 ) {
   const requested = createDeferred();
   const completed = createDeferred();
-  const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
   let count = 0;
-  const spy = vi
-    .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
-    .mockImplementation(
-      async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal): Promise<T> => {
-        try {
-          const result = admit(run, origin, signal);
-          if (origin === expectedOrigin) {
-            requested.resolve();
-          }
-          return await result;
-        } finally {
-          if (origin === expectedOrigin && ++count === expectedCount) {
-            completed.resolve();
-          }
-        }
-      },
-    );
+  const observe = async <T>(
+    admit: (run: () => Promise<T>, origin?: string, signal?: AbortSignal) => Promise<T>,
+    run: () => Promise<T>,
+    origin?: string,
+    signal?: AbortSignal,
+  ): Promise<T> => {
+    try {
+      const result = admit(run, origin, signal);
+      if (origin === expectedOrigin) {
+        requested.resolve();
+      }
+      return await result;
+    } finally {
+      if (origin === expectedOrigin && ++count === expectedCount) {
+        completed.resolve();
+      }
+    }
+  };
+  // Startup attempts own a detached scope so a closed boot owner cannot abort them.
+  const detachedAdmit = gatewayWorkAdmission.runWithGatewayDetachedWorkAdmission;
+  const independentAdmit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+  const spy =
+    expectedOrigin === "main-session:startup-recovery"
+      ? vi
+          .spyOn(gatewayWorkAdmission, "runWithGatewayDetachedWorkAdmission")
+          .mockImplementation((run, origin, signal) => observe(detachedAdmit, run, origin, signal))
+      : vi
+          .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
+          .mockImplementation((run, origin, signal) =>
+            observe(independentAdmit, run, origin, signal),
+          );
   return {
     requested: requested.promise,
     completed: completed.promise,
