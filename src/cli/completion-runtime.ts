@@ -1,3 +1,5 @@
+// Shell completion runtime: cache paths, profile installation, and shell detection.
+import { isUtf8 } from "node:buffer";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -21,7 +23,54 @@ export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLU
 
 type CompletionProfileEncoding = "utf8" | "utf8bom" | "utf16le" | "utf16be";
 
-async function readCompletionProfile(profilePath: string, shell: CompletionShell) {
+class InvalidUtf8CompletionProfileError extends Error {
+  readonly profilePath: string;
+
+  constructor(profilePath: string) {
+    super(`Shell profile must be valid UTF-8: ${profilePath}`);
+    this.name = "InvalidUtf8CompletionProfileError";
+    this.profilePath = profilePath;
+  }
+}
+
+function isInvalidUtf8CompletionProfileError(
+  error: unknown,
+): error is InvalidUtf8CompletionProfileError {
+  return error instanceof InvalidUtf8CompletionProfileError;
+}
+
+function decodeUtf8CompletionProfile(
+  buffer: Buffer,
+  profilePath: string,
+  mode: "inspect" | "mutate",
+): string {
+  // Read-only hook detection must keep recognizing ASCII OpenClaw lines beside
+  // Latin-1 comments; strict admission belongs only on the rewrite path.
+  if (mode === "mutate" && !isUtf8(buffer)) {
+    throw new InvalidUtf8CompletionProfileError(profilePath);
+  }
+  return buffer.toString("utf8");
+}
+
+function formatInvalidUtf8InstallMessage(params: {
+  profilePath: string;
+  shell: CompletionShell;
+  cachePath: string;
+}): string {
+  const reload = formatCompletionReloadCommand(params.shell, params.cachePath);
+  return [
+    `Shell profile must be valid UTF-8: ${params.profilePath}.`,
+    "The file was left untouched.",
+    `For this session, load the prepared cache with: ${reload}.`,
+    "Persistent installation requires backing up the profile and correcting its encoding first.",
+  ].join(" ");
+}
+
+async function readCompletionProfile(
+  profilePath: string,
+  shell: CompletionShell,
+  mode: "inspect" | "mutate" = "mutate",
+) {
   const { buffer } = await readRegularFile({ filePath: await fs.realpath(profilePath) });
   let encoding: CompletionProfileEncoding = "utf8";
   if (shell === "powershell" && process.platform === "win32") {
@@ -35,7 +84,9 @@ async function readCompletionProfile(profilePath: string, shell: CompletionShell
   // Removing an owned first line must not remove the profile's encoding declaration.
   return {
     content:
-      encoding === "utf8" ? buffer.toString("utf8") : decodeWindowsTextFileBuffer({ buffer }),
+      encoding === "utf8"
+        ? decodeUtf8CompletionProfile(buffer, profilePath, mode)
+        : decodeWindowsTextFileBuffer({ buffer }),
     encoding,
   };
 }
@@ -417,7 +468,7 @@ export async function isCompletionInstalled(
   }
   const cachePath = resolveCompletionCachePath(shell, binName);
   const homeDir = process.env.HOME || os.homedir();
-  const { content } = await readCompletionProfile(profilePath, shell);
+  const { content } = await readCompletionProfile(profilePath, shell, "inspect");
   const lines = content.split("\n");
   // A marker does not install completion; retain missing-cache source lines for doctor repair.
   // Managed portable hooks for the same cache script count as installed but are never rewritten.
@@ -442,7 +493,7 @@ export async function usesSlowDynamicCompletion(
   }
 
   const cachePath = resolveCompletionCachePath(shell, binName);
-  const { content } = await readCompletionProfile(profilePath, shell);
+  const { content } = await readCompletionProfile(profilePath, shell, "inspect");
   return content
     .split("\n")
     .some((line) => isSlowDynamicCompletionLine(line, binName) && !line.includes(cachePath));
@@ -462,6 +513,58 @@ export function findCompletionProfileWriteError(err: unknown): NodeJS.ErrnoExcep
     return err;
   }
   return err instanceof Error ? findCompletionProfileWriteError(err.cause) : undefined;
+}
+
+export type OptionalCompletionInstallFailure =
+  | { kind: "write"; error: NodeJS.ErrnoException }
+  | { kind: "encoding"; message: string; profilePath: string };
+
+/** Optional setup/Doctor paths may skip install on write or encoding failures. */
+export function findOptionalCompletionInstallFailure(
+  err: unknown,
+): OptionalCompletionInstallFailure | undefined {
+  const writeError = findCompletionProfileWriteError(err);
+  if (writeError) {
+    return { kind: "write", error: writeError };
+  }
+  let current: unknown = err;
+  let recoveryMessage: string | undefined;
+  let profilePath: string | undefined;
+  while (current instanceof Error) {
+    if (
+      !recoveryMessage &&
+      current.message.includes("must be valid UTF-8") &&
+      current.message.includes("left untouched")
+    ) {
+      recoveryMessage = current.message;
+      profilePath ??=
+        /Shell profile must be valid UTF-8:\s*(.+?)\./u.exec(current.message)?.[1] ?? undefined;
+    }
+    if (isInvalidUtf8CompletionProfileError(current)) {
+      return {
+        kind: "encoding",
+        message: recoveryMessage ?? current.message,
+        profilePath: current.profilePath,
+      };
+    }
+    // Cross-realm / mocked causes keep the same name + profilePath contract.
+    if (
+      current.name === "InvalidUtf8CompletionProfileError" &&
+      "profilePath" in current &&
+      typeof current.profilePath === "string"
+    ) {
+      return {
+        kind: "encoding",
+        message: recoveryMessage ?? current.message,
+        profilePath: current.profilePath,
+      };
+    }
+    current = current.cause;
+  }
+  if (recoveryMessage && profilePath) {
+    return { kind: "encoding", message: recoveryMessage, profilePath };
+  }
+  return undefined;
 }
 
 export async function installCompletion(shell: string, yes: boolean, binName = "openclaw") {
@@ -484,8 +587,13 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     let content: string;
     let encoding: CompletionProfileEncoding = "utf8";
     try {
-      ({ content, encoding } = await readCompletionProfile(profilePath, shell));
+      ({ content, encoding } = await readCompletionProfile(profilePath, shell, "mutate"));
     } catch (error) {
+      if (isInvalidUtf8CompletionProfileError(error)) {
+        throw new Error(formatInvalidUtf8InstallMessage({ profilePath, shell, cachePath }), {
+          cause: error,
+        });
+      }
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
