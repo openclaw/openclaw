@@ -1,6 +1,7 @@
 import {
   claimHeartbeatOutcomeRowInDatabase,
   persistHeartbeatOutcomeInDatabase,
+  readClaimableHeartbeatOutcomeRow,
   type HeartbeatOutcomeInput,
   type HeartbeatOutcomeRow,
 } from "./heartbeat-outcome-store.kernel.js";
@@ -22,6 +23,16 @@ export function bindSqliteWorkerBackend(
   return {
     execute(command) {
       context.admit("transaction");
+      if (command.type === "claim") {
+        const row = readClaimableHeartbeatOutcomeRow(db, command.input);
+        // The FIFO is still held; absent outcomes and durable retries need no new write.
+        if (
+          !row ||
+          (row.context_run_id === command.input.runId && row.context_claimed_at !== null)
+        ) {
+          return row;
+        }
+      }
       context.admit("commit");
       return runSqliteSingleStatementSync(db, () =>
         command.type === "persist"

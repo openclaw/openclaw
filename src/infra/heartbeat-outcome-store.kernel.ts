@@ -86,3 +86,20 @@ export function claimHeartbeatOutcomeRowInDatabase(
       .returningAll(),
   ).rows[0];
 }
+
+export function readClaimableHeartbeatOutcomeRow(
+  db: DatabaseSync,
+  params: { sessionKey: string; runId: string },
+): HeartbeatOutcomeRow | undefined {
+  const agentDb = getNodeSqliteKysely<HeartbeatDatabase>(db);
+  return executeSqliteQuerySync(
+    db,
+    agentDb
+      .selectFrom("heartbeat_outcomes")
+      .selectAll()
+      .where("session_key", "=", params.sessionKey)
+      .where((eb) =>
+        eb.or([eb("context_run_id", "is", null), eb("context_run_id", "=", params.runId)]),
+      ),
+  ).rows[0];
+}
