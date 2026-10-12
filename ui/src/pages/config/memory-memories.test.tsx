@@ -17,13 +17,13 @@ type MemoryMemoriesTestElement = HTMLElement & {
 };
 
 function createElement(request: Request, advertised = true) {
-  const element = document.createElement("div") as MemoryMemoriesTestElement;
   const input: MemoryMemoriesProps = {
     client: { request } as unknown as GatewayBrowserClient,
     connected: true,
     methodAdvertised: advertised,
     agentId: "main",
   };
+  const element = Object.assign(document.createElement("div"), input);
   const [revision, setRevision] = createSignal(0);
   for (const key of ["client", "connected", "methodAdvertised", "agentId"] as const) {
     Object.defineProperty(element, key, {

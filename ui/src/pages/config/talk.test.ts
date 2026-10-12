@@ -185,7 +185,27 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
 }
 
 function mountTalkPage(context: ApplicationContext, initialConfig: Record<string, unknown>) {
-  const page = document.createElement("div") as TalkPageElement;
+  const page: TalkPageElement = Object.assign(document.createElement("div"), {
+    context,
+    configObject: initialConfig,
+    changeModel: (value: string | null) => {
+      flush();
+      const picker = page.querySelector<SelectPicker>("openclaw-select-picker");
+      if (!picker) {
+        throw new Error("Talk model picker is unavailable");
+      }
+      picker.params.onChange(value ?? "");
+    },
+    changeProvider: (value: string | null) => {
+      const input = [...page.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find(
+        (entry) => entry.value === (value ?? ""),
+      );
+      if (!input) {
+        throw new Error("Talk provider choice is unavailable");
+      }
+      input.click();
+    },
+  });
   const [config, setConfig] = createSignal(initialConfig);
   document.body.append(page);
   const provider = createSolidApplicationContextProvider(context);
@@ -203,23 +223,6 @@ function mountTalkPage(context: ApplicationContext, initialConfig: Record<string
     context: { value: context },
     configObject: { get: config, set: setConfig },
   });
-  page.changeModel = (value) => {
-    flush();
-    const picker = page.querySelector<SelectPicker>("openclaw-select-picker");
-    if (!picker) {
-      throw new Error("Talk model picker is unavailable");
-    }
-    picker.params.onChange(value ?? "");
-  };
-  page.changeProvider = (value) => {
-    const input = [...page.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find(
-      (entry) => entry.value === (value ?? ""),
-    );
-    if (!input) {
-      throw new Error("Talk provider choice is unavailable");
-    }
-    input.click();
-  };
   page.remove = () => {
     view.unmount();
     remove();
@@ -347,7 +350,7 @@ describe("Talk device and voice wake settings", () => {
     vi.useFakeTimers();
     const input = page.querySelector("textarea")!;
     input.value = "hello";
-    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
     await vi.advanceTimersByTimeAsync(400);
     flush();
     expect(page.querySelector("[role='alert']")?.textContent).toContain("Permission denied");
@@ -374,13 +377,13 @@ describe("Talk device and voice wake settings", () => {
     const input = page.querySelector("textarea")!;
     input.focus();
     input.value = "first phrase";
-    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
     await vi.advanceTimersByTimeAsync(400);
     flush();
     expect(input.disabled).toBe(false);
     expect(document.activeElement).toBe(input);
     input.value = "second phrase";
-    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
     await vi.advanceTimersByTimeAsync(400);
     expect(writes).toBe(1);
     first.resolve({ triggers: ["first phrase"] });
@@ -416,12 +419,12 @@ describe("Talk device and voice wake settings", () => {
       const input = page.querySelector("textarea")!;
       for (const text of ["first phrase", "intermediate phrase"]) {
         input.value = text;
-        input.dispatchEvent(new Event("input"));
+        input.dispatchEvent(new Event("input", { bubbles: true }));
         await vi.advanceTimersByTimeAsync(400);
       }
       expect(writes).toBe(1);
       input.value = latest;
-      input.dispatchEvent(new Event("input"));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
       page.remove();
       first.resolve({ triggers: ["first phrase"] });
       await vi.advanceTimersByTimeAsync(400);
@@ -449,7 +452,7 @@ describe("Talk device and voice wake settings", () => {
       vi.useFakeTimers();
       const input = page.querySelector("textarea")!;
       input.value = "hello computer";
-      input.dispatchEvent(new Event("input"));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
       await vi.advanceTimersByTimeAsync(timing === "in-flight" ? 400 : 100);
       setGatewayConnection(false);
       if (timing === "in-flight") {
@@ -484,7 +487,7 @@ describe("Talk device and voice wake settings", () => {
     vi.useFakeTimers();
     const input = page.querySelector("textarea")!;
     input.value = "old gateway words";
-    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
     setGatewayConnection(false);
     gatewayWords = ["new gateway words"];
     setGatewayConnection(true, "wss://other-gateway.example.test");
@@ -509,11 +512,11 @@ describe("Talk device and voice wake settings", () => {
       vi.useFakeTimers();
       const input = page.querySelector("textarea")!;
       input.value = "initial phrase";
-      input.dispatchEvent(new Event("input"));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
       setGatewayConnection(false);
       flush();
       input.value = "retained phrase";
-      input.dispatchEvent(new Event("input"));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
       await vi.advanceTimersByTimeAsync(400);
       page.remove();
       gatewayWords = ["other gateway phrase"];
@@ -745,7 +748,10 @@ describe("TalkSettingsPage realtime transport mutation", () => {
             ? failedCatalog.promise.then(() => expect.fail("catalog refresh failed"))
             : catalog,
     });
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
+    await waitForSolid(() => {
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(page.querySelector("openclaw-select-picker")).not.toBeNull();
+    });
     page.changeModel(null);
     setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
     flush();
@@ -779,7 +785,10 @@ describe("TalkSettingsPage realtime transport mutation", () => {
         "gpt-realtime-alt": ["verse"],
       },
     });
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
+    await waitForSolid(() => {
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(page.querySelector("openclaw-select-picker")).not.toBeNull();
+    });
 
     page.changeModel(null);
     page.changeModel("gpt-realtime-alt");

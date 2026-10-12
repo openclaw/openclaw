@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import type { WebPushSnapshot } from "../../app/web-push.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { renderNotificationsSection } from "./notifications-section.tsx";
@@ -188,7 +189,7 @@ describe("Web Push preference controls", () => {
         connected: true,
         onWebPushSetDevicePreferences: options.onDevice,
         onWebPushSetUserPreferences: options.onUser,
-        get webPush() {
+        get webPush(): WebPushSnapshot {
           return {
             supported: true,
             permission: "granted",
