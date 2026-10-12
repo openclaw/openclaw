@@ -8,6 +8,37 @@ struct ChatLiveRunState: Equatable, Sendable {
 }
 
 extension OpenClawChatViewModel {
+    /// Sequence and token telemetry do not change which runs are active.
+    var liveRunStateByRunID: [String: ChatLiveRunState] {
+        get {
+            self.access(keyPath: \.liveRunStateByRunID)
+            return self.liveRunStateStorage
+        }
+        set {
+            let lifecycle: (ChatLiveRunState) -> ChatLiveRunState = { state in
+                var state = state
+                state.sequence = 0
+                state.outputTokens = nil
+                return state
+            }
+            let lifecycleChanged = newValue.mapValues(lifecycle) != self.liveRunStateStorage.mapValues(lifecycle)
+            let tokensChanged = newValue.compactMapValues(\.outputTokens) !=
+                self.liveRunStateStorage.compactMapValues(\.outputTokens)
+            let update = {
+                if lifecycleChanged {
+                    self.withMutation(keyPath: \.liveRunStateByRunID) { self.liveRunStateStorage = newValue }
+                } else {
+                    self.liveRunStateStorage = newValue
+                }
+            }
+            if tokensChanged {
+                self.withMutation(keyPath: \.liveRunOutputTokens, update)
+            } else {
+                update()
+            }
+        }
+    }
+
     func usesMutableContractRouting(sessionKey: String, contract: String?) -> Bool {
         if OpenClawChatSessionKey.agentID(from: sessionKey) == nil {
             return true
@@ -86,7 +117,8 @@ extension OpenClawChatViewModel {
     }
 
     var liveRunOutputTokens: Int? {
-        self.liveUsageRunID.flatMap { self.liveRunStateByRunID[$0]?.outputTokens }
+        self.access(keyPath: \.liveRunOutputTokens)
+        return self.liveUsageRunID.flatMap { self.liveRunStateStorage[$0]?.outputTokens }
     }
 
     var hasAdvertisedLiveRun: Bool {
