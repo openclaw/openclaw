@@ -21,7 +21,6 @@ import {
   readPackageActivationStatus,
   runPackageActivationRecovery,
   settlePendingPackageActivation,
-  settleRemountedPackageActivation,
 } from "./package-update-activation.js";
 import { legacyPackageFingerprint } from "./package-update-legacy.test-support.js";
 
@@ -176,9 +175,11 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     const f = await fixture.prepare();
     const journalPath = resolvePackageActivationJournalPath(f.anchor);
     const before = fs.readFileSync(journalPath);
-    await expect(settleRemountedPackageActivation(f.anchor, f.operationId)).rejects.toThrow(
-      "requires a verified device remount",
-    );
+    await expect(
+      settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+        operationId: f.operationId,
+      }),
+    ).rejects.toThrow("requires a verified device remount");
     expect(fs.readFileSync(journalPath)).toEqual(before);
     expect(fs.existsSync(path.join(f.anchor, "candidate"))).toBe(true);
   });
@@ -227,7 +228,9 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
       const result =
         scenario === "settle"
           ? await settlePendingPackageActivation(f.packageRoot)
-          : await settleRemountedPackageActivation(f.anchor, f.operationId);
+          : await settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+              operationId: f.operationId,
+            });
       expect(result).toMatchObject({ reason: "publication-settled-external-change" });
       cut?.mockRestore();
       if (scenario === "archive-interrupted") {
@@ -304,7 +307,9 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
           },
         );
       }
-      const refusal = await settleRemountedPackageActivation(f.anchor, f.operationId).then(
+      const refusal = await settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+        operationId: f.operationId,
+      }).then(
         () => undefined,
         (error: unknown) => error,
       );
@@ -416,10 +421,9 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     const before = fs.readFileSync(f.journalPath);
     const refuse = () =>
       expect(
-        settleRemountedPackageActivation(
-          f.anchor,
-          scenario === "operation" ? randomUUID() : f.operationId,
-        ),
+        settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+          operationId: scenario === "operation" ? randomUUID() : f.operationId,
+        }),
       ).rejects.toThrow();
     if (scenario === "active-lease") {
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {

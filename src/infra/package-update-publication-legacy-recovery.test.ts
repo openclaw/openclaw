@@ -15,7 +15,6 @@ import {
   assertNoPendingPackageActivation,
   runPackageActivationRecovery,
   settlePendingPackageActivation,
-  settleRemountedPackageActivation,
 } from "./package-update-activation.js";
 import { legacyPackageFingerprint } from "./package-update-legacy.test-support.js";
 
@@ -127,13 +126,17 @@ it.skipIf(process.platform === "win32").each([false, true])(
     if (modified) {
       fs.appendFileSync(path.join(f.packageRoot, "openclaw.mjs"), "changed");
       const before = fs.readFileSync(f.journalPath);
-      await expect(settleRemountedPackageActivation(f.anchor, f.operationId)).rejects.toThrow(
-        "full candidate fingerprint changed",
-      );
+      await expect(
+        settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+          operationId: f.operationId,
+        }),
+      ).rejects.toThrow("full candidate fingerprint changed");
       expect(fs.readFileSync(f.journalPath)).toEqual(before);
     } else {
       await expect(
-        settleRemountedPackageActivation(f.anchor, f.operationId),
+        settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+          operationId: f.operationId,
+        }),
       ).resolves.toMatchObject({ reason: "publication-settled-external-change" });
       expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
     }
