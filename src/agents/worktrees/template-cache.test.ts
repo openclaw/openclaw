@@ -80,6 +80,24 @@ describe("worktree template custody", () => {
     await expect(fs.access(left.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("reuses a retained ready generation and revalidates it once readers settle", async () => {
+    const first = await prepareWorktreeTemplate(params);
+    expect(first).toBeDefined();
+    const unavailableValidation = async () => {
+      throw new Error("validation must not hold up a concurrent clone");
+    };
+    const second = await prepareWorktreeTemplate({ ...params, validate: unavailableValidation });
+    expect(second?.id).toBe(first?.id);
+    expect(await fs.readFile(path.join(second!.path, "source"), "utf8")).toBe("source");
+    await first?.release();
+    await second?.release();
+    await fs.writeFile(path.join(first!.path, "source"), "changed");
+    const next = await prepareWorktreeTemplate(params);
+    expect(next?.id).not.toBe(first?.id);
+    expect(await fs.readFile(path.join(next!.path, "source"), "utf8")).toBe("source");
+    await next?.release();
+  });
+
   it.each(["settled", "worker", "process"])(
     "retains a failed builder only while its native outcome is uncertain (%s)",
     async (kind) => {

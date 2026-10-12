@@ -25,7 +25,12 @@
   min-width: 0;
 }
 .agent-chat__composer-notices:not(
-  :has(> :not(openclaw-chat-child-attention), > openclaw-chat-child-attention > *)
+  :has(
+    > :not(openclaw-chat-child-attention, .chat-composer-lit-content),
+    > openclaw-chat-child-attention > *,
+    > .chat-composer-lit-content > :not(openclaw-chat-child-attention),
+    > .chat-composer-lit-content > openclaw-chat-child-attention > *
+  )
 ) {
   display: none;
 }
@@ -58,11 +63,24 @@
   :has(
     > :not(
       .agent-chat__composer-notices,
+      .chat-composer-lit-content,
       openclaw-plugin-contributions,
       openclaw-chat-outbox-recovery
     ),
-    > .agent-chat__composer-notices > :not(openclaw-chat-child-attention),
+    > .agent-chat__composer-notices
+      > :not(openclaw-chat-child-attention, .chat-composer-lit-content),
     > .agent-chat__composer-notices > openclaw-chat-child-attention > *,
+    > .agent-chat__composer-notices
+      > .chat-composer-lit-content
+      > :not(openclaw-chat-child-attention),
+    > .agent-chat__composer-notices
+      > .chat-composer-lit-content
+      > openclaw-chat-child-attention
+      > *,
+    > .chat-composer-lit-content
+      > :not(openclaw-plugin-contributions, openclaw-chat-outbox-recovery),
+    > .chat-composer-lit-content > openclaw-plugin-contributions > *,
+    > .chat-composer-lit-content > openclaw-chat-outbox-recovery > *,
     > openclaw-plugin-contributions > *,
     > openclaw-chat-outbox-recovery > *
   )
