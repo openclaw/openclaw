@@ -507,7 +507,7 @@ struct GatewayChannelConnectTests {
             session: WebSocketSessionBox(session: session),
             connectOptions: options)
         await channel._test_setConnectTimeoutSeconds(0.1)
-        await channel._test_setConnectAttemptFinishedHandler { _ in
+        await channel._test_setConnectAttemptFinishedHandler {
             Task { await completion.record() }
         }
 
@@ -554,7 +554,9 @@ struct GatewayChannelConnectTests {
         })
         let url = try #require(URL(string: "wss://gateway.example.invalid"))
         let channel = GatewayChannelActor(
-            url: url, token: nil, session: WebSocketSessionBox(session: session),
+            url: url,
+            token: nil,
+            session: WebSocketSessionBox(session: session),
             connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
         var caught: (any Error)?
         do {

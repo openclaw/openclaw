@@ -2,112 +2,6 @@ import Foundation
 import OpenClawIPC
 import OpenClawKit
 
-actor MacNodeClaudeSessionCatalogWorker {
-    typealias Operation = @Sendable (String?) throws -> String
-
-    private struct PendingOperation {
-        var id: UUID
-        var paramsJSON: String?
-        var operation: Operation
-        var continuation: CheckedContinuation<String, Error>
-    }
-
-    private struct ActiveOperation {
-        var id: UUID
-        var task: Task<String, Error>
-        var continuation: CheckedContinuation<String, Error>?
-    }
-
-    static let shared = MacNodeClaudeSessionCatalogWorker(
-        listOperation: { try MacNodeClaudeSessionCatalog.list(paramsJSON: $0) },
-        readOperation: { try MacNodeClaudeSessionCatalog.read(paramsJSON: $0) })
-
-    private let listOperation: Operation
-    private let readOperation: Operation
-    private var pending: [PendingOperation] = []
-    private var active: ActiveOperation?
-
-    init(
-        listOperation: @escaping Operation,
-        readOperation: @escaping Operation)
-    {
-        self.listOperation = listOperation
-        self.readOperation = readOperation
-    }
-
-    func list(paramsJSON: String?) async throws -> String {
-        try await self.enqueue(paramsJSON: paramsJSON, operation: self.listOperation)
-    }
-
-    func read(paramsJSON: String?) async throws -> String {
-        try await self.enqueue(paramsJSON: paramsJSON, operation: self.readOperation)
-    }
-
-    private func enqueue(
-        paramsJSON: String?,
-        operation: @escaping Operation) async throws -> String
-    {
-        let id = UUID()
-        let result: String = try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                guard !Task.isCancelled else {
-                    continuation.resume(throwing: CancellationError())
-                    return
-                }
-                self.pending.append(PendingOperation(
-                    id: id,
-                    paramsJSON: paramsJSON,
-                    operation: operation,
-                    continuation: continuation))
-                self.startNextIfNeeded()
-            }
-        } onCancel: {
-            Task { await self.cancel(id: id) }
-        }
-        try Task.checkCancellation()
-        return result
-    }
-
-    private func startNextIfNeeded() {
-        guard self.active == nil, !self.pending.isEmpty else { return }
-        let pending = self.pending.removeFirst()
-        let task = Task.detached(priority: .utility) {
-            try Task.checkCancellation()
-            return try pending.operation(pending.paramsJSON)
-        }
-        self.active = ActiveOperation(
-            id: pending.id,
-            task: task,
-            continuation: pending.continuation)
-        // One Claude filesystem operation at a time. Codex and other node commands
-        // remain free to run while this dedicated lane waits or scans.
-        Task {
-            let result = await task.result
-            self.finish(id: pending.id, result: result)
-        }
-    }
-
-    private func cancel(id: UUID) {
-        if let index = pending.firstIndex(where: { $0.id == id }) {
-            let pending = self.pending.remove(at: index)
-            pending.continuation.resume(throwing: CancellationError())
-            return
-        }
-        guard self.active?.id == id else { return }
-        self.active?.continuation?.resume(throwing: CancellationError())
-        self.active?.continuation = nil
-        self.active?.task.cancel()
-    }
-
-    private func finish(id: UUID, result: Result<String, Error>) {
-        guard self.active?.id == id else { return }
-        let continuation = self.active?.continuation
-        self.active = nil
-        continuation?.resume(with: result)
-        self.startNextIfNeeded()
-    }
-}
-
 actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
     private static let maxScreenSnapshotRawBytesBeforeBase64 = (maxGatewayPayloadBytes / 4) * 3
@@ -128,9 +22,6 @@ actor MacNodeRuntime {
     private let codexThreadCatalogClient: MacNodeCodexThreadCatalogClient
     private let codexThreadListRequest: @Sendable (String?) async throws -> String
     private let codexThreadTurnsRequest: @Sendable (String?) async throws -> String
-    private let claudeSessionCatalogEnabled: @Sendable () -> Bool
-    private let claudeSessionListRequest: @Sendable (String?) async throws -> String
-    private let claudeSessionReadRequest: @Sendable (String?) async throws -> String
     private var cachedMainActorServices: (any MacNodeRuntimeMainActorServices)?
     /// Single-flight lazy initialization. Separate service instances would split
     /// ownership of held computer input and make lifecycle release incomplete.
@@ -163,16 +54,7 @@ actor MacNodeRuntime {
         },
         codexThreadCatalogClient: MacNodeCodexThreadCatalogClient = MacNodeCodexThreadCatalogClient(),
         codexThreadListRequest: (@Sendable (String?) async throws -> String)? = nil,
-        codexThreadTurnsRequest: (@Sendable (String?) async throws -> String)? = nil,
-        claudeSessionCatalogEnabled: @escaping @Sendable () -> Bool = {
-            MacNodeClaudeSessionCatalog.shouldAdvertise()
-        },
-        claudeSessionListRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
-            try await MacNodeClaudeSessionCatalogWorker.shared.list(paramsJSON: paramsJSON)
-        },
-        claudeSessionReadRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
-            try await MacNodeClaudeSessionCatalogWorker.shared.read(paramsJSON: paramsJSON)
-        })
+        codexThreadTurnsRequest: (@Sendable (String?) async throws -> String)? = nil)
     {
         self.nodeHostWorker = nodeHostWorker
         self.cameraPTZ = cameraPTZ
@@ -191,9 +73,6 @@ actor MacNodeRuntime {
         self.codexThreadTurnsRequest = codexThreadTurnsRequest ?? { paramsJSON in
             try await codexThreadCatalogClient.turns(paramsJSON: paramsJSON)
         }
-        self.claudeSessionCatalogEnabled = claudeSessionCatalogEnabled
-        self.claudeSessionListRequest = claudeSessionListRequest
-        self.claudeSessionReadRequest = claudeSessionReadRequest
     }
 
     func updateMainSessionKey(_ sessionKey: String) {
@@ -234,7 +113,7 @@ actor MacNodeRuntime {
                 return try await self.handleCodexThreadInvoke(req)
             case MacNodeClaudeSessionCatalogContract.listCommand,
                  MacNodeClaudeSessionCatalogContract.readCommand:
-                return try await self.handleClaudeSessionInvoke(req)
+                return await self.handleClaudeSessionInvoke(req)
             default:
                 // Private supervisor controls are not public pairing capabilities.
                 // The shared dispatcher owns their validation and local hosting consent.
@@ -244,11 +123,6 @@ actor MacNodeRuntime {
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
             }
         } catch let error as MacNodeCodexThreadCatalog.CatalogError {
-            return Self.errorResponse(
-                req,
-                code: error.isInvalidRequest ? .invalidRequest : .unavailable,
-                message: error.localizedDescription)
-        } catch let error as MacNodeClaudeSessionCatalog.CatalogError {
             return Self.errorResponse(
                 req,
                 code: error.isInvalidRequest ? .invalidRequest : .unavailable,
@@ -459,18 +333,47 @@ actor MacNodeRuntime {
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
-    private func handleClaudeSessionInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        guard self.claudeSessionCatalogEnabled() else {
+    private func handleClaudeSessionInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+        guard let nodeHostWorker, await nodeHostWorker.supports(req.command) else {
             return Self.errorResponse(
                 req,
                 code: .unavailable,
                 message: "UNAVAILABLE: Claude session catalog is disabled")
         }
-        let request = req.command == MacNodeClaudeSessionCatalogContract.listCommand
-            ? self.claudeSessionListRequest
-            : self.claudeSessionReadRequest
-        let payload = try await request(req.paramsJSON)
-        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        let response = await nodeHostWorker.invoke(req)
+        guard !response.ok, let error = response.error, error.code == .invalidRequest else {
+            return response
+        }
+        // Plugin failures share one wire code; preserve the native catalog's errors without leaking file paths.
+        let message = error.message.hasPrefix("Error: ") ? String(error.message.dropFirst(7)) : error.message
+        let parameterError: String? = if message == "Claude session parameters must be valid JSON" ||
+            message == "Claude session catalog parameters must be an object" ||
+            message == "Claude session read parameters must be an object"
+        {
+            "parameters must be valid JSON objects"
+        } else if message.hasPrefix("unknown Claude session ") {
+            message
+                .replacingOccurrences(of: "catalog parameter:", with: "parameter:")
+                .replacingOccurrences(of: "read parameter:", with: "parameter:")
+        } else if message.hasPrefix("limit must be an integer from 1 to ") ||
+            [
+                "threadId is invalid",
+                "catalog cursor is invalid",
+                "transcript cursor is invalid",
+                "Claude session is unavailable",
+            ].contains(message)
+        {
+            message
+        } else {
+            nil
+        }
+        if let parameterError {
+            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: \(parameterError)")
+        }
+        let unavailable = message == "Claude transcript page exceeded the safe scan limit"
+            ? "Claude session item exceeded the size limit"
+            : "Claude session catalog is unavailable"
+        return Self.errorResponse(req, code: .unavailable, message: "UNAVAILABLE: \(unavailable)")
     }
 }
 

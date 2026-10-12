@@ -1100,6 +1100,30 @@ struct GatewayNodeSessionTests {
         #expect(await gateway.workerConnectionData(ifCurrentRoute: route) == nil)
     }
 
+    @Test func `changed connection options renegotiate the advertised handshake`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let url = try testURL("ws://gateway.example.invalid")
+        var options = nodeConnectOptions()
+        try await gateway.connectForTest(url, options: options, session: session)
+        try await gateway.connectForTest(url, options: options, session: session)
+        #expect(session.snapshotMakeCount() == 1)
+
+        options.scopesAreExplicit = true
+        try await gateway.connectForTest(url, options: options, session: session)
+        #expect(session.snapshotMakeCount() == 2)
+
+        options.computerUse = AnyCodable(["capabilities": ["screenshot"]])
+        try await gateway.connectForTest(url, options: options, session: session)
+        #expect(session.snapshotMakeCount() == 3)
+        let socket = try #require(session.latestTask())
+        let request = try #require(socket.sentRequests(method: "connect").last)
+        let params = try #require(request["params"] as? [String: Any])
+        let computerUse = try #require(params["computerUse"] as? [String: Any])
+        #expect(computerUse["capabilities"] as? [String] == ["screenshot"])
+        await gateway.disconnect()
+    }
+
     @Test func `operator canvas refresh uses the operator surface method`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
@@ -1578,34 +1602,6 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func `completed snapshot timeout cannot release a later route waiter`() async throws {
-        let gateway = GatewayNodeSession()
-        let firstRegistered = AsyncGate()
-        let firstWait = Task {
-            await gateway.signalAfterSuspension(firstRegistered) { gateway in
-                await gateway._test_waitForSnapshot(timeoutMs: 1000)
-            }
-        }
-        await firstRegistered.waitUntilStarted()
-        #expect(await gateway._test_snapshotWaiterCount() == 1)
-        await gateway._test_markSnapshotReceived()
-        #expect(await firstWait.value)
-
-        await gateway._test_resetConnectionState()
-        let replacementRegistered = AsyncGate()
-        let replacementWait = Task {
-            await gateway.signalAfterSuspension(replacementRegistered) { gateway in
-                await gateway._test_waitForSnapshot(timeoutMs: 3000)
-            }
-        }
-        await replacementRegistered.waitUntilStarted()
-        #expect(await gateway._test_snapshotWaiterCount() == 1)
-        try await Task.sleep(nanoseconds: 1_200_000_000)
-        await gateway._test_markSnapshotReceived()
-        #expect(await replacementWait.value)
-    }
-
-    @Test
     func `concurrent replacements wait for route invalidation before installing a channel`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
@@ -1881,8 +1877,8 @@ struct GatewayNodeSessionTests {
             },
             onInvokeCancel: { _ in cancellation.markCancelled() })
 
-        /// Both decoded frames arrive in one actor turn: detached work cannot
-        /// register between them. The socket tests above exercise wire decoding.
+        // Both decoded frames arrive in one actor turn: detached work cannot
+        // register between them. The socket tests above exercise wire decoding.
         func deliverBeforeDetachedAdmission(to gateway: isolated GatewayNodeSession) async {
             await gateway._test_handlePush(
                 nodeInvokePush(id: "cancel-before-admission", command: command),

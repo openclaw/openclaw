@@ -84,7 +84,6 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
     public enum AvatarResource: Hashable, Sendable { case channel, agent(String) }
     private struct Avatar {
         let version: String
-        let id = UUID()
         let task: Task<AvatarResult, Never>
         var retryAt: Date?
     }
@@ -94,10 +93,7 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
     private var cards: [Target: ProgressCard] = [:]
     private var progressNeedsReload: Set<Target> = []
     private var owners: [UUID: Target] = [:]
-    private var lifetimes: [Target: UUID] = [:]
     private var dirty: Set<Target> = []
-    private enum Revision { case unknown, atLeast(Int) }
-    private var pending: [Target: Revision] = [:]
     private var generation = UUID()
     var avatarGeneration: UUID {
         self.generation
@@ -149,6 +145,10 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
         Set(self.owners.values.map { Self.wireKey($0) })
     }
 
+    private var targets: Set<Target> {
+        Set(self.owners.values)
+    }
+
     public func pullRequests(sessionKey: String, agentID: String?) -> OpenClawSessionPullRequestSnapshot? {
         self.pulls[Self.wireKey(Self.target(sessionKey: sessionKey, agentID: agentID))]
     }
@@ -165,7 +165,7 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
         load: @escaping @MainActor @Sendable () async -> AvatarResult) async -> Data?
     {
         let target = Self.target(sessionKey: sessionKey, agentID: agentID)
-        guard let lifetime = self.lifetimes[target] else { return nil }
+        guard self.targets.contains(target) else { return nil }
         let cached = self.avatars[target]?[resource]
         if cached?.version != version || cached?.retryAt.map({ $0 <= .now }) == true {
             cached?.task.cancel()
@@ -174,8 +174,7 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
         guard let avatar = self.avatars[target]?[resource] else { return nil }
         let generation = self.generation
         let result = await avatar.task.value
-        guard generation == self.generation, self.lifetimes[target] == lifetime,
-              self.avatars[target]?[resource]?.id == avatar.id, !Task.isCancelled else { return nil }
+        guard generation == self.generation, !avatar.task.isCancelled, !Task.isCancelled else { return nil }
         // ui/src/lib/authenticated-avatar-route.ts:128: share images/404s while watched; other misses remain retryable.
         switch result {
         case let .image(data): return data
@@ -195,11 +194,8 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
         let wireKey = Self.wireKey(key)
         let refresh: Set<String> = self.evictedPullKeys.remove(wireKey) == nil ? [] : [wireKey]
         let first = self.owners.isEmpty
+        let newKey = !self.targets.contains(key)
         self.owners[owner] = key
-        let newKey = self.lifetimes[key] == nil
-        if newKey {
-            self.lifetimes[key] = UUID()
-        }
         if first { self.activate(true) }
         self.synchronize(refresh: refresh)
         if newKey || self.progressNeedsReload.contains(key) { self.loadProgress(key) }
@@ -210,11 +206,9 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
         guard let key = self.owners.removeValue(forKey: owner) else { return }
         if !self.owners.values.contains(key) {
             self.avatars.removeValue(forKey: key)?.values.forEach { $0.task.cancel() }
-            self.lifetimes[key] = nil
             self.cards[key] = nil
             self.progressNeedsReload.remove(key)
             self.dirty.remove(key)
-            self.pending[key] = nil
             self.reads.removeValue(forKey: key)?.cancel()
         }
         let wireKey = Self.wireKey(key)
@@ -232,7 +226,7 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
         self.request = request
         self.pullRequestsAvailable = pullRequestsAvailable
         self.synchronize()
-        self.lifetimes.keys.forEach { self.loadProgress($0) }
+        self.targets.forEach { self.loadProgress($0) }
     }
 
     public func disconnect() {
@@ -248,7 +242,6 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
         self.cards.removeAll()
         self.progressNeedsReload.removeAll()
         self.dirty.removeAll()
-        self.pending.removeAll()
         self.reads.values.forEach { $0.cancel() }
         self.reads.removeAll()
         self.refreshTasks.values.forEach { $0.cancel() }
@@ -303,20 +296,13 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
         }
     }
 
-    private func loadProgress(_ target: Target, revision: Int? = nil) {
-        guard let request = self.request, let lifetime = self.lifetimes[target] else { return }
+    private func loadProgress(_ target: Target) {
+        guard let request = self.request, self.targets.contains(target) else { return }
         self.dirty.insert(target)
-        if self.reads[target] != nil {
-            if case .unknown = self.pending[target] { return }
-            let previous: Int = if case let .atLeast(value) = self.pending[target] {
-                value
-            } else { 0 }
-            self.pending[target] = revision.map { .atLeast(max(previous, $0)) } ?? .unknown
-            return
-        }
+        guard self.reads[target] == nil else { return }
         let generation = self.generation
         self.reads[target] = Task {
-            while self.generation == generation, self.lifetimes[target] == lifetime, !Task.isCancelled,
+            while self.generation == generation, !Task.isCancelled,
                   self.dirty.remove(target) != nil
             {
                 let outcome: Result<Data, Error>
@@ -324,8 +310,7 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
                     outcome = try await .success(request(OpenClawChatGatewayRequests.progressCardGet(
                         sessionKey: target.sessionKey, agentID: target.agentID)))
                 } catch { outcome = .failure(error) }
-                guard self.generation == generation, self.lifetimes[target] == lifetime,
-                      !Task.isCancelled else { return }
+                guard self.generation == generation, !Task.isCancelled else { return }
                 self.progressNeedsReload.insert(target)
                 // session-progress-cards.ts:234: denial retires content; transient errors retain the last useful card.
                 if case let .failure(error) = outcome, let response = error as? GatewayResponseError,
@@ -333,11 +318,10 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
                 {
                     self.cards[target] = nil
                 }
-                // session-progress-cards.ts:327: only a revisioned card can satisfy an overlapping invalidation.
                 if case let .success(data) = outcome,
                    let result = try? JSONDecoder().decode(ProgressCardGetResult.self, from: data)
                 {
-                    if result.card.value is NSNull, self.pending[target] == nil {
+                    if result.card.value is NSNull {
                         self.cards[target] = nil
                         self.progressNeedsReload.remove(target)
                     } else if let card = try? OpenClawChatGatewayPayloadCodec.decodeProgressCard(data, agentID: nil),
@@ -345,19 +329,16 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
                     {
                         self.cards[target] = card
                         self.progressNeedsReload.remove(target)
-                        if case let .atLeast(revision) = self.pending[target],
-                           card.revision >= revision { self.dirty.remove(target) }
                     }
                 }
-                self.pending[target] = nil
             }
-            if self.generation == generation, self.lifetimes[target] == lifetime { self.reads[target] = nil }
+            if !Task.isCancelled { self.reads[target] = nil }
         }
     }
 
     public func refresh() {
         self.synchronize(refresh: self.wireKeys)
-        self.lifetimes.keys.forEach { self.loadProgress($0) }
+        self.targets.forEach { self.loadProgress($0) }
     }
 
     private func scheduleRetry(refresh: Set<String>) {
@@ -397,9 +378,9 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
         } else if event == "progressCard.changed" {
             guard let change = try? JSONDecoder().decode(ProgressCardChangedEvent.self, from: payload) else { return }
             // session-progress-cards.ts:203,449: global and ordinary targets share invalidations, never cached cards or reads.
-            for target in self.lifetimes.keys where Self.wireKey(target) == change.sessionkey {
+            for target in self.targets where Self.wireKey(target) == change.sessionkey {
                 if (change.revision.value as? Int).map({ (self.cards[target]?.revision ?? 0) < $0 }) ?? true {
-                    self.loadProgress(target, revision: change.revision.value as? Int)
+                    self.loadProgress(target)
                 }
             }
         } else if let data = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
@@ -408,12 +389,10 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
             let target = Self.target(sessionKey: rawKey, agentID: data["agentId"] as? String)
             let key = Self.wireKey(target)
             guard self.wireKeys.contains(key) else { return }
-            if event == "sessions.changed", self.lifetimes[target] != nil,
+            if event == "sessions.changed", self.targets.contains(target),
                ["reset", "delete"].contains(data["reason"] as? String ?? "")
             {
-                self.lifetimes[target] = UUID()
                 self.reads.removeValue(forKey: target)?.cancel()
-                self.pending[target] = nil
                 self.cards[target] = nil
                 self.pulls[key] = nil
                 self.loadProgress(target)
