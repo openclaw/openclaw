@@ -122,7 +122,7 @@ async function withDatabaseExclusion<T>(
   return outcome.value;
 }
 
-/** The caller owns a settled failed candidate that has never been allowed to serve. */
+/** The caller owns a settled failed candidate that has never admitted user work. */
 export async function restoreUpdateDatabaseBackup(params: {
   backup: UpdateDatabaseBackup;
   runId: string;

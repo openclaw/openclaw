@@ -98,6 +98,11 @@ The embedded runtime's existing session setting `retry.provider.maxRetries` over
 
 ### Durable outbound delivery
 
+The Gateway checks for unfinished outbound deliveries once at startup. New
+durable enqueues wake recovery after their database transaction commits. Recovery
+keeps retrying while unfinished deliveries remain and stops waking when the queue
+is empty; an idle Gateway does not poll an empty outbound queue.
+
 The durable outbound queue has a separate delivery-attempt budget. When a
 delivery uses a producer claim, reservation checks the exact owner and its lease
 before charging an attempt. An expired or replaced claim does not spend the

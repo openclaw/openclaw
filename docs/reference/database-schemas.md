@@ -23,6 +23,14 @@ CLI, Doctor, cron, and plugin child processes must route mutations through the
 Gateway or acquire exclusive ownership while it is stopped. First admission,
 migration, repair, and final live-authority checks retain their existing owners.
 
+Agent deletion status is loaded on first admission and retained per agent in the
+physical shared database's process-owned facts. Journal writers publish pending,
+completed, and removed status at commit through the existing worker fact transport;
+rollback preserves the previous status. Session admission reuses this fact and the
+deletion owner's queue closure instead of reading the journal on every turn.
+Restart loads persisted tombstones again. Destructive cleanup retains its current
+journal-authority checks; schema, retention, and update behavior are unchanged.
+
 Once Gateway startup holds exclusive state ownership, it inspects the previous
 Gateway lease directly in a read-only worker instead of copying the shared
 database. Fresh or unverifiable owners still prevent startup; Doctor's schema

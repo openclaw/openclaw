@@ -1,8 +1,10 @@
 import { copyFileSync, readFileSync, renameSync } from "node:fs";
 import { symlink } from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -503,7 +505,8 @@ describe("SQLite report payload selection", () => {
       const alias = state.path("report-alias");
       await symlink(path.dirname(databasePath), alias, "junction");
       const aliasedScope = { ...scope, storePath: path.join(alias, path.basename(databasePath)) };
-      const other = new DatabaseSync(databasePath);
+      const other = openNodeSqliteDatabase(databasePath);
+      admitSqliteSchema(other);
       const competitor = {
         customType: "status",
         content: "concurrent report",

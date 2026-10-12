@@ -9,7 +9,6 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
-import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import { readSessionEntryStore } from "./session-accessor.sqlite-entry-store.js";
 import { collectLifecycleIdentityChanges } from "./session-accessor.sqlite-identity.js";
 import {
@@ -35,7 +34,6 @@ export function commitSessionLifecycleProjection(
   { writeTransaction, admit, options }: AgentWorkerOperationContext,
 ) {
   return writeTransaction("session.lifecycle.project", "Session lifecycle", (database) => {
-    assertSessionSubagentRunsCurrent(input, options.env ?? process.env);
     const progressCardResetKeys: string[] = [];
     const projectionReconcileSessionIds: string[] = [];
     const postimages: SessionEntryWritePostimages = new Map();
@@ -99,7 +97,6 @@ export function commitSessionLifecycleProjection(
       ),
     };
     const receipt = transferSessionEntryWorkerCandidate(database, admit, candidate);
-    assertSessionSubagentRunsCurrent(input, options.env ?? process.env);
     return receipt;
   });
 }

@@ -8,12 +8,14 @@ import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import {
   collectGatewayStatusSamples,
-  renderGatewayCpuVital,
-  renderGatewayMemoryVital,
-  renderGatewayVitals,
   type GatewayStatusSample,
   type GatewayStatusSnapshot,
 } from "../../components/gateway-vitals.ts";
+import {
+  GatewayCpuVital,
+  GatewayMemoryVital,
+  GatewayVitals,
+} from "../../components/solid/gateway-vitals.tsx";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import {
@@ -22,7 +24,6 @@ import {
 } from "../../lib/gateway-diagnostics.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSystemInfo } from "../../lib/system-info.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import {
   DEBUG_OVERLAY_SECTION_HEADERS,
   type DebugOverlaySectionId,
@@ -81,8 +82,8 @@ export function DebugOverlayWidget(props: {
 }) {
   return (
     <div class="debug-overlay__widget">
-      <LitContent render={() => renderGatewayCpuVital(props.status, props.history)} />
-      <LitContent render={() => renderGatewayMemoryVital(props.status, props.history)} />
+      <GatewayCpuVital status={props.status} history={props.history} />
+      <GatewayMemoryVital status={props.status} history={props.history} />
       <openclaw-sparkline
         class="gateway-vital gateway-vital--ping"
         data-degraded={props.status.pingMs > 250 ? "" : undefined}
@@ -103,7 +104,7 @@ function Status(props: {
 }) {
   return (
     <>
-      <LitContent render={() => renderGatewayVitals(props.status, props.history)} />
+      <GatewayVitals status={props.status} history={props.history} />
       <Show when={props.status.disks?.length}>
         <div class="gateway-vitals debug-overlay__disks">
           <For each={props.status.disks ?? []} keyed={(disk) => disk.path}>

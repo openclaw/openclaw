@@ -2848,6 +2848,7 @@ export const en: TranslationMap & {
       finished: "Finished ({count})",
       callsOne: "{count} call",
       callsMany: "{count} calls",
+      callsAtLeast: "{count}+ calls",
       empty: "No subagents in this conversation.",
       noRunning: "No running subagents",
       refresh: "Refresh subagents",

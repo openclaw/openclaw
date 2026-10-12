@@ -14,8 +14,10 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { bindUserTurnTranscriptAnnotation } from "../../sessions/user-turn-transcript-annotation.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import { loadSkillLibrarySelection } from "../../skills/library/selection.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
 import type { SkillEntry } from "../../skills/types.js";
 import {
@@ -406,7 +408,7 @@ export function createAgentHarnessHostCapabilities(params: {
       : undefined;
   const toolConstructionInputs = (
     options: HostToolSurfaceOptions,
-    libraryEntries?: readonly SkillEntry[],
+    libraryEntries: readonly SkillEntry[],
     assertCurrent: () => void = assertActive,
   ) => {
     assertCurrent();
@@ -495,7 +497,16 @@ export function createAgentHarnessHostCapabilities(params: {
     },
     bindToolSurface,
     createToolSurface: (options, bindingOptions) => {
-      const inputs = toolConstructionInputs(options);
+      warnPluginSdkDeprecation({
+        family: "agent-harness-host",
+        method: "createToolSurface",
+        replacement: "createToolSurfaceAsync",
+        compatibility: "Synchronous tool construction retains its pinned skill resources.",
+      });
+      const inputs = toolConstructionInputs(
+        options,
+        loadSkillLibrarySelection(skillResourceSnapshot(options)?.librarySelections ?? []),
+      );
       return bindCreatedTools(
         withToolConstructionScope(() =>
           createOpenClawCodingToolsInternal(inputs.options, inputs.skillReadResources),

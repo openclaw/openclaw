@@ -546,63 +546,83 @@ describe("convertResponsesMessages", () => {
     expect(JSON.stringify(result)).not.toContain("see attached image");
   });
 
-  const sameRoute = buildOpenAIResponsesReasoningReplayMetadata(
-    nativeOpenAIModel,
-    reasoningReplayIdentity,
-  );
-  const otherSession = buildOpenAIResponsesReasoningReplayMetadata(nativeOpenAIModel, {
-    ...reasoningReplayIdentity,
-    sessionId: "session-b",
-  });
-  it.each([
-    ["matching block metadata", sameRoute, otherSession, true],
-    ["mismatched block metadata", otherSession, sameRoute, false],
-    ["malformed block metadata", null, sameRoute, false],
-    ["mismatched embedded metadata", undefined, otherSession, false],
-  ])(
-    "fences encrypted reasoning with %s",
-    (_name, blockMetadata, embeddedMetadata, preservesCiphertext) => {
-      const input = replay(
-        {
-          messages: [
-            assistant([
-              {
-                type: "thinking",
-                thinking: "Safe visible reasoning.",
-                thinkingSignature: JSON.stringify({
-                  type: "reasoning",
-                  id: "rs_route_fenced",
-                  summary: [{ type: "summary_text", text: "safe summary" }],
-                  content: [{ type: "reasoning_text", text: "safe content" }],
-                  encrypted_content: "route-bound-ciphertext",
-                  ...(embeddedMetadata !== undefined
-                    ? { __openclaw_replay: embeddedMetadata }
-                    : {}),
-                }),
-                ...(blockMetadata !== undefined ? { openclawReasoningReplay: blockMetadata } : {}),
-              },
-            ] as unknown as AssistantMessage["content"]),
-          ],
-        },
-        {
-          includeSystemPrompt: false,
-          replayResponsesItemIds: true,
-          ...reasoningReplayIdentity,
+  describe.each([
+    { name: "SDK", model: nativeOpenAIModel, summary: [], content: undefined },
+    {
+      name: "native ChatGPT",
+      model: { ...nativeOpenAIModel, api: "openai-chatgpt-responses" },
+      summary: [{ type: "summary_text", text: "safe summary" }],
+      content: [{ type: "reasoning_text", text: "safe content" }],
+    },
+  ] satisfies Array<{ name: string; model: Model; summary: unknown[]; content?: unknown[] }>)(
+    "$name reasoning replay",
+    ({ model, summary, content }) => {
+      const sameRoute = buildOpenAIResponsesReasoningReplayMetadata(model, reasoningReplayIdentity);
+      const otherSession = buildOpenAIResponsesReasoningReplayMetadata(model, {
+        ...reasoningReplayIdentity,
+        sessionId: "session-b",
+      });
+      it.each([
+        ["matching block metadata", sameRoute, otherSession, true],
+        ["mismatched block metadata", otherSession, sameRoute, false],
+        ["malformed block metadata", null, sameRoute, false],
+        ["mismatched embedded metadata", undefined, otherSession, false],
+      ])(
+        "fences encrypted reasoning with %s",
+        (_name, blockMetadata, embeddedMetadata, preservesCiphertext) => {
+          const input = replay(
+            {
+              messages: [
+                {
+                  ...assistant([
+                    {
+                      type: "thinking",
+                      thinking: "Safe visible reasoning.",
+                      thinkingSignature: JSON.stringify({
+                        type: "reasoning",
+                        id: "rs_route_fenced",
+                        summary: [{ type: "summary_text", text: "safe summary" }],
+                        content: [{ type: "reasoning_text", text: "safe content" }],
+                        encrypted_content: "route-bound-ciphertext",
+                        ...(embeddedMetadata !== undefined
+                          ? { __openclaw_replay: embeddedMetadata }
+                          : {}),
+                      }),
+                      ...(blockMetadata !== undefined
+                        ? { openclawReasoningReplay: blockMetadata }
+                        : {}),
+                    },
+                  ] as unknown as AssistantMessage["content"]),
+                  api: model.api,
+                },
+              ],
+            },
+            {
+              includeSystemPrompt: false,
+              replayResponsesItemIds: true,
+              ...reasoningReplayIdentity,
+            },
+            model,
+          );
+          const item = input.find((entry) => entry.type === "reasoning");
+          if (!preservesCiphertext) {
+            expect(item).toBeUndefined();
+            return;
+          }
+          expect(item).toMatchObject({
+            type: "reasoning",
+            id: "rs_route_fenced",
+            summary,
+          });
+          if (content) {
+            expect(item).toHaveProperty("content", content);
+          } else {
+            expect(item).not.toHaveProperty("content");
+          }
+          expect(item).not.toHaveProperty("__openclaw_replay");
+          expect(item).toHaveProperty("encrypted_content", "route-bound-ciphertext");
         },
       );
-      const item = input.find((entry) => entry.type === "reasoning");
-      if (!preservesCiphertext) {
-        expect(item).toBeUndefined();
-        return;
-      }
-      expect(item).toMatchObject({
-        type: "reasoning",
-        id: "rs_route_fenced",
-        summary: [{ type: "summary_text", text: "safe summary" }],
-        content: [{ type: "reasoning_text", text: "safe content" }],
-      });
-      expect(item).not.toHaveProperty("__openclaw_replay");
-      expect(item).toHaveProperty("encrypted_content", "route-bound-ciphertext");
     },
   );
 });
