@@ -7,7 +7,7 @@ import type {
   SessionEntryCohortRequest,
   SessionEntryCohortResult,
 } from "./session-entry-read.types.js";
-import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 
 export type SessionStoreWorkerReadScope = {
   agentId: string;

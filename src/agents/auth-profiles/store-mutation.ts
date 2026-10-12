@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
-import { captureOAuthRefreshClaimPublication } from "./oauth-refresh-marker.js";
 import { buildPersistedAuthProfileSecretsStore } from "./persisted.js";
 import { runtimeAuthMetadataState } from "./runtime-snapshot-owner.js";
 import { buildPersistedAuthProfileState, coerceAuthProfileState } from "./state.js";
@@ -93,10 +92,6 @@ export function prepareAuthProfileStoreMutation(params: {
       credentialsChanged: !isDeepStrictEqual(existingRaw, payload),
       stateChanged,
       selectionChanged,
-      oauthRefreshClaimIds: captureOAuthRefreshClaimPublication(
-        payload.profiles,
-        changedProfileIds,
-      ),
     },
   };
 }

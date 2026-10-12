@@ -13,6 +13,7 @@ import type {
 } from "../infra/approval-gateway-runtime.types.js";
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 // HTTP agent ingress can finish before the lazy agent.wait handler loads its recorder.
 import "./agent-turn/agent-job.js";
@@ -358,6 +359,50 @@ export function createGatewayInstanceRuntime(
   };
   const releaseRecoveryRuntime = registerGatewayRecoveryRuntime(recovery);
 
+  const pendingApprovalPublications = new Map<string, Set<symbol>>();
+  const publishRequestedAsync = async (
+    kind: ChannelApprovalKind,
+    request: GatewayApprovalRequest,
+  ): Promise<number> => {
+    if (closed) {
+      return 0;
+    }
+    const publication = Symbol("approval publication");
+    const publications = pendingApprovalPublications.get(request.id) ?? new Set<symbol>();
+    publications.add(publication);
+    pendingApprovalPublications.set(request.id, publications);
+    let delivered = 0;
+    try {
+      for (const subscriber of Array.from(approvalSubscribers)) {
+        if (!subscriber.eventKinds.has(kind)) {
+          continue;
+        }
+        try {
+          if (!(await subscriber.shouldHandle(request))) {
+            continue;
+          }
+          // Resolution, unsubscription, or Gateway close can retire delivery while eligibility waits.
+          if (closed || pendingApprovalPublications.get(request.id) !== publications) {
+            break;
+          }
+          if (!approvalSubscribers.has(subscriber)) {
+            continue;
+          }
+          subscriber.onRequested(request);
+          delivered += 1;
+        } catch (error) {
+          options.logError?.(`internal approval subscriber failed: ${String(error)}`);
+        }
+      }
+    } finally {
+      publications.delete(publication);
+      if (!publications.size && pendingApprovalPublications.get(request.id) === publications) {
+        pendingApprovalPublications.delete(request.id);
+      }
+    }
+    return delivered;
+  };
+
   const publish = (
     kind: ChannelApprovalKind,
     callback: (subscriber: GatewayApprovalEventSubscriber) => void,
@@ -387,13 +432,53 @@ export function createGatewayInstanceRuntime(
   return {
     createAgentTurnFacade,
     approvalEvents: {
-      publishRequested: (kind, request) =>
-        publish(
+      publishRequested: (kind, request) => {
+        warnPluginSdkDeprecation({
+          family: "approval-event-publication",
+          method: "approvalEvents.publishRequested",
+          replacement: "await approvalEvents.publishRequestedAsync",
+          compatibility: "Synchronous subscribers retain immediate delivery and numeric counts.",
+        });
+        if (closed) {
+          return 0;
+        }
+        // SAFETY: Gateway publishers pass the canonical normalized approval request union.
+        const approvalRequest = request as GatewayApprovalRequest;
+        const eligible = new Set<GatewayApprovalEventSubscriber>();
+        for (const subscriber of Array.from(approvalSubscribers)) {
+          if (!subscriber.eventKinds.has(kind)) {
+            continue;
+          }
+          let accepted: boolean | Promise<boolean>;
+          try {
+            accepted = subscriber.shouldHandle(approvalRequest);
+          } catch (error) {
+            options.logError?.(`internal approval subscriber failed: ${String(error)}`);
+            continue;
+          }
+          if (typeof accepted !== "boolean") {
+            // Observe started preparation even though this publication cannot await it.
+            void accepted.catch((error: unknown) => {
+              options.logError?.(`internal approval subscriber failed: ${String(error)}`);
+            });
+            throw new Error(
+              "Approval eligibility requires async preparation; use approvalEvents.publishRequestedAsync.",
+            );
+          }
+          if (accepted) {
+            eligible.add(subscriber);
+          }
+        }
+        return publish(
           kind,
-          (subscriber) => subscriber.onRequested(request as GatewayApprovalRequest),
-          (subscriber) => subscriber.shouldHandle(request as GatewayApprovalRequest),
-        ),
+          (subscriber) => subscriber.onRequested(approvalRequest),
+          (subscriber) => eligible.has(subscriber),
+        );
+      },
+      publishRequestedAsync: (kind, request) =>
+        publishRequestedAsync(kind, request as GatewayApprovalRequest),
       publishResolved: (kind, resolved) => {
+        pendingApprovalPublications.delete((resolved as GatewayApprovalResolved).id);
         publish(kind, (subscriber) => subscriber.onResolved(resolved as GatewayApprovalResolved));
       },
     },
@@ -452,6 +537,7 @@ export function createGatewayInstanceRuntime(
       recoveryTyping.close();
       releaseRecoveryRuntime();
       approvalSubscribers.clear();
+      pendingApprovalPublications.clear();
       routeCoordinator.close();
     },
   };

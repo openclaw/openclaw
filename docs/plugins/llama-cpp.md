@@ -129,7 +129,7 @@ its own server preset, so verification does not rewrite an existing managed
 server's preset. Downloaded files may remain cached for a retry. Setup verifies and reuses cached
 recommendations, and charges disk space only for missing model and runtime files.
 
-Managed router presets retain configured chat models in deterministic order and
+Managed router presets retain configured chat models in a fixed order and
 remove model sections outside that inventory. Chat and embedding preparation
 update their owned settings while preserving the header, `[*]` defaults,
 comments, and additional options on retained models. Embedding-only setup uses
@@ -248,6 +248,15 @@ manager, or machine owns the process.
 OpenClaw reads `/health`, `/models` (falling back to `/v1/models`), and
 `/props`. Router property checks use `autoload=false`. Discovery never loads,
 wakes, unloads, downloads, or reloads models.
+
+Discovery and inference share the provider's private-network request policy.
+`models.providers.llama-cpp.request.allowPrivateNetwork: true` permits both to
+reach an operator-controlled link-local server, such as a Podman host gateway.
+The same opt-in also permits addresses otherwise blocked by the inference
+policy, including metadata addresses; use it only for a trusted endpoint.
+Setting it to `false` disables private-network and configured-origin trust
+for both discovery and inference. Discovery has no separate retry or redirect
+exception.
 
 For discovered models, OpenClaw advertises reasoning and effort controls only
 when `/props` sets `chat_template_caps.supports_reasoning_effort` to `true`.

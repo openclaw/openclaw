@@ -54,6 +54,7 @@ import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.j
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { modelCatalogRouteVariantKey, modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
+import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
@@ -62,7 +63,6 @@ import {
   fingerprintPreparedModelCatalogPluginContext,
   fingerprintPreparedModelWorkerRequest,
 } from "./prepared-model-catalog-fingerprints.js";
-import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./prepared-model-catalog-worker.js";
 import type { PreparedModelCatalogWorkerData } from "./prepared-model-catalog-worker.pool.js";
 import type {
   PreparedModelCatalogWorkerInput,
@@ -616,6 +616,7 @@ if (parentPort) {
           let previous = contexts.get(workspaceDir);
           const fingerprint = fingerprintPreparedModelCatalogPluginContext(value);
           let attempted: WorkerGeneration | undefined;
+          let replacing = false;
           try {
             const work = new AsyncWorkScope();
             const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
@@ -631,6 +632,7 @@ if (parentPort) {
                         if (previous?.fingerprint === fingerprint) {
                           return previous.prepared;
                         }
+                        replacing = true;
                         return (attempted = await prepareWorkerGeneration(value));
                       },
                       async () => {
@@ -653,6 +655,7 @@ if (parentPort) {
             if (attempted && result.status === "ok") {
               contexts.set(workspaceDir, { fingerprint, prepared: attempted });
               attempted = undefined;
+              replacing = false;
               // Acquire the replacement before releasing shared source registrations.
               await previous?.prepared.release();
               // Registry custody can retain this request's async context until retirement.
@@ -661,7 +664,16 @@ if (parentPort) {
             }
             return result;
           } finally {
-            await attempted?.release();
+            try {
+              if (replacing) {
+                // Registration can replace module-level API handles before a refresh fails.
+                // Re-register the requested config next time instead of reusing that context.
+                contexts.delete(workspaceDir);
+                await previous?.prepared.release();
+              }
+            } finally {
+              await attempted?.release();
+            }
           }
         },
         data.sourceCaptureManagedRoot,

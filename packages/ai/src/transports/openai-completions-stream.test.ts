@@ -17,6 +17,72 @@ function collectVisibleText(output: OpenAICompletionsOutput): string {
 }
 
 describe("openai completions stream", () => {
+  it.each([false, true])(
+    "publishes cumulative tool input before execution (direct=%s)",
+    async (direct) => {
+      const model = makeCompletionsModel();
+      const output = createAssistantOutput(model);
+      const snapshots: unknown[] = [];
+      await processCompletionsStream(
+        streamChunks([
+          makeCompletionsChunk({
+            tool_calls: [
+              {
+                index: 0,
+                id: "write-progress",
+                type: "function",
+                function: { name: "write", arguments: '{"content":"first' },
+              },
+            ],
+          }),
+          makeCompletionsChunk({
+            tool_calls: [
+              {
+                index: 1,
+                id: "edit-progress",
+                type: "function",
+                function: { name: "edit", arguments: '{"newText":"second' },
+              },
+            ],
+          }),
+          makeCompletionsChunk({ tool_calls: [{ index: 0, function: { arguments: ' line"}' } }] }),
+          makeCompletionsChunk({ tool_calls: [{ index: 1, function: { arguments: ' line"}' } }] }),
+          makeCompletionsChunk({}, "tool_calls"),
+        ]),
+        output,
+        model,
+        {
+          push: (event) => {
+            if (event.type === "toolcall_delta") {
+              snapshots.push(structuredClone(event.partial.content[event.contentIndex]));
+            }
+          },
+        },
+        direct ? { mode: "direct", beforeContentBlock() {} } : undefined,
+      );
+      expect(snapshots).toEqual([
+        expect.objectContaining({ id: "write-progress", partialJson: '{"content":"first' }),
+        expect.objectContaining({ id: "edit-progress", partialJson: '{"newText":"second' }),
+        expect.objectContaining({ id: "write-progress", partialJson: '{"content":"first line"}' }),
+        expect.objectContaining({ id: "edit-progress", partialJson: '{"newText":"second line"}' }),
+      ]);
+      expect(output.content).toEqual([
+        {
+          type: "toolCall",
+          id: "write-progress",
+          name: "write",
+          arguments: { content: "first line" },
+        },
+        {
+          type: "toolCall",
+          id: "edit-progress",
+          name: "edit",
+          arguments: { newText: "second line" },
+        },
+      ]);
+    },
+  );
+
   it.each([
     ["length", ["<thi", "nk>unfinished reasoning"], ""],
     ["length", ["Answer. ", "<reasoning>unfinished\n\nreasoning"], "Answer. "],
@@ -282,7 +348,7 @@ describe("openai completions stream", () => {
     },
   );
 
-  it("phases text interrupted by resumed reasoning_details", async () => {
+  it("preserves unphased text across resumed reasoning_details", async () => {
     const model = makeCompletionsModel({
       id: "openrouter/qwen/qwen3-235b-a22b",
       name: "Qwen3 235B A22B",
@@ -317,9 +383,6 @@ describe("openai completions stream", () => {
       {
         type: "text",
         text: "Interim.",
-        textSignature: expect.stringMatching(
-          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-        ),
       },
       {
         type: "thinking",
@@ -329,9 +392,6 @@ describe("openai completions stream", () => {
       {
         type: "text",
         text: "Final.",
-        textSignature: expect.stringMatching(
-          /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
-        ),
       },
     ]);
   });

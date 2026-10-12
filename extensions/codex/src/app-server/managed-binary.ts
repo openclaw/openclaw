@@ -57,7 +57,7 @@ type ResolveManagedCodexAppServerOptions = {
 };
 
 /** A user-installed Codex that passed the version policy and an app-server handshake. */
-export type InstalledCodexAppServer = {
+type InstalledCodexAppServer = {
   command: string;
   nativeCommand: string;
   version: string;

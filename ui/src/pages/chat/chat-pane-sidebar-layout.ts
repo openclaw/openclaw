@@ -51,11 +51,14 @@ type LazyElement = readonly [tagName: string, loadModule: () => Promise<unknown>
 const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
   region: [
     "openclaw-chat-sidebar-region",
-    () => import("./components/chat-sidebar-region.runtime.ts"),
+    () => import("./components/chat-sidebar-region.runtime.tsx"),
   ],
   // Not a slot key: the detail slot also renders tool output and status
   // templates synchronously, so only its panel branch waits for this element.
-  "detail-panel": ["openclaw-chat-detail-panel", () => import("./components/chat-detail-panel.ts")],
+  "detail-panel": [
+    "openclaw-chat-detail-panel",
+    () => import("./components/chat-detail-panel.tsx"),
+  ],
   terminal: [
     "openclaw-terminal-panel",
     () => import("../../components/terminal/terminal-panel-registration.ts"),
@@ -66,19 +69,19 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
   ],
   browser: ["openclaw-browser-panel", () => import("../../components/browser/browser-panel.ts")],
   desktop: ["openclaw-desktop-panel", () => import("../../components/desktop/desktop-panel.ts")],
-  portal: ["openclaw-portals-page", () => import("../portals/portals-page.ts")],
+  portal: ["openclaw-portals-page", () => import("../portals/portals-page.tsx")],
   companion: ["openclaw-chat-session-rail", () => import("./components/chat-session-rail.ts")],
   processes: [
     "openclaw-chat-processes-panel",
-    () => import("./components/chat-processes-panel.ts"),
+    () => import("./components/chat-processes-panel.tsx"),
   ],
   subagents: [
     "openclaw-chat-subagents-panel",
-    () => import("./components/chat-subagents-panel.ts"),
+    () => import("./components/chat-subagents-panel.tsx"),
   ],
   discussion: [
     "openclaw-session-discussion",
-    () => import("./components/session-discussion-panel.ts"),
+    () => import("./components/session-discussion-panel.tsx"),
   ],
 };
 

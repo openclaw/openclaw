@@ -21,7 +21,6 @@ import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import {
   applySelectedChatAgent,
   refreshChatMetadata,
-  refreshChatModelCatalogOnDemand,
   retireChatMetadataRequests,
 } from "../pages/chat/chat-state-refresh.ts";
 import {
@@ -118,94 +117,6 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
     gateway.stop();
   }
 });
-
-it.each([
-  { mode: "automatic", hidden: false, reject: false, replacementFails: false, revision: undefined },
-  { mode: "automatic", hidden: true, reject: true, replacementFails: false, revision: undefined },
-  { mode: "explicit", hidden: false, reject: false, replacementFails: true, revision: undefined },
-  { mode: "picker", hidden: false, reject: false, replacementFails: false, revision: undefined },
-  { mode: "picker", hidden: false, reject: false, replacementFails: false, revision: "changed" },
-])(
-  "preserves cold catalog demand across a matching session event ($mode, revision: $revision, hidden: $hidden, rejection: $reject, replacement failure: $replacementFails)",
-  async ({ mode, hidden, reject, replacementFails, revision }) => {
-    const pendingCatalog = createDeferred<ModelCatalogResult>();
-    const fresh = { id: "fresh", name: "Fresh model", provider: "example" };
-    let catalogReads = 0;
-    const request = createGatewayRequestMock((method) => {
-      if (method === "models.list") {
-        if (++catalogReads === 1) {
-          return pendingCatalog.promise;
-        }
-        return replacementFails
-          ? Promise.reject(new Error("Replacement catalog failed"))
-          : Promise.resolve({ models: [fresh] });
-      }
-      return Promise.resolve({ commands: [] });
-    });
-    const client = createTestGatewayClient(request);
-    const state = makeChatHost({ client }) as ChatPageHost;
-    state.connected = true;
-    state.sessionKey = "agent:main:cold";
-    let presented = true;
-    state.chatMetadataIsPresented = () => presented;
-    const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
-    shell.runtime = {
-      context: {
-        config: createShellConfigFixture(),
-        gateway: { snapshot: { client, phase: "connected" } },
-        agents: { state: { agentsList: null } },
-        sessions: state.sessions,
-      } as unknown as ApplicationContext,
-    };
-    const loading =
-      mode === "picker"
-        ? refreshChatModelCatalogOnDemand(state)
-        : refreshChatMetadata(state, { automatic: mode === "automatic" });
-    try {
-      expect(catalogReads).toBe(1);
-      shell.handleGatewayEvent({
-        event: "sessions.changed",
-        payload: {
-          key: state.sessionKey,
-          agentId: "main",
-          reason: "message",
-          ...(revision
-            ? { session: { key: state.sessionKey, sessionModelRevision: revision } }
-            : {}),
-        },
-      });
-      presented = !hidden;
-      if (reject) {
-        pendingCatalog.reject(new Error("Retired catalog request failed"));
-      } else {
-        pendingCatalog.resolve({ models: [{ ...fresh, id: "retired" }] });
-      }
-      await loading;
-      if (hidden) {
-        expect(catalogReads).toBe(1);
-        expect(state.chatModelCatalog).toEqual([]);
-        presented = true;
-        await refreshChatMetadata(state, { automatic: true });
-      }
-      expect(state.chatModelCatalog).toEqual(replacementFails ? [] : [fresh]);
-      if (replacementFails) {
-        expect(state.chatModelCatalogError).toContain("Replacement catalog failed");
-      } else {
-        expect(state.chatModelCatalogError).toBeNull();
-      }
-      expect(state.chatModelsLoading).toBe(false);
-      expect(catalogReads).toBe(2);
-      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(
-        mode === "picker" ? 0 : 1,
-      );
-    } finally {
-      pendingCatalog.resolve({ models: [] });
-      await loading;
-      retireChatMetadataRequests(state);
-      state.sessions.dispose();
-    }
-  },
-);
 
 it("refreshes a changed session projection through the catalog owner after explicit metadata", async () => {
   vi.useFakeTimers();
@@ -375,7 +286,6 @@ it("retires chat metadata through config.changed and the Gateway close callback"
 
 it.each([
   { kind: "auth", transition: "same-client identity" },
-  { kind: "catalog", transition: "chat.metadata.changed" },
   { kind: "catalog", transition: "same-client reconnect" },
   { kind: "catalog", transition: "same-client identity" },
 ])("retires shared $kind reads through $transition", async ({ kind, transition }) => {
@@ -477,6 +387,7 @@ it("rebinds global chat metadata immediately on agent selection and follows late
         includeModels: false,
       }),
     );
+    await vi.waitFor(() => expect(state.chatModelsLoading).toBe(false));
     ready = true;
     invalidateChatMetadataStore(client);
     await vi.waitFor(() => expect(state.chatModelCatalog[0]?.available).toBe(true));

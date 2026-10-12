@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -8,6 +13,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail, resolveUserProfileId } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -116,6 +122,62 @@ beforeEach(() => {
 });
 
 describe("chat send stop ownership", () => {
+  it("preserves admitted and embedded controller-less producers without Stop opt-in", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { fixture, params } = preAdmissionFixture("controller-less-stop");
+      const cfg: OpenClawConfig = {
+        session: { store: state.statePath("agents", "{agentId}", "sessions", "sessions.sqlite") },
+      };
+      await state.writeConfig(cfg);
+      fixture.context.getRuntimeConfig = () => cfg;
+      params.request.stopCommand = true;
+      params.request.p.message = "/stop";
+      params.session.cfg = cfg;
+      params.session.storePath = resolveSessionStorePathCore(cfg.session?.store, {
+        agentId: "main",
+      });
+      const { sessionKey, entry, storePath } = params.session;
+      await upsertSessionEntryCore({ agentId: "main", storePath, sessionKey }, entry!);
+      const before = loadSessionEntry({ agentId: "main", storePath, sessionKey });
+      const embeddedAbort = vi.fn();
+      const handle = createEmbeddedRunHandle({ runId: "embedded-producer", abort: embeddedAbort });
+      setActiveEmbeddedRun(entry!.sessionId, handle, sessionKey, undefined, "main");
+      const controller = new AbortController();
+      const admittedInterrupt = vi.fn((reason?: Error) => {
+        controller.abort(reason);
+        return { runId: "admitted-producer" };
+      });
+      const admission = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: [sessionKey, entry!.sessionId],
+        run: {
+          runId: "admitted-producer",
+          sessionKey,
+          sessionId: entry!.sessionId,
+          agentId: "main",
+          controlUiVisible: true,
+        },
+        onInterrupt: admittedInterrupt,
+        assertAllowed: () => {},
+      });
+      try {
+        expect(await runChatSendPreAdmission(params)).toBe(false);
+        expect(fixture.respond).toHaveBeenCalledWith(true, {
+          ok: true,
+          aborted: false,
+          runIds: [],
+        });
+        expect(embeddedAbort).not.toHaveBeenCalled();
+        expect(admittedInterrupt).not.toHaveBeenCalled();
+        expect(controller.signal.aborted).toBe(false);
+        expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })).toEqual(before);
+      } finally {
+        admission.release();
+        clearActiveEmbeddedRun(entry!.sessionId, handle, sessionKey);
+      }
+    });
+  });
+
   it("stops selected-agent work without cancelling the compatibility owner's run", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { fixture, params } = preAdmissionFixture("stop-selected-agent");

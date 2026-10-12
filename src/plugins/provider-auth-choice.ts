@@ -4,7 +4,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,7 +20,10 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginWithCapabilityConsent } from "./enable.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
-import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
+import {
+  applyProviderAuthConfigPatch,
+  restoreAgentsDefaultsModel,
+} from "./provider-auth-choice-helpers.js";
 import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "./provider-auth-method.js";
@@ -84,25 +87,9 @@ function restoreConfiguredPrimaryModel(
   nextConfig: OpenClawConfig,
   originalConfig: OpenClawConfig,
 ): OpenClawConfig {
-  const originalModel = originalConfig.agents?.defaults?.model;
-  const nextAgents = nextConfig.agents;
-  const nextDefaults = nextAgents?.defaults;
-  if (!nextDefaults) {
-    return nextConfig;
-  }
-  const defaults = { ...nextDefaults };
-  if (originalModel === undefined) {
-    delete defaults.model;
-  } else {
-    defaults.model = originalModel;
-  }
-  return {
-    ...nextConfig,
-    agents: {
-      ...nextAgents,
-      defaults,
-    },
-  };
+  return nextConfig.agents?.defaults
+    ? restoreAgentsDefaultsModel(nextConfig, originalConfig.agents?.defaults?.model)
+    : nextConfig;
 }
 
 function resolveConfiguredDefaultModelPrimary(cfg: OpenClawConfig): string | undefined {
@@ -197,7 +184,7 @@ async function prepareProviderPluginAuthMethod(
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.config, agentId);
-  const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
   const existingProfiles = Object.entries(store.profiles)
     .filter(([, credential]) => credential.provider === params.providerId)
     .map(([profileId, credential]) => ({ profileId, credential }));

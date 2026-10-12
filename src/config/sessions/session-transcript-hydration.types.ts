@@ -14,6 +14,7 @@ import type {
   PreparedSessionTranscriptHydration,
   SessionTranscriptReadSnapshot,
 } from "./session-history-read.types.js";
+import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 export type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
@@ -83,6 +84,7 @@ export type SessionTranscriptHydrationWorkerInput = {
   includeEventJson?: boolean;
   limits?: { maxBytes: number; maxEvents: number };
   transcript?: SessionEntryCohortRequest["transcript"];
+  preparedEntry?: SessionTranscriptAnchorEntry;
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 

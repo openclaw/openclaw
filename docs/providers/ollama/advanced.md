@@ -10,6 +10,12 @@ sidebarTitle: "Advanced"
 
 ## Advanced configuration
 
+Native Ollama requests keep exact session identities and runtime facts in the
+first user message, after the shared system and tool prefix. This allows local
+prompt caches to reuse that prefix across equivalent subagent spawns while
+preserving earlier message bytes on follow-up turns. Cache reuse still depends
+on the model template, available cache slots, and unchanged instructions/tools.
+
 <AccordionGroup>
   <Accordion title="Legacy OpenAI-compatible mode">
     <Warning>
@@ -177,8 +183,9 @@ sidebarTitle: "Advanced"
 
     When replaying an assistant message, native requests retain its available
     reasoning in Ollama's separate `thinking` field alongside text and tool
-    calls. This lets tool follow-ups reuse reasoning retained by the session's
-    history policy without mixing it into visible answer text.
+    calls, including later tool steps and reopened sessions. Earlier reasoning
+    stays in place so local prompt caches can reuse the prefix. It is not mixed
+    into visible answer text; compaction can still replace older history.
 
     ```bash
     openclaw agent --model ollama/gemma4 --thinking off
@@ -285,12 +292,13 @@ sidebarTitle: "Advanced"
     Ollama uses the **native API** (`/api/chat`) by default, which supports
     streaming and tool calling together — no special config needed.
 
-    Like Chat Completions, native Ollama withholds durable reply blocks until
-    the text phase is known at message completion, even with
-    `blockStreamingBreak: "text_end"`. Tool narration stays out of replies;
-    ordinary finals and length-limited answers remain deliverable. Independent
-    live previews can still update when enabled.
-    See [Pending text phases](/concepts/streaming#pending-text-phases).
+    Native Ollama and ordinary Chat Completions preserve visible model text as
+    it streams. Later tool calls or reasoning do not reclassify earlier text.
+    Durable reply blocks follow the configured streaming boundaries. With
+    block streaming off, the final channel reply uses the assistant text after
+    the last tool call, while live surfaces retain text already shown.
+    Reasoning visibility and private-tag filtering still apply.
+    See [Text phases and final replies](/concepts/streaming#pending-text-phases).
 
     For native requests, `/think off`, `openclaw agent --thinking off`, and
     plugin `api.runtime.llm.complete({ reasoning: "off" })` calls send top-level

@@ -8,6 +8,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import type * as SqliteDatabaseAdmission from "../../infra/sqlite-database-admission.js";
 import type { AdmissionOperations } from "../../infra/sqlite-database-admission.worker.test-support.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
@@ -23,6 +24,20 @@ import {
   maintainSessionTranscriptIndexStatus,
 } from "./session-transcript-index-status.worker.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
+import {
+  bindSqliteWorkerBackend,
+  type TranscriptProjectionPublicationOperations,
+} from "./session-transcript-projection-publication.worker.js";
+
+const siblingRevision = vi.hoisted(() => ({ unknown: false }));
+vi.mock("../../infra/sqlite-database-admission.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof SqliteDatabaseAdmission>();
+  return {
+    ...actual,
+    readSqliteDatabaseSiblingWriteRevision: (db: DatabaseSync) =>
+      siblingRevision.unknown ? undefined : actual.readSqliteDatabaseSiblingWriteRevision(db),
+  };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const databases: DatabaseSync[] = [];
@@ -84,6 +99,73 @@ function settle(db: DatabaseSync) {
   }
   throw new Error("Bounded projection maintenance did not finish");
 }
+
+it.each(["preflight", "sweep"] as const)(
+  "%s leaves the writer lock free during both host grants and reads subsequent writes",
+  (type) => {
+    const filename = path.join(tempDirs.make("index-admission-"), "agent.sqlite");
+    const db = createDatabase(filename);
+    const other = openNodeSqliteDatabase(filename);
+    databases.push(other);
+    other.exec("PRAGMA busy_timeout = 0");
+    const writable: boolean[] = [];
+    const backend = bindSqliteWorkerBackend(undefined, {
+      database: db,
+      databasePath: filename,
+      admit(stage) {
+        try {
+          other.exec("BEGIN IMMEDIATE");
+          writable.push(true);
+          if (stage === "commit") {
+            seedCleanSession(other, "arrived-during-admission");
+            other.exec("UPDATE session_transcript_index_state SET needs_rebuild = 1");
+          }
+          other.exec("COMMIT");
+        } catch {
+          writable.push(false);
+          if (other.isTransaction) {
+            other.exec("ROLLBACK");
+          }
+        }
+      },
+    });
+    const result = backend.execute({ type, input: undefined });
+    expect(writable).toEqual([true, true]);
+    expect(result).toMatchObject({ sessionIds: ["arrived-during-admission"] });
+    backend.assertSettled();
+  },
+);
+
+it("yields contended maintenance without a transaction and reacquires admission on retry", () => {
+  const filename = path.join(tempDirs.make("index-contention-"), "agent.sqlite");
+  const db = createDatabase(filename);
+  const other = openNodeSqliteDatabase(filename);
+  databases.push(other);
+  const admit = vi.fn();
+  const backend = bindSqliteWorkerBackend(undefined, {
+    database: db,
+    databasePath: filename,
+    admit,
+  });
+  other.exec("BEGIN IMMEDIATE");
+  try {
+    expect(backend.execute({ type: "preflight", input: undefined })).toEqual({
+      sessionIds: [],
+      hasMore: true,
+      traversalComplete: false,
+    });
+    backend.assertSettled();
+  } finally {
+    other.exec("ROLLBACK");
+  }
+  expect(admit.mock.calls).toEqual([["transaction"], ["commit"]]);
+  expect(backend.execute({ type: "preflight", input: undefined })).toMatchObject({
+    sessionIds: [],
+    hasMore: false,
+    traversalComplete: true,
+  });
+  expect(admit.mock.calls).toEqual([["transaction"], ["commit"], ["transaction"], ["commit"]]);
+});
 
 it("does not reconcile an empty transcript because of orphaned or another session's projection", () => {
   const db = createDatabase();
@@ -324,4 +406,33 @@ it("cleans late orphans during continuous sibling commits and certifies readines
     hasMore: false,
     traversalComplete: true,
   });
+});
+
+it("reaches a late dirty session while the sibling write revision stays unknown", async () => {
+  const db = createDatabase();
+  transaction(db, () => {
+    for (let index = 0; index < 300; index++) {
+      seedCleanSession(db, `z-${String(index).padStart(3, "0")}`);
+    }
+  });
+  db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = 'z-299'");
+  siblingRevision.unknown = true;
+  try {
+    // Mirrors the reconcile backlog loop: each pass resumes from the previous traversal.
+    let traversal: TranscriptProjectionPublicationOperations["preflight"]["output"]["traversal"];
+    for (let pass = 0; pass < 3; pass++) {
+      const status = await drainTranscriptIndexStatus(
+        async () => transaction(db, () => maintainSessionTranscriptIndexStatus(db)),
+        traversal,
+      );
+      if (status.traversalComplete) {
+        expect(status.sessionIds).toEqual(["z-299"]);
+        return;
+      }
+      traversal = status.traversal;
+    }
+    throw new Error("Backlog traversal never reached the late dirty session");
+  } finally {
+    siblingRevision.unknown = false;
+  }
 });

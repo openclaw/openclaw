@@ -25,14 +25,9 @@ import {
 } from "../chat-thread.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { buildChatArchiveNotice, renderChatDivider, renderChatNotice } from "./chat-divider.ts";
-import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts";
+import * as groups from "./chat-message-group-view.tsx";
 import { assistantMediaPolicyKey, getChatMediaRenderVersion } from "./chat-message-media.ts";
-import {
-  renderStreamGroup,
-  renderUnplacedSubagentWait,
-  renderWorkGroupSummary,
-  type StreamGroupOptions,
-} from "./chat-message-stream.ts";
+import { renderUnplacedSubagentWait, type StreamGroupOptions } from "./chat-message-stream.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import {
@@ -40,7 +35,6 @@ import {
   getTranscriptState,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import { renderWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
@@ -61,6 +55,7 @@ import {
   trackTranscriptRenderDependencies,
 } from "./chat-transcript-render-guard.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
+import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
@@ -68,8 +63,6 @@ import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 import "./chat-subagent-activity-live.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
-const workPreviewCache =
-  createTranscriptMemo<ReturnType<typeof renderWorkGroupBrowserTabPreviews>>();
 const persistedMessageIds = createTranscriptMemo<Set<string | null>>();
 
 export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTranscriptSession) {
@@ -115,6 +108,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     streamSegments: props.streamSegments,
     stream: props.stream ?? null,
     reasoning,
+    showReasoning,
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     initialTurnId: props.initialTurnId,
@@ -164,6 +158,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     sessionKey: props.sessionKey,
     runWorking: Boolean(props.runWorking),
     searchActive: searchFiltering,
+    bubbleMode: props.chatBubbleMode === true,
     session: props.transcriptMetadata ?? activeSession,
   });
   const { collapsedItems, transcriptItems, continuations } = transcriptChain;
@@ -174,23 +169,14 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   const { messageRowKeysById, transcriptMessageKeys, loadedReplySources, positionIndex, rows } =
     projectTranscriptIndex(transcriptChain, expandedToolCards, props);
   const latestBrowserTabsKey = JSON.stringify([...(latestBrowserTabs ?? [])]);
-  const workPreviews = workPreviewCache(
-    transcriptChain.workGroups,
-    [
-      expandedToolCards,
-      getExpansionStateVersion(expandedToolCards),
-      props.sessionKey,
-      latestBrowserTabsKey,
-    ],
-    () =>
-      renderWorkGroupBrowserTabPreviews(
-        transcriptChain.workGroups.filter((item) => !expandedToolCards.get(item.key)),
-        { sessionKey: props.sessionKey, latestBrowserTabs },
-      ),
-  );
-  const questionPrompts = new Map(
-    (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
-  );
+  const workPreviews = projectTranscriptWorkPreviews(transcriptChain.workGroups, {
+    sessionKey: props.sessionKey,
+    expanded: expandedToolCards,
+    latestBrowserTabs,
+    latestBrowserTabsKey,
+    bubbleMode: props.chatBubbleMode,
+  });
+  const questionPrompts = new Map(props.questionPrompts?.map((prompt) => [prompt.id, prompt]));
   const toggleToolCardExpanded = (toolCardId: string, expanded?: boolean) => {
     setExpansionState(
       expandedToolCards,
@@ -309,6 +295,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
     boardProvider: props.boardProvider,
+    widgetLayout: props.widgetLayout,
     agentId: assistantAgentId,
     runActive: props.runActive,
     asyncQuestions,
@@ -331,6 +318,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     githubRepo: props.githubRepo,
     githubRepositories: props.githubRepositories,
     showAssistantAvatar: avatarPlacement === "gutter",
+    bubbleMode: props.chatBubbleMode === true && !searchFiltering,
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
     ...sharedMessageRenderOptions,
@@ -418,7 +406,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       turnRecap: recapForGroup(item.key),
       latestAssistant: item.key === latestAssistantItemKey,
       searchResult: searchFiltering,
-    } satisfies Parameters<typeof renderMessageGroup>[1];
+    } satisfies Parameters<typeof groups.renderSolidMessageGroup>[1];
   };
   // Only the working indicator shows live usage and subagent status, so rows
   // without one keep memoizing across usage and child-roster patches.
@@ -462,54 +450,69 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     }
     return dependencies;
   };
-  const renderItem = guardChatRenderItems(state, rowPresentationDependencies, (item) => {
-    if (item.kind === "divider") {
-      return renderChatDivider(item);
-    }
-    if (item.kind === "notice") {
-      return renderChatNotice(item);
-    }
-    if (item.kind === "stream-run") {
-      return renderStreamGroup(item.parts, streamGroupOptions);
-    }
-    if (item.kind === "work-group") {
-      const workExpanded = expandedToolCards.get(item.key) ?? false;
-      return renderWorkGroupSummary(item, {
-        expanded: workExpanded,
-        browserTabPreviews: workPreviews.get(item.key),
-        onToggle: () => toggleToolCardExpanded(item.key, workExpanded),
-      });
-    }
-    if (item.kind === "activity-run") {
-      const firstGroup = item.groups[0];
-      if (!firstGroup) {
-        return nothing;
+  const renderItem = guardChatRenderItems(
+    state,
+    rowPresentationDependencies,
+    (item) => {
+      if (item.kind === "group") {
+        return { kind: "group", group: item, options: renderGroupOptions(item) };
       }
-      return item.groups.length === 1
-        ? renderMessageGroup(firstGroup, renderGroupOptions(firstGroup))
-        : renderActivityGroup(item.groups, renderGroupOptions(firstGroup));
-    }
-    if (item.kind === "agent-run-frame") {
-      return renderAgentRunFrame(item, {
-        basePath: props.basePath,
-        sessionPublicOrigin: props.sessionPublicOrigin,
-        streamOptions: streamGroupOptions,
-        renderGroupOptions,
-        isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
-        onToggleWork: toggleToolCardExpanded,
-        turnRecap: recapForGroup(item.key),
-      });
-    }
-    if (item.kind === "group") {
-      return renderMessageGroup(item, renderGroupOptions(item));
-    }
-    if (item.kind === "question") {
-      return renderStreamGroup([item], {
-        questionPrompts,
-      });
-    }
-    return nothing;
-  });
+      if (item.kind === "stream-run" || item.kind === "question") {
+        return item.kind === "question"
+          ? { kind: "stream", parts: [item], options: { questionPrompts } }
+          : { kind: "stream", parts: item.parts, options: streamGroupOptions };
+      }
+      if (item.kind === "work-group") {
+        const workExpanded = expandedToolCards.get(item.key) ?? false;
+        return {
+          kind: "work",
+          item,
+          options: {
+            expanded: workExpanded,
+            bubbleMode: props.chatBubbleMode === true && !searchFiltering,
+            browserTabPreviews: workPreviews.get(item.key),
+            onToggle: () => toggleToolCardExpanded(item.key, workExpanded),
+          },
+        };
+      }
+      if (item.kind === "activity-run") {
+        const firstGroup = item.groups[0];
+        if (!firstGroup) {
+          return undefined;
+        }
+        return item.groups.length === 1
+          ? { kind: "group", group: firstGroup, options: renderGroupOptions(firstGroup) }
+          : {
+              kind: "activity",
+              groups: item.groups,
+              options: renderGroupOptions(firstGroup),
+              presentation: "standalone",
+            };
+      }
+      return undefined;
+    },
+    (item) => {
+      if (item.kind === "divider") {
+        return () => renderChatDivider(item);
+      }
+      if (item.kind === "notice") {
+        return () => renderChatNotice(item);
+      }
+      if (item.kind === "agent-run-frame") {
+        return () =>
+          renderAgentRunFrame(item, {
+            basePath: props.basePath,
+            sessionPublicOrigin: props.sessionPublicOrigin,
+            streamOptions: streamGroupOptions,
+            renderGroupOptions,
+            isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
+            onToggleWork: toggleToolCardExpanded,
+            turnRecap: recapForGroup(item.key),
+          });
+      }
+      return undefined;
+    },
+  );
   transcript.entryAnimations.project(chatItems);
   transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
   const transcriptRows: TranscriptRow<ChatRenderItem>[] = workPreviews.size ? [] : rows.slice();
@@ -604,6 +607,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     Boolean(props.loadFullAssistantMessage),
     showReasoning,
     props.showToolCalls,
+    props.chatBubbleMode,
     Boolean(props.runActive),
     activityRunId,
     activityGroupKey,
@@ -677,6 +681,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
             sessionKey: props.sessionKey,
             runWorking: Boolean(props.runWorking),
             searchActive: false,
+            bubbleMode: props.chatBubbleMode === true,
             session: activeSession,
           },
         )
@@ -720,6 +725,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
         props.announceTranscript !== false && !state.searchOpen && !props.loading,
         overlay,
         header,
+        props.transcriptVisible ?? true,
       ),
   };
 }

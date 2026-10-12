@@ -16,7 +16,9 @@ import {
   MAX_USER_PROFILE_AVATAR_BYTES,
   USER_PROFILE_AVATAR_MIME_TYPES,
 } from "../shared/avatar-limits.js";
+import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { CHANNEL_IDENTITY_PROVIDER } from "./user-channel-identities.js";
+import type { UserGitHubConnectionCommit } from "./user-github-connections.types.js";
 import { ensureUserPreferencesSchema } from "./user-preferences.store.js";
 import { normalizeProfileEmail as normalizeEmail } from "./user-profile-email.kernel.js";
 import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
@@ -48,7 +50,6 @@ import { mergeUserProfiles } from "./user-profiles-merge.js";
 import {
   ensureUserProfileRoleSchema,
   ensureUserProfilesSchema,
-  hasEnsuredUserProfileRoleSchema,
   UserProfileMergeError,
   UserProfileNotFoundError,
   UserProfileOwnerError,
@@ -80,6 +81,7 @@ type PendingPublication = {
   display: Set<string>;
   profiles: Set<string>;
   identities: Set<string>;
+  githubConnections: UserGitHubConnectionCommit;
 };
 
 function selectUserProfileListItemById(db: DatabaseSync, profileId: string): UserProfileListItem {
@@ -93,7 +95,7 @@ function selectUserProfileListItemById(db: DatabaseSync, profileId: string): Use
         "display_name",
         "avatar_mime",
         "merged_into",
-        ...(hasEnsuredUserProfileRoleSchema(db) ? (["role"] as const) : []),
+        ...(tableHasColumn(db, "user_profiles", "role") ? (["role"] as const) : []),
         "created_at",
         "updated_at",
         userProfileAvatarPresence,
@@ -141,6 +143,11 @@ export function createUserProfileWriteOperation<Input, Output>(
           display: new Set(),
           profiles: new Set(),
           identities: new Set(),
+          githubConnections: {
+            kind: "user-github-connection",
+            changedOwners: [],
+            retiredProfileIds: [],
+          },
         };
         pending = current;
         try {
@@ -197,6 +204,10 @@ export function createUserProfileWriteOperation<Input, Output>(
             }),
             after: ids.map((id) => [id, after.get(id)]),
             emailBindings,
+            ...(current.githubConnections.changedOwners.length ||
+            current.githubConnections.retiredProfileIds.length
+              ? { githubConnections: current.githubConnections }
+              : {}),
           };
           requestSqliteWorkerOperationAdmission({ stage: "commit", facts: publication });
           deferSqlitePostCommitPublication(db, () => committed.push(publication));
@@ -228,6 +239,10 @@ export function createUserProfileWriteOperation<Input, Output>(
       authority: (...ids) => ids.forEach((id) => pending?.profiles.add(id)),
       identity: (...ids) => ids.forEach((id) => pending?.identities.add(id)),
       publish: (...ids) => ids.forEach((id) => pending?.display.add(id)),
+      publishGitHubConnections: (receipt) => {
+        pending?.githubConnections.changedOwners.push(...receipt.changedOwners);
+        pending?.githubConnections.retiredProfileIds.push(...receipt.retiredProfileIds);
+      },
     };
     const owned = { ...options, mutation };
     try {

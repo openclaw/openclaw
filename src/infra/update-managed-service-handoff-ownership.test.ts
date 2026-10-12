@@ -22,6 +22,10 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { readRestartSentinelRowSync } from "./restart-sentinel-store.js";
+import {
+  createManagedHandoffTempDirTracker,
+  readManagedHandoffArtifacts,
+} from "./update-managed-service-handoff-artifacts.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -71,7 +75,7 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
   resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
 }));
 
-const tempDirs = new Set<string>();
+const tempDirs = createManagedHandoffTempDirTracker();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
 type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
 
@@ -88,7 +92,7 @@ beforeEach(async () => {
     process.nextTick(() => {
       signalMockManagedUpdateHandoffReady({
         child,
-        paramsPath: args.at(-1) ?? "",
+        paramsPath: readManagedHandoffArtifacts(args).paramsPath,
         cleanups: mockedHandoffLeaseCleanups,
       });
     });
@@ -101,8 +105,7 @@ afterEach(async () => {
     cleanup();
   }
   closeOpenClawStateDatabaseForTest();
-  await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
-  tempDirs.clear();
+  await tempDirs.cleanup();
   vi.resetModules();
 });
 
@@ -240,7 +243,7 @@ async function runOwnershipHelper(params: {
   }
   const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
 
-  await startManagedServiceUpdateHandoff({
+  const started = await startManagedServiceUpdateHandoff({
     root: tmpDir,
     timeoutMs: 1_800_000,
     restartDrainTimeoutMs: 300_000,
@@ -263,12 +266,9 @@ async function runOwnershipHelper(params: {
     string[],
     { env: NodeJS.ProcessEnv; detached?: boolean; cwd?: string },
   ];
-  const helperScriptPath = args[0] ?? "";
-  tempDirs.add(path.dirname(helperScriptPath));
-  const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf8")) as Record<
-    string,
-    unknown
-  >;
+  tempDirs.add(path.dirname(started.logPath));
+  const { scriptPath: helperScriptPath, paramsPath } = readManagedHandoffArtifacts(args);
+  const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf8")) as Record<string, unknown>;
   await params.prepareStateDatabase?.(env);
   if (params.sentinel !== undefined) {
     writeRestartSentinelRow(env, params.sentinel);
@@ -610,34 +610,6 @@ describe("managed service update handoff state ownership and sentinel persistenc
     );
   });
 
-  it("writes a fallback update failure when no restart sentinel row exists", async () => {
-    const { result, env } = await runOwnershipHelper({
-      handoffId: "handoff-123",
-      metaHandoffId: "handoff-123",
-    });
-
-    expect(result).toEqual({ code: 1, signal: null });
-    expect(readRestartSentinelRowSync(openOpenClawStateDatabase({ env }).db)).toMatchObject({
-      kind: "valid",
-      sentinel: {
-        version: 1,
-        payload: {
-          kind: "update",
-          status: "error",
-          sessionKey: "agent:test:webchat:dm:user-123",
-          stats: {
-            handoffId: "handoff-123",
-            reason: "managed-service-handoff-failed",
-          },
-        },
-      },
-    });
-    if (process.platform !== "win32") {
-      const mode = (await fs.stat(resolveOpenClawStateSqlitePath(env))).mode & 0o777;
-      expect(mode).toBe(0o600);
-    }
-  });
-
   it.each(
     process.platform === "win32"
       ? (["closed-gate"] as const)
@@ -750,6 +722,20 @@ describe("managed service update handoff state ownership and sentinel persistenc
     await lockReleased;
 
     expect(result).toEqual({ code: 1, signal: null });
+    expect(readRestartSentinelRowSync(openOpenClawStateDatabase({ env }).db)).toMatchObject({
+      kind: "valid",
+      sentinel: {
+        version: 1,
+        payload: {
+          kind: "update",
+          status: "error",
+          sessionKey: "agent:test:webchat:dm:user-123",
+        },
+      },
+    });
+    if (process.platform !== "win32") {
+      expect((await fs.stat(resolveOpenClawStateSqlitePath(env))).mode & 0o777).toBe(0o600);
+    }
     expect(readRestartSentinelPayload(env)).toMatchObject({
       version: 1,
       payload: {

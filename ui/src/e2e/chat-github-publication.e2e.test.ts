@@ -234,6 +234,14 @@ suite.define(() => {
     const first = panes.nth(0);
     const second = panes.nth(1);
     await openDetailsPullRequests(second);
+    if (captureUiProof) {
+      await writeFile(
+        path.join(suite.artifactDir, "split-details-open.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+          second.getByRole("dialog", { name: "Details", exact: true }),
+        ]),
+      );
+    }
     await second.getByRole("button", { name: "Publish PR", exact: true }).waitFor();
     await openDetailsPullRequests(first);
     await first.getByRole("button", { name: "Publish PR", exact: true }).waitFor();

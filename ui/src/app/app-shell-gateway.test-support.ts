@@ -1,4 +1,4 @@
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { createChatPageSessions } from "../pages/chat/chat-page.test-support.ts";
@@ -11,9 +11,13 @@ export function createProfileAppearanceGateway(profileId: string | null) {
   let requestStarted = createDeferred();
   const request = vi.fn(
     () =>
-      new Promise<{ status: string; entries: { "ui.accent": string } }>((resolve) => {
+      new Promise<{
+        status: string;
+        entries: { "ui.accent": string; "ui.railShortcuts": string[] };
+      }>((resolve) => {
         pendingResponses.push((accent) =>
-          resolve({ status: "ok", entries: { "ui.accent": accent } }),
+          // Existing personal navigation keeps this appearance fixture out of legacy inventory.
+          resolve({ status: "ok", entries: { "ui.accent": accent, "ui.railShortcuts": [] } }),
         );
         requestStarted.resolve();
       }),
@@ -65,6 +69,8 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     requestUpdate,
     routeState: {},
   } as unknown as ShellGatewayHost;
+  const owner = new ShellGatewayOwner(host);
+  onTestFinished(() => owner.reset());
   return {
     async completeProfileAppearance(this: void, accent = "#336699") {
       // The first request follows a lazy import; synchronize on its arrival, not loader speed.
@@ -83,7 +89,7 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     },
     context,
     host,
-    owner: new ShellGatewayOwner(host),
+    owner,
     refreshTheme,
     requestUpdate,
     request,

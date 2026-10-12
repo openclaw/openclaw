@@ -145,7 +145,7 @@ describe("anthropic payload policy", () => {
     expect(configuredPayload.context_management).toBe(existing);
   });
 
-  it("applies native Anthropic service tier and cache markers without widening cache scope", () => {
+  it("applies native Anthropic service tier and checkpoints the user-message tail", () => {
     const policy = cachePolicy({ cacheRetention: "long", serviceTier: "standard_only" });
     const payload: TestPayload = {
       system: [
@@ -181,7 +181,7 @@ describe("anthropic payload policy", () => {
     expect(payload.messages[1]).toEqual({
       role: "user",
       content: [
-        { type: "text", text: "Hello", cache_control: { type: "ephemeral", ttl: "1h" } },
+        { type: "text", text: "Hello" },
         {
           type: "tool_result",
           tool_use_id: "tool_1",
@@ -192,7 +192,7 @@ describe("anthropic payload policy", () => {
     });
   });
 
-  it("falls back to the latest tool result when no user text or image exists", () => {
+  it("keeps the previous tool-result checkpoint when the latest result advances", () => {
     const policy = cachePolicy();
     const payload: TestPayload = {
       system: [{ type: "text", text: "Follow policy." }],
@@ -216,7 +216,14 @@ describe("anthropic payload policy", () => {
 
     expect(payload.messages[0]).toEqual({
       role: "user",
-      content: [{ type: "tool_result", tool_use_id: "tool_1", content: "first" }],
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "tool_1",
+          content: "first",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
     });
     expect(payload.messages[2]).toEqual({
       role: "user",

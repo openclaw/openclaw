@@ -329,6 +329,27 @@ describe("chat waiting on subagents", () => {
     expect(count({ selectedSession: undefined })).toBe(0);
   });
 
+  it("keeps an active parent's running count while a covering child read is pending", () => {
+    const input = {
+      selectedSession: { ...parent, hasActiveRun: true },
+      subagentSessions: [child],
+      subagentSessionsHydrated: true,
+      subagentSessionsPending: true,
+      messages,
+    };
+    expect(projectSubagentStatus(input, false)).toMatchObject({
+      wait: null,
+      running: 1,
+      listed: true,
+    });
+    // If the parent hands off before that read answers, its wait is still generic.
+    expect(projectSubagentStatus({ ...input, selectedSession: parent }, false).wait).toEqual({
+      startedAt: 2_000,
+      runId: "parent-run",
+      runningCount: 0,
+    });
+  });
+
   it("leads to the Subagents panel only when it lists every subagent the line mentions", () => {
     const listed = (subagentSessions: GatewaySessionRow[], working = true) =>
       projectSubagentStatus(

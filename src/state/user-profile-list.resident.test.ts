@@ -21,6 +21,7 @@ import {
   prepareUserProfileIdentity,
   readUserProfileAliases,
   readUserProfileIdentity,
+  readResidentUserProfileAliases,
   captureResidentUserProfileAccess,
   isUserProfileCatalogReady,
   resolveUserProfileReference,
@@ -64,7 +65,9 @@ describe("resident profile display and reference catalog", () => {
     expect(fs.existsSync(options.path)).toBe(false);
     const profile = ensureProfileForEmail("appeared@example.test", options);
     expect(isUserProfileCatalogReady(options)).toBe(false);
-    const native = vi.spyOn(openOpenClawStateDatabase(options).db, "prepare");
+    const database = openOpenClawStateDatabase(options);
+    await database.walMaintenance.stop();
+    const native = vi.spyOn(database.db, "prepare");
     const current = await prepareUserProfileCatalog(options);
     releases.push(current.release);
     expect(current.readCurrentIdentity(profile.id)?.profileId).toBe(profile.id);
@@ -298,7 +301,7 @@ describe("resident profile display and reference catalog", () => {
               { identity, authenticationAlias: { kind: "email", email: "first@example.test" } },
               options,
             );
-      const seen = vi.fn(() => readUserProfileAliases(second.id, options));
+      const seen = vi.fn(() => readResidentUserProfileAliases(second.id, options));
       releases.push(sessionChanges.subscribe(seen));
       expect(() =>
         runOpenClawStateWriteTransaction(() => {
@@ -508,6 +511,9 @@ describe("resident profile display and reference catalog", () => {
         value: target.id,
       });
       expect(readUserProfileAliases(source.id, options)).toEqual(new Set([source.id, target.id]));
+      expect(readResidentUserProfileAliases(source.id, options)).toEqual(
+        new Set([source.id, target.id]),
+      );
     }
     expect(reads).not.toHaveBeenCalled();
     expect(native).not.toHaveBeenCalled();

@@ -7,6 +7,7 @@ import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
+import { boundWebPushSubscriptionsAdmission } from "./push-web-store.cache.js";
 import {
   WebPushSubscriptionBindingError,
   type WebPushMutationGuard,
@@ -17,6 +18,7 @@ import {
   type WebPushSnapshotAction,
 } from "./push-web-store.scope.js";
 import type { WebPushWorkerOperations } from "./push-web-store.worker-contract.js";
+import { getOrLoadSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 export {
   WebPushSubscriptionBindingError,
@@ -177,7 +179,16 @@ export function listWebPushSubscriptions(stateDir?: string) {
 }
 
 export function hasBoundWebPushSubscriptions(stateDir?: string) {
-  return executeWebPushCommand("webPush.hasBoundWebPushSubscriptions", undefined, stateDir);
+  const captured = context(stateDir);
+  captured.admission.assertCurrent();
+  const admitted = getOrLoadSqliteDatabaseAdmissionForPath(
+    captured.admission.databasePath,
+    boundWebPushSubscriptionsAdmission,
+    () => undefined,
+  );
+  return admitted === undefined
+    ? executeWebPushCommand("webPush.hasBoundWebPushSubscriptions", undefined, captured)
+    : Promise.resolve(admitted);
 }
 
 export function prepareWebPushApprovalDeliveries(

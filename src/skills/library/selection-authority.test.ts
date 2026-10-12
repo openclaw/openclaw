@@ -17,6 +17,7 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
@@ -49,6 +50,45 @@ import { projectSkillLibraryList, type SkillLibraryAuthority } from "./store.js"
 const { fixture, tempDirs } = useSkillLibraryFixture();
 
 describe("skill library worker reads and prepared selection authority", () => {
+  it("reuses library facts until a library or profile writer changes their inputs", async () => {
+    const { options, alice, admin } = fixture();
+    const saved = await saveSkillLibrary(alice, draft(), options);
+    const reads = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
+    try {
+      const first = await seedSkillLibrarySelection(alice, options);
+      expect(first).toHaveLength(1);
+      const count = reads.mock.calls.length;
+      first[0]!.name = "caller mutation";
+      expect(await seedSkillLibrarySelection(alice, options)).toEqual([
+        {
+          skillId: saved.entry.skillId,
+          revision: saved.entry.revision,
+          name: saved.entry.name,
+          ownerProfileId: saved.entry.ownerProfileId,
+        },
+      ]);
+      expect(reads.mock.calls).toHaveLength(count);
+
+      await mutateSkillLibrary(
+        alice,
+        { action: "disable", skillId: saved.entry.skillId, expectedRevision: saved.entry.revision },
+        options,
+      );
+      expect(await seedSkillLibrarySelection(alice, options)).toEqual([]);
+      expect(await resolveSkillLibraryPresentation(admin, options)).toMatchObject({
+        multipleProfiles: false,
+        defaultTarget: "workspace",
+      });
+      ensureProfileForEmail("new-person@example.test", options);
+      expect(await resolveSkillLibraryPresentation(admin, options)).toMatchObject({
+        multipleProfiles: true,
+        defaultTarget: "personal",
+      });
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
   it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows", async () => {
     const { options, alice } = fixture();
     const saved = await saveSkillLibrary(alice, draft(), options);

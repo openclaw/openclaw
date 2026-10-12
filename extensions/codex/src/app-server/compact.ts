@@ -155,7 +155,7 @@ export async function maybeCompactCodexAppServerSession(
     if (!params.abortSignal?.aborted) {
       throw error;
     }
-    const threadId = options.bindingStore.read(bindingIdentity)?.threadId;
+    const threadId = (await options.bindingStore.readAsync(bindingIdentity))?.threadId;
     return abortedResult(params, threadId, threadId);
   }
   const { binding: initialBinding, authority } = resolvedBinding;
@@ -395,7 +395,7 @@ export async function maybeCompactCodexAppServerSession(
               if (bindingCleared) {
                 return;
               }
-              const currentBinding = options.bindingStore.read(bindingIdentity);
+              const currentBinding = await options.bindingStore.readAsync(bindingIdentity);
               if (
                 currentBinding?.threadId !== binding.threadId ||
                 currentBinding.clientId !== binding.clientId

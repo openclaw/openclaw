@@ -11,6 +11,7 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import * as pluginStateWorker from "../plugin-state/plugin-state-worker-client.js";
 import { createRuntimeHealthRecordEnvelope } from "../plugin-state/runtime-health-store.js";
+import { loadOpenClawPlugins } from "../plugins/loader-runtime-load.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
@@ -25,6 +26,7 @@ import {
   setActivePluginRegistry,
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getProcessStartTime } from "../shared/pid-alive.js";
 import { seedNativeVersionZeroState } from "../state/native-version-zero.test-support.js";
@@ -298,11 +300,13 @@ describe("context engine quarantine health", () => {
   it.each([
     "cold",
     "cached",
+    "sync",
+    "sync superseded",
     "superseded",
     "new failure",
     "publication throws",
     "cached publication throws",
-  ] as const)("joins worker-backed CLI activation health cleanup (%s)", async (mode) => {
+  ] as const)("joins worker-backed activation health cleanup (%s)", async (mode) => {
     await withStateDirEnv("openclaw-activation-quarantine-", async () => {
       useNoBundledPlugins();
       const previous = captureActivePluginRegistrySnapshot();
@@ -365,7 +369,15 @@ describe("context engine quarantine health", () => {
           }
         });
       let settled = false;
-      const loading = ensureCliPluginRegistryLoaded({ scope: "all", config }).then(
+      const load = () => {
+        if (mode === "sync" || mode === "sync superseded") {
+          const work = new AsyncWorkScope();
+          work.run(() => loadOpenClawPlugins({ config }));
+          return work.drain();
+        }
+        return ensureCliPluginRegistryLoaded({ scope: "all", config });
+      };
+      const loading = load().then(
         () => {
           settled = true;
           return undefined;
@@ -375,6 +387,7 @@ describe("context engine quarantine health", () => {
           return error;
         },
       );
+      let retirement: ReturnType<typeof pluginRuntime.waitForPluginRegistryRetirement> | undefined;
       try {
         const phase = await Promise.race([
           reached.promise.then(() => "worker"),
@@ -388,8 +401,12 @@ describe("context engine quarantine health", () => {
         prepare.mockRestore();
         expect(settled).toBe(false);
         expect(getContextEngineQuarantine(engineId)).toBeUndefined();
-        if (mode === "superseded") {
+        if (mode === "superseded" || mode === "sync superseded") {
+          const supersededRegistry = pluginRuntime.getActivePluginRegistry();
           pluginRuntime.setActivePluginRegistry(createEmptyPluginRegistry());
+          if (supersededRegistry) {
+            retirement = pluginRuntime.waitForPluginRegistryRetirement(supersededRegistry);
+          }
         } else if (mode === "new failure") {
           await recordContextEngineQuarantine({
             ...quarantine,
@@ -398,10 +415,11 @@ describe("context engine quarantine health", () => {
         }
         release.resolve();
         expect(await loading).toBe(publicationThrows ? failure : undefined);
+        await retirement;
         expect(await listPersistedContextEngineQuarantines()).toEqual(
           mode === "new failure"
             ? [getContextEngineQuarantine(engineId)]
-            : mode === "superseded" || publicationThrows
+            : mode === "superseded" || mode === "sync superseded" || publicationThrows
               ? [original]
               : [],
         );
@@ -409,6 +427,7 @@ describe("context engine quarantine health", () => {
         prepare.mockRestore();
         release.resolve();
         await loading;
+        await retirement;
         observer.mockRestore();
         activationObserver.mockRestore();
         commit.mockRestore();

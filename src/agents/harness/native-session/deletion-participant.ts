@@ -6,6 +6,8 @@ import type { AgentHarnessSessionDeletionMutation } from "../types.js";
 export type NativeSessionDeletionParticipant = {
   binding?: PluginStateNativeBindingPlan;
   source?: DatabasePathIdentity;
+  /** Selected before execution only when the host requires native transaction atomicity. */
+  nativeMutation?: AgentHarnessSessionDeletionMutation & { prepare(): Promise<void> };
   assertCurrent(): void;
   renewalPending(): boolean;
   joinRenewal(): Promise<void>;
@@ -37,24 +39,36 @@ export function wrapNativeSessionDeletionMutation(
   mutation: AgentHarnessSessionDeletionMutation,
   hooks: { assertCurrent(): void; committed(): void; rolledBack(): void },
 ): AgentHarnessSessionDeletionMutation {
-  const wrapped: AgentHarnessSessionDeletionMutation = {
+  const wrap = (
+    original: AgentHarnessSessionDeletionMutation,
+  ): AgentHarnessSessionDeletionMutation => ({
     commit() {
       hooks.assertCurrent();
-      mutation.commit();
+      original.commit();
       hooks.committed();
     },
     rollback() {
       hooks.assertCurrent();
-      mutation.rollback();
+      original.rollback();
       hooks.rolledBack();
     },
-  };
+  });
+  const wrapped = wrap(mutation);
   const participant = participants.get(mutation);
   if (participant) {
+    const nativeMutation = participant.nativeMutation;
     // An unresolved binding must keep the outer exact-client cleanup owner reachable.
     participant.retain(hooks);
     participants.set(wrapped, {
       ...participant,
+      ...(nativeMutation
+        ? {
+            nativeMutation: {
+              ...wrap(nativeMutation),
+              prepare: () => nativeMutation.prepare(),
+            },
+          }
+        : {}),
       assertCurrent() {
         participant.assertCurrent();
         hooks.assertCurrent();

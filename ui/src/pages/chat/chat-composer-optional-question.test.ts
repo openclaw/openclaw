@@ -4,9 +4,9 @@ import { html, render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
-import { resolveComposerQuestionPanel } from "./components/chat-composer-question.ts";
+import { resolveComposerQuestionPanel } from "./components/chat-composer-question.tsx";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import "./components/chat-question-panel.ts";
+import "./components/chat-question-panel.tsx";
 
 afterEach(() => resetComposerFixture());
 

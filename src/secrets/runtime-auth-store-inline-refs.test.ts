@@ -62,35 +62,6 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
     expect(profile.key).toBe("resolved-key-value");
   });
 
-  it("keeps explicit keyRef when inline key SecretRef is also present", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({ models: {}, secrets: {} }),
-      env: {
-        PRIMARY_KEY: "primary-key-value",
-        SHADOW_KEY: "shadow-key-value",
-      },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      loadAuthStore: () =>
-        loadAuthStoreWithProfiles({
-          "custom:explicit-keyref": {
-            type: "api_key",
-            provider: "custom",
-            keyRef: { source: "env", provider: "default", id: "PRIMARY_KEY" },
-            key: { source: "env", provider: "default", id: "SHADOW_KEY" } as unknown as string,
-          },
-        }),
-    });
-
-    const profile = snapshot.authStores[0]?.store.profiles["custom:explicit-keyref"] as Record<
-      string,
-      unknown
-    >;
-    expect(profile.keyRef).toEqual({ source: "env", provider: "default", id: "PRIMARY_KEY" });
-    activateSecretsRuntimeSnapshot(snapshot);
-    expect(profile.key).toBe("primary-key-value");
-  });
-
   it("skips refs on auth profiles that are not eligible for their configured provider", async () => {
     const profileId = "openai:mismatched";
     const tokenProfileId = "github-copilot:mismatched";

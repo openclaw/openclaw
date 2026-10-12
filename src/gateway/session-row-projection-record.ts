@@ -1,10 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
+import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
 import type { SessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionTitleFields } from "../config/sessions/session-history-read.types.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
+import type { SessionTranscriptAuthority } from "../config/sessions/session-transcript-authority.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type {
   InternalSessionEntry as SessionEntry,
@@ -12,7 +14,9 @@ import type {
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
+import type { PluginStateReadDependency } from "../plugin-state/plugin-state-publication.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
@@ -34,18 +38,37 @@ export type ProjectionOptions = {
 
 export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
   acpMeta: SessionAcpMeta | null;
+  runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
+  runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
   repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
 };
 
 /** Undefined shared facets await their owner; null is acknowledged absence. */
 export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
-  Partial<Pick<PreparedSessionRowDatabaseFacts, "acpMeta" | "repositoryWorkspace">>;
+  Partial<
+    Pick<
+      PreparedSessionRowDatabaseFacts,
+      "acpMeta" | "runtimeOwnership" | "runtimeOwnershipDependencies" | "repositoryWorkspace"
+    >
+  >;
 
 export function isPreparedSessionRowDatabaseFacts(
   facts: RetainedSessionRowDatabaseFacts | undefined,
 ): facts is PreparedSessionRowDatabaseFacts {
   return (
-    facts !== undefined && facts.acpMeta !== undefined && facts.repositoryWorkspace !== undefined
+    facts !== undefined &&
+    facts.acpMeta !== undefined &&
+    facts.runtimeOwnership !== undefined &&
+    facts.runtimeOwnershipDependencies !== undefined &&
+    facts.repositoryWorkspace !== undefined
+  );
+}
+
+/** Opaque legacy/external ownership must be prepared again whenever its row becomes dirty. */
+export function canRetainSessionRowRuntimeOwnership(facts: PreparedSessionRowDatabaseFacts) {
+  return (
+    facts.runtimeOwnershipDependencies.length > 0 ||
+    resolveSessionPinnedHarnessId(facts.entry) === undefined
   );
 }
 
@@ -68,8 +91,12 @@ export type Row = {
   pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
   /** Presentation retains certified facets until their owner publishes or the row is demoted. */
   retainedDatabaseFacts?: RetainedSessionRowDatabaseFacts;
+  /** Exact committed transcript receipt; notifications cannot advance its watermark. */
+  transcriptAuthority?: SessionTranscriptAuthority;
   /** Durable search metadata survives archive demotion, until its owner invalidates it. */
   preparedAcpMeta?: SessionAcpMeta | null;
+  preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
+  runtimeOwnershipDependencies?: readonly PluginStateReadDependency[];
   databaseFactsRevision: number;
   publishedSource?: SessionEntryPublicationSource;
   /** Category uncertainty keeps identity resident; earlier structural uncertainty dominates. */
@@ -223,6 +250,15 @@ export function invalidateDatabaseFacts(row: Row, retained?: RetainedSessionRowD
   row.pendingDatabaseFacts = undefined;
   row.retainedDatabaseFacts = retained;
   row.preparedAcpMeta = retained?.acpMeta;
+  if (
+    !retained ||
+    retained.activitySummaryWatermark?.generation !== row.transcriptAuthority?.generation ||
+    retained.activitySummaryWatermark?.maxSeq !== row.transcriptAuthority?.rawSeq
+  ) {
+    row.transcriptAuthority = undefined;
+  }
+  row.preparedRuntimeOwnership = retained?.runtimeOwnership;
+  row.runtimeOwnershipDependencies = retained?.runtimeOwnershipDependencies;
 }
 
 export function create(target: RowTarget, entry?: SessionEntry): Row {
@@ -332,7 +368,10 @@ export function renewGeneration(row: Row): Row {
     storedEntry: undefined,
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts: undefined,
+    transcriptAuthority: undefined,
     preparedAcpMeta: undefined,
+    preparedRuntimeOwnership: undefined,
+    runtimeOwnershipDependencies: undefined,
     unresolvedDatabaseFacts: undefined,
     publishedSource: undefined,
     sharingEntry: undefined,
@@ -572,6 +611,7 @@ export function dematerialize(row: Row): Row {
     facts: undefined,
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts: undefined,
+    transcriptAuthority: undefined,
     databaseFactsRevision: row.databaseFactsRevision + 1,
     membership: new Set<string>(),
     lastMessagePreview: undefined,
@@ -676,10 +716,13 @@ export function acquireSessionRowEntry(params: {
         : undefined,
     ...(generation !== row.generation
       ? {
+          transcriptAuthority: undefined,
           lastMessagePreview: undefined,
           fallbackModel: undefined,
           materialized: undefined,
           preparedAcpMeta: undefined,
+          preparedRuntimeOwnership: undefined,
+          runtimeOwnershipDependencies: undefined,
         }
       : {}),
   };

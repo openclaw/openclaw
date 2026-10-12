@@ -274,12 +274,32 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
 
     The same resolved route and effective threshold gate the client preflight,
     so OpenClaw does not delay local compaction unless the transport will inject
-    `context_management`. ChatGPT OAuth, custom proxies, and routes with
-    `compat.supportsStore: false` are not store-capable and therefore ignore
-    these server-compaction controls. This applies to the built-in OpenClaw
-    runtime path and to OpenAI provider hooks used by embedded runs. The native
-    Codex app-server harness manages its own context through Codex and is not
-    affected by this setting.
+    `context_management`. This automatic-inline policy excludes ChatGPT OAuth,
+    custom proxies, and routes with `compat.supportsStore: false`. It applies to
+    the built-in OpenClaw runtime and embedded OpenAI provider hooks. The native
+    Codex app-server harness continues to own its own compaction.
+
+    On the native ChatGPT sign-in route, the built-in runtime instead uses
+    **Codex V2 compaction** by default for context-budget pressure before a model
+    request, including between completed tool rounds. It sends the normal
+    request with a trailing `compaction_trigger`, using the same instructions,
+    tools, payload hooks, and cache key, with `store: false`. Only a successfully
+    completed stream with one opaque checkpoint can replace the covered context.
+    Retained human messages remain eligible across subsequent compactions.
+    The saved checkpoint remains active on later tool rounds and user turns,
+    including after the session is restored.
+
+    `params.responsesServerCompaction: false` or
+    `params.responsesCompactEndpoint: false` disables this V2 path. Disabling
+    automatic compaction also disables V2. On this route, manual `/compact`
+    (with or without focus instructions) and provider-confirmed overflow use
+    client-side compaction, not V2. A V2 failure before persistence
+    returns to the existing compactor and logs its reason; explicit compact-endpoint
+    opt-ins still apply there. Cancellation
+    does not start a fallback, and a committed checkpoint is not compacted again
+    because a later observer fails. Context engines that own compaction retain
+    their existing behavior, as do explicitly configured compaction models or
+    summarization providers.
 
     OpenAI emits the compacted state as an encrypted `compaction` output item.
     Keep that item opaque. For stateless continuation, carry the newest item
@@ -288,6 +308,13 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     route, session, and auth identity, preserves it across worker transcript
     commits, and filters it from user-visible history and diagnostics. Never
     display or log the encrypted content.
+
+    The next foreground turn waits for any pending local transcript projection
+    rebuild before reading the checkpoint. Request token counts need not fall
+    below the compaction threshold: instructions and tools are sent again, and
+    tool results or reasoning produced after the checkpoint remain in context.
+    To check replay, inspect item types rather than token totals: the newest
+    `compaction` item replaces the covered prefix, followed only by later items.
 
     <Tabs>
       <Tab title="Enable explicitly">
@@ -344,7 +371,9 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     </Tabs>
 
     <Note>
-    `responsesServerCompaction` only controls `context_management` injection.
+    On the public OpenAI Responses route, `responsesServerCompaction` only
+    controls `context_management` injection; on the native ChatGPT sign-in route,
+    setting it to `false` also disables V2 compaction as described above.
     The public OpenAI Responses API also uses `/responses/compact` by default
     for budget-triggered compaction and for `/compact` without focus
     instructions. Set `params.responsesCompactEndpoint: false` to disable this

@@ -18,9 +18,9 @@ import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { WORKER_ADMISSION_DEADLINE_MS } from "../../worker/worker-connection-contract.js";
 import { StaleWorkerBuildError } from "./admission.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
-import { sameWorkerSessionTurnClaim } from "./placement-record.js";
+import { isCurrentPlacementTurnClaim, sameWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementRecord, WorkerSessionTurnClaim } from "./placement-store.js";
-import { matchesWorkerPlacementTarget } from "./placement-target.js";
+import { isWorkerEnvironmentAttachedTo, matchesWorkerPlacementTarget } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
 import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
@@ -127,11 +127,8 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         prepared.assertCurrent();
         const currentEnvironment = options.environments.get(placement.environmentId);
         if (
-          currentEnvironment?.state !== "attached" ||
+          !isWorkerEnvironmentAttachedTo(currentEnvironment, placement) ||
           currentEnvironment.environmentId !== placement.environmentId ||
-          currentEnvironment.ownerEpoch !== placement.activeOwnerEpoch ||
-          currentEnvironment.attachedSessionIds.length !== 1 ||
-          currentEnvironment.attachedSessionIds[0] !== placement.sessionId ||
           (sandbox.backendId === "node" &&
             currentEnvironment.nodeDeviceId !== sandbox.placementNodeId)
         ) {
@@ -405,15 +402,20 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 };
                 activeWorkerTurns.set(turnClaim.sessionId, activeWorkerTurn);
               }
+              using placementReadCleanup = new DisposableStack();
+              const placementRead = await options.placements.prepareSessionPlacement(
+                turnClaim.sessionId,
+              );
+              placementReadCleanup.defer(placementRead.release);
               const readPreparedPlacement = (assertAdmission: () => void) => {
                 turn.abortSignal?.throwIfAborted();
                 assertAdmission();
-                const preparedPlacement = options.placements.get(turnClaim.sessionId);
+                const preparedPlacement = placementRead.current();
                 if (
                   preparedPlacement?.state !== "active" ||
                   preparedPlacement.executionMode !== placement.executionMode ||
                   !matchesWorkerPlacementTarget(preparedPlacement, placement) ||
-                  !options.placements.validateTurnClaim(turnClaim)
+                  !isCurrentPlacementTurnClaim(preparedPlacement, turnClaim)
                 ) {
                   throw new Error("Worker placement changed while loading turn execution");
                 }
@@ -475,7 +477,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 turn,
                 turnClaim,
                 runLocal,
-                assertRunCurrent: remoteExec ? assertRunCurrent : assertPreparationCurrent,
+                assertRunCurrent: remoteExec ? assertCurrent : assertPreparationCurrent,
               };
               return await withWorkerTurnTranscriptDatabase(
                 turn,

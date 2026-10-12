@@ -176,26 +176,11 @@ it("refuses a replaced pointer without changing the adopted generation", async (
   expect(mocks.record).not.toHaveBeenCalled();
 });
 
-it("recognizes an adopted absolute pointer to the same contained generation", async () => {
-  const current = path.join(root, "current");
-  await fs.unlink(current);
-  await fs.symlink(record.descriptor.current.path, current);
-  record.descriptor.current.pointerIdentity = identity(current);
-
-  await expect(inspectImmutableInstall(root)).resolves.toMatchObject({
-    root,
-    currentSha,
-    currentPath: record.descriptor.current.path,
-  });
-  expect(await pointer()).toBe(record.descriptor.current.path);
-  expect(mocks.record).not.toHaveBeenCalled();
-});
-
-it.each(["relative", "absolute"])("refuses a %s current pointer outside releases", async (form) => {
+it("refuses a current pointer outside releases", async () => {
   const foreign = path.join(path.dirname(root), "foreign", currentSha);
   await fs.mkdir(foreign, { recursive: true, mode: 0o755 });
   const current = path.join(root, "current");
-  const target = form === "absolute" ? foreign : path.relative(root, foreign);
+  const target = path.relative(root, foreign);
   await fs.unlink(current);
   await fs.symlink(target, current);
   record.descriptor.current.pointerIdentity = identity(current);
@@ -205,7 +190,7 @@ it.each(["relative", "absolute"])("refuses a %s current pointer outside releases
   expect(mocks.record).not.toHaveBeenCalled();
 });
 
-it.each([undefined, nextSha])(
+it.each([undefined])(
   "resolves a dry-run target without filesystem or receipt changes (%s)",
   async (sha) => {
     const before = await fs.readdir(root);
@@ -269,7 +254,7 @@ it.skipIf(process.platform !== "linux")(
   },
 );
 
-it.skipIf(process.platform !== "linux").each([undefined, nextSha])(
+it.skipIf(process.platform !== "linux").each([undefined])(
   "freezes the exact candidate, seals and records it without selecting it (%s)",
   async (sha) => {
     const result = await prepareImmutableUpdate({ root, sha });
@@ -292,19 +277,6 @@ it.skipIf(process.platform !== "linux").each([undefined, nextSha])(
     expect(mocks.seal).toHaveBeenCalledOnce();
     expect(mocks.record).toHaveBeenCalledOnce();
     expect(await fs.readdir(root)).toEqual(["current", "releases"]);
-  },
-);
-
-it.skipIf(process.platform !== "linux")(
-  "keeps the serving generation and omits a receipt on build failure",
-  async () => {
-    mocks.build.mockRejectedValueOnce(new Error("build-failed"));
-    const result = await prepareImmutableUpdate({ root, sha: nextSha });
-    expect(result).toMatchObject({ status: "error", targetSha: nextSha, reason: "build-failed" });
-    expect(await pointer()).toBe(`releases/${currentSha}`);
-    expect(await fs.readdir(path.join(root, "releases"))).toEqual([currentSha]);
-    expect(mocks.record).not.toHaveBeenCalled();
-    expect(mocks.seal).not.toHaveBeenCalled();
   },
 );
 

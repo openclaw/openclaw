@@ -1,8 +1,6 @@
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
-import {
-  intersectSessionEventToolsAllow,
-  narrowSessionEventSettings,
-} from "../../auto-reply/reply/session-event-target.js";
+import { narrowSessionEventSettings } from "../../auto-reply/reply/session-event-policy.js";
+import { intersectSessionEventToolsAllow } from "../../auto-reply/reply/session-event-target.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   readAdmittedRunOperatorAuthority,
@@ -110,8 +108,22 @@ export function captureCliRunToolAuthority(
   const sessionKey = params.sessionKey ?? params.sessionId;
   const signal = params.abortSignal;
   const assertSourceCurrent = params.assertCurrent;
+  const sourcePolicy = captureCliSessionEventSourcePolicy(params);
   return {
-    sessionEventSourcePolicy: captureCliSessionEventSourcePolicy(params),
+    finalizeSessionEventSourcePolicy(run: RunCliAgentParams, promptToolsAllow?: readonly string[]) {
+      return Object.freeze({
+        ...sourcePolicy,
+        toolsAllow: intersectSessionEventToolsAllow(
+          sourcePolicy.toolsAllow,
+          promptToolsAllow,
+          run.disableTools
+            ? []
+            : run.cliToolAvailability?.native.length === 0
+              ? run.cliToolAvailability.openClaw
+              : undefined,
+        ),
+      });
+    },
     hasReplyOperation: Boolean(operation),
     async bindQuestions(
       route: { provider: string; model: string },
@@ -151,25 +163,5 @@ function captureCliSessionEventSourcePolicy(
         { toolOverrides: params.sessionEntry?.toolOverrides },
       ).toolOverrides,
     }),
-  });
-}
-
-/** Native availability and prompt hooks can narrow, never replace, the caller's original cap. */
-export function finalizeCliSessionEventSourcePolicy(
-  original: NonNullable<PreparedCliRunContext["sessionEventSourcePolicy"]>,
-  params: RunCliAgentParams,
-  promptToolsAllow?: readonly string[],
-): NonNullable<PreparedCliRunContext["sessionEventSourcePolicy"]> {
-  return Object.freeze({
-    ...original,
-    toolsAllow: intersectSessionEventToolsAllow(
-      original.toolsAllow,
-      promptToolsAllow,
-      params.disableTools
-        ? []
-        : params.cliToolAvailability?.native.length === 0
-          ? params.cliToolAvailability.openClaw
-          : undefined,
-    ),
   });
 }

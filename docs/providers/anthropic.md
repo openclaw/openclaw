@@ -167,6 +167,28 @@ OpenClaw release:
         captures recheck availability for their own generation. Model lists also
         recheck it in the background at most once a minute, so `claude auth login`
         or logout after Gateway startup reaches the model picker without a restart.
+
+        For native-login users, the model picker reads Claude Code's own model menu
+        in the background, without sending a prompt or using an inference turn.
+        It shows unique native model IDs as `anthropic/<id>` on the Claude CLI
+        runtime, with the effort levels reported by Claude Code. Account and
+        organization restrictions therefore affect the menu. The hosted OpenClaw
+        catalog adds metadata only to those exact IDs; it cannot add native models.
+        New native models do not require an OpenClaw upgrade or a catalog edit.
+
+        Before the first discovery completes, only already configured or selected
+        models are available through the native route. Pickers never wait for the
+        subprocess. Existing configured and selected IDs remain listed and runnable,
+        including older IDs absent from the menu; deprecated rows stay hidden.
+        Use `openclaw models list --refresh --provider anthropic` to request fresh
+        discovery. API-only users and users with both API and native credentials
+        keep their existing API catalog behavior.
+
+        If a menu refresh fails temporarily, the picker keeps the last accepted
+        menu for the same authentication state. A successful refresh replaces
+        that menu, including when access becomes more restrictive. Changing
+        authentication discards the retained menu.
+
         New sessions select saved subscription credentials by account order and
         use protected file-descriptor forwarding, including tokens saved with
         `openclaw models auth paste-token --provider anthropic`. API keys saved for

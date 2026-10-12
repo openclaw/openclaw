@@ -60,7 +60,7 @@ Topologies for running `imsg` next to a signed-in Messages account, and the conf
     `cliPath` is an absolute, Gateway-local wrapper path. `remoteHost` and `dbPath` refer to the Messages Mac; do not rewrite the remote database path using the Gateway user's home directory.
 
     Use SSH keys so both SSH and SCP are non-interactive.
-    Ensure the host key is trusted first (for example `ssh bot@mac-mini.tailnet-1234.ts.net`) so `known_hosts` is populated.
+    Trust the host key first (for example `ssh bot@mac-mini.tailnet-1234.ts.net`) so `known_hosts` is populated.
 
   </Accordion>
 

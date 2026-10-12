@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
+import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
@@ -98,6 +99,7 @@ export function readSessionRowInputs(params: {
   key: string;
   entry?: InternalSessionEntry;
   preparedAcpMeta?: SessionEntry["acp"] | null;
+  preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
   preparedModelMetadata?: PluginMetadataSnapshot | null;
   preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
@@ -126,6 +128,7 @@ export function readSessionRowInputs(params: {
       key,
       entry,
       preparedAcpMeta: params.preparedAcpMeta,
+      preparedRuntimeOwnership: params.preparedRuntimeOwnership,
       preparedModelMetadata: params.preparedModelMetadata,
       source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
       agentId,
@@ -197,6 +200,7 @@ export function readSessionRowInputs(params: {
     modelContextTokens: catalogEntry?.contextTokens,
     modelContextWindow: contextWindowProfile.contextTokens,
     allowAsyncLoad: false,
+    allowCacheLookup: false,
   });
   const resolvedModelContextTokens = asPositiveFiniteNumber(modelContext.contextTokens);
 
@@ -256,7 +260,7 @@ export function readSessionRowInputs(params: {
         entry,
         provider,
         model,
-        agentHarnessId: thinkingProjection.agentRuntime.id,
+        agentHarnessId: thinkingProjection.capacityRuntime,
         resolvedContextTokens: contextWindowProfile.contextTokens
           ? Math.min(
               resolvedModelContextTokens ?? contextWindowProfile.contextTokens,

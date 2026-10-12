@@ -205,6 +205,14 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
   Extra HTTP headers owned by the remote destination. Provider defaults are merged only for the provider's configured destination.
 </ParamField>
 
+Header values must be strings. Environment references in memory headers are
+resolved during secret preparation; an unresolved reference stops indexing or
+search with an error naming the setting, before any embedding request is sent.
+Already-resolved values are used literally. LM Studio and generic OpenAI-compatible
+servers that do not require authentication still work without credentials,
+including on LAN hosts; configuring a broken reference is different from omitting
+authentication.
+
 ```json5
 {
   memory: {
@@ -411,10 +419,10 @@ it and the active profile or container hint. See [memory index](/cli/memory#memo
 
 All under `memory.search.query`:
 
-| Key          | Type     | Default | Description                               |
-| ------------ | -------- | ------- | ----------------------------------------- |
-| `maxResults` | `number` | `6`     | Max memory hits returned before injection |
-| `minScore`   | `number` | `0.35`  | Minimum relevance score to include a hit  |
+| Key          | Type     | Default | Description                                                                              |
+| ------------ | -------- | ------- | ---------------------------------------------------------------------------------------- |
+| `maxResults` | `number` | `6`     | Max memory hits returned before injection                                                |
+| `minScore`   | `number` | `0.35`  | Minimum relevance score before recency decay, including importance and project weighting |
 
 Without a per-call `maxResults`, primary-only `memory_search` calls use this
 configured limit, including `corpus=memory` and `corpus=sessions`. Wiki and

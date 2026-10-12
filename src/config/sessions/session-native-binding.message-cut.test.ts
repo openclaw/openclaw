@@ -11,7 +11,7 @@ import { PluginStateStoreError } from "../../plugin-state/plugin-state-store.typ
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import {
   withNativeBindingFixture,
   type NativeBindingClientTestApi,

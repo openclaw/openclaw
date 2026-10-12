@@ -24,7 +24,7 @@ import {
   type SidebarLayout,
 } from "../sidebar-layout.ts";
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
-import "./chat-sidebar-region.runtime.ts";
+import "./chat-sidebar-region.runtime.tsx";
 
 type Region = HTMLElementTagNameMap["openclaw-chat-sidebar-region"] & {
   updateComplete: Promise<unknown>;
@@ -160,7 +160,7 @@ describe("chat sidebar region", () => {
     commits.length = 0;
 
     for (let index = 0; index < 4; index++) {
-      region.requestUpdate();
+      region.layout = { ...region.layout };
       await region.updateComplete;
     }
     expect(measure).not.toHaveBeenCalled();
@@ -172,13 +172,13 @@ describe("chat sidebar region", () => {
     // Swapping content can keep the total width while changing each transcript.
     mainWidth = 400;
     sideWidth = 800;
-    region.requestUpdate();
+    region.layout = { ...region.layout };
     await region.updateComplete;
     vi.advanceTimersToNextFrame();
     expect(commits).toEqual([false, true]);
 
     measure.mockClear();
-    region.requestUpdate();
+    region.layout = { ...region.layout };
     await region.updateComplete;
     shell.remove();
     vi.advanceTimersToNextFrame();
@@ -411,9 +411,7 @@ describe("chat sidebar region", () => {
       `[data-panel-slot="${slot}"] openclaw-panel-empty-state`,
     );
     await (unavailable as HTMLElement & { updateComplete?: Promise<unknown> })?.updateComplete;
-    expect(unavailable?.shadowRoot?.textContent).toContain(
-      "The plugin that owns this tab is not active",
-    );
+    expect(unavailable?.textContent).toContain("The plugin that owns this tab is not active");
     expect(region.panelDefinitions.find((definition) => definition.slot === slot)?.available).toBe(
       false,
     );

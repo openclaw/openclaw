@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -15,12 +14,13 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
-  readExactSessionEntryRow,
+  readSessionEntrySelectionSnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 
 describe("session entry replacement compare-and-swap", () => {
   const tempDirs: string[] = [];
@@ -101,14 +101,21 @@ describe("session entry replacement compare-and-swap", () => {
     expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toBeUndefined();
   });
 
-  it("publishes persisted writer bytes and participants until a later transaction mutation", () => {
+  it("publishes detached persisted bytes and participant facts without rereading the writer", () => {
     recordSessionParticipant(scope, {
       identity: { type: "agent", id: "contributor" },
       promptedAt: 1,
     });
     runOpenClawAgentWriteTransaction(
       (database) => {
-        const previous = readExactSessionEntryRow(database, scope.sessionKey)!.entry;
+        const snapshot = readSessionEntrySelectionSnapshot(
+          database,
+          scope.sessionKey,
+          true,
+          true,
+        )[0]!;
+        const previous = snapshot.entry;
+        const postimages: SessionEntryWritePostimages = new Map();
         const written = writeSessionEntry(
           database,
           scope.sessionKey,
@@ -121,7 +128,10 @@ describe("session entry replacement compare-and-swap", () => {
           },
           {
             canonicalPreviousEntry: previous,
-            canonicalPreviousEntryRevision: getSqliteReadScopeRevision(database.db),
+            canonicalPreviousRow: snapshot.row,
+            canonicalPreviousWindow: snapshot.window,
+            canonicalPreviousSideTables: snapshot.sideTables,
+            postimages,
           },
         );
         const changes = {
@@ -131,70 +141,30 @@ describe("session entry replacement compare-and-swap", () => {
           membershipInvalidatedKeys: [],
           maintenancePlans: [],
         };
-        const reads = trackSqliteStatementExecutions(database.db, ["participants"], (sql) =>
-          /\bfrom\s+"session_participants"/iu.test(sql) ? "participants" : null,
+        const reads = trackSqliteStatementExecutions(database.db, ["publication"], (sql) =>
+          /\bfrom\s+"(?:session_nodes|session_participants|session_windows)"/iu.test(sql)
+            ? "publication"
+            : null,
         );
         try {
-          // The returned entry remains caller-owned; publication must retain its committed bytes.
           written.model = "not committed";
-          const publication = prepareSessionEntryReplacementPublication(changes, database);
+          if (previous.participants?.[0]) {
+            previous.participants[0].identity.id = "caller-owned";
+          }
+          const publication = prepareSessionEntryReplacementPublication(changes, database, {
+            captureFullFacts: true,
+            postimages,
+          });
           expect(publication.current.get(scope.sessionKey)).toMatchObject({
             model: "committed",
             participants: [{ identity: { type: "agent", id: "contributor" } }],
             participantCount: 1,
           });
           expect(publication.current.get(scope.sessionKey)?.skillsSnapshot).toBeUndefined();
-          expect(reads.counts.participants).toBe(0);
-          const callerParticipant = previous.participants?.[0]?.identity;
-          if (callerParticipant) {
-            callerParticipant.id = "caller-owned";
-          }
-          expect(publication.current.get(scope.sessionKey)?.participants?.[0]?.identity.id).toBe(
-            "contributor",
+          expect(publication.fullEntries?.get(scope.sessionKey)?.skillsSnapshot?.prompt).toBe(
+            "private saved prompt",
           );
-
-          database.db
-            .prepare("UPDATE session_participants SET actor_id = ? WHERE session_key = ?")
-            .run("changed-in-transaction", scope.sessionKey);
-          const afterMutation = prepareSessionEntryReplacementPublication(changes, database);
-          expect(afterMutation.current.get(scope.sessionKey)).toMatchObject({
-            model: "committed",
-            participants: [{ identity: { type: "agent", id: "changed-in-transaction" } }],
-            participantCount: 1,
-          });
-          expect(reads.counts.participants).toBe(1);
-
-          const beforeGetter = readExactSessionEntryRow(database, scope.sessionKey)!.entry;
-          let getterMutated = false;
-          const getterWritten = writeSessionEntry(
-            database,
-            scope.sessionKey,
-            {
-              ...beforeGetter,
-              get model() {
-                if (!getterMutated) {
-                  getterMutated = true;
-                  database.db
-                    .prepare("UPDATE session_participants SET actor_id = ? WHERE session_key = ?")
-                    .run("changed-by-getter", scope.sessionKey);
-                }
-                return "getter-committed";
-              },
-            },
-            {
-              canonicalPreviousEntry: beforeGetter,
-              canonicalPreviousEntryRevision: getSqliteReadScopeRevision(database.db),
-            },
-          );
-          const afterGetter = prepareSessionEntryReplacementPublication(
-            { ...changes, current: new Map([[scope.sessionKey, getterWritten]]) },
-            database,
-          );
-          expect(afterGetter.current.get(scope.sessionKey)).toMatchObject({
-            model: "getter-committed",
-            participants: [{ identity: { type: "agent", id: "changed-by-getter" } }],
-            participantCount: 1,
-          });
+          expect(reads.counts.publication).toBe(0);
         } finally {
           reads.restore();
         }
@@ -202,9 +172,9 @@ describe("session entry replacement compare-and-swap", () => {
       { agentId: "main", path: storePath },
     );
     expect(loadSessionEntry(scope)).toMatchObject({
-      model: "getter-committed",
+      model: "committed",
       skillsSnapshot: { prompt: "private saved prompt" },
-      participants: [{ identity: { type: "agent", id: "changed-by-getter" } }],
+      participants: [{ identity: { type: "agent", id: "contributor" } }],
     });
   });
 

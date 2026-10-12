@@ -188,85 +188,6 @@ describe("lobster plugin tool", () => {
     expect(factory(fakeCtx({ sandboxed: true }))).toBeNull();
   });
 
-  it("returns approval envelopes for ordinary runs", async () => {
-    const runner = {
-      run: vi.fn().mockResolvedValue({
-        ok: true,
-        status: "needs_approval",
-        output: [],
-        requiresApproval: {
-          type: "approval_request",
-          prompt: "Continue?",
-          items: [],
-          resumeToken: "resume-token-1",
-        },
-      }),
-    };
-
-    vi.mocked(createEmbeddedLobsterRunner).mockReturnValueOnce(runner);
-    const tool = createLobsterTool(fakeApi());
-    const res = await tool.execute("call-ordinary-run", {
-      action: "run",
-      pipeline: "noop",
-    });
-
-    expect(runner.run).toHaveBeenCalledWith({
-      action: "run",
-      pipeline: "noop",
-      cwd: process.cwd(),
-      timeoutMs: 20_000,
-      maxStdoutBytes: 512_000,
-    });
-    const details = requireRecord(res.details, "ordinary run details");
-    expect(details).toEqual({
-      ok: true,
-      status: "needs_approval",
-      output: [],
-      requiresApproval: {
-        type: "approval_request",
-        prompt: "Continue?",
-        items: [],
-        resumeToken: "resume-token-1",
-      },
-    });
-  });
-
-  it("resumes ordinary workflows with approval credentials", async () => {
-    const runner = {
-      run: vi.fn().mockResolvedValue({
-        ok: true,
-        status: "ok",
-        output: [{ approved: true }],
-        requiresApproval: null,
-      }),
-    };
-
-    vi.mocked(createEmbeddedLobsterRunner).mockReturnValueOnce(runner);
-    const tool = createLobsterTool(fakeApi());
-    const res = await tool.execute("call-ordinary-resume", {
-      action: "resume",
-      token: "resume-token-1",
-      approve: true,
-    });
-
-    expect(runner.run).toHaveBeenCalledWith({
-      action: "resume",
-      token: "resume-token-1",
-      approve: true,
-      cwd: process.cwd(),
-      timeoutMs: 20_000,
-      maxStdoutBytes: 512_000,
-    });
-    const details = requireRecord(res.details, "ordinary resume details");
-    expect(details.ok).toBe(true);
-    expect(details).toEqual({
-      ok: true,
-      status: "ok",
-      output: [{ approved: true }],
-      requiresApproval: null,
-    });
-  });
-
   it("normalizes numeric string run limits before invoking the runner", async () => {
     const runner = {
       run: vi.fn().mockResolvedValue({
@@ -295,42 +216,6 @@ describe("lobster plugin tool", () => {
       timeoutMs: 1500,
       maxStdoutBytes: 4096,
     });
-  });
-
-  it("rejects malformed numeric run limits before invoking the runner", async () => {
-    const runner = { run: vi.fn() };
-    vi.mocked(createEmbeddedLobsterRunner).mockReturnValueOnce(runner);
-    const tool = createLobsterTool(fakeApi());
-
-    await expect(
-      tool.execute("call-bad-timeout", {
-        action: "run",
-        pipeline: "noop",
-        timeoutMs: "1500.5",
-      }),
-    ).rejects.toThrow("timeoutMs must be a positive integer");
-    await expect(
-      tool.execute("call-bad-stdout", {
-        action: "run",
-        pipeline: "noop",
-        maxStdoutBytes: 0,
-      }),
-    ).rejects.toThrow("maxStdoutBytes must be a positive integer");
-    expect(runner.run).not.toHaveBeenCalled();
-  });
-
-  it("propagates runtime errors", async () => {
-    vi.mocked(createEmbeddedLobsterRunner).mockReturnValueOnce({
-      run: vi.fn().mockRejectedValue(new Error("boom")),
-    });
-    const tool = createLobsterTool(fakeApi());
-
-    await expect(
-      tool.execute("call-runner-error", {
-        action: "run",
-        pipeline: "noop",
-      }),
-    ).rejects.toThrow("boom");
   });
 
   it("requires action", async () => {

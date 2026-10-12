@@ -17,8 +17,12 @@ export function attachChildProcessBridge(
   { signals = defaultSignals, onSignal }: ChildProcessBridgeOptions = {},
 ): { detach: () => void } {
   const listeners = new Map<NodeJS.Signals, () => void>();
+  let childExited = false;
   for (const signal of signals) {
     const listener = (): void => {
+      if (childExited) {
+        return;
+      }
       onSignal?.(signal);
       try {
         child.kill(signal);
@@ -40,8 +44,11 @@ export function attachChildProcessBridge(
   };
 
   // Child errors can report failed signal/IPC operations while the PID stays live.
-  // Keep forwarding until exit, with close covering failed spawn and final handle cleanup.
-  child.once("exit", detach);
+  // Stop forwarding at exit, but retain the handlers while final pipes drain so
+  // a second signal cannot terminate the parent before its close boundary.
+  child.once("exit", () => {
+    childExited = true;
+  });
   child.once("close", detach);
 
   return { detach };

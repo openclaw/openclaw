@@ -13,9 +13,20 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
 import { resolveConfiguredModelCompat } from "../../agents/tools-effective-inventory.js";
 import { buildLearnPrompt, DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
+import { WorkshopWriteError } from "../../skills/workshop/library.js";
+import {
+  describeWorkshopReviewUndo,
+  undoWorkshopReview,
+  WorkshopReviewNotFoundError,
+  workshopReviewRunId,
+} from "../../skills/workshop/review-undo.js";
 import { resolveSkillWorkshopToolPolicyAvailability } from "../../skills/workshop/tool-policy-diagnostic.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
-import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
+import {
+  commandReply,
+  defineAuthorizedTextCommand,
+  requireGatewayClientScope,
+} from "./command-gates.js";
 import { matchSlashCommandToken } from "./commands-slash-parse.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
@@ -25,9 +36,20 @@ const SKILL_WORKSHOP_TOOL_NAME = "skill_workshop";
 const SKILL_WORKSHOP_UNAVAILABLE_REPLY =
   "Skill workshop is not available on this agent. Use a non-sandboxed agent where the skill_workshop tool is available, or use the openclaw skills workshop CLI.";
 
-function parseLearnRequest(raw: string): string | null {
+// Only this exact form undoes; any other "/learn undo ..." text stays a learn request.
+const UNDO_PATTERN = /^undo\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+type LearnCommand = { kind: "learn"; request: string } | { kind: "undo"; reviewId: string };
+
+function parseLearnCommand(raw: string): LearnCommand | null {
   const request = matchSlashCommandToken(raw, LEARN_COMMAND_PREFIX);
-  return request === null ? null : request || DEFAULT_LEARN_REQUEST;
+  if (request === null) {
+    return null;
+  }
+  const reviewId = UNDO_PATTERN.exec(request)?.[1];
+  return reviewId
+    ? { kind: "undo", reviewId: reviewId.toLowerCase() }
+    : { kind: "learn", request: request || DEFAULT_LEARN_REQUEST };
 }
 
 /** /learn needs a harness that exposes OpenClaw tools and a policy that allows skill_workshop. */
@@ -139,15 +161,62 @@ function isWorkshopAvailable(params: HandleCommandsParams): boolean {
   }
 }
 
+/** Reverts one background review's skill changes, as the Undo button on its notice asks. */
+async function undoReview(params: HandleCommandsParams, reviewId: string) {
+  const missingAdminScope = requireGatewayClientScope(params, {
+    label: "/learn undo",
+    allowedScopes: ["operator.admin"],
+    missingText: "❌ /learn undo requires operator.admin for gateway clients.",
+  });
+  if (missingAdminScope) {
+    return missingAdminScope;
+  }
+  try {
+    const result = await undoWorkshopReview(
+      {
+        config: params.cfg,
+        agentId: params.agentId,
+        actor: "user",
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(params.command.assertOwnerCurrent
+          ? { assertLive: params.command.assertOwnerCurrent }
+          : {}),
+      },
+      { runId: workshopReviewRunId(reviewId) },
+    );
+    return commandReply(
+      result.status === "undone"
+        ? `↩️ Undid the skill change: ${describeWorkshopReviewUndo(result.changes)}.`
+        : "That skill change was already undone.",
+    );
+  } catch (error) {
+    if (error instanceof WorkshopReviewNotFoundError) {
+      return commandReply("No skill change found for that id.");
+    }
+    if (error instanceof WorkshopWriteError) {
+      return commandReply(`⚠️ ${error.message}`);
+    }
+    throw error;
+  }
+}
+
 /** Command handler for /learn: a foreground turn that writes Workshop skills directly. */
 export const handleLearnCommand: CommandHandler = defineAuthorizedTextCommand(
-  { label: LEARN_COMMAND_PREFIX, match: parseLearnRequest },
-  (params, request) => {
+  {
+    label: LEARN_COMMAND_PREFIX,
+    match: parseLearnCommand,
+    // Undo changes skills without a model turn, so it takes the owner gate other writes use.
+    ownerOnly: (_params, command) => command.kind === "undo",
+  },
+  (params, command) => {
+    if (command.kind === "undo") {
+      return undoReview(params, command.reviewId);
+    }
     if (!isWorkshopAvailable(params)) {
       return commandReply(SKILL_WORKSHOP_UNAVAILABLE_REPLY);
     }
 
-    applyCommandTextToParams(params, buildLearnPrompt(request));
+    applyCommandTextToParams(params, buildLearnPrompt(command.request));
     return { shouldContinue: true };
   },
 );
