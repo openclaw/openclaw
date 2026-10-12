@@ -78,8 +78,9 @@ export function registerExternalHandoffShutdownTests(
         expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
         expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
         expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
-        // A settled rejection preserves failure status, not an orphaned watchdog.
-        expect(cancelShutdownHardExitWatchdog).toHaveBeenCalledOnce();
+        // A settled rejection can retain referenced resources. A clean exit
+        // retires its safety net; failed cleanup keeps the native deadline.
+        expect(cancelShutdownHardExitWatchdog).toHaveBeenCalledTimes(fails ? 0 : 1);
       });
     },
   );
