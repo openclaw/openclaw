@@ -2051,6 +2051,28 @@ export const en: TranslationMap & {
     sessionRestarted:
       "{error} OpenClaw started a fresh session; earlier messages remain for context.",
     unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",
+    autoSetup: {
+      title: "AI setup",
+      connecting: "Connecting your AI...",
+      verifying: "Checking a real conversation. This may take a minute or more.",
+      using: "Using {label} ({modelRef}) on {gateway}",
+      thisMac: "This Mac",
+      thisGateway: "this Gateway",
+      alternatives: "Or use another AI",
+      signInTitle: "Connect ChatGPT to get started",
+      signInBody: "OpenClaw is ready to connect your ChatGPT account.",
+      signIn: "Sign in with ChatGPT",
+      startingSignIn: "Opening ChatGPT sign-in...",
+      unavailableTitle: "Your AI needs a little help",
+      unavailableBody: "OpenClaw could not connect an AI automatically.",
+      nativeSetup: "Open AI setup",
+      commandHint: "To connect an AI, run",
+      differentGateway: "Use a different Gateway",
+      reviewPermissions: "Review permissions",
+      failed: "OpenClaw could not finish AI setup. Try again.",
+      safety:
+        "OpenClaw can take actions using the permissions and services you enable. Review prompts and only connect tools you trust.",
+    },
     panel: {
       title: "OpenClaw",
       toggle: "Toggle Ask OpenClaw",

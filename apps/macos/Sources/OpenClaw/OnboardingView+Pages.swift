@@ -4,8 +4,21 @@ import OpenClawKit
 import SwiftUI
 
 extension OnboardingView {
-    @ViewBuilder
     func pageView(for pageIndex: Int, contentHeight: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            if let initialError, pageIndex == initialPage.rawValue {
+                Text(initialError)
+                    .foregroundStyle(.red)
+                    .font(.callout)
+                    .padding(.horizontal, 28)
+                    .accessibilityIdentifier("onboarding-recovery-error")
+            }
+            self.pageContent(for: pageIndex, contentHeight: contentHeight)
+        }
+    }
+
+    @ViewBuilder
+    private func pageContent(for pageIndex: Int, contentHeight: CGFloat) -> some View {
         switch pageIndex {
         case 0:
             self.welcomePage()

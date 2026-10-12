@@ -272,10 +272,13 @@ if (!customElements.get("openclaw-custodian-page")) {
 }
 
 export function renderCustodianRoute(data: CustodianRouteData | undefined) {
+  if (!data) {
+    return nothing;
+  }
   return html`
     <openclaw-custodian-page
-      .onboarding=${data?.onboarding === true}
-      .newAgentIntent=${data?.intent === "new-agent"}
+      .onboarding=${data.onboarding}
+      .newAgentIntent=${data.intent === "new-agent"}
     ></openclaw-custodian-page>
   `;
 }

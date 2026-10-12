@@ -5,6 +5,7 @@ import type { CustodianTurnAdmission } from "../../components/custodian-alert-co
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { initialWizardValue } from "../model-setup/state.ts";
+import { CustodianAutoSetup } from "./custodian-auto-setup.ts";
 import { CustodianInputDrafts } from "./custodian-input-drafts.ts";
 import {
   navigateFromCustodianSetup,
@@ -16,10 +17,7 @@ import {
   persistCustodianSessionId,
 } from "./custodian-session-identity.ts";
 import { CustodianSessionOwner } from "./custodian-session-owner.ts";
-import {
-  resolveCustodianConfiguredInferenceState,
-  type CustodianConfiguredInferenceState,
-} from "./custodian-session-variant.ts";
+import type { CustodianConfiguredInferenceState } from "./custodian-session-variant.ts";
 import {
   custodianWizardSubmission,
   isCustodianWizardCancelAvailable,
@@ -68,6 +66,11 @@ export class CustodianSessionStore {
   earlierBoundaryAfterId: number | null = null;
   abandonedTurnOutcomeUnknown = false;
 
+  readonly autoSetup = new CustodianAutoSetup(() => {
+    this.synchronizeClient();
+    this.emit();
+  });
+
   private inferenceState: "unverified" | "ready" = "unverified";
   private inputDrafts = new CustodianInputDrafts();
   private context: ApplicationContext | null = null;
@@ -103,6 +106,8 @@ export class CustodianSessionStore {
     if (!contextChanged && this.variant === variant) {
       return;
     }
+    // Subscriptions may publish synchronously, so install the requested mode first.
+    this.variant = variant;
     if (contextChanged) {
       this.gatewayCleanup?.();
       this.agentCleanup?.();
@@ -130,7 +135,6 @@ export class CustodianSessionStore {
         this.emit();
       });
     }
-    this.variant = variant;
     this.synchronizeClient();
     this.emit();
   }
@@ -477,11 +481,12 @@ export class CustodianSessionStore {
     const chatSupported =
       client !== null && canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin");
     const chatUnsupported = isGatewayMethodAdvertised(snapshot, "openclaw.chat") === false;
-    const configuredInferenceState = resolveCustodianConfiguredInferenceState(this.context);
+    const ownershipKey = this.sessionOwner.key(context.gateway);
+    this.autoSetup.synchronize(context, this.variant === "onboarding", ownershipKey);
+    const configuredInferenceState = this.autoSetup.configuredInferenceState;
     const inferenceStateChanged = configuredInferenceState !== this.configuredInferenceState;
     this.configuredInferenceState = configuredInferenceState;
     const variantChanged = this.sessionStarted && this.sessionVariant !== this.variant;
-    const ownershipKey = this.sessionOwner.key(context.gateway);
     const reconnected = this.sessionStarted && client !== null && this.activeClient === null;
     const clientReplaced = this.sessionStarted && client !== null && client !== this.sessionClient;
     const ownershipChanged =

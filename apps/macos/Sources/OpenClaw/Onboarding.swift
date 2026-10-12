@@ -514,6 +514,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     static let windowStyleMask: NSWindow.StyleMask = [.titled, .closable, .resizable, .fullSizeContentView]
     private var window: NSWindow?
     private var closeConfirmationPending = false
+    var automaticSetupTask: Task<OnboardingFirstRun.Fallback?, Never>?
     var sheetPresentationWindow: NSWindow? {
         self.window
     }
@@ -530,19 +531,26 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         DashboardManager.shared.handleOnboardingCompletion()
     }
 
-    func show() {
+    func show(page: OnboardingFirstRun.Page = .welcome, error: String? = nil) {
+        self.automaticSetupTask?.cancel()
         if ProcessInfo.processInfo.isNixMode {
             // Nix mode is fully declarative; onboarding would suggest interactive setup that doesn't apply.
             Self.markComplete()
             return
         }
         if let window {
+            if page != .welcome {
+                let frame = window.frame
+                window.contentViewController = NSHostingController(
+                    rootView: OnboardingView(initialPage: page, initialError: error))
+                window.setFrame(frame, display: false)
+            }
             DockIconManager.shared.temporarilyShowDock()
             AppActivation.shared.makeKeyAndOrderFront(window: window)
             AppActivation.shared.activate()
             return
         }
-        let hosting = NSHostingController(rootView: OnboardingView())
+        let hosting = NSHostingController(rootView: OnboardingView(initialPage: page, initialError: error))
         let window = NSWindow(contentViewController: hosting)
         window.isRestorable = false
         window.title = "Welcome to OpenClaw"
@@ -667,6 +675,8 @@ struct OnboardingView: View {
     @State var localGatewayProbe: LocalGatewayProbe?
     @State var defaultsToLocalGateway: Bool
     @Bindable var state: AppState
+    let initialPage: OnboardingFirstRun.Page
+    let initialError: String?
     let systemAgentDefaults: UserDefaults
     let aiSetupRouteIdentityProvider: @MainActor () -> String?
     let gatewaySelectionPersister: @MainActor () -> Bool
@@ -825,6 +835,8 @@ struct OnboardingView: View {
     }
 
     init(
+        initialPage: OnboardingFirstRun.Page = .welcome,
+        initialError: String? = nil,
         state: AppState = AppStateStore.shared,
         discoveryModel: GatewayDiscoveryModel = GatewayDiscoveryModel(
             localDisplayName: InstanceIdentity.displayName,
@@ -841,6 +853,8 @@ struct OnboardingView: View {
             }
         })
     {
+        self.initialPage = initialPage
+        self.initialError = initialError
         self.state = state
         self.systemAgentDefaults = systemAgentDefaults
         let routeIdentityProvider = aiSetupRouteIdentityProvider ?? {

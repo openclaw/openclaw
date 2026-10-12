@@ -3679,6 +3679,8 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-modifier","surface":"apple","id":"native.apple.49cddeb3a7c08ae5","source":"Refresh"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-modifier","surface":"apple","id":"native.apple.3aed5e06894db75b","source":"Reply"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.49cddeb3a7c08ae5","source":"Refresh"},
+    {"path":"apps/macos/Sources/OpenClaw/OnboardingController+FirstRun.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.19d491705eb09a42","source":"Could not save the local Gateway setup."},
+    {"path":"apps/macos/Sources/OpenClaw/OnboardingController+FirstRun.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.bc7e63e04776ae06","source":"Install the Gateway to continue setup."},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupSheet.swift","kind":"ui-call","surface":"apple","id":"native.apple.addaba7d7374d016","source":"Cancel"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupSheet.swift","kind":"ui-call","surface":"apple","id":"native.apple.c81b1c4da43da35d","source":"Confirm"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupSheet.swift","kind":"ui-call","surface":"apple","id":"native.apple.380a9edbcbbf2f4f","source":"Copy"},
