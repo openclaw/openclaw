@@ -26,6 +26,7 @@ import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
 import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
@@ -222,7 +223,22 @@ async function openTerminalSessionWithSource(
     unavailable("terminal is not available");
     return;
   }
-  const launch = context.resolveTerminalLaunchPolicy(request.agentId);
+  let agentId = request.agentId;
+  // A qualified conversation key names its terminal owner. Unqualified keys keep the
+  // launch default, so a system or compatibility owner cannot pick the host shell.
+  if (request.sessionKey && parseAgentSessionKey(request.sessionKey.trim())) {
+    const requestedOwner = resolveRequestedSessionAgentId(
+      context.getRuntimeConfig(),
+      request.sessionKey,
+      agentId,
+    );
+    if (!requestedOwner.ok) {
+      respond(false, undefined, requestedOwner.error);
+      return;
+    }
+    agentId = requestedOwner.agentId;
+  }
+  const launch = context.resolveTerminalLaunchPolicy(agentId);
   if (!launch.ok) {
     respondLaunchBlocked(respond, launch.block, request.failureHint);
     return;
@@ -399,9 +415,7 @@ async function openTerminalSessionWithSource(
     unavailable("terminal is disabled");
     return;
   }
-  const refreshedLaunch = context.resolveTerminalLaunchPolicy(
-    agentOwner?.agentId ?? request.agentId,
-  );
+  const refreshedLaunch = context.resolveTerminalLaunchPolicy(agentOwner?.agentId ?? agentId);
   if (!refreshedLaunch.ok) {
     respondLaunchBlocked(respond, refreshedLaunch.block, request.failureHint);
     return;
