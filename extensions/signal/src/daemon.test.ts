@@ -4,11 +4,18 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertSignalDaemonEndpointAvailable, spawnSignalDaemon } from "./daemon.js";
+import { resolveSignalAccount } from "./accounts.js";
+import {
+  assertSignalDaemonEndpointAvailable,
+  spawnSignalDaemon,
+  waitForSignalDaemonReady,
+} from "./daemon.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const ensurePortAvailableMock = vi.hoisted(() => vi.fn());
+const signalCheckMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
@@ -22,6 +29,14 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, spawn: spawnMock };
+});
+
+vi.mock("./client-adapter.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client-adapter.js")>();
+  return {
+    ...actual,
+    signalCheck: (...args: unknown[]) => signalCheckMock(...args),
+  };
 });
 
 function createMockChild() {
@@ -47,6 +62,8 @@ beforeEach(() => {
   spawnMock.mockReset();
   spawnMock.mockReturnValue(child);
   ensurePortAvailableMock.mockClear();
+  signalCheckMock.mockReset();
+  signalCheckMock.mockResolvedValue({ ok: true });
 });
 
 afterEach(() => {
@@ -252,4 +269,84 @@ describe("spawnSignalDaemon", () => {
     await stopPromise;
     expect(resolved).toBe(true);
   });
+
+  it("passes a URL-only local port through --http and the readiness probe", async () => {
+    await expectResolvedDaemonHttpMatchesProbe({
+      channels: {
+        signal: {
+          transport: { kind: "managed-native", url: "http://127.0.0.1:8082" },
+        },
+      },
+    });
+  });
+
+  it("rewrites --http and the readiness URL when a sibling reserves the URL port", async () => {
+    const resolved = await expectResolvedDaemonHttpMatchesProbe(
+      {
+        channels: {
+          signal: {
+            accounts: {
+              sibling: {
+                account: "+10000000001",
+                transport: { kind: "external-native", url: "http://127.0.0.1:8082" },
+              },
+              managed: {
+                account: "+10000000002",
+                transport: { kind: "managed-native", url: "http://127.0.0.1:8082" },
+              },
+            },
+          },
+        },
+      },
+      "managed",
+    );
+    expect(resolved.httpPort).not.toBe(8082);
+  });
 });
+
+async function expectResolvedDaemonHttpMatchesProbe(
+  cfg: OpenClawConfig,
+  accountId?: string,
+): Promise<{ httpHost: string; httpPort: number; baseUrl: string }> {
+  const resolved = resolveSignalAccount({ cfg, accountId });
+  expect(resolved.transport.kind).toBe("managed-native");
+  if (resolved.transport.kind !== "managed-native") {
+    throw new Error("expected managed-native");
+  }
+  const handle = spawnSignalDaemon({
+    cliPath: resolved.transport.cliPath,
+    httpHost: resolved.transport.httpHost,
+    httpPort: resolved.transport.httpPort,
+  });
+  const spawnedArgs = spawnMock.mock.calls[0]?.[1];
+  if (!Array.isArray(spawnedArgs)) {
+    throw new Error("expected signal-cli arguments");
+  }
+  const args = spawnedArgs.map((arg) => {
+    if (typeof arg !== "string") {
+      throw new Error("expected signal-cli arguments");
+    }
+    return arg;
+  });
+  expect(args[args.indexOf("--http") + 1]).toBe(
+    `${resolved.transport.httpHost}:${resolved.transport.httpPort}`,
+  );
+  expect(new URL(resolved.baseUrl).port).toBe(String(resolved.transport.httpPort));
+  await waitForSignalDaemonReady({
+    baseUrl: resolved.baseUrl,
+    startupDeadlineMs: Date.now() + 5_000,
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    waitForTransportReadyFn: async ({ check }) => {
+      await check();
+    },
+  });
+  expect(signalCheckMock).toHaveBeenCalledWith(resolved.baseUrl, expect.any(Number));
+  const stop = handle.stop();
+  child.emit("exit", 0, null);
+  await stop;
+  return {
+    httpHost: resolved.transport.httpHost,
+    httpPort: resolved.transport.httpPort,
+    baseUrl: resolved.baseUrl,
+  };
+}
