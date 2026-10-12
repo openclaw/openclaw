@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { fromMarkdown, type Extension, type Handle } from "mdast-util-from-markdown";
 import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
 import { gfmTable } from "micromark-extension-gfm-table";
+import { createMarkdownOwnershipCache } from "./markdown-ownership-cache.js";
 
 export type ReasoningTagTextDelta =
   | { kind: "text"; text: string }
@@ -196,7 +197,7 @@ type PositionedNode = {
   children?: PositionedNode[];
 };
 
-type MarkdownCodeRegion = {
+export type MarkdownCodeRegion = {
   start: number;
   end: number;
   block: boolean;
@@ -346,17 +347,44 @@ function captureIndentedSources(
   };
 }
 
-export function parseMarkdownOwnership(text: string, options?: MarkdownOwnershipOptions) {
+export type MarkdownOwnership = {
+  regions: MarkdownCodeRegion[];
+  codeSpans: Array<[number, number]>;
+  textSpans: Array<[number, number]>;
+  retainStart: number;
+  completedParagraphs: MarkdownCompletedParagraph[];
+  paragraphs?: Array<{ start: number; end: number }>;
+};
+
+export type MarkdownBlock = { type?: string; start: number; end: number };
+
+export type ParsedOwnership = { ownership: MarkdownOwnership; blocks: MarkdownBlock[] };
+
+const ownershipCache = createMarkdownOwnershipCache((text) => parseOwnershipSource(text));
+
+export function parseMarkdownOwnership(
+  text: string,
+  options?: MarkdownOwnershipOptions,
+): MarkdownOwnership {
+  return options
+    ? parseOwnershipSource(text, options).ownership
+    : ownershipCache.parseOwnership(text);
+}
+
+function parseOwnershipSource(text: string, options?: MarkdownOwnershipOptions): ParsedOwnership {
   const paragraphs: Array<{ start: number; end: number }> | undefined =
     options?.includeIndentedSource ? [] : undefined;
   if (!text) {
     return {
-      regions: [],
-      codeSpans: [],
-      textSpans: [],
-      retainStart: 0,
-      completedParagraphs: [],
-      ...(paragraphs ? { paragraphs } : {}),
+      ownership: {
+        regions: [],
+        codeSpans: [],
+        textSpans: [],
+        retainStart: 0,
+        completedParagraphs: [],
+        ...(paragraphs ? { paragraphs } : {}),
+      },
+      blocks: [],
     };
   }
   const sources = new Map<number, MarkdownInlineSource>();
@@ -465,12 +493,19 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
   }
   regions.sort((left, right) => left.start - right.start);
   return {
-    regions,
-    codeSpans: regions.map(({ start, end }): [number, number] => [start, end]),
-    textSpans,
-    retainStart: tree.children?.at(-1)?.position?.start?.offset ?? text.length,
-    completedParagraphs,
-    ...(paragraphs ? { paragraphs } : {}),
+    ownership: {
+      regions,
+      codeSpans: regions.map(({ start, end }): [number, number] => [start, end]),
+      textSpans,
+      retainStart: tree.children?.at(-1)?.position?.start?.offset ?? text.length,
+      completedParagraphs,
+      ...(paragraphs ? { paragraphs } : {}),
+    },
+    blocks: blocks.flatMap((block): MarkdownBlock[] => {
+      const start = block.position?.start?.offset;
+      const end = block.position?.end?.offset;
+      return start === undefined || end === undefined ? [] : [{ type: block.type, start, end }];
+    }),
   };
 }
 
@@ -479,7 +514,13 @@ export function findMarkdownCodeRegions(
   text: string,
   options?: MarkdownOwnershipOptions,
 ): MarkdownCodeRegion[] {
-  return /[`~\t]| {4}/u.test(text) ? parseMarkdownOwnership(text, options).regions : [];
+  if (!/[`~\t]| {4}/u.test(text)) {
+    return [];
+  }
+  return (
+    (options ? undefined : ownershipCache.findSettledCodeRegions(text)) ??
+    parseMarkdownOwnership(text, options).regions
+  );
 }
 
 /** Returns parser-owned CommonMark/GFM code ranges, including their delimiters. */

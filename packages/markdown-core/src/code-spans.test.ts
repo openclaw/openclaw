@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildCodeSpanIndex } from "./code-spans.js";
-import { findMarkdownCodeRegions, findMarkdownCodeSpans } from "./reasoning-tags.js";
+import {
+  findMarkdownCodeRegions,
+  findMarkdownCodeSpans,
+  parseMarkdownOwnership,
+} from "./reasoning-tags.js";
 
 describe("buildCodeSpanIndex", () => {
   it("supports backward queries over inline code that encloses a fence", () => {
@@ -178,5 +182,48 @@ describe("markdown-core code spans", () => {
     const input = `${"> ".repeat(10_000)}\`<think>x</think>\``;
 
     expectCodeRegionSlices(input, ["`<think>x</think>`"]);
+  });
+
+  it("matches a whole parse while a streamed reply grows past settled blocks", () => {
+    // Option calls bypass the streaming caches, and gfm is the default syntax.
+    const whole = { syntax: "gfm" } as const;
+    const text = [
+      "Settled paragraph with `code` that the stream reuses.\n\n".repeat(6),
+      "    indented code\n\n2) not a list after indented code\n\n",
+      "Lead\n\n* \n\n\tTab code\n\n    more code\n\n",
+      "> # Note\n    code\n2. ```\n   MEDIA: ./a.png\n   ```\n\n",
+      "> |a|b|\n> |-|-|\n|`c|d`|\n\n",
+      "Lead line\r\nHeader cell\r\n|---|---|\r\n\r\n",
+      "Para\n\n\uFEFFbom with `code`\n\n",
+      "See ![`[[audio_as_voice]]`][ref] here.\n\nMore.\n\n[ref]: https://example.invalid/a.png\n\n",
+      "Tail with `code`.",
+    ].join("");
+    // Stream every prefix, then continue each line start differently, which can
+    // change how earlier lines parse.
+    for (const fork of ["", "2. ```\nx\n```\n", "|-|-|\n", "#tag\n"]) {
+      for (let end = 1; end <= text.length; end += 1) {
+        const prefix = text.slice(0, end);
+        if (fork && !/[\r\n]$/u.test(prefix)) {
+          continue;
+        }
+        const candidate = prefix + fork;
+        expect(parseMarkdownOwnership(candidate)).toEqual(parseMarkdownOwnership(candidate, whole));
+        expect(findMarkdownCodeRegions(candidate)).toEqual(
+          findMarkdownCodeRegions(candidate, whole),
+        );
+      }
+    }
+  });
+
+  it("matches a whole parse when a streamed line that began with indentation is rewritten", () => {
+    const head = `${"Settled paragraph with `code` that the stream reuses.\n\n".repeat(6)}Para\n\n`;
+    const streamed = `${head} \tcode after a space\n\nMore.\n`;
+    for (let end = 1; end <= streamed.length; end += 1) {
+      parseMarkdownOwnership(streamed.slice(0, end));
+    }
+    const rewritten = `${head} \n\nx`;
+    expect(parseMarkdownOwnership(rewritten)).toEqual(
+      parseMarkdownOwnership(rewritten, { syntax: "gfm" }),
+    );
   });
 });
