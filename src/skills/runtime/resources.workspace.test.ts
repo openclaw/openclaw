@@ -724,6 +724,116 @@ it("coalesces concurrent same-cohort acquisitions into a single walk", async () 
   }
 });
 
+it("counts underlying delivery-time walks against the per-preparation bound", async () => {
+  const f = await fixture();
+  try {
+    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
+    if (!workspaceSkill) {
+      throw new Error("missing workspace skill fixture");
+    }
+    recordSkillFileHost(workspaceSkill, "workspace");
+    // Nine more workspace-hosted bundles with armed delivery acquisitions.
+    const extraSkills: Skill[] = [];
+    for (let i = 0; i < 9; i += 1) {
+      const name = `bulk${i}`;
+      const hostDir = path.join(f.host, "skills", name);
+      await fs.mkdir(hostDir, { recursive: true });
+      await fs.writeFile(
+        path.join(hostDir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${name}\n---\nUse ${name}.\n`,
+      );
+      const gatewayDir = path.join(f.gateway, "skills", name);
+      extraSkills.push(
+        recordSkillFileHost(
+          createCanonicalFixtureSkill({
+            name,
+            description: name,
+            filePath: path.join(gatewayDir, "SKILL.md"),
+            baseDir: gatewayDir,
+            source: "openclaw-workspace",
+          }),
+          "workspace",
+        ),
+      );
+    }
+    const snapshot = {
+      ...f.snapshot,
+      skills: [...f.snapshot.skills, ...extraSkills.map((skill) => ({ name: skill.name }))],
+      resolvedSkills: [...(f.snapshot.resolvedSkills ?? []), ...extraSkills],
+    };
+    const stamped = await stampLocalSkillBundleIdentities({
+      snapshot,
+      libraryEntries: [],
+      workspaceDir: f.gateway,
+    });
+    const entries = (stamped.snapshot?.resolvedSkills ?? []).filter((skill) =>
+      skill.name.startsWith("bulk"),
+    );
+    expect(entries).toHaveLength(9);
+    const acquirers = entries.map((entry) => stamped.deliveredIdentityAcquirers.get(entry));
+    expect(acquirers.every((acquirer) => acquirer !== undefined)).toBe(true);
+    const orig = f.skillResources.readSkillFiles.getMockImplementation()!;
+    const gates: Array<() => void> = [];
+    f.skillResources.readSkillFiles.mockImplementation(
+      async (skill: Skill, options: { allowMissingRoot: boolean }) => {
+        let release!: () => void;
+        gates.push(() => release());
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return orig(skill, options);
+      },
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      // The bound's worth of concurrent delivery acquisitions starts one
+      // underlying walk each; the delivery race omits them all at the short
+      // deadline while the underlying reads stay outstanding and counted.
+      const pending = acquirers
+        .slice(0, SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY)
+        .map((acquirer, index) => acquirer!(`Use bulk${index}.`, undefined));
+      await vi.advanceTimersByTimeAsync(SKILL_DELIVERED_FINGERPRINT_ACQUISITION_TIMEOUT_MS + 1);
+      for (const acquired of pending) {
+        expect(await acquired).toBeUndefined();
+      }
+      expect(gates).toHaveLength(SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY);
+      // A delivery acquisition beyond the bound omits without starting
+      // another underlying walk: no telemetry read piles onto the full bound.
+      const refused = acquirers[SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY]!("Use bulk8.", undefined);
+      expect(await refused).toBeUndefined();
+      expect(gates).toHaveLength(SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY);
+      // The walk bound releases only when an underlying read settles: a
+      // race deadline never frees a slot. Restore real timers, settle one
+      // walk's underlying fs read, and the refused acquisition retries into a
+      // fresh walk — a fake-timer-frozen walk would never release its slot.
+      vi.useRealTimers();
+      gates[0]!();
+      for (let i = 0; i < 100; i += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      const retry = acquirers[SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY]!("Use bulk8.", undefined);
+      expect(gates).toHaveLength(SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY + 1);
+      // The retry's underlying walk settles like any other: release it, and
+      // the opportunistic acquisition verifies its delivered text against the
+      // walked bundle — a mismatch omits — without holding the served read.
+      for (const release of gates.splice(0, gates.length)) {
+        release();
+      }
+      expect(await retry).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      for (const release of gates.splice(0, gates.length)) {
+        release();
+      }
+      for (let i = 0; i < 10; i += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    }
+  } finally {
+    f.release();
+  }
+});
+
 it("bounds outstanding discovery walks per preparation", async () => {
   const f = await fixture();
   try {

@@ -231,20 +231,53 @@ export async function stampLocalSkillBundleIdentities(params: {
   const preparationDeadlineAt = Date.now() + SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS;
   /** An acquired bundle identity together with the instruction text its tree carries. */
   type AcquiredBundleIdentity = { revision: string; instructionText: string };
+  /** Underlying bundle walks this preparation started that have not settled yet. */
+  let outstandingBundleWalks = 0;
+  /**
+   * Counts an underlying bundle walk against the per-preparation bound: a
+   * slow or remote reader never holds more walks open behind abandoned or
+   * timed-out observations than the bound, whether a discovery batch or a
+   * delivery-time acquisition started them. The count releases only when the
+   * underlying read settles — a race deadline alone never frees a slot.
+   */
+  const tryStartBundleWalk = (): boolean => {
+    if (outstandingBundleWalks >= SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY) {
+      return false;
+    }
+    outstandingBundleWalks += 1;
+    return true;
+  };
   const readBundleIdentity = async (
     skill: Skill,
     reader: SkillResourceSourceReader,
     budgetMs: number,
   ): Promise<AcquiredBundleIdentity | undefined> => {
+    if (!tryStartBundleWalk()) {
+      // The preparation's walk bound is full: another underlying read never
+      // starts behind it, so this telemetry observation omits.
+      return undefined;
+    }
+    let underlyingSettled = false;
+    const releaseUnderlying = (): void => {
+      if (!underlyingSettled) {
+        underlyingSettled = true;
+        outstandingBundleWalks -= 1;
+      }
+    };
     try {
       // The bound sits at the resource-reader boundary so every consumer —
       // preparation discovery stamps and delivery-time acquisition alike —
       // observes a deadline: a tree that cannot establish the bundle promptly
       // omits the identity instead of holding up turn preparation or a
-      // completed delivery. The underlying walk keeps its own semantics;
+      // completed delivery. The underlying walk stays counted until it
+      // settles; the underlying walk keeps its own semantics and
       // resource-integrity reads never pass through here.
       const files = await raceWithTimeout(
-        () => reader.readSkillFiles(skill, { allowMissingRoot: true }),
+        () => {
+          const underlying = reader.readSkillFiles(skill, { allowMissingRoot: true });
+          void underlying.then(releaseUnderlying, releaseUnderlying);
+          return underlying;
+        },
         budgetMs,
         () => undefined,
         { ref: false },
@@ -260,6 +293,9 @@ export async function stampLocalSkillBundleIdentities(params: {
         ? { revision: bundle.revision, instructionText: skillMd.bytes.toString("utf8") }
         : undefined;
     } catch {
+      // The factory threw before an underlying read existed, or the read
+      // itself failed: release this walk's slot either way.
+      releaseUnderlying();
       // Telemetry-only acquisition: omit rather than weaken resource integrity.
       return undefined;
     }
