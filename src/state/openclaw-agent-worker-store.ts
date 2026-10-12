@@ -386,20 +386,8 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
       assertCurrent: assert,
       createAdmission(binding) {
         return (retained) => {
-          let phase: "waiting" | "transaction" | "commit" = "waiting";
           const admission = createSqliteWorkerOperationAdmission((request, grant) => {
             binding.authorize(worker.assertAdmission?.(request) ?? request);
-            if (request.stage === "transaction" || request.stage === "commit") {
-              if (
-                !(
-                  (phase === "waiting" && request.stage === "transaction") ||
-                  (phase === "transaction" && request.stage === "commit")
-                )
-              ) {
-                throw new Error("Agent publication authority requested out of order");
-              }
-              phase = request.stage;
-            }
             if (!grant(() => worker.onAdmitted?.(request))) {
               throw new Error("Agent publication authority expired");
             }

@@ -15,7 +15,6 @@ import {
   completeAgentDeletionJournalInDatabase,
   deleteAgentDeletionJournalInDatabase,
   handoffAgentDeletionJournalInDatabase,
-  listPendingAgentDeletionJournalsInDatabase,
   readAgentDeletionJournalInDatabase,
   updateAgentDeletionJournalPathsInDatabase,
   type AgentDeletionJournalCleanupPath,
@@ -151,8 +150,6 @@ export const agentDeletionOperations = {
     ),
   "agentDeletion.read": (input: { agentId: string }, { open }: WorkerWriteOperationContext) =>
     readAgentDeletionJournalInDatabase(open(), input.agentId),
-  "agentDeletion.listPending": (_input: undefined, { open }: WorkerWriteOperationContext) =>
-    listPendingAgentDeletionJournalsInDatabase(open()),
   "agentDeletion.begin": (
     input: {
       entry: Parameters<typeof beginAgentDeletionJournalInDatabase>[1];

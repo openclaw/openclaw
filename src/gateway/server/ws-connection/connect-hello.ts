@@ -37,10 +37,10 @@ import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import { operatorSessionCap } from "../../operator-role-policy.js";
+import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
 import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
 import {
   MAX_BUFFERED_BYTES,
-  MAX_PAYLOAD_BYTES,
   TICK_INTERVAL_MS,
   WEBSOCKET_OPEN_READY_STATE,
 } from "../../server-constants.js";

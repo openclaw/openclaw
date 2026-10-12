@@ -1,14 +1,17 @@
-import { render, nothing } from "lit";
+import { html, render, nothing } from "lit";
+import { createSignal } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
   createComposerProps,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
+import { solidTemplate } from "./components/chat-composer-controls.ts";
 import { renderComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
+import { LitContent } from "./components/chat-composer-interop.tsx";
 import { renderChatComposer } from "./components/chat-composer.tsx";
 import { ComposerDictationController } from "./composer-dictation.ts";
 
@@ -30,6 +33,25 @@ function mountComposer(initial: Parameters<typeof renderChatComposer>[0]) {
     },
   };
 }
+
+it("mounts nested Solid content when opaque Lit content changes after mount", async () => {
+  const Label = (props: { text: string }) => <b class="nested-label">{props.text}</b>;
+  const [value, setValue] = createSignal<unknown>(html`<i>initial</i>`);
+  const view = mountSolid(() => <LitContent value={value()} />);
+
+  // Composer updates reach LitContent from its render effect, where nested
+  // directives must not create roots without an owner.
+  setValue(html`${solidTemplate(Label, { text: "attached" })}`);
+  flush();
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".nested-label")?.textContent).toBe("attached"),
+  );
+
+  setValue(html`${solidTemplate(Label, { text: "still reactive" })}`);
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".nested-label")?.textContent).toBe("still reactive"),
+  );
+});
 
 it("retains the native input and IME draft across external composer updates", () => {
   let draft = "hello";

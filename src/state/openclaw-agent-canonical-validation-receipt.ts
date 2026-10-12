@@ -9,8 +9,6 @@ import {
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
-import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import { CANONICAL_READY_COLUMN_DEFINITION } from "./openclaw-agent-db-additive-columns.js";
 import { findOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
@@ -27,11 +25,6 @@ const canonicalReceiptAdmission: SqliteDatabaseAdmissionKey<string | null> = {
 
 function hasReceiptColumn(db: DatabaseSync): boolean {
   const { tableName, columnName } = CANONICAL_READY_COLUMN_DEFINITION;
-  const schema = getAdmittedSqliteSchemaFacts(db);
-  if (schema) {
-    const sql = schema.tableSql.get(tableName);
-    return sql !== undefined && parseSqliteTableDefinition(sql, tableName).columns.has(columnName);
-  }
   return tableHasColumn(db, tableName, columnName);
 }
 

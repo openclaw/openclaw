@@ -5,7 +5,10 @@ import {
   readAgentDeletionRecoveryHolds,
   type AgentDeletionRecoveryHoldPredicate,
 } from "./agent-deletion-journal-recovery.kernel.js";
-import { readAgentDeletionJournalInDatabase } from "./agent-deletion-journal.js";
+import {
+  listPendingAgentDeletionJournalsInDatabase,
+  readAgentDeletionJournalInDatabase,
+} from "./agent-deletion-journal.js";
 import type { WorkerWriteOperationContext } from "./worker-operation-registry.js";
 
 export const agentRecoveryOperations = {
@@ -33,6 +36,10 @@ export const agentRecoveryReadOperations = {
   "agentRecovery.holds": (input: { statePath: string }, db: DatabaseSync) => ({
     type: "agentRecovery.holds" as const,
     held: readAgentDeletionRecoveryHolds({ db, path: input.statePath }),
+  }),
+  "agentRecovery.pendingDeletions": (_input: undefined, db: DatabaseSync) => ({
+    type: "agentRecovery.pendingDeletions" as const,
+    ...listPendingAgentDeletionJournalsInDatabase({ db }),
   }),
   "agentRecovery.creationJournal": (input: { agentId: string }, db: DatabaseSync) => ({
     type: "agentRecovery.creationJournal" as const,

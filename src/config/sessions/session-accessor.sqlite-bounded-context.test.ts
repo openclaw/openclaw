@@ -342,6 +342,12 @@ it("retains the latest boundary and counts earlier resets before a truncated tai
       "new",
     ]);
     expect(context.events.at(-1)).toMatchObject({ parentId: "middle" });
+    expect(context.parents).toEqual(
+      new Map([
+        ["summary", "prior-reset"],
+        ["new", "middle"],
+      ]),
+    );
     expect(context.opaqueParents.get("middle")).toBe("summary");
     expect(context.boundaryCount).toBe(2);
   });
