@@ -79,10 +79,7 @@ export async function prepareWorktreeDestination(params: {
 }
 
 export async function createWithWorktreeAllocation(
-  input: Pick<
-    CreateManagedWorktreeParams,
-    "signal" | "commitGuard" | "withSource" | "withRollback"
-  > & {
+  input: Pick<CreateManagedWorktreeParams, "signal" | "commitGuard" | "withSource"> & {
     env: NodeJS.ProcessEnv;
     workerAuthority?: WorktreeWorkerAuthority;
   },
@@ -112,7 +109,6 @@ export async function createWithWorktreeAllocation(
                 error instanceof OpenClawStateLeaseError &&
                 error.code === "OPENCLAW_STATE_LEASE_LOST"
               ) &&
-              !publication.cleanup &&
               publication.pending &&
               !(await worktreePathExists(publication.pending.path))
             ) {
@@ -140,24 +136,11 @@ export async function createWithWorktreeAllocation(
         throw error;
       }
       const failures = [error];
-      if (publication.cleanup || publication.pending) {
+      if (publication.pending) {
         try {
           await withWorktreeAllocationLease(
             { env: params.env, id: publication.id },
             async (allocation) => {
-              const cleanup = publication.cleanup;
-              if (cleanup) {
-                const remove = async (assertCheckoutCurrent?: () => void) =>
-                  await cleanup(() => {
-                    allocation.commitGuard();
-                    assertCheckoutCurrent?.();
-                  });
-                if (params.withRollback) {
-                  await params.withRollback(remove);
-                } else {
-                  await remove();
-                }
-              }
               if (publication.pending && !(await worktreePathExists(publication.pending.path))) {
                 await releasePendingWorktree(
                   params.env,

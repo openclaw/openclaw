@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
@@ -24,7 +25,7 @@ type AgentHarnessHookParams<Event> = {
   ctx: AgentHarnessHookContext;
   hookRunner?: AgentHarnessHookRunner;
 };
-type FinalizeRetryBudget = Map<string, Map<string, number>>;
+type FinalizeRetryBudget = Map<string, number>;
 
 /** Returns the current global hook runner for harness lifecycle hooks. */
 export function getAgentHarnessHookRunner(): AgentHarnessHookRunner {
@@ -33,27 +34,6 @@ export function getAgentHarnessHookRunner(): AgentHarnessHookRunner {
 
 function getFinalizeRetryBudget(): FinalizeRetryBudget {
   return resolveGlobalSingleton<FinalizeRetryBudget>(FINALIZE_RETRY_BUDGET_KEY, () => new Map());
-}
-
-function countFinalizeRetryBudgetEntries(budget: FinalizeRetryBudget): number {
-  let count = 0;
-  for (const runBudget of budget.values()) {
-    count += runBudget.size;
-  }
-  return count;
-}
-
-function pruneFinalizeRetryBudget(budget: FinalizeRetryBudget): void {
-  while (countFinalizeRetryBudgetEntries(budget) > FINALIZE_RETRY_BUDGET_MAX_ENTRIES) {
-    const [oldestRunId, oldestRunBudget] = budget.entries().next().value!;
-    const oldestRetryKey = oldestRunBudget.keys().next().value;
-    if (oldestRetryKey !== undefined) {
-      oldestRunBudget.delete(oldestRetryKey);
-    }
-    if (oldestRunBudget.size === 0) {
-      budget.delete(oldestRunId);
-    }
-  }
 }
 
 /** Dispatches best-effort LLM input hooks for a harness attempt. */
@@ -184,13 +164,11 @@ function normalizeBeforeAgentFinalizeResult(
     // Track retry attempts per run+instruction to prevent finalize hooks
     // from creating an unbounded revise loop.
     const budget = getFinalizeRetryBudget();
-    const runBudget = budget.get(retryRunId) ?? new Map<string, number>();
-    const nextCount = (runBudget.get(retryKey) ?? 0) + 1;
-    runBudget.delete(retryKey);
-    runBudget.set(retryKey, nextCount);
-    budget.delete(retryRunId);
-    budget.set(retryRunId, runBudget);
-    pruneFinalizeRetryBudget(budget);
+    const key = JSON.stringify([retryRunId, retryKey]);
+    const nextCount = (budget.get(key) ?? 0) + 1;
+    budget.delete(key);
+    budget.set(key, nextCount);
+    pruneMapToMaxSize(budget, FINALIZE_RETRY_BUDGET_MAX_ENTRIES);
     if (nextCount > maxAttempts) {
       continue;
     }

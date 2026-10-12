@@ -48,8 +48,6 @@ type CheckoutOptions = WorktreeFilesystemOptions & {
   /** Hydrate the registered commit and return its estimated checkout bytes. */
   prepareCommit?: (commit: string) => Promise<number>;
   rollbackGuard?: () => void;
-  /** Unwind source custody before the service reacquires allocation for an untouched registration. */
-  deferUnpreparedCleanup?: (cleanup: (assertCurrent: () => void) => Promise<void>) => void;
   /** Restore reuses a warm template, or materializes its snapshot after registration. */
   deferGitCheckout?: boolean;
   /** This source is consumed by a sandboxed session, never host filter programs. */
@@ -330,7 +328,6 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     throw new Error("Worktree registration changed during creation; preserve it for recovery.");
   }
   const options = { ...input, base: commit };
-  const destinationIdentity = await fs.lstat(options.destination);
   // Native PR owns its seed and partial checkout, including cancellation failures.
   let preserve = Boolean(existingBranch);
   let materializationStarted = false;
@@ -640,38 +637,8 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       }
       await removeFailedCheckout({ ...options, signal: undefined, commitGuard: rollbackGuard });
     } catch (error) {
-      if (
-        materializationStarted ||
-        preserve ||
-        !options.deferUnpreparedCleanup ||
-        !(error instanceof OpenClawStateLeaseError) ||
-        error.code !== "OPENCLAW_STATE_LEASE_LOST"
-      ) {
-        failures.push(error);
-      } else {
-        options.deferUnpreparedCleanup(async (assertCurrent) => {
-          const current = await fs.lstat(options.destination);
-          if (
-            !current.isDirectory() ||
-            current.dev !== destinationIdentity.dev ||
-            current.ino !== destinationIdentity.ino
-          ) {
-            throw new Error("Worktree target changed before cleanup; checkout preserved.", {
-              cause: error,
-            });
-          }
-          const recoveryOptions = { beforeRun: assertCurrent, killProcessTree: true };
-          if (
-            (await resolveGitMetadataPath(options.destination, ".", recoveryOptions)) !== absolute
-          ) {
-            throw new Error("Worktree registration changed before cleanup; checkout preserved.", {
-              cause: error,
-            });
-          }
-          await assertUnprepared(recoveryOptions);
-          await removeFailedCheckout({ ...options, signal: undefined, commitGuard: assertCurrent });
-        });
-      }
+      // Lost cleanup authority leaves the registration for inspection, even when still empty.
+      failures.push(error);
     }
   }
   if (failures.length > 1) {

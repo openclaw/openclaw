@@ -40,14 +40,12 @@ import type {
   NativeHookRelayProcessResponse,
   NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
-import { readOptionalNonEmptyString, truncateRelayText } from "./native-hook-relay-utils.js";
+import { readOptionalNonEmptyString } from "./native-hook-relay-utils.js";
 
 type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
 
 const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;
 const PERMISSION_ALLOW_ALWAYS_TTL_MS = 30 * 60 * 1000;
-const MAX_PERMISSION_FALLBACK_KEYS = 200;
-const MAX_PERMISSION_FALLBACK_KEY_CHARS = 240;
 const MAX_PERMISSION_FINGERPRINT_SORT_KEYS = 200;
 const MAX_PERMISSION_APPROVALS_PER_WINDOW = 12;
 const PERMISSION_APPROVAL_WINDOW_MS = 60_000;
@@ -363,9 +361,7 @@ function nativeHookRelayPermissionApprovalKey(params: {
   return JSON.stringify([
     params.registration.relayId,
     params.registration.runId,
-    params.request.toolCallId
-      ? ["call", params.request.toolCallId]
-      : ["fallback", permissionRequestFallbackKey(params.request)],
+    params.request.toolCallId,
     permissionRequestContentFingerprint(params.request),
     params.binding ? permissionRequestBindingFingerprint(params.binding) : "no-file-binding",
   ]);
@@ -420,34 +416,6 @@ function nativeHookRelayPermissionAllowAlwaysKey(params: {
       ]),
     )
     .digest("hex");
-}
-
-function permissionRequestFallbackKey(request: NativeHookRelayPermissionApprovalRequest): string {
-  const command = readOptionalNonEmptyString(request.toolInput.command);
-  if (command) {
-    return `${request.toolName}:command:${truncateRelayText(command, 240)}`;
-  }
-  return `${request.toolName}:keys:${permissionRequestToolInputKeyFingerprint(request.toolInput)}`;
-}
-
-export { permissionRequestToolInputKeyFingerprint as permissionRequestToolInputKeyFingerprintForTests };
-
-function permissionRequestToolInputKeyFingerprint(toolInput: Record<string, unknown>): string {
-  let fingerprint = "";
-  const { keys, truncated } = readBoundedOwnKeys(toolInput, MAX_PERMISSION_FALLBACK_KEYS);
-  for (const key of keys) {
-    const separator = fingerprint ? "," : "";
-    const remaining = MAX_PERMISSION_FALLBACK_KEY_CHARS - fingerprint.length - separator.length;
-    if (remaining <= 0) {
-      break;
-    }
-    fingerprint += `${separator}${key.slice(0, remaining)}`;
-  }
-  if (truncated && fingerprint.length < MAX_PERMISSION_FALLBACK_KEY_CHARS) {
-    const marker = `${fingerprint ? "," : ""}...`;
-    fingerprint += marker.slice(0, MAX_PERMISSION_FALLBACK_KEY_CHARS - fingerprint.length);
-  }
-  return fingerprint || "none";
 }
 
 export { permissionRequestContentFingerprint as permissionRequestContentFingerprintForTests };

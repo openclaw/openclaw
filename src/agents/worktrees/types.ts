@@ -155,7 +155,6 @@ export type WorktreeCreationPublication = {
   id: string;
   pending?: ManagedWorktreeRecord;
   record?: ManagedWorktreeRecord;
-  cleanup?: (assertCurrent: () => void) => Promise<void>;
 };
 
 /** Exact retirement retains the original checkout, not merely its captured bytes. */
