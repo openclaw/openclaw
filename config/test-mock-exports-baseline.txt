@@ -7869,7 +7869,6 @@
 ["src/gateway/server.talk-runtime.test.ts","../tts/tts.js","9930d092be2d25bfb56e59a0d2d927fef96d977687407c73eb10faa0f1d21d85",1]
 ["src/gateway/server/client-presence.test.ts","./ws-connection/message-handler.js","4f8c50278158a0732e74b04338896158be80ba1b3b26f77825cd9086142c37c0",1]
 ["src/gateway/server/event-loop-health.cpu.test.ts","../../infra/worker-cpu.js","ca91375d756e65c5ccc6cfd73ca0ff1760790acdcee203edc7af0deb19914789",1]
-["src/gateway/server/health-state.test.ts","../../config/runtime-snapshot.js","b72504ba13344acc914d1e395d5762e66412ad60dfeddcb08ffc8bff57d52dfb",1]
 ["src/gateway/server/health-state.test.ts","../../infra/update-status-state.js","ba45d94acc7f72e0aae4b6d11dc3886f1512da4a1f88b1099f117a7ac7e3945b",1]
 ["src/gateway/server/health-state.test.ts","../health/collector.js","26c112a948f1b9d00436e998b718a06ee46a5dda81af2f1917a248f20c85b5f2",1]
 ["src/gateway/server/hooks.agent-trust.test.ts","../../channels/plugins/helpers.js","e50d764485f09ff8f8d9474151660ba0d449af75e3dabea1c280eb68671a5574",1]
