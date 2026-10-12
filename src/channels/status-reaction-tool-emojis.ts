@@ -35,6 +35,7 @@ export const TOOL_REACTION_EMOJIS = new Map([
   ["plugins", "🧩"],
   ["exec", "🛠️"],
   ["tool_call", "🧰"],
+  ["dispatch_action", "🧰"],
   ["tool_call_update", "🧰"],
   ["session_status", "📊"],
   ["github_publish", "🔀"],

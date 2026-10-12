@@ -117,7 +117,7 @@ describe("worker Gateway tool runtime", () => {
       expect(projection.tools.map(({ name }) => name)).toEqual([
         "tool_search",
         "tool_describe",
-        "tool_call",
+        "dispatch_action",
       ]);
       expect(projection.toolSchemaDirectoryPrompt).toContain(
         "Deferred names are not directly callable.",

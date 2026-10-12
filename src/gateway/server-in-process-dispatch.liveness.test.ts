@@ -47,7 +47,7 @@ function startNestedTool(execute: () => Promise<void>, runId = "current-run", ow
     await execute();
     return result;
   });
-  const outer = wrap("tool_call", () => inner.execute("inner", {}));
+  const outer = wrap("dispatch_action", () => inner.execute("inner", {}));
   const execution = outer.execute("outer", {});
   pendingWork.push(execution);
   return execution;
@@ -149,7 +149,7 @@ describe("nested tool Gateway response deadlines", () => {
     const snapshot = getDiagnosticSessionActivitySnapshot(ref);
     if (owned && timeoutMs !== undefined) {
       expect(snapshot).toMatchObject({
-        activeToolName: "tool_call",
+        activeToolName: "dispatch_action",
         activeToolCallId: "outer",
         activeToolAgeMs: BLOCKED_TOOL_CALL_ABORT_FLOOR_MS + 1,
         activeToolDeadlineAtMs: startedAt + timeoutMs + BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
@@ -206,7 +206,7 @@ describe("nested tool Gateway response deadlines", () => {
       requests[first === "long" ? "short" : "long"].completed.resolve();
       await finishedWaits.promise;
       expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-        activeToolName: "tool_call",
+        activeToolName: "dispatch_action",
         activeToolDeadlineAtMs: undefined,
       });
       finishTool.resolve();

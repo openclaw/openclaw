@@ -41,7 +41,8 @@ public enum ToolDisplayRegistry {
 
     /// Presentation only; invocation identity and stored tool names stay raw.
     public static func displayCall(name: String?, args: AnyCodable?) -> (name: String?, args: AnyCodable?) {
-        guard name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "tool_call",
+        guard let key = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              ["dispatch_action", "tool_call"].contains(key),
               let arguments = args?.dictionaryValue,
               let id = arguments["id"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
               !id.isEmpty

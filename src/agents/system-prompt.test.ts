@@ -681,7 +681,7 @@ describe("buildAgentSystemPrompt", () => {
     const toolSchemaDirectoryPrompt =
       "Available deferred-schema tools:\n- fake_calendar: Schedule an event";
     const prompt = renderPrompt({
-      toolNames: ["tool_search", "tool_describe", "tool_call"],
+      toolNames: ["tool_search", "tool_describe", "dispatch_action"],
       toolSchemaDirectoryPrompt,
     });
     const boundary = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);

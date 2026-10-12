@@ -22,7 +22,7 @@ const clientTools = [
 ];
 function plan(overrides: Partial<Parameters<typeof buildToolSearchRunPlan>[0]> = {}) {
   return buildToolSearchRunPlan({
-    visibleTools: [tool("tool_call")],
+    visibleTools: [tool("dispatch_action")],
     uncompactedTools: [],
     clientTools,
     clientToolsCataloged: true,
@@ -63,7 +63,7 @@ describe("buildToolSearchRunPlan", () => {
   it.each([
     { name: "explicit client", cataloged: true, entries: ["client_pick_file"] },
     { name: "wildcard directory client", cataloged: false, entries: ["client_*"] },
-    { name: "explicit control", cataloged: true, entries: ["tool_call"] },
+    { name: "explicit control", cataloged: true, entries: ["dispatch_action"] },
   ])("recognizes $name as callable", ({ cataloged, entries }) => {
     const result = plan({
       clientToolsCataloged: cataloged,
@@ -71,14 +71,14 @@ describe("buildToolSearchRunPlan", () => {
       explicitAllowlistSources: [{ entries }],
     });
     expect([...result.visibleAllowedToolNames]).toEqual(
-      cataloged ? ["tool_call"] : ["tool_call", "client_pick_file"],
+      cataloged ? ["dispatch_action"] : ["dispatch_action", "client_pick_file"],
     );
     expect(result.hasCallableTools).toBe(true);
   });
 
   it("keeps ambiguous deferred names replayable but not directly callable", () => {
     const result = plan({
-      visibleTools: [tool("tool_search"), tool("tool_describe"), tool("tool_call")],
+      visibleTools: [tool("tool_search"), tool("tool_describe"), tool("dispatch_action")],
       uncompactedTools: [tool("fake_plugin_tool"), tool("sessions_spawn"), tool("sessions_spawn")],
       clientToolsCataloged: false,
       catalogToolCount: 3,
@@ -89,7 +89,7 @@ describe("buildToolSearchRunPlan", () => {
       "fake_plugin_tool",
       "tool_search",
       "tool_describe",
-      "tool_call",
+      "dispatch_action",
       "client_pick_file",
     ]);
     expect([...result.replayAllowedToolNames]).toContain("sessions_spawn");

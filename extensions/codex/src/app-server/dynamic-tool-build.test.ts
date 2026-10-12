@@ -284,7 +284,7 @@ describe("Codex app-server dynamic tool build", () => {
         "get_goal",
         "create_goal",
         "update_goal",
-        "tool_call",
+        "dispatch_action",
         "tool_describe",
         "tool_search",
         "web_search",

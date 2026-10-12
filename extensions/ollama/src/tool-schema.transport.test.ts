@@ -91,7 +91,7 @@ const freeFormExecTool = {
 
 // Tool Search uses TypeBox's Type.Record(), which emits patternProperties for args.
 const toolCallDispatcherTool = {
-  name: "tool_call",
+  name: "dispatch_action",
   description: "Call an exact Tool Search result id or name through OpenClaw.",
   parameters: {
     type: "object",
@@ -140,7 +140,7 @@ describe("free-form object tool schema over the real Ollama NDJSON transport (#1
       description: "Tool input.",
     });
 
-    expect(toolCall?.name).toBe("tool_call");
+    expect(toolCall?.name).toBe("dispatch_action");
     expect(toolCall?.arguments).toEqual(toolCallArguments);
   });
 });

@@ -111,7 +111,7 @@ describe("tool search gateway e2e session log scanner", () => {
         JSON.stringify({
           message: {
             role: "assistant",
-            content: 'FAKE_PLUGIN_OK fake_plugin_tool_17 via tool_call quoted_call("alpha")',
+            content: 'FAKE_PLUGIN_OK fake_plugin_tool_17 via dispatch_action quoted_call("alpha")',
           },
         }),
         2,
@@ -150,13 +150,13 @@ describe("tool search gateway e2e session log scanner", () => {
           needles: {
             fake_plugin_tool_17: "fake_plugin_tool_17",
             quoted_call: 'quoted_call("alpha")',
-            tool_call: "tool_call",
+            dispatch_action: "dispatch_action",
           },
         }),
       ).resolves.toEqual({
         fake_plugin_tool_17: 2,
         quoted_call: 1,
-        tool_call: 1,
+        dispatch_action: 1,
       });
     } finally {
       db.close();
@@ -237,7 +237,7 @@ describe("tool search gateway e2e lane result", () => {
           {
             body: { tools: [] },
             plannedToolName: "fake_plugin_tool_17",
-            plannedWireToolName: "tool_call",
+            plannedWireToolName: "dispatch_action",
             raw: "{}",
             toolOutput: searchOutput,
           },
@@ -259,7 +259,7 @@ describe("tool search gateway e2e lane result", () => {
       });
 
       expect(result.providerInputSnippet).toBe(inputPrefix);
-      expect(result.providerPlannedTools).toEqual(["tool_search", "tool_call"]);
+      expect(result.providerPlannedTools).toEqual(["tool_search", "dispatch_action"]);
       expect(result.providerToolSearchResult).toEqual(JSON.parse(searchOutput));
       expect(result.providerToolOutputSnippet).toBe(
         `${searchOutput}\n${"o".repeat(4_000 - searchOutput.length - 1)}`,
@@ -318,7 +318,7 @@ describe("tool search gateway e2e lane result", () => {
             `${JSON.stringify({
               message: {
                 role: "assistant",
-                content: "tool_call tool_describe fake_plugin_tool_17-variant",
+                content: "dispatch_action tool_describe fake_plugin_tool_17-variant",
               },
             })}\n`,
             "utf8",
@@ -329,9 +329,9 @@ describe("tool search gateway e2e lane result", () => {
           return jsonResponse([
             {
               body: {
-                tools: [{ type: "function", name: "tool_call" }],
+                tools: [{ type: "function", name: "dispatch_action" }],
               },
-              plannedToolName: "tool_call",
+              plannedToolName: "dispatch_action",
               raw: responseSecret,
               prompt: promptSecret,
               toolOutput: `${toolOutputSecret} FAKE_PLUGIN_OK fake_plugin_tool_17`,
@@ -360,13 +360,13 @@ describe("tool search gateway e2e lane result", () => {
         const renderedError = scenario.details ?? "";
         expect(renderedError).toContain("Tool Search tools lane gateway request failed (HTTP 502)");
         expect(renderedError).toContain(
-          'providerRequests=[{"plannedToolName":"tool_call","declaredToolCount":1,"targetDeclared":false,"targetResultObserved":true}]',
+          'providerRequests=[{"plannedToolName":"dispatch_action","declaredToolCount":1,"targetDeclared":false,"targetResultObserved":true}]',
         );
         expect(renderedError).toContain(
-          'sessionMentions={"tool_search":0,"tool_describe":1,"tool_call":1,"fake_plugin_tool_17":0}',
+          'sessionMentions={"tool_search":0,"tool_describe":1,"dispatch_action":1,"fake_plugin_tool_17":0}',
         );
         expect(renderedError).toContain(
-          `gatewayLogFacts={"captured":${logMode !== "unavailable"},"mentions":{"tool_search":false,"tool_describe":false,"tool_call":${logMode !== "unavailable"},"fake_plugin_tool_17":false}}`,
+          `gatewayLogFacts={"captured":${logMode !== "unavailable"},"mentions":{"tool_search":false,"tool_describe":false,"dispatch_action":${logMode !== "unavailable"},"fake_plugin_tool_17":false}}`,
         );
         expect(renderedError).not.toContain(gatewaySecret);
         expect(renderedError).not.toContain(responseSecret);
@@ -446,10 +446,10 @@ describe("tool search gateway e2e lane assertions", () => {
     status: "completed",
     providerToolCallResult,
     providerDeclaredToolCount: 3,
-    providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
-    providerPlannedTools: ["tool_search", "tool_call"],
+    providerDeclaredToolNames: ["tool_search", "tool_describe", "dispatch_action"],
+    providerPlannedTools: ["tool_search", "dispatch_action"],
     providerToolSearchResult: groupedSearchResult,
-    sessionLogToolMentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
+    sessionLogToolMentions: { tool_search: 1, dispatch_action: 1, [targetTool]: 1 },
   };
 
   it("accepts structured lane proof only when the target plugin tool output is present", () => {
@@ -478,14 +478,14 @@ describe("tool search gateway e2e lane assertions", () => {
     {
       label: "reuses the first query candidate for the second group",
       status: "completed",
-      plannedTools: ["tool_search", "tool_call"],
+      plannedTools: ["tool_search", "dispatch_action"],
       result: {
         results: [
           { query: targetTool, candidates: [{ name: targetTool }] },
           { query: QA_TOOL_SEARCH_SECONDARY_TARGET, candidates: [{ name: targetTool }] },
         ],
       },
-      mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
+      mentions: { tool_search: 1, dispatch_action: 1, [targetTool]: 1 },
       error: "did not return both grouped search results",
     },
   ])(
@@ -514,7 +514,7 @@ describe("tool search gateway e2e lane assertions", () => {
         tools: {
           ...tools,
           providerToolCallResult: undefined,
-          sessionLogToolMentions: { tool_search: 1, tool_call: 1, [targetTool]: 2 },
+          sessionLogToolMentions: { tool_search: 1, dispatch_action: 1, [targetTool]: 2 },
         },
       }),
     ).toThrow(`structured lane did not call ${targetTool}`);
@@ -534,7 +534,7 @@ describe("tool search gateway e2e lane assertions", () => {
         tools: {
           ...tools,
           gatewayOutputText: `${toolsOutput}😀tail`,
-          providerPlannedTools: ["tool_call", targetTool],
+          providerPlannedTools: ["dispatch_action", targetTool],
         },
       });
 

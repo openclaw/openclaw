@@ -71,7 +71,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       codeMode: false,
       preferred: false,
       search: true,
-      expected: ["tool_search", "tool_describe", "tool_call", "fixture_direct"],
+      expected: ["tool_search", "tool_describe", "dispatch_action", "fixture_direct"],
     },
   ] as const)(
     "preserves the local $mode projection after transporting prepared facts",
@@ -131,7 +131,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
         }
         if (search) {
           const call = expectDefined(
-            workerSurface.tools.find((tool) => tool.name === "tool_call"),
+            workerSurface.tools.find((tool) => tool.name === "dispatch_action"),
             "prepared catalog call control",
           );
           const result = await call.execute("prepared-call", { id: "fixture_read", args: {} });
@@ -299,13 +299,13 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
         expect(surface.tools.map((tool) => tool.name)).toEqual([
           "tool_search",
           "tool_describe",
-          "tool_call",
+          "dispatch_action",
           "read",
           "message",
         ]);
         expect(surface.promptToolPolicy.apply().callableToolNames).toContain("browser");
         const call = expectDefined(
-          surface.tools.find((tool) => tool.name === "tool_call"),
+          surface.tools.find((tool) => tool.name === "dispatch_action"),
           "catalog call control",
         );
         expect(

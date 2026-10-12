@@ -285,7 +285,7 @@ bridge calls and continuation resume; consumers do not reconstruct it from the
 catalog.
 
 The catalog omits code-mode control tools (`exec`, `wait`, `tool_search`,
-`tool_describe`, `tool_call`) and direct-only tools. Controls
+`tool_describe`, `dispatch_action`) and direct-only tools. Controls
 must not recurse through the catalog; direct-only tools remain model-visible
 because their structured results cannot cross the JSON guest bridge.
 
@@ -304,7 +304,7 @@ is active.
 
 When Code Mode engages through forced `true` or `"auto"` activation:
 
-- OpenClaw does not expose `tool_search`, `tool_describe`, or `tool_call` as
+- OpenClaw does not expose `tool_search`, `tool_describe`, or `dispatch_action` as
   model-visible tools.
 - The same cataloging idea moves inside the guest runtime.
 - The guest runtime receives bare async globals plus callable search/describe

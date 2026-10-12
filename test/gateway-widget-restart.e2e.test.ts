@@ -123,10 +123,12 @@ async function startWidgetProvider(signal: AbortSignal) {
           }
           expect(request.url).toBe("/v1/responses");
           calls.push({ recovering, tools, input: body.input });
-          expect(tools.some((name) => name === "show_widget" || name === "tool_call")).toBe(true);
-          const widgetName = tools.includes("show_widget") ? "show_widget" : "tool_call";
+          expect(tools.some((name) => name === "show_widget" || name === "dispatch_action")).toBe(
+            true,
+          );
+          const widgetName = tools.includes("show_widget") ? "show_widget" : "dispatch_action";
           const widgetArgs = (args: unknown) =>
-            widgetName === "tool_call" ? { id: "show_widget", args } : args;
+            widgetName === "dispatch_action" ? { id: "show_widget", args } : args;
           if (!recovering) {
             initialCalls += 1;
             if (initialCalls === 1) {
