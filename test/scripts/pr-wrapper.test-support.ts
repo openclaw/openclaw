@@ -50,6 +50,7 @@ export function linkPrWrapperDependencies(destination: string): void {
     "jiti",
     "json5",
     "kysely",
+    "markdown-it",
     "minimatch",
     "p-map",
     "partial-json",

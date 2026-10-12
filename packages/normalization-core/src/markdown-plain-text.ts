@@ -1,3 +1,36 @@
+import MarkdownIt from "markdown-it";
+
+const blockParser = new MarkdownIt({ html: true });
+
+function stripTildeFencedCode(text: string): string {
+  if (!text.includes("~~~")) {
+    return text;
+  }
+  const lineOffsets = [0];
+  for (const newline of text.matchAll(/\r\n?|\n/g)) {
+    lineOffsets.push(newline.index + newline[0].length);
+  }
+  let cursor = 0;
+  const parts: string[] = [];
+  for (const token of blockParser.parse(text, {})) {
+    if (token.type !== "fence" || token.markup[0] !== "~" || !token.map) {
+      continue;
+    }
+    const [startLine, endLine] = token.map;
+    const bodyLines = token.content
+      ? token.content.split("\n").length - (token.content.endsWith("\n") ? 1 : 0)
+      : 0;
+    // A closed fence spans its opening line, body, and a closing line.
+    // Preserve unfinished fences, which the parser also emits as fence tokens.
+    if (endLine - startLine <= bodyLines + 1) {
+      continue;
+    }
+    parts.push(text.slice(cursor, lineOffsets[startLine]), " ");
+    cursor = lineOffsets[endLine] ?? text.length;
+  }
+  return parts.join("") + text.slice(cursor);
+}
+
 /**
  * Flattens Markdown into a single line of readable plain text.
  *
@@ -7,7 +40,7 @@
  * link/image text, so it must not be used where the Markdown is rendered.
  */
 export function flattenMarkdownToPlainText(text: string): string {
-  const withoutCode = text
+  const withoutCode = stripTildeFencedCode(text)
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/```/g, " ")
     .replace(/`([^`]*)`/g, "$1");

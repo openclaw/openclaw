@@ -92,4 +92,13 @@ describe("projectSessionDisplayMessage", () => {
     const quoted = "Use `[[reply_to_current]]` literally.";
     expect(projectSessionDisplayMessage({ role: "assistant", content: quoted })?.text).toBe(quoted);
   });
+
+  test.each(["~~~", "~~~~"])("omits %s code blocks before bounding a preview", (fence) => {
+    const content = `Before\n${fence}ts\n${"hidden ".repeat(60)}\n${fence}\nAfter`;
+    const message = { role: "assistant", content };
+    expect(projectSessionDisplayMessage(message, { flattenMarkdown: true })?.text).toBe(
+      "Before After",
+    );
+    expect(projectSessionDisplayMessage(message, { maxChars: 800 })?.text).toBe(content);
+  });
 });
