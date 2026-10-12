@@ -64,6 +64,18 @@ describe("splitShellArgs", () => {
     expect(splitShellArgs(String.raw`echo "\$HOME"`)).toEqual(["echo", "$HOME"]);
   });
 
+  // Expectations below match `bash 5.2` word splitting for the same inputs.
+  it("removes backslash-newline line continuations without breaking the word", () => {
+    expect(splitShellArgs("ba\\\nsh")).toEqual(["bash"]);
+    expect(splitShellArgs("echo a\\\nb")).toEqual(["echo", "ab"]);
+    expect(splitShellArgs('echo "ba\\\nsh"')).toEqual(["echo", "bash"]);
+    expect(splitShellArgs("echo a\\\n")).toEqual(["echo", "a"]);
+  });
+
+  it("keeps backslash-newline literal inside single quotes", () => {
+    expect(splitShellArgs("echo 'ba\\\nsh'")).toEqual(["echo", "ba\\\nsh"]);
+  });
+
   it("returns null for unterminated quotes", () => {
     expect(splitShellArgs(`echo "oops`)).toBeNull();
     expect(splitShellArgs(`echo 'oops`)).toBeNull();
