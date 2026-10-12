@@ -239,6 +239,25 @@ describe("agent defaults schema", () => {
     ).toBe(45);
   });
 
+  it("rejects blank heartbeat.every while keeping 0m as an explicit disable", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ heartbeat: { every: "" } }),
+      "heartbeat.every",
+    );
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ heartbeat: { every: "   " } }),
+      "heartbeat.every",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "ops", heartbeat: { every: "" } }),
+      "heartbeat.every",
+    );
+    expect(AgentDefaultsSchema.parse({ heartbeat: { every: "0m" } })?.heartbeat?.every).toBe("0m");
+    expect(AgentDefaultsSchema.parse({ heartbeat: { every: "30m" } })?.heartbeat?.every).toBe(
+      "30m",
+    );
+  });
+
   it("rejects invalid heartbeat activeHours without an explicit cadence", () => {
     expectSchemaFailurePath(
       AgentDefaultsSchema.safeParse({
