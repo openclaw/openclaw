@@ -118,6 +118,57 @@ it("focuses the filter on keyboard open and reopen, and returns Escape to the tr
   expect(params.onModelSelect).not.toHaveBeenCalled();
 });
 
+it.each(["trigger", "Escape", "outside", "selection"])(
+  "resets All models after closing through %s without restricting search",
+  async (close) => {
+    const { picker, trigger, search, composer, toggle, params, update } = mountPicker();
+    params.modelOptions = params.modelOptions.map((option) => ({
+      ...option,
+      recommended: option.label === "Alpha",
+    }));
+    update();
+    const more = picker.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]")!;
+    const rest = picker.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="example/beta"]',
+    )!;
+    await toggle(() => userEvent.click(trigger));
+    expect(more.checkVisibility()).toBe(true);
+    expect(rest.checkVisibility()).toBe(false);
+    await userEvent.click(more);
+    expect(more.checkVisibility()).toBe(false);
+    expect(rest.checkVisibility()).toBe(true);
+    update();
+    await Promise.resolve();
+    expect(rest.checkVisibility()).toBe(true);
+
+    if (close === "trigger") {
+      await toggle(() => userEvent.click(trigger));
+    } else if (close === "Escape") {
+      await toggle(() => userEvent.keyboard("{Escape}"));
+    } else if (close === "outside") {
+      await toggle(() => userEvent.click(composer));
+    } else {
+      await toggle(() => userEvent.click(rest));
+      expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
+    }
+    expect(picker.open).toBe(false);
+    update();
+    await toggle(() => userEvent.click(trigger));
+    expect(more.checkVisibility()).toBe(true);
+    expect(rest.checkVisibility()).toBe(false);
+
+    // Search still reaches the collapsed remainder, without expanding it.
+    await userEvent.type(search, "beta");
+    expect(rest.checkVisibility()).toBe(true);
+    expect(more.checkVisibility()).toBe(false);
+    await userEvent.keyboard("{Escape}");
+    expect(picker.open).toBe(true);
+    expect(search.value).toBe("");
+    expect(more.checkVisibility()).toBe(true);
+    expect(rest.checkVisibility()).toBe(false);
+  },
+);
+
 it.each(["closed", "removed", "focus moved"])(
   "does not autofocus after opening is %s",
   async (state) => {
