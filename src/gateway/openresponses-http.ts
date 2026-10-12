@@ -103,7 +103,7 @@ export async function handleOpenResponsesHttpRequest(
   const handled = await prepareOpenAiCompatibleHttpRequest(req, res, {
     ...opts,
     pathname: "/v1/responses",
-    maxBodyBytes: maxBodyBytes,
+    maxBodyBytes,
     schema: CreateResponseBodySchema,
   });
   if (!handled) {

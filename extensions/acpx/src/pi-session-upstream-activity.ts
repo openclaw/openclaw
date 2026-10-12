@@ -1,9 +1,9 @@
 import process from "node:process";
 import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import {
-  type SessionCatalogContinueProviderResult,
-  type SessionUpstreamActivity,
-  type SessionUpstreamProbe,
+import type {
+  SessionCatalogContinueProviderResult,
+  SessionUpstreamActivity,
+  SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
 import { readSessionCatalogJsonlActivity } from "openclaw/plugin-sdk/session-catalog-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
