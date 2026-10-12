@@ -813,6 +813,12 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     resolveEmbeddedAgentApiKey: resolveCompactHooksApiKeyMock,
     resolveEmbeddedAgentBaseStreamFn: vi.fn(() => vi.fn()),
     resolveEmbeddedAgentStream: resolveEmbeddedAgentStreamMock,
+    selectEmbeddedAgentStream: (
+      params: Parameters<typeof import("./stream-resolution.js").selectEmbeddedAgentStream>[0],
+    ) => ({
+      ...resolveEmbeddedAgentStreamMock(params),
+      wrapApiKey: (stream: import("../runtime/index.js").StreamFn) => stream,
+    }),
   }));
 
   vi.doMock("./extra-params.js", () => ({

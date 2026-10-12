@@ -49,6 +49,7 @@ export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSess
   preparedModelRuntime: PreparedModelRuntimeSnapshot;
   requestedRouteResolution?: "resolved";
   transcriptBytePreflightAuthority?: true;
+  assertTranscriptBytePreflightActive?: () => Promise<void>;
   transcriptByteCompactionPersistence?: TranscriptByteCompactionPersistence;
   transcriptByteCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync;
   sandbox?: SandboxContext | null;

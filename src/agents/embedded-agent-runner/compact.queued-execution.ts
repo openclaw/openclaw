@@ -354,6 +354,10 @@ export async function executeQueuedContextEngineCompaction(input: {
             const clearClaim = setTranscriptBytePreflightClaim(
               backendParams.runtimeContext,
               transcriptBytePreflightAuthority,
+              async () => {
+                await assertActive(runtimeTarget, expectedEntry);
+                assertCallerActive();
+              },
               host.withCompactionPersistence,
               host.withCompactionPersistenceAsync,
             );

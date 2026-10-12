@@ -280,6 +280,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
           config: params.config,
           thinkLevel,
+          assertCurrent: assertActive,
+          assertBeforeRequest: params.assertTranscriptBytePreflightActive,
           modelCallUrgency:
             params.trigger === "manual" ? "foreground" : (params.modelCallUrgency ?? "background"),
         });

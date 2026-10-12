@@ -15,6 +15,7 @@ export type TranscriptByteCompactionPersistenceAsync = CompactionAppendPersisten
 
 export type TranscriptBytePreflightClaim = {
   authority: TranscriptBytePreflightAuthority;
+  assertActive: () => Promise<void>;
   sessionTarget: Partial<SessionTranscriptRuntimeTarget>;
   withCompactionPersistence?: TranscriptByteCompactionPersistence;
   withCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync;
@@ -37,6 +38,7 @@ export function resolveTranscriptBytePreflightAuthority(
 export function setTranscriptBytePreflightClaim(
   runtimeContext: ContextEngineRuntimeContext | undefined,
   authority: TranscriptBytePreflightAuthority | undefined,
+  assertActive: TranscriptBytePreflightClaim["assertActive"],
   withCompactionPersistence?: TranscriptByteCompactionPersistence,
   withCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync,
 ): () => void {
@@ -46,6 +48,7 @@ export function setTranscriptBytePreflightClaim(
   const target = runtimeContext.sessionTarget;
   const claim = {
     authority,
+    assertActive,
     ...(withCompactionPersistence ? { withCompactionPersistence } : {}),
     ...(withCompactionPersistenceAsync ? { withCompactionPersistenceAsync } : {}),
     sessionTarget: {

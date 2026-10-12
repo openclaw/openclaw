@@ -12,7 +12,7 @@ import { applyExtraParamsToAgent } from "./extra-params.js";
 import {
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStream,
+  selectEmbeddedAgentStream,
 } from "./stream-resolution.js";
 import { mapThinkingLevelForProvider } from "./utils.js";
 
@@ -24,7 +24,9 @@ export async function prepareCompactionSessionAgent(params: {
   signal: AbortSignal;
   effectiveModel: ProviderRuntimeModel;
   resolvedApiKey?: string;
-  authStorage: Parameters<typeof resolveEmbeddedAgentStream>[0]["authStorage"];
+  authStorage: Parameters<typeof selectEmbeddedAgentStream>[0]["authStorage"];
+  assertCurrent: () => void;
+  assertBeforeRequest?: () => Promise<void>;
   config?: OpenClawConfig;
   provider: string;
   modelId: string;
@@ -41,13 +43,26 @@ export async function prepareCompactionSessionAgent(params: {
         provider: params.effectiveModel.provider,
       })
     : params.resolvedApiKey;
-  params.session.agent.streamFn = resolveEmbeddedAgentStream({
+  const { streamFn, wrapApiKey } = selectEmbeddedAgentStream({
     ...params,
     currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session }),
     model: params.effectiveModel,
     transportAuthAvailable: Boolean(transportApiKey?.trim()),
     authProfileId: params.runtimePlan?.auth.forwardedAuthProfileId,
-  }).streamFn;
+  });
+  const assertBeforeRequest = params.assertBeforeRequest;
+  // Resolve request credentials first, then recheck the original host writer
+  // immediately before any chunk or merge summary can leave the process.
+  params.session.agent.streamFn = wrapApiKey(
+    assertBeforeRequest
+      ? async (...args) => {
+          await assertBeforeRequest();
+          params.signal.throwIfAborted();
+          params.assertCurrent();
+          return streamFn(...args);
+        }
+      : streamFn,
+  );
   const providerTextTransforms = resolveProviderTextTransforms({
     provider: params.provider,
     config: params.config,

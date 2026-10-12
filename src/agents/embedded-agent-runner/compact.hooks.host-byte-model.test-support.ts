@@ -4,6 +4,7 @@ import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntryReadOnly,
+  patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -37,6 +38,7 @@ import {
   createAgentSessionMock,
   resolveContextEngineMock,
   maybeCompactAgentHarnessSessionMock,
+  hookRunner,
 } from "./compact.hooks.harness.js";
 import type { CompactHooksQueuedCompaction } from "./compact.hooks.metadata.test-support.js";
 
@@ -139,24 +141,34 @@ export function registerCodexHostByteModelTests(fixture: {
         preflightCompactionTrigger: "transcript_bytes",
         config: { agents: { defaults: { compaction: { model: "deepseek/deepseek-flash" } } } },
       });
+      const forgedAssertion = vi.fn(async () => {
+        throw new Error("forged source must not be used");
+      });
       const result = await delegateCompactionToRuntime({
         sessionId: params.sessionId,
         sessionKey: expectDefined(params.sessionKey, "test session key"),
         sessionTarget: params.sessionTarget,
         tokenBudget: 128_000,
         force: true,
-        runtimeContext: { ...params, transcriptBytePreflightAuthority: true },
+        runtimeContext: {
+          ...params,
+          transcriptBytePreflightAuthority: true,
+          assertTranscriptBytePreflightActive: forgedAssertion,
+        },
       });
       expect(result).toMatchObject({ ok: true, compacted: true });
       expect(buildAgentRuntimePlanMock).toHaveBeenCalledWith(
         expect.objectContaining({ harnessId: "codex" }),
       );
       expect(attemptServerEndpointCompactionMock).toHaveBeenCalledOnce();
+      expect(forgedAssertion).not.toHaveBeenCalled();
     });
 
-    it.each([false, true])(
-      "uses the configured summary model unless history is model-locked (%s)",
-      async (locked) => {
+    it.each(["unlocked", "locked", "revoked", "replaced-writer"] as const)(
+      "gates host summary model egress for %s history",
+      async (scenario) => {
+        const locked = scenario === "locked";
+        let sourceActive = true;
         registerCodexByteCompactionHarness();
         const config: OpenClawConfig = {
           agents: {
@@ -277,12 +289,53 @@ export function registerCodexHostByteModelTests(fixture: {
           compact: compactEngine,
         } as never);
         maybeCompactAgentHarnessSessionMock.mockResolvedValue({ ok: true, compacted: true });
+        if (scenario === "revoked" || scenario === "replaced-writer") {
+          hookRunner.hasHooks.mockImplementation((name) => name === "before_compaction");
+          hookRunner.runBeforeCompaction.mockImplementationOnce(async () => {
+            if (scenario === "revoked") {
+              sourceActive = false;
+            } else {
+              await patchSessionEntryCore(target, (entry) => ({
+                ...entry,
+                activeWriterRunId: "replacement-writer",
+              }));
+            }
+          });
+        }
 
-        const result = await fixture.compact()(params, {
-          transcriptBytePreflightHarness: "codex",
-        });
+        const result = await fixture
+          .compact()(params, {
+            transcriptBytePreflightHarness: "codex",
+            assertActive: () => {
+              if (!sourceActive) {
+                throw new Error("summary source revoked");
+              }
+            },
+          })
+          .catch((error: unknown) => {
+            if (scenario !== "revoked" && scenario !== "replaced-writer") {
+              throw error;
+            }
+            return {
+              ok: false,
+              compacted: false,
+              reason: error instanceof Error ? error.message : String(error),
+            };
+          });
 
-        expect(result).toMatchObject({ ok: true, compacted: true });
+        if (scenario === "revoked" || scenario === "replaced-writer") {
+          expect(result).toMatchObject({ ok: false, compacted: false });
+          expect(result.reason).toContain(
+            scenario === "revoked" ? "summary source revoked" : "writer",
+          );
+          expect(stream).not.toHaveBeenCalled();
+          expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(
+            false,
+          );
+          expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+          return;
+        }
+        expect(result, result.reason).toMatchObject({ ok: true, compacted: true });
         const engineConfig = compactEngine.mock.calls[0]?.[0].runtimeContext?.config;
         expect(engineConfig).not.toHaveProperty("agents.defaults.compaction.provider");
         if (locked) {
