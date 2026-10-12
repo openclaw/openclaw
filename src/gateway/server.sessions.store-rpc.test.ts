@@ -19,6 +19,7 @@ import type { SessionsListResult } from "./session-utils.types.js";
 import { agentDiscoveryMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq as directSessionHandlerReq,
+  seedLinearSessionTranscript,
   setupGatewaySessionsTestHarness,
   getGatewayConfigModule,
   getSessionsHandlers,
@@ -26,7 +27,11 @@ import {
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-type SessionPatchResponse = { ok: true; key: string; entry: Record<string, unknown> };
+type SessionPatchResponse = {
+  ok: true;
+  key: string;
+  entry: Record<string, unknown>;
+};
 
 test("lists and patches session store via sessions.* RPC", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -470,7 +475,11 @@ test("lists and patches session store via sessions.* RPC", async () => {
     resolved?: {
       model?: string;
       modelProvider?: string;
-      agentRuntime?: { id: string; source: string; devicePlacementSupported?: boolean };
+      agentRuntime?: {
+        id: string;
+        source: string;
+        devicePlacementSupported?: boolean;
+      };
     };
   }>("sessions.patch", {
     key: "agent:main:main",
@@ -552,7 +561,10 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
   expect(deliveryContextFromSession(reset.payload?.entry)?.accountId).toBe("work");
   expect(deliveryContextFromSession(reset.payload?.entry)?.threadId).toBe("1737500000.123456");
-  const entryAfterReset = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+  const entryAfterReset = loadSessionEntry({
+    sessionKey: "agent:main:main",
+    storePath,
+  });
   expect(deliveryContextFromSession(entryAfterReset)?.accountId).toBe("work");
   expect(deliveryContextFromSession(entryAfterReset)?.threadId).toBe("1737500000.123456");
   const resetTranscript = await loadTranscriptRows({
@@ -560,7 +572,10 @@ test("lists and patches session store via sessions.* RPC", async () => {
     sessionKey: "agent:main:main",
     storePath,
   });
-  expect(resetTranscript.at(-1)).toMatchObject({ type: "reset", reason: "reset" });
+  expect(resetTranscript.at(-1)).toMatchObject({
+    type: "reset",
+    reason: "reset",
+  });
   expect(resetTranscript.at(-1)).not.toHaveProperty("firstKeptEntryId");
 
   const badThinking = await directSessionReq("sessions.patch", {
@@ -571,6 +586,72 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect((badThinking.error as { message?: unknown } | undefined)?.message ?? "").toMatch(
     /invalid thinkinglevel/i,
   );
+});
+
+test("sessions.search real WS run: configured ACP store owner with a non-ACP-shaped key", async () => {
+  // Unique subdirectory under the suite-owned state root keeps repeated and
+  // concurrent runs isolated while the suite handles cleanup after the gateway
+  // fixture fully drains; the standalone (non-harness) proof seeds its own
+  // persistent state separately (see the PR description evidence).
+  const rootStateDir = expectDefined(process.env.OPENCLAW_STATE_DIR, "OPENCLAW_STATE_DIR");
+  const stateDir = path.join(rootStateDir, "real-ws-run-non-acp");
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    // Config comes from the real config file (no test overrides) so this run
+    // doubles as real-configured-setup behavior evidence.
+    const configPath = expectDefined(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
+    const configJson =
+      '{"agents":{"entries":{"main":{}}},"acp":{"defaultAgent":"codex","allowedAgents":["codex"]}}';
+    await fs.writeFile(configPath, configJson, "utf-8");
+    const agentsDir = path.join(stateDir, "agents");
+    const agentId = "codex";
+    const sessionKey = `agent:${agentId}:existing`;
+    const sessionId = "session-real-run-non-acp";
+    const storePath = path.join(agentsDir, agentId, "sessions", "sessions.json");
+    await writeSessionStore({
+      storePath,
+      agentId,
+      entries: { [sessionKey]: { sessionId, updatedAt: 42 } },
+    });
+    await seedLinearSessionTranscript({
+      agentId,
+      contents: ["real run proof needle for ordinary key"],
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+
+    const { ws } = await openClient();
+    const owned = await rpcReq<{
+      ok: boolean;
+      results?: Array<{
+        sessionKey: string;
+        excerpt?: string;
+        snippet?: string;
+      }>;
+    }>(ws, "sessions.search", {
+      agentId,
+      query: "real run proof needle",
+      sessionKeys: [sessionKey],
+    });
+    console.log("[real-run] owned non-ACP key:", JSON.stringify(owned));
+    expect(owned.ok).toBe(true);
+    expect(owned.payload?.results?.map((hit) => hit.sessionKey)).toContain(sessionKey);
+    expect(
+      owned.payload?.results?.[0]?.excerpt ?? owned.payload?.results?.[0]?.snippet ?? "",
+    ).toContain("real run proof needle");
+
+    const crossOwner = await rpcReq<{
+      ok: boolean;
+      error?: { code: string };
+    }>(ws, "sessions.search", {
+      agentId,
+      query: "real run proof needle",
+      sessionKeys: ["agent:claude:existing"],
+    });
+    console.log("[real-run] cross-owner rejection:", JSON.stringify(crossOwner));
+    expect(crossOwner.ok).toBe(false);
+    expect((crossOwner.error as { code?: string } | undefined)?.code ?? "").toBe("INVALID_REQUEST");
+  });
 });
 
 test("sessions.list configuredAgentsOnly keeps configured-agent children and hides unrelated stores", async () => {
@@ -617,8 +698,16 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
       storePath: childStorePath,
       agentId: "codex",
       entries: {
-        [spawnedChildKey]: { sessionId: "sess-codex-child", updatedAt: 25, spawnedBy: mainKey },
-        [parentChildKey]: { sessionId: "child-2", updatedAt: 27, parentSessionKey: mainKey },
+        [spawnedChildKey]: {
+          sessionId: "sess-codex-child",
+          updatedAt: 25,
+          spawnedBy: mainKey,
+        },
+        [parentChildKey]: {
+          sessionId: "child-2",
+          updatedAt: 27,
+          parentSessionKey: mainKey,
+        },
       },
     });
     await writeSessionStore({
@@ -627,7 +716,10 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
       entries: { main: { sessionId: "sess-local", updatedAt: 10 } },
     });
     // Physical stores hydrate once before either warm selection policy runs.
-    await directSessionHandlerReq("sessions.list", { includeGlobal: false, includeUnknown: false });
+    await directSessionHandlerReq("sessions.list", {
+      includeGlobal: false,
+      includeUnknown: false,
+    });
     const enumerateAgentDirs = vi.spyOn(sessionDirs, "resolveAgentSessionDirsFromAgentsDirSync");
     try {
       const configuredOnly = await directSessionHandlerReq<SessionsListResult>("sessions.list", {
@@ -686,7 +778,11 @@ test("write-scoped operators manage chat organization but not admin session sett
   try {
     const renamed = await rpcReq<{
       ok: true;
-      entry: { label?: string; modelOverride?: string; providerOverride?: string };
+      entry: {
+        label?: string;
+        modelOverride?: string;
+        providerOverride?: string;
+      };
     }>(ws, "sessions.patch", {
       key: "agent:main:topic-a",
       label: "Trip planning",
@@ -723,7 +819,10 @@ test("write-scoped operators manage chat organization but not admin session sett
       sectionOrder: string[];
     }>(ws, "sessions.groups.list", {});
     expect(groupsAfterPatch.ok).toBe(true);
-    expect(groupsAfterPatch.payload?.groups).toContainEqual({ name: "Travel", position: 0 });
+    expect(groupsAfterPatch.payload?.groups).toContainEqual({
+      name: "Travel",
+      position: 0,
+    });
     expect(groupsAfterPatch.payload?.sectionOrder).toEqual([]);
 
     const reordered = await rpcReq<{
@@ -765,11 +864,9 @@ test("write-scoped operators manage chat organization but not admin session sett
     expect(renamedGroup.ok).toBe(true);
     expect(renamedGroup.payload?.updatedSessions).toBe(1);
     expect(renamedGroup.payload?.sectionOrder).toEqual(["work", "category:Trips", "ungrouped"]);
-    const describedAfterRename = await rpcReq<{ session?: { category?: string } }>(
-      ws,
-      "sessions.describe",
-      { key: "agent:main:topic-a" },
-    );
+    const describedAfterRename = await rpcReq<{
+      session?: { category?: string };
+    }>(ws, "sessions.describe", { key: "agent:main:topic-a" });
     expect(describedAfterRename.ok).toBe(true);
     expect(describedAfterRename.payload?.session?.category).toBe("Trips");
 
@@ -785,12 +882,18 @@ test("write-scoped operators manage chat organization but not admin session sett
     const archived = await rpcReq<{ ok: true; entry: { archivedAt?: number } }>(
       ws,
       "sessions.patch",
-      { key: "agent:main:topic-b", archived: true, expectedSessionId: "sess-topic-b" },
+      {
+        key: "agent:main:topic-b",
+        archived: true,
+        expectedSessionId: "sess-topic-b",
+      },
     );
     expect(archived.ok).toBe(true);
     expect(archived.payload?.entry.archivedAt).toEqual(expect.any(Number));
 
-    const searched = await rpcReq<SessionsListResult>(ws, "sessions.list", { search: "trip plan" });
+    const searched = await rpcReq<SessionsListResult>(ws, "sessions.list", {
+      search: "trip plan",
+    });
     expect(searched.ok).toBe(true);
     expect(searched.payload?.sessions.map((session) => session.key)).toEqual([
       "agent:main:topic-a",
@@ -904,7 +1007,11 @@ test("archiving a session disables cron jobs bound to it", async () => {
     },
   });
   const jobs = [
-    { id: "bound", enabled: true, sessionTarget: "session:agent:main:subagent:cronbound" },
+    {
+      id: "bound",
+      enabled: true,
+      sessionTarget: "session:agent:main:subagent:cronbound",
+    },
     { id: "elsewhere", enabled: true, sessionTarget: "isolated" },
   ] as unknown as CronJob[];
   const update = vi.fn(

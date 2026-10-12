@@ -763,6 +763,81 @@ test("sessions.search accepts an ACP allowlist owner absent from the agent roste
   expect(await listAgentIdsViaRpc()).toEqual(["main"]);
 });
 
+test("sessions.search accepts an ACP allowlist owner for non-ACP agent keys", async () => {
+  const agentId = "codex";
+  const sessionKey = `agent:${agentId}:existing`;
+  const sessionId = "session-acp-owner-non-acp-key";
+  const storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
+  await setAgentsConfig({ entries: { main: {} } });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  getRuntimeConfig().acp = { allowedAgents: [agentId] };
+  await replaceSessionEntry({ agentId, sessionKey, storePath }, { sessionId, updatedAt: 42 });
+  await seedLinearSessionTranscript({
+    agentId,
+    contents: ["non-ACP key search needle"],
+    sessionId,
+    sessionKey,
+    storePath,
+  });
+
+  const searched = await directSessionReq<{ results: Array<{ sessionKey: string }> }>(
+    "sessions.search",
+    { agentId, query: "non-ACP key search needle", sessionKeys: [sessionKey] },
+  );
+
+  expect(searched).toMatchObject({
+    ok: true,
+    payload: { results: [expect.objectContaining({ sessionKey })] },
+  });
+  const mismatchedOwner = await directSessionReq("sessions.search", {
+    agentId,
+    query: "non-ACP key search needle",
+    sessionKeys: [`agent:claude:existing`],
+  });
+  expect(mismatchedOwner).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST" },
+  });
+});
+
+test("sessions.search keeps validating ACP allowlist owners on alias, legacy, and malformed keys", async () => {
+  const agentId = "codex";
+  testState.sessionStorePath = path.join(requireStateDir(), "shared-store", "sessions.json");
+  await setAgentsConfig({ entries: { main: {} } });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  getRuntimeConfig().acp = { allowedAgents: [agentId] };
+
+  const aliasKey = await directSessionReq("sessions.search", {
+    agentId,
+    query: "alias collapse probe",
+    sessionKeys: [`agent:${agentId}:main`],
+  });
+  expect(aliasKey).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST" },
+  });
+
+  const legacyKey = await directSessionReq("sessions.search", {
+    agentId,
+    query: "legacy key probe",
+    sessionKeys: ["existing"],
+  });
+  expect(legacyKey).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST" },
+  });
+
+  const malformedKey = await directSessionReq("sessions.search", {
+    agentId,
+    query: "malformed key probe",
+    sessionKeys: ["agent:"],
+  });
+  expect(malformedKey).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST" },
+  });
+});
+
 test("session reads find a retired store only reachable through its deterministic template", async () => {
   const agentId = "template-retired";
   const sessionKey = `agent:${agentId}:existing`;
