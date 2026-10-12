@@ -1,4 +1,4 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID, normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   buildDmGroupAccountAllowlistAdapter,
   createNestedAllowlistOverrideResolver,
@@ -41,7 +41,9 @@ import {
   formatDuplicateTelegramTokenReason,
   inspectTelegramAccount,
 } from "./account-inspect.js";
+import { releaseAccountThrottler } from "./account-throttler.js";
 import {
+  listTelegramAccountIds,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
   type ResolvedTelegramAccount,
@@ -596,6 +598,21 @@ const resolveTelegramAllowlistGroupOverrides = createNestedAllowlistOverrideReso
   resolveInnerEntries: (topicCfg) => topicCfg?.allowFrom,
 });
 
+// A bot token may be shared across accounts; only release its throttler when
+// no configured account still uses it (the removed/changed account excluded).
+function telegramTokenStillInUse(
+  cfg: OpenClawConfig,
+  token: string,
+  excludeAccountId?: string,
+): boolean {
+  const excluded =
+    excludeAccountId === undefined ? undefined : normalizeOptionalAccountId(excludeAccountId);
+  return listTelegramAccountIds(cfg).some(
+    (accountId) =>
+      accountId !== excluded && resolveTelegramAccount({ cfg, accountId }).token.trim() === token,
+  );
+}
+
 export const telegramPlugin = createChatChannelPlugin({
   base: {
     ...createTelegramSetupPluginBase({
@@ -717,14 +734,23 @@ export const telegramPlugin = createChatChannelPlugin({
         if (previousToken !== nextToken) {
           // Startup needs the previous identity to reset that bot's ingress before replacement.
           await deleteStartupBotInfoCache(accountId);
+          // The rotated-out token's limiter is no longer reachable through
+          // this account; drop it unless a sibling account still uses it.
+          if (!telegramTokenStillInUse(nextCfg, previousToken)) {
+            await releaseAccountThrottler(previousToken);
+          }
         }
       },
-      onAccountRemoved: async ({ accountId }) => {
+      onAccountRemoved: async ({ prevCfg, accountId }) => {
         const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
         await Promise.all([
           deleteTelegramUpdateOffset({ accountId }),
           deleteStartupBotInfoCache(accountId),
         ]);
+        const removedToken = resolveTelegramAccount({ cfg: prevCfg, accountId }).token.trim();
+        if (removedToken && !telegramTokenStillInUse(prevCfg, removedToken, accountId)) {
+          await releaseAccountThrottler(removedToken);
+        }
       },
     },
     heartbeat: {
