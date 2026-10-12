@@ -495,31 +495,9 @@ async function uploadImageBlock(
 
 async function uploadFileBlock(
   client: Lark.Client,
-  {
-    doc_token: docToken,
-    parent_block_id: parentBlockId,
-  }: Extract<FeishuDocParams, { action: "upload_file" }>,
+  { doc_token: docToken }: Extract<FeishuDocParams, { action: "upload_file" }>,
   upload: DocxUpload,
 ) {
-  const blockId = parentBlockId ?? docToken;
-
-  // Feishu cannot create empty file blocks, so allocate a temporary Markdown placeholder.
-  const placeholderMd = "[file](https://example.com/placeholder)";
-  const converted = await convertMarkdown(client, placeholderMd);
-  const { orderedBlocks } = normalizeConvertedBlockTree(
-    converted.blocks,
-    converted.firstLevelBlockIds,
-  );
-  const inserted = await insertBlocks(client, docToken, orderedBlocks, blockId);
-
-  const placeholderBlock = inserted[0];
-  if (!placeholderBlock?.block_id) {
-    throw new Error("Failed to create placeholder block for file upload");
-  }
-
-  const parentId = placeholderBlock.parent_id ?? blockId;
-  await deleteChildBlock(client, docToken, parentId, placeholderBlock.block_id);
-
   const fileToken = await uploadDocxMedia(client, "file", docToken, upload);
 
   return {

@@ -7,6 +7,7 @@ import { readConversation, registerConversationAddresses } from "./conversation-
 import { resolveConversationRouteFingerprint } from "./conversation-route-fingerprint.js";
 import {
   applySessionEntryOperation,
+  recordInboundSessionMeta,
   replaceSessionEntrySync,
   updateSessionLastRouteInScope,
 } from "./session-accessor.sqlite-entry.js";
@@ -17,6 +18,50 @@ import type { SessionEntry } from "./types.js";
 const { getSessionEntryPatchDelivery } =
   await import("./session-entry-patch-delivery.test-support.js");
 const delivery = getSessionEntryPatchDelivery();
+
+it.each(["inbound", "route"] as const)(
+  "merges %s metadata with an in-process write without a detached comparison read",
+  async (kind) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const original = f.read()!;
+      delivery.beforeCommit = () => {
+        delivery.beforeCommit = undefined;
+        replaceSessionEntrySync(f.scope, {
+          ...original,
+          label: "concurrent label",
+          updatedAt: original.updatedAt + 100,
+          delivery: {
+            kind: "external",
+            route: {
+              channel: "reef",
+              target: { to: "user:existing" },
+              thread: { id: "old-thread" },
+            },
+            context: { channel: "reef", to: "user:existing", threadId: "old-thread" },
+            origin: { provider: "reef", to: "user:existing", threadId: "old-thread" },
+          },
+        });
+      };
+      const ctx = { Provider: "reef", From: "reef:alice", ChatType: "direct", SenderName: "Alice" };
+      const result =
+        kind === "inbound"
+          ? await recordInboundSessionMeta({ ...f.scope, ctx })
+          : await updateSessionLastRouteInScope(f.scope, {
+              channel: "reef",
+              to: "user:alice",
+              ctx,
+            });
+      expect(result).toMatchObject({
+        label: "concurrent label",
+        updatedAt: original.updatedAt + 100,
+      });
+      expect(result).toMatchObject({ delivery: { origin: { label: "Alice" } } });
+      expect(f.read()).toEqual(result);
+      expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
+    });
+  },
+);
 
 it("reduces a fixed patch against the current row in one worker request without losing foreign metadata", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

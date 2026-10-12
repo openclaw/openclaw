@@ -125,7 +125,7 @@ export async function reloadGatewayPlugins(
   let committed = false;
   let restored = false;
   let candidateServices: PluginServicesHandle | undefined;
-  let loaded: ReturnType<typeof PluginBootstrap.prepareGatewayPluginLoad> | undefined;
+  let loaded: Awaited<ReturnType<typeof PluginBootstrap.prepareGatewayPluginLoad>> | undefined;
   let decisionReplacement: ReturnType<typeof prepareDecisionProviderReload> | undefined;
   let memoryReplacement: ReturnType<typeof prepareMemoryRuntimeReload> | undefined;
   const changedPluginIds = new Set(replacePluginIds);
@@ -238,7 +238,7 @@ export async function reloadGatewayPlugins(
       prepareRegistrationFailureCleanup: prepareRegistrationFailureCleanup(params.nextConfig),
       env: params.env,
     };
-    const preflight = withPluginCache(cache, () =>
+    const preflight = await withPluginCache(cache, () =>
       preparePlugins({ ...loadParams, loadModules: false }),
     );
     preflight.retireGatewayRuntimeBindings();
@@ -332,7 +332,7 @@ export async function reloadGatewayPlugins(
     }
     await checkpoint();
     phase = "activate";
-    loaded = withPluginCache(cache, () => preparePlugins(loadParams));
+    loaded = await withPluginCache(cache, () => preparePlugins(loadParams));
     nextRegistry = loaded.pluginRegistry;
     const { resolvedConfig } = loaded;
     const activationCleanup: Promise<void>[] = [];
@@ -521,7 +521,9 @@ export async function reloadGatewayPlugins(
         !previousCleanupFailed
       ) {
         const recoveryErrors: unknown[] = [];
-        let recovered: ReturnType<typeof PluginBootstrap.prepareGatewayPluginLoad> | undefined;
+        let recovered:
+          | Awaited<ReturnType<typeof PluginBootstrap.prepareGatewayPluginLoad>>
+          | undefined;
         let recoveredServices: PluginServicesHandle | undefined;
         let recoveryPublished = false;
         try {
@@ -540,7 +542,7 @@ export async function reloadGatewayPlugins(
               );
             }
             await disposeInstances(previousRegistry, changedPluginIds);
-            recovered = recovery.prepare(
+            recovered = await recovery.prepare(
               {
                 ...sharedLoadParams,
                 cfg: previousConfig,

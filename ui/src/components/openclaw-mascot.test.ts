@@ -3,7 +3,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { setCurrentThemeBranding } from "../app/theme-branding.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import type { OpenClawMascotElement } from "./openclaw-mascot.ts";
 import "./openclaw-mascot.ts";
 
 afterEach(() => {
@@ -22,12 +21,10 @@ it("replaces the animated mascot with a same-size neutral mark and restores it o
   vi.stubGlobal("requestAnimationFrame", requestFrame);
   vi.stubGlobal("cancelAnimationFrame", cancelFrame);
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-  // SAFETY: The imported bridge registers this tag with the declared properties.
-  const mascot = document.createElement("openclaw-mascot") as OpenClawMascotElement;
-  mascot.size = 48;
+  const mascot = document.createElement("openclaw-mascot");
+  mascot.setAttribute("size", "48");
   document.body.append(mascot);
-  await mascot.updateComplete;
-  expect(mascot.querySelector("canvas")).not.toBeNull();
+  await waitForSolid(() => expect(mascot.querySelector("canvas")).not.toBeNull());
   expect(requestFrame).toHaveBeenCalledOnce();
 
   setCurrentThemeBranding(resolveThemeBranding({ mascot: "none", critters: [] }));

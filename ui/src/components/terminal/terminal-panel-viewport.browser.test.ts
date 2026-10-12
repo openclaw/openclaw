@@ -12,9 +12,8 @@ it.runIf("__vitest_browser__" in globalThis)(
         new CustomEvent("openclaw:terminal-toggle", { detail: { open: true } }),
       );
       await panel.updateComplete;
-      const viewport = panel.querySelector("wa-tab-panel");
+      const viewport = panel.querySelector('[role="tabpanel"]');
       expect(viewport).not.toBeNull();
-      await viewport!.updateComplete;
       const canvas = document.createElement("canvas");
       canvas.width = 100;
       canvas.height = 50;

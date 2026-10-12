@@ -18,6 +18,15 @@ Physical integrity admission remains valid independently of canonical readiness.
 The schema 25 migration seeds every existing node before admission; see
 [canonical writer validation](/reference/database-schemas/agent-schema-history#canonical-writer-validation).
 
+Inbound session metadata and last-route changes use closed entry operations. The
+Gateway prepares plugin-owned group and origin facts once; the writer merges
+those facts with its current entry, preserving concurrent metadata, routing
+fallbacks, creation provenance, and activity timestamps without a detached
+callback comparison. Skill snapshot persistence uses the same fixed-field path.
+Generic callbacks retain their prepare-and-compare contract, and source and
+conversation authority still apply at the mutation boundary. These operations
+change no schemas, stored formats, retention, or update behavior.
+
 Runtime database access belongs in workers. The Gateway main thread owns live
 projections, caches, and caller authority; it awaits prepared facts and installs
 committed results. Synchronous boot admission, migrations, Doctor/CLI one-shots,
@@ -240,6 +249,39 @@ the canonical agent worker, including after native deletion preparation. Native
 inline maintenance and archive persistence still share the released opaque SDK
 deletion transaction; moving those calls requires that transaction owner's cutover.
 This changes no schemas, retention, stored bytes, or update behavior.
+
+## Live T1 and deprecated compatibility
+
+`pnpm check:database-worker-ratchet` reports live **T1** separately from
+**T1-compat** (deprecated-only synchronous compatibility). T1 remains a
+conservative inventory of bundled-reachable or unproven runtime/mixed SQL;
+T1-compat is not worker execution or a runtime speedup. The combined count still
+shows the retained synchronous implementation.
+
+An operation enters T1-compat only through the reviewed operation registry in
+`scripts/lib/database-worker-compat.mts`. Its declaration must retain
+`@deprecated`, and the source graph must have no bundled value references except
+from other reviewed compatibility boundaries. The check follows import and
+reexport aliases, including SDK barrels, and rejects escaped callbacks and
+namespace values as well as direct calls. Type-only references and pure
+reexports preserve the released SDK surface without becoming runtime callers.
+Tests remain outside this production inventory. Returned-method families and
+shared kernels stay in T1 until their complete caller boundary can be enforced;
+a deprecation marker alone does not move them to T1-compat.
+
+The same check runs from the inventory generator and the worker ratchet, including
+staged-source checks. Adding a bundled caller fails even if another T1 call is
+removed in the same change. A shared kernel stays T1 unless every native caller
+has a proven compatibility boundary; worker callers alone do not prove that.
+Boot admission, migrations, Doctor/CLI one-shots, and lock primitives retain their
+existing T2/T3 classifications.
+
+Remove a T1-compat API and its remaining synchronous kernel in the next Plugin SDK
+major, together with obsolete SDK exports and registry entries. Publish release
+notes naming the removed API and its asynchronous replacement. Until that major,
+keep the deprecated API's completion and transaction contract; migrate bundled
+callers to the owning worker operation instead of removing the compatibility
+implementation.
 
 ## Session target discovery
 
@@ -873,6 +915,19 @@ paths do not allocate them or add worker requests. Partial entry or
 transcript receipts cannot certify complete pending-input and model-context
 facts. Native, SDK, recovery, and maintenance writers keep their existing
 publication and final-authority guards during this incremental cutover.
+
+Closed entry patches reuse an already resident actor when the session and
+lifecycle stay unchanged. The entry writer supplies its complete row and window
+postimages; the actor keeps the untouched pending inputs and transcript facts,
+then publishes its full hot state through the same commit receipt. A rollback
+preserves the stored preimage; conservative receipt invalidation can require a
+reload. Missing residency, replacement lifecycles, and unknown writes still
+require hydration. Oversized optional actor postimages are
+shed with full-entry enrichment under the existing publication limit.
+Bounded context reads inside the actor transaction also derive logical parents
+from its active positions and identities and reuse its projection, reset, and
+prefix facts; standalone reads retain their SQL lookups. Hydration does not
+repeat a revision check inside this synchronous owner.
 
 Phase C entry readers share this bounded MAIN residency. Eligible exact-entry
 and ordered-cohort reads reuse complete actor state or its entry-only projection;
@@ -3586,7 +3641,11 @@ Cold bootstrap retains its existing owner. Schemas, stored formats, and update
 behavior are unchanged.
 
 Memory dreaming and backfill retain the selected physical corpus file across
-filesystem discovery in the existing history reader. Their final ingestion-policy
+filesystem discovery in the existing history reader. Read scopes that explicitly
+capture a physical source recheck its retained identity after asynchronous
+preparation and before disclosure or writable admission. Deleted or replaced files
+are refused without repeating schema or integrity validation; ordinary admission
+lookups continue to reuse their retained facts. Their final ingestion-policy
 decision remains a synchronous, bounded batch of exact source metadata after the
 existing corpus and tombstone preparation. Forgotten sources and disabled policies
 require no metadata read. Raw synchronous SDK writers do not
@@ -5589,6 +5648,13 @@ still read their logical agent namespaces. Recorded quarantine remains authorita
 Canonical validation receipts share that same physical admission; their certifying
 and offline repair writers publish committed replacements. Ordinary session writes
 do not expire the receipt, and rollback cannot publish an uncommitted one.
+
+Lifecycle mutations return the resulting entry count from their committed
+inserts and removals. Finalization subtracts only acknowledged retention removals;
+it does not query the count again after archive publication. A later lifecycle
+operation reads its own starting count, so unrelated writes after the earlier
+commit belong to that later operation. Doctor callbacks that can change arbitrary
+rows still count inside their transaction.
 
 Warm maintenance reads use the current age hint and one count statement without
 an explicit transaction. Capacity pressure still requests full planning, whose

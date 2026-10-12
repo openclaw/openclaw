@@ -59,7 +59,7 @@ describe("QA Gateway auth profile staging", () => {
     expect(configProfile.provider).toBe("anthropic");
     expect(configProfile.mode).toBe("token");
     const storeProfile = requireAuthProfile(
-      readAuthProfileStore(stateDir, "main").profiles,
+      (await readAuthProfileStore(stateDir, "main")).profiles,
       "anthropic:qa-setup-token",
     );
     expect(storeProfile).toMatchObject({ type: "token", provider: "anthropic", token });
@@ -90,7 +90,7 @@ describe("QA Gateway auth profile staging", () => {
       expect.objectContaining({ provider: "anthropic" }),
     );
     for (const agentId of ["main", "qa"]) {
-      const profiles = readAuthProfileStore(stateDir, agentId).profiles;
+      const profiles = (await readAuthProfileStore(stateDir, agentId)).profiles;
       expect(requireAuthProfile(profiles, "qa-live-openai-env")).toMatchObject({
         type: "api_key",
         provider: "openai",
@@ -122,7 +122,7 @@ describe("QA Gateway auth profile staging", () => {
 
     expect(cfg.auth?.profiles).toBeUndefined();
     for (const agentId of ["main", "qa"]) {
-      expect(readAuthProfileStore(stateDir, agentId).profiles).toEqual({});
+      expect((await readAuthProfileStore(stateDir, agentId)).profiles).toEqual({});
     }
     const env = buildQaRuntimeEnv({
       configPath: "/tmp/openclaw-qa/openclaw.json",
@@ -196,7 +196,7 @@ describe("QA Gateway auth profile staging", () => {
     // Anthropic should NOT be staged when the caller restricts providers.
     expect(cfg.auth?.profiles?.["qa-mock-anthropic"]).toBeUndefined();
 
-    const qaStore = readAuthProfileStore(stateDir, "qa");
+    const qaStore = await readAuthProfileStore(stateDir, "qa");
     const openaiStoreProfile = requireAuthProfile(qaStore.profiles, "qa-mock-openai");
     expect(openaiStoreProfile.provider).toBe("openai");
     expect(openaiStoreProfile.type).toBe("api_key");

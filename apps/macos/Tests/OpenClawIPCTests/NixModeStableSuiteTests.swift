@@ -53,6 +53,17 @@ struct NixModeStableSuiteTests {
         }
     }
 
+    @Test func `detects the live test runner across concurrent reads`() async {
+        await withTaskGroup(of: Bool.self) { group in
+            for _ in 0..<32 {
+                group.addTask { ProcessInfo.processInfo.isRunningTests }
+            }
+            for await isRunningTests in group {
+                #expect(isRunningTests)
+            }
+        }
+    }
+
     @Test func `detects SwiftPM and XCTest runners`() {
         #expect(ProcessInfo.resolveIsRunningTests(
             environment: [:],

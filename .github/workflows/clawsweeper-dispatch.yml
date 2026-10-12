@@ -207,15 +207,6 @@ jobs:
             --input - <<< "$ack_payload"
 
       - name: Dispatch GitHub activity to ClawSweeper
-        # The App covers issue, issue-comment, and PR activity after cutover.
-        # Keep relaying events outside its subscriptions.
-        if: >-
-          ${{
-            vars.CLAWSWEEPER_GITHUB_ACTIVITY_RELAY_DISABLED != '1' ||
-            github.event_name == 'push' ||
-            github.event_name == 'pull_request_review' ||
-            github.event_name == 'pull_request_review_comment'
-          }}
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           TARGET_REPO: ${{ github.repository }}

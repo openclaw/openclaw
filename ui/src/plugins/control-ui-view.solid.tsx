@@ -24,7 +24,7 @@ import { renderPluginTemplate } from "./control-ui-view.runtime.ts";
 import type { ViewKind } from "./control-ui-view.ts";
 
 type ViewRegistration = ControlUiRegistration<{ mount: ControlUiView<unknown> }>;
-export type PluginViewProps = {
+type PluginViewProps = {
   kind: ViewKind;
   contributionKey: string;
   surface: ControlUiSurface;
@@ -380,22 +380,23 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
   );
 }
 
-export const PluginView = defineSolidBridge<
-  PluginViewProps,
-  { focus(options?: FocusOptions): void }
->("openclaw-plugin-view", PluginViewContent, {
-  properties: {
-    kind: { default: "replacements", attribute: false },
-    contributionKey: { default: "", attribute: false },
-    surface: { default: "workspace", attribute: false },
-    props: { default: {}, attribute: false },
-    defaultView: { default: undefined, attribute: false },
-    replacementCompanion: { default: undefined, attribute: false },
-    defaultHost: { default: undefined, attribute: false },
-    presented: { default: true, type: Boolean },
+const PluginView = defineSolidBridge<PluginViewProps, { focus(options?: FocusOptions): void }>(
+  "openclaw-plugin-view",
+  PluginViewContent,
+  {
+    properties: {
+      kind: { default: "replacements", attribute: false },
+      contributionKey: { default: "", attribute: false },
+      surface: { default: "workspace", attribute: false },
+      props: { default: {}, attribute: false },
+      defaultView: { default: undefined, attribute: false },
+      replacementCompanion: { default: undefined, attribute: false },
+      defaultHost: { default: undefined, attribute: false },
+      presented: { default: true, type: Boolean },
+    },
+    methods: { focus: (host, options) => views.get(host)?.focus(options) },
   },
-  methods: { focus: (host, options) => views.get(host)?.focus(options) },
-});
+);
 
 export function PluginContribution(props: {
   kind: Exclude<ViewKind, "replacements">;
