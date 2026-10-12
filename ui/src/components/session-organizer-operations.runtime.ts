@@ -295,17 +295,18 @@ export async function renameSession(
         return null;
       }
       let failure: string | null = null;
-      await patchSession(host, session, patch, scope, {
+      const result = await patchSession(host, session, patch, scope, {
         sessionScope: true,
         handleError: (error) => {
-          if (!/^label already in use:/iu.test(formatUiError(error))) {
+          failure = formatUiError(error);
+          if (!/^label already in use:/iu.test(failure)) {
             return false;
           }
           failure = t("sessionsView.sessionNameInUse");
           return true;
         },
       });
-      return failure;
+      return failure ?? (result === "failed" ? t("common.failed") : null);
     },
   });
 }
