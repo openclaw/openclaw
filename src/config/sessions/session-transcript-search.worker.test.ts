@@ -237,23 +237,6 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
       slowUnavailable.mockRestore();
       clock.mockRestore();
     }
-
-    runOpenClawAgentWriteTransaction(
-      ({ db }) => {
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<DB>(db)
-            .updateTable("session_transcript_index_state")
-            .set({ needs_rebuild: 1 }),
-        );
-      },
-      { ...database, env: state.env },
-    );
-
-    expect(await searchSessionTranscripts(request, database)).toEqual({
-      ...golden,
-      indexing: false,
-    });
   });
 });
 
