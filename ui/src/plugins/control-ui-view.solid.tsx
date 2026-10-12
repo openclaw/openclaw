@@ -1,5 +1,13 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { createEffect, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import {
+  createEffect,
+  createSignal,
+  getOwner,
+  onCleanup,
+  onSettled,
+  runWithOwner,
+  Show,
+} from "solid-js";
 import type {
   ControlUiSurface,
   ControlUiSurfaceProps,
@@ -63,11 +71,12 @@ export function observePluginProperties<P extends object>(
 }
 
 function MountedContent(props: { value: unknown; host?: object }) {
+  const owner = getOwner();
   let container!: HTMLDivElement;
   createEffect(
     () => ({ value: props.value, host: props.host }),
     ({ value, host }) => {
-      renderPluginTemplate(value, container, host);
+      runWithOwner(owner, () => renderPluginTemplate(value, container, host));
     },
   );
   onCleanup(() => renderPluginTemplate(undefined, container));

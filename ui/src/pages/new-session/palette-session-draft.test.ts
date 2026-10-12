@@ -118,6 +118,8 @@ describe("PaletteSessionDraft", () => {
     expect(host.draft.messageLocked).toBe(true);
     expect(context.sessions.createResult).not.toHaveBeenCalled();
     policy.resolve({ sessionPlacement: { requiredProfile: profile } });
+    await context.agents.refreshList();
+    host.requestUpdate();
     await host.coldOutcome.promise;
     expect(host.draft.submitting).toBe(true);
     expect(host.draft.error).toBeNull();
