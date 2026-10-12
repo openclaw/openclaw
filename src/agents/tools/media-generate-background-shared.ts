@@ -136,22 +136,29 @@ type WakeMediaGenerationTaskCompletionParams = Omit<
 async function wakeMediaGenerationTaskCompletionWithRetry(params: {
   wake: () => Promise<MediaGenerationCompletionWakeOutcome>;
   beforeRetry?: () => void;
+  onQueued?: () => void;
 }): Promise<MediaGenerationCompletionWakeOutcome> {
   const deadline = Date.now() + MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS;
   let outcome = await params.wake();
   let retryIndex = 0;
-  while (outcome.status === "pending") {
+  let queueOwnsCompletion = false;
+  while (outcome.status === "pending" || outcome.status === "queued") {
+    if (outcome.status === "queued" && !queueOwnsCompletion) {
+      queueOwnsCompletion = true;
+      params.onQueued?.();
+    }
     const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
+    if (!queueOwnsCompletion && remainingMs <= 0) {
       throw new Error("media completion did not settle before the handoff deadline");
     }
-    // Queue admission and an owned continuation can both be transient. Keep the
-    // operation live until delivery, permanent refusal, or the bounded deadline.
+    // Only unconfirmed admission has a deadline. Once durably queued, the queue
+    // owns delivery and the original cron turn must release its continuation lane.
     const delayMs = computeBackoffSchedule(
       MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS,
       retryIndex + 1,
     );
-    await sleepWithAbort(Math.min(delayMs, remainingMs), undefined, { ref: false });
+    const retryDelayMs = queueOwnsCompletion ? delayMs : Math.min(delayMs, remainingMs);
+    await sleepWithAbort(retryDelayMs, undefined, { ref: false });
     params.beforeRetry?.();
     outcome = await params.wake();
     retryIndex += 1;
@@ -385,6 +392,9 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       runId: params.handle.runId,
       ...meta,
     });
+  const recordCompletionQueueCustody = () => {
+    updateMediaGenerationOperation(params.handle.runId, { completionDelivery: "queued" });
+  };
   const runBackgroundWork = async () => {
     let executed: MediaGenerationExecutionResult;
     if (!isMediaGenerationOperationCurrent(params.handle.runId)) {
@@ -417,6 +427,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
               statusLabel: "failed",
               result: formatErrorMessage(error),
             }),
+          onQueued: recordCompletionQueueCustody,
         });
         if (wakeOutcome.status !== "delivered") {
           reportFailure(`${params.toolName} failure completion delivery was not confirmed`);
@@ -458,6 +469,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
         // Keep the native operation and process-local activity fresh
         // while an exact cron continuation is still owned by its original run.
         beforeRetry: recordCompletionDeliveryProgress,
+        onQueued: recordCompletionQueueCustody,
       });
       if (wakeOutcome.status !== "delivered") {
         const failureReason = "completion delivery was not confirmed after successful generation";

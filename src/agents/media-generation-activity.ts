@@ -19,6 +19,8 @@ export type MediaGenerationOperation = {
   endedAt?: number;
   lastEventAt?: number;
   progressSummary?: string;
+  /** Durable completion custody releases the requester lane without declaring delivery done. */
+  completionDelivery?: "queued";
   terminalSummary?: string;
   terminalOutcome?: "blocked";
   error?: string;
@@ -173,6 +175,7 @@ export function updateMediaGenerationOperation(
       | "endedAt"
       | "lastEventAt"
       | "progressSummary"
+      | "completionDelivery"
       | "terminalSummary"
       | "terminalOutcome"
       | "error"

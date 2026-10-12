@@ -20,7 +20,10 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import { hasPendingGeneratedMediaTaskForSessionKey } from "../media-generation-activity.js";
+import {
+  findMediaGenerationOperation,
+  hasPendingGeneratedMediaTaskForSessionKey,
+} from "../media-generation-activity.js";
 
 const subagentAnnounceDeliveryMocks = vi.hoisted(() => ({
   deliverSubagentAnnouncement: vi.fn(),
@@ -535,6 +538,60 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       vi.useRealTimers();
     }
   });
+
+  it.each(["success", "error"] as const)(
+    "retains queued %s completion past the admission deadline without blocking its cron lane",
+    async (result) => {
+      vi.useFakeTimers();
+      try {
+        const sessionKey = "agent:main:cron:daily-media:run:run-123";
+        const scheduled: Array<() => Promise<void>> = [];
+        const onWakeFailure = vi.fn();
+        let delivered = false;
+        subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockImplementation(async () =>
+          delivered
+            ? { delivered: true, path: "queued" }
+            : { delivered: false, path: "queued", disposition: "session_queued" },
+        );
+        const lifecycle = createImageMediaLifecycle();
+        const handle = await lifecycle.createTaskRun({ sessionKey, prompt: "proof image" });
+        assert(handle);
+        scheduleImageCompletion({
+          lifecycle,
+          handle,
+          scheduleBackgroundWork: (work) => scheduled.push(work),
+          onWakeFailure,
+          run: async () => {
+            if (result === "error") {
+              throw new Error("provider refused generation");
+            }
+            return generatedImageResult();
+          },
+        });
+
+        const backgroundWork = scheduled[0]?.();
+        await vi.advanceTimersByTimeAsync(125_000);
+        expect(findMediaGenerationOperation(handle.runId)).toMatchObject({
+          status: "running",
+          completionDelivery: "queued",
+        });
+        expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(true);
+        expect(detachedTaskRuntimeMocks.completeOperation).not.toHaveBeenCalled();
+        expect(detachedTaskRuntimeMocks.failOperation).not.toHaveBeenCalled();
+        expect(onWakeFailure).not.toHaveBeenCalled();
+
+        delivered = true;
+        await vi.advanceTimersByTimeAsync(2_000);
+        await backgroundWork;
+        const operation = findMediaGenerationOperation(handle.runId);
+        expect(operation?.status).toBe(result === "success" ? "succeeded" : "failed");
+        expect(operation?.terminalOutcome).toBeUndefined();
+        expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("stops pending handoff retries at the completion deadline", async () => {
     vi.useFakeTimers();

@@ -240,7 +240,7 @@ describe("original requester media handoff", () => {
           expect(enqueue).toHaveBeenCalledTimes(1);
           expect(entries).toEqual([]);
         } else {
-          expect(result).toEqual({ status: "pending" });
+          expect(result).toEqual({ status: "queued" });
           expect(entries).toHaveLength(1);
           const entry = entries[0]!;
           expect(entry).toMatchObject({

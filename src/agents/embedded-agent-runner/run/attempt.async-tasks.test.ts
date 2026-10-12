@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   clearGeneratedMediaTaskActivity,
   createMediaGenerationOperation,
+  findMediaGenerationOperation,
   updateMediaGenerationOperation,
 } from "../../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
@@ -85,6 +86,31 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
       ],
     });
   });
+
+  it.each(["image", "music", "video"])(
+    "releases the cron lane when the durable queue takes %s completion custody",
+    async (kind) => {
+      const task = startTask(kind);
+      const toolMetas = [{ asyncStarted: true, asyncTaskRunId: task.runId }];
+      await expect(
+        wait({
+          getToolMetas: () => toolMetas,
+          sleep: async () => {
+            updateMediaGenerationOperation(task.taskId, { completionDelivery: "queued" });
+          },
+        }),
+      ).resolves.toEqual({ waitedRunIds: [task.runId], timedOutRunIds: [], terminalTasks: [] });
+      expect(findMediaGenerationOperation(task.taskId)?.status).toBe("running");
+      expect(requiresCompletionRequiredAsyncTaskWait({ sessionKey, toolMetas })).toBe(false);
+      await expect(
+        wait({ getToolMetas: () => toolMetas, getDeadlineAtMs: () => 0 }),
+      ).resolves.toEqual({
+        waitedRunIds: [],
+        timedOutRunIds: [],
+        terminalTasks: [],
+      });
+    },
+  );
 
   it("ignores media operations owned by another requester", async () => {
     startTask("image", "agent:main:parent");
