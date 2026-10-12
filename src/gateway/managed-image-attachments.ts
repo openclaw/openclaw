@@ -78,6 +78,7 @@ import {
   encodeImageThumbnail,
   resolveManagedImageThumbnail,
 } from "./managed-image-thumbnail-cache.js";
+import { handleManagedImageThumbnailResponse } from "./managed-image-thumbnail-response.js";
 import {
   createManagedOutgoingImageTicket,
   verifyManagedOutgoingImageTicket,
@@ -1429,12 +1430,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
               respondNotFound();
               return true;
             }
-            const sourceName = path.parse(responseFilename ?? "generated-image").name;
-            res.statusCode = 200;
-            res.setHeader("content-length", String(thumbnail.byteLength));
-            writeMediaHeaders("image/png", `${sourceName}-thumbnail.png`);
-            res.end(req.method === "HEAD" ? undefined : thumbnail);
-            return true;
+            return handleManagedImageThumbnailResponse(req, res, {
+              thumbnail,
+              filename: responseFilename,
+              cacheControl: immutableCacheControl,
+            });
           }
 
           const isPlayback =
