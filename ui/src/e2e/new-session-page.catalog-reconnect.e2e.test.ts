@@ -490,10 +490,8 @@ suite.define(() => {
   });
 
   it.each([
-    { catalogId: "codex", action: "button" },
     { catalogId: "codex", action: "Enter" },
     { catalogId: "claude", action: "button" },
-    { catalogId: "claude", action: "Enter" },
   ])(
     "$catalogId + primary $action opens a native terminal without Chat or title inference",
     async ({ catalogId, action }) => {

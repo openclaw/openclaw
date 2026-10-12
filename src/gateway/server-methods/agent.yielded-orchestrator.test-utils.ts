@@ -47,6 +47,8 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
         await seedPersistedSubagentRunForAgentTest({
           runId: previousRunId,
           childSessionKey,
+          childAgentId: "main",
+          childSessionIdentity: { sessionId: "spawned-child-session" },
           requesterSessionKey: "agent:main:main",
           requesterDisplayKey: "main",
           task: "Wait for the parent's answer",
@@ -168,6 +170,8 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
           await seedPersistedSubagentRunForAgentTest({
             runId: previousRunId,
             childSessionKey,
+            childAgentId: "main",
+            childSessionIdentity: { sessionId: "spawned-child-session" },
             requesterSessionKey,
             requesterDisplayKey: requesterSessionKey,
             task: "Collect the worker's result",

@@ -72,6 +72,8 @@ async function seedYieldedParent() {
   await registerSubagentRun({
     runId: childRunId,
     childSessionKey: childKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: childId, lifecycleRevision: "original-incarnation" },
     requesterSessionKey: parentKey,
     requesterAgentId: "main",
     requesterDisplayKey: parentKey,

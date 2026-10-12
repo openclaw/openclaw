@@ -64,6 +64,8 @@ it("does not recreate a source released before replacement admission", async () 
   await registerSubagentRun({
     runId: "released-source",
     childSessionKey: "agent:main:subagent:released-source",
+    childAgentId: "main",
+    sessionEntry: { sessionId: "released-source-session" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: "original task",
@@ -116,6 +118,8 @@ it("hydrates a cold durable source before advancing its replacement generation",
   await registerSubagentRun({
     runId: "cold-original",
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: "cold-replacement-session" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: "restored replacement source",
@@ -176,6 +180,8 @@ it.each(["transaction", "commit"] as const)(
     await registerSubagentRun({
       runId: "lifecycle-predecessor",
       childSessionKey: "agent:main:subagent:lifecycle-replacement",
+      childAgentId: "main",
+      sessionEntry: { sessionId: "lifecycle-replacement-session" },
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "original task",
@@ -244,6 +250,8 @@ it.each(["end", "error"] as const)(
     await registerSubagentRun({
       runId: "timeout-predecessor",
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "Continue bounded work",
@@ -454,6 +462,8 @@ it.each(["successor", "source retirement"] as const)(
     await registerSubagentRun({
       runId: "rollback-predecessor",
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: { sessionId: "rearm-rollback-session" },
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "Resume interrupted work",
@@ -556,6 +566,8 @@ it("rearms native execution for an interrupted run's successor", async () => {
   await registerSubagentRun({
     runId: "interrupted-task-old",
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
     requesterSessionKey,
     requesterDisplayKey: "main",
     task: "Resume interrupted work",
@@ -646,11 +658,17 @@ it("admits a child follow-up while its predecessor's browser cleanup is still pe
     agentId: "main",
     sessionKey: childSessionKey,
     defaultSessionId: "held-browser-cleanup-session",
+    lifecycleRevision: "held-browser-cleanup-revision",
   });
   try {
     await registerSubagentRun({
       runId: "browser-cleanup-predecessor",
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: {
+        sessionId: "held-browser-cleanup-session",
+        lifecycleRevision: "held-browser-cleanup-revision",
+      },
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "Finish browser work",
@@ -711,6 +729,8 @@ it.each([
     await registerSubagentRun({
       runId: "pending-ended-hook",
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: { sessionId: "pending-ended-hook-session" },
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "original work",

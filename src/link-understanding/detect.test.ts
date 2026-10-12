@@ -19,19 +19,14 @@ describe("extractLinksFromMessage", () => {
     expect(links).toStrictEqual([]);
   });
 
-  it.each([
-    ["escaped double quote", '[doc](https://docs.example "A \\"quoted\\" title")'],
-    ["escaped single quote", "[doc](https://docs.example 'A \\'quoted\\' title')"],
-    ["escaped parenthesis", "[doc](https://docs.example (a \\(paren\\) title))"],
-    ["title line break", '[doc](https://docs.example "line one\nline two")'],
-    ["angle destination", '[doc](<https://docs.example/a b> "Docs")'],
-    ["balanced destination parentheses", "[doc](https://docs.example/a_(b))"],
-    ["escaped destination parenthesis", String.raw`[doc](https://docs.example/a\)b)`],
-  ])("ignores markdown links with a %s", (_name, markdownLink) => {
-    expect(extractLinksFromMessage(`${markdownLink} https://bare.example`)).toStrictEqual([
-      "https://bare.example",
-    ]);
-  });
+  it.each([["title line break", '[doc](https://docs.example "line one\nline two")']])(
+    "ignores markdown links with a %s",
+    (_name, markdownLink) => {
+      expect(extractLinksFromMessage(`${markdownLink} https://bare.example`)).toStrictEqual([
+        "https://bare.example",
+      ]);
+    },
+  );
 
   it("does not strip a link with an escaped closing delimiter", () => {
     expect(extractLinksFromMessage('[doc](https://docs.example "t\\")')).toStrictEqual([

@@ -167,6 +167,7 @@ jobs:
       qa_smoke_ci_matrix: ${{ steps.manifest.outputs.qa_smoke_ci_matrix }}
       run_prompt_snapshots: ${{ steps.manifest.outputs.run_prompt_snapshots }}
       run_sqlite_session_lifecycle: ${{ steps.manifest.outputs.run_sqlite_session_lifecycle }}
+      run_postgres_conformance: ${{ steps.manifest.outputs.run_postgres_conformance }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
       run_plugin_contracts_shards: ${{ steps.manifest.outputs.run_plugin_contracts_shards }}
       plugin_contracts_matrix: ${{ steps.manifest.outputs.plugin_contracts_matrix }}
@@ -2348,10 +2349,27 @@ jobs:
           fi
           requires_webkit="$(node --input-type=module <<'NODE'
           import { existsSync } from "node:fs";
-          import { loadPatternListFromEnv, matchesVitestGlob } from "./test/vitest/vitest.pattern-file.ts";
-          const suite = "ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts";
-          const include = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE");
-          process.stdout.write(String(existsSync(suite) && (!include || include.some((pattern) => matchesVitestGlob(suite, pattern)))));
+          import { resolve } from "node:path";
+          const suite = resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts");
+          let requiresWebkit = false;
+          if (existsSync(suite)) {
+            const { createVitest } = await import("vitest/node");
+            const vitest = await createVitest({
+              config: "test/vitest/vitest.ui-e2e.config.ts",
+              configLoader: "runner",
+              watch: false,
+              maxWorkers: Number(process.env.OPENCLAW_VITEST_MAX_WORKERS || 2),
+              shard: `${process.env.VITEST_SHARD_INDEX}/${process.env.VITEST_SHARD_COUNT}`,
+            });
+            try {
+              const sequencer = new vitest.config.sequence.sequencer(vitest);
+              const files = await sequencer.shard(await vitest.globTestSpecifications());
+              requiresWebkit = files.some((file) => file.moduleId === suite);
+            } finally {
+              await vitest.close();
+            }
+          }
+          process.stdout.write(String(requiresWebkit));
           NODE
           )"
           if [[ "$requires_webkit" == "true" ]]; then
@@ -4382,6 +4400,31 @@ jobs:
         with:
           mode: publish-run
 
+  postgres-conformance:
+    permissions:
+      contents: read
+    name: PostgreSQL conformance
+    needs: [preflight]
+    if: needs.preflight.outputs.run_postgres_conformance == 'true'
+    runs-on: *hosted_linux_runner
+    timeout-minutes: 30
+    steps:
+      - *linux_node_checkout_step
+      - *linux_node_setup_step
+      - name: Start PostgreSQL service
+        run: |
+          docker run --detach --name openclaw-postgres --publish 127.0.0.1:5432:5432 \
+            --user postgres postgres:17 bash -ec \
+            'initdb -A trust -U postgres -D /tmp/openclaw-pg >/dev/null;
+             echo "host all all all trust" >> /tmp/openclaw-pg/pg_hba.conf;
+             exec postgres -D /tmp/openclaw-pg -h 0.0.0.0'
+          timeout 60s docker exec openclaw-postgres bash -c 'until pg_isready -U postgres; do sleep 1; done'
+      - name: Run PostgreSQL conformance
+        run: node scripts/test-database-conformance.mjs --engine postgres --connection postgresql://postgres@127.0.0.1:5432/postgres
+      - name: Stop PostgreSQL service
+        if: always()
+        run: docker rm --force openclaw-postgres
+
   check-docs:
     permissions:
       contents: read
@@ -6319,6 +6362,7 @@ jobs:
       - android-access-native
       - docker-seed-e2e
       - published-driver-update
+      - postgres-conformance
     if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && github.repository == 'openclaw/openclaw' && !github.event.pull_request.draft }}
     runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || github.repository != 'openclaw/openclaw' || github.event.pull_request.head.repo.full_name != github.repository || needs.preflight.outputs.runner_profile == 'github') && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 15
@@ -6390,6 +6434,7 @@ jobs:
       - android-access-native
       - docker-seed-e2e
       - published-driver-update
+      - postgres-conformance
       - pr-failure-report
     if: ${{ (github.event_name != 'schedule' || (github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main')) && ((github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && always() && (github.event_name == 'schedule' || !cancelled()) && (github.event_name != 'pull_request' || !github.event.pull_request.draft)) }}
     # Preserve critical-path routing for Blacksmith PR failures.
@@ -6459,6 +6504,7 @@ jobs:
             android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_access_native }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
             published-driver-update=${{ needs.published-driver-update.result }}|${{ needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha }}
+            postgres-conformance=${{ needs.postgres-conformance.result }}|${{ needs.preflight.outputs.run_postgres_conformance }}
             pr-failure-report=${{ (github.run_attempt != 1 || needs.preflight.outputs.run_checks_node_core_nondist != 'true') && 'skipped' || needs.pr-failure-report.result }}|${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' }}
         run: |
           set -euo pipefail
@@ -6527,6 +6573,7 @@ jobs:
       - check-test-types-hosted-core-shard
       - check-additional-shard
       - check-extension-package-boundary
+      - postgres-conformance
       - check-docs
       - skills-python
       - checks-windows

@@ -383,7 +383,7 @@ it("publishes maintenance removals before row listeners recreate the key", async
       expect(readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey)?.sessionId).toBe(
         "removed",
       );
-      await runSqliteSessionReclamation({ forceInProcess: false, plan, diagnostics });
+      await runSqliteSessionReclamation({ plan, diagnostics });
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
       expect(callbackErrors).toEqual([]);
       expect(identities).toEqual(["delete:removed", "create:replacement"]);

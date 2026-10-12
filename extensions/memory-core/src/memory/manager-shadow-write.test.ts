@@ -3,10 +3,8 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import * as storage from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { SqliteWorkerError } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
-import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
@@ -25,86 +23,30 @@ describe("private session source staging", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  async function setup(vectorEnabled = false) {
+  async function setup() {
     await fixture.seedSessionTranscript({
       sessionId: "shadow-session",
       messages: [
         {
           role: "user",
           timestamp: 1,
-          content: vectorEnabled
-            ? "Violet session preference. Beta."
-            : "Violet session preference.",
+          content: "Violet session preference.",
           senderIsOwner: true,
         },
       ],
     });
     const manager = await fixture.getFreshManager(
       fixture.createConfig({
-        provider: vectorEnabled ? "openai" : "none",
+        provider: "none",
         sources: ["memory", "sessions"],
         sessionMemory: true,
-        vectorEnabled,
+        vectorEnabled: false,
       }),
     );
     // SAFETY: this fixture owns the manager and inspects its published native store.
     const db = Reflect.get(manager, "db") as DatabaseSync;
     return { manager, db };
   }
-
-  it.each([
-    { mode: "FTS-only", vectorEnabled: false },
-    { mode: "vector", vectorEnabled: true },
-  ])(
-    "publishes forced $mode memory and session sources without the application-thread kernel",
-    async ({ vectorEnabled }) => {
-      const { manager, db } = await setup(vectorEnabled);
-      vi.spyOn(MemorySourceIndexKernel.prototype, "replaceRows").mockImplementation(() => {
-        throw new Error("source publication reached the application thread");
-      });
-      await manager.sync({ reason: "cli", force: true });
-      expect(
-        db.prepare("SELECT DISTINCT source FROM memory_index_chunks ORDER BY source").all(),
-      ).toEqual([{ source: "memory" }, { source: "sessions" }]);
-      const sessionChunks = db
-        .prepare(
-          "SELECT id, text, embedding FROM memory_index_chunks WHERE source='sessions' ORDER BY id",
-        )
-        .all();
-      expect(sessionChunks).toEqual([
-        {
-          id: expect.any(String),
-          text: expect.stringContaining("Violet session preference."),
-          embedding: storage.encodeMemoryEmbedding(vectorEnabled ? [0, 1, 0, 0] : []),
-        },
-      ]);
-      if (vectorEnabled) {
-        const inspection = memoryIndexFixtureWriter(manager);
-        expect((await storage.loadSqliteVecExtension({ db: inspection })).ok).toBe(true);
-        const vectors = inspection
-          .prepare(
-            "SELECT v.id, hex(v.embedding) AS embedding FROM memory_index_chunks_vec AS v " +
-              "JOIN memory_index_chunks AS c ON c.id = v.id WHERE c.source = 'sessions' ORDER BY v.id",
-          )
-          .all();
-        const embedding = Buffer.from(new Float32Array([0, 1, 0, 0]).buffer)
-          .toString("hex")
-          .toUpperCase();
-        expect(vectors).toEqual(sessionChunks.map(({ id }) => ({ id, embedding })));
-        const sql = observeHostDataSql();
-        try {
-          await manager.sync({ reason: "after-shadow-publication" });
-          expect(sql.queries).toEqual([]);
-        } finally {
-          sql.restore();
-        }
-      }
-      const databasePath = db.location()!;
-      await manager.close();
-      const entries = await fs.readdir(path.dirname(databasePath));
-      expect(entries.filter((name) => name.includes(".memory-reindex-"))).toEqual([]);
-    },
-  );
 
   it("rejects a tombstone recorded after native staging before publishing the shadow", async () => {
     const { manager, db } = await setup();

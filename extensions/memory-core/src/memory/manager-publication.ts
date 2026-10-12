@@ -118,48 +118,37 @@ export async function publishMemorySource(params: {
   });
 }
 
-/** The committing worker checks the captured revision before retaining vectors. */
+/** Cache entries are content-addressed; the worker excludes forgotten sessions. */
 export async function publishMemoryEmbeddingCache(params: {
   scope: PublicationScope;
   mutation: MemoryEmbeddingCacheMutation;
-  prepareRevision: () => number | undefined;
-  invalidate: () => void;
+  prepare: () => boolean;
   retry: PublicationRetry;
 }): Promise<boolean | undefined> {
-  const { scope, mutation, prepareRevision, invalidate, retry } = params;
-  const expectedRevision = prepareRevision();
-  if (expectedRevision === undefined) {
+  const { scope, mutation, prepare, retry } = params;
+  if (!prepare()) {
     return undefined;
   }
-  const prepare = async () => prepareRevision() !== undefined;
+  const prepareRetry = async () => prepare();
   if (mutation.kind === "clear") {
-    try {
-      return await retry(
-        () =>
-          scope.execute({
-            type: "cache.clear",
-            input: { identities: mutation.identities, expectedRevision },
-          }),
-        prepare,
-      );
-    } finally {
-      // The vector-space conflict is already known, even if clearing loses its reply.
-      invalidate();
-    }
+    return await retry(
+      () =>
+        scope.execute({
+          type: "cache.clear",
+          input: { identities: mutation.identities },
+        }),
+      prepareRetry,
+    );
   }
   if (memoryEmbeddingCacheFitsInline(mutation.header, mutation.entries)) {
-    const current = await retry(
+    return await retry(
       () =>
         scope.execute({
           type: "cache.write.inline",
-          input: { header: mutation.header, entries: mutation.entries, expectedRevision },
+          input: { header: mutation.header, entries: mutation.entries },
         }),
-      prepare,
+      prepareRetry,
     );
-    if (current === false) {
-      invalidate();
-    }
-    return current;
   }
   await scope.execute({
     type: "cache.stage.start",
@@ -169,15 +158,11 @@ export async function publishMemoryEmbeddingCache(params: {
     await scope.execute({ type: "stage.append", input: { fragments } });
   }
   const current = await retry(
-    () => scope.execute({ type: "cache.write", input: { expectedRevision } }),
-    prepare,
+    () => scope.execute({ type: "cache.write", input: undefined }),
+    prepareRetry,
   );
   if (current === undefined) {
     await scope.execute({ type: "stage.discard", input: undefined });
-  }
-  if (current === false) {
-    // Publish generation invalidation before releasing this writer turn.
-    invalidate();
   }
   return current;
 }

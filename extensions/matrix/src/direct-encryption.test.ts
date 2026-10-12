@@ -6,13 +6,18 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "./channel.js";
 import { registerMatrixCli } from "./cli.js";
+import { prepareMockMatrixClientStorage } from "./matrix/client/shared.test-support.js";
 import { loadMatrixCredentialsAsync } from "./matrix/credentials-read.js";
 import { saveMatrixCredentials } from "./matrix/credentials.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
 const createMatrixClient = vi.hoisted(() => vi.fn());
-vi.mock("./matrix/client/create-client.js", () => ({ createMatrixClient }));
+// mock-isolation: Direct-room action proof supplies SDK I/O without opening client storage.
+vi.mock("./matrix/client/create-client.js", () => ({
+  createMatrixClient,
+  prepareMatrixClientStorage: prepareMockMatrixClientStorage,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -227,14 +232,12 @@ describe.each([true, false])(
       expectRepair(client, encrypted);
       expect(client.events[0]).toBe("start");
       expect(client.events.at(-1)).toBe("persist");
-      expect(createMatrixClient).toHaveBeenCalledWith(
-        expect.objectContaining({
-          accountId: "ops",
-          userId: "@ops:example.org",
-          accessToken: "synthetic-matrix-token",
-          encryption: encrypted,
-        }),
-      );
+      expect(createMatrixClient.mock.calls[0]?.[0]).toMatchObject({
+        accountId: "ops",
+        userId: "@ops:example.org",
+        accessToken: "synthetic-matrix-token",
+        encryption: encrypted,
+      });
     });
   },
 );

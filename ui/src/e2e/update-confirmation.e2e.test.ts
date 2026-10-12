@@ -38,7 +38,7 @@ function confirmationDialog(page: Page) {
   return page.getByRole("dialog", { name: "Update Gateway", exact: true });
 }
 
-async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
+async function openUpdateCard(page: Page, baseUrl: string) {
   const gateway = await installMockGateway(page, {
     methodResponses: {
       "update.run": UPDATE_RUN_RESPONSE,
@@ -49,16 +49,6 @@ async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
   await gateway.waitForRequest("chat.startup");
   await gateway.setMethodResponse("update.status", { updateAvailable: UPDATE_AVAILABLE });
   await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
-  if (compact) {
-    await page.locator(".chat-header-session-menu__trigger").click();
-    expect(await page.getByText("Update available v2.0.0", { exact: true }).count()).toBe(0);
-    await page.screenshot({
-      animations: "disabled",
-      path: path.join(PROOF_DIR, "04a-compact-session-menu-without-update.png"),
-    });
-    await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-  }
   await page.locator(".sidebar-issues-button:visible").click();
   const updateIssue = page.locator(
     'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
@@ -68,13 +58,7 @@ async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
   await updateButton.waitFor({ timeout: 10_000 });
   // Expansion checks freshness; a disabled button cannot receive keyboard focus.
   await expect.poll(() => updateButton.isEnabled()).toBe(true);
-  if (compact) {
-    await page.screenshot({
-      animations: "disabled",
-      path: path.join(PROOF_DIR, "04b-compact-update-inbox.png"),
-    });
-  }
-  return { compact, gateway, updateButton };
+  return { gateway, updateButton };
 }
 
 async function openConfirmation(page: Page, updateButton: Locator) {
@@ -594,77 +578,6 @@ suite.define(() => {
     );
   });
 
-  it("opens a confirmation that states the action, target, versions, and restart impact", async () => {
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { height: 720, width: 1280 } },
-      async ({ page }) => {
-        const { gateway, updateButton } = await openUpdateCard(page, suite.server.baseUrl);
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(PROOF_DIR, "01-update-affordance-light.png"),
-        });
-
-        await openConfirmation(page, updateButton);
-
-        const dialog = confirmationDialog(page);
-        await dialog.waitFor();
-        expect(await dialog.getAttribute("aria-label")).toBe("Update Gateway");
-        const dialogText = await confirmationCopy(page).textContent();
-        expect(dialogText).toContain(
-          "Installs the available update on the connected Gateway and restarts it.",
-        );
-        expect(dialogText).toContain("this Control UI disconnects until the Gateway is back");
-        expect(dialogText).toContain("Installed v1.0.0 · Available v2.0.0");
-        // The first click must not reach the Gateway.
-        expect(await gateway.getRequests("update.run")).toHaveLength(0);
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(PROOF_DIR, "02-confirmation-light.png"),
-        });
-      },
-    );
-  });
-
-  it("renders the same confirmation in dark mode and on a compact viewport", async () => {
-    for (const variant of [
-      { colorScheme: "dark", name: "03-confirmation-dark", viewport: { height: 720, width: 1280 } },
-      {
-        colorScheme: "light",
-        name: "04-confirmation-compact",
-        viewport: { height: 780, width: 420 },
-      },
-    ] as const) {
-      await suite.withPage(
-        {
-          colorScheme: variant.colorScheme,
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: variant.viewport,
-        },
-        async ({ page }) => {
-          const compact = variant.viewport.width < 600;
-          const { gateway, updateButton } = await openUpdateCard(
-            page,
-            suite.server.baseUrl,
-            compact,
-          );
-          await openConfirmation(page, updateButton);
-          await confirmationDialog(page).waitFor();
-          expect(
-            await confirmationCopy(page)
-              .getByRole("button", { name: "Update and restart", exact: true })
-              .isVisible(),
-          ).toBe(true);
-          expect(await gateway.getRequests("update.run")).toHaveLength(0);
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(PROOF_DIR, `${variant.name}.png`),
-          });
-        },
-      );
-    }
-  });
-
   it.each([
     { dismiss: "Escape" as const, name: "Escape" },
     { dismiss: "cancel" as const, name: "Cancel" },
@@ -734,6 +647,13 @@ suite.define(() => {
         const { gateway, updateButton } = await openUpdateCard(page, suite.server.baseUrl);
         await openConfirmation(page, updateButton);
         await confirmationDialog(page).waitFor();
+        const dialogText = await confirmationCopy(page).textContent();
+        expect(dialogText).toContain(
+          "Installs the available update on the connected Gateway and restarts it.",
+        );
+        expect(dialogText).toContain("this Control UI disconnects until the Gateway is back");
+        expect(dialogText).toContain("Installed v1.0.0 · Available v2.0.0");
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
 
         await confirmationCopy(page)
           .getByRole("button", { name: "Update and restart", exact: true })

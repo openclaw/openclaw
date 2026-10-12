@@ -1,0 +1,131 @@
+import type { DatabaseSync } from "node:sqlite";
+import { redactSensitiveText } from "../../logging/redact.js";
+import { getNodeSqliteKysely } from "../kysely-sync.js";
+import { PostgresSyncConnection } from "../postgres-sync/connection.js";
+import { isPostgresSqlConnection } from "../sql-connection.js";
+import {
+  runSqliteDeferredTransactionSync,
+  runSqliteImmediateTransactionSync,
+  runSqliteReadSnapshotSync,
+} from "../sqlite-transaction.js";
+import type { DatabaseEngineInput } from "./config.js";
+import type { DatabaseEngineAdapter, DatabaseErrorKind } from "./contract.js";
+import { observeConnection } from "./observation.js";
+import { POSTGRES_LOCK_TIMEOUT_MS, POSTGRES_STATEMENT_TIMEOUT_MS } from "./policy.js";
+
+function classifyError(error: unknown): DatabaseErrorKind {
+  if (!(error instanceof Error)) {
+    return "other";
+  }
+  const code = "code" in error ? error.code : undefined;
+  if (code === "outcome-unknown") {
+    return "outcome-unknown";
+  }
+  if (/connection.*lost/i.test(error.message)) {
+    return "connection-lost";
+  }
+  if (/constraint/i.test(error.message)) {
+    return "constraint";
+  }
+  if (/locked|busy|lock timeout/i.test(error.message)) {
+    return "busy";
+  }
+  return "other";
+}
+
+export const databaseEngineAdapters: {
+  readonly sqlite: DatabaseEngineAdapter<DatabaseSync>;
+  readonly postgres: DatabaseEngineAdapter<PostgresSyncConnection>;
+} = {
+  sqlite: {
+    id: "sqlite",
+    openConnection: ({ anchor }) => observeConnection(anchor),
+    kysely: getNodeSqliteKysely,
+    transactions: {
+      write: runSqliteImmediateTransactionSync,
+      read: runSqliteDeferredTransactionSync,
+    },
+    capabilities: { fullText: "fts5", vector: "sqlite-vec" },
+    schema: {
+      // The store's existing SQLite schema/migration owner runs unchanged at open.
+      bootstrap: (store) => store.openSqlite(),
+      migrate: (store) => store.openSqlite(),
+    },
+    classifyError,
+  },
+  postgres: {
+    id: "postgres",
+    openConnection: (store) => {
+      if (!store.input || !store.storeId || !store.namespace) {
+        throw new Error("PostgreSQL store is not admitted");
+      }
+      try {
+        return new PostgresSyncConnection(
+          store.input.connection,
+          store.namespace,
+          store.anchor,
+          store.storeId,
+          {
+            purpose: "admission",
+            lockTimeoutMs: POSTGRES_LOCK_TIMEOUT_MS,
+            statementTimeoutMs: POSTGRES_STATEMENT_TIMEOUT_MS,
+          },
+        );
+      } catch (error) {
+        const code =
+          error instanceof Error && "code" in error && typeof error.code === "string"
+            ? `${error.code}: `
+            : "";
+        const reason = redactSensitiveText(
+          `${code}${error instanceof Error ? error.message : String(error)}`.replaceAll(
+            store.input.connection,
+            "[REDACTED]",
+          ),
+          { mode: "tools" },
+        );
+        throw new Error(
+          `Cannot open PostgreSQL connection: ${reason}; verify database.postgres.connection and server availability.`,
+          { cause: error },
+        );
+      }
+    },
+    kysely: getNodeSqliteKysely,
+    transactions: { write: runSqliteImmediateTransactionSync, read: runSqliteReadSnapshotSync },
+    capabilities: { fullText: "tsvector", vector: null },
+    schema: {
+      bootstrap: (store, db) => {
+        if (!store.schema.postgres) {
+          throw new Error("Store has no PostgreSQL schema");
+        }
+        db.exec(store.schema.postgres);
+        db.prepare(
+          "INSERT INTO openclaw_schema_meta (store, version, store_id) VALUES (?, ?, ?)",
+        ).run(store.schema.id, store.schema.version, store.storeId!);
+      },
+      migrate: (store, from) => {
+        throw new Error(
+          `PostgreSQL ${store.schema.id} schema version mismatch: expected ${store.schema.version}, found ${from}; PostgreSQL migrations are not supported yet. Use a matching OpenClaw version or restore a matching backup.`,
+        );
+      },
+    },
+    classifyError,
+  },
+};
+
+/** Worker envelopes need a transaction only on PostgreSQL; native SQLite statements stay identical. */
+export function runEngineWorkerWrite<T>(
+  input: DatabaseEngineInput,
+  operation: () => T,
+  transaction: (operation: () => T) => T,
+): T {
+  return input ? transaction(operation) : operation();
+}
+
+export function runEngineStoreReadSnapshot<T>(
+  db: Parameters<typeof getNodeSqliteKysely>[0] | PostgresSyncConnection,
+  operation: () => T,
+): T {
+  return isPostgresSqlConnection(db)
+    ? runSqliteReadSnapshotSync(db, operation)
+    : runSqliteDeferredTransactionSync(db, operation);
+}

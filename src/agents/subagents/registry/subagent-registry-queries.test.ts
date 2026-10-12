@@ -318,6 +318,27 @@ describe("subagent registry query regressions", () => {
     expect(index.countPendingDescendantRuns("new-parent")).toBe(3);
   });
 
+  it.each([
+    { requesterSessionKey: "agent:main:main", requesterAgentId: undefined, matches: true },
+    { requesterSessionKey: "agent:main:main", requesterAgentId: "other", matches: false },
+    { requesterSessionKey: "global", requesterAgentId: undefined, matches: false },
+    { requesterSessionKey: "global", requesterAgentId: "main", matches: true },
+    { requesterSessionKey: "global", requesterAgentId: "other", matches: false },
+  ])(
+    "resolves requester ownership without backfill ($requesterSessionKey, $requesterAgentId)",
+    ({ requesterSessionKey, requesterAgentId, matches }) => {
+      const entry = makeRun({ runId: "legacy-requester", requesterSessionKey, requesterAgentId });
+      const before = structuredClone(entry);
+
+      expect(
+        listRunsForRequesterFromRuns(toRunMap([entry]), requesterSessionKey, {
+          requesterAgentId: "main",
+        }),
+      ).toEqual(matches ? [entry] : []);
+      expect(entry).toEqual(before);
+    },
+  );
+
   it("scopes direct children to the requester run window", () => {
     const parent = makeRun({ runId: "parent", createdAt: 200, startedAt: 200, endedAt: 260 });
     const old = makeRun({

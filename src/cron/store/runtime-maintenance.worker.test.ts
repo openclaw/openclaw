@@ -47,7 +47,6 @@ it.each(["empty", "retained", "expired"] as const)(
                 snapshot: {
                   nowMs,
                   protectedJobIds: [],
-                  locallyOwnedReceiptIds: [],
                 },
               }),
           );

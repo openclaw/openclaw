@@ -1,35 +1,25 @@
 import type { CronConfig } from "../../config/types.cron.js";
-import type {
-  CronNotificationIntent,
-  ResolvedFailureAlert,
-} from "../service/notification-intents.js";
-import type { CronRunReceiptRecoveryCandidate } from "./run-receipt.types.js";
+import type { CronNotificationIntent } from "../service/notification-intents.js";
+import type { CronJob } from "../types.js";
 
-export type CronRunRecoveryResult =
-  | { kind: "live"; receipt: CronRunReceiptRecoveryCandidate }
-  | { kind: "superseded"; receipt?: CronRunReceiptRecoveryCandidate }
-  | {
-      kind: "repaired";
-      interrupted?: InterruptedStartupRun;
-      notifications: CronNotificationIntent[];
-      skipStartupCatchup?: boolean;
-    };
-
-export type CronRunRecoveryOutcome = {
-  result: CronRunRecoveryResult;
-  logs: Array<{ level: "debug" | "info" | "warn" | "error"; fields: unknown; message?: string }>;
-};
-
-export type CronRunRecoveryPreparation = {
-  proposedReceiptIsStale: boolean;
+export type CronRunRecoveryInput = {
+  storeKey: string;
   nowMs: number;
   cronConfig?: CronConfig;
-  failureAlert: ResolvedFailureAlert | null;
+};
+
+export type CronRunRecoveryOutcome = {
+  jobs: CronJob[];
+  removedJobIds: string[];
+  interruptedRuns: InterruptedStartupRun[];
+  notifications: CronNotificationIntent[];
+  skipJobIds: string[];
+  logs: Array<{ level: "debug" | "info" | "warn" | "error"; fields: unknown; message?: string }>;
 };
 
 export type InterruptedStartupRun = {
   jobId: string;
-  taskRunId?: string;
+  runId?: string;
   runAtMs: number;
   durationMs: number;
   replacementAtMs?: number;

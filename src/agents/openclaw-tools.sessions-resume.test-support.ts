@@ -63,13 +63,18 @@ export function registerSessionsSendResumeTests({
         scenario !== "explicit separate followup" &&
         scenario !== "unrelated caller" &&
         scenario !== "completion unspecified";
+      const childSessionIdentity = {
+        sessionId: "tool-resume-session",
+        lifecycleRevision: "tool-resume-revision",
+      };
       await replaceSessionEntry(
         { agentId: "main", sessionKey: targetKey },
-        { sessionId: "tool-resume-session", updatedAt: Date.now() },
+        { ...childSessionIdentity, updatedAt: Date.now() },
       );
       await addSubagentRunForTests({
         runId: previousRunId,
         childSessionKey: targetKey,
+        childSessionIdentity,
         requesterSessionKey: controller,
         requesterDisplayKey: controller,
         controllerSessionKey: controller,
@@ -84,6 +89,7 @@ export function registerSessionsSendResumeTests({
         await addSubagentRunForTests({
           runId: siblingRunId,
           childSessionKey: targetKey,
+          childSessionIdentity,
           requesterSessionKey: "agent:main:dashboard:separate-requester",
           requesterDisplayKey: "separate-requester",
           controllerSessionKey: parent,

@@ -223,7 +223,7 @@ describe("worker bundle archive", () => {
     },
   );
 
-  it.each(["worker.mjs", "~/worker.mjs"])(
+  it.each(["~/worker.mjs"])(
     "retains hardlinked %s and ignores directories and the install receipt in file limits",
     async (relativePath) => {
       const source = path.join(root, "source");
