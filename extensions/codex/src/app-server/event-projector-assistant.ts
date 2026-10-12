@@ -181,6 +181,24 @@ export class CodexAssistantProjection {
     }
   }
 
+  /**
+   * Codex deltas are best-effort and completed item text is authoritative (the
+   * codex-rs TUI consolidates from it); stream any tail a dropped final delta
+   * left out so live and terminal chat text end on the completed text.
+   */
+  async streamCompletedTextTail(item: CodexThreadItem | undefined): Promise<void> {
+    if (item?.type !== "agentMessage" || typeof item.text !== "string") {
+      return;
+    }
+    const streamed = this.assistantTextByItem.get(item.id);
+    if (streamed && item.text.startsWith(streamed)) {
+      await this.handleAssistantDelta({
+        itemId: item.id,
+        delta: item.text.slice(streamed.length),
+      });
+    }
+  }
+
   recordItemCompleted(
     item: CodexThreadItem | undefined,
     itemId: string | undefined,

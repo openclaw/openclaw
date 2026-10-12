@@ -483,6 +483,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     if (!this.asyncDeliveryProjection.allows(item, true)) {
       return;
     }
+    await this.assistantProjection.streamCompletedTextTail(item);
     const asyncMessage = this.assistantProjection.recordItemCompleted(
       item,
       itemId,
@@ -611,6 +612,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         continue;
       }
       this.diagnostics.warnUnknownItemStatus(item);
+      await this.assistantProjection.streamCompletedTextTail(item);
       const asyncMessage = this.assistantProjection.recordSnapshotItem(item);
       if (asyncMessage) {
         await this.asyncDeliveryProjection.deliver(asyncMessage);
