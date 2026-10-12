@@ -64,9 +64,10 @@ export function renderChatWorkingIndicator(
     presentation?: "standalone" | "continuation";
   } = {},
 ) {
-  // The composer owns waiting copy; the transcript keeps the live child activity.
-  if (options.waitingSubagents) {
-    return options.subagentActivity ?? nothing;
+  // Keep the transcript indicator until roster hydration supplies live child activity.
+  // Waiting copy belongs to the composer, including view-only conversations.
+  if (options.waitingSubagents && options.subagentActivity !== undefined) {
+    return options.subagentActivity;
   }
   const waitingApproval = options.waitingApproval === true;
   const runningSubagents = options.runningSubagents ?? 0;

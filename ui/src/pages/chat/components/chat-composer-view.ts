@@ -357,16 +357,17 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         })}
       </div>`
     : nothing;
+  const runStatus =
+    props.waitingSubagents || (isChatRunWorking(props) && !props.waitingApproval)
+      ? html`<openclaw-chat-composer-run-status
+          .waitingSubagents=${props.waitingSubagents ?? null}
+          .working=${isChatRunWorking(props) && !props.waitingApproval}
+          .onOpenSubagents=${props.onOpenSubagents}
+        ></openclaw-chat-composer-run-status>`
+      : nothing;
   return html`
     <div class="agent-chat__composer-shell">
-      ${
-        showComposerInput && props.waitingSubagents
-          ? html`<openclaw-chat-composer-run-status
-              .waitingSubagents=${props.waitingSubagents}
-              .onOpenSubagents=${props.onOpenSubagents}
-            ></openclaw-chat-composer-run-status>`
-          : nothing
-      }
+      ${props.waitingSubagents || !showComposerInput ? runStatus : nothing}
       <div class="chat-footer__context">
         ${props.footerContent ?? nothing}
         <div class="agent-chat__composer-notices">
@@ -639,14 +640,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 </div>
                 <div class="agent-chat__composer-trail">
                   <div class="agent-chat__composer-meta agent-chat__composer-context">
-                    ${
-                      isChatRunWorking(props) && !props.waitingApproval && !props.waitingSubagents
-                        ? html`<openclaw-chat-composer-run-status
-                            .working=${true}
-                          ></openclaw-chat-composer-run-status>`
-                        : nothing
-                    }
-                    ${contextNotice}
+                    ${!props.waitingSubagents ? runStatus : nothing} ${contextNotice}
                   </div>
                   ${
                     composerControls !== nothing

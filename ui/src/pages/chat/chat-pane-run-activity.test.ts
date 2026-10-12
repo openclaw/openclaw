@@ -35,10 +35,11 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
 
   it.each([
     {
-      name: "shows a completed parent waiting on its visible child, not working",
+      name: "shows a completed parent waiting on its child roster",
       selectedKey: "agent:main:main",
       parentActive: false,
-      expectWorking: false,
+      // Recovery-ready panes wait for their own roster before showing child activity.
+      expectWorking: recoveryScopeReady,
       expectWaiting: true,
     },
     {
@@ -117,83 +118,103 @@ describe("composer run status", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows the yielded parent's child count, name and run time, opens Subagents and clears after settlement", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(66_000);
-    const parent: GatewaySessionRow = {
-      key: "agent:main:parent",
-      kind: "direct",
-      hasActiveRun: false,
-      hasActiveSubagentRun: true,
-      startedAt: 1_000,
-    };
-    const child: GatewaySessionRow = {
-      key: "agent:main:subagent:backend",
-      kind: "direct",
-      spawnedBy: parent.key,
-      label: "Backend implementation",
-      hasActiveRun: true,
-      startedAt: 5_000,
-    };
-    const { pane, state, context } = createRefreshChatPane();
-    state.sessionKey = parent.key;
-    state.sessionsResult = sessionsResult([parent]);
-    pane.render();
-    const container = createApplicationContextProvider(context);
-    const onOpenSubagents = vi.fn();
-    const draw = async (children: GatewaySessionRow[]) => {
-      renderChatPropsInto(container, {
-        ...expectDefined(pane.chatProps, "chat props"),
-        selectedSession: parent,
-        messages: [
-          {
-            role: "assistant",
-            runId: "parent-run",
-            timestamp: 2_000,
-            content: [{ type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} }],
-          },
-          {
-            role: "toolResult",
-            runId: "parent-run",
-            toolCallId: "yield",
-            toolName: "sessions_yield",
-            timestamp: 2_001,
-            content: [{ type: "text", text: '{"status":"yielded"}' }],
-          },
-        ],
-        subagentSessions: children,
-        subagentSessionsHydrated: true,
-        onOpenSubagents,
-      });
-      await container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-        "openclaw-chat-composer-run-status",
-      )?.updateComplete;
-    };
-    await draw([child]);
-    const line = container.querySelector(".agent-chat__composer-run-status--waiting");
-    expect(line).not.toBeNull();
-    const elapsed = line?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-elapsed-time",
-    );
-    await elapsed?.updateComplete;
-    expect(line?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "Waiting on 1 subagent · Backend implementation · running 1m 1s View",
-    );
-    expect(elapsed).toHaveProperty("startMs", 5_000);
-    line?.querySelector<HTMLButtonElement>("button")?.click();
-    expect(onOpenSubagents).toHaveBeenCalledExactlyOnceWith(true);
+  it.each(["editable", "view-only subagent", "read-only shared"] as const)(
+    "keeps %s wait status through roster hydration and settlement",
+    async (access) => {
+      vi.spyOn(Date, "now").mockReturnValue(66_000);
+      const parent: GatewaySessionRow = {
+        key: access === "view-only subagent" ? "agent:main:subagent:parent" : "agent:main:parent",
+        kind: "direct",
+        ...(access === "read-only shared"
+          ? { visibility: "read-only" as const, sharingRole: "viewer" as const }
+          : {}),
+        hasActiveRun: false,
+        hasActiveSubagentRun: true,
+        startedAt: 1_000,
+      };
+      const child: GatewaySessionRow = {
+        key: "agent:main:subagent:backend",
+        kind: "direct",
+        spawnedBy: parent.key,
+        label: "Backend implementation",
+        hasActiveRun: true,
+        startedAt: 5_000,
+      };
+      const { pane, state, context } = createRefreshChatPane();
+      state.sessionKey = parent.key;
+      state.sessionsResult = sessionsResult([parent]);
+      pane.render();
+      const container = createApplicationContextProvider(context);
+      const onOpenSubagents = vi.fn();
+      const draw = async (children: GatewaySessionRow[], hydrated = true) => {
+        renderChatPropsInto(container, {
+          ...expectDefined(pane.chatProps, "chat props"),
+          selectedSession: parent,
+          messages: [
+            {
+              role: "assistant",
+              runId: "parent-run",
+              timestamp: 2_000,
+              content: [{ type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} }],
+            },
+            {
+              role: "toolResult",
+              runId: "parent-run",
+              toolCallId: "yield",
+              toolName: "sessions_yield",
+              timestamp: 2_001,
+              content: [{ type: "text", text: '{"status":"yielded"}' }],
+            },
+          ],
+          subagentSessions: children,
+          subagentSessionsHydrated: hydrated,
+          onOpenSubagents,
+        });
+        await container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+          "openclaw-chat-composer-run-status",
+        )?.updateComplete;
+      };
+      await draw([], false);
+      expect(
+        container.querySelector(".agent-chat__composer-run-status--waiting")?.textContent,
+      ).toContain("Waiting on subagents");
+      expect(
+        container.querySelector(".chat-working-indicator .chat-reading-indicator"),
+      ).not.toBeNull();
+      await draw([child]);
+      if (access === "view-only subagent") {
+        expect(container.querySelector(".agent-chat__disabled-banner")?.textContent).toContain(
+          "View-only subagent",
+        );
+        expect(container.querySelector(".agent-chat__composer-combobox")).toBeNull();
+      }
+      expect(container.querySelector(".chat-working-indicator .chat-reading-indicator")).toBeNull();
+      const line = container.querySelector(".agent-chat__composer-run-status--waiting");
+      expect(line).not.toBeNull();
+      const elapsed = line?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+        "openclaw-elapsed-time",
+      );
+      await elapsed?.updateComplete;
+      expect(line?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+        "Waiting on 1 subagent · Backend implementation · running 1m 1s View",
+      );
+      expect(elapsed).toHaveProperty("startMs", 5_000);
+      line?.querySelector<HTMLButtonElement>("button")?.click();
+      expect(onOpenSubagents).toHaveBeenCalledExactlyOnceWith(true);
 
-    await draw([
-      child,
-      { ...child, key: "agent:main:subagent:frontend", label: "Frontend implementation" },
-    ]);
-    expect(
-      container.querySelector(".agent-chat__composer-run-status--waiting")?.textContent,
-    ).toContain("Waiting on 2 subagents");
-    expect(container.querySelector(".agent-chat__composer-wait-child")).toBeNull();
+      await draw([
+        child,
+        { ...child, key: "agent:main:subagent:frontend", label: "Frontend implementation" },
+      ]);
+      expect(
+        container.querySelector(".agent-chat__composer-run-status--waiting")?.textContent,
+      ).toContain("Waiting on 2 subagents");
+      expect(container.querySelector(".agent-chat__composer-wait-child")).toBeNull();
 
-    await draw([{ ...child, hasActiveRun: false }]);
-    expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
-  });
+      await draw([{ ...child, hasActiveRun: false }]);
+      expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
+    },
+  );
 
   it("shows Working only during the current run and leaves idle and approval states empty", async () => {
     const { context } = createRefreshChatPane();
@@ -220,6 +241,15 @@ describe("composer run status", () => {
     expect(
       container.querySelector(".agent-chat__composer-notices .agent-chat__composer-run-status"),
     ).toBeNull();
+    props.disabledBanner = {
+      kind: "composer-replacement",
+      text: "This conversation is view-only.",
+    };
+    await draw();
+    expect(container.querySelector(".agent-chat__composer-combobox")).toBeNull();
+    expect(container.querySelector(".agent-chat__composer-run-status")?.textContent).toContain(
+      "Working…",
+    );
     props.waitingApproval = true;
     await draw();
     expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();

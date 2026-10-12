@@ -394,7 +394,7 @@ describe("chat waiting on subagents", () => {
   });
 
   it.each([false, true])(
-    "leaves waiting text to the composer and retains child activity (bubble mode: %s)",
+    "keeps a working fallback until child activity replaces it, leaving wait text to the composer (bubble mode: %s)",
     (bubbleMode) => {
       const container = document.createElement("div");
       const onOpenSubagent = vi.fn();
@@ -415,7 +415,8 @@ describe("chat waiting on subagents", () => {
       };
       const part = { kind: "reading-indicator" as const, key: "parent-wait", startedAt: 1_500 };
       render(renderChatWorkingIndicator(part, options), container);
-      expect(container.textContent).toBe("");
+      expect(container.textContent).toContain("Working…");
+      expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
       render(
         renderChatWorkingIndicator(part, {
           ...options,
