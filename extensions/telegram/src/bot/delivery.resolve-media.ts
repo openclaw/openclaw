@@ -86,20 +86,21 @@ function resolveMediaMetadata(msg: TelegramMediaContext["message"]) {
       msg.photo?.[msg.photo.length - 1] ??
       msg.video ??
       msg.video_note ??
+      msg.animation ??
       msg.document ??
       msg.audio ??
       msg.voice,
     fileName:
+      msg.animation?.file_name ??
       msg.document?.file_name ??
       msg.audio?.file_name ??
-      msg.video?.file_name ??
-      msg.animation?.file_name,
+      msg.video?.file_name,
     mimeType:
       msg.audio?.mime_type ??
       msg.voice?.mime_type ??
       msg.video?.mime_type ??
-      msg.document?.mime_type ??
-      msg.animation?.mime_type,
+      msg.animation?.mime_type ??
+      msg.document?.mime_type,
   };
 }
 
@@ -155,33 +156,8 @@ async function resolveTelegramFileWithRetry(
   }
 }
 
-function resolveRequiredTelegramTransport(transport?: TelegramTransport): TelegramTransport {
-  if (transport) {
-    return transport;
-  }
-  const resolvedFetch = globalThis.fetch;
-  if (!resolvedFetch) {
-    throw new Error("fetch is not available; set channels.telegram.proxy in config");
-  }
-  return {
-    fetch: resolvedFetch,
-    sourceFetch: resolvedFetch,
-    // Caller-owned transport constructed from the globalThis fetch — it owns
-    // no dispatcher lifecycle of its own, so close() is a no-op.
-    close: async () => {},
-  };
-}
-
 const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 const TELEGRAM_DOWNLOAD_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
-
-function usesTrustedTelegramExplicitProxy(transport: TelegramTransport): boolean {
-  return (
-    transport.dispatcherAttempts?.some(
-      (attempt) => attempt.dispatcherPolicy?.mode === "explicit-proxy",
-    ) ?? false
-  );
-}
 
 function resolveTrustedLocalTelegramRoot(
   filePath: string,
@@ -307,14 +283,21 @@ async function downloadAndSaveTelegramFile(params: {
       `Telegram Bot API returned absolute file path ${params.filePath} outside trustedLocalFileRoots`,
     );
   }
-  const transport = resolveRequiredTelegramTransport(params.transport);
+  const transport = params.transport;
+  const fetchImpl = transport ? transport.sourceFetch : globalThis.fetch;
+  if (!transport && !fetchImpl) {
+    throw new Error("fetch is not available; set channels.telegram.proxy in config");
+  }
   const apiBase = resolveTelegramApiBase(params.apiRoot);
   const url = `${apiBase}/file/bot${params.token}/${params.filePath}`;
   return await saveRemoteMedia({
     url,
-    fetchImpl: transport.sourceFetch,
-    dispatcherAttempts: transport.dispatcherAttempts,
-    trustExplicitProxyDns: usesTrustedTelegramExplicitProxy(transport),
+    fetchImpl,
+    dispatcherAttempts: transport?.dispatcherAttempts,
+    trustExplicitProxyDns:
+      transport?.dispatcherAttempts?.some(
+        (attempt) => attempt.dispatcherPolicy?.mode === "explicit-proxy",
+      ) ?? false,
     shouldRetryFetchError: shouldRetryTelegramTransportFallback,
     // The update spool and best-effort album/reply callers own failure handling.
     // Nested retries would multiply this header deadline before those owners act.

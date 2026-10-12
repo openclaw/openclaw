@@ -212,74 +212,64 @@ export class DurableChatComposerPersistence {
       return;
     }
     // Capture edits before storage yields so a newer edit invalidates this baseline.
-    const { onCurrentWins, ...baseline } = prepare();
+    const { onCurrentWins, ...prepared } = prepare();
+    const baseline = { scope, ...prepared };
     this.restoredScopeKey = scopeIdentity;
     const generation = ++this.restoreGeneration;
-    void this.restoreScope({ scope, ...baseline }, generation, current, apply, onCurrentWins);
-  }
-
-  private async restoreScope(
-    baseline: RestoreBaseline,
-    generation: number,
-    current: () => { scope: DurableComposerDraftScope | null; signature: string; revision: number },
-    apply: (draft: RestoredDraft) => void,
-    onCurrentWins: (storedRevision: number) => void,
-  ) {
-    const { readDurableComposerDraft, prepareDurableComposerRecovery } = await durableComposerStore;
-    if (baseline.scope.scopeKey.startsWith("chat:v3:")) {
-      const recovery = await prepareDurableComposerRecovery(baseline.scope);
-      if (recovery.status === "storage-failed") {
+    const isCurrent = () => {
+      const active = current();
+      return (
+        generation === this.restoreGeneration &&
+        active.scope?.gatewayOwner === baseline.scope.gatewayOwner &&
+        active.scope.recoveryScope === baseline.scope.recoveryScope &&
+        active.scope.scopeKey === baseline.scope.scopeKey &&
+        active.signature === baseline.signature &&
+        active.revision === baseline.latestRevision
+      );
+    };
+    void (async () => {
+      const { readDurableComposerDraft, prepareDurableComposerRecovery } =
+        await durableComposerStore;
+      if (baseline.scope.scopeKey.startsWith("chat:v3:")) {
+        const recovery = await prepareDurableComposerRecovery(baseline.scope);
+        if (recovery.status === "storage-failed") {
+          reportDurableComposerStorageError(baseline.scope, this.onStorageError);
+          return;
+        }
+      }
+      const result = await readDurableComposerDraft(baseline.scope);
+      if (result.status === "storage-failed") {
         reportDurableComposerStorageError(baseline.scope, this.onStorageError);
         return;
       }
-    }
-    const result = await readDurableComposerDraft(baseline.scope);
-    if (result.status === "storage-failed") {
-      reportDurableComposerStorageError(baseline.scope, this.onStorageError);
-      return;
-    }
-    const revision = result.status === "found" ? result.draft.revision : result.revision;
-    if (revision === undefined || revision < baseline.latestRevision) {
-      if (this.isBaselineCurrent(baseline, generation, current())) {
-        onCurrentWins(revision ?? 0);
-      }
-      return;
-    }
-    const draft = result.status === "found" ? result.draft : undefined;
-    let attachments: ChatAttachment[] = [];
-    if (draft) {
-      try {
-        attachments = await hydrateDurableComposerAttachments(draft.attachments);
-      } catch {
-        reportDurableComposerStorageError(baseline.scope, this.onStorageError);
+      const revision = result.status === "found" ? result.draft.revision : result.revision;
+      if (revision === undefined || revision < baseline.latestRevision) {
+        if (isCurrent()) {
+          onCurrentWins(revision ?? 0);
+        }
         return;
       }
-    }
-    if (!this.isBaselineCurrent(baseline, generation, current())) {
-      return;
-    }
-    apply({
-      revision,
-      text: draft ? draft.text : "",
-      ...(draft?.mentions ? { mentions: draft.mentions } : {}),
-      ...(draft?.goalMode ? { goalMode: draft.goalMode } : {}),
-      ...(draft?.replyTarget ? { replyTarget: draft.replyTarget } : {}),
-      attachments,
-    });
-  }
-
-  private isBaselineCurrent(
-    baseline: RestoreBaseline,
-    generation: number,
-    active: { scope: DurableComposerDraftScope | null; signature: string; revision: number },
-  ): boolean {
-    return (
-      generation === this.restoreGeneration &&
-      active.scope?.gatewayOwner === baseline.scope.gatewayOwner &&
-      active.scope.recoveryScope === baseline.scope.recoveryScope &&
-      active.scope.scopeKey === baseline.scope.scopeKey &&
-      active.signature === baseline.signature &&
-      active.revision === baseline.latestRevision
-    );
+      const draft = result.status === "found" ? result.draft : undefined;
+      let attachments: ChatAttachment[] = [];
+      if (draft) {
+        try {
+          attachments = await hydrateDurableComposerAttachments(draft.attachments);
+        } catch {
+          reportDurableComposerStorageError(baseline.scope, this.onStorageError);
+          return;
+        }
+      }
+      if (!isCurrent()) {
+        return;
+      }
+      apply({
+        revision,
+        text: draft ? draft.text : "",
+        ...(draft?.mentions ? { mentions: draft.mentions } : {}),
+        ...(draft?.goalMode ? { goalMode: draft.goalMode } : {}),
+        ...(draft?.replyTarget ? { replyTarget: draft.replyTarget } : {}),
+        attachments,
+      });
+    })();
   }
 }

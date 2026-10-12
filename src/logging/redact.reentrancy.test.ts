@@ -3,7 +3,6 @@ import { redactSensitiveText } from "../plugin-sdk/security-runtime.js";
 import { compileSafeRegexDetailed } from "../security/safe-regex.js";
 import {
   getDefaultRedactPatterns,
-  redactInputTextWithSourcePolicy,
   redactSensitiveFieldValue,
   resolveRedactOptions,
 } from "./redact.js";
@@ -43,22 +42,6 @@ describe("nested redaction calls", () => {
     expect(redactSensitiveText(input, { patterns })).toBe("*** [***] [***] ***");
     expect(inputs).toEqual(["*** [outer-one] [outer-two] suffix"]);
     expect(nested).toEqual(["inside ***", "inside ***"]);
-  });
-
-  it.each(["API_TOKEN=", "pass: "])("keeps nested source assignment policy for %s", (prefix) => {
-    const input = `${prefix}computeFirst()\n${prefix}computeSecond()`;
-    const assignments: string[] = [];
-
-    expect(
-      redactInputTextWithSourcePolicy(input, undefined, (text, offset) => {
-        expect(redactSensitiveText("pass: private pass: nested", { mode: "tools" })).toBe(
-          "pass: *** pass: ***",
-        );
-        assignments.push(text.slice(offset).split("\n")[0] ?? "");
-        return true;
-      }),
-    ).toBe(input);
-    expect(assignments).toEqual(expect.arrayContaining(["computeFirst()", "computeSecond()"]));
   });
 
   it("rechecks vendor candidates after an intervening custom replacement", () => {

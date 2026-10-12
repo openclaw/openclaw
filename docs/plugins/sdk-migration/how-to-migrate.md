@@ -9,6 +9,342 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Await durable session persistence
+
+Use the asynchronous `SessionManager` methods for durable sessions on the
+Gateway main thread, including
+`openAsync`, `openModelContextAsync`, `readSessionContextAsync`, and
+`appendMessageAsync`. Deprecated synchronous SDK methods remain compatible until
+the next SDK major. Replace
+`readCodexSessionContext` with the reader from `createCodexSessionContextReader`.
+
+The `codex-session-transcript-runtime` facade also retains deprecated
+`validateCodexSessionTranscriptReadAdmission` and
+`validateCodexSessionTranscriptContextVersion` helpers. Keep validation with the
+owner supplied to `createCodexSessionContextReader` instead of issuing separate
+synchronous database reads. For transcript mirrors, replace
+`withCodexSessionTranscriptMirrorWriteLock` with
+`withCodexSessionTranscriptMirrorWrite`. These compatibility helpers remain until
+the next Plugin SDK major; actor-bound and incognito targets reject their
+synchronous database access.
+
+Opaque `AgentHarnessSessionDeletionMutation.commit` callbacks are deprecated.
+Use `createNativeSessionBindingLifecycleV2` for stored native bindings or
+`createNativeSessionCommitFinalizer` for effects that only run after commit.
+These existing participants let session deletion stay in the database worker;
+opaque callbacks retain the synchronous compatibility adapter until removal.
+
+## Await GitHub publication operations
+
+The Gateway context's `githubPublicationService` provides versioned requests and
+awaited lifecycle operations for shared, personal, and repository publication.
+Use the same service from `GatewayRequestHandlerOptions` in `core` or
+`gateway-runtime`, or from the current `plugin-runtime` request scope. There is
+no new GitHub-specific SDK subpath.
+
+| Deprecated method           | Replacement                        |
+| --------------------------- | ---------------------------------- |
+| `requestForSession`         | `requestForSessionV2`              |
+| `requestForClaim`           | `requestForClaimV2`                |
+| `requestPersonalForSession` | `requestPersonalForSessionV2`      |
+| `confirmPersonal`           | `confirmPersonalV2`                |
+| `deferClaimPreparation`     | `await deferClaimPreparationAsync` |
+| `deferOrphanedRequests`     | `await deferOrphanedRequestsAsync` |
+| `listUnreportedResults`     | `await listUnreportedResultsAsync` |
+| `markReported`              | `await markReportedAsync`          |
+| `read`                      | `await readAsync`                  |
+| `personalStatus`            | `await personalStatusAsync`        |
+
+The Gateway context also exposes managed OAuth methods through `githubOAuthService`.
+Replace `cancelAuthorization(requestId)` with `await cancelAuthorizationAsync(requestId)`
+and `retireProfile(profileId)` with `await retireProfileAsync(profileId)`. The legacy
+methods retain synchronous results for this SDK major and warn on use.
+
+The same Gateway context exposes personal connection operations through
+`githubOAuthService.personal`. Replace
+`personal.cancelAuthorization(action, requestId)` with
+`await personal.cancelAuthorizationAsync(action, requestId)`, and
+`personal.disconnect(action)` with `await personal.disconnectAsync(action)`.
+The arguments are unchanged. The legacy methods retain their synchronous
+`boolean` and `void` results and commit before returning; the async methods
+resolve after the worker commits and installs the connection facts. They share
+the publication family's deprecation warning and removal window below.
+
+The V2 request methods require the host's `GitHubPublicationRequesterV2`;
+personal methods require `PersonalGitHubSessionActionV2`. Prepare them through
+`prepareGitHubPublicationRequesterV2` or `preparePersonalGitHubSessionActionV2`
+from `openclaw/plugin-sdk/gateway-runtime`, passing the admitted Gateway handler
+options and selected session. Forward the original object through adapters.
+These capabilities include `version: 2`,
+a lifetime `signal`, and `prepareSource`, in addition to their existing caller
+assertions. Do not synthesize them from request parameters, a saved requester
+snapshot, or a legacy callback. Their source capability is bound to the admitted
+session and physical database lifetime and cannot be reconstructed from JSON.
+
+Replace the legacy call `await service.requestForSession({ ...input, requester })`
+and its opaque requester assertions with a retained host preparation:
+
+```ts
+import {
+  prepareGitHubPublicationRequesterV2,
+  type GatewayRequestHandlerOptions,
+} from "openclaw/plugin-sdk/gateway-runtime";
+
+type Publications = NonNullable<
+  GatewayRequestHandlerOptions["context"]["githubPublicationService"]
+>;
+type PublicationInput = Omit<
+  Parameters<Publications["requestForSessionV2"]>[0],
+  "requester" | "sessionKey"
+> & { sessionKey: string };
+
+async function publish(options: GatewayRequestHandlerOptions, input: PublicationInput) {
+  const service = options.context.githubPublicationService;
+  if (!service) throw new Error("GitHub publication is unavailable.");
+  const prepared = await prepareGitHubPublicationRequesterV2(options, {
+    agentId: input.agentId,
+    sessionKey: input.sessionKey,
+  });
+  try {
+    return await service.requestForSessionV2({ ...input, requester: prepared.requester });
+  } finally {
+    prepared.release();
+  }
+}
+```
+
+For personal publication, call
+`await preparePersonalGitHubSessionActionV2(options, { sessionKey, agentId })`,
+pass its `action` to `requestPersonalForSessionV2` or `confirmPersonalV2`, and
+release it in the same `try`/`finally` pattern. The factory derives personal and
+session authority from the admitted handler context; a claimed profile ID does
+not grant access.
+
+V2 prepares host policy before acquiring database reservations. The worker
+compares the selected session lifecycle, requester, connection, and workspace
+facts under source exclusion, then commits the request and lifecycle binding in
+one destination transaction. The source remains reserved until that transaction
+settles. Async completion includes installation of its committed facts. Keep the
+requester's owner alive until the operation and its cleanup settle.
+
+Publication no longer runs a native compatibility path. Legacy publication
+methods warn and fail with the replacement method name; they never fall back to
+synchronous SQLite. Migrate to V2 before calling publication. Preparation precedes
+reservation, and typed predicates authorize commit; arbitrary transaction-local
+callback visibility is not supported. A failed or uncertain worker operation never
+replays an accepted external effect.
+
+Await deferral and reporting before dependent reads or shutdown. Reporting and
+claim deferral each update the relevant publication kinds in one worker transaction. Accepted
+bookkeeping, including execution claims, head updates, dispatch markers, observed effects, and completion, can settle
+after action cancellation while the execution owner retains custody. The worker
+applies its request and execution predicates inside its transaction; it does not
+request another host grant for each bookkeeping commit. This grants no authority
+for another push or pull request. New external effects always require current
+caller and source authority at the point of effect.
+An attempted-dispatch marker can remain when that final guard refuses the action;
+only an observed response records the effect as observed.
+
+Checkpoint-preparation failure and stale-request retirement also record outcomes
+without source reservations. A checkpoint becoming available or a session being
+restored after the check may require a new publication request; the original
+content and recorded GitHub effects remain intact.
+
+Deprecated publication methods retain their TypeScript signatures to make the
+migration discoverable, but fail explicitly at invocation. Actual legacy use emits
+one warning per plugin and the `github-publication` family per Gateway process,
+through the shared SDK warning helper. The warning states that the method no
+longer performs publication work and names its replacement. Unknown direct SDK consumers share one
+bounded family warning. These methods will be **removed in the next Plugin SDK
+major**. Personal OAuth compatibility methods described above retain their existing
+completion behavior. No schema, stored-data, retention, or update migration is required.
+
+## Replace native SQLite runtime writes
+
+Plugins using the internal `sqlite-runtime` facade should send data-only commands
+through `openOpenClawAgentSqliteWorkerStoreV2`. Its required `{ version: 2,
+assertCurrent }` capability stays bound to the store's lifetime. The host prepares
+inputs; the paired worker backend rereads predicates and commits in a synchronous
+transaction. Await completion before publishing results or releasing authority.
+
+```ts
+// Before: this callback executes on the host even though admission is awaited.
+await withOpenClawAgentDatabaseWrite(options, ({ db }) => updateRows(db, input));
+
+// After: the paired backend owns updateRows and its transaction.
+const store = await openOpenClawAgentSqliteWorkerStoreV2(
+  options,
+  { version: 2, assertCurrent: owner.assertCurrent },
+  { moduleUrl: workerUrl, input: backendOptions },
+);
+try {
+  await store.prepare(); // Explicit creation/admission, when the flow requires it.
+  await store.execute({ type: "updateRows", input }, owner.assertCurrent);
+} finally {
+  await store.close();
+}
+```
+
+`execute` and `executeExisting` admit one transaction across backend binding and
+the command. If binding commits independent schema initialization, use
+`store.run((scope) => scope.execute(command), owner.assertCurrent)` to keep
+binding and the command in separate admissions. This callback sequences worker
+commands; it never receives a native database handle.
+
+`executeExisting` preserves absence and never creates a missing database. Store
+closure refuses new work and joins accepted operations. Completion includes the
+owning domain's committed-fact installation; an unknown outcome never permits a
+native fallback or automatic replay. There is no universal async raw-SQL callback
+replacement. Host closures are not serialized, and arbitrary transaction-local
+callback visibility is not promised by data-only commands.
+
+Writable raw open/borrow helpers, native query helpers, and opaque
+`withOpenClawAgentDatabaseAsync`, `withOpenClawAgentDatabaseRuntime`,
+`withOpenClawAgentDatabaseWrite`, `runOpenClawAgentWriteAdmission`, and transaction
+callbacks retain their released signatures and ordering during compatibility.
+Synchronous writes still commit before returning. Their `sqlite-runtime` exports
+are deprecated and will be removed in the next Plugin SDK major. Actual legacy
+use emits one warning per plugin and capability family; unscoped imports share
+one SDK warning. Importing a module alone does not warn.
+
+Worker backends use `sqlite-worker-runtime` primitives. External-database reads
+must explicitly open with `readOnly: true`; Doctor/import/reset writes require
+offline maintenance custody while the Gateway is stopped. Test-labeled SQLite
+and state barrels are fixture/QA inspection contracts, not runtime write APIs.
+These exceptions do not authorize writable handles in ordinary plugin handlers.
+There is no schema, stored-byte, retention, or update migration.
+
+## Use worker-owned approval requests
+
+Use host-bound `api.runtime.gateway.request` for approval requests, reads,
+history, grant operations, resolution, and waiting. Reads that expire rows are
+worker operations too. The host's method classification does not enlarge the
+internal principal's allowed methods. Released opaque approval commit guards
+retain their synchronous callback signature and run at the worker precommit
+boundary. A thrown callback rejects and rolls back the write. It can inspect
+current host authority, but cannot query tentative worker rows through the host
+connection or depend on the former host transaction view. The native
+SQLite adapter is removed; callbacks remain deprecated until the next Plugin SDK
+major.
+
+The shared warning budget is per plugin and capability family, on legacy use.
+Current effect-time authority checks remain synchronous. Schemas, stored bytes,
+permissions, and update behavior are unchanged.
+
+## Await plugin state and conversation bindings
+
+Use `api.runtime.state.openKeyedStoreV2<T>(options)` for a data-only store bound
+to the plugin runtime's lifetime. For an individual revocable action, pass its
+`assertCurrent` authority as the second argument. Deferred code with an explicit
+owner can use `createPluginStateKeyedStoreV2(pluginId, options, authority)` from
+`openclaw/plugin-sdk/plugin-state-store-runtime`. Keep that import lazy.
+
+The opener returns synchronously; await every operation before publishing its
+result or releasing its owner. Reads and writes execute in the existing workers.
+Mutation completion includes native commit and installation of committed facts.
+Atomic `consume` and `registerIfAbsent` remain single worker operations.
+
+Replace transaction-local JavaScript callbacks with observation and conditional
+application:
+
+```typescript
+// Legacy: the callback executes inside a native transaction on the host.
+await legacyStore.update("counter", (value) => (value ?? 0) + 1);
+
+// Worker-owned: prepare outside the transaction and handle an explicit conflict.
+const observed = await store.observe("counter");
+const result = await store.compareAndApply("counter", observed.comparison, {
+  operation: "update",
+  action: "set",
+  value: (observed.value ?? 0) + 1,
+});
+if (result.status === "conflict") {
+  // Recompute from current observations or report the conflict to the caller.
+}
+```
+
+Comparisons bind stored content and metadata, not permission or a unique binding
+incarnation. The optional fourth argument accepts same-plugin conditions on
+other namespace/key observations. The worker checks every condition and the
+destination inside one transaction. On conflict, prepare every dependent input
+again; the returned `current` describes only the destination. Never retry a
+transport error, an unknown write, or an arbitrary callback. The new API does
+not serialize closures or preserve transaction-local reads made by old callbacks.
+For transcript callbacks, use the separate
+[transcript preparation contract](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation),
+which checks duplicates before preparation and supports explicit suppression.
+
+For account-scoped conversation bindings, use
+`createAccountScopedConversationBindingManagerV2` from
+`openclaw/plugin-sdk/thread-bindings-runtime`. Await bind, touch, unbind, and
+lookup methods, including lookups that expire bindings. Register custom adapters
+with `registerSessionBindingAdapterV2`; the V2 interface requires asynchronous
+readers and current-owner checks. The service exposes `listBySessionAsync`,
+`resolveByConversationAsync`, and `touchAsync`. An async failure never selects a
+synchronous fallback. External adapters remain responsible for their own
+storage, currentness, and committed publication.
+
+For channel route ownership, replace `resolveConversationRouteOwner` and
+`prepareConversationRouteOwners` with `prepareConversationRouteOwnersAsync`.
+Await its `inspectBindings(refs)` callback during preparation, then return one
+synchronous resolver per input. The callback returns a reader for the prepared
+binding facts; invoke that reader inside the resolver so committed binding
+changes invalidate ownership before an external effect. Do not retain the
+preparation callback after returning. The Gateway releases the facts after
+selection or delivery. Discord, Matrix, Slack, and Telegram use this contract for all bundled
+route ownership reads; deprecated synchronous hooks remain for external plugins
+until the next Plugin SDK major and warn when called.
+
+The original synchronous keyed stores, opaque `update`/`deleteIf` callbacks,
+binding managers, and adapter registrations remain compatibility APIs. They
+preserve synchronous commit-before-return and callback ordering, and are
+**removed in the next Plugin SDK major** after the approved compatibility window.
+Actual legacy use emits one diagnostic per plugin and capability family per
+Gateway process; importing a module does not warn. Diagnostics contain the method,
+replacement, and compatibility promise, without paths or stored values.
+
+This migration changes no schema, stored format, retention, or update behavior.
+
+When state-backed reads feed a channel, migrate its config and security adapters
+to the [async channel hooks](/plugins/sdk-channel-plugins). Forward these hooks
+through wrapper and setup adapters while keeping existing synchronous signatures
+for older hosts.
+
+## Migrate inspection, authorization, and approval factories
+
+Use these async replacements when inspection or channel eligibility reads
+worker-owned state:
+
+| SDK subpath                               | Synchronous API                                    | Replacement                                             |
+| ----------------------------------------- | -------------------------------------------------- | ------------------------------------------------------- |
+| `conversation-binding-inspection-runtime` | `inspectConversationBinding`                       | `inspectConversationBindingAsync`                       |
+| `command-auth-native`                     | `resolveCommandAuthorization`                      | `resolveCommandAuthorizationAsync`                      |
+| `approval-delivery-runtime`               | `createApproverRestrictedNativeApprovalCapability` | `createApproverRestrictedNativeApprovalCapabilityAsync` |
+| `approval-handler-runtime`                | `createChannelApprovalNativeRuntimeAdapter`        | `createChannelApprovalNativeRuntimeAdapterAsync`        |
+| `approval-handler-adapter-runtime`        | `createLazyChannelApprovalNativeRuntimeAdapter`    | `createLazyChannelApprovalNativeRuntimeAdapterAsync`    |
+
+Await inspection and command authorization before consuming their results. The
+approval factories still return adapters synchronously; their async eligibility
+callbacks are awaited by the host. The original APIs preserve their synchronous
+contracts through the next Plugin SDK major compatibility window. Use the narrow
+subpaths above for new imports; broad compatibility barrels retain existing APIs
+without duplicating the replacements.
+
+## Await Gateway approval publication
+
+Use `await context.approvalEvents.publishRequestedAsync(kind, request)` to prepare
+subscriber eligibility before publishing. If an older host supplies only
+`publishRequested`, select that synchronous callback before dispatch; never retry
+a failed async publication through the old callback.
+
+`publishRequested(kind, request)` retains its synchronous numeric result for
+synchronous subscribers. It is deprecated and **removed in the next Plugin SDK
+major**. If any subscriber requires asynchronous eligibility, the old method
+throws a migration error before sending the request to any subscriber. Use the
+async method for bundled native approval runtimes, whose route selection can
+prepare account state in workers. Legacy publisher objects need not implement
+the optional async companion.
+
 ## Workspace mutation guards
 
 Await `api.runtime.agent.ensureAgentWorkspace({ dir, guard: { assertHost } })`.
@@ -54,15 +390,21 @@ depending on refreshed connected views. Recording also awaits the collaboration
 writer's session involvement update before saving Inbox items. Both writes retain
 their existing owners and settle before Gateway worker shutdown.
 
-The shipped `list`, `dismiss`, `recordCommittedInput`, and `invalidate` methods
-remain synchronous third-party adapters until the next Plugin SDK major and
-explicit breaking-release approval. Each emits a `DEP_SESSION_PERSISTENCE`
-deprecation warning once per plugin and method per process; calls outside a
-plugin invocation warn once per method. Existing return values and completion
-timing stay intact, including recording before an immediate synchronous list.
-Notifications publish after the enclosing transaction commits and are discarded
-on rollback. This migration changes no schema, retained data, retention, or
-update behavior.
+The shipped synchronous signatures remain deprecated until the next Plugin SDK
+major, but their native persistence adapters have been retired. `list` and
+`dismiss` return `UNAVAILABLE` with the awaited replacement in the message;
+`invalidate` throws a migration-directed error. Legacy `recordCommittedInput`
+queues the worker operation after any enclosing transaction commits; rollback
+discards it. Await `recordCommittedInputAsync` for completion. Each
+emits a `DEP_SESSION_PERSISTENCE` warning once per plugin and capability family
+per process; unscoped calls share one SDK-level family warning. Rejected reads, dismissals, and invalidations do not schedule background work.
+Queued legacy recording drains on orderly shutdown; an abrupt process exit can
+lose a queued submission.
+
+Move recording outside any synchronous SQLite transaction and await it after
+the source message commits. The awaited Inbox writer owns its own transaction
+and publishes notifications only after that write commits. This migration
+changes no schema, retained data, retention, or update behavior.
 
 ## Await personal model-account operations
 
@@ -90,26 +432,76 @@ fall back to its synchronous counterpart.
 The synchronous methods shipped in 2026.9.8 retain their arguments, immediate
 return values, and completion timing until the next Plugin SDK major and
 explicit breaking-release approval. Each emits one `DEP_SESSION_PERSISTENCE`
-warning per plugin and method per process, including across plugin reloads;
+warning per plugin and capability family per process, including across plugin reloads;
 unscoped calls warn once per method. Core and bundled callers use the awaited
 methods. This migration changes no RPC schema, stored data, retention, or update
 behavior.
 
+## Await skill-command discovery
+
+Use `prepareSkillCommandsForAgents` and `prepareSkillCommandsForWorkspace` from
+`openclaw/plugin-sdk/skill-commands-runtime` when building native command menus.
+`command-auth-native` also exposes `prepareSkillCommandsForAgents` alongside its
+existing command helpers. Await preparation before registering commands or
+publishing a menu so managed-library selection runs through its database worker.
+
+The synchronous `listSkillCommandsForAgents` and `listSkillCommandsForWorkspace`
+methods retain their array results until the next Plugin SDK major. They are
+deprecated and warn once per plugin and capability family on use. Bundled
+Discord, Mattermost, Slack, and Telegram menus use the awaited methods.
+Command names, filtering, stored selections, and update behavior are unchanged.
+
 ## Await placement preparation
 
-Gateway contexts provide `workerSessionPlacementService.getManyAsync` and
-`retireSessionPlacementAsync`. Await their results before using placement facts,
-starting dependent work, or releasing request resources. Their synchronous
-counterparts shipped through the 2026.9.8 Gateway SDK and remain deprecated
-compatibility methods until the next Plugin SDK major.
+Await placement reads and mutations before using their result, starting dependent
+work, or releasing request resources. The Gateway's native synchronous adapters
+are retired; the deprecated signatures remain until the next Plugin SDK major.
 
-Use `placementStandingGrants.resolveBindingAsync`, `validateAsync`, and
-`retainAsync` for node-grant preparation. `resolveAsync` combines binding and
-retained-parent validation in one request. These additions are optional on the
-released interface so existing custom service implementations remain compatible;
-the native Gateway supplies them. Keep `consume` at the final synchronous
-transport authorization boundary: earlier prepared facts do not replace current
-placement, pairing, or parent-approval authority.
+| Deprecated `workerSessionPlacementService` method | Awaited replacement                            |
+| ------------------------------------------------- | ---------------------------------------------- |
+| `get`                                             | `getAsync`                                     |
+| `getMany`                                         | `getManyAsync`                                 |
+| `list`                                            | `listAsync`                                    |
+| `listForReconcile`                                | `listForReconcileAsync`                        |
+| `listPendingWorkspaceResults`                     | `listPendingWorkspaceResultsAsync`             |
+| `getWorkspaceResultReconcilingSessionIds`         | `getWorkspaceResultReconcilingSessionIdsAsync` |
+| `retireSessionPlacement`                          | `retireSessionPlacementAsync`                  |
+| `clearLocalTurnClaimsAfterRestart`                | `clearLocalTurnClaimsAfterRestartAsync`        |
+
+`get` and `getMany` only consume committed in-process receipts. Cold or invalidated
+entries throw with migration guidance; an owner-published absence remains a valid
+result. The synchronous inventory and mutation methods always throw and never
+schedule work. Calls emit a warning once per plugin and capability family.
+
+Placement activation callbacks receive the committed active placement directly.
+Use that result for maintenance scheduling instead of reading it again. For final
+execution or disclosure guards, prepare authority with the placement owner, then
+check its live in-process facts immediately before the effect.
+
+Startup awaits `clearLocalTurnClaimsAfterRestartAsync` while holding the
+state-directory lock, before admitting turns. The worker clears stale local claims
+and publishes returned records after success. An uncertain result fails startup;
+the next boot can safely repeat cleanup. Bundled reset and deletion paths await
+`retireSessionPlacementAsync`.
+
+The built-in `placementStandingGrants` service has these replacements:
+
+| Deprecated method | Awaited replacement   |
+| ----------------- | --------------------- |
+| `resolveBinding`  | `resolveBindingAsync` |
+| `retain`          | `retainAsync`         |
+| `validate`        | `validateAsync`       |
+
+The synchronous methods throw migration-directed errors. `resolveAsync` combines
+binding and retained-parent validation in one request. Await `consumeAsync` just
+before transport handoff, then call `consume` synchronously at the effect. The
+final call checks the prepared write receipt, expiry, node, pairing, and placement
+binding without SQLite; a changed receipt rejects the grant. Do not treat an older
+preparation as permission for a later effect.
+
+The async additions remain optional on the released interface for custom service
+implementations. The built-in Gateway supplies them and never chooses a native
+fallback after a worker failure.
 
 Device-placement demand also has an awaited
 `workerPlacementDispatchService.getAdmittedDeviceSessionCountsAsync` companion.
@@ -185,6 +577,76 @@ The synchronous fingerprint, projection, binding, and injection methods are depr
 SDK major and explicit breaking-release approval. No runtime warning, schema
 change, retention change, or update migration is introduced.
 
+## Prepare session catalog identities
+
+Await `readSessionTranscriptCatalogTitleAsync({ agentId, sessionKey, storePath, entry })`
+from `openclaw/plugin-sdk/session-transcript-runtime` when deriving a catalog title.
+It preserves metadata precedence and reads the bounded first-message fallback through
+the history worker. `readSessionTranscriptCatalogPage` also uses that worker while
+retaining raw event coordinates for pagination. The synchronous
+`readSessionTranscriptCatalogTitle` remains supported in the current Plugin SDK major,
+warns once per plugin, and will be removed in the next Plugin SDK major.
+
+Use `await prepareSessionCatalogSourceActorProjector({ pluginId, sourceDomain, actors })`
+from `openclaw/plugin-sdk/session-transcript-runtime` before projecting a source catalog page.
+The returned synchronous projector reads only the prepared profile and verified GitHub facts.
+For receiver attribution, use `await prepareSessionCatalogGitHubLinker({ participants, owners })`,
+passing the page's participants and configured owner references. Its synchronous
+`linkParticipant` and `resolveOwner` methods retain every verified GitHub account and
+login, while source exports use only the person's primary account.
+If multiple hosts prepare concurrently, retain each linker's `assertCurrent` and
+invoke it before publishing a completed host or the aggregate result.
+Recheck each host's snapshot lifecycle at the same publication boundary, including
+hosts that do not link profile identities.
+
+Prepare again for each page after transport work, then project and disclose without another
+await. Profile changes during preparation reject the page; identity claims never grant access.
+Foreign commits after the identity read do not rewrite that page's attribution snapshot;
+the next unpinned page reads fresh facts. This snapshot never replaces a permission check.
+Recheck the source's current sharing policy before disclosure. The existing
+`runtime.agent.session.listSessionEntries` accepts optional `sessionKeys` to restrict
+this final read to exact persisted keys while preserving canonical listing validation.
+Selected reads include derived participants and counts by default. Guards that consume only
+sharing metadata can pass `includeParticipants: false` to skip that hydration; canonical
+validation remains enabled in both read-only and writable listings.
+Its optional `captureSource(assertCurrent)` callback captures the admitted physical store;
+invoke the supplied assertion after preparation and before the final sharing read to reject
+replacement at the same path, even when session IDs were reused.
+
+The released synchronous `createSessionCatalogSourceActorProjector` and
+`createSessionCatalogGitHubLinker` signatures remain available for existing plugins;
+bundled Session Share uses the awaited helpers. Schemas, stored data, retention,
+permissions, and update behavior are unchanged.
+
+## Replace unbound native session deletion callbacks
+
+Harness `withSessionDeletion` and `withSessionContextReset` hooks should pass
+factory-produced participants to `run`, instead of plain
+`AgentHarnessSessionDeletionMutation` objects with unbound `commit` and
+`rollback` callbacks. Import the factories from
+`openclaw/plugin-sdk/agent-harness-session-runtime`:
+
+| Deprecated callback                                                   | Replacement                                                                                |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Direct callbacks that remove and restore a stored native binding      | The participant supplied by `createNativeSessionBindingLifecycleV2(...).withDeletion(...)` |
+| Direct callbacks that only finalize cleanup after the session commits | `createNativeSessionCommitFinalizer({ commit, rollback })`                                 |
+
+The binding lifecycle lets the existing worker transaction settle reversible
+stored state. The commit finalizer is only for cleanup without a reversible
+storage effect; it does not move arbitrary database callbacks to a worker.
+Use `wrapNativeSessionDeletionMutation` when adding live-authority or settlement
+hooks to either participant, so the wrapper preserves its worker ownership.
+
+During durable Gateway deletion, direct unbound callbacks run only after the
+worker acknowledges the session commit; their rollback callback is not used.
+Cleanup failures warn without undoing deletion, and a process exit can leave
+cleanup unfinished. Stopped-owner maintenance and process-local incognito
+deletion retain their native transaction contract. Legacy callbacks warn once
+per plugin and callback family and will be **removed in the next Plugin SDK
+major**. Factory-produced participants and the two harness hooks remain
+supported. See [deletion companions](/plugins/sdk-migration/compatibility-policy#harness-deletion-companions).
+This migration changes no schema, stored format, retention, or update behavior.
+
 ## Await session upstream links
 
 Use `upsertSessionUpstreamLinkAsync` and `deleteSessionUpstreamLinkAsync` from
@@ -212,25 +674,211 @@ deprecation is recorded in TypeScript and the compatibility registry without
 runtime warnings. This migration changes no schema, stored data, retention, or
 update behavior.
 
+## Await session metadata listings
+
+Use `listSessionEntriesAsync` from `openclaw/plugin-sdk/session-store-runtime`,
+or `api.runtime.agent.session.listSessionEntriesAsync`, to enumerate session
+metadata before preparing work. Pass an explicit `agentId` and optionally the
+existing `storePath` and `env`, then await the result. The read runs through the
+session worker and never creates or registers a missing agent database.
+
+The async listing retains session IDs, initialization status, plugin metadata,
+and derived participants while omitting detached snapshots such as saved skill
+prompts. Use `getSessionEntryAsync` when a complete entry is needed. The async
+listing is always read-only, so it does not take `readOnly`, snapshot hydration,
+or synchronous source-capture options. Keep final deletion or disclosure guards
+at their existing effect boundary.
+
+The synchronous `listSessionEntries` API is deprecated until the next Plugin SDK
+major. Its existing arguments and complete-entry behavior remain available for
+compatibility, with a one-time deprecation warning on legacy use.
+
+## Await transcript statistics
+
+Use `await readTranscriptStatsAsync(scope)` from
+`openclaw/plugin-sdk/session-store-runtime` for one transcript, or
+`await readTranscriptStatsBatchReadOnlyAsync(scopes)` from
+`openclaw/plugin-sdk/memory-core-host-engine-sessions` for a batch. Durable reads
+run through the existing session worker. Batch results retain input order and
+duplicate IDs, return zero counts for missing transcripts in existing stores,
+and return `null` for unavailable stores without creating them.
+
+`readTranscriptStatsSync` and `readTranscriptStatsBatchReadOnlySync` retain their
+released signatures until the next Plugin SDK major. Legacy calls on the main
+thread emit a shared session-store deprecation warning; kernels already running
+inside database workers can keep their synchronous reads without a warning.
+
+Use `await statSessionEntry(path, options)` from
+`openclaw/plugin-sdk/memory-core-host-engine-sessions` to read transcript file
+metadata through the worker. `statSessionEntrySync` remains available until the
+next Plugin SDK major; passing already prepared transcript statistics to it
+only projects those values and does not query SQLite. `buildSessionEntry`
+also reads durable snapshots in the worker when an `onTranscriptMessage`
+observer is supplied, then invokes the observer on the caller with the original
+messages and timestamps.
+
+## Prepare session entry changes
+
+Use `prepareSessionEntryPatch` or `applySessionEntryPatch` from
+`openclaw/plugin-sdk/session-store-runtime`. The agent runtime exposes
+`api.runtime.agent.session.prepareSessionEntryPatch` with the calling plugin's
+lifetime and session ownership checks bound by the host.
+
+```ts
+// Legacy callback adapter: retained with its original transaction guard.
+await patchSessionEntry({
+  ...target,
+  update: async (entry) => ({ displayName: await chooseTitle(entry) }),
+  assertCommitAllowed: assertLegacyOwner,
+});
+
+// Prepare outside SQLite; commit only if the captured entry is unchanged.
+await prepareSessionEntryPatch({
+  ...target,
+  prepare: async (entry) => ({ displayName: await chooseTitle(entry) }),
+  authority: { kind: "host", assertCurrent: assertLiveOwner },
+});
+
+// Already prepared data needs only one worker mutation command.
+await applySessionEntryPatch({
+  ...target,
+  expected: { sessionId, lifecycleRevision },
+  patch: { displayName: title },
+  preserveActivity: true,
+});
+```
+
+Preparation runs once outside the database transaction. Returning `null`
+suppresses the write and retains the existing result behavior. The worker checks
+the exact captured entry before committing; a conflict rejects without replaying
+the callback. `applySessionEntryPatch` checks its optional expected session and
+lifecycle in the committing transaction; `expected: null` requires absence.
+Use `fallbackEntry` when creating an absent row, and `replaceEntry: true` only
+when the supplied patch is a complete replacement.
+
+A `host` authority checks live ownership or cancellation without database access.
+It is rechecked after preparation and at worker admission and commit. Pass an
+existing host-provided source assertion as
+`authority: { kind: "source", source }` when storage predicates are involved;
+wrapping it in a database-reading callback loses its prepared-source contract.
+Ordinary direct SDK CRUD retains its existing optional-authority contract.
+
+`patchSessionEntry`, `updateSessionStoreEntry`, and the
+`updateLastRoute.assertCommitAllowed` option are deprecated and will be removed
+in the next Plugin SDK major. Use `updateLastRouteWithAuthority` for guarded
+route updates. Legacy guards retain their original native transaction visibility.
+New preparation does not serialize closures or promise that visibility. The
+shared warning budget is once per plugin and session-store family per process.
+
+`upsertSessionEntry` and `updateAmbientTranscriptWatermark` keep their names and
+results; their existing reducers now execute in the owning worker. Awaited
+completion includes committed-fact installation. No schema, stored-byte,
+retention, or update migration is introduced.
+
+Unbound incognito sessions retain their native owner until the incognito actor
+cutover. Cross-store source assertions retain their existing native
+adapter until the typed cross-store entry writer is available. These explicit
+routes are not worker-only; neither route retries a failed worker mutation.
+
 ## Await locked transcript preparation
 
-Inside `withSessionTranscriptWriteLock`, use
-`prepareMessageAfterIdempotencyCheckAsync` when message preparation needs to await
-work. Returning `undefined` suppresses a fresh append. Duplicate messages and
-accepted pending inputs retain their original preparation decision. The existing
-`prepareMessageAfterIdempotencyCheck` callback remains synchronous inside the
-transaction until the next Plugin SDK major.
+Replace `withSessionTranscriptWriteLock` with `withSessionTranscriptWrite` from
+`openclaw/plugin-sdk/session-transcript-runtime`. Pass message preparation and
+the host's prepared source authority in `preparation`.
 
-Await each append to consume its result. The lock also joins accepted operations
-in call order before releasing the writer, including when its callback fails or
-returns without awaiting an append. Retained context methods reject new calls
-after the callback finishes. Keep current authority checks in
-`beforeFreshMessageCommit`.
+The legacy form runs opaque preparation inside the native transaction:
 
-Bundled adapters use `composeSessionTranscriptWriteAssertion` to preserve prepared
-owner checks through wrappers. Pass existing assertions as sources; a custom
-check may inspect only owned in-memory state. Unprepared callbacks retain their
-native transaction ordering.
+```ts
+await withSessionTranscriptWriteLock(target, async (transcript) => {
+  await transcript.appendMessage({
+    message,
+    prepareMessageAfterIdempotencyCheck: redactMessageSync,
+  });
+});
+```
+
+The replacement awaits preparation outside that transaction:
+
+```ts
+await withSessionTranscriptWrite(target, async (transcript) => {
+  const result = await transcript.appendMessage({
+    message,
+    idempotencyLookup: "scan",
+    preparation: {
+      prepareMessage: async (candidate) => redactMessage(candidate),
+      source: sourceAuthority,
+    },
+  });
+  if (result?.appended) {
+    await transcript.publishUpdate({ messageId: result.messageId });
+  }
+});
+```
+
+`prepareMessage` runs outside the transaction after duplicate detection. Returning
+`undefined` suppresses a fresh append. Replays retain stored bytes and skip
+preparation. The owner captures the transcript version before preparation and
+checks it again in the committing transaction; a change refuses the prepared
+write. It does not replay preparation automatically. Keep externally visible
+side effects out of preparation, and publish only from an acknowledged result.
+
+`appendSessionTranscriptMessagesByIdentity` remains an atomic batch of
+already-prepared messages. It does not accept per-message `preparation`; use the
+singleton append or the write sequence when duplicate-sensitive preparation is
+needed.
+
+The new scope orders accepted operations, and each append commits independently.
+For actor-bound targets, it is optimistic: callback awaits do not reserve the
+actor queue. Reads capture a transcript version that later fresh appends must
+still match; successful appends advance that version. A duplicate replay can
+return its original receipt after another writer advances the transcript, but
+the stale scope then refuses further mutations.
+
+Durable targets retain their canonical worker writer across callback awaits;
+native compatibility and unbound native incognito targets retain their native
+writer queue. Their reads do not automatically impose an exact version
+precondition on later appends. On every path, awaited
+`prepareMessage` still captures and rechecks its own preparation snapshot before
+a fresh insert, as described above. These process-local reservations do not
+exclude foreign processes or direct synchronous writers.
+
+A callback failure does not roll back earlier appends, but discards its queued
+notifications. The scope joins accepted operations in call order before releasing
+ownership, including when its callback fails or returns without awaiting an
+append. Retained context methods reject new calls after the callback finishes.
+
+`preparation.source` accepts the existing host-owned source assertion. Actor and
+worker-backed writes prepare its exact row predicates for the owning transaction
+and recheck its bounded host lifecycle guard at mutation admission and commit.
+That prepared source remains held through accepted persistence. Native sequence
+writes retain the source's synchronous assertion inside the transaction before
+a fresh insert; they do not acquire a separate prepared-source receipt. Pass the
+original source capability through wrappers with
+`composeSessionTranscriptWriteAssertion`; do not replace it with an opaque
+database-reading lambda. Keep its owner alive until the write scope settles.
+Unprepared source callbacks cannot authorize actor-bound writes.
+
+The scope's captured writer authority is separate from a fresh message's source.
+It remains required for reads, replay, accepted-input custody, and publication.
+Actor scopes retain that prepared authority and its exact predicates until all
+accepted work and publication settle.
+
+The Codex mirror equivalent is `withCodexSessionTranscriptMirrorWrite` in
+`openclaw/plugin-sdk/codex-session-transcript-runtime`; it has the same semantics
+and retains message-sequence receipts.
+
+The old lock functions, `prepareMessageAfterIdempotencyCheck`, and
+`beforeFreshMessageCommit` are deprecated. Durable targets keep their original
+transaction ordering, with one warning per plugin for this legacy contract.
+Incognito targets, including explicitly actor-bound targets, reject the legacy
+form with an error naming `withSessionTranscriptWrite` and
+`preparation.prepareMessage` / `preparation.source`. Removal is scheduled for the
+next Plugin SDK major. `prepareMessageAfterIdempotencyCheckAsync` remains a
+compatible spelling; migrate it to `preparation.prepareMessage` too.
+
+Actor routing remains inactive unless the host explicitly selects an actor.
+Ordinary unbound incognito operations retain their existing host owner. This
+migration changes no schema, retention, or stored data and needs no update step.
 
 ## Await session transcript persistence
 
@@ -289,11 +937,11 @@ Replace `SessionManager.readSessionContext(target, read)` with
 `await SessionManager.readSessionContextAsync(target, read, { admission?, signal? })`.
 This reader preserves full-fidelity messages, including storage-only fields omitted
 from model context. Its consumer may return a promise; the iterator closes when
-the consumer settles, and source validation must succeed before the result is
-returned. A rewritten source or revoked admission rejects the read. The durable
-reader retains its database owner through consumption and cleanup;
-database closure revokes the read. Final acceptance uses the existing writer
-FIFO and native mutation witness, including rewrites made after worker validation.
+the consumer settles. The durable reader retains its database owner through
+consumption and cleanup; database closure, cancellation, or revoked admission
+rejects the read. A later append or rewrite does not invalidate the captured
+durable snapshot or the result already computed from it. A subsequent read sees
+the new transcript.
 The `session-manager-sync-context-read` record deprecates the synchronous reader on
 October 4, 2026, with one warning per process and removal at the next Plugin SDK
 major. Its existing synchronous result remains compatible during that window.
@@ -302,8 +950,9 @@ Actor-bound incognito sessions reject the deprecated synchronous persistence and
 context methods before native storage or loaded-view mutation. The error names
 the awaited replacement. Production incognito remains host-owned until the atomic
 worker activation; durable synchronous compatibility is unchanged. An ordinary
-`resolveCurrentTurnEntryId()` only walks the loaded view; to include omitted
-custom messages, await `openAsync(target)` and walk that complete view instead.
+`resolveCurrentTurnEntryId()` only walks the loaded view. Its
+`includeOmittedCustomMessages` option is deprecated; await `openAsync(target)`
+and walk that complete view instead.
 
 Bundled Codex history captures `captureCodexSessionContextReader(target, signal?)`
 from `openclaw/plugin-sdk/codex-session-transcript-runtime` before yielding. When
@@ -355,10 +1004,12 @@ User-turn transcript recorders also provide optional
 `completeProcessingAsync(outcome)` and `waitForPendingInputSettlement()` methods.
 Await processing completion before publishing its outcome. Completion records
 processing separately from transcript consumption; it does not append or consume
-the pending input. The synchronous `completeProcessing` callback shipped in
-`v2026.9.8` retains its immediate result for existing SDK consumers. The host
-uses that legacy callback only when a supplied recorder has no async companion,
-never after an async failure or an undefined async result.
+the pending input. Bundled callers complete through the awaited methods. Host-created recorders
+retain the deprecated synchronous `completeProcessing` adapter and its immediate
+return and transaction semantics until the next Plugin SDK major. Using it warns
+once per plugin. Replace it with `completeProcessingAsync`. The host also accepts
+plugin-supplied legacy callbacks when a recorder has no async companion, never
+after an async failure or an undefined async result.
 
 `finishPendingInput(disposition)` still revokes prompt custody synchronously.
 After calling it, await `waitForPendingInputSettlement()` when available before
@@ -383,7 +1034,7 @@ The old methods retain their synchronous `void` contract for third-party
 extensions. `extension-session-sync-persistence` records their deprecation and
 next-Plugin-SDK-major removal gate. The added methods preserve existing source
 contracts while allowing the host to await persistence failures and committed
-state before continuing. Deprecated calls emit the same once-per-method
+state before continuing. Deprecated calls emit the same once-per-family
 `DEP_SESSION_PERSISTENCE` warning.
 
 Custom extension hosts should supply `ExtensionActionsV2` through
@@ -412,7 +1063,7 @@ The synchronous `sanitizeGoogleGeminiReplayHistory`, legacy
 remain third-party compatibility adapters. The original context types keep their
 signatures; the V2 types add the required awaited capability. These surfaces are
 recorded as `provider-replay-sync-persistence` for removal at the next Plugin SDK
-major. Deprecated calls emit the same once-per-method
+major. Deprecated calls emit the same once-per-family
 `DEP_SESSION_PERSISTENCE` warning. The family builder retains its
 legacy hook for supported older consumers. The awaited Gemini helper propagates
 metadata write failures; the legacy adapter retains its historical best-effort
@@ -859,18 +1510,124 @@ write `agents.entries`. This compatibility window adds no runtime warnings.
 
 ## Await strict transcript message preparation
 
-For `appendSessionTranscriptMessageByIdentityStrict`, use
-`prepareMessageAfterIdempotencyCheckAsync` when a message needs preparation after
-duplicate detection. The callback runs outside the writer transaction; returning
-`undefined` suppresses a fresh message. Replayed messages retain their stored bytes
-and skip preparation. A transcript change during awaited message preparation
-refuses that prepared write.
+For `appendSessionTranscriptMessageByIdentityStrict` and
+`appendSessionTranscriptMessageByIdentity`, use `preparation.prepareMessage` for
+awaited preparation after duplicate detection and `preparation.source` for the
+host owner's source authority. They use the same
+[preparation and conflict semantics](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation)
+as `withSessionTranscriptWrite`. Strict appends still require an exact session ID
+and distinguish suppression from a session rebound.
 
-Keep live, synchronous authority assertions in `beforeFreshMessageCommit`. They
-run only for fresh inserts and are checked again at commit. They must not perform
-blocking reads or query the target database from a worker admission callback;
-use the host owner's prepared source authority when storage facts are needed.
+The released synchronous preparation and before-commit callbacks retain their
+durable-target behavior through the next Plugin SDK major, with a one-time
+warning per plugin. They are refused for incognito and actor-bound targets.
+No stored data migration or update step is required.
 
-The released `prepareMessageAfterIdempotencyCheck` callback keeps its synchronous
-result and transaction ordering until the next Plugin SDK major and an explicitly
-approved breaking release. This change requires no data migration or update step.
+## Await auth-profile and provider-availability operations
+
+Use the awaited auth APIs before publishing model choices, registering provider
+availability, or starting work that depends on a stored credential. Their
+database reads and writes run through the existing auth owner and workers.
+Keep the same arguments and await the replacement's result:
+
+| SDK subpath                              | Synchronous API                               | Awaited replacement                                |
+| ---------------------------------------- | --------------------------------------------- | -------------------------------------------------- |
+| `provider-auth`                          | `ensureAuthProfileStore`                      | `ensureAuthProfileStoreAsync`                      |
+| `provider-auth`                          | `ensureAuthProfileStoreForLocalUpdate`        | `ensureAuthProfileStoreForLocalUpdateAsync`        |
+| `provider-auth`                          | `upsertAuthProfile`                           | `upsertAuthProfileAsync`                           |
+| `provider-auth`, `provider-auth-api-key` | `upsertApiKeyProfile`                         | `upsertApiKeyProfileAsync`                         |
+| `provider-auth`                          | `isProviderApiKeyConfigured`                  | `isProviderApiKeyConfiguredAsync`                  |
+| `provider-auth`                          | `isProviderAuthProfileConfigured`             | `isProviderAuthProfileConfiguredAsync`             |
+| `provider-auth`                          | `listUsableProviderAuthProfileIds`            | `listUsableProviderAuthProfileIdsAsync`            |
+| `provider-auth-runtime`                  | `resolveProviderAuthProfileMetadata`          | `resolveProviderAuthProfileMetadataAsync`          |
+| `agent-runtime`                          | `loadAuthProfileStoreWithoutExternalProfiles` | `loadAuthProfileStoreWithoutExternalProfilesAsync` |
+| `agent-runtime`                          | `findPersistedAuthProfileCredential`          | `findPersistedAuthProfileCredentialAsync`          |
+| `agent-runtime`                          | `resolvePersistedAuthProfileOwnerAgentDir`    | `resolvePersistedAuthProfileOwnerAgentDirAsync`    |
+| `agent-harness-runtime`                  | `resolveModelAuthMode`                        | `resolveModelAuthModeAsync`                        |
+| `models-provider-runtime`                | `formatModelsAvailableHeader`                 | `formatModelsAvailableHeaderAsync`                 |
+| `image-generation-core`                  | `resolveCapabilityModelCandidates`            | `resolveCapabilityModelCandidatesAsync`            |
+| `provider-selection-runtime`             | `resolveConfiguredCapabilityProvider`         | `resolveConfiguredCapabilityProviderAsync`         |
+| `realtime-voice`                         | `resolveConfiguredRealtimeVoiceProvider`      | `resolveConfiguredRealtimeVoiceProviderAsync`      |
+| `tts-runtime`, `agent-runtime`           | `getTtsProvider`                              | `getTtsProviderAsync`                              |
+| `tts-runtime`                            | `isTtsProviderConfigured`                     | `isTtsProviderConfiguredAsync`                     |
+| `tts-runtime`                            | `resolveExplicitTtsOverrides`                 | `resolveExplicitTtsOverridesAsync`                 |
+
+The deprecated broad `agent-runtime` subpath also exposes
+`ensureAuthProfileStoreAsync`; use the focused `provider-auth` subpath for new imports.
+
+Use `loadAuthProfileStoreWithoutExternalProfilesAsync` when an existing
+`agent-runtime` integration needs persisted credential or usage facts without
+runtime external-profile overlays. It preserves inherited profiles and the
+selected personal profile while reading through the worker; it does not use
+the runtime snapshot-first selection of `ensureAuthProfileStoreAsync`.
+
+`resolveProviderAuthProfileMetadataAsync` preserves the existing optional
+`profileId` and OAuth `accountId` result fields and returns an empty object when
+no profile matches. Use it to prepare provider discovery metadata without
+reading the auth database on the Gateway thread.
+
+Existing `agent-runtime` integrations can also await
+`findPersistedAuthProfileCredentialAsync({ agentDir, profileId })` when preparing
+credential facts. It resolves to the stored credential or `undefined`. Its
+synchronous counterpart remains available for a current credential-authority
+check at an actual effect boundary; earlier prepared facts do not replace that
+check.
+
+For preparatory owner selection, await
+`resolvePersistedAuthProfileOwnerAgentDirAsync({ agentDir, profileId })`. It
+preserves inherited OAuth ownership: `undefined` selects the shared/default
+owner, while an independently owned local profile resolves to its agent
+directory. The synchronous resolver remains available for effect-time callers
+through the compatibility window. A prepared owner directory does not authorize
+later credential use.
+
+Injected runtimes provide the same migration through
+`api.runtime.modelAuth.ensureAuthProfileStoreAsync` and
+`api.runtime.modelAuth.isProviderApiKeyConfiguredAsync`. For subscription CLI
+dispatch selection, await
+`api.runtime.agent.resolveCliBackendDispatchEligibilityAsync` in place of
+`resolveCliBackendDispatchEligibility`.
+
+Await each upsert before using its result or starting a dependent read.
+`upsertAuthProfileAsync` resolves after the canonical writer updates the selected
+profile; it preserves neighboring profiles. `upsertApiKeyProfileAsync` resolves
+to the profile ID after the write completes. A store returned for local update
+is a snapshot, not permission to replace newer owner state; use the owner-backed
+mutation API for the write.
+
+Image, music, video, speech, realtime voice, and realtime transcription provider
+plugins should implement
+`isConfiguredAsync(context): Promise<boolean>` instead of `isConfigured` when
+checking stored credentials. Capability selection awaits this hook and prefers
+it when both hooks exist. The legacy synchronous hook remains supported;
+an async failure is not retried through it. Availability and model-auth labels
+describe configured choices, not live service health or authorization to use a
+credential.
+
+Realtime voice providers can also implement `resolveConfigAsync(context)` when
+configuration needs stored credentials. The awaited realtime selector prefers
+it over `resolveConfig`. The generic
+`resolveConfiguredCapabilityProviderAsync` accepts awaited
+`resolveProviderConfig` and `isProviderConfigured` callbacks while preserving
+explicit selection, automatic ordering, and existing result envelopes.
+
+For speech selection, await `getTtsProviderAsync` before using the selected
+provider and `isTtsProviderConfiguredAsync` before presenting configured-state
+results. Await `resolveExplicitTtsOverridesAsync` when model or voice overrides
+depend on selecting a provider. These preserve the synchronous methods'
+selection and override semantics while allowing stored-credential checks to
+run in the worker. Existing external speech providers that only implement
+`isConfigured` remain supported.
+
+The synchronous APIs shipped in 2026.10.1 retain their signatures, immediate
+results, and completion timing through the next Plugin SDK major and explicit
+breaking-release approval. They are deprecated; synchronous auth storage
+entrypoints warn once per plugin and capability family per process.
+Bundled callers use the awaited APIs. This migration changes no schema,
+stored format, retention, or update behavior.
+
+Native web-search selection no longer repeats a credential-presence lookup
+already owned by the model request. A stale availability hint may therefore
+select native search for a request that subsequently fails credential admission.
+The model request still resolves and validates current credentials before its
+external effect; prepared availability never replaces that authority check.

@@ -474,7 +474,10 @@ describeControlUiE2e("Control UI chat file links", () => {
         .toMatchObject({ path: "packages/app" });
       await expect
         .poll(() =>
-          page.getByRole("button", { name: "All", exact: true }).getAttribute("aria-pressed"),
+          page
+            .getByRole("group", { name: "Filter files", exact: true })
+            .getByRole("button", { name: "All", exact: true })
+            .getAttribute("aria-pressed"),
         )
         .toBe("true");
       const browserRow = page
@@ -493,7 +496,10 @@ describeControlUiE2e("Control UI chat file links", () => {
         "2",
       );
       await page.screenshot({ path: path.join(artifactDir, "03-workspace-file-preview.png") });
-      await page.locator('.side-panel__header button[aria-label="Files"]').click();
+      await page
+        .locator('[data-region-header="side"]')
+        .getByRole("button", { name: "Files", exact: true })
+        .click();
       const search = page.locator('.chat-workspace-rail input[type="search"]');
       await search.fill("README");
       await expect

@@ -231,20 +231,6 @@ export function createMergeOutcomeFixtureHarness() {
       previewBody: "Fixture body",
       previewHeadline: "Configured squash headline (#123)" as string | null,
       tamperMergeBody: false,
-      issueComments: [
-        {
-          id: 1,
-          body: `<!-- clawsweeper-review-version item=123 reviewed_at=${new Date().toISOString()} sha=${head} source_revision=${"b".repeat(64)} lease_owner=github-run-1 lease_comment_id=1 v=1 -->
-
-<!-- clawsweeper-review item=123 -->`,
-          user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-        },
-      ],
-      issueCommentsAfterFirst: null as null | Array<{
-        id: number;
-        body: string;
-        user: { id: number; login: string; type: string };
-      }>,
       issueCommentReads: 0,
       tamperCorrectionAtFinalReview: false,
       issueCommentsErrorAt: 0,
@@ -254,6 +240,7 @@ export function createMergeOutcomeFixtureHarness() {
       unavailable: false,
       stale: false,
       drift: false,
+      strictDrift: false,
       crash: "",
       comment: "success",
       admin: false,
@@ -686,6 +673,11 @@ else if(args[0]==="pr"&&args[1]==="view") {
     if(!args.includes("Cache-Control: max-age=0")) fail("missing independent fresh merge observation");
     if(args.find(arg=>arg.startsWith("query="))!==${JSON.stringify(landingSnapshotQuery)}) fail("landing snapshot query is not supported by the shipped Octopool shim");
     s.observationReads++;
+    if(s.observationReads===2&&s.tamperCorrectionAtFinalReview) fs.appendFileSync(process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/correction-review.json","\\n");
+    if(s.tamperMergeBody) {
+      const local=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/";
+      for(const name of fs.readdirSync(local).filter(name=>name.startsWith("merge-body."))) fs.writeFileSync(local+name,"Tampered");
+    }
     const step=s.observations.shift();
     if(step?.pr) Object.assign(s.pr,step.pr);
     if(step?.priorCi) Object.assign(s.priorCi,step.priorCi);
@@ -711,15 +703,9 @@ else if(args[0]==="pr"&&args[1]==="view") {
   } else {
     if(!args.includes("Cache-Control: max-age=0")) fail("missing live comment header");
     s.issueCommentReads++;
-    if(s.issueCommentReads>1&&s.tamperCorrectionAtFinalReview) fs.appendFileSync(process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/correction-review.json","\\n");
-    if(s.tamperMergeBody) {
-      const local=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/";
-      for(const name of fs.readdirSync(local).filter(name=>name.startsWith("merge-body."))) fs.writeFileSync(local+name,"Tampered");
-    }
     if(s.issueCommentReads===s.issueCommentsErrorAt) fail("comment API unavailable");
-    if(s.issueCommentReads>1&&s.issueCommentsAfterFirst) s.issueComments=s.issueCommentsAfterFirst;
     save();
-    out([[...s.issueComments,...s.comments]]);
+    out([s.comments]);
   }
 } else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/commits?"))) {
   const query=new URL(args.find(arg=>arg.startsWith("repos/fixture/repo/commits?")),"https://github.com").searchParams;
@@ -746,6 +732,7 @@ source "$script_parent_dir/pr-lib/common.sh"
 source "$script_parent_dir/pr-lib/merge.sh"
 source "$script_parent_dir/pr-lib/review.sh"
 source "$script_parent_dir/pr-lib/gates.sh"
+source "$script_parent_dir/pr-lib/prepare-core.sh"
 repo_root() { printf '%s\\n' "$FIXTURE_REPO"; }
 ensure_gh_api_auth() { :; }
 verify_prep_branch_matches_prepared_head() { [ "$(command git rev-parse HEAD)" = "$2" ]; }
@@ -769,7 +756,7 @@ pr_gh_plain() {
 sleep() { if [ "$#" = 1 ] && { [ "$1" = 1 ] || [ "$1" = 2 ]; }; then command node "$FIXTURE_GH" sleep "$1"; else command sleep "$@"; fi; }
 verify_crabbox_admin_merge_bypass() {
   [ "$(command jq -r .admin "$FIXTURE_STATE")" = true ] || return 1
-  command jq --arg main "$(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/main)" '{mainSha:$main,crabboxCheckUrl:"fixture",ciGateUrl:"fixture"}' "$FIXTURE_STATE" > .local/merge-crabbox-bypass.json
+  command jq --arg main "$(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/main)" '{mainSha:$main,finalMainSha:$main,crabboxCheckUrl:"fixture",ciGateUrl:"fixture"}' "$FIXTURE_STATE" > .local/merge-crabbox-bypass.json
 }
 # Fault the Git boundary, not the outcome owner: crash after intent CAS, or
 # reject later receipt writes. All successful object/ref operations are real.
@@ -820,7 +807,7 @@ if [ "\${9:-}" = verify ]; then
 elif [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
 else
-  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-}" "\${11:-false}"
+  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-}" "\${11:-false}" "\${12:-}"
 fi
 `,
       true,
@@ -869,6 +856,7 @@ fi
       verifyOnly = false,
       adminEvidence = "",
       confirmedAdmin = false,
+      mergedHead = "",
     ) => {
       const result = spawnSync(
         nodeExecutable,
@@ -888,6 +876,7 @@ fi
           verifyOnly ? "verify" : "",
           adminEvidence,
           String(confirmedAdmin),
+          mergedHead,
         ],
         {
           cwd,
@@ -895,6 +884,7 @@ fi
             ...env,
             FIXTURE_REAL_GH: String(Boolean(state().quotaAt || state().restReadFailure)),
             OPENCLAW_PR_MERGE_METHOD: method,
+            OPENCLAW_PR_STRICT_DRIFT: state().strictDrift ? "1" : "",
           },
           encoding: "utf8",
           timeout: 20_000,
@@ -951,7 +941,6 @@ fi
       prepare(replacement, main);
       const next = state();
       next.pr.headRefOid = replacement;
-      next.issueComments[0]!.body = next.issueComments[0]!.body.replace(head, replacement);
       save(next);
       return replacement;
     };
@@ -1033,6 +1022,8 @@ fi
       complete: (oid: string) => run(false, repo, "squash", "", "", "", oid),
       verify: () => run(false, repo, "squash", "", "", "", "", "", false, "", true),
       cancel: (oid: string) => run(false, repo, "squash", oid, "", "", "", "", true),
+      acceptHeadDrift: (oid: string, mergedHead: string) =>
+        run(false, repo, "squash", oid, "", "", "", "", false, "", false, "", false, mergedHead),
       recover,
       advance,
       record,

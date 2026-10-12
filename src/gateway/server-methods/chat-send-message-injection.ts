@@ -6,7 +6,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { bindWorkerToolPreparation } from "../../agents/harness/host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "../../agents/harness/tool-authority-preparation.js";
-import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
+import { resolveCommandAuthorizationAsync } from "../../auto-reply/command-auth.js";
 import { resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import { buildInboundMediaNoteProjection } from "../../auto-reply/media-note.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
@@ -184,7 +184,7 @@ export function createChatSendMessageInjectionStarter(params: {
             })),
           ]
         : replyOptionImages;
-    const authorization = resolveCommandAuthorization({
+    const authorization = await resolveCommandAuthorizationAsync({
       ctx,
       cfg,
       commandAuthorized: ctx.CommandAuthorized === true,
@@ -299,7 +299,8 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
   attempt: ReplyMessageInjectionAttempt;
   sessionBinding?: Readonly<
     Pick<ChatAbortControllerEntry, "sessionKey" | "sessionId" | "agentId" | "lifecycleGeneration">
-  >;
+  > &
+    Pick<ChatAbortControllerEntry, "terminalOutcomeObserved">;
   context: GatewayRequestContext;
   ctx: RuntimeMsgContext;
   persistUserTurnTranscriptBestEffort: () => Promise<void>;
@@ -412,6 +413,7 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     });
     if (indeterminate) {
       broadcastChatError({
+        terminalEntry: params.sessionBinding,
         context,
         runId: clientRunId,
         sessionKey,
@@ -419,7 +421,13 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
         errorMessage: indeterminate,
       });
     } else {
-      broadcastChatFinal({ context, runId: clientRunId, sessionKey, agentId });
+      broadcastChatFinal({
+        context,
+        runId: clientRunId,
+        sessionKey,
+        agentId,
+        terminalEntry: params.sessionBinding,
+      });
     }
   }
   return true;

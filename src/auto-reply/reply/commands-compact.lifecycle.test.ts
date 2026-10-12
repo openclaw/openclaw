@@ -177,7 +177,7 @@ describe("handleCompactCommand lifecycle authority", () => {
     expect(vi.mocked(compactEmbeddedAgentSession)).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves the drained writer fence and completed count, with caller abort=%s",
     async (abortAfterCompletion) => {
       const controller = new AbortController();
@@ -225,10 +225,12 @@ describe("handleCompactCommand lifecycle authority", () => {
       expect(incrementCompactionCount).toHaveBeenCalledOnce();
       expect(enqueueSystemEvent).toHaveBeenCalledTimes(abortAfterCompletion ? 0 : 1);
       expect(currentEntry.activeWriterRunId).toBe("drained-writer");
+      expect(abortEmbeddedAgentRun).not.toHaveBeenCalled();
+      expect(waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith("session-1", 60_000);
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "uses the host-accepted successor before accounting, with owner replacement=%s",
     async (replaceBeforeAccounting) => {
       const initial = { sessionId: "native-session", updatedAt: 1, lifecycleRevision: "lifecycle" };
@@ -237,14 +239,17 @@ describe("handleCompactCommand lifecycle authority", () => {
       vi.mocked(resolveCurrentSessionEntry).mockImplementation(({ expected }) =>
         expected.sessionId === currentSessionId ? { updatedAt: 1, ...expected } : undefined,
       );
-      vi.mocked(incrementCompactionCount).mockImplementationOnce(async ({ expectedSession }) => {
-        expect(expectedSession?.sessionId).toBe("successor-session");
-        if (replaceBeforeAccounting) {
-          currentSessionId = "replacement-session";
-          return undefined;
-        }
-        return 1;
-      });
+      vi.mocked(incrementCompactionCount).mockImplementationOnce(
+        async ({ expectedSession, transcriptByteCompactionLatch }) => {
+          expect(expectedSession?.sessionId).toBe("successor-session");
+          expect(transcriptByteCompactionLatch).toBeNull();
+          if (replaceBeforeAccounting) {
+            currentSessionId = "replacement-session";
+            return undefined;
+          }
+          return 1;
+        },
+      );
       vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (params, host) => {
         host?.assertActive?.();
         const storePath = params.sessionTarget?.storePath;

@@ -1,5 +1,8 @@
 // Owns core preparation and sync/async orchestration for config validation.
-import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence-policy.js";
+import {
+  listChannelIdsForOwnershipMigration,
+  listChannelIdsForOwnershipMigrationAsync,
+} from "../plugins/channel-presence-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { attachAgentListProjection } from "./agent-list-projection.js";
 import { omitDeferredPluginMigrationConfig } from "./deferred-plugin-migration-config.js";
@@ -176,6 +179,25 @@ export function materializeLegacyAgentOwnershipForActiveChannelsResult(
   },
 ): ReturnType<typeof materializeLegacyDefaultAgentRoles> {
   const ambientChannelIds = listChannelIdsForOwnershipMigration({
+    config,
+    env,
+    ...(manifestRecords ? { manifestRecords } : {}),
+  });
+  return materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
+    ambientChannelIds,
+    env,
+    homedir: options?.homedir,
+    materializeSessionStore: options?.materializeSessionStore,
+    materializeWorkspace: options?.materializeWorkspace,
+  });
+}
+
+export async function materializeLegacyAgentOwnershipForActiveChannelsResultAsync(
+  ...[config, legacyDefaultAgentId, env, manifestRecords, options]: Parameters<
+    typeof materializeLegacyAgentOwnershipForActiveChannelsResult
+  >
+): Promise<ReturnType<typeof materializeLegacyDefaultAgentRoles>> {
+  const ambientChannelIds = await listChannelIdsForOwnershipMigrationAsync({
     config,
     env,
     ...(manifestRecords ? { manifestRecords } : {}),

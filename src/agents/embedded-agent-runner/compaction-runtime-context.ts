@@ -80,16 +80,7 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
   // Revalidate the immutable request for every concrete candidate instead of
   // carrying a level clamped for an earlier model into a later attempt.
   return (
-    resolveCandidateThinkingLevel({
-      cfg: params.config,
-      provider: params.provider,
-      modelId: params.modelId,
-      level: requestedLevel,
-      catalog: params.catalog,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      agentRuntime: params.agentRuntime,
-    }) ?? "off"
+    resolveCandidateThinkingLevel({ ...params, cfg: params.config, level: requestedLevel }) ?? "off"
   );
 }
 
@@ -348,6 +339,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     provider: resolved.provider,
     runtimeProvider: resolved.runtimeProvider,
     model: resolved.model,
+    modelCallUrgency: params.modelCallUrgency,
     modelFallbacksOverride: afterTurn ? undefined : params.modelFallbacksOverride,
     thinkLevel: params.thinkLevel,
     reasoningLevel: params.reasoningLevel,

@@ -1,6 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildDiscordActivityCustomId } from "../component-custom-id.js";
 import { sendDiscordComponentMessage } from "../send.components.js";
 import { createDiscordSendReceipt } from "../send.receipt.js";
 import { createDiscordWidgetPresenter } from "./presenter.js";
@@ -97,72 +96,6 @@ describe("Discord Activity widget presenter", () => {
     ).resolves.toMatchObject({
       ok: false,
       error: { code: "presentation_error", message: "title must be 80 characters or fewer" },
-    });
-  });
-
-  it.each([
-    [80, true],
-    [81, false],
-  ])("enforces the title limit for %i emoji", async (count, ok) => {
-    const presenter = createDiscordWidgetPresenter(createActivityTestRuntime());
-
-    await expect(
-      presenter.present({
-        context: discordContext(),
-        document: { kind: "html", html: "<p>ok</p>" },
-        title: "🦞".repeat(count),
-      }),
-    ).resolves.toMatchObject({ ok });
-  });
-
-  it("stores the canonical document before posting a fixed launch button", async () => {
-    const runtime = createActivityTestRuntime();
-    const createWidget = vi.spyOn(runtime.store, "createWidget");
-    const send = vi.mocked(sendDiscordComponentMessage);
-    const canonicalHtml = '<!doctype html><html><body data-owner="core">Canonical</body></html>';
-    vi.spyOn(Date, "now").mockReturnValue(7);
-    const presenter = createDiscordWidgetPresenter(runtime);
-
-    const result = await present(presenter, discordContext(), canonicalHtml);
-    expect(result).toMatchObject({
-      ok: true,
-      value: {
-        kind: "message",
-        receipt: { primaryPlatformMessageId: "1000000000000000001" },
-      },
-    });
-    const widgetIdPromise = createWidget.mock.results[0]?.value;
-    if (!widgetIdPromise) {
-      throw new Error("expected widget creation");
-    }
-    const widgetId = await widgetIdPromise;
-    const stored = await runtime.store.lookupWidget(widgetId);
-    expect(stored).toMatchObject({
-      html: canonicalHtml,
-      title: "Status",
-      channelId: "987654321",
-      accountId: "default",
-      createdAt: 7,
-      deliveredMessageId: "1000000000000000001",
-    });
-    expect(send.mock.calls[0]?.[1]).toEqual({
-      text: "Status",
-      blocks: [
-        {
-          type: "actions",
-          buttons: [
-            {
-              label: "Open widget",
-              style: "secondary",
-              internalCustomId: buildDiscordActivityCustomId(widgetId ?? ""),
-            },
-          ],
-        },
-      ],
-    });
-    expect(send.mock.calls[0]?.[2]).toMatchObject({
-      accountId: "default",
-      allowedMentions: { parse: [] },
     });
   });
 

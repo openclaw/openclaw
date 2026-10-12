@@ -7,7 +7,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayClient } from "./client.js";
 import type { GatewayServer } from "./server-public.js";
-import * as rowReads from "./session-row-projection-read.js";
+import * as rowReads from "./session-row-database-facts.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 
 // Manual, two-minute transport measurement; excluded from ordinary test execution.

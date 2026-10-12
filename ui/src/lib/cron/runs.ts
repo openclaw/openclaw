@@ -39,6 +39,7 @@ type CronRunsRequestIdentity = {
   agentId: string | null;
   scope: CronRunScope;
   jobId: string | null;
+  runId: string | null;
   limit: number;
   offset: number;
   statuses: CronRunsStatusValue[];
@@ -62,6 +63,7 @@ function matchesCronRunsView(state: CronState, request: CronRunsRequestIdentity)
     state.client === request.client &&
     state.cronAgentId === request.agentId &&
     state.cronRunsScope === request.scope &&
+    (state.cronRunsRunId ?? null) === request.runId &&
     (request.scope !== "job" || state.cronRunsJobId === request.jobId) &&
     state.cronRunsLimit === request.limit &&
     state.cronRunsStatusFilter === request.status &&
@@ -137,6 +139,7 @@ export async function loadCronRuns(
     agentId: state.cronAgentId,
     scope,
     jobId: scope === "job" ? activeJobId : null,
+    runId: state.cronRunsRunId ?? null,
     limit: state.cronRunsLimit,
     offset: append ? Math.max(0, state.cronRunsNextOffset ?? state.cronRuns.length) : 0,
     statuses: [...state.cronRunsStatuses],
@@ -159,6 +162,7 @@ export async function loadCronRuns(
       ...(request.scope === "all" && request.agentId ? { agentId: request.agentId } : {}),
       scope: request.scope,
       id: request.jobId ?? undefined,
+      runId: request.runId ?? undefined,
       limit: request.limit,
       offset: request.offset,
       statuses: request.statuses.length > 0 ? request.statuses : undefined,
@@ -207,12 +211,33 @@ export async function loadMoreCronRuns(state: CronState) {
   await loadCronRuns(state, { append: true });
 }
 
+export function loadCronRunsForJob(
+  state: CronState,
+  jobId: string | null,
+  runId: string | null = null,
+) {
+  updateCronRunsFilter(state, {
+    cronRunsScope: jobId === null ? "all" : "job",
+    cronRunsRunId: runId,
+  });
+  if (runId) {
+    updateCronRunsFilter(state, {
+      cronRunsQuery: "",
+      cronRunsStatuses: [],
+      cronRunsDeliveryStatuses: [],
+    });
+  }
+  state.cronRunsJobId = jobId;
+  return loadCronRuns(state);
+}
+
 export function updateCronRunsFilter(
   state: CronState,
   patch: Partial<
     Pick<
       CronState,
       | "cronRunsScope"
+      | "cronRunsRunId"
       | "cronRunsStatuses"
       | "cronRunsDeliveryStatuses"
       | "cronRunsStatusFilter"
@@ -222,6 +247,9 @@ export function updateCronRunsFilter(
   >,
 ) {
   state.cronRunsScope = patch.cronRunsScope ?? state.cronRunsScope;
+  if (patch.cronRunsRunId !== undefined) {
+    state.cronRunsRunId = patch.cronRunsRunId;
+  }
   if (Array.isArray(patch.cronRunsStatuses)) {
     state.cronRunsStatuses = patch.cronRunsStatuses;
     state.cronRunsStatusFilter = patch.cronRunsStatuses[0] ?? "all";

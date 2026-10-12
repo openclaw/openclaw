@@ -1,4 +1,9 @@
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import type {
+  WorkerPlacementRecoveryCandidate,
+  WorkerSessionPlacementReadResult,
+} from "./placement-read-projection.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type {
   ClaimChange,
@@ -17,6 +22,21 @@ export function affectsPlacementObservation(change: ClaimChange, sessionId?: str
       ? change.kind !== "claim" || !change.localOnly
       : change.sessionId === sessionId)
   );
+}
+
+export function prunePublication(owner: PlacementAuthorityOwner, sessionId: string): void {
+  if (
+    !owner.claims.has(sessionId) &&
+    !owner.workspaceResults.has(sessionId) &&
+    !owner.observations.has(sessionId) &&
+    !owner.placementReaders.has(sessionId) &&
+    ![...owner.pending].some((change) => change.sessionId === sessionId)
+  ) {
+    owner.published.delete(sessionId);
+    if (!owner.tools.get(sessionId)?.authority) {
+      owner.tools.delete(sessionId);
+    }
+  }
 }
 
 /** Install committed postimages without revoking a destination on ordinary turn claims. */
@@ -85,4 +105,142 @@ export function retainSessionPlacementRead(
       authority.release();
     },
   };
+}
+
+type PlacementReadObservation = {
+  owner: PlacementAuthorityOwner;
+  observation: { revoked: boolean; indeterminate: boolean };
+  authority: { assertCurrent: () => void; release: () => void };
+  assertUsable: () => void;
+};
+
+export function retainProjection(
+  owner: PlacementAuthorityOwner,
+  sessionId: string,
+  projection: WorkerSessionPlacementReadResult,
+) {
+  owner.projections.delete(sessionId);
+  const placement = projection.projection.placements.get(sessionId);
+  // Environment lifecycle has its own owner. Keep its changing facts on direct reads.
+  if (
+    (placement && placement.state !== "local") ||
+    projection.projection.environments.size ||
+    projection.projection.moves.size ||
+    projection.projection.pendingResults.size ||
+    projection.projection.workspaceRecoveryPendingSessionIds.size
+  ) {
+    return;
+  }
+  owner.projections.set(sessionId, structuredClone(projection));
+  // Cold sessions can always rehydrate; residency is independent of durable ownership.
+  if (owner.projections.size > 256) {
+    owner.projections.delete(owner.projections.keys().next().value!);
+  }
+}
+
+/** Local claim writes change only placement; the owner retains the other projection facts. */
+export function projectCachedLocalPlacementTurnClaim(
+  owner: PlacementAuthorityOwner | undefined,
+  placement: WorkerSessionPlacementRecord,
+): WorkerSessionPlacementReadResult["projection"] | undefined {
+  if (
+    !owner?.active ||
+    placement.state !== "local" ||
+    hasPendingPublication(owner, placement.sessionId)
+  ) {
+    return undefined;
+  }
+  const retained = owner.projections.get(placement.sessionId);
+  if (!retained) {
+    return undefined;
+  }
+  const projection = structuredClone(retained.projection);
+  projection.placements = new Map(projection.placements).set(
+    placement.sessionId,
+    structuredClone(placement),
+  );
+  return projection;
+}
+
+/** The authority owner retains exact reads until one of its writers publishes a change. */
+export async function readCachedPlacementProjection(
+  captured: PlacementReadObservation,
+  sessionId: string,
+  read: () => Promise<WorkerSessionPlacementReadResult>,
+): Promise<WorkerSessionPlacementReadResult> {
+  const { owner, observation, authority, assertUsable } = captured;
+  try {
+    const signal = getAsyncWorkSignal();
+    signal?.throwIfAborted();
+    assertUsable();
+    // Snapshot reads must not wait for a delayed receipt from an earlier write.
+    const value = hasPendingPublication(owner, sessionId)
+      ? await read()
+      : (owner.projections.get(sessionId) ?? (await read()));
+    signal?.throwIfAborted();
+    assertUsable();
+    if (!observation.revoked && !hasPendingPublication(owner, sessionId)) {
+      retainProjection(owner, sessionId, value);
+    }
+    return structuredClone(value);
+  } finally {
+    authority.release();
+  }
+}
+
+export async function prepareCachedPlacementPreservationRead(
+  captured: PlacementReadObservation,
+  read: () => Promise<WorkerSessionPlacementRecord[]>,
+) {
+  return await preparePlacementRead(
+    captured,
+    undefined,
+    async (owner) => owner.preservation ?? (await read()),
+    (value, { owner, authority }) => {
+      owner.preservation = freezeJsonSnapshot(value);
+      return { placements: structuredClone(value), ...authority };
+    },
+  );
+}
+
+/** Recovery work stays live; empty inventories sleep until a placement writer commits. */
+export async function readCachedPlacementRecoveryCandidates(
+  captured: PlacementReadObservation,
+  read: () => Promise<WorkerPlacementRecoveryCandidate[]>,
+): Promise<WorkerPlacementRecoveryCandidate[]> {
+  try {
+    return await preparePlacementRead(
+      captured,
+      undefined,
+      async (owner) => (owner.recoveryCandidatesEmpty ? [] : await read()),
+      (candidates, { owner }) => {
+        if (candidates.length === 0) {
+          owner.recoveryCandidatesEmpty = true;
+        }
+        return candidates;
+      },
+    );
+  } finally {
+    captured.authority.release();
+  }
+}
+
+export async function preparePlacementRead<T, Result>(
+  captured: PlacementReadObservation,
+  _sessionId: string | undefined,
+  read: (owner: PlacementAuthorityOwner) => Promise<T>,
+  consume: (value: T, captured: PlacementReadObservation) => Result,
+): Promise<Result> {
+  const { authority, owner } = captured;
+  const signal = getAsyncWorkSignal();
+  try {
+    signal?.throwIfAborted();
+    const value = await read(owner);
+    signal?.throwIfAborted();
+    authority.assertCurrent();
+    return consume(value, captured);
+  } catch (error) {
+    authority.release();
+    throw error;
+  }
 }

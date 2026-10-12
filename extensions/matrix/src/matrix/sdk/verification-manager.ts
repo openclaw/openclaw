@@ -168,6 +168,20 @@ export class MatrixVerificationManager {
     this.emitVerificationSummary(session);
   }
 
+  private observeVerificationOperation(
+    session: MatrixVerificationSession,
+    operation: Promise<void>,
+    onError?: () => void,
+  ): Promise<void> {
+    return operation
+      .then(() => this.touchVerificationSession(session))
+      .catch((err: unknown) => {
+        onError?.();
+        session.error = formatErrorMessage(err);
+        this.touchVerificationSession(session);
+      });
+  }
+
   private clearSasAutoConfirmTimer(session: MatrixVerificationSession): void {
     if (!session.sasAutoConfirmTimer) {
       return;
@@ -246,10 +260,7 @@ export class MatrixVerificationManager {
     session.request.on(VerificationRequestEvent.Change, () => {
       this.touchVerificationSession(session);
       this.maybeAutoAcceptInboundRequest(session);
-      const verifier = this.readRequestValue(() => session.request.verifier, null);
-      if (verifier) {
-        this.attachVerifierToVerificationSession(session, verifier);
-      }
+      this.attachRequestVerifier(session);
       this.maybeAutoStartInboundSas(session);
     });
   }
@@ -272,16 +283,9 @@ export class MatrixVerificationManager {
     }
 
     session.acceptRequested = true;
-    void request
-      .accept()
-      .then(() => {
-        this.touchVerificationSession(session);
-      })
-      .catch((err: unknown) => {
-        session.acceptRequested = false;
-        session.error = formatErrorMessage(err);
-        this.touchVerificationSession(session);
-      });
+    void this.observeVerificationOperation(session, request.accept(), () => {
+      session.acceptRequested = false;
+    });
   }
 
   private maybeAutoStartInboundSas(session: MatrixVerificationSession): void {
@@ -316,6 +320,16 @@ export class MatrixVerificationManager {
       .catch(() => {
         session.startRequested = false;
       });
+  }
+
+  private attachRequestVerifier(
+    session: MatrixVerificationSession,
+    request = session.request,
+  ): void {
+    const verifier = this.readRequestValue(() => request.verifier, null);
+    if (verifier) {
+      this.attachVerifierToVerificationSession(session, verifier);
+    }
   }
 
   private attachVerifierToVerificationSession(
@@ -380,14 +394,10 @@ export class MatrixVerificationManager {
         return;
       }
       session.sasAutoConfirmStarted = true;
-      void this.confirmSasForSession(session, callbacks)
-        .then(() => {
-          this.touchVerificationSession(session);
-        })
-        .catch((err: unknown) => {
-          session.error = formatErrorMessage(err);
-          this.touchVerificationSession(session);
-        });
+      void this.observeVerificationOperation(
+        session,
+        this.confirmSasForSession(session, callbacks),
+      );
     }, SAS_AUTO_CONFIRM_DELAY_MS);
   }
 
@@ -404,16 +414,10 @@ export class MatrixVerificationManager {
       return;
     }
     session.verifyStarted = true;
-    const verifier = session.activeVerifier;
-    session.verifyPromise = verifier
-      .verify()
-      .then(() => {
-        this.touchVerificationSession(session);
-      })
-      .catch((err: unknown) => {
-        session.error = formatErrorMessage(err);
-        this.touchVerificationSession(session);
-      });
+    session.verifyPromise = this.observeVerificationOperation(
+      session,
+      session.activeVerifier.verify(),
+    );
   }
 
   private async trustOwnDeviceAfterConfirmedSas(session: MatrixVerificationSession): Promise<void> {
@@ -442,10 +446,7 @@ export class MatrixVerificationManager {
         if (this.isSameLogicalVerificationRequest(existing.request, request)) {
           existing.request = request;
           this.ensureVerificationRequestTracked(existing);
-          const verifier = this.readRequestValue(() => request.verifier, null);
-          if (verifier) {
-            this.attachVerifierToVerificationSession(existing, verifier);
-          }
+          this.attachRequestVerifier(existing, request);
           this.touchVerificationSession(existing);
           return this.buildVerificationSummary(existing);
         }
@@ -467,10 +468,7 @@ export class MatrixVerificationManager {
     this.verificationSessions.set(session.id, session);
     this.ensureVerificationRequestTracked(session);
     this.maybeAutoAcceptInboundRequest(session);
-    const verifier = this.readRequestValue(() => request.verifier, null);
-    if (verifier) {
-      this.attachVerifierToVerificationSession(session, verifier);
-    }
+    this.attachRequestVerifier(session, request);
     this.maybeAutoStartInboundSas(session);
     this.emitVerificationSummary(session);
     return this.buildVerificationSummary(session);

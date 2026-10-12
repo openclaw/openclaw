@@ -13,20 +13,25 @@ import { expectSubagentFollowupReactivation } from "./subagent-followup.test-hel
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const loadSessionEntryMock = vi.fn();
-const loadGatewaySessionEntryReadOnlyMock = vi.fn();
-const resolveDeletedAgentIdFromSessionKeyMock = vi.fn();
+const prepareDeletedAgentSessionCheckMock = vi.fn();
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const getLatestLiveSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
 const terminateAcceptedCollectorRunMock = vi.fn();
 const chatSendMock = vi.fn();
 
+// mock-isolation: Follow-up routing uses synthetic entries instead of real session stores.
 vi.mock("../session-utils.js", () => ({
-  loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
-  loadGatewaySessionEntryReadOnly: (...args: unknown[]) =>
-    loadGatewaySessionEntryReadOnlyMock(...args),
-  resolveDeletedAgentIdFromSessionKey: (...args: unknown[]) =>
-    resolveDeletedAgentIdFromSessionKeyMock(...args),
+  prepareDeletedAgentSessionCheck: (...args: unknown[]) =>
+    prepareDeletedAgentSessionCheckMock(...args),
+}));
+// mock-isolation: Follow-up routing supplies synthetic entries without a database worker.
+vi.mock("../session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) => loadSessionEntryMock(params.key, { agentId: params.agentId }),
 }));
 vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async () => {
   const actual = await vi.importActual<
@@ -130,8 +135,7 @@ describe("sessions.send completed subagent follow-up status", () => {
   afterEach(() => flushPendingSessionsChangedEvents());
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
-    loadGatewaySessionEntryReadOnlyMock.mockReset();
-    resolveDeletedAgentIdFromSessionKeyMock.mockReset().mockReturnValue(null);
+    prepareDeletedAgentSessionCheckMock.mockReset().mockReturnValue(null);
     getLatestSubagentRunByChildSessionKeyMock.mockReset();
     getLatestLiveSubagentRunByChildSessionKeyMock.mockReset();
     replaceSubagentRunAfterSteerMock.mockReset();
@@ -144,7 +148,7 @@ describe("sessions.send completed subagent follow-up status", () => {
   it("rejects keys belonging to a deleted agent", async () => {
     const key = "agent:deleted-agent:main";
     loadSession(key, "sess-orphan");
-    resolveDeletedAgentIdFromSessionKeyMock.mockReturnValue("deleted-agent");
+    prepareDeletedAgentSessionCheckMock.mockReturnValue("deleted-agent");
     const respond = await send({ key, message: "hi" });
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: ErrorCodes.INVALID_REQUEST,

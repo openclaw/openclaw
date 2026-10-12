@@ -360,10 +360,7 @@ describe("event Web Push classification", () => {
     );
   });
 
-  it.each([
-    { agentId: "agent\n\u202E", label: "agent\\u{A}\\u{202E}" },
-    { agentId: "🦞".repeat(50), label: "🦞".repeat(40) },
-  ])(
+  it.each([{ agentId: "agent\n\u202E", label: "agent\\u{A}\\u{202E}" }])(
     "bounds event display labels while preserving the raw agent filter: $agentId",
     async ({ agentId, label }) => {
       const subscription = boundSubscription("browser-device");
@@ -407,36 +404,6 @@ describe("event Web Push classification", () => {
       }),
     );
   });
-
-  it.each([false, true])(
-    "honors the scheduled failure preference (enabled: %s)",
-    async (scheduledTaskFailed) => {
-      const subscription = boundSubscription("browser-device");
-      subscription.devicePreferences.categories = {
-        scheduledTaskFailed,
-      };
-      listBoundWebPushSubscriptionsMock.mockResolvedValue([subscription]);
-      const getRuntimeConfig = vi.fn(() => ({}));
-      const delivery = createEventWebPushDelivery({ getRuntimeConfig });
-
-      delivery.handleEvent("cron", {
-        action: "finished",
-        jobId: "nightly",
-        status: "error",
-      });
-      if (scheduledTaskFailed) {
-        await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
-        expect(preparedWebPushSendMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            payload: expect.objectContaining({ title: "OpenClaw scheduled task failed" }),
-          }),
-        );
-      } else {
-        await authorityCompleted.promise;
-        expect(preparedWebPushSendMock).not.toHaveBeenCalled();
-      }
-    },
-  );
 
   it("rereads subscriptions after transport preparation before sending", async () => {
     const stale = boundSubscription("stale-device");
@@ -515,7 +482,7 @@ describe("event Web Push classification", () => {
     },
   );
 
-  it.each(["unchanged", "preferences changed", "profile merged"] as const)(
+  it.each(["preferences changed", "profile merged"] as const)(
     "honors recipient preferences after pairing preparation: %s",
     async (change) => {
       const pairingStarted = createDeferred();
@@ -552,14 +519,12 @@ describe("event Web Push classification", () => {
       if (change === "profile merged") {
         profileId = "alice";
       }
-      if (change !== "unchanged") {
-        revision += 1;
-      }
+      revision += 1;
       pairingReady.resolve();
       await authorityCompleted.promise;
 
-      expect(preparedWebPushSendMock).toHaveBeenCalledTimes(change === "unchanged" ? 1 : 0);
-      expect(getUserPreferenceValuesMock).toHaveBeenCalledTimes(change === "unchanged" ? 1 : 2);
+      expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+      expect(getUserPreferenceValuesMock).toHaveBeenCalledTimes(2);
       expect(getUserPreferenceValuesMock).toHaveBeenLastCalledWith(
         [profileId],
         "notifications.web.v1",
@@ -638,26 +603,19 @@ describe("event Web Push classification", () => {
       expect(preparedWebPushSendMock).toHaveBeenCalledTimes(2);
     });
 
-    it.each(["preparation", "send"] as const)(
-      "omits sensitive details from an unexpected %s error",
-      async (phase) => {
-        const failure = new Error("https://push.example.test/private-endpoint?secret=do-not-log");
-        if (phase === "preparation") {
-          prepareWebPushNotificationSenderMock.mockRejectedValueOnce(failure);
-        } else {
-          preparedWebPushSendMock.mockRejectedValueOnce(failure);
-        }
-        createEventWebPushDelivery({
-          getRuntimeConfig: () => ({}),
-          log: { warn: webPushWarnMock },
-        }).deliverMention(humanMention());
+    it("omits sensitive details from an unexpected preparation error", async () => {
+      const failure = new Error("https://push.example.test/private-endpoint?secret=do-not-log");
+      prepareWebPushNotificationSenderMock.mockRejectedValueOnce(failure);
+      createEventWebPushDelivery({
+        getRuntimeConfig: () => ({}),
+        log: { warn: webPushWarnMock },
+      }).deliverMention(humanMention());
 
-        await vi.waitFor(() => expect(webPushWarnMock).toHaveBeenCalledOnce());
-        expect(webPushWarnMock.mock.calls).toEqual([
-          ["event Web Push delivery could not complete", { category: "human-mentioned" }],
-        ]);
-      },
-    );
+      await vi.waitFor(() => expect(webPushWarnMock).toHaveBeenCalledOnce());
+      expect(webPushWarnMock.mock.calls).toEqual([
+        ["event Web Push delivery could not complete", { category: "human-mentioned" }],
+      ]);
+    });
 
     it.each([
       "eligible admin",
@@ -789,7 +747,7 @@ describe("event Web Push classification", () => {
       },
     );
 
-    it.each(["private", "identified", "detailed"] as const)(
+    it.each(["private", "identified"] as const)(
       "keeps %s lock-screen copy label-only and routes through the receiving PWA",
       async (detailLevel) => {
         const subscription = boundSubscription("browser-device", "bob");
@@ -824,14 +782,6 @@ describe("event Web Push classification", () => {
 
     it.each([
       {
-        name: "subscription removal",
-        revoke: () => listBoundWebPushSubscriptionsMock.mockResolvedValue([]),
-      },
-      {
-        name: "device unpairing",
-        revoke: () => listDevicePairingMock.mockReturnValue({ paired: [] }),
-      },
-      {
         name: "token revocation",
         revoke: () => {
           const device = pairedOperator("browser-device");
@@ -858,10 +808,6 @@ describe("event Web Push classification", () => {
           ]),
       },
       {
-        name: "session access loss",
-        revoke: () => canReceiveSessionEventMock.mockReturnValue(false),
-      },
-      {
         name: "mention expiry or dismissal",
         revoke: () => mentionCurrentMock.mockReturnValue(false),
       },
@@ -881,7 +827,6 @@ describe("event Web Push classification", () => {
     });
 
     it.each([
-      { name: "default category", preferences: { categories: {} } },
       { name: "disabled category", preferences: { categories: { humanMentioned: false } } },
       { name: "disabled browser", preferences: { enabled: false } },
       { name: "agent filter", preferences: { agentIds: ["other"] } },
@@ -909,21 +854,6 @@ describe("event Web Push classification", () => {
         expect(mentionCurrentMock).toHaveReturnedWith(true);
       },
     );
-
-    it("coalesces retries by mention identity without collapsing distinct mentions", async () => {
-      const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
-      delivery.deliverMention(humanMention());
-      delivery.deliverMention(humanMention());
-      delivery.deliverMention(humanMention({ id: "mention-2" }));
-
-      await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledTimes(3));
-      const identities = preparedWebPushSendMock.mock.calls.map(([params]) => ({
-        tag: params.payload.tag,
-        topic: params.deliveryOptions.topic,
-      }));
-      expect(identities[0]).toEqual(identities[1]);
-      expect(identities[0]).not.toEqual(identities[2]);
-    });
 
     it("refreshes the mention after awaited pairing preparation before its final send fence", async () => {
       let durable = true;

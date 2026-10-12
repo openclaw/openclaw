@@ -1,7 +1,14 @@
+import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
+import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
+import { createNativeSubagentSessionAuthority } from "./native-subagent-assignment-store.js";
 import {
   createCodexNativeSubagentHistoryOwner,
   type CodexNativeSubagentHistoryOwner,
@@ -20,6 +27,7 @@ import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     cleanup();
@@ -81,6 +89,45 @@ async function fixture(initialReceipt?: CodexNativeSubagentSubmission) {
 }
 
 describe("native subagent submission receipts in the binding store", () => {
+  it("refuses receipt persistence after the captured parent lifecycle changes", async () => {
+    const { root, store, owner } = await fixture();
+    const scope = {
+      agentId: identity.agentId,
+      sessionKey: identity.sessionKey,
+      storePath: path.join(root, "agents", identity.agentId, "sessions", "sessions.json"),
+      env: { ...process.env, OPENCLAW_STATE_DIR: root },
+    };
+    const entry = {
+      sessionId: identity.sessionId,
+      lifecycleRevision: owner.lifecycleRevision,
+      updatedAt: 1,
+    };
+    await patchSessionEntry({
+      ...scope,
+      fallbackEntry: entry,
+      replaceEntry: true,
+      skipMaintenance: true,
+      update: () => entry,
+    });
+    const parent = await captureSessionEntryCurrentCheckAsync(scope);
+    const authority = createNativeSubagentSessionAuthority(parent);
+    await patchSessionEntry({
+      ...scope,
+      replaceEntry: true,
+      skipMaintenance: true,
+      update: () => ({ ...entry, lifecycleRevision: "replacement-lifecycle" }),
+    });
+    await expect(
+      store.mutate(
+        identity,
+        { kind: "record-native-subagent-submission", owner, receipt },
+        currentAuthority,
+        authority,
+      ),
+    ).rejects.toThrow();
+    expect(await store.readNativeSubagentSubmissions(identity, owner)).toEqual([]);
+  });
+
   it("reopens initial assignment facts across native rotation but not physical adoption", async () => {
     const { root, store, owner } = await fixture();
     const assignment = {
@@ -109,12 +156,12 @@ describe("native subagent submission receipts in the binding store", () => {
     resetPluginStateStoreForTests();
     const reopened = createLazyCodexAppServerBindingStore(openState(root));
     const rotated = { ...owner, parentThreadId: "rotated-parent" };
-    expect(reopened.readNativeSubagentAssignments?.(identity, rotated)).toEqual([assignment]);
-    expect(reopened.readNativeSubagentSubmissions(identity, rotated)).toEqual([]);
+    expect(await reopened.readNativeSubagentAssignments?.(identity, rotated)).toEqual([assignment]);
+    expect(await reopened.readNativeSubagentSubmissions(identity, rotated)).toEqual([]);
     const successor = { ...identity, sessionId: "new-physical-session" };
     await reopened.adoptSessionGeneration(successor, identity.sessionId, currentAuthority);
     expect(
-      reopened.readNativeSubagentAssignments?.(successor, {
+      await reopened.readNativeSubagentAssignments?.(successor, {
         ...rotated,
         sessionId: successor.sessionId,
       }),
@@ -156,7 +203,7 @@ describe("native subagent submission receipts in the binding store", () => {
     resetPluginStateStoreForTests();
     const reopenedState = openState(root);
     const reopened = scope(createLazyCodexAppServerBindingStore(reopenedState));
-    expect(reopened.readNativeSubagentSubmissions(logicalIdentity, logicalOwner)).toEqual([
+    expect(await reopened.readNativeSubagentSubmissions(logicalIdentity, logicalOwner)).toEqual([
       receipt,
       second,
     ]);
@@ -167,7 +214,9 @@ describe("native subagent submission receipts in the binding store", () => {
     );
     await expect(reopened.mutate(logicalIdentity, consume, currentAuthority)).resolves.toBe(true);
     await expect(reopened.mutate(logicalIdentity, consume, currentAuthority)).resolves.toBe(true);
-    expect(reopened.readNativeSubagentSubmissions(logicalIdentity, logicalOwner)).toEqual([second]);
+    expect(await reopened.readNativeSubagentSubmissions(logicalIdentity, logicalOwner)).toEqual([
+      second,
+    ]);
     const consumeSecond = { ...consume, receipt: second };
     await expect(reopened.mutate(logicalIdentity, consumeSecond, currentAuthority)).resolves.toBe(
       true,
@@ -204,7 +253,9 @@ describe("native subagent submission receipts in the binding store", () => {
         selectedOwner = { ...owner, lifecycleRevision: "replacement-revision" };
       }
       const before = state.lookup(bindingStoreKey(identity));
-      expect(store.readNativeSubagentSubmissions(selectedIdentity, selectedOwner)).toEqual([]);
+      expect(await store.readNativeSubagentSubmissions(selectedIdentity, selectedOwner)).toEqual(
+        [],
+      );
       for (const kind of [
         "record-native-subagent-submission",
         "consume-native-subagent-submission",
@@ -256,9 +307,9 @@ describe("native subagent submission receipts in the binding store", () => {
         threadId: binding.threadId,
         patch: { serviceTier: "priority" },
       });
-      expect(store.readNativeSubagentSubmissions(identity, owner)).toEqual([receipt]);
+      expect(await store.readNativeSubagentSubmissions(identity, owner)).toEqual([receipt]);
     });
-    expect(store.readNativeSubagentSubmissions(identity, owner)).toEqual([receipt]);
+    expect(await store.readNativeSubagentSubmissions(identity, owner)).toEqual([receipt]);
     expect(state.lookup(bindingStoreKey(identity))).not.toHaveProperty("lease");
     expect(store.read(identity)).toEqual({ ...binding, model: "gpt-5.5", serviceTier: "priority" });
   });
@@ -294,7 +345,7 @@ describe("native subagent submission receipts in the binding store", () => {
             ? { ...binding, appServerRuntimeFingerprint: "replacement-runtime" }
             : undefined,
       );
-      expect(store.readNativeSubagentSubmissions(identity, owner)).toEqual([]);
+      expect(await store.readNativeSubagentSubmissions(identity, owner)).toEqual([]);
     },
   );
 
@@ -315,14 +366,14 @@ describe("native subagent submission receipts in the binding store", () => {
         "adopted",
       );
       const successorOwner = { ...owner, sessionId: successor.sessionId };
-      expect(store.readNativeSubagentSubmissions(successor, successorOwner)).toEqual(
+      expect(await store.readNativeSubagentSubmissions(successor, successorOwner)).toEqual(
         stamped ? [receipt] : [],
       );
       expect(store.read(successor)).toEqual(binding);
-      expect(store.readNativeSubagentSubmissions(identity, owner)).toEqual([]);
+      expect(await store.readNativeSubagentSubmissions(identity, owner)).toEqual([]);
       if (stamped) {
         const replacement = { ...successorOwner, lifecycleRevision: "replacement-revision" };
-        expect(store.readNativeSubagentSubmissions(successor, replacement)).toEqual([]);
+        expect(await store.readNativeSubagentSubmissions(successor, replacement)).toEqual([]);
         await expect(
           store.mutate(
             successor,
@@ -342,40 +393,40 @@ describe("native subagent submission receipts in the binding store", () => {
     },
   );
 
-  it.each([
-    { version: 2, future: ["preserve-me"] },
-    { version: 1, receipts: "invalid" },
-  ])("preserves unreadable receipt metadata through unrelated writes", async (metadata) => {
-    const { state, store, owner } = await fixture();
-    state.register(bindingStoreKey(identity), {
-      version: 1,
-      state: "active",
-      sessionId: identity.sessionId,
-      binding,
-      nativeSubagentSubmissions: metadata,
-    });
-    await store.withLease(identity, async () => {
-      await store.mutate(identity, { kind: "set", binding });
-      await store.mutate(identity, {
-        kind: "patch",
-        threadId: binding.threadId,
-        patch: { model: "gpt-5.5" },
+  it.each([{ version: 2, future: ["preserve-me"] }])(
+    "preserves unreadable receipt metadata through unrelated writes",
+    async (metadata) => {
+      const { state, store, owner } = await fixture();
+      state.register(bindingStoreKey(identity), {
+        version: 1,
+        state: "active",
+        sessionId: identity.sessionId,
+        binding,
+        nativeSubagentSubmissions: metadata,
       });
-    });
-    expect(store.read(identity)).toEqual({ ...binding, model: "gpt-5.5" });
-    const before = state.lookup(bindingStoreKey(identity));
-    expect(before).toHaveProperty("nativeSubagentSubmissions", metadata);
-    expect(() => store.readNativeSubagentSubmissions(identity, owner)).toThrow(
-      /native subagent submission/i,
-    );
-    for (const kind of [
-      "record-native-subagent-submission",
-      "consume-native-subagent-submission",
-    ] as const) {
-      await expect(
-        store.mutate(identity, { kind, owner, receipt }, currentAuthority),
-      ).rejects.toThrow(/native subagent submission/i);
-    }
-    expect(state.lookup(bindingStoreKey(identity))).toEqual(before);
-  });
+      await store.withLease(identity, async () => {
+        await store.mutate(identity, { kind: "set", binding });
+        await store.mutate(identity, {
+          kind: "patch",
+          threadId: binding.threadId,
+          patch: { model: "gpt-5.5" },
+        });
+      });
+      expect(store.read(identity)).toEqual({ ...binding, model: "gpt-5.5" });
+      const before = state.lookup(bindingStoreKey(identity));
+      expect(before).toHaveProperty("nativeSubagentSubmissions", metadata);
+      await expect(store.readNativeSubagentSubmissions(identity, owner)).rejects.toThrow(
+        /native subagent submission/i,
+      );
+      for (const kind of [
+        "record-native-subagent-submission",
+        "consume-native-subagent-submission",
+      ] as const) {
+        await expect(
+          store.mutate(identity, { kind, owner, receipt }, currentAuthority),
+        ).rejects.toThrow(/native subagent submission/i);
+      }
+      expect(state.lookup(bindingStoreKey(identity))).toEqual(before);
+    },
+  );
 });

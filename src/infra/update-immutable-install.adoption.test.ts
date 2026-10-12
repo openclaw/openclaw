@@ -38,7 +38,8 @@ vi.mock("../daemon/service-operation-lock.js", () => ({
     run: (assertCurrent: () => void) => unknown,
   ) => run(() => {}),
 }));
-vi.mock("./update-immutable-generation.js", () => ({
+vi.mock("./update-immutable-generation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-immutable-generation.js")>()),
   verifyImmutableGeneration: mocks.verify,
   installImmutableLauncher: mocks.launcher,
 }));
@@ -240,8 +241,8 @@ describe.skipIf(process.platform !== "linux")("explicit immutable adoption after
         throw new Error("Bridge process changed");
       }
     });
-    mocks.launcher.mockImplementation(async ({ upgradeFromV1 }) => {
-      upgradeFromV1?.assertCurrent();
+    mocks.launcher.mockImplementation(async ({ upgrade }) => {
+      upgrade?.assertCurrent();
       return path.join(root, "bin", "openclaw-gateway");
     });
   });
@@ -299,7 +300,7 @@ describe.skipIf(process.platform !== "linux")("explicit immutable adoption after
         "previous sealed bytes",
       );
       expect(mocks.launcher).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ upgradeFromV1: { assertCurrent: expect.any(Function) } }),
+        expect.objectContaining({ upgrade: { version: 1, assertCurrent: expect.any(Function) } }),
       );
     },
   );
@@ -373,4 +374,75 @@ describe.skipIf(process.platform !== "linux")("explicit immutable adoption after
       expect(mocks.launcher).not.toHaveBeenCalled();
     },
   );
+
+  it("adopts retention inspection only after the serving version-2 bridge and launcher settle", async () => {
+    await adoptImmutableInstall(params);
+    original = read();
+    mocks.launcher.mockClear();
+    fsSync.writeFileSync(
+      path.join(bridgePath, "package.json"),
+      JSON.stringify({
+        openclaw: { immutableInstallDescriptorVersion: 3 },
+      }),
+    );
+    const result = await adoptImmutableInstall({ ...params, inspectReleaseRetention: true });
+    expect(read()).toMatchObject({
+      descriptor: {
+        version: 3,
+        releaseRetention: { version: 1, mode: "inspect", keepVerifiedGenerations: 3, pins: [] },
+      },
+      releases: [],
+    });
+    expect(result.releaseRetention).toMatchObject({ mode: "inspect", generations: [] });
+    expect(mocks.launcher).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        upgrade: { version: 2, assertCurrent: expect.any(Function) },
+      }),
+    );
+    expect(
+      fsSync.readFileSync(path.join(original.activation!.previous!.path, "retained"), "utf8"),
+    ).toBe("previous sealed bytes");
+    expect(await adoptImmutableInstall({ ...params, inspectReleaseRetention: true })).toEqual(
+      result,
+    );
+  });
+
+  it.each([undefined, 2, 4])(
+    "refuses a serving reader marker of %s before adopting retention",
+    async (version) => {
+      await adoptImmutableInstall(params);
+      const before = fsSync.readFileSync(journal());
+      mocks.launcher.mockClear();
+      fsSync.writeFileSync(
+        path.join(bridgePath, "package.json"),
+        JSON.stringify({
+          openclaw: { immutableInstallDescriptorVersion: version },
+        }),
+      );
+      await expect(
+        adoptImmutableInstall({ ...params, inspectReleaseRetention: true }),
+      ).rejects.toThrow("cannot read this control format");
+      expect(fsSync.readFileSync(journal())).toEqual(before);
+      expect(mocks.launcher).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves pending recovery before any retention-format upgrade", async () => {
+    await adoptImmutableInstall(params);
+    original = read();
+    retainPendingActivation();
+    const before = fsSync.readFileSync(journal());
+    mocks.launcher.mockClear();
+    fsSync.writeFileSync(
+      path.join(bridgePath, "package.json"),
+      JSON.stringify({
+        openclaw: { immutableInstallDescriptorVersion: 3 },
+      }),
+    );
+    await expect(
+      adoptImmutableInstall({ ...params, inspectReleaseRetention: true }),
+    ).rejects.toThrow("Complete version-2 bridge activation and recovery");
+    expect(fsSync.readFileSync(journal())).toEqual(before);
+    expect(mocks.launcher).not.toHaveBeenCalled();
+  });
 });

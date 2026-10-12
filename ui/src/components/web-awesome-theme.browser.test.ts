@@ -40,9 +40,29 @@ function color(token: string) {
   return value;
 }
 
-function part(element: Element, name: string) {
+function controlStyle(
+  element: Element,
+  surface:
+    | "submenu indicator"
+    | "item description"
+    | "menu"
+    | "options"
+    | "select indicator"
+    | "selected value"
+    | "clear selection",
+) {
+  // This adapter is the only palette-test dependency on the current renderer.
+  const name = {
+    "submenu indicator": "submenu-icon",
+    "item description": "details",
+    menu: "menu",
+    options: "listbox",
+    "select indicator": "expand-icon",
+    "selected value": "display-input",
+    "clear selection": "clear-button",
+  }[surface];
   const found = element.shadowRoot?.querySelector<HTMLElement>(`[part~="${name}"]`);
-  expect(found, name).not.toBeNull();
+  expect(found, surface).not.toBeNull();
   // Reading computed style starts CSS transitions inside this shadow root.
   const style = getComputedStyle(found!);
   void style.color;
@@ -52,8 +72,35 @@ function part(element: Element, name: string) {
   return getComputedStyle(found!);
 }
 
-describe.runIf("__vitest_browser__" in globalThis)("Web Awesome theme inheritance", () => {
-  it("keeps the account menu and shared control shadow parts on the selected palette", async () => {
+async function prepareControls(host: HTMLElement) {
+  const controls = host.querySelectorAll<HTMLElement & { updateComplete: Promise<boolean> }>(
+    "wa-dropdown, wa-dropdown-item, wa-select, wa-tab-group",
+  );
+  await Promise.all([...controls].map((control) => control.updateComplete));
+}
+
+async function focusNextOption(select: HTMLElement) {
+  const control = select as HTMLElementTagNameMap["wa-select"];
+  await control.show();
+  const { userEvent } = await import("vitest/browser");
+  control.focus();
+  await userEvent.keyboard("{ArrowDown}");
+  const current = control.querySelector<HTMLElement>("wa-option:state(current)");
+  expect(current, "keyboard-focused option").not.toBeNull();
+  return current!;
+}
+
+function expectThemeDefaults() {
+  const style = getComputedStyle(root);
+  expect(style.getPropertyValue("--wa-font-weight-normal").trim()).toBe("400");
+  expect(style.getPropertyValue("--wa-font-weight-semibold").trim()).toBe("500");
+  expect(style.getPropertyValue("--wa-transition-fast").trim()).toBe("75ms");
+  expect(style.getPropertyValue("--wa-focus-ring").trim()).toContain("0.1875rem");
+  expect(style.getPropertyValue("--wa-focus-ring-offset").trim()).toBe("0.0625rem");
+}
+
+describe.runIf("__vitest_browser__" in globalThis)("shared control theme inheritance", () => {
+  it("keeps the account menu and shared controls on the selected palette", async () => {
     const host = document.createElement("div");
     document.body.append(host);
     render(
@@ -90,22 +137,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome theme inheritanc
     const danger = [...host.querySelectorAll("wa-dropdown-item")].find(
       (item) => item.variant === "danger",
     )!;
-    await Promise.all([
-      menu.updateComplete,
-      select.updateComplete,
-      tabs.updateComplete,
-      danger.updateComplete,
-    ]);
-    await Promise.all(
-      [...menu.querySelectorAll("wa-dropdown-item")].map((item) => item.updateComplete),
-    );
-
-    await select.show();
-    const { userEvent } = await import("vitest/browser");
-    select.focus();
-    await userEvent.keyboard("{ArrowDown}");
-    const currentOption = select.querySelector<HTMLElement>("wa-option:state(current)")!;
-    expect(currentOption).not.toBeNull();
+    await prepareControls(host);
+    const currentOption = await focusNextOption(select);
 
     for (const theme of [
       "dark",
@@ -131,13 +164,14 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome theme inheritanc
       for (const animation of document.getAnimations()) {
         animation.finish();
       }
-      expect(part(help, "submenu-icon").color, theme).toBe(color("muted"));
-      expect(part(help, "details").color, theme).toBe(color("muted"));
-      expect(part(menu, "menu").backgroundColor, theme).toBe(color("bg-elevated"));
-      expect(part(select, "listbox").backgroundColor, theme).toBe(color("popover"));
-      expect(part(select, "expand-icon").color, theme).toBe(color("muted"));
-      expect(part(select, "display-input").color, theme).toBe(color("text"));
-      expect(part(select, "clear-button").color, theme).toBe(color("muted"));
+      expectThemeDefaults();
+      expect(controlStyle(help, "submenu indicator").color, theme).toBe(color("muted"));
+      expect(controlStyle(help, "item description").color, theme).toBe(color("muted"));
+      expect(controlStyle(menu, "menu").backgroundColor, theme).toBe(color("bg-elevated"));
+      expect(controlStyle(select, "options").backgroundColor, theme).toBe(color("popover"));
+      expect(controlStyle(select, "select indicator").color, theme).toBe(color("muted"));
+      expect(controlStyle(select, "selected value").color, theme).toBe(color("text"));
+      expect(controlStyle(select, "clear selection").color, theme).toBe(color("muted"));
       expect(getComputedStyle(tabs).getPropertyValue("--indicator-color").trim(), theme).toBe(
         getComputedStyle(root).getPropertyValue("--accent").trim(),
       );

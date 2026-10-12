@@ -135,6 +135,7 @@ async function runQuickJsWorker(
       },
       {
         timeoutMs,
+        hostTimeout: "owner",
         signal,
         inputBytes:
           workerData.kind === "resume"

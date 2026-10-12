@@ -8,21 +8,10 @@ import {
 import { BoundaryInputSnapshot } from "../../scripts/lib/extension-boundary-inputs.mts";
 import { createDeclarationInputBoundary } from "../../scripts/lib/local-check-runtime.mts";
 import { compileNativeProject } from "../../scripts/lib/native-declaration-emitter.mts";
-import { createDeclarationFileSystem } from "../../scripts/lib/native-declaration-filesystem.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { materializeNativeCompiler, writeNativeFixtureFile } from "./native-boundary-fixture.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
-
-it("refuses reusable observations after contradictory filesystem reads", () => {
-  const root = fs.realpathSync.native(roots.make("native-boundary-contradiction-"));
-  const boundary = createDeclarationInputBoundary(root);
-  const view = createDeclarationFileSystem(root, (file) => boundary.assert(file), new Map());
-  expect(view.filesystem.readFile("later.ts")).toBeNull();
-  fs.writeFileSync(path.join(root, "later.ts"), "export {};\n");
-  expect(view.filesystem.readFile("later.ts")).toBe("export {};\n");
-  expect(() => view.getLookups()).toThrow("Native compiler lookup changed during compilation");
-});
 
 it("reuses observed compiler lookups and rejects newly effective resolutions", async () => {
   const parent = fs.realpathSync.native(roots.make("native-boundary-cache-"));
@@ -75,20 +64,10 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
       emit: false,
     });
   const publish = async () => {
-    const before = new BoundaryInputSnapshot(root);
-    before.signature(config, args, []);
-    const startedAt = Date.now();
     const result = await compile();
     const inputs = result.inputs.map((file) => portableRelativePath(root, file)).toSorted();
     write(receipt, `${JSON.stringify({ inputs, lookups: result.lookups })}\n`);
-    return new BoundaryInputSnapshot(root).record(
-      config,
-      args,
-      receipt,
-      [receipt],
-      before,
-      startedAt,
-    );
+    return new BoundaryInputSnapshot(root).record(config, args, receipt, [receipt]);
   };
   const matches = (record: ArtifactRecord) =>
     new BoundaryInputSnapshot(root).matchesReceipt(record, config, args, [receipt], receipt);

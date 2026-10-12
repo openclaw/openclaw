@@ -14,20 +14,18 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { bindUserTurnTranscriptAnnotation } from "../../sessions/user-turn-transcript-annotation.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import { loadSkillLibrarySelection } from "../../skills/library/selection.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
+import type { SkillEntry } from "../../skills/types.js";
 import {
   getAdmittedRunDelegatedAuthority,
   readAdmittedRunOperatorAuthority,
   retainAdmittedRunBeforeToolCallRecovery,
 } from "../admitted-run-context.js";
-import { bindAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
-import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
-import {
-  rewrapToolWithBeforeToolCallHook,
-  runBeforeToolCallHook,
-} from "../agent-tools.before-tool-call.js";
+import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import {
   createOpenClawCodingToolsInternal,
   createOpenClawCodingToolsInternalAsync,
@@ -45,16 +43,18 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
-  wrapToolWithGatewayCallerIdentity,
 } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
   getCoreTtsToolResultMediaUrls,
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
-import { gateBoundTool } from "./host-bound-tool.js";
+import { bindHostToolSurface } from "./host-bound-tool.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
-import { captureRequiredWorkspaceToolFloor } from "./host-capability-workspace.js";
+import {
+  captureRequiredWorkspaceToolFloor,
+  prepareHostWorkspaceReadiness,
+} from "./host-capability-workspace.js";
 import { normalizeNativeOperationCwd, prepareAgentHarnessEnvironment } from "./host-environment.js";
 import { bindHarnessMedia } from "./host-media.js";
 import {
@@ -64,7 +64,7 @@ import {
   resolveAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
-import { bindHostSkillCatalog } from "./host-skills.js";
+import { bindHostSkillCatalog, prepareHostSkillLibraryResources } from "./host-skills.js";
 import { cloneHostSnapshot as cloneSnapshot } from "./host-snapshot.js";
 import {
   bindHarnessHostSourceAuthority,
@@ -81,6 +81,9 @@ type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
 type AgentHarnessHostApprovalResult = NonNullable<
   Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>
 >;
+type HostToolSurfaceOptions = Parameters<
+  NonNullable<AgentHarnessHostCapabilities["createToolSurfaceAsync"]>
+>[0];
 
 /** Creates a closure-bound capability before plugin invocation. */
 export function createAgentHarnessHostCapabilities(params: {
@@ -168,6 +171,7 @@ export function createAgentHarnessHostCapabilities(params: {
     turnSourceAccountId: attempt.agentAccountId,
     turnSourceThreadId: attempt.currentThreadTs,
   });
+  const workspaceReadiness = prepareHostWorkspaceReadiness(sessionKey, assertActive);
   const observeCoreTtsToolResult = (result: unknown) => {
     if (typeof result === "object" && result !== null && getCoreTtsToolResultMediaUrls(result)) {
       coreTtsToolResults.add(result);
@@ -325,6 +329,9 @@ export function createAgentHarnessHostCapabilities(params: {
     }: Parameters<AgentHarnessHostCapabilities["runBeforeToolCall"]>[0],
   ) => {
     assertCurrent();
+    if (workspaceReadiness.beforeToolCall) {
+      await workspaceReadiness.beforeToolCall(request, assertCurrent);
+    }
     const hostApprovalMode = approvalMode === "defer" ? "defer" : "request";
     const actionHookContext = hookContextForOperation(nativeOperation);
     const result = await runBeforeToolCallHook({
@@ -372,29 +379,36 @@ export function createAgentHarnessHostCapabilities(params: {
     tools: AnyAgentTool[],
     options: Readonly<{ cwd?: string }> | undefined,
     observeResult: (result: unknown) => void,
-  ) => {
-    assertActive();
-    const boundAbortSignal = bindAbortSignal(attempt.abortSignal);
-    const bindingHookContext = hookContextForOperation(options);
-    return tools
-      .map((tool) => bindAgentToolSourceExecutionGuard(tool, assertActive))
-      .map((tool) => rewrapToolWithBeforeToolCallHook(tool, bindingHookContext))
-      .map((tool) =>
-        callerIdentity ? wrapToolWithGatewayCallerIdentity(tool, callerIdentity) : tool,
-      )
-      .map((tool) => wrapToolWithAbortSignal(tool, boundAbortSignal))
-      .map((tool) => gateBoundTool(tool, assertActive, observeResult));
-  };
+  ) =>
+    bindHostToolSurface(tools, {
+      assertActive,
+      observeResult,
+      callerIdentity,
+      hookContext: hookContextForOperation(options),
+      abortSignal: bindAbortSignal(attempt.abortSignal),
+      workspaceReadiness: workspaceReadiness.readiness,
+    });
   const bindToolSurface: AgentHarnessHostCapabilities["bindToolSurface"] = (tools, options) =>
     bindTools(tools, options, () => {});
   const bindModelExecution: AgentHarnessHostCapabilities["bindModelExecution"] =
     nativeModelPolicySupported
       ? (model) => bindHarnessModelExecution(attempt.admittedRunContext, model, assertActive)
       : undefined;
+  // Sandboxes use their materialized snapshot paths, never host library pins.
+  const skillResourceSnapshot = (options: HostToolSurfaceOptions) =>
+    !requiredWorkspace &&
+    !hostSandboxEnabled &&
+    !options?.sandbox?.enabled &&
+    options?.includeCoreTools !== false &&
+    options?.toolConstructionPlan?.includeBaseCodingTools !== false
+      ? skillsSnapshot
+      : undefined;
   const toolConstructionInputs = (
-    options: Parameters<NonNullable<AgentHarnessHostCapabilities["createToolSurfaceAsync"]>>[0],
+    options: HostToolSurfaceOptions,
+    libraryEntries: readonly SkillEntry[],
+    assertCurrent: () => void = assertActive,
   ) => {
-    assertActive();
+    assertCurrent();
     const effectiveOptions = { ...options, ...requiredWorkspace?.apply(options) };
     return {
       options: {
@@ -410,15 +424,10 @@ export function createAgentHarnessHostCapabilities(params: {
         skillUsagePaths: options?.skillUsagePaths ?? skillUsagePaths,
         operationalRunInstance,
       },
-      // Sandboxes use their materialized snapshot paths, never host library pins.
-      skillReadResources:
-        !requiredWorkspace &&
-        !hostSandboxEnabled &&
-        !options?.sandbox?.enabled &&
-        options?.includeCoreTools !== false &&
-        options?.toolConstructionPlan?.includeBaseCodingTools !== false
-          ? resolveSkillResourceCandidates(skillsSnapshot)
-          : undefined,
+      skillReadResources: resolveSkillResourceCandidates(
+        skillResourceSnapshot(options),
+        libraryEntries,
+      ),
     };
   };
   const bindCreatedTools = (
@@ -446,6 +455,7 @@ export function createAgentHarnessHostCapabilities(params: {
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
+    ...(workspaceReadiness.capability ? { workspaceReadiness: workspaceReadiness.capability } : {}),
     get assertNativeSubagentSpawnAllowed() {
       return bindHarnessNativeSpawnAuthority(personalToolParticipants, assertActive);
     },
@@ -485,7 +495,16 @@ export function createAgentHarnessHostCapabilities(params: {
     },
     bindToolSurface,
     createToolSurface: (options, bindingOptions) => {
-      const inputs = toolConstructionInputs(options);
+      warnPluginSdkDeprecation({
+        family: "agent-harness-host",
+        method: "createToolSurface",
+        replacement: "createToolSurfaceAsync",
+        compatibility: "Synchronous tool construction retains its pinned skill resources.",
+      });
+      const inputs = toolConstructionInputs(
+        options,
+        loadSkillLibrarySelection(skillResourceSnapshot(options)?.librarySelections ?? []),
+      );
       return bindCreatedTools(
         withToolConstructionScope(() =>
           createOpenClawCodingToolsInternal(inputs.options, inputs.skillReadResources),
@@ -494,7 +513,15 @@ export function createAgentHarnessHostCapabilities(params: {
       );
     },
     createToolSurfaceAsync: async (options, bindingOptions) => {
-      const inputs = toolConstructionInputs(options);
+      const librarySelections = skillResourceSnapshot(options)?.librarySelections ?? [];
+      const library = librarySelections.length
+        ? await prepareHostSkillLibraryResources(librarySelections, assertActive)
+        : undefined;
+      const inputs = toolConstructionInputs(
+        options,
+        library?.entries ?? [],
+        library?.assertCurrent,
+      );
       const sourceTools = await withToolConstructionScope(() =>
         createOpenClawCodingToolsInternalAsync(
           inputs.options,
@@ -502,11 +529,12 @@ export function createAgentHarnessHostCapabilities(params: {
           undefined,
           undefined,
           {
-            assertCurrent: assertActive,
+            assertCurrent: library?.assertCurrent ?? assertActive,
             signal: bindAbortSignal(attemptSignal),
           },
         ),
       );
+      library?.assertPublicationCurrent();
       return bindCreatedTools(sourceTools, bindingOptions);
     },
     prepareMutableFileApproval: async (request) => {

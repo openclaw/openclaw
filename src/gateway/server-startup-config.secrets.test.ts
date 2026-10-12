@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createInfoWarnErrorLogger as mockLogSecretsForTest } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles.js";
 import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
@@ -42,7 +42,7 @@ type ActivateRuntimeSecretsSnapshotForTest =
 
 type GatewayStartupSecretsRuntimeMock = {
   runtimeImport: () => void;
-  loadAuthStore?: typeof loadAuthProfileStoreWithoutExternalProfiles;
+  loadAuthStore?: typeof loadAuthProfileStoreWithoutExternalProfilesAsync;
   prepareRuntimeSecretsSnapshot: PrepareRuntimeSecretsSnapshotForTest;
   activateRuntimeSecretsSnapshot: ActivateRuntimeSecretsSnapshotForTest;
 };
@@ -286,8 +286,9 @@ function installGatewayStartupSecretsRuntimeMock(state: GatewayStartupSecretsRun
       __gatewayStartupSecretsRuntimeMock?: typeof state;
     }
   )["__gatewayStartupSecretsRuntimeMock"] = state;
+  // mock-isolation: startup controls the auth fixture so host credentials cannot alter lazy secrets activation.
   vi.doMock("../agents/auth-profiles.js", () => ({
-    loadAuthProfileStoreWithoutExternalProfiles:
+    loadAuthProfileStoreWithoutExternalProfilesAsync:
       state.loadAuthStore ?? vi.fn(() => createAuthProfileStoreFixture({})),
   }));
   vi.doMock("../secrets/runtime.js", () => {
@@ -1271,7 +1272,7 @@ describe("gateway startup config secret preflight", () => {
     expect(typeof result.config.gateway).toBe("object");
     const preflightInput = prepareRuntimeSecretsSnapshot.mock.calls[0]![0];
     expect(preflightInput.config?.channels).toBeUndefined();
-    expect(preflightInput.loadAuthStore).toBe(loadAuthProfileStoreWithoutExternalProfiles);
+    expect(preflightInput.loadAuthStore).toBe(loadAuthProfileStoreWithoutExternalProfilesAsync);
   });
 
   it("honors startup auth overrides before secret preflight gating", async () => {
@@ -1294,7 +1295,7 @@ describe("gateway startup config secret preflight", () => {
     const preflightInput = prepareRuntimeSecretsSnapshot.mock.calls[0]![0];
     expect(preflightInput.config?.gateway?.auth?.mode).toBe("password");
     expect(preflightInput.config?.gateway?.auth?.password).toBe("override-password");
-    expect(preflightInput.loadAuthStore).toBe(loadAuthProfileStoreWithoutExternalProfiles);
+    expect(preflightInput.loadAuthStore).toBe(loadAuthProfileStoreWithoutExternalProfilesAsync);
     expect(getActiveSecretsRuntimeSnapshotState()?.config.gateway?.auth?.password).toBe(
       "override-password",
     );
@@ -1337,14 +1338,14 @@ describe("gateway startup config secret preflight", () => {
       async ({ config }) => preparedSnapshot(config),
     );
     const activateRuntimeSecretsSnapshot = vi.fn();
-    const loadAuthProfileStoreWithoutExternalProfilesMock = vi.fn(() =>
+    const loadAuthProfileStoreWithoutExternalProfilesAsyncMock = vi.fn(async () =>
       createAuthProfileStoreFixture({}),
     );
     installGatewayStartupSecretsRuntimeMock({
       runtimeImport,
       prepareRuntimeSecretsSnapshot,
       activateRuntimeSecretsSnapshot,
-      loadAuthStore: loadAuthProfileStoreWithoutExternalProfilesMock,
+      loadAuthStore: loadAuthProfileStoreWithoutExternalProfilesAsyncMock,
     });
 
     try {
@@ -1359,7 +1360,7 @@ describe("gateway startup config secret preflight", () => {
       expect(runtimeImport).not.toHaveBeenCalled();
       expect(prepareRuntimeSecretsSnapshot).not.toHaveBeenCalled();
       expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
-      expect(loadAuthProfileStoreWithoutExternalProfilesMock).not.toHaveBeenCalled();
+      expect(loadAuthProfileStoreWithoutExternalProfilesAsyncMock).not.toHaveBeenCalled();
       expect(result.config.gateway?.auth?.token).toBe("startup-test-token");
       expect(getImportedSecretsRuntimeSnapshot()?.config.gateway?.auth?.token).toBe(
         "startup-test-token",

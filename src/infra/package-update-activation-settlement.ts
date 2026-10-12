@@ -13,42 +13,165 @@ import {
 import { readRootJsonObjectSync } from "./json-files.js";
 import {
   packageActivationIdentity,
-  resolvePackageActivationHelper,
   type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
 import { decodePackageActivationLauncher } from "./package-update-activation-launcher.js";
 import {
+  LEGACY_PACKAGE_RECOVERY_HELPER,
+  privatePackageActivationIdentity,
+  resolvePackageActivationControl,
+  resolvePackageActivationHelper,
+  resolvePackageActivationJournalPath,
+} from "./package-update-activation-paths.js";
+import {
+  assertPackageIntegritySettlementUnchanged,
   createPackageIntegrityReader,
   packageLauncherDifferences,
   packageStatUnchanged,
 } from "./package-update-integrity.js";
 
-/** Verify the installed candidate without republishing it or trusting its old tree fingerprint. */
-export async function verifyPackagePublicationSettlement(
+// Published npm openclaw@2026.9.9 uses the same digest encoding as 2026.9.8.
+// This pin selects encoding only, not the older previous-tree recovery allowances.
+const PACKAGE_RECOVERY_2026_9_9_HELPER =
+  "6ae5112de5a98832da6c8151c65a9cc1e42c59f210284e539e45cf4f280a427f";
+
+/** Qualify only the lost publish acknowledgement, never arbitrary stale custody. */
+export function inspectRemountedPackagePublication(
   anchor: string,
   record: PackageActivationRecord,
+) {
+  const d = record.descriptor;
+  if (
+    record.phase !== "publishing" ||
+    record.intent?.kind !== "publish" ||
+    record.publications.length !== 0 ||
+    !("digest" in d.candidate)
+  ) {
+    throw new Error("Remounted settlement requires a fully fingerprinted pending publication.");
+  }
+  const historicalDevices = new Map<string, string>();
+  const currentDevices = new Map<string, string>();
+  const identities: Array<() => void> = [];
+  const bind = (historical: string, observe: () => string) => {
+    const current = observe();
+    const [oldDevice, oldInode] = historical.split(":");
+    const [device, inode] = current.split(":");
+    if (
+      oldInode !== inode ||
+      !oldDevice ||
+      !device ||
+      (historicalDevices.has(device) && historicalDevices.get(device) !== oldDevice) ||
+      (currentDevices.has(oldDevice) && currentDevices.get(oldDevice) !== device)
+    ) {
+      throw new Error("Package settlement inode or device mapping changed.");
+    }
+    historicalDevices.set(device, oldDevice);
+    currentDevices.set(oldDevice, device);
+    identities.push(() => {
+      if (observe() !== current) {
+        throw new Error("Package settlement custody changed.");
+      }
+    });
+    return current;
+  };
+  bind(d.parentIdentity, () => packageActivationIdentity(path.dirname(anchor), "parent"));
+  bind(d.journalParentIdentity, () =>
+    privatePackageActivationIdentity(resolvePackageActivationControl(anchor), "control"),
+  );
+  bind(d.journalIdentity, () =>
+    privatePackageActivationIdentity(resolvePackageActivationJournalPath(anchor), "journal"),
+  );
+  const helper = resolvePackageActivationHelper(anchor);
+  bind(d.helperIdentity, () => privatePackageActivationIdentity(helper, "helper"));
+  bind(d.anchorIdentity, () => privatePackageActivationIdentity(anchor, "anchor"));
+  bind(d.previous.identity, () => packageActivationIdentity(path.join(anchor, "previous"), true));
+  bind(d.launcherRootIdentity, () =>
+    packageActivationIdentity(path.join(anchor, "launchers"), true),
+  );
+  if (d.previousLauncherRootIdentity) {
+    bind(d.previousLauncherRootIdentity, () =>
+      packageActivationIdentity(path.join(anchor, "previous-launchers"), true),
+    );
+  }
+  const candidateIdentity = bind(d.candidate.identity, () =>
+    packageActivationIdentity(d.authority.installKey, true),
+  );
+  const binIdentity = bind(d.binIdentity, () => packageActivationIdentity(d.binDir, "parent"));
+  for (const entry of d.launchers) {
+    const launcher = path.join(d.binDir, entry.name);
+    const current = packageActivationIdentity(launcher, "launcher");
+    // The original link may already name the candidate; equality of link contents
+    // does not authorize accepting a replacement inode.
+    const previous = entry.previousIdentity;
+    const historical =
+      previous && previous.split(":")[1] === current.split(":")[1]
+        ? previous
+        : entry.candidateIdentity;
+    if (
+      historical === previous &&
+      (!entry.previous ||
+        packageLauncherDifferences(
+          decodePackageActivationLauncher(entry.previous),
+          decodePackageActivationLauncher(entry.candidate),
+          { checkMode: true },
+        ).length)
+    ) {
+      throw new Error("Package settlement original launcher did not already match the candidate.");
+    }
+    bind(historical, () => packageActivationIdentity(launcher, "launcher"));
+  }
+  if (![...historicalDevices].some(([device, historical]) => device !== historical)) {
+    throw new Error("Separate-helper settlement requires a verified device remount.");
+  }
+  const assertUnchanged = () => {
+    identities.forEach((assertIdentity) => assertIdentity());
+    if (
+      fs.lstatSync(path.join(anchor, "candidate"), { throwIfNoEntry: false }) ||
+      fs.lstatSync(d.originalStageRoot, { throwIfNoEntry: false }) ||
+      createHash("sha256").update(fs.readFileSync(helper)).digest("hex") !== d.helperDigest
+    ) {
+      throw new Error(
+        "Package settlement requires the original helper and an already installed candidate.",
+      );
+    }
+  };
+  assertUnchanged();
+  return { candidateIdentity, binIdentity, historicalDevices, assertUnchanged };
+}
+
+/** Verify the installed candidate without republishing it; remounts also prove the sealed tree. */
+export async function verifyPackagePublicationSettlement(
+  record: PackageActivationRecord,
   assertCurrent: () => void,
+  remount?: ReturnType<typeof inspectRemountedPackagePublication>,
 ) {
   const descriptor = record.descriptor;
   const live = descriptor.authority.installKey;
-  const retained = `${anchor}.superseded-${descriptor.operationId}`;
-  const helper = () =>
-    fs.existsSync(resolvePackageActivationHelper(anchor))
-      ? resolvePackageActivationHelper(anchor)
-      : path.join(retained, "recovery.mjs");
   assertCurrent();
-  const helperPath = helper();
-  const helperBefore = fs.lstatSync(helperPath, { bigint: true });
-  if (
-    packageActivationIdentity(helperPath, false) !== descriptor.helperIdentity ||
-    createHash("sha256")
-      .update(await fsp.readFile(helperPath))
-      .digest("hex") !== descriptor.helperDigest ||
-    !packageStatUnchanged(helperBefore, fs.lstatSync(helperPath, { bigint: true }))
-  ) {
-    throw new Error("Sealed package recovery helper changed.");
+  let assertTreeUnchanged: (() => void) | undefined;
+  if (remount) {
+    remount.assertUnchanged();
+    const tree = await createPackageIntegrityReader().tree(
+      live,
+      descriptor.originalStageRoot,
+      undefined,
+      [LEGACY_PACKAGE_RECOVERY_HELPER, PACKAGE_RECOVERY_2026_9_9_HELPER].includes(
+        descriptor.helperDigest,
+      ),
+      remount.historicalDevices,
+    );
+    assertCurrent();
+    remount.assertUnchanged();
+    if (
+      !("digest" in descriptor.candidate) ||
+      tree.digest !== descriptor.candidate.digest ||
+      tree.version !== descriptor.candidate.version ||
+      tree.identity !== remount.candidateIdentity
+    ) {
+      throw new Error("Package settlement full candidate fingerprint changed.");
+    }
+    assertTreeUnchanged = () => assertPackageIntegritySettlementUnchanged(tree);
   }
-  let helperVerified = helperBefore;
   const observed = new Map<string, fs.BigIntStats>();
   for (const relative of [
     "",
@@ -196,31 +319,26 @@ export async function verifyPackagePublicationSettlement(
       throw new Error(`Package settlement launcher changed: ${entry.name}.`);
     }
   }
-  const assertUnchanged = () => {
+  const assertInstalledUnchanged = () => {
     assertCurrent();
+    assertTreeUnchanged?.();
     if (
-      packageActivationIdentity(live, true) !== descriptor.candidate.identity ||
-      packageActivationIdentity(descriptor.binDir, "parent") !== descriptor.binIdentity ||
-      packageActivationIdentity(helper(), false) !== descriptor.helperIdentity
+      packageActivationIdentity(live, true) !==
+        (remount?.candidateIdentity ?? descriptor.candidate.identity) ||
+      packageActivationIdentity(descriptor.binDir, "parent") !==
+        (remount?.binIdentity ?? descriptor.binIdentity)
     ) {
       throw new Error("Package settlement identity changed.");
-    }
-    const helperNow = fs.lstatSync(helper(), { bigint: true });
-    if (!packageStatUnchanged(helperVerified, helperNow)) {
-      // Archival can change ctime. Recheck the seal, including on a resumed rename.
-      if (
-        createHash("sha256").update(fs.readFileSync(helper())).digest("hex") !==
-        descriptor.helperDigest
-      ) {
-        throw new Error("Sealed package recovery helper changed.");
-      }
-      helperVerified = helperNow;
     }
     for (const [file, before] of observed) {
       if (!packageStatUnchanged(before, fs.lstatSync(file, { bigint: true }))) {
         throw new Error(`Package settlement observation changed: ${path.relative(live, file)}.`);
       }
     }
+  };
+  const assertUnchanged = () => {
+    remount?.assertUnchanged();
+    assertInstalledUnchanged();
   };
   assertUnchanged();
   // Only dist scopes affect inventoried modules; dependency manifests are expected.
@@ -254,6 +372,7 @@ export async function verifyPackagePublicationSettlement(
   assertUnchanged();
   return {
     assertUnchanged,
-    detail: `Root package.json was field-verified, not content-verified. Entry targets outside dist were checked for resolution, not content. Inventoried dist content mismatches: none. Extra dist paths: ${extras.length ? extras.join(", ") : "none"}. Original per-path metadata is not retained in the sealed tree digest.`,
+    assertInstalledUnchanged,
+    detail: `${remount ? "Full candidate tree, including root manifest and entry targets, verified with historical device encoding. " : "Root package.json was field-verified, not content-verified. Entry targets outside dist were checked for resolution, not content. "}Inventoried dist content mismatches: none. Extra dist paths: ${extras.length ? extras.join(", ") : "none"}. Original per-path metadata is not retained in the sealed tree digest.`,
   };
 }

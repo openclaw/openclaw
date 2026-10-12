@@ -8,6 +8,7 @@ import {
   normalizeQaCredentialConvexSiteUrl,
   normalizeQaCredentialEndpointPrefix,
   parseQaCredentialPositiveIntegerEnv,
+  parseQaCredentialResponsePayload,
 } from "./qa-credentials-common.runtime.js";
 import { fingerprintQaCredentialId } from "./qa-credentials-fingerprint.runtime.js";
 
@@ -274,25 +275,12 @@ function resolveAdminConfig(options: AdminBaseOptions, operation: "add" | "remov
   };
 }
 
-function parseJsonResponsePayload(text: string) {
-  if (!text.trim()) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return text;
-  }
-}
-
-async function postJson<T>(params: {
-  authToken: string;
-  body: Record<string, unknown>;
-  fetchImpl: typeof fetch;
-  httpTimeoutMs: number;
-  responseSchema: z.ZodType<T>;
-  url: string;
-}) {
+async function postJson<T>(
+  params: ReturnType<typeof resolveAdminConfig> & {
+    body: Record<string, unknown>;
+    responseSchema: z.ZodType<T>;
+  },
+) {
   const httpTimeoutMs = resolveTimerTimeoutMs(params.httpTimeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
   let response: Response;
   let text: string;
@@ -321,7 +309,7 @@ async function postJson<T>(params: {
       message: `Convex credential admin request failed: ${formatErrorMessage(error)}`,
     });
   }
-  const payload = parseJsonResponsePayload(text);
+  const payload = parseQaCredentialResponsePayload(text);
 
   const brokerError = brokerErrorSchema.safeParse(payload);
   if (brokerError.success) {

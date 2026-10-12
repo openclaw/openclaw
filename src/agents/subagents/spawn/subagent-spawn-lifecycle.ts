@@ -1,6 +1,48 @@
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
+import { recordSessionCreated } from "../../../sessions/session-created.js";
+import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
+import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+
+/** Record setup now; requester participation is credited only after accepted dispatch. */
+export async function recordSubagentSessionSetup(params: {
+  cfg: OpenClawConfig;
+  childEntry?: SessionEntry;
+  childSessionKey: string;
+  childRunId: string;
+  requesterSessionKey: string;
+  requesterAgentId: string;
+  targetAgentId: string;
+  promptedAt: number;
+}): Promise<() => void> {
+  if (params.childEntry) {
+    await recordSessionCreated(params.cfg, {
+      sessionKey: params.childSessionKey,
+      agentId: params.targetAgentId,
+      entry: params.childEntry,
+    });
+  }
+  await recordSubagentSpawned({
+    childSessionKey: params.childSessionKey,
+    childRunId: params.childRunId,
+    requesterSessionKey: params.requesterSessionKey,
+    agentId: params.targetAgentId,
+  });
+  return () =>
+    recordSessionParticipantBestEffort({
+      promptedAt: params.promptedAt,
+      identity: { type: "agent", id: params.requesterAgentId },
+      agentId: params.targetAgentId,
+      sessionKey: params.childSessionKey,
+      storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+        agentId: params.targetAgentId,
+      }),
+    });
+}
 
 export function createSubagentSpawnLifecycleEmitter(params: {
   hookRunner: SubagentLifecycleHookRunner | null;

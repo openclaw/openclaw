@@ -21,6 +21,10 @@ type PlacementSessionRetirementDeps = {
   createSessionEvidenceResolver: (
     placements: readonly WorkerSessionPlacementRecord[],
   ) => Promise<PlacementSessionEvidenceResolver>;
+  reportChanges: (
+    operation: () => Promise<void>,
+    before: readonly WorkerSessionPlacementRecord[],
+  ) => Promise<void>;
   warn: (message: string) => void;
 };
 
@@ -108,16 +112,22 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
 
   const reconcile = async (): Promise<void> => {
     const placements = await deps.placements.listAsync();
-    const resolveSessionEvidence = await deps.createSessionEvidenceResolver(placements);
-    for (const placement of placements) {
-      try {
-        await reconcilePlacement(placement, resolveSessionEvidence);
-      } catch (error) {
-        deps.warn(
-          `Worker placement session evidence check failed for ${placement.sessionId}: ${String(error)}`,
-        );
-      }
+    if (placements.length === 0) {
+      return;
     }
+    // The retirement scan already supplies the complete before-snapshot for reporting.
+    await deps.reportChanges(async () => {
+      const resolveSessionEvidence = await deps.createSessionEvidenceResolver(placements);
+      for (const placement of placements) {
+        try {
+          await reconcilePlacement(placement, resolveSessionEvidence);
+        } catch (error) {
+          deps.warn(
+            `Worker placement session evidence check failed for ${placement.sessionId}: ${String(error)}`,
+          );
+        }
+      }
+    }, placements);
   };
 
   return { reconcile };

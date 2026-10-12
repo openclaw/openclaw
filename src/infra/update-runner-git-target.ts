@@ -44,6 +44,7 @@ export async function classifyPartialCloneGitFailure(params: {
   if (params.result.code === 0 || !UNVERIFIED_GIT_CORRUPTION.test(params.result.stderr)) {
     return params.result;
   }
+  const withDiagnostic = (stderr: string) => ({ ...params.result, stderr });
   const promisorConfig = await params
     .runCommand(
       [
@@ -62,15 +63,13 @@ export async function classifyPartialCloneGitFailure(params: {
     promisorConfig?.code === 0 &&
     promisorConfig.stdout.split("\n").some((line) => /\s(?:true|yes|on|1)$/iu.test(line.trim()))
   ) {
-    return {
-      ...params.result,
-      stderr:
-        "Git could not resolve one or more promised objects in this partial clone. " +
+    return withDiagnostic(
+      "Git could not resolve one or more promised objects in this partial clone. " +
         "This does not by itself indicate repository corruption. Bulk-fetch the missing object IDs " +
         "from the configured promisor remote, then retry the update (for example: " +
         "git rev-list --objects --missing=print --all | sed -n 's/^?//p' | " +
         'git fetch "<promisor-remote>" --stdin).',
-    };
+    );
   }
   const fsck = await params
     .runCommand(
@@ -80,18 +79,13 @@ export async function classifyPartialCloneGitFailure(params: {
     .catch(() => undefined);
   const fsckOutput = `${fsck?.stdout ?? ""}\n${fsck?.stderr ?? ""}`.trim();
   if (fsck?.code !== 0 && VERIFIED_GIT_CORRUPTION.test(fsckOutput)) {
-    return {
-      ...params.result,
-      stderr: `Git verified repository corruption with git fsck: ${fsckOutput}`,
-    };
+    return withDiagnostic(`Git verified repository corruption with git fsck: ${fsckOutput}`);
   }
-  return {
-    ...params.result,
-    stderr:
-      "Git reported an object-database inconsistency, but OpenClaw did not verify repository " +
+  return withDiagnostic(
+    "Git reported an object-database inconsistency, but OpenClaw did not verify repository " +
       "corruption with git fsck. Retry the update; if it recurs, inspect the repository with " +
       "git fsck before attempting repair.",
-  };
+  );
 }
 
 function quoteGitConfig(value: string): string {

@@ -34,6 +34,9 @@ it("loads only the requested domain and routes exact operation names after prepa
     write: () => {
       throw new Error("The registry must leave transactions to its handler");
     },
+    writeAdmitted: () => {
+      throw new Error("The registry must leave transactions to its handler");
+    },
     stateOptions: () => ({ path: "synthetic-state.sqlite", env: {} }),
   };
   const command = { type: "apns.registration.read", input: "synthetic-node" } as const;

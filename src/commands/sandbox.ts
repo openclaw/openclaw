@@ -123,7 +123,6 @@ async function recreateOwnedSandboxes(
   runtime.log("\nRemoving sandbox runtimes...\n");
 
   let successCount = 0;
-  let failCount = 0;
   const remove = opts.browser ? removeSandboxBrowserContainer : removeSandboxContainer;
   for (const { containerName } of containers) {
     try {
@@ -133,10 +132,10 @@ async function recreateOwnedSandboxes(
       successCount++;
     } catch (err) {
       runtime.error(`Failed to remove ${containerName}: ${formatErrorMessage(err)}.`);
-      failCount++;
     }
   }
 
+  const failCount = containers.length - successCount;
   displayRecreateResult({ successCount, failCount }, runtime);
   if (failCount > 0) {
     runtime.error(

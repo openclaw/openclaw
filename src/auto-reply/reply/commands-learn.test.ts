@@ -1,12 +1,19 @@
 // Tests /learn prompt rewriting, defaults, standards, and availability gating.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
+import { WorkshopReviewNotFoundError } from "../../skills/workshop/review-undo.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { handleLearnCommand } from "./commands-learn.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+
+const undoWorkshopReview = vi.hoisted(() => vi.fn());
+vi.mock("../../skills/workshop/review-undo.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/workshop/review-undo.js")>()),
+  undoWorkshopReview,
+}));
 
 const DEFAULT_TEST_MODELS: NonNullable<OpenClawConfig["models"]> = {
   providers: {
@@ -99,6 +106,8 @@ describe("learn command", () => {
       expect(result?.shouldContinue).toBe(shouldContinue);
       if (shouldContinue) {
         expect(params.ctx.BodyForAgent).toContain(DEFAULT_LEARN_REQUEST);
+        expect(params.command.commandBodyNormalized).toBe(params.ctx.BodyForAgent);
+        expect(params.ctx.BodyForCommands).toBe(params.ctx.BodyForAgent);
       } else {
         expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
         expect(params.ctx.BodyForAgent).toBe("/learn");
@@ -107,7 +116,6 @@ describe("learn command", () => {
   );
 
   it.each([
-    { mode: "off", denyWorkshop: false, shouldContinue: true },
     { mode: "all", denyWorkshop: false, shouldContinue: false },
     { mode: "off", denyWorkshop: true, shouldContinue: false },
   ] as const)(
@@ -136,41 +144,6 @@ describe("learn command", () => {
       }
     },
   );
-
-  it("rewrites the agent and normalized command bodies and continues", async () => {
-    const params = buildLearnParams("/learn docs/runbook.md and https://example.com/guide");
-
-    const result = await handleLearnCommand(params, true);
-    const instruction = (params.ctx as { BodyForAgent?: string }).BodyForAgent;
-
-    expect(result).toEqual({ shouldContinue: true });
-    expect(instruction).toContain("docs/runbook.md and https://example.com/guide");
-    expect(params.command.rawBodyNormalized).toBe(instruction);
-    expect(params.command.commandBodyNormalized).toBe(instruction);
-  });
-
-  it("replies without continuing when the workshop is unavailable", async () => {
-    const params = buildLearnParams("/learn", {
-      agents: { defaults: { sandbox: { mode: "all" } } },
-    });
-
-    const result = await handleLearnCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
-    expect((params.ctx as { BodyForAgent?: string }).BodyForAgent).toBe("/learn");
-  });
-
-  it("replies without continuing when tool policy denies the workshop", async () => {
-    const params = buildLearnParams("/learn", {
-      tools: { deny: ["skill_workshop"] },
-    });
-
-    const result = await handleLearnCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
-  });
 
   it("keeps the workshop available for owner WebChat under a wildcard sender policy", async () => {
     const params = buildLearnParams("/learn", {
@@ -231,5 +204,81 @@ describe("learn command", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
+  });
+
+  describe("undo", () => {
+    const reviewId = "0b6a4a52-1f43-4f0e-9d55-3c1d8e1f7a10";
+    const undo = (configure?: (params: HandleCommandsParams) => void) => {
+      const params = buildLearnParams(`/learn undo ${reviewId.toUpperCase()}`);
+      configure?.(params);
+      return handleLearnCommand(params, true);
+    };
+
+    beforeEach(() => {
+      undoWorkshopReview.mockReset();
+    });
+
+    it("reverts the review as the user and lists what it restored and archived", async () => {
+      undoWorkshopReview.mockResolvedValue({
+        status: "undone",
+        changes: [
+          { skillName: "deploy", action: "restore" },
+          { skillName: "release", action: "archive" },
+        ],
+      });
+
+      const result = await undo();
+
+      expect(result).toEqual({
+        shouldContinue: false,
+        reply: { text: "↩️ Undid the skill change: restored `deploy`; archived `release`." },
+      });
+      expect(undoWorkshopReview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "main",
+          actor: "user",
+          sessionKey: "agent:main:webchat:test",
+        }),
+        { runId: `skill-workshop-review:${reviewId}` },
+      );
+    });
+
+    it("answers a repeated undo and an unknown id without a model turn", async () => {
+      undoWorkshopReview.mockResolvedValueOnce({ status: "already-undone", changes: [] });
+      undoWorkshopReview.mockRejectedValueOnce(new WorkshopReviewNotFoundError("none"));
+
+      expect((await undo())?.reply?.text).toBe("That skill change was already undone.");
+      expect((await undo())?.reply?.text).toBe("No skill change found for that id.");
+    });
+
+    it("keeps any other undo text a learn request", async () => {
+      const params = buildLearnParams("/learn undo the deploy notes");
+
+      const result = await handleLearnCommand(params, true);
+
+      expect(result).toEqual({ shouldContinue: true });
+      expect(params.ctx.BodyForAgent).toContain("undo the deploy notes");
+      expect(undoWorkshopReview).not.toHaveBeenCalled();
+    });
+
+    it("refuses senders without owner or admin authority", async () => {
+      const nonOwner = await undo((params) => {
+        params.command.senderIsOwner = false;
+      });
+      const unauthorized = await undo((params) => {
+        params.command.senderIsOwner = false;
+        params.command.isAuthorizedSender = false;
+      });
+      const missingAdmin = await undo((params) => {
+        params.ctx.GatewayClientScopes = ["operator.write"];
+      });
+
+      expect(nonOwner?.reply?.text).toContain("not authorized to use this owner-only command");
+      expect(unauthorized).toEqual({ shouldContinue: false });
+      expect(missingAdmin?.reply?.text).toBe(
+        "❌ /learn undo requires operator.admin for gateway clients.",
+      );
+      expect(undoWorkshopReview).not.toHaveBeenCalled();
+    });
   });
 });

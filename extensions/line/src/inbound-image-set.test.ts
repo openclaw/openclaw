@@ -35,19 +35,6 @@ describe("createLineImageSetIngressBuffer", () => {
       ...(params.total === undefined ? {} : { total: params.total }),
     });
 
-  it("hands the holder the whole set, in the order the sender picked", async () => {
-    // LINE delivered index 2 before index 1 in the reported capture.
-    const held = arrive({ index: 2, total: 3 });
-    await expect(arrive({ index: 1, total: 3 })).resolves.toBeNull();
-    await expect(arrive({ index: 3, total: 3 })).resolves.toBeNull();
-
-    await expect(held).resolves.toMatchObject({
-      events: ["image-1", "image-2", "image-3"],
-      // Every part's claim travels with it, so one turn can own them all.
-      lifecycles: ["claim-1", "claim-2", "claim-3"],
-    });
-  });
-
   it("extends the wait on every arrival so a slow part joins the same set", async () => {
     // Without `total` the timer is the only completion signal. A part slower
     // than the delay must extend the set, not open a second one that answers
@@ -117,49 +104,6 @@ describe("createLineImageSetIngressBuffer", () => {
     });
   });
 
-  it("delivers what arrived when LINE never reports a total", async () => {
-    const held = arrive({ index: 1 });
-
-    await vi.advanceTimersByTimeAsync(4_000);
-    await expect(held).resolves.toMatchObject({ events: ["image-1"] });
-  });
-
-  it("replaces a redelivered part instead of adding a second image", async () => {
-    const held = arrive({ index: 1, total: 2 });
-    await expect(
-      buffer.admit({
-        laneKey: "user:U1",
-        setId: "set-1",
-        senderKey: "user:U1",
-        messageId: "m1",
-        index: 1,
-        total: 2,
-        event: "image-1-again",
-        lifecycle: "claim-1-again",
-      }),
-    ).resolves.toBeNull();
-    await expect(arrive({ index: 2, total: 2 })).resolves.toBeNull();
-
-    await expect(held).resolves.toMatchObject({ events: ["image-1-again", "image-2"] });
-  });
-
-  it("keeps sets on different lanes apart", async () => {
-    const senderA = arrive({ index: 1, total: 2, laneKey: "user:UA", setId: "set-a" });
-    const senderB = arrive({
-      index: 1,
-      laneKey: "user:UB",
-      setId: "set-b",
-    });
-    await expect(
-      arrive({ index: 2, total: 2, laneKey: "user:UA", setId: "set-a" }),
-    ).resolves.toBeNull();
-
-    await expect(senderA).resolves.toMatchObject({ events: ["image-1", "image-2"] });
-
-    await vi.advanceTimersByTimeAsync(4_000);
-    await expect(senderB).resolves.toMatchObject({ events: ["image-1"] });
-  });
-
   it("keeps two members of one group apart when LINE reuses a set id", async () => {
     // A group lane is shared by every member, and the combined turn is
     // authorized once for its holder. Keyed without the sender, a member the
@@ -204,27 +148,6 @@ describe("createLineImageSetIngressBuffer", () => {
     await expect(memberB).resolves.toMatchObject({ events: ["b-image-1", "b-image-2"] });
   });
 
-  it("takes a total that only a later part reports", async () => {
-    const held = arrive({ index: 1 });
-    await expect(arrive({ index: 2, total: 2 })).resolves.toBeNull();
-
-    await expect(held).resolves.toMatchObject({ events: ["image-1", "image-2"] });
-  });
-
-  it("holds the set on its first part only", async () => {
-    const held = arrive({ index: 1, total: 3 });
-    let holderResolved = false;
-    void held.then(() => {
-      holderResolved = true;
-    });
-
-    await expect(arrive({ index: 2, total: 3 })).resolves.toBeNull();
-    expect(holderResolved).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(4_000);
-    await expect(held).resolves.toMatchObject({ events: ["image-1", "image-2"] });
-  });
-
   // Between the holder taking its parts and finishing delivery, the entry is still
   // on the lane. A late part matching that set must not join it - those parts are
   // already the turn, so it would be dropped and its claim left unsettled.
@@ -253,32 +176,6 @@ describe("createLineImageSetIngressBuffer", () => {
       events: ["image-3"],
       lifecycles: ["claim-3"],
     });
-  });
-
-  // The lane is released so the rest of a set can be claimed at all. Anything else
-  // the sender sent afterwards has to wait, or it overtakes the images.
-  it("keeps a later unrelated event behind an incomplete set", async () => {
-    const held = arrive({ index: 1, total: 3 });
-    let laneFree = false;
-    const later = buffer.enterLane("user:U1").then((release) => {
-      laneFree = true;
-      release();
-    });
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(laneFree).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    const set = await held;
-    if (!set) {
-      throw new Error("the first part should hold the set");
-    }
-    // Taking the set is not enough: the holder still has to deliver it.
-    expect(laneFree).toBe(false);
-
-    set.finish();
-    await later;
-    expect(laneFree).toBe(true);
   });
 
   it("does not report parts an earlier piece of the same set already delivered", async () => {

@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
+import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   buildBootstrapContextFiles,
@@ -39,6 +41,32 @@ function renderMiddle(lines: string[], maxChars: number) {
 }
 
 describe("buildBootstrapContextFiles", () => {
+  it.each([1500, 3000])("keeps seeded workspace safety guidance within %i chars", (maxChars) => {
+    const template = fs.readFileSync(
+      new URL("../../docs/reference/templates/AGENTS.md", import.meta.url),
+      "utf-8",
+    );
+    const content = extractFrontmatterBlock(template)?.body.trimStart() ?? template;
+    const [injected] = buildBootstrapContextFiles([makeFile({ content })], { maxChars });
+
+    expect(injected?.content.length).toBeLessThanOrEqual(maxChars);
+    for (const instruction of [
+      "Don't share private data with people or services the user didn't ask for.",
+      "Confirm destructive or irreversible actions the user didn't ask for.",
+      "Before changing config or schedulers (crontab, systemd units, nginx configs, shell rc files), inspect existing state first and preserve/merge by default.",
+      "Prefer `trash` over `rm` - recoverable beats gone forever.",
+      ...(maxChars === 3000
+        ? [
+            "**Do freely:** anything the user asked for, including sending messages, emails, or posts on their behalf; read files, explore, organize, learn; search the web, check calendars; work within this workspace.",
+            "**Ask first:** public or outbound actions the user did not request.",
+            "Recommend paid services only with explicit spend approval.",
+          ]
+        : []),
+    ]) {
+      expect(injected?.content).toContain(instruction);
+    }
+  });
+
   it("skips empty or whitespace-only content", () => {
     const files = [makeFile({ content: "   \n  " })];
     expect(buildBootstrapContextFiles(files)).toStrictEqual([]);

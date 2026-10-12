@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import {
   buildFeishuConversationId,
@@ -13,8 +12,6 @@ import { isFeishuBroadcastMention } from "./mention.js";
 import { formatFeishuMediaContent } from "./message-content.js";
 import { parsePostContent } from "./post.js";
 import type { FeishuChatType, FeishuConfig, FeishuMediaInfo } from "./types.js";
-
-type FeishuMention = NonNullable<FeishuMessageEvent["message"]["mentions"]>[number];
 
 type FeishuMessageLike = {
   message: Pick<FeishuMessageEvent["message"], "content" | "message_type" | "mentions">;
@@ -135,31 +132,6 @@ export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string):
   return false;
 }
 
-export function normalizeMentions(
-  text: string,
-  mentions?: FeishuMention[],
-  botStripId?: string,
-): string {
-  if (!mentions || mentions.length === 0) {
-    return text;
-  }
-  const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const replacements = new Map<string, string>();
-  for (const mention of mentions) {
-    const mentionId = mention.id.open_id;
-    const replacement =
-      botStripId && mentionId === botStripId
-        ? ""
-        : mentionId
-          ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
-          : `@${mention.name}`;
-    replacements.set(mention.key, replacement);
-  }
-  // Longest keys win; a single pass keeps placeholder-like display names literal.
-  const keys = [...replacements.keys()].toSorted((a, b) => b.length - a.length).map(escapeRegExp);
-  return text.replace(new RegExp(keys.join("|"), "g"), (key) => replacements.get(key)!).trim();
-}
-
 export function normalizeFeishuCommandProbeBody(text: string): string {
   return text
     .replace(/<at\b[^>]*>[^<]*<\/at>/giu, " ")
@@ -168,26 +140,21 @@ export function normalizeFeishuCommandProbeBody(text: string): string {
     .trim();
 }
 
-function parseMediaKeys(
+function parseMediaResource(
   content: string,
   messageType: string,
-): { imageKey?: string; fileKey?: string; fileName?: string } {
+): { key?: string; fileName?: string } {
   try {
     const parsed = JSON.parse(content);
     const imageKey = normalizeFeishuExternalKey(parsed.image_key);
     const fileKey = normalizeFeishuExternalKey(parsed.file_key);
-    switch (messageType) {
-      case "image":
-        return { imageKey, fileName: parsed.file_name };
-      case "file":
-      case "audio":
-        return { fileKey, fileName: parsed.file_name };
-      case "video":
-      case "media":
-        return { fileKey, imageKey, fileName: parsed.file_name };
-      default:
-        return {};
-    }
+    const key =
+      messageType === "image"
+        ? imageKey
+        : messageType === "video" || messageType === "media"
+          ? fileKey || imageKey
+          : fileKey;
+    return { key, fileName: parsed.file_name };
   } catch {
     return {};
   }
@@ -259,15 +226,14 @@ export async function resolveFeishuMediaList(params: {
       });
     }
   } else {
-    const mediaKeys = parseMediaKeys(content, messageType);
-    const fileKey = mediaKeys.fileKey || mediaKeys.imageKey;
-    if (!fileKey) {
+    const resource = parseMediaResource(content, messageType);
+    if (!resource.key) {
       return [{ kind: resolveFeishuMediaKind(messageType) }];
     }
     resources.push({
-      key: fileKey,
+      key: resource.key,
       type: messageType === "image" ? "image" : "file",
-      fileName: mediaKeys.fileName,
+      fileName: resource.fileName,
       kind: resolveFeishuMediaKind(messageType),
       label: `${messageType} media`,
     });

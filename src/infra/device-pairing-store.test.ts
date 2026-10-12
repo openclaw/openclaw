@@ -1,16 +1,21 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { executeDevicePairingRead } from "./device-pairing-read.kernel.js";
 import {
   loadDevicePairingStoreState,
+  loadPairedDevicePairingStoreRecordFromDatabase,
   persistDevicePairingStoreState,
+  readPairedDevicePairingRecordsFromDatabase,
+  updatePairedDeviceInTransaction,
+  withDevicePairingStoreDatabase,
   type DevicePairingStoreState,
 } from "./device-pairing-store.js";
+import { updatePairedDeviceMetadata } from "./device-pairing.js";
 import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
+import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let baseDir: string;
@@ -32,12 +37,12 @@ beforeEach(() => {
   expect(loadDevicePairingStoreState(baseDir)).toEqual(initial);
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
-  closeOpenClawStateDatabaseByPath(database.path);
+  await closeOpenClawStateDatabaseByPathAsync(database.path);
 });
 
-test("shares admitted pairing freshness and observes foreign changes on the next read", () => {
+test("invalidates retained pairing rows after a worker commit without freshness probes", async () => {
   const reads = trackSqliteStatementExecutions(database.db, ["freshness", "paired"], (sql) =>
     /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)
       ? "freshness"
@@ -50,27 +55,24 @@ test("shares admitted pairing freshness and observes foreign changes on the next
       type: "devicePairing.lookup",
       deviceId: "node",
     });
-  const peer = new DatabaseSync(database.path);
   try {
     runSqliteReadOperationSync(database.db, () => {
       expect(read()).toMatchObject({ device: { publicKey: "synthetic-key" } });
       expect(read()).toMatchObject({ device: { publicKey: "synthetic-key" } });
     });
-    expect(reads.counts).toEqual({ freshness: 1, paired: 0 });
+    expect(reads.counts).toEqual({ freshness: 0, paired: 0 });
 
-    peer
-      .prepare("UPDATE device_pairing_paired SET public_key = ? WHERE device_id = ?")
-      .run("synthetic-foreign-key", "node");
-    expect(read()).toMatchObject({ device: { publicKey: "synthetic-foreign-key" } });
-    // The unpinned read and its new transaction each require current freshness.
-    expect(reads.counts).toEqual({ freshness: 3, paired: 1 });
+    expect(
+      await updatePairedDeviceMetadata("node", { displayName: "Worker update" }, baseDir),
+    ).toBe(true);
+    expect(read()).toMatchObject({ device: { displayName: "Worker update" } });
+    expect(reads.counts).toEqual({ freshness: 0, paired: 1 });
 
     runSqliteReadOperationSync(database.db, () => {
-      expect(read()).toMatchObject({ device: { publicKey: "synthetic-foreign-key" } });
+      expect(read()).toMatchObject({ device: { displayName: "Worker update" } });
     });
-    expect(reads.counts).toEqual({ freshness: 4, paired: 1 });
+    expect(reads.counts).toEqual({ freshness: 0, paired: 1 });
   } finally {
-    peer.close();
     reads.restore();
   }
 });
@@ -96,7 +98,7 @@ test.each(["cleanup failure", "module copy", "reopened connection"])(
       expect(other.loadDevicePairingStoreState).not.toBe(loadDevicePairingStoreState);
       other.persistDevicePairingStoreState(empty, baseDir, "paired");
     } else {
-      closeOpenClawStateDatabaseByPath(database.path);
+      await closeOpenClawStateDatabaseByPathAsync(database.path);
       const reopened = stateDb.openOpenClawStateDatabase({
         env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
       });
@@ -133,5 +135,96 @@ test.each([false, true])(
     expect(loadDevicePairingStoreState(baseDir).pairedByDeviceId).toEqual(
       rollback ? initial.pairedByDeviceId : {},
     );
+  },
+);
+
+test.each([false, true])(
+  "reuses one paired snapshot without stale reads or escaped rollback state (rollback=%s)",
+  (rollback) => {
+    const reads = trackSqliteStatementExecutions(database.db, ["paired"], (sql) =>
+      /^\s*select\b.*\bfrom "device_pairing_paired"/iu.test(sql) ? "paired" : null,
+    );
+    const env = { ...process.env, OPENCLAW_STATE_DIR: baseDir };
+    const expected = {
+      node: {
+        deviceId: "node",
+        publicKey: "synthetic-key",
+        createdAtMs: 1,
+        approvedAtMs: 1,
+        remoteIp: "192.0.2.2",
+        tokens: {
+          operator: {
+            token: "synthetic-token",
+            role: "operator",
+            scopes: ["operator.read"],
+            createdAtMs: 2,
+          },
+        },
+      },
+      sibling: {
+        deviceId: "sibling",
+        publicKey: "synthetic-sibling-key",
+        createdAtMs: 3,
+        approvedAtMs: 3,
+      },
+    };
+    const operate = () =>
+      runWithSqliteWorkerStateContext({ environment: env }, () =>
+        stateDb.runOpenClawStateWriteTransaction(
+          () => {
+            const paired = readPairedDevicePairingRecordsFromDatabase(database.db);
+            return withDevicePairingStoreDatabase(
+              database,
+              () => {
+                updatePairedDeviceInTransaction("node", () => ({
+                  value: undefined,
+                  patch: { displayName: "Temporary name", tokens: expected.node.tokens },
+                }));
+                const state = loadDevicePairingStoreState();
+                state.pairedByDeviceId.sibling = expected.sibling;
+                persistDevicePairingStoreState(state, undefined, "paired");
+                updatePairedDeviceInTransaction("node", (device) => {
+                  // The callback owns a copy; unpersisted edits must not enter its receipt.
+                  if (device) {
+                    device.publicKey = "not-persisted";
+                  }
+                  return {
+                    value: undefined,
+                    patch: { displayName: undefined, remoteIp: "192.0.2.2" },
+                  };
+                });
+                expect(loadPairedDevicePairingStoreRecordFromDatabase(database.db, "node")).toEqual(
+                  expected.node,
+                );
+                expect(readPairedDevicePairingRecordsFromDatabase(database.db)).toEqual(expected);
+                expect(
+                  loadPairedDevicePairingStoreRecordFromDatabase(database.db, "constructor"),
+                ).toBeNull();
+                expect(
+                  loadPairedDevicePairingStoreRecordFromDatabase(database.db, "__proto__"),
+                ).toBeNull();
+                expect(reads.counts.paired).toBe(1);
+                if (rollback) {
+                  throw new Error("rollback pairing snapshot");
+                }
+              },
+              paired,
+            );
+          },
+          { database, env },
+        ),
+      );
+    try {
+      if (rollback) {
+        expect(operate).toThrow("rollback pairing snapshot");
+      } else {
+        operate();
+      }
+      expect(readPairedDevicePairingRecordsFromDatabase(database.db)).toEqual(
+        rollback ? initial.pairedByDeviceId : expected,
+      );
+    } finally {
+      reads.restore();
+    }
   },
 );

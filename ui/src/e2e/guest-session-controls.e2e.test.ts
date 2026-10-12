@@ -145,7 +145,7 @@ suite.define(() => {
           await navigate(foreign);
           await expect.poll(() => composer.isDisabled()).toBe(true);
         }
-        const newSession = page.locator(".sidebar-brand__new-thread");
+        const newSession = page.locator(".sidebar-session-toolbar .sidebar-new-session");
         await expect.poll(() => newSession.isEnabled()).toBe(true);
         await newSession.click();
         const draft = page.locator(".new-session-page__message");
@@ -259,9 +259,12 @@ suite.define(() => {
         await expect.poll(() => slider.isEnabled()).toBe(true);
         await slider.press("End");
         await gateway.waitForRequest("sessions.patch", { match: { key, thinkingLevel: "high" } });
+        await page.keyboard.press("Escape");
+        await model.click();
         const contextWindow = pane.locator("[data-chat-context-window-toggle]");
+        await expect.poll(() => contextWindow.isVisible()).toBe(true);
         await expect.poll(() => contextWindow.isDisabled()).toBe(true);
-        await capture("safe-controls", pane.locator("[data-chat-thinking-select]"));
+        await capture("safe-controls", pane.locator(".chat-controls__model-menu"));
         await page.keyboard.press("Escape");
         const permission = pane.locator("[data-chat-permission-select]");
         await permission.click();

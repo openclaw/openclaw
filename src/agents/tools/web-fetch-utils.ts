@@ -177,15 +177,19 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
       continue;
     }
 
+    const kind =
+      token.name === "title"
+        ? "title"
+        : token.name === "a"
+          ? "anchor"
+          : /^h[1-6]$/.test(token.name)
+            ? "heading"
+            : token.name === "li"
+              ? "list-item"
+              : undefined;
     if (token.closing) {
-      if (token.name === "title") {
-        closeThroughContext(stack, "title", state);
-      } else if (token.name === "a") {
-        closeThroughContext(stack, "anchor", state);
-      } else if (/^h[1-6]$/.test(token.name)) {
-        closeThroughContext(stack, "heading", state);
-      } else if (token.name === "li") {
-        closeThroughContext(stack, "list-item", state);
+      if (kind) {
+        closeThroughContext(stack, kind, state);
       } else if (BLOCK_BREAK_TAGS.has(token.name)) {
         appendText(stack, "\n");
       }
@@ -203,32 +207,19 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
       appendText(stack, "\n");
       continue;
     }
-    if (token.name === "title" && !token.selfClosing) {
-      pushContext(stack, { kind: "title", parts: [] }, state);
+    if (!kind || token.selfClosing) {
       continue;
     }
-    if (token.name === "a" && !token.selfClosing) {
-      closeThroughContext(stack, "anchor", state);
-      pushContext(
-        stack,
-        { kind: "anchor", href: readAnchorHref(token.raw), hasText: false, parts: [] },
-        state,
-      );
-      continue;
+    if (kind !== "title") {
+      closeThroughContext(stack, "anchor", state, kind !== "anchor");
     }
-    if (/^h[1-6]$/.test(token.name) && !token.selfClosing) {
-      closeThroughContext(stack, "anchor", state, true);
-      pushContext(
-        stack,
-        { kind: "heading", level: Number.parseInt(token.name[1] ?? "1", 10), parts: [] },
-        state,
-      );
-      continue;
-    }
-    if (token.name === "li" && !token.selfClosing) {
-      closeThroughContext(stack, "anchor", state, true);
-      pushContext(stack, { kind: "list-item", parts: [] }, state);
-    }
+    const context: Exclude<RenderContext, { kind: "root" }> =
+      kind === "anchor"
+        ? { kind, href: readAnchorHref(token.raw), hasText: false, parts: [] }
+        : kind === "heading"
+          ? { kind, level: Number.parseInt(token.name[1] ?? "1", 10), parts: [] }
+          : { kind, parts: [] };
+    pushContext(stack, context, state);
   }
 
   while (stack.length > 1) {

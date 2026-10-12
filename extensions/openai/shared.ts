@@ -12,6 +12,7 @@ import { TOKEN_SHARING_AUTH_FLOW } from "./token-sharing.js";
 import { resolveOpenAITransportTurnState } from "./transport-policy.js";
 
 export const OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
+export const OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS = 500_000;
 
 export function resolveConfiguredOpenAIBaseUrl(cfg: OpenClawConfig | undefined): string {
   return normalizeOptionalString(cfg?.models?.providers?.openai?.baseUrl) ?? OPENAI_API_BASE_URL;

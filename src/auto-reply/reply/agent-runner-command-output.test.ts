@@ -11,6 +11,42 @@ function buildFromCliResult(overrides: Record<string, unknown>) {
 }
 
 describe("buildCommandOutputFromToolResultEvent", () => {
+  it.each(["exec", "mcp__openclaw__exec", "mcp_openclaw_exec"])(
+    "preserves the authored title and raw identity for %s",
+    (name) => {
+      expect(
+        buildFromCliResult({
+          name,
+          commandBearing: true,
+          args: { command: "false", title: "Check build status" },
+          isError: true,
+          result: "command failed",
+        }),
+      ).toMatchObject({
+        name,
+        toolCallId: "call-1",
+        title: "Check build status",
+        status: "failed",
+        output: "command failed",
+      });
+    },
+  );
+
+  it.each([
+    { name: "mcp__other__exec", commandBearing: true, title: undefined, expected: "false" },
+    { name: "mcp__openclaw__exec", title: "Recorded title", expected: "Recorded title" },
+  ])("keeps explicit titles and third-party names unchanged: $name", ({ expected, ...data }) => {
+    expect(
+      buildFromCliResult({
+        commandBearing: true,
+        args: { command: "false", title: "Check build status" },
+        isError: true,
+        result: "command failed",
+        ...data,
+      }),
+    ).toMatchObject({ name: data.name, title: expected, status: "failed" });
+  });
+
   it("reports a CLI command failure whose result is only text", () => {
     // CLI backends report the outcome plus raw content, never a structured
     // record, so requiring a structured field dropped the failure entirely.

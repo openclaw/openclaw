@@ -4,6 +4,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { withSandboxRegistryWorkerReceipt } from "./registry-publication.js";
 import {
   beginSandboxRegistryRemovalInDatabase,
   reserveSandboxRegistryInDatabase,
@@ -17,22 +18,23 @@ export function executeSandboxRegistryCommand(
   options: OpenClawStateDatabaseOptions,
 ) {
   return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const result =
-        command.type === "sandboxRegistry.reserve"
-          ? reserveSandboxRegistryInDatabase(db, command.input)
-          : command.type === "sandboxRegistry.beginRemoval"
-            ? beginSandboxRegistryRemovalInDatabase(db, command.input)
-            : writeSandboxRegistryInDatabase(
-                db,
-                command.type === "sandboxRegistry.finishRemoval"
-                  ? { operation: "removeGeneration", kind: "container", entry: command.input }
-                  : command.input,
-              );
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      return result;
-    },
+    ({ db }) =>
+      withSandboxRegistryWorkerReceipt(db, () => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        const result =
+          command.type === "sandboxRegistry.reserve"
+            ? reserveSandboxRegistryInDatabase(db, command.input)
+            : command.type === "sandboxRegistry.beginRemoval"
+              ? beginSandboxRegistryRemovalInDatabase(db, command.input)
+              : writeSandboxRegistryInDatabase(
+                  db,
+                  command.type === "sandboxRegistry.finishRemoval"
+                    ? { operation: "removeGeneration", kind: "container", entry: command.input }
+                    : command.input,
+                );
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        return result;
+      }),
     options,
     { operationLabel: command.type },
   );

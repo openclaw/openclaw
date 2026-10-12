@@ -204,6 +204,10 @@ type RecoveryCheckpointCompletion =
   | { outcome: "changed" }
   | { outcome: "unsafe-transcript"; reason: string };
 
+function unsafeRecoveryTranscript(reason: string): RecoveryCheckpointCompletion {
+  return { outcome: "unsafe-transcript", reason };
+}
+
 export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   agentId: string;
   entry: SessionEntry;
@@ -243,10 +247,7 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   };
   const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
   if (params.reason === "handled-silent" && !sourceTurnId) {
-    return {
-      outcome: "unsafe-transcript",
-      reason: "handled silent checkpoint lacks its durable source turn",
-    };
+    return unsafeRecoveryTranscript("handled silent checkpoint lacks its durable source turn");
   }
   const sourceTurnRange = sourceTurnId
     ? findSourceTurnRange({
@@ -257,23 +258,16 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     : undefined;
   const toolCallId = normalizeOptionalString(params.toolCallId);
   if (sourceTurnId && sourceTurnRange === undefined) {
-    return {
-      outcome: "unsafe-transcript",
-      reason: "recovery checkpoint cannot be matched to its durable source turn",
-    };
+    return unsafeRecoveryTranscript(
+      "recovery checkpoint cannot be matched to its durable source turn",
+    );
   }
   if (sourceTurnRange && sourceTurnRange.endIndex !== params.messages.length) {
-    return {
-      outcome: "unsafe-transcript",
-      reason: "recovery checkpoint belongs to an earlier transcript turn",
-    };
+    return unsafeRecoveryTranscript("recovery checkpoint belongs to an earlier transcript turn");
   }
   if (toolCallId) {
     if (!sourceTurnId || !sourceTurnRange) {
-      return {
-        outcome: "unsafe-transcript",
-        reason: "terminal delivery lacks its durable source turn",
-      };
+      return unsafeRecoveryTranscript("terminal delivery lacks its durable source turn");
     }
     const messageToolCallIndex = params.messages.findLastIndex(
       (message, index) =>
@@ -285,16 +279,12 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
         ),
     );
     if (messageToolCallIndex === -1) {
-      return {
-        outcome: "unsafe-transcript",
-        reason: "terminal delivery cannot be matched to its message tool call",
-      };
+      return unsafeRecoveryTranscript(
+        "terminal delivery cannot be matched to its message tool call",
+      );
     }
     if (readAssistantToolCalls(params.messages[messageToolCallIndex])?.length !== 1) {
-      return {
-        outcome: "unsafe-transcript",
-        reason: "terminal message tool call has sibling tool work",
-      };
+      return unsafeRecoveryTranscript("terminal message tool call has sibling tool work");
     }
     const successfulToolResultIndex = params.messages.findIndex(
       (message, index) =>
@@ -309,13 +299,11 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
         successfulToolResultIndex,
       })
     ) {
-      return {
-        outcome: "unsafe-transcript",
-        reason:
-          successfulToolResultIndex === -1
-            ? "terminal delivery would require an out-of-order transcript repair"
-            : "terminal delivery result is followed by unfinished transcript work",
-      };
+      return unsafeRecoveryTranscript(
+        successfulToolResultIndex === -1
+          ? "terminal delivery would require an out-of-order transcript repair"
+          : "terminal delivery result is followed by unfinished transcript work",
+      );
     }
     if (successfulToolResultIndex === -1) {
       const persisted = await persistSessionTranscriptTurn(

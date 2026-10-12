@@ -112,12 +112,20 @@ describe("browser.request local control state", () => {
   });
 
   it("uses the same resolved browser config as the HTTP control service", async () => {
-    mocks.runtimeConfig = browserConfig({
-      executablePath: "/usr/bin/google-chrome",
-      headless: true,
-      noSandbox: true,
-    });
-    mocks.runtimeSourceConfig = mocks.runtimeConfig;
+    const source = {
+      ...browserConfig({
+        executablePath: "/usr/bin/google-chrome",
+        headless: true,
+        noSandbox: true,
+      }),
+      plugins: { allow: ["telegram"] },
+    };
+    const originalSource = structuredClone(source);
+    mocks.runtimeSourceConfig = source;
+    mocks.runtimeConfig = {
+      ...source,
+      plugins: { allow: ["telegram", "browser"], entries: { browser: { enabled: true } } },
+    };
     const httpState = await startBrowserControlServerFromConfig();
     expect(httpState?.resolved.executablePath).toBe("/usr/bin/google-chrome");
     expect(httpState?.resolved.noSandbox).toBe(true);
@@ -137,33 +145,28 @@ describe("browser.request local control state", () => {
     expect(status.executablePath).toBe("/usr/bin/google-chrome");
     expect(status.headless).toBe(true);
     expect(status.noSandbox).toBe(true);
+    expect(source).toEqual(originalSource);
   });
 
-  it.each(["gateway request", "HTTP server"] as const)(
-    "honors runtime plugin activation on a cold %s while retaining fresh browser options",
-    async (entrypoint) => {
-      const source = {
-        ...browserConfig({ headless: true }),
-        plugins: { allow: ["telegram"] },
-      };
-      const originalSource = structuredClone(source);
-      mocks.runtimeSourceConfig = source;
-      mocks.runtimeConfig = {
-        ...browserConfig({ headless: false }),
-        plugins: { allow: ["telegram", "browser"], entries: { browser: { enabled: true } } },
-      };
+  it("honors runtime plugin activation on a cold gateway request while retaining fresh browser options", async () => {
+    const source = {
+      ...browserConfig({ headless: true }),
+      plugins: { allow: ["telegram"] },
+    };
+    const originalSource = structuredClone(source);
+    mocks.runtimeSourceConfig = source;
+    mocks.runtimeConfig = {
+      ...browserConfig({ headless: false }),
+      plugins: { allow: ["telegram", "browser"], entries: { browser: { enabled: true } } },
+    };
 
-      if (entrypoint === "HTTP server") {
-        expect(await startBrowserControlServerFromConfig()).not.toBeNull();
-      }
-      expect(await browserRequestStatus()).toMatchObject({
-        enabled: true,
-        profile: "openclaw",
-        headless: true,
-      });
-      expect(source).toEqual(originalSource);
-    },
-  );
+    expect(await browserRequestStatus()).toMatchObject({
+      enabled: true,
+      profile: "openclaw",
+      headless: true,
+    });
+    expect(source).toEqual(originalSource);
+  });
 
   it("retains effective plugin disablement at both cold entrypoints", async () => {
     const source = browserConfig();

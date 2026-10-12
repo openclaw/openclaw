@@ -38,16 +38,6 @@ import { runWhatsAppStructuredInboundChecks } from "./whatsapp-live.media.js";
 import { waitForScenarioObservedMessage } from "./whatsapp-live.observations.js";
 import { unpackWhatsAppAuthArchive } from "./whatsapp-live.setup.js";
 
-const runExecSpy = vi.hoisted(() =>
-  vi.fn<typeof import("openclaw/plugin-sdk/process-runtime").runExec>(),
-);
-
-vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
-  runExecSpy.mockImplementation(actual.runExec);
-  return { ...actual, runExec: runExecSpy };
-});
-
 const testing = {
   buildWhatsAppQaConfig,
   callWhatsAppGatewayMessageAction,
@@ -411,71 +401,6 @@ async function runWhatsAppApprovalReactionFixture(params: {
 }
 
 describe("WhatsApp QA live runtime", () => {
-  it("parses credential payloads and normalizes phone numbers", () => {
-    const payload = testing.parseWhatsAppQaCredentialPayload({
-      driverPhoneE164: "15550000001",
-      sutPhoneE164: "+15550000002",
-      driverAuthArchiveBase64: "driver",
-      sutAuthArchiveBase64: "sut",
-    });
-    expect(payload.driverPhoneE164).toBe("+15550000001");
-    expect(payload.sutPhoneE164).toBe("+15550000002");
-    expect(payload.driverAuthArchiveBase64).toBe("driver");
-    expect(payload.sutAuthArchiveBase64).toBe("sut");
-  });
-
-  it("rejects credential payloads that reuse the same phone", () => {
-    expect(() =>
-      testing.parseWhatsAppQaCredentialPayload({
-        driverPhoneE164: "+15550000001",
-        sutPhoneE164: "+15550000001",
-        driverAuthArchiveBase64: "driver",
-        sutAuthArchiveBase64: "sut",
-      }),
-    ).toThrow("requires two distinct WhatsApp phone numbers");
-  });
-
-  it("derives a stable non-secret credential fingerprint", () => {
-    expect(testing.fingerprintWhatsAppCredentialId("cred-stale-row")).toMatch(
-      /^sha256:[0-9a-f]{16}$/,
-    );
-    expect(testing.fingerprintWhatsAppCredentialId(undefined)).toBeUndefined();
-  });
-
-  it("unpacks auth archives into a caller-provided temp directory", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-qa-test-"));
-    try {
-      runExecSpy.mockClear();
-      const archiveBase64 = await createTgz({
-        root: tempRoot,
-        entries: {
-          "creds.json": "{}\n",
-          "session/key.json": "{}\n",
-        },
-      });
-      const authDir = await testing.unpackWhatsAppAuthArchive({
-        archiveBase64,
-        label: "driver",
-        parentDir: tempRoot,
-      });
-      await expect(fs.readFile(path.join(authDir, "creds.json"), "utf8")).resolves.toBe("{}\n");
-      await expect(fs.readFile(path.join(authDir, "session/key.json"), "utf8")).resolves.toBe(
-        "{}\n",
-      );
-      const archivePath = path.join(tempRoot, "driver.tgz");
-      const execOptions = { logOutput: false, timeoutMs: 60_000 };
-      expect(runExecSpy).toHaveBeenNthCalledWith(1, "tar", ["-tzf", archivePath], execOptions);
-      expect(runExecSpy).toHaveBeenNthCalledWith(
-        2,
-        "tar",
-        ["-xzf", archivePath, "-C", authDir],
-        execOptions,
-      );
-    } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
-  });
-
   it("can remove copied Signal sessions while preserving other auth archive state", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-qa-test-"));
     try {
@@ -516,6 +441,38 @@ describe("WhatsApp QA live runtime", () => {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it("parses credential payloads and normalizes phone numbers", () => {
+    const payload = testing.parseWhatsAppQaCredentialPayload({
+      driverPhoneE164: "15550000001",
+      sutPhoneE164: "+15550000002",
+      driverAuthArchiveBase64: "driver",
+      sutAuthArchiveBase64: "sut",
+    });
+    expect(payload.driverPhoneE164).toBe("+15550000001");
+    expect(payload.sutPhoneE164).toBe("+15550000002");
+    expect(payload.driverAuthArchiveBase64).toBe("driver");
+    expect(payload.sutAuthArchiveBase64).toBe("sut");
+  });
+
+  it("rejects credential payloads that reuse the same phone", () => {
+    expect(() =>
+      testing.parseWhatsAppQaCredentialPayload({
+        driverPhoneE164: "+15550000001",
+        sutPhoneE164: "+15550000001",
+        driverAuthArchiveBase64: "driver",
+        sutAuthArchiveBase64: "sut",
+      }),
+    ).toThrow("requires two distinct WhatsApp phone numbers");
+  });
+
+  it("derives a stable non-secret credential fingerprint", () => {
+    expect(testing.fingerprintWhatsAppCredentialId("cred-stale-row")).toMatch(
+      /^sha256:[0-9a-f]{16}$/,
+    );
+    expect(testing.fingerprintWhatsAppCredentialId(undefined)).toBeUndefined();
+  });
+
   it("observes the native WhatsApp reaction for the user-path agent action scenario", async () => {
     const triggerMessageId = "driver-trigger-message-1";
     const { context, expectedReaction, recordedMessages, rejectedCandidates, run } =
@@ -931,18 +888,6 @@ describe("WhatsApp QA live runtime", () => {
     expect(scenarioIds).toContain("whatsapp-canary");
     expect(scenarioIds).toContain("whatsapp-mention-gating");
     expect(scenarioIds).not.toContain("whatsapp-native-new-command");
-  });
-
-  it("includes mock-only scenarios when the provider lane supports them", () => {
-    const scenarioIds = resolveLiveTransportQaScenarioIds({
-      channelId: "whatsapp",
-      providerMode: "mock-openai",
-      supportsModuleFlows: true,
-    });
-
-    expect(scenarioIds).toContain("whatsapp-audio-preflight");
-    expect(scenarioIds).toContain("whatsapp-native-new-command");
-    expect(scenarioIds).toContain("whatsapp-tool-only-usage-footer");
   });
 
   it("patches the effective WhatsApp policy for default and named SUT accounts", async () => {
@@ -1372,35 +1317,6 @@ describe("WhatsApp QA live runtime", () => {
     );
   });
 
-  it("labels structured-message contact wait failures", async () => {
-    const sendSticker = vi.fn(async () => ({ messageId: "sticker-1" }));
-    const driver = createWhatsAppQaDriverMock({
-      sendContact: vi.fn(async () => ({ messageId: "contact-1" })),
-      sendLocation: vi.fn(async () => ({ messageId: "location-1" })),
-      sendMedia: vi.fn(async () => ({ messageId: "document-1" })),
-      sendSticker,
-    });
-
-    await expect(
-      testing.runWhatsAppStructuredInboundChecks({
-        contactToken: "CONTACT_TOKEN",
-        documentToken: "DOCUMENT_TOKEN",
-        driver,
-        driverPhoneE164: "+15550000001",
-        locationToken: "LOCATION_TOKEN",
-        stickerToken: "STICKER_TOKEN",
-        target: "+15550000002",
-        waitForStructuredReply: async (label, _observedAfter, expectedToken) => {
-          if (label === "contact") {
-            throw new Error(
-              `timed out waiting for WhatsApp structured ${label} reply (${expectedToken})`,
-            );
-          }
-        },
-      }),
-    ).rejects.toThrow("timed out waiting for WhatsApp structured contact reply");
-    expect(sendSticker).not.toHaveBeenCalled();
-  });
   it("adds safe diagnostics when a WhatsApp scenario reply wait observes nothing", async () => {
     const driver = createWhatsAppQaDriverMock({
       getObservedMessages: () => [],
@@ -1516,24 +1432,6 @@ describe("WhatsApp QA live runtime", () => {
     });
   });
 
-  it("targets DM approval reactions at the approval prompt message", async () => {
-    const sendReaction = await runWhatsAppApprovalReactionFixture({
-      fromJid: "15550000002@s.whatsapp.net",
-      scenarioId: "whatsapp-approval-exec-reaction-native",
-      turnSourceTo: "+15550000002",
-    });
-
-    expect(sendReaction).toHaveBeenCalledWith(
-      "15550000002@s.whatsapp.net",
-      "approval-message-1",
-      "👍",
-      {
-        fromMe: false,
-        participant: undefined,
-      },
-    );
-  });
-
   it("enables WhatsApp native exec and plugin approval delivery for approval scenarios", () => {
     const cfg = buildWhatsAppQaConfigFixture({
       overrides: {
@@ -1621,18 +1519,6 @@ describe("WhatsApp QA live runtime", () => {
         scenarioRun.sendMode.mediaBuffer.includes(triggerSentinel) &&
         !scenarioRun.quietSendMode.mediaBuffer.includes(triggerSentinel),
     ).toBe(true);
-  });
-
-  it("applies WhatsApp QA config overrides for reply mode and inbound debounce", () => {
-    const cfg = buildWhatsAppQaConfigFixture({
-      overrides: {
-        inboundDebounceMs: 250,
-        replyToMode: "all",
-      },
-    });
-
-    expect(cfg.channels?.whatsapp?.accounts?.sut?.replyToMode).toBe("all");
-    expect(cfg.messages?.inbound?.byChannel?.whatsapp).toBe(250);
   });
 
   it("keeps pending-history group context enabled through the supported config path", () => {

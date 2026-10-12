@@ -87,11 +87,7 @@ export function listLoadedChannelPluginsForRegistry(
 export function getLoadedChannelPluginById(
   id: string,
 ): ActiveChannelPluginRuntimeShape | undefined {
-  const resolvedId = normalizeOptionalString(id) ?? "";
-  if (!resolvedId) {
-    return undefined;
-  }
-  return resolveChannelPlugins().entriesById.get(resolvedId)?.plugin;
+  return getLoadedChannelPluginEntryById(id)?.plugin;
 }
 
 /** Returns one loaded channel plugin without triggering bundled discovery. */

@@ -19,6 +19,7 @@ import {
 } from "../sessions/transcript-events.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import * as profileAuthority from "../state/user-channel-identity-operations.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
@@ -85,6 +86,7 @@ describe("HTTP historical model disclosure", () => {
   let committed: OpenClawConfig;
   let port: number;
   let readerId: string;
+  let releaseProfileCatalog: (() => void) | undefined;
   let sequence = 0;
   let scope: { agentId: string; sessionKey: string; sessionId: string };
   const readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
@@ -103,6 +105,7 @@ describe("HTTP historical model disclosure", () => {
     readerId = (await ensureCanonicalUserProfileForEmail(readerEmail)).id;
     const staff = await ensureCanonicalUserProfileForEmail(staffEmail);
     await setCanonicalUserProfileRole(staff.id, "staff");
+    releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
     const context = createDirectChatContext({
       getRuntimeConfig: () => current,
       getCommittedRuntimeConfig: () => committed,
@@ -116,6 +119,7 @@ describe("HTTP historical model disclosure", () => {
       getResolvedAuth: () => resolveGatewayAuth({ authConfig: current.gateway?.auth }),
       getRuntimeConfig: () => current,
       getGatewayRequestContext: () => context,
+      httpRequestLifetime: context,
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
@@ -163,13 +167,17 @@ describe("HTTP historical model disclosure", () => {
   });
 
   afterAll(async () => {
-    server?.closeAllConnections();
-    if (server) {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+    try {
+      server?.closeAllConnections();
+      if (server) {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    } finally {
+      releaseProfileCatalog?.();
+      await state?.cleanup();
     }
-    await state?.cleanup();
   });
 
   async function requestHistory(

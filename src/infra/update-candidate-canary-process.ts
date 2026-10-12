@@ -18,6 +18,8 @@ export function launchCanary(params: {
   assertCurrent?: () => void;
   capture: (line: string) => void;
   onLine?: (line: string) => void;
+  /** Receipt lines reach onLine only; they never become logs or failure reasons. */
+  hidesLine?: (line: string) => boolean;
   onStdout?: (stdout: string) => void;
 }) {
   const { entry, args, env, capture } = params;
@@ -69,10 +71,12 @@ export function launchCanary(params: {
     let pending = "";
     let droppingLine = false;
     const captureLine = (line: string) => {
-      if (stream === child.stderr) {
-        captureStderr(line);
+      if (!params.hidesLine?.(line)) {
+        if (stream === child.stderr) {
+          captureStderr(line);
+        }
+        capture(line);
       }
-      capture(line);
       params.onLine?.(line);
     };
     stream.on("data", (chunk: string) => {

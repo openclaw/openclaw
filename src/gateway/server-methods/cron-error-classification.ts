@@ -23,8 +23,7 @@ export function isCronInvalidRequestError(err: unknown): boolean {
     message.includes("cron trigger every interval") ||
     message.includes("cron job is missing sessionTarget") ||
     message.includes("invalid cron sessionTarget session id") ||
-    message.includes('main cron jobs require payload.kind="systemEvent"') ||
-    message.includes('isolated/current/session cron jobs require payload.kind="agentTurn"') ||
+    message.startsWith('cron sessionTarget "') ||
     message.includes("has no upcoming run time and would never fire") ||
     message.includes('sessionTarget "main" is only valid for the default agent') ||
     message.includes('cron.update payload.kind="systemEvent" requires text') ||

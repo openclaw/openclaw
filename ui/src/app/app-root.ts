@@ -19,6 +19,7 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { ChatRouteData } from "../pages/chat/route-loader.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
+import type { ControlUiReadiness } from "./control-ui-readiness.ts";
 import {
   APPROVAL_PAGE_ELEMENT,
   BROWSER_DOCUMENT_ELEMENT,
@@ -67,6 +68,28 @@ export class OpenClawApp extends OpenClawLightDomElement {
   @state() private focusDashboardRoute: FocusDashboardRouteState = { kind: "loading" };
 
   private runtime: ApplicationRuntime | undefined;
+  private readiness: ControlUiReadiness | undefined;
+  private readinessLoad: Promise<void> | undefined;
+  // Automation opts in by reading its hook; normal navigation needs no observer graph.
+  private readonly loadReadiness = () => {
+    const runtime = this.runtime;
+    if (runtime && !this.readiness && !this.readinessLoad) {
+      this.readinessLoad = import("./control-ui-readiness-lit.ts")
+        .then(({ createLitControlUiReadiness }) => {
+          if (this.runtime !== runtime) {
+            return;
+          }
+          this.readiness = createLitControlUiReadiness(this, runtime);
+        })
+        .catch((error: unknown) => {
+          if (this.runtime === runtime) {
+            this.readinessLoad = undefined;
+            console.error("[openclaw] automation readiness could not load", error);
+          }
+        });
+    }
+    return this.readiness?.hook;
+  };
   private disconnectViewport: (() => void) | undefined;
   private readonly contextProvider = new ContextProvider(this, {
     context: applicationContext,
@@ -148,6 +171,13 @@ export class OpenClawApp extends OpenClawLightDomElement {
       this.requestLazyDocument(QUESTION_PAGE_ELEMENT);
     }
     const context = this.runtime.context;
+    const window = this.ownerDocument.defaultView;
+    if (window) {
+      Object.defineProperty(window, "openclawControlUi", {
+        configurable: true,
+        get: this.loadReadiness,
+      });
+    }
     this.pendingGatewayUrl = this.runtime.pendingGatewayConnection?.gatewayUrl ?? null;
     // Context identity changes only across a full app-tree connection epoch;
     // descendants reconnect and rebuild their controller-owned state afterward.
@@ -170,6 +200,16 @@ export class OpenClawApp extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    this.readiness?.disconnect();
+    const window = this.ownerDocument.defaultView;
+    if (
+      window &&
+      Object.getOwnPropertyDescriptor(window, "openclawControlUi")?.get === this.loadReadiness
+    ) {
+      delete window.openclawControlUi;
+    }
+    this.readiness = undefined;
+    this.readinessLoad = undefined;
     // Stop reactive subscriptions before disposing their application sources.
     this.subscriptions.clear();
     this.disconnectViewport?.();
@@ -191,6 +231,14 @@ export class OpenClawApp extends OpenClawLightDomElement {
     if (this.runtime) {
       globalThis.dispatchEvent(new Event("openclaw-control-ui-rendered"));
     }
+  }
+
+  protected override willUpdate(): void {
+    this.readiness?.invalidateRoot();
+  }
+
+  protected override updated(): void {
+    this.readiness?.commitRoot();
   }
 
   private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
@@ -277,13 +325,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
 
   private replaceFocusDashboardLocation(location: RouteLocation, source: RouteLocation): void {
     const basePath = this.context?.basePath ?? "";
-    const expected = buildControlUiFocusPath(
-      { kind: "dashboard", path: routeLocationHref(source) },
-      basePath,
-    );
-    const replacement = buildControlUiFocusPath(
-      { kind: "dashboard", path: routeLocationHref(location) },
-      basePath,
+    const [expected, replacement] = [source, location].map((target) =>
+      buildControlUiFocusPath({ kind: "dashboard", path: routeLocationHref(target) }, basePath),
     );
     const current = `${globalThis.location.pathname}${globalThis.location.search}${globalThis.location.hash}`;
     if (!expected || !replacement || current !== expected || replacement === current) {
@@ -505,12 +548,13 @@ export class OpenClawApp extends OpenClawLightDomElement {
           ${
             terminal
               ? html`<openclaw-terminal-panel
-                  .client=${gatewayConnected ? gatewaySnapshot.client : null}
-                  .available=${available}
-                  .agentId=${owner ? normalizeAgentId(owner) : null}
-                  .themeMode=${context.theme.resolvedMode}
-                  fullscreen
-                ></openclaw-terminal-panel>`
+                    .client=${gatewayConnected ? gatewaySnapshot.client : null}
+                    .available=${available}
+                    .agentId=${owner ? normalizeAgentId(owner) : null}
+                    .themeMode=${context.theme.resolvedMode}
+                    fullscreen
+                  ></openclaw-terminal-panel>
+                  <openclaw-toast-host></openclaw-toast-host>`
               : html`<openclaw-desktop-panel
                   .client=${gatewayConnected ? gatewaySnapshot.client : null}
                   .sessions=${context.sessions}
@@ -603,7 +647,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
         <openclaw-login-gate
           .props=${{
             resourceBasePath: context.resourceBasePath,
-            mascot: context.theme.branding.mascot,
+            branding: context.theme.branding,
             connected: gatewayConnected,
             lastError: gatewaySnapshot.lastError,
             reconnectAt: gatewaySnapshot.reconnectAt,
@@ -677,6 +721,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
         >
           <openclaw-app-shell
             .runtime=${runtime}
+            .readiness=${this.readiness}
             .onboarding=${this.onboarding}
           ></openclaw-app-shell>
         </openclaw-session-progress-hovercard-provider>

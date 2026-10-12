@@ -19,6 +19,7 @@ import {
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { onAgentEvent, rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../../plugins/runtime.js";
 import {
   getGatewayContextLifetime,
@@ -33,12 +34,16 @@ import {
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "../announce/subagent-announce-overrides.test-support.js";
 import * as announce from "../announce/subagent-announce.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryChangesToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   adoptSubagentRunForRequesterTurn,
@@ -46,6 +51,8 @@ import {
   replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
+import { registerSubagentRegistrationOwnershipTests } from "./subagent-registry.registration-ownership.test-support.js";
+import { registerRequesterCompletionCustodyTests } from "./subagent-registry.requester-completion.test-support.js";
 import {
   releaseSubagentRun,
   resetSubagentRegistryForTests,
@@ -97,6 +104,8 @@ function registration(
   return {
     runId,
     childSessionKey: `agent:main:subagent:${runId}`,
+    childAgentId: "main",
+    sessionEntry: { sessionId: `original-${runId}` },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: "result",
@@ -120,6 +129,28 @@ afterEach(async () => {
 });
 
 describe("registered completion source custody", () => {
+  registerSubagentRegistrationOwnershipTests({ registration, updateRun });
+
+  it("keeps same-key child registrations owned by different agents separate", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const first = registration("research-global", {
+        childSessionKey: "global",
+        childAgentId: "research",
+      });
+      await registerSubagentRun(first);
+      const original = loadSubagentRegistryFromSqlite().get(first.runId);
+      await registerSubagentRun(
+        registration("main-global", { childSessionKey: "global", childAgentId: "main" }),
+      );
+      await expect(
+        registerSubagentRun({ ...first, childAgentId: "main" }, { acceptedRunReplay: true }),
+      ).rejects.toThrow("unresolved or different child owner");
+      const persisted = loadSubagentRegistryFromSqlite();
+      expect(persisted.get(first.runId)).toEqual(original);
+      expect(persisted.get("main-global")?.childAgentId).toBe("main");
+    });
+  });
+
   it.each([
     "current",
     "before commit",
@@ -246,7 +277,7 @@ describe("registered completion source custody", () => {
               }),
             );
             const accepted = subagentRuns.get(runId);
-            expect(accepted?.childAgentId).toBeUndefined();
+            expect(accepted?.childAgentId).toBe("main");
             await registerSubagentRun(registration(runId, { childAgentId: "MAIN" }), {
               acceptedRunReplay: true,
             });
@@ -255,7 +286,7 @@ describe("registered completion source custody", () => {
               registerSubagentRun(registration(runId, { childAgentId: "research" }), {
                 acceptedRunReplay: true,
               }),
-            ).rejects.toThrow("Subagent registration child agent disagrees with its session key.");
+            ).rejects.toThrow("explicit valid child agent");
             expect(callGateway).toHaveBeenCalledTimes(1);
           }
         } finally {
@@ -298,26 +329,14 @@ describe("registered completion source custody", () => {
       );
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const execute = stateWorker.runOpenClawStateWorkerOperation;
-      const held = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementation((owner, run, options) =>
-          execute(
-            owner,
-            (scope) =>
-              run({
-                execute: async (command, executeOptions) => {
-                  const receipt = await scope.execute(command, executeOptions);
-                  if (command.type === "subagents.persistChanges") {
-                    entered.resolve();
-                    await release.promise;
-                  }
-                  return receipt;
-                },
-              }),
-            options,
-          ),
-        );
+      const held = probe.command(stateWorker, async (command, executeOptions, scope) => {
+        const receipt = await scope.execute(command, executeOptions);
+        if (command.type === "subagents.persistChanges") {
+          entered.resolve();
+          await release.promise;
+        }
+        return receipt;
+      });
       const pending = withPluginRuntimeGatewayRequestScope(
         { client, context, resolveGatewayContext, isWebchatConnect: () => false },
         () => registerSubagentRun(params),
@@ -474,6 +493,7 @@ describe("registered completion source custody", () => {
               registerSubagentRun(
                 registration(runId, {
                   childSessionKey,
+                  sessionEntry: { sessionId: "completion-child" },
                   requesterSessionKey,
                   requesterAgentId: "main",
                   requesterOrigin: { channel: "discord", to: "dm:registered-completion" },
@@ -566,25 +586,48 @@ describe("registered completion source custody", () => {
     },
   );
 
-  it("retains raw child ownership, including unknown legacy ownership, on registration replay", async () => {
+  registerRequesterCompletionCustodyTests({ registration, updateRun });
+
+  it("retains raw child ownership across store changes and refuses unresolved historical replay", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const originalConfig = { session: { store: state.path("original.sqlite") } };
       for (const childAgentId of [undefined, "research"]) {
         vi.mocked(config.getRuntimeConfig).mockReturnValue(originalConfig);
         const runId = childAgentId ?? "legacy";
-        const params = registration(runId, { childSessionKey: "global", childAgentId });
-        await registerSubagentRun(params);
-        expect(subagentRuns.get(runId)?.childAgentId).toBe(childAgentId);
+        const params = registration(runId, {
+          childSessionKey: "global",
+          childAgentId: childAgentId ?? "main",
+        });
+        if (childAgentId === undefined) {
+          const historical = createSubagentRunRecord({
+            runId,
+            childSessionKey: "global",
+            requesterAgentId: "main",
+            requesterStorePath: resolvePhysicalSessionStorePath(
+              { sessionKey: params.requesterSessionKey, agentId: "main" },
+              originalConfig,
+            ),
+          });
+          saveSubagentRegistryChangesToSqlite(new Map([[runId, historical]]), [runId]);
+        } else {
+          await registerSubagentRun(params);
+        }
+        const original = loadSubagentRegistryFromSqlite().get(runId);
+        expect(original?.childAgentId).toBe(childAgentId);
         vi.mocked(config.getRuntimeConfig).mockReturnValue({
           session: { store: state.path("replacement.sqlite") },
         });
-        await registerSubagentRun(
-          { ...params, childAgentId: "main" },
-          {
-            acceptedRunReplay: true,
-          },
-        );
-        expect(subagentRuns.get(runId)?.childAgentId).toBe(childAgentId);
+        if (childAgentId === undefined) {
+          await expect(registerSubagentRun(params, { acceptedRunReplay: true })).rejects.toThrow(
+            "unresolved or different child owner",
+          );
+          expect(subagentRuns.has(runId)).toBe(false);
+        } else {
+          const accepted = subagentRuns.get(runId);
+          await registerSubagentRun(params, { acceptedRunReplay: true });
+          expect(subagentRuns.get(runId)).toBe(accepted);
+        }
+        expect(loadSubagentRegistryFromSqlite().get(runId)).toEqual(original);
       }
     });
   });
@@ -712,7 +755,7 @@ describe("registered completion source custody", () => {
             await pending;
             expect(subagentRuns.get(runId)?.requesterStorePath).toBe(originalPath);
             expect(subagentRuns.get(runId)?.controllerStorePath).toBe(originalPath);
-            expect(subagentRuns.get(runId)?.childAgentId).toBeUndefined();
+            expect(subagentRuns.get(runId)?.childAgentId).toBe("main");
             await releaseSubagentRun(runId);
           } else {
             await expect(pending).rejects.toThrow(

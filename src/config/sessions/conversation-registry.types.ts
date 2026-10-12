@@ -29,6 +29,7 @@ export type ConversationRecord = {
 export type ConversationReadQuery = {
   channel?: string;
   conversationRef?: string;
+  conversationRefs?: readonly string[];
   limit?: number;
   primarySession?: { sessionId: string; sessionKey: string };
   currentBindingOnly?: boolean;

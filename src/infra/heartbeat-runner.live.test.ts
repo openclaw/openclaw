@@ -274,7 +274,9 @@ describeLive("session event wake through a live Gateway", () => {
           completedMessages.slice(foregroundMessages.length),
           "user",
         );
-        expect(completionUsers).toContain("[OpenClaw exec completion]");
+        expect(completionUsers).toMatch(
+          new RegExp(`Exec completed \\([^)]*, code ${exitCode}\\) :: ${completionReply}`),
+        );
         expect(completionUsers).not.toContain("[OpenClaw heartbeat poll]");
         expect(await fs.readFile(path.join(workspace, "completion-completed"), "utf8")).toBe(
           "completed",

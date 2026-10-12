@@ -181,6 +181,10 @@ export async function resolveGatewayCredentialsWithSecretInputs(
   const env = options.env ?? process.env;
   const config = options.config;
   let resolvedConfig = config;
+  const resolvePath = async (path: SupportedGatewaySecretInputPath) => {
+    const value = await resolveConfiguredGatewaySecretInput({ config: resolvedConfig, path, env });
+    assignResolvedGatewaySecretInput({ config: resolvedConfig, path, value });
+  };
   for (const path of ALL_GATEWAY_SECRET_INPUT_PATHS) {
     if (!canGatewaySecretInputPathWin({ options, env, config: resolvedConfig, path })) {
       continue;
@@ -189,12 +193,7 @@ export async function resolveGatewayCredentialsWithSecretInputs(
       resolvedConfig = cloneConfigWithResolutionFacts(config);
     }
     try {
-      const value = await resolveConfiguredGatewaySecretInput({
-        config: resolvedConfig,
-        path,
-        env,
-      });
-      assignResolvedGatewaySecretInput({ config: resolvedConfig, path, value });
+      await resolvePath(path);
     } catch (error) {
       if (isSecretResolutionError(error) && error.code === "SECRET_REF_REDACTED_VALUE") {
         throw error;
@@ -220,12 +219,7 @@ export async function resolveGatewayCredentialsWithSecretInputs(
       }
       // Resolve refs lazily on demand as a backstop for precedence cases the
       // optimistic scan skipped, but stop if the same path loops.
-      const value = await resolveConfiguredGatewaySecretInput({
-        config: resolvedConfig,
-        path,
-        env,
-      });
-      assignResolvedGatewaySecretInput({ config: resolvedConfig, path, value });
+      await resolvePath(path);
       resolvedPaths.add(path);
     }
   }

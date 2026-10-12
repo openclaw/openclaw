@@ -35,6 +35,7 @@ export async function recordBackupRunOutcome(
     createdAt?: number;
     env?: NodeJS.ProcessEnv;
   } & Omit<BackupRunManifest, "pushFailed">,
+  options?: { assertCurrent?: () => void; signal?: AbortSignal },
 ): Promise<void> {
   const databasePath = resolveOpenClawStateSqlitePath(params.env ?? process.env);
   // Best-effort log only: never bootstrap an absent state database to record an
@@ -59,7 +60,7 @@ export async function recordBackupRunOutcome(
   await runOpenClawStateWorkerOperation(
     context,
     (scope) => scope.execute({ type: "backup.recordOutcome", input: row }),
-    { existingOnly: true },
+    { ...options, existingOnly: true },
   );
 }
 

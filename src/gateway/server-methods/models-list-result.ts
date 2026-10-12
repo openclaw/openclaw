@@ -11,9 +11,11 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import {
   createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
   resolveCatalogDecisionRuntime,
   type ModelCatalogDecisionParams,
 } from "../../agents/model-catalog-decisions.js";
+import { createModelPickerRecommendationRank } from "../../agents/model-catalog-order.js";
 import { prepareModelCatalogView } from "../../agents/model-catalog-view.js";
 import {
   resolveLogicalModelCatalogEntryState,
@@ -43,6 +45,7 @@ import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { createThinkingCatalogResolver } from "../../auto-reply/thinking.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
+import { resolveRuntimeModelConfigCacheKey } from "../../config/runtime-snapshot.js";
 import { resolveProviderModelCatalogId } from "../../plugins/provider-model-routes.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { withCurrentReadAuthority } from "../../shared/current-read-authority.js";
@@ -125,9 +128,10 @@ async function prepareOwnedModelsListResult({
   preparedPluginRegistry,
 }: ModelsListOwner): Promise<PreparedModelsListResult> {
   const preparedOwnerIsCurrent = preparedProjectionOwner?.isCurrent;
+  const configKey = resolveRuntimeModelConfigCacheKey(requestConfig);
   // Native readiness belongs to the prepared generation, even across config publication.
   const isCurrent = () =>
-    currentConfig() === requestConfig &&
+    resolveRuntimeModelConfigCacheKey(currentConfig()) === configKey &&
     preparedOwnerIsCurrent?.() === true &&
     publicationScope?.isCurrent?.() !== false;
   if (!metadataSnapshot || !preparedAuthStore) {
@@ -200,12 +204,10 @@ async function prepareOwnedModelsListResult({
     ...(view === "provider-config" ? {} : profiles),
     routeResolverFactory: params.routeResolverFactory,
   };
-  const projector = await withCurrentReadAuthority(
-    authority,
-    () =>
-      (usedPreloadedCatalog ? params.catalogProjector : undefined) ??
-      createModelCatalogDecisions(projectorParams),
-  );
+  const preloadedProjector = usedPreloadedCatalog ? params.catalogProjector : undefined;
+  const projector = preloadedProjector
+    ? await withCurrentReadAuthority(authority, () => preloadedProjector)
+    : await prepareModelCatalogDecisions(projectorParams, authority);
   if (view !== "provider-config") {
     await projector.prepareSelectedAccountCatalog(
       () => {
@@ -218,8 +220,7 @@ async function prepareOwnedModelsListResult({
         }
       },
       {
-        allowDiscovery: !params.preloadedOnly && !params.params.preparedOnly,
-        refresh,
+        refresh: refresh && !params.preloadedOnly && !params.params.preparedOnly,
         withCurrent: authority?.withCurrent,
         beforeRequest: publicationScope?.beforeRequest,
       },
@@ -232,9 +233,7 @@ async function prepareOwnedModelsListResult({
   ]);
   const evaluateNative: typeof projector.evaluateNative = (entry, host, runtimeId) => {
     const native = projector.evaluateNative(entry, host, runtimeId);
-    return native !== host && currentConfig() !== requestConfig
-      ? { ...native, availability: false }
-      : native;
+    return native !== host && !isCurrent() ? { ...native, availability: false } : native;
   };
   const { normalizeProvider, providerFilter, matchesProvider } = createModelsListProviderFilter({
     config: cfg,
@@ -423,10 +422,10 @@ async function prepareOwnedModelsListResult({
         entries.set(runtimeKey, preparedEntry);
         prepared.set(entry, entries);
       }
-      // Legacy views require a boolean; inventory consumers preserve unknown state.
-      const projectedAvailability = preserveUnknownAvailability
-        ? evaluation.availability
-        : (evaluation.availability ?? false);
+      const projectedAvailability =
+        preserveUnknownAvailability || evaluation.runtimeAuth?.source === "native"
+          ? evaluation.availability
+          : (evaluation.availability ?? false);
       const speedPolicy = fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
       const supportsFastMode = speedPolicy.supportsFastMode;
       const serviceTiers = projectModelServiceTiers({
@@ -624,6 +623,7 @@ async function prepareOwnedModelsListResult({
     read: () => {
       const currentCatalog = readCatalog();
       const keyOf = createModelCatalogIdentityKeyResolver();
+      const recommendationRank = createModelPickerRecommendationRank(cfg);
       return {
         models: omitCliRuntimeAliasTwins(
           currentCatalog.filter(matchesProvider).map((entry) => {
@@ -636,6 +636,9 @@ async function prepareOwnedModelsListResult({
             const projected = projectPublic(entry, evaluation);
             if (runtimeChoices?.length) {
               projected.runtimeChoices = runtimeChoices;
+            }
+            if (recommendationRank(entry) !== undefined) {
+              projected.recommended = true;
             }
             return { row: projected, twin: twinRoutes.get(key) };
           }),

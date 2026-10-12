@@ -9,6 +9,12 @@ import { parseRoleRef } from "./pw-role-snapshot.js";
 let nextUploadArmId = 0;
 let nextDownloadArmId = 0;
 
+const LOCATOR_STATE_DIAGNOSTICS: Partial<Record<string, string>> = {
+  editable: "is not editable (for example, read-only). Use an editable control.",
+  enabled: "is not enabled. Complete any prerequisites that enable the control.",
+  stable: "is not stable. Wait for movement or animation to finish before interacting.",
+};
+
 export function bumpUploadArmId(): number {
   nextUploadArmId += 1;
   return nextUploadArmId;
@@ -99,20 +105,9 @@ export function toAIFriendlyError(error: unknown, selector: string): Error {
     const state = diagnostic
       .match(/^element is not (editable|enabled|visible|stable)$/i)?.[1]
       ?.toLowerCase();
-    if (state === "editable") {
-      return failure(
-        `Element "${label}" is not editable (for example, read-only). Use an editable control.`,
-      );
-    }
-    if (state === "enabled") {
-      return failure(
-        `Element "${label}" is not enabled. Complete any prerequisites that enable the control.`,
-      );
-    }
-    if (state === "stable") {
-      return failure(
-        `Element "${label}" is not stable. Wait for movement or animation to finish before interacting.`,
-      );
+    const stateDiagnostic = state ? LOCATOR_STATE_DIAGNOSTICS[state] : undefined;
+    if (stateDiagnostic) {
+      return failure(`Element "${label}" ${stateDiagnostic}`);
     }
     if (
       state === "visible" ||

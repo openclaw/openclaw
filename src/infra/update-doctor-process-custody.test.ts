@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as groups from "../process/child-process-tree.js";
+import type { CommandProcessIdentity } from "../process/command-process-custody.types.js";
 import { spawnCommand, withCommandProcessScope } from "../process/exec-spawn.js";
 import * as packageRoot from "./openclaw-root.js";
 import {
@@ -21,6 +22,144 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+
+it.skipIf(process.platform === "win32").each([false, true])(
+  "retains a real Doctor child's identity across a failed bind (settlement fails: %s)",
+  async (settlementFails) => {
+    const root = fs.realpathSync(directories.make("doctor-failed-binding-"));
+    const privateTmp = path.join(root, "private-tmp");
+    fs.mkdirSync(privateTmp, { mode: 0o700 });
+    const { databasePath } = installPrivateUpdateHandoffStore(privateTmp);
+    const resultPath = path.join(root, "result.json");
+    const receiptPath = `${resultPath}.processes`;
+    vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, resultPath);
+    vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
+    const create = nativeCustody.createManagedCommandProcessCustody;
+    let identity: CommandProcessIdentity | undefined;
+    let releaseReservation: (() => void) | undefined;
+    vi.spyOn(nativeCustody, "createManagedCommandProcessCustody").mockImplementation(
+      async (options) => {
+        const native = await create(options);
+        const reserve = native.custody.reserve.bind(native.custody);
+        native.custody.reserve = (argv) => {
+          const reservation = reserve(argv);
+          releaseReservation = () => reservation.settled();
+          return {
+            spawned(childIdentity) {
+              identity = childIdentity;
+              throw new Error("Native command binding failed");
+            },
+            settled() {
+              if (settlementFails) {
+                throw new Error("Native command settlement failed");
+              }
+              reservation.settled();
+            },
+          };
+        };
+        return native;
+      },
+    );
+    const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} });
+    using custody = await retainUpdateDoctorProcesses();
+    await expect(
+      withCommandProcessScope(
+        async () => await spawnCommand([process.execPath, "-e", "process.stdin.resume()"]),
+        undefined,
+        custody,
+      ),
+    ).rejects.toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+    try {
+      expect(identity).toMatchObject({ pid: expect.any(Number) });
+      expect(groups.isChildProcessTreeAlive(identity!)).toBe(false);
+      const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+      expect(receipt.slots).toEqual(settlementFails ? [{ id: 1, identity }] : []);
+      expect(store.readCommandChildren([root])).toHaveLength(settlementFails ? 1 : 0);
+    } finally {
+      if (settlementFails) {
+        releaseReservation?.();
+      }
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32").each([
+  {
+    name: "legacy updater without a run ID",
+    runId: undefined,
+    admitted: true,
+    publicationFault: false,
+  },
+  { name: "current updater", runId: "current-update-run", admitted: true, publicationFault: false },
+  {
+    name: "invalid current run ID",
+    runId: "x".repeat(4097),
+    admitted: false,
+    publicationFault: false,
+  },
+  {
+    name: "recovered IPC publication",
+    runId: "current-update-run",
+    admitted: true,
+    publicationFault: true,
+  },
+])(
+  "admits Doctor commands with $name only with valid custody",
+  async ({ runId, admitted, publicationFault }) => {
+    const root = fs.realpathSync(directories.make("doctor-run-id-custody-"));
+    const privateTmp = path.join(root, "private-tmp");
+    fs.mkdirSync(privateTmp, { mode: 0o700 });
+    const { databasePath } = installPrivateUpdateHandoffStore(privateTmp);
+    const resultPath = path.join(root, "result.json");
+    const receiptPath = `${resultPath}.processes`;
+    const effect = path.join(root, "command-effect");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, resultPath);
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", runId);
+    vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
+    const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} });
+    {
+      using custody = await retainUpdateDoctorProcesses();
+      expect(custody).toBeDefined();
+      const dispatch = () =>
+        withCommandProcessScope(
+          async () =>
+            await spawnCommand([
+              process.execPath,
+              "-e",
+              `require('node:fs').writeFileSync(${JSON.stringify(effect)}, 'completed')`,
+            ]),
+          undefined,
+          custody,
+        );
+      if (publicationFault) {
+        const publicationError = Object.assign(new Error("Doctor receipt publication failed"), {
+          code: "EIO",
+        });
+        const publication = vi.spyOn(fs, "renameSync").mockImplementationOnce((from, to) => {
+          expect(from).toBe(`${receiptPath}.pending`);
+          expect(to).toBe(receiptPath);
+          throw publicationError;
+        });
+        await expect(dispatch()).rejects.toBe(publicationError);
+        publication.mockRestore();
+        expect(fs.existsSync(effect)).toBe(false);
+        expect(store.readCommandChildren([root])).toEqual([]);
+      }
+      if (admitted) {
+        await dispatch();
+        expect(fs.readFileSync(effect, "utf8")).toBe("completed");
+      } else {
+        await expect(dispatch()).rejects.toThrow("managed handoff admission is invalid");
+        expect(fs.existsSync(effect)).toBe(false);
+      }
+      expect(JSON.parse(fs.readFileSync(receiptPath, "utf8"))).toMatchObject({ slots: [] });
+      expect(store.readCommandChildren([root])).toEqual([]);
+    }
+    expect(fs.existsSync(receiptPath)).toBe(false);
+    expect(store.read(root).kind).toBe("absent");
+  },
+);
 
 it.each(["unavailable root", "missing bound database", "inaccessible command storage"] as const)(
   "permits no-child Doctor work with %s while refusing writer admission",

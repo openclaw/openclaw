@@ -401,6 +401,12 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             return;
           }
         }
+        const runtimeAuthorityError = () =>
+          resolveNodeInvokeRuntimeAuthorityError({
+            context,
+            client,
+            approvalAuthority: forwardedParams.approvalAuthority,
+          });
         const isForwardedApprovalAuthorityActive = () =>
           isUploadAllowed() &&
           isForwardedNodeInvokeApprovalAuthorityActive({
@@ -497,11 +503,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         }
         // Policy, pairing, and approval checks above may await. Revalidate the
         // exact runtime capability at the final raw transport handoff.
-        const authorityError = resolveNodeInvokeRuntimeAuthorityError({
-          context,
-          client,
-          approvalAuthority: forwardedParams.approvalAuthority,
-        });
+        const authorityError = runtimeAuthorityError();
         if (authorityError) {
           respond(
             false,
@@ -534,11 +536,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           isDispatchAuthorized: () =>
             isUploadAllowed() &&
             (nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
-            resolveNodeInvokeRuntimeAuthorityError({
-              context,
-              client,
-              approvalAuthority: forwardedParams.approvalAuthority,
-            }) === undefined,
+            runtimeAuthorityError() === undefined,
           onDispatchReady: (invokeId) => {
             nodeCommandDispatched = true;
             nodeInvokeStream?.onDispatchReady(invokeId);

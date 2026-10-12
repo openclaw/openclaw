@@ -2,6 +2,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
+  normalizeBackgroundPreference,
+  USER_BACKGROUND_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/background-preferences.js";
+import {
   GIT_COAUTHOR_PREFERENCE_KEY,
   USER_PREFS_PROFILE_KEY_LIMIT,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
@@ -9,6 +13,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema.js";
+import { isOwnedBackgroundPreference } from "./user-background.store.js";
 import { publishUserPreferencesChange } from "./user-preferences-publication.js";
 import type {
   PreparedUserPreferenceUpdate,
@@ -102,11 +107,20 @@ export function mergeUserPreferences(
     if (targetKeys.size >= USER_PREFS_PROFILE_KEY_LIMIT) {
       break;
     }
+    // A discarded source upload must not leave its custom selection dangling on the target.
+    const background =
+      row.pref_key === USER_BACKGROUND_PREFERENCE_KEY
+        ? normalizeBackgroundPreference(JSON.parse(row.value_json))
+        : undefined;
+    const valueJson =
+      background && !isOwnedBackgroundPreference(database, targetProfileId, background)
+        ? JSON.stringify({ ...background, source: { kind: "none" } })
+        : row.value_json;
     executeSqliteQuerySync(
       database,
       db
         .insertInto("user_preferences")
-        .values({ ...row, profile_id: targetProfileId })
+        .values({ ...row, value_json: valueJson, profile_id: targetProfileId })
         .onConflict((conflict) => conflict.columns(["profile_id", "pref_key"]).doNothing()),
     );
     targetKeys.add(row.pref_key);
@@ -149,6 +163,18 @@ export function writeUserPreferences(
   update: PreparedUserPreferenceUpdate,
 ): Result<void, UserPreferenceError> {
   const { serialized, deletionKeys, expected } = update;
+  const background = serialized.find((entry) => entry.prefKey === USER_BACKGROUND_PREFERENCE_KEY);
+  if (background || deletionKeys.includes(USER_BACKGROUND_PREFERENCE_KEY)) {
+    if (!expected.some((entry) => entry.prefKey === USER_BACKGROUND_PREFERENCE_KEY)) {
+      return err({ code: "conflict" });
+    }
+    if (
+      background &&
+      !isOwnedBackgroundPreference(sqlite, profileId, JSON.parse(background.valueJson))
+    ) {
+      return err({ code: "invalid-value", key: USER_BACKGROUND_PREFERENCE_KEY });
+    }
+  }
   if (expected.length > 0) {
     const current = readUserPreferences(
       sqlite,

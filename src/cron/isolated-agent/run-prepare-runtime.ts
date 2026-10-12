@@ -15,7 +15,7 @@ import type {
 } from "../types.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import { logWarn } from "./run.runtime.js";
-import type { RunCronAgentTurnResult } from "./run.types.js";
+import type { CronLaneWaitCallback, RunCronAgentTurnResult } from "./run.types.js";
 
 export type RunCronAgentTurnParams = {
   admissionSource?: import("../../agents/admitted-run-context.js").AdmittedRunContext["admissionSource"];
@@ -28,7 +28,7 @@ export type RunCronAgentTurnParams = {
   signal?: AbortSignal;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
-  onLaneWait?: (info?: { waiting?: boolean }) => void;
+  onLaneWait?: CronLaneWaitCallback;
   sessionKey: string;
   agentId?: string;
   lane?: string;

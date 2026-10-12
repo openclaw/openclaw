@@ -21,5 +21,4 @@ export const signalReplyAuthorState = {
       expiresAt: number;
     }
   >(),
-  persistentStoreDisabled: false,
 };

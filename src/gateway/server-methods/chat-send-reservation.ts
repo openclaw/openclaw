@@ -13,23 +13,22 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 export function createPendingChatSendReservationAccess(params: {
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
-  key: string;
-  runId: string;
   attemptId: string;
   request: NormalizedChatSendRequest;
   session: PreparedChatSendSession;
 }) {
+  const { pendingChatSendKey: key, clientRunId: runId } = params.session;
   const read = () =>
     readPreRegisteredRun({
-      key: params.key,
-      entry: params.context.dedupe.get(params.key),
+      key,
+      entry: params.context.dedupe.get(key),
       keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
     });
   return {
     read,
     reserve: () => {
       const { context, request, session, attemptId } = params;
-      context.dedupe.set(params.key, {
+      context.dedupe.set(key, {
         ts: session.now,
         ok: true,
         requestIdentity: request.goalOperation?.requestFingerprint ?? request.requestIdentity,
@@ -59,10 +58,10 @@ export function createPendingChatSendReservationAccess(params: {
     clear: () => {
       const pending = read();
       if (
-        pending?.runId === params.runId &&
+        pending?.runId === runId &&
         normalizeOptionalString(pending.payload.attemptId) === params.attemptId
       ) {
-        params.context.dedupe.delete(params.key);
+        params.context.dedupe.delete(key);
       }
     },
   };

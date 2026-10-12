@@ -182,50 +182,41 @@ function adoptAgentRuntimeRegistrations(
   if (params.purpose === "model-catalog" || params.purpose === "isolated-completion") {
     return { registry: pluginRegistry };
   }
-  const channelRegistry =
+  const canAdoptGatewayRegistrations =
     params.allowGatewaySubagentBinding === true &&
-    (params.env === undefined || params.env === process.env)
-      ? adoptRuntimeChannelRegistrations(pluginRegistry, channelSource)
-      : pluginRegistry;
+    (params.env === undefined || params.env === process.env);
+  const channelRegistry = canAdoptGatewayRegistrations
+    ? adoptRuntimeChannelRegistrations(pluginRegistry, channelSource)
+    : pluginRegistry;
   const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const toolDonor = requestRegistry && getPluginRegistryGatewayOwner(requestRegistry)?.current();
   const toolRegistry =
-    toolDonor &&
-    config &&
-    params.allowGatewaySubagentBinding === true &&
-    (params.env === undefined || params.env === process.env)
+    toolDonor && config && canAdoptGatewayRegistrations
       ? adoptRuntimeToolRegistrations(channelRegistry, toolDonor, config)
       : channelRegistry;
-  if (!activeRegistry) {
-    return {
-      registry: bindAdmittingGateway(bindPluginRegistryResourceOwner(toolRegistry, pluginRegistry)),
-      ...(toolRegistry !== channelRegistry ? { toolDonor } : {}),
-    };
-  }
-  const memoryRegistry =
-    params.metadataSnapshot &&
-    params.workspaceDir &&
-    config &&
-    getActivePluginRegistryWorkspaceDir() === resolveUserPath(params.workspaceDir)
-      ? adoptRuntimeMemoryRegistrations(toolRegistry, activeRegistry, config)
-      : toolRegistry;
-  const registry = bindPluginRegistryResourceOwner(
-    adoptRuntimeWidgetPresenterRegistrations(
+  let registry = toolRegistry;
+  if (activeRegistry) {
+    const memoryRegistry =
+      params.metadataSnapshot &&
+      params.workspaceDir &&
+      config &&
+      getActivePluginRegistryWorkspaceDir() === resolveUserPath(params.workspaceDir)
+        ? adoptRuntimeMemoryRegistrations(toolRegistry, activeRegistry, config)
+        : toolRegistry;
+    registry = adoptRuntimeWidgetPresenterRegistrations(
       adoptRuntimeContextEngineRegistrations(
-        config &&
-          params.allowGatewaySubagentBinding === true &&
-          (params.env === undefined || params.env === process.env)
+        config && canAdoptGatewayRegistrations
           ? adoptRuntimeDecisionProviders(memoryRegistry, activeRegistry, config)
           : memoryRegistry,
         activeRegistry,
       ),
       activeRegistry,
-    ),
-    pluginRegistry,
-  );
+    );
+  }
+  bindPluginRegistryResourceOwner(registry, pluginRegistry);
   return {
     registry: bindAdmittingGateway(registry),
-    ...(registry !== pluginRegistry ? { donor: activeRegistry } : {}),
+    ...(activeRegistry && registry !== pluginRegistry ? { donor: activeRegistry } : {}),
     ...(toolRegistry !== channelRegistry ? { toolDonor } : {}),
   };
 }

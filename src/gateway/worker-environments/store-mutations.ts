@@ -186,7 +186,7 @@ export function reconcileAttachedSessionOwners(db: DatabaseSync, nowMs: number):
     const [, ...duplicates] = owners.toSorted(compareAttachmentAuthority);
     for (const duplicate of duplicates) {
       // Fence legacy duplicate live owners before startup snapshots them.
-      updateWorkerEnvironmentRecord(db, duplicate.environmentId, "attached", {
+      updateRow(db, duplicate.environmentId, "attached", {
         owner_epoch: nextGlobalOwnerEpoch(db),
         state: "idle",
         attached_session_ids_json: json([]),

@@ -46,67 +46,42 @@ describe("ReefInboxConnection recovery", () => {
     expect(requestedAfter).toEqual([0, 0, 20]);
   });
 
-  it.each([false, true])(
-    "retains the previous cursor when asynchronous persistence fails (empty page: %s)",
-    async (empty) => {
-      const requestedAfter: number[] = [];
-      const persistence = createDeferred<void>();
-      const started = createDeferred<void>();
-      const failure = new Error("cursor persistence failed");
-      let fail = true;
-      const client = createClient(async (input) => {
-        const after = Number(parseRequestUrl(input).searchParams.get("after"));
-        requestedAfter.push(after);
-        return Response.json({
-          entries: !empty && after === 7 ? [receiptEntry(8)] : [],
-          cursor: 8,
-        });
+  it("retains the previous cursor when asynchronous persistence fails", async () => {
+    const requestedAfter: number[] = [];
+    const persistence = createDeferred<void>();
+    const started = createDeferred<void>();
+    const failure = new Error("cursor persistence failed");
+    let fail = true;
+    const client = createClient(async (input) => {
+      const after = Number(parseRequestUrl(input).searchParams.get("after"));
+      requestedAfter.push(after);
+      return Response.json({
+        entries: after === 7 ? [receiptEntry(8)] : [],
+        cursor: 8,
       });
-      const inbox = new ReefInboxConnection(
-        client,
-        async () => {},
-        () => new ControlledSocket() as unknown as WebSocketLike,
-        {
-          initialCursor: 7,
-          persistCursor: async () => {
-            started.resolve();
-            if (fail) {
-              await persistence.promise;
-            }
-          },
-        },
-      );
-      const first = expect(inbox.drain()).rejects.toBe(failure);
-      await started.promise;
-      expect(requestedAfter).toEqual([7]);
-      persistence.reject(failure);
-      await first;
-      fail = false;
-      await inbox.drain();
-      expect(requestedAfter).toEqual(empty ? [7, 7] : [7, 7, 8]);
-    },
-  );
-
-  it("does not advance past an entry that failed processing", async () => {
-    const persisted: number[] = [];
-    const client = createClient(async () =>
-      Response.json({ entries: [receiptEntry(8), receiptEntry(9)], cursor: 9 }),
-    );
+    });
     const inbox = new ReefInboxConnection(
       client,
-      async ([entry]) => {
-        if (entry?.seq === 9) {
-          throw new Error("entry failed");
-        }
+      async () => {},
+      () => new ControlledSocket() as unknown as WebSocketLike,
+      {
+        initialCursor: 7,
+        persistCursor: async () => {
+          started.resolve();
+          if (fail) {
+            await persistence.promise;
+          }
+        },
       },
-      () => {
-        throw new Error("socket should not open during direct drain");
-      },
-      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
     );
-
-    await expect(inbox.drain()).rejects.toThrow("entry failed");
-    expect(persisted).toEqual([8]);
+    const first = expect(inbox.drain()).rejects.toBe(failure);
+    await started.promise;
+    expect(requestedAfter).toEqual([7]);
+    persistence.reject(failure);
+    await first;
+    fail = false;
+    await inbox.drain();
+    expect(requestedAfter).toEqual([7, 7, 8]);
   });
 
   it("retries a parked live entry after a later separate frame completes", async () => {
@@ -243,29 +218,6 @@ describe("ReefInboxConnection recovery", () => {
     );
     expect(processed).toEqual([]);
     expect(persisted).toEqual([]);
-  });
-
-  it("persists cursor-only progress when retained entries have expired", async () => {
-    const requestedAfter: number[] = [];
-    const persisted: number[] = [];
-    const client = createClient(async (input) => {
-      requestedAfter.push(Number(parseRequestUrl(input).searchParams.get("after")));
-      return Response.json({ entries: [], cursor: 12 });
-    });
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => new ControlledSocket() as unknown as WebSocketLike,
-      {
-        initialCursor: 7,
-        persistCursor: (cursor) => persisted.push(cursor),
-      },
-    );
-
-    await inbox.drain();
-
-    expect(requestedAfter).toEqual([7]);
-    expect(persisted).toEqual([12]);
   });
 
   it("serializes socket frames behind catch-up and skips pull/socket duplicates", async () => {

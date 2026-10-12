@@ -4,6 +4,60 @@ import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "./web-awesome-select.ts";
 
 type Operation = "show" | "hide";
+type Lifecycle = Operation | "after-show" | "after-hide";
+type Select = HTMLElementTagNameMap["wa-select"];
+
+function rendered(select: Select) {
+  return select.updateComplete;
+}
+
+async function optionsRendered(select: Select) {
+  await rendered(select);
+  await Promise.all(
+    [...select.querySelectorAll("wa-option")].map((option) => option.updateComplete),
+  );
+}
+
+function observeLifecycle(select: Select) {
+  const events: Lifecycle[] = [];
+  for (const phase of ["show", "hide", "after-show", "after-hide"] as const) {
+    select.addEventListener(`wa-${phase}`, (event) => {
+      if (event.target === select) {
+        events.push(phase);
+      }
+    });
+  }
+  return events;
+}
+
+function vetoTransition(select: Select, operation: Operation, once = true) {
+  select.addEventListener(`wa-${operation}`, (event) => event.preventDefault(), { once });
+}
+
+function requestVisibility(select: Select, operation: Operation) {
+  return operation === "show" ? select.show() : select.hide();
+}
+
+function duringTransition(
+  select: Select,
+  operation: Operation,
+  request: () => unknown,
+  action: () => void | Promise<void>,
+) {
+  return duringElementAnimation(select.popup.popup, operation, request, action);
+}
+
+function expectSelectFocused(select: Select) {
+  expect(focused()).toBe(select.displayInput);
+}
+
+async function clearSelection(select: Select, onClear: () => void) {
+  const { page } = await import("vitest/browser");
+  select.addEventListener("wa-clear", onClear);
+  await page
+    .elementLocator(select.shadowRoot!.querySelector<HTMLElement>('[part="clear-button"]')!)
+    .click();
+}
 
 async function fixture(multiple = false, shadow = false) {
   const host = document.createElement("div");
@@ -21,18 +75,8 @@ async function fixture(multiple = false, shadow = false) {
   outside.textContent = "Outside";
   root.append(select, outside);
   document.body.append(host);
-  await select.updateComplete;
-  await Promise.all(
-    [...select.querySelectorAll("wa-option")].map((option) => option.updateComplete),
-  );
-  const events: string[] = [];
-  for (const type of ["wa-show", "wa-hide", "wa-after-show", "wa-after-hide"]) {
-    select.addEventListener(type, (event) => {
-      if (event.target === select) {
-        events.push(type);
-      }
-    });
-  }
+  await optionsRendered(select);
+  const events = observeLifecycle(select);
   return { host, root, select, outside, events };
 }
 
@@ -61,7 +105,7 @@ function focused(): Element | null {
 
 async function prepare(f: Fixture, operation: Operation) {
   if (operation === "hide") {
-    await f.select.show();
+    await requestVisibility(f.select, "show");
   }
   f.events.length = 0;
 }
@@ -79,19 +123,19 @@ describe.runIf("__vitest_browser__" in globalThis)(
         const settled: string[] = [];
         let first: Promise<void> | undefined;
         let second: Promise<void> | undefined;
-        await duringElementAnimation(
-          f.select.popup.popup,
+        await duringTransition(
+          f.select,
           operation,
           () => {
-            first = f.select[operation]().then(() => {
+            first = requestVisibility(f.select, operation).then(() => {
               settled.push("first");
             });
           },
           async () => {
-            second = f.select[operation]().then(() => {
+            second = requestVisibility(f.select, operation).then(() => {
               settled.push("second");
             });
-            await f.select.updateComplete;
+            await rendered(f.select);
             expect(f.select.open).toBe(operation === "show");
             expect(settled).toEqual([]);
           },
@@ -99,10 +143,10 @@ describe.runIf("__vitest_browser__" in globalThis)(
         await Promise.all([first, second]);
         expect(settled.toSorted()).toEqual(["first", "second"]);
         await visible(f, operation === "show");
-        expect(f.events).toEqual([`wa-${operation}`, `wa-after-${operation}`]);
-        await f.select[operation]();
+        expect(f.events).toEqual([operation, `after-${operation}`]);
+        await requestVisibility(f.select, operation);
         await visible(f, operation === "show");
-        expect(f.events).toEqual([`wa-${operation}`, `wa-after-${operation}`]);
+        expect(f.events).toEqual([operation, `after-${operation}`]);
       },
     );
 
@@ -112,8 +156,8 @@ describe.runIf("__vitest_browser__" in globalThis)(
         const f = await fixture();
         await prepare(f, operation);
         const opposite = operation === "show" ? "hide" : "show";
-        const first = f.select[operation]();
-        const second = f.select[opposite]();
+        const first = requestVisibility(f.select, operation);
+        const second = requestVisibility(f.select, opposite);
         await Promise.all([first, second]);
         await visible(f, opposite === "show");
         expect(f.events).toEqual([]);
@@ -128,32 +172,32 @@ describe.runIf("__vitest_browser__" in globalThis)(
         const opposite = operation === "show" ? "hide" : "show";
         let first: Promise<void> | undefined;
         let replacement: Promise<void> | undefined;
-        await duringElementAnimation(
-          f.select.popup.popup,
+        await duringTransition(
+          f.select,
           operation,
           () => {
-            first = f.select[operation]();
+            first = requestVisibility(f.select, operation);
           },
           async () => {
-            replacement = f.select[opposite]();
-            await f.select.updateComplete;
+            replacement = requestVisibility(f.select, opposite);
+            await rendered(f.select);
           },
         );
         await Promise.all([first, replacement]);
         await visible(f, opposite === "show");
-        expect(f.events).toEqual([`wa-${operation}`, `wa-${opposite}`, `wa-after-${opposite}`]);
+        expect(f.events).toEqual([operation, opposite, `after-${opposite}`]);
       },
     );
 
     it("settles a vetoed show and permits the next accepted opening", async () => {
       const f = await fixture();
-      f.select.addEventListener("wa-show", (event) => event.preventDefault(), { once: true });
-      await f.select.show();
+      vetoTransition(f.select, "show");
+      await requestVisibility(f.select, "show");
       await visible(f, false);
-      expect(f.events).toEqual(["wa-show"]);
-      await f.select.show();
+      expect(f.events).toEqual(["show"]);
+      await requestVisibility(f.select, "show");
       await visible(f, true);
-      expect(f.events).toEqual(["wa-show", "wa-show", "wa-after-show"]);
+      expect(f.events).toEqual(["show", "show", "after-show"]);
     });
 
     it("keeps an accepted opening when hide is vetoed during its animation", async () => {
@@ -161,26 +205,26 @@ describe.runIf("__vitest_browser__" in globalThis)(
       const f = await fixture();
       let opening: Promise<void> | undefined;
       let vetoed: Promise<void> | undefined;
-      await duringElementAnimation(
-        f.select.popup.popup,
+      await duringTransition(
+        f.select,
         "show",
         () => {
-          opening = f.select.show();
+          opening = requestVisibility(f.select, "show");
         },
         async () => {
-          f.select.addEventListener("wa-hide", (event) => event.preventDefault(), { once: true });
-          vetoed = f.select.hide();
-          await f.select.updateComplete;
+          vetoTransition(f.select, "hide");
+          vetoed = requestVisibility(f.select, "hide");
+          await rendered(f.select);
           expect(f.select.open).toBe(true);
         },
       );
       await Promise.all([opening, vetoed]);
       await visible(f, true);
-      expect(f.events).toEqual(["wa-show", "wa-hide", "wa-after-show"]);
+      expect(f.events).toEqual(["show", "hide", "after-show"]);
       await userEvent.keyboard("{Escape}");
       await visible(f, false);
-      await expect.poll(() => f.events.at(-1)).toBe("wa-after-hide");
-      expect(focused()).toBe(f.select.displayInput);
+      await expect.poll(() => f.events.at(-1)).toBe("after-hide");
+      expectSelectFocused(f.select);
     });
 
     it.each(["show", "hide"] as const)(
@@ -190,11 +234,11 @@ describe.runIf("__vitest_browser__" in globalThis)(
         const f = await fixture(false, true);
         await prepare(f, operation);
         let pending: Promise<void> | undefined;
-        await duringElementAnimation(
-          f.select.popup.popup,
+        await duringTransition(
+          f.select,
           operation,
           () => {
-            pending = f.select[operation]();
+            pending = requestVisibility(f.select, operation);
           },
           () => {
             f.select.remove();
@@ -202,27 +246,21 @@ describe.runIf("__vitest_browser__" in globalThis)(
           },
         );
         await pending;
-        expect(f.events).toEqual([`wa-${operation}`]);
+        expect(f.events).toEqual([operation]);
         expect(focused()).toBe(f.outside);
         const nextHost = document.createElement("div");
         const nextRoot = nextHost.attachShadow({ mode: "open" });
         document.body.append(nextHost);
         nextRoot.append(f.select);
-        await f.select.updateComplete;
+        await rendered(f.select);
         await visible(f, false);
-        await f.select.show();
+        await requestVisibility(f.select, "show");
         await visible(f, true);
         await userEvent.keyboard("{Escape}");
         await visible(f, false);
-        await expect.poll(() => f.events.at(-1)).toBe("wa-after-hide");
-        expect(f.events).toEqual([
-          `wa-${operation}`,
-          "wa-show",
-          "wa-after-show",
-          "wa-hide",
-          "wa-after-hide",
-        ]);
-        expect(focused()).toBe(f.select.displayInput);
+        await expect.poll(() => f.events.at(-1)).toBe("after-hide");
+        expect(f.events).toEqual([operation, "show", "after-show", "hide", "after-hide"]);
+        expectSelectFocused(f.select);
       },
     );
 
@@ -234,7 +272,7 @@ describe.runIf("__vitest_browser__" in globalThis)(
       f.select.focus();
       await userEvent.keyboard("{ArrowDown}");
       await visible(f, true);
-      await expect.poll(() => f.events.at(-1)).toBe("wa-after-show");
+      await expect.poll(() => f.events.at(-1)).toBe("after-show");
       await userEvent.keyboard("{ArrowDown}{Enter}");
       expect(f.select.value).toBe("a");
       expect(changes).toEqual([]);
@@ -242,21 +280,21 @@ describe.runIf("__vitest_browser__" in globalThis)(
       await userEvent.keyboard("{End}{Enter}");
       await expect.poll(() => changes).toEqual(["b"]);
       await visible(f, false);
-      expect(focused()).toBe(f.select.displayInput);
+      expectSelectFocused(f.select);
     });
 
     it.each([false, true])("closes a disabled select (hide veto: %s)", async (veto) => {
       const { userEvent } = await import("vitest/browser");
       const f = await fixture();
-      await f.select.show();
+      await requestVisibility(f.select, "show");
       const changes: unknown[] = [];
       f.select.addEventListener("change", () => changes.push(f.select.value));
       if (veto) {
-        f.select.addEventListener("wa-hide", (event) => event.preventDefault());
+        vetoTransition(f.select, "hide", false);
       }
 
       f.select.disabled = true;
-      await f.select.updateComplete;
+      await rendered(f.select);
       await userEvent.keyboard("{End}{Enter}");
       expect(f.select.value).toBe("a");
       expect(changes).toEqual([]);
@@ -266,27 +304,24 @@ describe.runIf("__vitest_browser__" in globalThis)(
     it("preserves multiple selection, clearing, outside dismissal, and ordinary disabled behavior", async () => {
       const { page } = await import("vitest/browser");
       const f = await fixture(true);
-      await f.select.show();
+      await requestVisibility(f.select, "show");
       await page.elementLocator(f.select.querySelector('wa-option[value="b"]')!).click();
       expect(f.select.value).toEqual(["a", "b"]);
       await visible(f, true);
       f.outside.focus();
       await visible(f, false);
-      await expect.poll(() => f.events.at(-1)).toBe("wa-after-hide");
+      await expect.poll(() => f.events.at(-1)).toBe("after-hide");
       const cleared: unknown[] = [];
-      f.select.addEventListener("wa-clear", () => cleared.push(f.select.value));
-      await page
-        .elementLocator(f.select.shadowRoot!.querySelector<HTMLElement>('[part="clear-button"]')!)
-        .click();
+      await clearSelection(f.select, () => cleared.push(f.select.value));
       expect(f.select.value).toEqual([]);
       await expect.poll(() => cleared).toEqual([[]]);
       f.select.disabled = true;
-      await f.select.updateComplete;
-      await f.select.show();
+      await rendered(f.select);
+      await requestVisibility(f.select, "show");
       await visible(f, false);
       f.select.disabled = false;
-      await f.select.updateComplete;
-      await f.select.show();
+      await rendered(f.select);
+      await requestVisibility(f.select, "show");
       await visible(f, true);
     });
   },

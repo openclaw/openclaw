@@ -19,7 +19,6 @@ import {
   prepareTelegramAccount,
   writeTelegramUpdateOffset,
   type TelegramOffsetRotationReason,
-  type TelegramAccountRotationInfo,
 } from "./update-offset-store.js";
 
 const TELEGRAM_OFFSET_ROTATION_LABELS: Record<TelegramOffsetRotationReason, string> = {
@@ -28,25 +27,10 @@ const TELEGRAM_OFFSET_ROTATION_LABELS: Record<TelegramOffsetRotationReason, stri
   "token-rotated": "token rotation",
 };
 
-function formatTelegramOffsetRotationMessage(
-  accountId: string,
-  info: TelegramAccountRotationInfo,
-): string {
-  const previousLabel = info.previousBotId ?? "(legacy unscoped offset)";
-  const reasonLabel = TELEGRAM_OFFSET_ROTATION_LABELS[info.reason];
-  return `[telegram] Detected ${reasonLabel} for account "${accountId}" (was ${previousLabel}, now ${info.currentBotId}); discarding stale update offset ${info.staleLastUpdateId ?? "(none)"} and starting fresh.`;
-}
-
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const logInfo = (line: string) => (opts.runtime?.log ?? console.log)(line);
   const logError = (line: string) => (opts.runtime?.error ?? console.error)(line);
-  const log = (line: string) => {
-    if (line.includes("[telegram][diag]")) {
-      logInfo(line);
-      return;
-    }
-    logError(line);
-  };
+  const log = (line: string) => (line.includes("[telegram][diag]") ? logInfo : logError)(line);
   const cfg = opts.config ?? getRuntimeConfig();
   const account = resolveTelegramAccount({
     cfg,
@@ -104,8 +88,13 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           accountId: account.accountId,
           botToken: token,
           abortSignal: opts.abortSignal,
-          onRotationDetected: (info) =>
-            log(formatTelegramOffsetRotationMessage(account.accountId, info)),
+          onRotationDetected: (info) => {
+            const previousLabel = info.previousBotId ?? "(legacy unscoped offset)";
+            const reasonLabel = TELEGRAM_OFFSET_ROTATION_LABELS[info.reason];
+            log(
+              `[telegram] Detected ${reasonLabel} for account "${account.accountId}" (was ${previousLabel}, now ${info.currentBotId}); discarding stale update offset ${info.staleLastUpdateId ?? "(none)"} and starting fresh.`,
+            );
+          },
         });
     const botOptions = () => ({
       token,
@@ -158,9 +147,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       onInvalidUpdateId: (updateId) => {
         log(`[telegram] Ignoring invalid update_id value: ${String(updateId)}`);
       },
-      onRetry: ({ attempt, delayMs, error, updateId }) => {
+      onError: ({ error, updateId }) => {
         logError(
-          `telegram: failed to persist update offset ${updateId}; retry ${attempt} in ${delayMs}ms: ${formatErrorMessage(error)}`,
+          `telegram: failed to persist update offset ${updateId}; a later update will retry: ${formatErrorMessage(error)}`,
         );
       },
       abortSignal: opts.abortSignal,

@@ -30,6 +30,7 @@ openclaw doctor
   <Accordion title="Automations not firing">
     - Check the `cron.enabled` config setting and `OPENCLAW_SKIP_CRON` in the Gateway's launch environment. Either can disable automatic runs; clear both disable settings and restart the Gateway to enable scheduling.
     - Confirm the Gateway is running continuously.
+    - Use `openclaw automations list --all` to find disabled jobs and `openclaw doctor` to inspect recorded auto-disable reasons, including terminal one-shot execution failures. Fix the cause before running `openclaw automations enable <jobId>`. Operator cancellations and restart retirements stay quiet and do not record an auto-disable.
     - For `cron` schedules, verify timezone (`--tz`) vs the host timezone.
     - `reason: not-due` in run output means the manual run was checked with `openclaw automations run <jobId> --due` and the job was not due yet.
     - If the job's execution agent cannot be resolved, automatic and manual attempts record a failed task and a skipped run-history entry with the reason. Select an agent with `openclaw automations edit <jobId> --agent <id>`.

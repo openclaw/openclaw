@@ -50,14 +50,14 @@ export function createDeliveryResultRecorder(params: {
     );
   const recordIdentifiedDeliveryResults = async (
     deliveries: readonly OutboundDeliveryResult[],
-    options?: { finalResultIsLastReported?: boolean },
+    finalResultIsLastReported = false,
   ): Promise<boolean[]> => {
     if (deliveries.length === 0) {
       suppressionReason = "adapter_returned_no_identity";
     }
     try {
       const recorded: boolean[] = [];
-      const availableReported = options?.finalResultIsLastReported
+      const availableReported = finalResultIsLastReported
         ? new Map([...reportedResults].toReversed())
         : reportedResults;
       const takeReported = (
@@ -132,9 +132,7 @@ export function createDeliveryResultRecorder(params: {
   };
   return {
     recordIdentifiedDeliveryResult: async (delivery: OutboundDeliveryResult): Promise<boolean> => {
-      const [recorded] = await recordIdentifiedDeliveryResults([delivery], {
-        finalResultIsLastReported: true,
-      });
+      const [recorded] = await recordIdentifiedDeliveryResults([delivery], true);
       return recorded ?? false;
     },
     recordIdentifiedDeliveryResults,

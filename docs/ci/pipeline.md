@@ -1,5 +1,5 @@
 ---
-summary: "Job graph, fail-fast order, and the Control UI size budgets"
+summary: "Job graph, failure reporting, and the Control UI size budgets"
 title: "CI pipeline jobs"
 read_when:
   - You need to know which CI job owns a check
@@ -233,12 +233,15 @@ test-project planner to find their owners. The runtime owner admits only qualifi
 configs, exact files, and partitions; ambiguous selections retain Node. No tests
 are removed from the selected inventory.
 
-The complete CLI and embedded-agent-run leaf configs also support Bun. Their
-existing pools, exclusions, and worker limits remain in effect. CLI-process and
-other agent owners keep their separate qualification policies. Dual validation
-runs each complete selected owner on Node before Bun in the same worker slot.
+The complete agents-support, CLI, embedded-agent-run, and gateway-methods leaf
+configs also support Bun. Their existing pools, exclusions, and worker limits
+remain in effect. CLI-process and other agent and Gateway owners keep their
+separate qualification policies. Agents-support and gateway-methods include
+overrides use Bun only for canonical owner patterns or literal files proven to
+belong to that owner; broad or uncertain patterns keep the complete Node
+selection. Dual validation runs each complete selected owner on Node before Bun
+in the same worker slot.
 
-Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`),
 OpenAI realtime worker messaging (`extensions/openai/realtime-quicksilver-peer-worker.test.ts`),
 plugin CommonJS interoperability (`src/plugins/plugin-module-generation.interop.test.ts`),
 plugin SDK alias boundaries (`src/plugins/sdk-alias.test.ts`),
@@ -337,15 +340,22 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `42bd1d282ad16189ff71789ddbf81fa89dcd9d3a` with WebKit
-`cb8d6f202b5a396caa204ee1bb75d78175aa841a` in prerelease
-`openclaw-v1.4.3-20261008-42bd1d282a-webkit-cb8d6f202b`.
-WebKit is unchanged from the previous `fc53bf8c0f` pin. This build defers full
-`node:vm` bytecode generation until payload reuse, returns integral heap-sampling
-byte sizes, and releases inspector snapshot metadata when sessions close.
-It retains the previous worker heap-cap, module-resolution, test-deadline,
-GC cadence, and idle-worker fixes. The release publishes the four Darwin/Linux targets;
-Windows publication remains gated on signing.
+The pinned build pairs Bun `65d94e7156da4b6aca649dac5f19b8294b757570` with WebKit
+`01f208ae7a87661e7503f514c946a37bc76ad1d1` in prerelease
+`openclaw-v1.4.3-20261010-65d94e7156-webkit-01f208ae7a-r2`.
+This build shares source buffers on `node:vm` cache hits, refactors module
+resolution, aligns TLS teardown with Node, fixes subprocess retirement, and
+enforces Node-compatible process and Worker heap limits. It fixes N-API cleanup
+and external strings across Workers, releases Worker-local event-name state,
+and skips the preliminary full collection at Worker shutdown. WebKit fixes
+stale VM-entry storage initialization, uses a two-pointer VMEntryScope, and
+fixes Linux foreign-stack suspension deadlocks.
+It retains deferred VM bytecode generation, integral heap-sampling byte sizes,
+inspector snapshot cleanup, and the previous worker heap-cap, module-resolution,
+test-deadline, GC cadence, and idle-worker fixes. This same-commit rebuild publishes
+Darwin/Linux targets and Authenticode-signed Windows x64/arm64 targets from the
+OpenClaw Foundation. Darwin executables remain Developer ID signed and notarized;
+the shared pin records Windows targets as signed and not test-only.
 
 The build adds an adaptive, bounded `node:vm` compilation cache for large module
 graphs. It activates after 1,750 distinct compiled sources and defaults to a
@@ -665,8 +675,10 @@ If the PR head changes before or during evaluation, the obsolete run stops
 successfully without publishing approval for the replacement commit. The new
 head's automatic event owns its evaluation. Closing an unmerged PR, making it a
 draft, or changing its target also stops the obsolete evaluation successfully.
-Identity and permission changes and real evaluation errors still fail; a lifecycle
-change does not hide an earlier guard error.
+GitHub disabling maintainer edits as a PR closes does not prevent this clean stop
+or completion of merged review evidence. Permission changes on open PRs, other
+identity changes, and real evaluation errors still fail; a lifecycle change does
+not hide an earlier guard error. Cleanup and merge admission retain strict checks.
 
 A merge of the scheduled revision lets the security evaluation finish, including
 when enforcement starts after the merge. Both guards retain their findings in
@@ -704,8 +716,12 @@ HTTP `500`, `502`, `503`, and `504` responses and recognized connection failures
 use one-, two-, and four-second delays, sharing the three-restart limit and job
 deadline with rate-limit recovery. GitHub may have accepted the failed write, so
 the review rereads current PR, approval, role, and CI data instead of replaying an
-old decision. This recovery applies only to commit-status publication; other
-uncertain writes, cancellation, and write request timeouts remain errors.
+old decision. During enforcement, the same bounded recovery handles transient
+sticky-notice creation and update failures. Each restart rereads comments and
+updates an existing owned notice if GitHub accepted the earlier write, rather
+than blindly posting another comment. Required approval remains required.
+Automatic lockfile cleanup, other uncertain writes, cancellation, and write
+request timeouts remain outside this publication recovery.
 
 Separately, read-only `GET` and `HEAD` requests retry HTTP `500`, `502`, `503`,
 and `504` responses and recognized transient connection failures before headers
@@ -812,6 +828,7 @@ activity does not reevaluate the guards or change their statuses. Command mentio
 in prose, quotes, or code fences are not approval comments. The workflow filters
 ordinary comments before allocating a runner; a command mention can start the
 lightweight resolver, which validates the syntax before scheduling review.
+GitHub still records skipped workflow runs for ordinary comments.
 Both guards share one review job, and comment events do not rerun the test suite.
 Evaluation uses trusted repository code and GitHub metadata without
 executing contributor code or comment text.
@@ -863,15 +880,17 @@ workflow and the reviewed CODEOWNERS inventory are on the default branch:
 Verify the live GitHub settings and the maintainer, external contributor,
 automation account, and SecOps-owned-path cases before declaring enforcement active.
 
-## Fail-fast order
+<a id="fail-fast-order" />
+
+## Job ordering and failure reporting
 
 1. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs. Canonical `main` starts immediately in one of two parity slots; each slot admits one complete run and coalesces later pushes into its newest pending tip. Downstream jobs wait for the manifest, then eligible Blacksmith jobs restore exact dependencies from the trusted warmer or fall back to the ordinary pnpm-store cache on a miss. Pushes, pull requests, and manual runs targeting the workflow revision run preflight with native Node and skip dependency setup. Manual runs targeting a different revision install dependencies and retain that target's `tsx` tooling.
 2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs. Additional checks start directly after preflight. Narrow PRs with additional checks also place the existing `check-guards` and `check-dependencies` rows there: their complete guard, dependency, unused-file, and export scans do not consume the installed compiler/lint plan. Guards use the same commands and fetch the exact comparison base during checkout. Full selections and runs without that family retain the central rows, and the aggregate requires each selected owner. Extension-only compiler inputs can be planned from the four noncore graphs when an already selected additional boundary row owns the full core graph check. This requires existing regular source files without symlink aliases; mixed source changes retain complete discovery, and missing or uncertain inputs retain full checking. Known full selections skip discovery and retain boundary proof in an already selected additional boundary row or the required planner. No extra boundary row is admitted for that optimization. Ordinary pull-request, push, and scheduled CI skip the production dependency audit. Only `workflow_dispatch` IDs beginning with `full-release-validation-` or `release-native-android-` run it. The audit sends one complete graph with up to four attempts and a four-minute total request budget, including retries and response reading. Every non-zero audit exit produces a warning and exits 0, including findings, unavailable advisories, and invalid data. An unavailable audit is incomplete coverage, not a clean result. The optional pre-commit audit hook uses the same warn-only wrapper. The separate daily [Dependency Audit](/ci/scheduled-workflows#dependency-audit) remains strict for triage, is not a required PR check, and points to a dependency-bump follow-up. Release dependency evidence retains its separate known-malware gate; vulnerability advisories remain warnings.
 3. `build-artifacts` and the locale checks overlap with the fast Linux lanes. Control UI and native app source PRs exclude generated locale snapshots/resources; their serialized refresh workflows repair and auto-merge isolated generated PRs in the background. Source CI still blocks stale source inventories and unsafe localization calls. Generated PRs, manual CI, and release prep enforce full translated/platform-generated parity. Canonical `release/YYYY.M.PATCH` branches may include release-prep locale repairs with the other generated release output.
-4. Baseline ratchets and selected Node test shards start independently after preflight. Node rows consume the manifest, not ratchet outputs. `ci-gate` still requires every selected ratchet to pass, and the PR failure monitor still cancels remaining work after a ratchet failure. Frozen targets retain their existing ratchet selection.
+4. Baseline ratchets and selected Node test shards start independently after preflight. Node rows consume the manifest, not ratchet outputs. `ci-gate` still requires every selected ratchet to pass; a failed ratchet leaves sibling jobs running. Frozen targets retain their existing ratchet selection.
 5. Current plans with guards run `check:coercion-helpers` there once; fast-only plans retain its standalone row. Other platform and runtime lanes fan out independently: `checks-fast-core` (including startup corpus), `checks-fast-contracts-plugins`, `checks-fast-contracts-channels`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, the screenshot shards, and `android`.
-6. For canonical-repository PRs selecting Node rows, `pr-fail-fast` watches the first attempt and classifies failures before cancelling eligible same-repository work. Fork PR monitoring is read-only and never requests cancellation; unknown failures remain blocking through normal lane results. Only that job has `actions: write`. It starts after preflight and observes failures while the installed check planner queues or runs. Clean completion combines preflight's other job counts with the planner's exact admitted check count, published by its successful `CI check job count v1: N` step. It rechecks the current PR head, auto-merge setting, and newer runs before cancellation. The preflight-owned `ci:no-fail-fast` label fact disables both this monitor and native matrix fail-fast for that run. Add the label before triggering the run; label changes alone do not start CI. Canonical PR reruns let every Node matrix leg finish so inherited main failures cannot cancel the remaining proof needed for an explicit admin landing. Native matrix fail-fast applies only to unlabeled PRs whose workflow repository is not `openclaw/openclaw`, on any attempt. The monitor checks out trusted base-revision scripts. It adds one 4-vCPU Blacksmith registration per eligible same-repository PR, or uses hosted Ubuntu for fork PRs and under the outage override. The hybrid hosted admission owner reserves that fork row before spending the unchanged 45-row optional-offload budget. Main, manual runs, and retries do not start it. Observation ends before the monitor's job limit; ordinary lane verification still owns the result when no failure was observed. Partial reruns ignore monitor causes and results retained from earlier attempts.
-7. `openclaw/ci-gate` waits for every selected lane. Preflight and security must succeed; downstream jobs may skip only when unselected by the manifest and existing event, runner, and compatibility conditions. An unexpected selected skip or any failed or canceled downstream job fails the aggregate. Failure-triggered cancellation preserves the originating job's identity and runs the gate to report failure, including a cancellation request with an uncertain response. The existing critical-path route already keeps trusted hybrid first attempts on the 4-vCPU Blacksmith class. A first-attempt same-repository failure also uses that class under the default or explicit Blacksmith profile so hosted assignment cannot consume the cancellation grace period. Retries and the GitHub outage override retain hosted aggregation. A superseded run without a recorded failure cause skips final reporting and releases its concurrency slot as before.
+6. PR jobs keep running after sibling failures. `pr-failure-report` waits for the planned jobs, then uses `ci-known-main-red.mjs` to compare every failed or timed-out job with the same name/shard in the newest completed scheduled `ci.yml` run on main. A matching failed job is **pre-existing**, with matching signatures required wherever the existing Node or static evidence helpers support comparison. Other jobs identify their job-name-only match in the reason; check the failing tests against main before attributing those failures. A main pass or different failure signature is **new**. A missing, canceled, unplanned, or otherwise incomparable main job is **unknown**; unavailable supported evidence never implies a match. Detected build-verifier or lint-mode scope differences are **unknown**; the reason notes when selected scope was not compared. The compact summary links the main run and job and is copied into `openclaw/ci-gate`'s summary and log. JSON output exposes `job`, `conclusion`, `class`, `mainRunId`, `mainJobId`, and `reason` for scripts and agents. Reporting keeps the existing runner routes and fanout budget; it never cancels work.
+7. `openclaw/ci-gate` waits for every selected lane and the failure report. Preflight and security must succeed; downstream jobs may skip only when unselected by the manifest and existing event, runner, and compatibility conditions. Unexpected selected skips, failures, and cancellations retain their existing gate semantics, including the known-main-red allowance below. Classification alone does not make a failed gate pass. Superseded runs keep their existing concurrency behavior.
 
 Bot-authored, same-repository PRs containing only generated native locale data
 and resources retain strict native source and generated-parity verification,
@@ -881,7 +900,7 @@ selection. Add `ci:full` before the next PR run to retain ordinary selection for
 that generated cohort. Labels alone do not trigger extra CI runs. Main and manual
 validation keep their normal coverage.
 
-The monitor reads the latest completed hourly main run directly from GitHub.
+The existing known-main-red allowance reads the latest completed hourly main run directly from GitHub.
 A supported Node Vitest assertion, compiler diagnostic, or hosted lint diagnostic
 is advisory only when its file and complete signature match main, and the PR
 changes neither the file nor its direct subjects. Subject ownership conservatively
@@ -890,9 +909,9 @@ workspace package directories; unresolved imports retain blocking behavior.
 Workflow, tooling, configuration, and dependency changes cannot use this exception.
 The main run must descend from the PR merge base, or validate current main itself.
 Later main changes to those subjects retire the exception before the next hourly run.
-Both matrix siblings and packed test groups finish before the monitor emits an
+Both matrix siblings and packed test groups finish before the report emits an
 attempt-bound receipt. The shard runner records complete plan and process counts
-after cleanup; the monitor reconciles every inner invocation with its native test
+after cleanup; the existing evidence owner reconciles every inner invocation with its native test
 summaries. Compiler graphs and hosted lint stripes likewise require joined native
 diagnostics and complete group and step receipts. These runners finish ordinary
 diagnostic failures before reporting coverage. Mixed or narrowed lint commands
@@ -1007,6 +1026,11 @@ package and plugin metadata, explicit schema and build metadata inputs, and
 the compiler's recorded source files. Editing an unrelated CI script does not
 rebuild declarations. Resolution topology still participates in the cache key,
 and an unresolved generator import stops the build instead of trusting a cache.
+Full builds finish isolated plugin runtime and source-asset generation before
+capturing declaration inputs. Runtime cleanup preserves canonical declarations
+while discarding their staging-only `dist-runtime` copies, which postbuild
+recreates. Retained cache inputs therefore do not depend on leftover plugin
+artifacts from an earlier build; package output changes still invalidate them.
 
 Local `pnpm build:ci-artifacts` uses the same memory admission as full and package
 builds. The orchestrator passes the resolved heap budget to every child process,
@@ -1022,15 +1046,6 @@ remains the explicit operator override for attempting a different budget.
 sizes. Budget violations do not prevent artifact generation. The separate
 `control-ui-performance` job enforces the budgets without blocking other jobs
 from building or testing the same source.
-
-The report counts retained identity bytes: asset-manifest entries minus `.br`/`.gz`
-sidecars, which the Gateway keeps for already-open tabs after an update. The limit
-is 48 MiB, half the 96 MiB retention budget in
-`src/gateway/control-ui-asset-manifest.ts`, so the current and previous builds
-stay retained. Like the other size limits, it fails locally and warns in GitHub
-Actions; `--base-dist` reports the delta. Exceeding it means shrinking retained
-assets (locale catalogs are the largest share) or deliberately changing the
-retention budget.
 
 Startup CSS has a 45 KiB advisory target and a 50 KiB hard ceiling. Growth below
 1 KiB passes; an increase of 1 KiB or more in either startup CSS or the largest
@@ -1070,8 +1085,3 @@ artifacts remain errors in report-only mode.
 
 - [Install overview](/install)
 - [Release channels](/install/development-channels)
-
-With no observed failures, the PR failure monitor exits when the only remaining
-workload cannot qualify for a known-main-red exception. The aggregate still waits
-for and validates that workload. Eligible final workloads remain observed so a
-late inherited failure can receive complete classification evidence.

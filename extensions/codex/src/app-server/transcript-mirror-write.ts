@@ -7,7 +7,7 @@ import {
   type AgentMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { withCodexSessionTranscriptMirrorWriteLock } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
+import { withCodexSessionTranscriptMirrorWrite } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import {
   composeSessionTranscriptWriteAssertion,
   publishSessionTranscriptUpdateByIdentity,
@@ -150,8 +150,14 @@ export async function mirror(params: {
     params.assertWriteCurrent,
   ]);
   assertWritable();
-  const result = await withCodexSessionTranscriptMirrorWriteLock(
-    { ...transcriptTarget, config: params.config },
+  const result = await withCodexSessionTranscriptMirrorWrite(
+    {
+      ...transcriptTarget,
+      config: params.config,
+      ...(params.assertCurrent || params.assertWriteCurrent
+        ? { assertCurrent: assertWritable }
+        : {}),
+    },
     async (transcript) => {
       assertWritable();
       const nextAssistantMirrorIdentitiesOwned = new Set<string>();
@@ -310,14 +316,6 @@ export async function mirror(params: {
           result: appended,
         } = await transcript.appendMessageWithMessageSequence({
           message: messageToAppend,
-          ...(params.assertCurrent || params.assertWriteCurrent
-            ? {
-                prepareMessageAfterIdempotencyCheckAsync: async (
-                  preparedMessage: typeof messageToAppend,
-                ) => preparedMessage,
-                beforeFreshMessageCommit: assertWritable,
-              }
-            : {}),
           // Preliminary facts avoid hooks and payload work on normal retries.
           // SQLite repeats this lookup under BEGIN IMMEDIATE for cross-process safety.
           idempotencyLookup: "scan",

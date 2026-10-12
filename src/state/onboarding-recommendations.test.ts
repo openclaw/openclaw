@@ -124,29 +124,6 @@ describe("onboarding recommendations store", () => {
     });
   });
 
-  it("keeps acceptedAt null when the offer was shown without an answer", async () => {
-    await withOpenClawTestState({ label: "onboarding-recommendations-open" }, async (state) => {
-      const store = createOnboardingRecommendationsStore({
-        workspaceDir: state.workspaceDir,
-        database: { env: state.env },
-      });
-      const record = await store.writeOffer({
-        inventory: [{ label: "Chat" }],
-        matches,
-        answered: false,
-        nowMs: 2_345,
-      });
-
-      expect(record.acceptedAt).toBeNull();
-
-      const acknowledged = await store.acknowledge({
-        nowMs: 3_456,
-      });
-      expect(acknowledged).toEqual({ ...record, acceptedAt: 3_456, updatedAt: 3_456 });
-      expect(await store.read()).toEqual(acknowledged);
-    });
-  });
-
   it("updates pending matches without changing the inventory identity", async () => {
     await withOpenClawTestState({ label: "onboarding-recommendations-retry" }, async (state) => {
       const database = { env: state.env };

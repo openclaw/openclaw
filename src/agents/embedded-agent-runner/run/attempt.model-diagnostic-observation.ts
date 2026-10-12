@@ -172,21 +172,6 @@ function streamContextModelPromptStats(
   };
 }
 
-function normalizedModelCallUsage(rawUsage: unknown): ModelCallUsage | undefined {
-  if (!isRecord(rawUsage)) {
-    return undefined;
-  }
-  const usage = normalizeUsage(rawUsage as UsageLike);
-  if (!usage) {
-    return undefined;
-  }
-  const promptTokens = derivePromptTokens(usage);
-  return {
-    ...usage,
-    ...(promptTokens !== undefined ? { promptTokens } : {}),
-  };
-}
-
 function observeModelCallTerminalMessage(state: ModelCallObservationState, value: unknown): void {
   if (!isRecord(value)) {
     return;
@@ -215,9 +200,10 @@ function observeModelCallTerminalMessage(state: ModelCallObservationState, value
   } catch {
     return;
   }
-  const usage = normalizedModelCallUsage(rawUsage);
+  const usage = isRecord(rawUsage) ? normalizeUsage(rawUsage as UsageLike) : undefined;
   if (usage) {
-    state.usage = usage;
+    const promptTokens = derivePromptTokens(usage);
+    state.usage = { ...usage, ...(promptTokens !== undefined ? { promptTokens } : {}) };
   }
 }
 
@@ -314,23 +300,6 @@ function isSemanticModelCallResult(result: unknown): boolean {
   }
 }
 
-function maybeEmitModelCallSemanticProgress(
-  eventBase: ModelCallEventBase,
-  state: ModelCallObservationState,
-  result: unknown,
-): void {
-  if (state.semanticProgressEmitted || !isSemanticModelCallResult(result)) {
-    return;
-  }
-  state.semanticProgressEmitted = true;
-  emitCoreSemanticRunProgressDiagnosticEvent({
-    runId: eventBase.runId,
-    ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
-    ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
-    reason: MODEL_CALL_SEMANTIC_PROGRESS_REASON,
-  });
-}
-
 export function createModelObserver(params: {
   config?: OpenClawConfig;
   streamContext: unknown;
@@ -367,7 +336,15 @@ export function createModelObserver(params: {
       observeModelResponse(state, startedAt, result, "result");
       // Queue semantic progress beside model lifecycle events so request starts,
       // progress, and the next request retain their authoritative FIFO ordering.
-      maybeEmitModelCallSemanticProgress(eventBase, state, result);
+      if (!state.semanticProgressEmitted && isSemanticModelCallResult(result)) {
+        state.semanticProgressEmitted = true;
+        emitCoreSemanticRunProgressDiagnosticEvent({
+          runId: eventBase.runId,
+          ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
+          ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+          reason: MODEL_CALL_SEMANTIC_PROGRESS_REASON,
+        });
+      }
     },
     maybeEmitStreamProgress(eventBase: ModelCallEventBase) {
       reportStreamProgress({

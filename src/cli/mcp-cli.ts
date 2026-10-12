@@ -14,20 +14,12 @@ import {
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { Command } from "commander";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
-import {
-  setConfiguredMcpServer,
-  unsetConfiguredMcpServer,
-  updateConfiguredMcpServer,
-  updateConfiguredMcpServerTools,
-} from "../agents/mcp-config-mutation.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { readMcpOAuthStoreReadOnly } from "../agents/mcp-oauth-store.js";
 import {
   clearMcpOAuthCredentials,
-  completeMcpOAuthAuthorization,
   countMcpOAuthPrincipals,
   readMcpOAuthCredentialsStatus,
-  startMcpOAuthAuthorization,
   type McpOAuthPrincipalStatus,
 } from "../agents/mcp-oauth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
@@ -36,10 +28,6 @@ import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  startOAuthLoopbackCallbackServer,
-  type OAuthLoopbackCallbackServer,
-} from "../infra/oauth-loopback-callback.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
@@ -47,7 +35,15 @@ import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
-import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
+import { loginMcpServer } from "./mcp-cli-oauth.js";
+import {
+  offlineMcpAction,
+  setMcpServerOffline,
+  unsetMcpServerOffline,
+  configureMcpServerOffline,
+  updateMcpToolsOffline,
+} from "./mcp-cli-state-owner.js";
+import { exitCliAfterOutput, requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -66,8 +62,7 @@ function fail(message: string, json?: boolean): never {
   } else {
     defaultRuntime.error(message);
   }
-  defaultRuntime.exit(1);
-  throw new Error(message);
+  exitCliAfterOutput(defaultRuntime, 1);
 }
 
 async function loadMcpConfig(opts?: { json?: boolean }) {
@@ -106,8 +101,6 @@ function selectMcpServers(
 ) {
   return name ? { [name]: requireMcpServer(loaded, name, opts) } : loaded.mcpServers;
 }
-
-const MCP_OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
 
 type McpServerControlOptions = {
   auth?: string;
@@ -720,7 +713,7 @@ export function registerMcpCli(program: Command) {
         defaultRuntime.error(
           `MCP server failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep --require-rpc")} to inspect Gateway health.`,
         );
-        defaultRuntime.exit(1);
+        exitCliAfterOutput(defaultRuntime, 1);
       }
     });
 
@@ -832,53 +825,62 @@ export function registerMcpCli(program: Command) {
     .description("Connect to configured MCP servers and list available capabilities")
     .argument("[name]", "MCP server name")
     .option("--json", "Print JSON")
-    .action(async (name: string | undefined, opts: { json?: boolean }) => {
-      const loaded = await loadMcpConfig(opts);
-      const servers = selectMcpServers(loaded, name, opts);
-      if (name && loaded.mcpServers[name]?.enabled === false) {
-        fail(
-          `MCP server "${name}" is disabled in ${loaded.path}. Run ${formatCliCommand(`openclaw mcp configure ${name} --enable`)} before checking it.`,
-          opts.json,
-        );
-      }
-      // Empty and disabled-only registries have no live probe rows to print.
-      // Explain the intentional non-outcome; JSON keeps its existing empty envelope.
-      if (!opts.json && Object.values(servers).every((server) => server.enabled === false)) {
-        defaultRuntime.log(
-          `No enabled MCP servers in ${loaded.path}. Add one with ${formatCliCommand("openclaw mcp add <name> --command <command>")} or enable one with ${formatCliCommand("openclaw mcp configure <name> --enable")}.`,
-        );
-        return;
-      }
-      const runtime = await createMcpProbeRuntime("openclaw-cli-mcp-probe", loaded.config, servers);
-      try {
-        const result = await readMcpProbeResult(runtime);
-        if (opts.json) {
-          defaultRuntime.writeJson(result);
-        } else {
-          defaultRuntime.log(`MCP check (${loaded.path}):`);
-          for (const [serverName, server] of Object.entries(result.servers)) {
-            defaultRuntime.log(
-              `- ${serverName}: ${server.tools} tools${server.resources ? ", resources" : ""}${server.prompts ? ", prompts" : ""}, Codex approval ${server.codexApprovalMode}`,
+    .action(
+      offlineMcpAction(
+        "probe",
+        async (_owner, name: string | undefined, opts: { json?: boolean }) => {
+          const loaded = await loadMcpConfig(opts);
+          const servers = selectMcpServers(loaded, name, opts);
+          if (name && loaded.mcpServers[name]?.enabled === false) {
+            fail(
+              `MCP server "${name}" is disabled in ${loaded.path}. Run ${formatCliCommand(`openclaw mcp configure ${name} --enable`)} before checking it.`,
+              opts.json,
             );
-            if (server.approvalHint) {
-              defaultRuntime.log(`  i ${server.approvalHint}`);
+          }
+          // Empty and disabled-only registries have no live probe rows to print.
+          // Explain the intentional non-outcome; JSON keeps its existing empty envelope.
+          if (!opts.json && Object.values(servers).every((server) => server.enabled === false)) {
+            defaultRuntime.log(
+              `No enabled MCP servers in ${loaded.path}. Add one with ${formatCliCommand("openclaw mcp add <name> --command <command>")} or enable one with ${formatCliCommand("openclaw mcp configure <name> --enable")}.`,
+            );
+            return;
+          }
+          const runtime = await createMcpProbeRuntime(
+            "openclaw-cli-mcp-probe",
+            loaded.config,
+            servers,
+          );
+          try {
+            const result = await readMcpProbeResult(runtime);
+            if (opts.json) {
+              defaultRuntime.writeJson(result);
+            } else {
+              defaultRuntime.log(`MCP check (${loaded.path}):`);
+              for (const [serverName, server] of Object.entries(result.servers)) {
+                defaultRuntime.log(
+                  `- ${serverName}: ${server.tools} tools${server.resources ? ", resources" : ""}${server.prompts ? ", prompts" : ""}, Codex approval ${server.codexApprovalMode}`,
+                );
+                if (server.approvalHint) {
+                  defaultRuntime.log(`  i ${server.approvalHint}`);
+                }
+              }
+              for (const diagnostic of result.diagnostics) {
+                defaultRuntime.log(`! ${diagnostic.serverName}: ${diagnostic.message}`);
+              }
             }
+            const probeIssue = resolveMcpProbeIssue({ result, servers, path: loaded.path });
+            if (probeIssue) {
+              defaultRuntime.error(probeIssue);
+              if (!requestExitAfterOneShotOutput(defaultRuntime, 1)) {
+                exitCliAfterOutput(defaultRuntime, 1);
+              }
+            }
+          } finally {
+            await runtime.dispose();
           }
-          for (const diagnostic of result.diagnostics) {
-            defaultRuntime.log(`! ${diagnostic.serverName}: ${diagnostic.message}`);
-          }
-        }
-        const probeIssue = resolveMcpProbeIssue({ result, servers, path: loaded.path });
-        if (probeIssue) {
-          defaultRuntime.error(probeIssue);
-          if (!requestExitAfterOneShotOutput(defaultRuntime, 1)) {
-            defaultRuntime.exit(1);
-          }
-        }
-      } finally {
-        await runtime.dispose();
-      }
-    });
+        },
+      ),
+    );
 
   mcp
     .command("doctor")
@@ -887,60 +889,67 @@ export function registerMcpCli(program: Command) {
     .option("--probe", "Also connect to each checked server", false)
     .option("--json", "Print JSON")
     .action(async (name: string | undefined, opts: { probe?: boolean; json?: boolean }) => {
-      const loaded = await loadMcpConfig(opts);
-      const selected = selectMcpServers(loaded, name, opts);
-      const tasks = Object.entries(selected)
-        .toSorted(([a], [b]) => a.localeCompare(b))
-        .map(([serverName, server]) => async () => {
-          const issues = await collectMcpDoctorIssues({
-            name: serverName,
-            server,
-            config: loaded.config,
-            probe: Boolean(opts.probe),
+      const run = async () => {
+        const loaded = await loadMcpConfig(opts);
+        const selected = selectMcpServers(loaded, name, opts);
+        const tasks = Object.entries(selected)
+          .toSorted(([a], [b]) => a.localeCompare(b))
+          .map(([serverName, server]) => async () => {
+            const issues = await collectMcpDoctorIssues({
+              name: serverName,
+              server,
+              config: loaded.config,
+              probe: Boolean(opts.probe),
+            });
+            return {
+              name: serverName,
+              ok: !issues.some((entry) => entry.level === "error"),
+              issues,
+            };
           });
-          return {
-            name: serverName,
-            ok: !issues.some((entry) => entry.level === "error"),
-            issues,
-          };
+        // A probe can start one process or connection per server. Keep large
+        // registries from fanning out every transport at once.
+        const {
+          results: servers,
+          firstError,
+          hasError,
+        } = await runTasksWithConcurrency({
+          tasks,
+          limit: MCP_DOCTOR_CONCURRENCY,
         });
-      // A probe can start one process or connection per server. Keep large
-      // registries from fanning out every transport at once.
-      const {
-        results: servers,
-        firstError,
-        hasError,
-      } = await runTasksWithConcurrency({
-        tasks,
-        limit: MCP_DOCTOR_CONCURRENCY,
-      });
-      if (hasError) {
-        throw firstError;
-      }
-      const ok = servers.every((server) => server.ok);
-      if (opts.json) {
-        defaultRuntime.writeJson({ path: loaded.path, ok, servers });
+        if (hasError) {
+          throw firstError;
+        }
+        const ok = servers.every((server) => server.ok);
+        if (opts.json) {
+          defaultRuntime.writeJson({ path: loaded.path, ok, servers });
+          if (!ok) {
+            fail("MCP doctor found errors.");
+          }
+          return;
+        }
+        if (servers.length === 0) {
+          defaultRuntime.log(
+            `No MCP servers configured in ${loaded.path}. Add one with ${formatCliCommand("openclaw mcp add <name> --command <command>")}.`,
+          );
+          return;
+        }
+        defaultRuntime.log(`MCP doctor (${loaded.path}):`);
+        for (const server of servers) {
+          defaultRuntime.log(`- ${server.name}: ${server.ok ? "ok" : "issues"}`);
+          for (const entry of server.issues) {
+            const prefix = entry.level === "error" ? "!" : entry.level === "warning" ? "-" : "i";
+            defaultRuntime.log(`  ${prefix} ${entry.level}: ${entry.message}`);
+          }
+        }
         if (!ok) {
           fail("MCP doctor found errors.");
         }
-        return;
-      }
-      if (servers.length === 0) {
-        defaultRuntime.log(
-          `No MCP servers configured in ${loaded.path}. Add one with ${formatCliCommand("openclaw mcp add <name> --command <command>")}.`,
-        );
-        return;
-      }
-      defaultRuntime.log(`MCP doctor (${loaded.path}):`);
-      for (const server of servers) {
-        defaultRuntime.log(`- ${server.name}: ${server.ok ? "ok" : "issues"}`);
-        for (const entry of server.issues) {
-          const prefix = entry.level === "error" ? "!" : entry.level === "warning" ? "-" : "i";
-          defaultRuntime.log(`  ${prefix} ${entry.level}: ${entry.message}`);
-        }
-      }
-      if (!ok) {
-        fail("MCP doctor found errors.");
+      };
+      if (opts.probe) {
+        await offlineMcpAction("doctor --probe", run)();
+      } else {
+        await run();
       }
     });
 
@@ -1035,7 +1044,7 @@ export function registerMcpCli(program: Command) {
             servers: { [name]: server },
           });
         }
-        const result = await setConfiguredMcpServer({ name, server, createOnly: true });
+        const result = await setMcpServerOffline({ name, server, createOnly: true });
         if (!result.ok) {
           fail(result.error);
         }
@@ -1058,7 +1067,7 @@ export function registerMcpCli(program: Command) {
       if (parsed.error) {
         fail(parsed.error);
       }
-      const result = await setConfiguredMcpServer({ name, server: parsed.value });
+      const result = await setMcpServerOffline({ name, server: parsed.value });
       if (!result.ok) {
         fail(result.error);
       }
@@ -1076,7 +1085,7 @@ export function registerMcpCli(program: Command) {
       if (!opts.clear && opts.include === undefined && opts.exclude === undefined) {
         fail("Specify --include, --exclude, or --clear.");
       }
-      const result = await updateConfiguredMcpServerTools({
+      const result = await updateMcpToolsOffline({
         name,
         tools: opts.clear
           ? null
@@ -1188,14 +1197,14 @@ export function registerMcpCli(program: Command) {
           });
         }
         if (opts.enable && Object.keys(next).length === 0) {
-          const result = await unsetConfiguredMcpServer({ name });
+          const result = await unsetMcpServerOffline({ name });
           if (!result.ok) {
             fail(result.error);
           }
           defaultRuntime.log(`Removed disabled MCP override for "${name}" in ${result.path}.`);
           return;
         }
-        const result = await updateConfiguredMcpServer({
+        const result = await configureMcpServerOffline({
           name,
           update: () => next,
         });
@@ -1214,103 +1223,35 @@ export function registerMcpCli(program: Command) {
     .description("Authorize an OAuth MCP server")
     .argument("<name>", "MCP server name")
     .option("--code <code>", "Authorization code from the OAuth redirect")
-    .action(async (name: string, opts: { code?: string }) => {
-      const loaded = await loadMcpConfig();
-      const server = requireMcpServer(loaded, name);
-      if (asRecord(server.oauth)?.identity === "per-requester") {
-        fail(
-          `MCP server "${name}" uses per-requester OAuth. Senders connect from the channel via the MCP connect flow.`,
-        );
-      }
-      if (server.auth !== "oauth") {
-        fail(`MCP server "${name}" is not configured with auth: "oauth".`);
-      }
-      if (typeof server.url !== "string" || server.url.trim().length === 0) {
-        fail(`MCP server "${name}" needs a URL for OAuth login.`);
-      }
-      const resolved = resolveMcpTransportConfig(name, server);
-      if (!resolved || resolved.kind !== "http") {
-        fail(`MCP server "${name}" needs a valid HTTP transport for OAuth login.`);
-      }
-      const identity = operatorMcpOAuthIdentity(name, resolved.url);
-      if (opts.code) {
-        await completeMcpOAuthAuthorization(identity, resolved, {
-          code: opts.code,
-        });
-        defaultRuntime.log(`MCP OAuth credentials saved for "${name}".`);
-        return;
-      }
-
-      let callbackServer: OAuthLoopbackCallbackServer | undefined;
-      const manualCommand = formatCliCommand(`openclaw mcp login ${name} --code <code>`);
-      try {
-        const session = await startMcpOAuthAuthorization(identity, resolved, {});
-        if (session.status === "authorized") {
-          defaultRuntime.log(`MCP OAuth credentials saved for "${name}".`);
-          return;
-        }
-        if (session.state.length >= 16) {
-          try {
-            callbackServer = await startOAuthLoopbackCallbackServer({
-              redirectUrl: session.redirectUrl,
-              expectedState: session.state,
-              timeoutMs: MCP_OAUTH_CALLBACK_TIMEOUT_MS,
-            });
-          } catch (error) {
-            defaultRuntime.log(
-              `Could not start the local OAuth callback (${formatErrorMessage(error)}).`,
-            );
-          }
-        }
-        defaultRuntime.log(`Open this URL to authorize "${name}":`);
-        defaultRuntime.log(session.authorizationUrl);
-        if (callbackServer) {
-          defaultRuntime.log("Waiting for the browser to return to OpenClaw...");
-          defaultRuntime.log(`If the callback cannot reach this terminal, run ${manualCommand}.`);
-        } else {
-          defaultRuntime.log(`After approval, run ${manualCommand}.`);
-        }
-        if (!callbackServer) {
-          return;
-        }
-
-        let callback;
-        try {
-          callback = await callbackServer.waitForCallback();
-        } catch (error) {
-          fail(`${formatErrorMessage(error)}. Complete login manually with ${manualCommand}.`);
-        }
-        if (callback.type === "oauth_error") {
-          fail(`OAuth authorization did not complete. Retry login or use ${manualCommand}.`);
-        }
-        await completeMcpOAuthAuthorization(identity, resolved, {
-          code: callback.code,
-        });
-        defaultRuntime.log(`MCP OAuth credentials saved for "${name}".`);
-      } finally {
-        await callbackServer?.close();
-      }
-    });
+    .action(
+      offlineMcpAction("login", async (owner, name: string, opts: { code?: string }) => {
+        const loaded = await loadMcpConfig();
+        const server = requireMcpServer(loaded, name);
+        await loginMcpServer({ name, server, code: opts.code, owner, fail });
+      }),
+    );
 
   mcp
     .command("logout")
     .description("Clear stored OAuth credentials for an MCP server")
     .argument("<name>", "MCP server name")
-    .action(async (name: string) => {
-      const loaded = await loadMcpConfig();
-      const server = requireMcpServer(loaded, name);
-      if (asRecord(server.oauth)?.identity === "per-requester") {
-        fail(
-          `MCP server "${name}" uses per-requester OAuth. Remove or replace the server to clear requester credentials.`,
-        );
-      }
-      const resolved = resolveMcpTransportConfig(name, server);
-      if (!resolved || resolved.kind !== "http") {
-        fail(`MCP server "${name}" needs a valid HTTP transport for OAuth logout.`);
-      }
-      await clearMcpOAuthCredentials(operatorMcpOAuthIdentity(name, resolved.url));
-      defaultRuntime.log(`MCP OAuth credentials cleared for "${name}".`);
-    });
+    .action(
+      offlineMcpAction("logout", async (_owner, name: string) => {
+        const loaded = await loadMcpConfig();
+        const server = requireMcpServer(loaded, name);
+        if (asRecord(server.oauth)?.identity === "per-requester") {
+          fail(
+            `MCP server "${name}" uses per-requester OAuth. Remove or replace the server to clear requester credentials.`,
+          );
+        }
+        const resolved = resolveMcpTransportConfig(name, server);
+        if (!resolved || resolved.kind !== "http") {
+          fail(`MCP server "${name}" needs a valid HTTP transport for OAuth logout.`);
+        }
+        await clearMcpOAuthCredentials(operatorMcpOAuthIdentity(name, resolved.url));
+        defaultRuntime.log(`MCP OAuth credentials cleared for "${name}".`);
+      }),
+    );
 
   mcp
     .command("reload")
@@ -1327,7 +1268,7 @@ export function registerMcpCli(program: Command) {
     .description("Remove one OpenClaw-managed MCP server")
     .argument("<name>", "MCP server name")
     .action(async (name: string) => {
-      const result = await unsetConfiguredMcpServer({ name });
+      const result = await unsetMcpServerOffline({ name });
       if (!result.ok) {
         fail(result.error);
       }

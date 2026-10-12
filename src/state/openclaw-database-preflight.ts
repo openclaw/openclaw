@@ -10,6 +10,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { deferSqliteSnapshotCleanupAfterRead } from "../infra/sqlite-readonly-location-cleanup.js";
 import { adoptSqliteSchemaContracts } from "../infra/sqlite-schema-contract.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -24,6 +25,7 @@ import type {
   AgentDeletionJournalDisposition,
   AgentDeletionJournalPurpose,
 } from "./agent-deletion-journal.types.js";
+import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
@@ -176,9 +178,12 @@ export async function assertOpenClawDatabasesReady(
 
 /** Read schema headers and optionally verify current schema shape without repairing it. */
 export async function preflightOpenClawDatabaseSchemas(
-  options: OpenClawDatabasePreflightOptions,
+  inputOptions: OpenClawDatabasePreflightOptions,
   purpose: AgentDeletionJournalPurpose = "maintenance",
 ): Promise<OpenClawDatabaseSchemaPreflight> {
+  const options = isArtifactPreservingStateRead("agent")
+    ? { ...inputOptions, preserveSourceArtifacts: true }
+    : inputOptions;
   options.signal?.throwIfAborted();
   const supportedVersions = options.supportedVersions ?? {
     state: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -236,6 +241,8 @@ export async function preflightOpenClawDatabaseSchemas(
           preserveSourceArtifacts: options.preserveSourceArtifacts ?? true,
           allowLiveOwner: options.preserveSourceArtifacts !== false,
           signal: options.signal,
+          // Any failed removal refuses admission; keep its cause for the Bun EBUSY deferral.
+          requireCleanup: true,
         });
         stateLocation = stateSnapshot.location;
       }
@@ -360,6 +367,7 @@ export async function preflightOpenClawDatabaseSchemas(
         return undefined;
       }
       let agentSnapshot: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
+      let readSucceeded = false;
       try {
         // Preserve SQLite's filesystem traversal through symlink/.. locators.
         const realAgentPath = realpathSync.native(agentPath);
@@ -405,6 +413,7 @@ export async function preflightOpenClawDatabaseSchemas(
             preserveSourceArtifacts: options.preserveSourceArtifacts ?? true,
             allowLiveOwner: options.preserveSourceArtifacts !== false,
             signal: options.signal,
+            requireCleanup: true,
           });
           options.signal?.throwIfAborted();
           schemaInspection = await inspectSchema(
@@ -416,6 +425,7 @@ export async function preflightOpenClawDatabaseSchemas(
         if (!schemaInspection) {
           throw new Error(`Agent database inspection returned no result: ${agentPath}`);
         }
+        readSucceeded = !schemaInspection.failure && !schemaInspection.reason;
         const { version: agentVersion, writerAppVersion, agentSchemaMeta } = schemaInspection;
         if (row.holdForDeletionRecovery) {
           recordAgentDatabaseRecoveryInspection(
@@ -515,7 +525,12 @@ export async function preflightOpenClawDatabaseSchemas(
               };
             }
           } catch (error) {
-            failure = { error };
+            if (
+              !readSucceeded ||
+              !deferSqliteSnapshotCleanupAfterRead(error, agentSnapshot.cleanupRoot)
+            ) {
+              failure = { error };
+            }
           }
           if (failure && !startup?.recordInspectionFailure(row, inspection, failure.error)) {
             if (row.holdForDeletionRecovery) {

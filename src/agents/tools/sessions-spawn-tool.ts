@@ -426,6 +426,11 @@ export function createSessionsSpawnTool(
         const taskName = taskNameResult.taskName;
         const label = readToolStringParam(params, "label") ?? "";
         const runtime = params.runtime === "acp" ? "acp" : "subagent";
+        if (runtime === "subagent" && opts?.delegatedToolPolicyUnavailable) {
+          throw new ToolInputError(
+            "This mediated tool surface cannot preserve the active delegated execution grant. Start the helper from a Gateway-side native tool surface.",
+          );
+        }
         const completionTarget = params.completionTarget;
         if (completionTarget !== undefined && completionTarget !== "parent") {
           throw new ToolInputError('sessions_spawn completionTarget must be "parent" or omitted.');
@@ -580,6 +585,13 @@ export function createSessionsSpawnTool(
           sandboxed: opts?.sandboxed,
           inheritedToolAllowlist: opts?.inheritedToolAllowlist,
           inheritedToolDenylist: opts?.inheritedToolDenylist,
+          ...(runtime === "subagent"
+            ? {
+                delegatedToolDenyFloor: opts?.delegatedToolDenyFloor,
+                requesterToolDenylist: opts?.requesterToolDenylist,
+                readDelegationConfig: opts?.readDelegationConfig,
+              }
+            : {}),
           inheritedToolPolicySource: opts?.inheritedToolPolicySource,
           workspaceDir: opts?.workspaceDir,
           sessionPermissionPolicy: opts?.sessionPermissionPolicy,

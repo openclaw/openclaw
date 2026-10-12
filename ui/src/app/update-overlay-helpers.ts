@@ -5,7 +5,7 @@ import {
 } from "../../../src/infra/update-run-record.js";
 import { renderUpdateRunReport } from "../../../src/infra/update-run-report.js";
 import { classifyUpdateOutcome } from "../../../src/shared/update-outcome.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
@@ -206,36 +206,28 @@ export type UpdateRunResponse = {
 export function createUpdateStatusRefresher(params: {
   getClient: () => GatewayBrowserClient | null;
   getEpoch: () => number;
-  getRevision: () => number;
+  getAuthorization: () => GatewayHelloOk["auth"] | undefined;
   canRefresh: () => boolean;
   isCurrent: (client: GatewayBrowserClient, epoch: number) => boolean;
   onRefreshing: (refreshing: boolean) => void;
-  onStatus: (response: UpdateRestartStatusResponse, preserveInstall?: boolean) => void;
-  onCheckout: (response: UpdateRestartStatusResponse, preserveSchedule: boolean) => void;
+  onStatus: (response: UpdateRestartStatusResponse) => void;
   onError: (error: unknown, mode: "manual" | "completion") => void;
 }) {
-  let generation = 0;
-  let checkoutGeneration = 0;
-  let checkoutRevision = 0;
-  let progressRevision = 0;
   const refresh = async (
     mode: "manual" | "background" | "completion" = "manual",
   ): Promise<boolean> => {
     const client = params.getClient();
     const epoch = params.getEpoch();
+    // A later admin grant cannot authorize a response issued under a revoked grant.
+    const authorization = params.getAuthorization();
     if (!client || !params.canRefresh() || !params.isCurrent(client, epoch)) {
       return false;
     }
     const refreshCheckout = mode === "manual";
-    const operationGeneration = refreshCheckout ? ++checkoutGeneration : ++generation;
-    const revision = params.getRevision();
-    const checkoutRevisionAtStart = checkoutRevision;
-    const progressRevisionAtStart = progressRevision;
-    const ownsRequest = () =>
-      operationGeneration === (refreshCheckout ? checkoutGeneration : generation) &&
-      params.isCurrent(client, epoch);
     const isCurrent = () =>
-      ownsRequest() && params.canRefresh() && revision === params.getRevision();
+      params.isCurrent(client, epoch) &&
+      params.getAuthorization() === authorization &&
+      params.canRefresh();
     if (refreshCheckout) {
       params.onRefreshing(true);
     }
@@ -244,7 +236,8 @@ export function createUpdateStatusRefresher(params: {
         .request<UpdateRestartStatusResponse>(
           "update.status",
           refreshCheckout ? { refreshCheckout: true } : {},
-          refreshCheckout ? undefined : { timeoutMs: 5_000 },
+          // Checkout discovery uses the Gateway's Git command budgets.
+          { timeoutMs: refreshCheckout ? null : 5_000 },
         )
         .catch((error: unknown) => {
           if (mode !== "background" && isCurrent()) {
@@ -257,33 +250,20 @@ export function createUpdateStatusRefresher(params: {
       const response = await pending;
       if (response && isCurrent()) {
         if (refreshCheckout) {
-          checkoutRevision++;
-          const preserveSchedule = progressRevisionAtStart !== progressRevision;
-          // Runs carry their own monotonic revision; legacy sentinels do not.
-          const { activeRun, lastRun, sentinel } = response;
-          if (!preserveSchedule || activeRun || lastRun) {
-            params.onStatus({ activeRun, lastRun, ...(!preserveSchedule ? { sentinel } : {}) });
-          }
-          params.onCheckout(response, preserveSchedule);
-          // Discovery may finish after the fast read captured an empty schedule.
-          // Let that read settle before reconciling, without extending the button's lifetime.
-          void progress?.then(() => {
-            if (isCurrent()) {
-              void refresh("background");
-            }
-          });
-        } else {
-          progressRevision++;
-          params.onError(null, "completion");
-          // Campaigns and availability still belong to progress, even when a
-          // concurrent checkout completed a newer install comparison.
-          params.onStatus(response, checkoutRevisionAtStart !== checkoutRevision);
+          params.onError(null, "manual");
+          params.onStatus(response);
+          // The fast read may predate the fetch. Reconcile the target before
+          // the caller opens confirmation.
+          await progress;
+          return isCurrent() && (await refresh("completion"));
         }
+        params.onError(null, "completion");
+        params.onStatus(response);
         return true;
       }
       return false;
     } finally {
-      if (refreshCheckout && ownsRequest()) {
+      if (refreshCheckout && params.isCurrent(client, epoch)) {
         params.onRefreshing(false);
       }
     }
@@ -300,37 +280,25 @@ export function projectUpdateStatusResponse(
     heldUpdateCampaignId: string | null;
     updateSchedule?: UpdateScheduleState | null;
   },
-  preserveInstall = false,
 ) {
   const result = projectUpdateSentinel(response.sentinel);
   return {
     failure: result?.failure ?? null,
     updateStatusBanner: result ? result.banner : current.updateStatusBanner,
     recordedUpdateAttempt: result ? result.attempt : current.recordedUpdateAttempt,
-    ...projectUpdateCheckoutResponse(response, current, preserveInstall ? "install" : undefined),
+    ...projectUpdateCheckoutResponse(response, current),
   };
 }
 
-export function projectUpdateCheckoutResponse(
+function projectUpdateCheckoutResponse(
   response: UpdateRestartStatusResponse,
   current: { heldUpdateCampaignId: string | null; updateSchedule?: UpdateScheduleState | null },
-  preserve?: "install" | "schedule",
 ) {
-  const incoming = Object.hasOwn(response, "schedule")
+  const updateSchedule = Object.hasOwn(response, "schedule")
     ? readUpdateScheduleValue(response.schedule)
     : undefined;
-  let updateSchedule = preserve === "schedule" ? current.updateSchedule : incoming;
-  const installSource = preserve === "schedule" ? incoming : current.updateSchedule;
-  if (
-    preserve &&
-    updateSchedule &&
-    installSource?.channel === updateSchedule.channel &&
-    installSource.install
-  ) {
-    updateSchedule = { ...updateSchedule, install: installSource.install };
-  }
   return {
-    ...(preserve !== "schedule" && Object.hasOwn(response, "updateAvailable")
+    ...(Object.hasOwn(response, "updateAvailable")
       ? { updateAvailable: readUpdateAvailableValue(response.updateAvailable) }
       : {}),
     ...(updateSchedule !== undefined

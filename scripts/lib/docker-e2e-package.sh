@@ -353,6 +353,8 @@ docker_e2e_harness_mount_args() {
     -v "$harness_root/scripts/docker/verify-fs-safe-native.mjs:/app/scripts/docker/verify-fs-safe-native.mjs:ro"
     -v "$harness_root/scripts/lib:/app/scripts/lib:ro"
     -v "$harness_root/packages/gateway-client/src:/app/packages/gateway-client/src:ro"
+    -v "$harness_root/packages/llm-core/package.json:/app/packages/llm-core/package.json:ro"
+    -v "$harness_root/packages/llm-core/src/types.ts:/app/packages/llm-core/src/types.ts:ro"
     -v "$harness_root/packages/normalization-core/package.json:/app/packages/normalization-core/package.json:ro"
     -v "$harness_root/packages/normalization-core/src:/app/packages/normalization-core/src:ro"
     -v "$harness_root/tsconfig.json:/app/tsconfig.json:ro"

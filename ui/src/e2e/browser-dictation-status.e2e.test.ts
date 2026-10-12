@@ -177,7 +177,11 @@ suite.define(() => {
       });
       expect(dictationAppearance.color).toBe(dictationAppearance.textStrong);
       if (cancel) {
-        await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
+        await page.getByRole("button", { name: "Sessions", exact: true }).click();
+        await page.locator(".shell--nav-collapsed").waitFor();
+        expect(await textarea.evaluate((element) => document.activeElement === element)).toBe(
+          false,
+        );
         await page.keyboard.press("Escape");
       } else {
         await page.getByRole("button", { name: "Stop and keep text" }).click();

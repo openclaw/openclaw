@@ -4,7 +4,6 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { capturePluginRegistryLifecycleEpoch } from "../../plugins/registry-lifecycle.js";
 import type { SessionCatalogInstances } from "./session-catalog-entry-snapshot.js";
 import {
   SESSION_CATALOG_LIST_LIFETIME_MS,
@@ -26,7 +25,6 @@ type CatalogListOperation = {
 
 type CatalogListOperations = {
   registrations: CatalogRegistrationSnapshot;
-  epoch: ReturnType<typeof capturePluginRegistryLifecycleEpoch>;
   gatewaySignal?: AbortSignal;
   connectionSignal?: AbortSignal;
   pending: Map<string, CatalogListOperation>;
@@ -94,19 +92,10 @@ export function getSessionCatalogListOperations(
   client?: GatewayClient | null,
 ): CatalogListOperations {
   let state = catalogListsByConfig.get(config);
-  const epoch = registrations.registry
-    ? capturePluginRegistryLifecycleEpoch(registrations.registry)
-    : undefined;
-  if (
-    !state ||
-    state.registrations !== registrations ||
-    state.epoch !== epoch ||
-    state.gatewaySignal !== gatewaySignal
-  ) {
+  if (!state || state.registrations !== registrations || state.gatewaySignal !== gatewaySignal) {
     state?.retirement.abort();
     state = {
       registrations,
-      epoch,
       gatewaySignal,
       pending: new Map(),
       providers: new Map(),
@@ -125,7 +114,6 @@ export function getSessionCatalogListOperations(
   if (!caller) {
     caller = {
       registrations,
-      epoch,
       gatewaySignal,
       connectionSignal: client.connectionSignal
         ? AbortSignal.any([state.retirement.signal, client.connectionSignal])
@@ -165,56 +153,44 @@ export function retireSessionCatalogLists(config: OpenClawConfig): void {
   operations.pages.clear();
 }
 
-// Pending source promises may outlive delivery. Their reactions retain only
-// this detachable owner, never the aggregate frame or an evicted progress owner.
+// A bounded delivery lifetime owns cache publication, independently of provider settlement.
 function startProviderOperation(
   operations: CatalogListOperations,
   key: string,
   progress: SessionCatalogListLifetime,
   run: () => Promise<CatalogListEnumeration>,
 ): CatalogListOperation & { release: () => void } {
-  let owner: { operations: CatalogListOperations; key: string; signal: AbortSignal } | undefined = {
-    operations,
-    key,
-    signal: AbortSignal.any([
-      operations.retirement.signal,
-      ...(operations.gatewaySignal ? [operations.gatewaySignal] : []),
-      ...(operations.connectionSignal ? [operations.connectionSignal] : []),
-    ]),
-  };
+  const signal = AbortSignal.any([
+    operations.retirement.signal,
+    ...(operations.gatewaySignal ? [operations.gatewaySignal] : []),
+    ...(operations.connectionSignal ? [operations.connectionSignal] : []),
+  ]);
+  let active = true;
   const result = run().then((page) => {
-    const current = owner;
-    const catalog = page.catalogs[0]!;
-    if (
-      current &&
-      !current.signal.aborted &&
-      current.operations.providers.get(current.key)?.result === result &&
-      !catalog.error
-    ) {
-      const pages = current.operations.pages;
-      pages.delete(current.key);
-      pages.set(current.key, page);
-      if (pages.size > 128) {
-        pages.delete(pages.keys().next().value!);
+    if (active && !page.catalogs[0]!.error) {
+      operations.pages.delete(key);
+      operations.pages.set(key, page);
+      if (operations.pages.size > 128) {
+        operations.pages.delete(operations.pages.keys().next().value!);
       }
     }
     return page;
   });
   const release = () => {
-    clearTimeout(deadline);
-    const current = owner;
-    owner = undefined;
-    current?.signal.removeEventListener("abort", release);
-    if (current?.operations.providers.get(current.key)?.result === result) {
-      current.operations.providers.delete(current.key);
+    if (!active) {
+      return;
     }
+    active = false;
+    clearTimeout(deadline);
+    signal.removeEventListener("abort", release);
+    operations.providers.delete(key);
   };
   const deadline = setTimeout(release, SESSION_CATALOG_LIST_LIFETIME_MS);
   deadline.unref();
   const entry = { progress, result, release };
   operations.providers.set(key, entry);
-  owner.signal.addEventListener("abort", release, { once: true });
-  if (owner.signal.aborted) {
+  signal.addEventListener("abort", release, { once: true });
+  if (signal.aborted) {
     release();
   }
   void result.then(release, release);

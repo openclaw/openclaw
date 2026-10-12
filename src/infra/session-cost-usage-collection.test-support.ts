@@ -1,9 +1,9 @@
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
-import { listSessionTranscriptInstances } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
 } from "../config/sessions/session-accessor.sqlite-read.js";
+import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
 import {
   listUsageCountedTranscriptStats as collectTranscriptStats,
   resolveUsageCostTranscriptFile as resolveTranscriptFile,

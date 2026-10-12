@@ -148,9 +148,28 @@ export async function withPreparedEventRow(
     publish();
     return;
   }
-  await sessionEventPublicationRows(projection).withReadyRows(() => [query], publish, {
-    includeAncestors: true,
-  });
+  await sessionEventPublicationRows(projection).withReadyRows(
+    () => [query],
+    (read) => {
+      const record = read.describe(query);
+      const rows = record ? [record, ...(projection.ancestorRows(record, read) ?? [])] : [];
+      const children = new Set<string>();
+      for (const row of rows) {
+        for (const group of row.materialized.row.swarm?.groups ?? []) {
+          for (const child of group.children ?? []) {
+            children.add(child.sessionKey);
+          }
+        }
+      }
+      // Resolve child metadata before the transport catches serialization errors.
+      // Pending worker facts must reach the preparation owner's existing retry.
+      for (const key of children) {
+        read.selectEntries({ key });
+      }
+      publish(read);
+    },
+    { includeAncestors: true },
+  );
 }
 
 export async function withPreparedSessionEventRow(

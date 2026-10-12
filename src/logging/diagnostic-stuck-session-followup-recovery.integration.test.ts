@@ -67,7 +67,7 @@ describe("stuck session follow-up recovery", () => {
     { allowance: "mixed tool deadlines", requestTimeoutMs: undefined, progress: "mixed-tools" },
   ])("rechecks repeated requests before releasing a lane with $allowance", async (testCase) => {
     vi.useFakeTimers({
-      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
     });
     setDiagnosticsEnabledForProcess(true);
     startDiagnosticRunActivityTracking();

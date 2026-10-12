@@ -11,11 +11,12 @@ import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
+import type { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { executeOpenClawAgentWorkerPublication } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
@@ -33,7 +34,11 @@ import {
 } from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
 import { getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath } from "./mutation-lineage.js";
-import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
+import {
+  getPreparedSharedAuthStoreOwnership,
+  resolveSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
+} from "./path-resolve.js";
 import {
   buildPersistedAuthProfileSecretsStore,
   loadPersistedAuthProfileStoreAtDatabasePath,
@@ -45,8 +50,14 @@ import {
   getRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   invalidateRuntimeAuthProfileStoreSnapshotsForOwner,
 } from "./runtime-snapshots.js";
+import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
+import { isSharedAuthProfileWrite } from "./shared-store-bootstrap.js";
 import {
   prepareAuthProfileWriteTransaction,
+  prepareAuthProfileWriteTransactionAsync,
+  prepareAuthProfileWriteEnvironment,
+  resolveAuthProfileDatabasePath,
+  resolveAuthProfileDatabaseOwnerId,
   runAuthProfileWriteTransaction,
   type AuthProfileDatabase,
 } from "./sqlite.js";
@@ -55,7 +66,6 @@ import { watchAuthProfileNativeCommits } from "./store-update-commit.js";
 import type {
   AuthStoreUpdatePrepared,
   AuthStoreUpdateCommitted,
-  AuthStoreUpdateCommittedWire,
   AuthStoreUpdateResponse,
 } from "./store-update-kernel.js";
 import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
@@ -63,15 +73,19 @@ import {
   sendAuthProfileUpdateValue,
   receiveAuthProfileUpdateValue,
 } from "./store-update-transfer.js";
+import type { AuthStoreUpdateInput } from "./store.worker-contract.js";
 import type { AuthProfileStore, PreparedAuthProfileStoreOwner } from "./types.js";
-import { runAuthProfileUsage } from "./usage-lifecycle.js";
+import { reserveAuthProfileUsagePreparation, runAuthProfileUsage } from "./usage-lifecycle.js";
+import { captureAuthProfileWriteExecution } from "./write-execution.js";
 
 class AuthProfileSharedSourceChangedError extends Error {}
 
 /** The existing SQLite worker owns BEGIN/read/save/COMMIT; host callbacks keep their scope. */
-async function runAuthProfileStoreUpdate(params: {
+type AuthProfileStoreUpdate = {
+  existingDatabaseTarget?: { kind: "agent"; agentId: string; path: string; env: NodeJS.ProcessEnv };
   agentDir?: string;
   envOnly: boolean;
+  peerGeneration?: AuthStoreUpdateInput["peerGeneration"];
   options: Parameters<typeof prepareAuthProfileWriteTransaction>[1];
   assertCurrent?: () => void;
   update: (
@@ -84,12 +98,92 @@ async function runAuthProfileStoreUpdate(params: {
     assertCurrent: () => void,
     nativeCommits: ReturnType<typeof watchAuthProfileNativeCommits>,
     committedIsCurrent: () => boolean,
-  ) => Promise<AuthProfileStore>;
-}): Promise<AuthProfileStore> {
-  const { databaseTarget, sharedOwner } = prepareAuthProfileWriteTransaction(
-    params.agentDir,
-    params.options,
-  );
+  ) => Promise<void>;
+};
+
+export function runAuthProfileStoreUpdate(params: AuthProfileStoreUpdate): Promise<void> {
+  const env = prepareAuthProfileWriteEnvironment(params.options);
+  return runAuthProfileUsage(async () => {
+    const context = captureOpenClawStateWorkerContext({ env });
+    const sharedWrite = isSharedAuthProfileWrite({
+      agentDir: params.agentDir,
+      allowExplicitMain: params.options.sharedStoreWrite === true,
+      env,
+    });
+    const capturedAgentDir = sharedWrite
+      ? getPreparedSharedAuthStoreOwnership(env)?.location === "state-db"
+        ? undefined
+        : resolveSharedMainAuthAgentDir(env)
+      : params.agentDir;
+    const target =
+      params.existingDatabaseTarget ??
+      (capturedAgentDir
+        ? {
+            kind: "agent" as const,
+            agentId: resolveAuthProfileDatabaseOwnerId(capturedAgentDir),
+            path: resolveAuthProfileDatabasePath(capturedAgentDir),
+            env,
+          }
+        : undefined);
+    const execution = target ? captureAuthProfileWriteExecution({ ...target, env }) : undefined;
+    let transferred = false;
+    let followsCapturedAgent = true;
+    const assertCurrent = () => {
+      context.admission.assertCurrent();
+      context.maintenanceScope?.assertAdmission();
+      if (followsCapturedAgent) {
+        execution?.assertCurrent();
+      }
+      params.assertCurrent?.();
+    };
+    const reservation = reserveAuthProfileUsagePreparation([
+      resolveOpenClawStateSqlitePath(env),
+      ...(params.agentDir
+        ? [params.existingDatabaseTarget?.path ?? resolveAuthProfileDatabasePath(params.agentDir)]
+        : []),
+    ]);
+    try {
+      await reservation.ready;
+      const prepared = await prepareAuthProfileWriteTransactionAsync(
+        params.agentDir,
+        { ...params.options, env },
+        assertCurrent,
+      );
+      assertCurrent();
+      const databaseTarget = params.existingDatabaseTarget ?? prepared.databaseTarget;
+      transferred = databaseTarget.kind === "agent" && databaseTarget.path === target?.path;
+      // Bootstrap's acknowledged handoff selects the already-captured shared-state owner.
+      followsCapturedAgent = transferred;
+      return await runPreparedAuthProfileStoreUpdate(
+        {
+          ...params,
+          assertCurrent,
+          publish: (...args) => {
+            // The selected writer still owns publication; release discovery before cross-owner work.
+            reservation.release();
+            return params.publish(...args);
+          },
+        },
+        {
+          ...prepared,
+          databaseTarget,
+        },
+        transferred ? execution : undefined,
+      );
+    } finally {
+      if (!transferred) {
+        await execution?.release();
+      }
+      reservation.release();
+    }
+  });
+}
+
+async function runPreparedAuthProfileStoreUpdate(
+  params: AuthProfileStoreUpdate,
+  { databaseTarget, sharedOwner }: ReturnType<typeof prepareAuthProfileWriteTransaction>,
+  capturedExecution?: ReturnType<typeof captureOpenClawAgentDatabaseExecution>,
+): Promise<void> {
   const owner = { ...sharedOwner, databasePath: databaseTarget.path };
   let acknowledged = false;
   let exchangePort: MessagePort | undefined;
@@ -117,7 +211,7 @@ async function runAuthProfileStoreUpdate(params: {
       reportCommittedInlineAuthFailure("Auth outcome invalidation failed", invalidationError);
     }
   };
-  return runAuthProfileUsage(async () => {
+  return (async () => {
     let committed: AuthStoreUpdateCommitted | undefined;
     const captureSharedSource = () => {
       if (sharedSource || owner.databasePath === owner.sharedDatabasePath) {
@@ -187,20 +281,9 @@ async function runAuthProfileStoreUpdate(params: {
       if (exchangePort) {
         // SAFETY: The paired worker queues canonical fields before requesting its commit grant.
         const received = receiveAuthProfileUpdateValue(exchangePort) as
-          | AuthStoreUpdateCommittedWire
+          | AuthStoreUpdateCommitted
           | undefined;
-        committed = received && {
-          ...received,
-          publication: {
-            ...received.publication,
-            oauthRefreshClaimIds: new Map(
-              received.publication.oauthRefreshClaimIds.map(([profileId, claimId]) => [
-                profileId,
-                claimId ?? undefined,
-              ]),
-            ),
-          },
-        };
+        committed = received;
       }
     };
     const input = {
@@ -211,6 +294,7 @@ async function runAuthProfileStoreUpdate(params: {
       },
       agentDir: params.agentDir,
       envOnly: params.envOnly,
+      peerGeneration: params.peerGeneration,
     };
     const publish = () => {
       acknowledged = true;
@@ -260,7 +344,7 @@ async function runAuthProfileStoreUpdate(params: {
         },
       );
     }
-    const execution = captureOpenClawAgentDatabaseExecution(databaseTarget);
+    const execution = capturedExecution ?? captureAuthProfileWriteExecution(databaseTarget);
     const assertCurrent = () => {
       execution.assertCurrent();
       assertOwner();
@@ -307,14 +391,17 @@ async function runAuthProfileStoreUpdate(params: {
         };
       },
     };
-    let outcome: Result<AuthProfileStore, unknown>;
+    let outcome: Result<void, unknown>;
     try {
       const value = await runOpenClawAgentWriteAdmission(
         databaseTarget,
         async () => {
-          await execution.prepare(source);
+          // Captured peers use existing-only admission; ordinary saves retain first-use creation.
+          if (!params.existingDatabaseTarget) {
+            await execution.prepare(source);
+          }
           const result = await execution.runExisting(source, async (scope) => {
-            await executeOpenClawAgentWorkerPublication<
+            const invoked = await executeOpenClawAgentWorkerPublication<
               InlineAuthFailureOperations,
               "authProfiles.update"
             >(scope, {
@@ -324,7 +411,10 @@ async function runAuthProfileStoreUpdate(params: {
               input: {},
               command: { type: "authProfiles.update", input },
             });
-            return { value: await publish() };
+            if (invoked) {
+              await publish();
+            }
+            return { value: undefined };
           });
           if (!result) {
             throw new Error("Auth profile database disappeared before mutation");
@@ -357,7 +447,7 @@ async function runAuthProfileStoreUpdate(params: {
       throw outcome.error;
     }
     return outcome.value;
-  })
+  })()
     .catch((error: unknown) => {
       invalidateUnknown(error);
       throw error;
@@ -475,7 +565,7 @@ export function createAuthProfileStoreUpdater(
         );
       }
       let loadedStore: AuthProfileStore;
-      return await runAuthProfileStoreUpdate({
+      await runAuthProfileStoreUpdate({
         agentDir,
         envOnly,
         assertCurrent: params.assertCurrent,
@@ -500,6 +590,7 @@ export function createAuthProfileStoreUpdater(
               profiles: buildPersistedAuthProfileSecretsStore(store).profiles,
             };
           const options = params.saveOptions;
+          const copyIds = (ids: Iterable<string> | undefined) => ids && [...ids];
           return {
             save: true,
             store: sanitize(loadedStore)!,
@@ -514,15 +605,9 @@ export function createAuthProfileStoreUpdater(
                 : undefined,
             options: options && {
               ...options,
-              preserveOrderProfileIds: options.preserveOrderProfileIds && [
-                ...options.preserveOrderProfileIds,
-              ],
-              preserveStateProfileIds: options.preserveStateProfileIds && [
-                ...options.preserveStateProfileIds,
-              ],
-              pruneOrderProfileIds: options.pruneOrderProfileIds && [
-                ...options.pruneOrderProfileIds,
-              ],
+              preserveOrderProfileIds: copyIds(options.preserveOrderProfileIds),
+              preserveStateProfileIds: copyIds(options.preserveStateProfileIds),
+              pruneOrderProfileIds: copyIds(options.pruneOrderProfileIds),
             },
           };
         },
@@ -544,9 +629,9 @@ export function createAuthProfileStoreUpdater(
               );
             }
           }
-          return loadedStore!;
         },
       });
+      return loadedStore!;
     } catch (error) {
       if (error instanceof AuthProfileSharedSourceChangedError) {
         return null;

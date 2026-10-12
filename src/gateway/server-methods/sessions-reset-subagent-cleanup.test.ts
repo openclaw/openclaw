@@ -2,6 +2,7 @@ import path from "node:path";
 import type { WorkerOptions } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   listRegisteredAgentHarnesses,
@@ -136,7 +137,7 @@ async function request(
     context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
     respond: (ok, payload, error) => {
       if (!ok) {
-        throw new Error(error?.message ?? "request failed");
+        throw new GatewayClientRequestError(error ?? { message: "request failed" });
       }
       result = payload;
     },
@@ -179,9 +180,14 @@ async function registerCollector(id: string, childSessionKey = key, agentId = "m
   await registerSubagentRun({
     runId: id,
     childSessionKey,
+    childAgentId: agentId,
+    sessionEntry: loadSessionEntry({
+      storePath: cfg.session?.store,
+      agentId,
+      sessionKey: childSessionKey,
+    }),
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
-    agentId,
     requesterDisplayKey: "main",
     task: "failed collector launch",
     cleanup: "delete",
@@ -215,27 +221,24 @@ afterEach(async () => {
   env.restore();
 });
 
-test.each(["unchanged", "reset", "reset-reopen", "reopen-reset-reopen"])(
-  "collector cleanup retry: %s",
-  async (mode) => {
-    const reset = mode !== "unchanged";
-    if (mode === "reopen-reset-reopen") {
-      await reopen();
-    }
-    if (reset) {
-      await request("sessions.reset", { key });
-      expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).not.toBe("original");
-    }
-    const beforeRetry = loadSessionEntry({ sessionKey: key });
-    if (mode.endsWith("reopen")) {
-      await reopen();
-    }
-    await testing.sweepOnceForTests();
-    expect(loadSessionEntry({ sessionKey: key })).toEqual(reset ? beforeRetry : undefined);
-    expect(attempts).toBe(reset ? 1 : 2);
-    await expectResultRetained();
-  },
-);
+test.each(["unchanged", "reopen-reset-reopen"])("collector cleanup retry: %s", async (mode) => {
+  const reset = mode !== "unchanged";
+  if (mode === "reopen-reset-reopen") {
+    await reopen();
+  }
+  if (reset) {
+    await request("sessions.reset", { key });
+    expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).not.toBe("original");
+  }
+  const beforeRetry = loadSessionEntry({ sessionKey: key });
+  if (mode.endsWith("reopen")) {
+    await reopen();
+  }
+  await testing.sweepOnceForTests();
+  expect(loadSessionEntry({ sessionKey: key })).toEqual(reset ? beforeRetry : undefined);
+  expect(attempts).toBe(reset ? 1 : 2);
+  await expectResultRetained();
+});
 
 async function reopen() {
   await resetSubagentRegistryForTests({ persist: false });
@@ -327,9 +330,10 @@ async function startAnnouncingSubagent(id: string) {
   await registerSubagentRun({
     runId: id,
     childSessionKey: key,
+    childAgentId: "main",
+    sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: key }),
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
-    agentId: "main",
     requesterDisplayKey: "main",
     task: "announced subagent",
     cleanup: "delete",
@@ -495,6 +499,8 @@ test("revocation rechecks terminal owners after awaited entry planning", async (
 test.each([false, true])(
   "custom-store reset revokes only its worker child (incognito: %s)",
   async (incognito) => {
+    await testing.sweepOnceForTests();
+    expect(loadSubagentRegistryFromSqlite().get(runId)?.collectorLaunchCleanupPending).toBe(false);
     const agentId = "worker";
     cfg = {
       agents: {

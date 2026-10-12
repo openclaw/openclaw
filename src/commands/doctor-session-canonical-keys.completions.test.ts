@@ -114,7 +114,7 @@ describe("Doctor canonical completion receipt repair", () => {
       const f = fixture(stateDir);
       f.create();
       const first = await f.stage();
-      first.complete!(stopped);
+      await first.completeAsync!(stopped);
       first.finish("interrupted");
       const before = f.rows();
       f.database(true).db.exec("DROP TABLE session_input_completions");
@@ -144,7 +144,9 @@ describe("Doctor canonical completion receipt repair", () => {
     await withStateDirEnv("doctor-private-alias-", async ({ stateDir }) => {
       const f = fixture(stateDir, true);
       f.create();
-      (await f.stage()).complete!(stopped);
+      await (
+        await f.stage()
+      ).completeAsync!(stopped);
       const before = f.rows();
       f.database()
         .db.prepare(
@@ -173,8 +175,12 @@ describe("Doctor canonical completion receipt repair", () => {
       const f = fixture(stateDir);
       f.create(false, 20);
       f.create(true, 10);
-      (await f.stage()).complete!(completed);
-      (await f.stage(true, "different private result")).complete!(stopped);
+      await (
+        await f.stage()
+      ).completeAsync!(completed);
+      await (
+        await f.stage(true, "different private result")
+      ).completeAsync!(stopped);
       const source = f.rows();
       const destination = f.rows(true);
       await f.restart();
@@ -188,13 +194,17 @@ describe("Doctor canonical completion receipt repair", () => {
     await withStateDirEnv("doctor-private-key-conflict-", async ({ stateDir }) => {
       const f = fixture(stateDir);
       f.create();
-      (await f.stage()).complete!(completed);
+      await (
+        await f.stage()
+      ).completeAsync!(completed);
       const otherKey = "agent:main:another-parent";
       replaceSessionEntrySync(
         { ...f.scope(true), sessionKey: otherKey },
         { sessionId: f.scope(true).sessionId, updatedAt: 10 },
       );
-      (await f.stage(true, "private child result", otherKey)).complete!(stopped);
+      await (
+        await f.stage(true, "private child result", otherKey)
+      ).completeAsync!(stopped);
       const source = f.rows();
       const destination = f.rows(true);
       await f.restart();

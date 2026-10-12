@@ -86,14 +86,14 @@ it.each<{
 }>([
   { cpus: 1, workerClass: "reader", admitted: 1 },
   { cpus: 2, workerClass: "reader", admitted: 1 },
-  { cpus: 8, workerClass: "reader", admitted: 7 },
-  { cpus: 128, workerClass: "reader", admitted: 8 },
+  { cpus: 8, workerClass: "reader", admitted: 2 },
+  { cpus: 128, workerClass: "reader", admitted: 2 },
   { cpus: 128, workerClass: "file-reader", admitted: 2 },
   { cpus: 128, workerClass: "compute", admitted: 4 },
   { cpus: 128, workerClass: "writer", admitted: 1 },
   { cpus: 128, workerClass: "singleton", admitted: 1 },
-  { cpus: 128, workerClass: "reader", admitted: 8, owned: true },
-  { cpus: 128, workerClass: "reader", admitted: 8, maxWorkers: 1 },
+  { cpus: 128, workerClass: "reader", admitted: 2, owned: true },
+  { cpus: 128, workerClass: "reader", admitted: 2, maxWorkers: 1 },
 ])("bounds $workerClass admission on $cpus CPUs (owned=$owned)", async (testCase) => {
   cpu.count = testCase.cpus;
   const options = {

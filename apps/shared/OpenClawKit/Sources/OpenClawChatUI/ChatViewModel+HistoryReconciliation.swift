@@ -635,6 +635,39 @@ extension OpenClawChatViewModel {
         return Self.dedupeMessages(reconciled)
     }
 
+    /// Retained local rows keep their place after their nearest surviving predecessor, or before their nearest
+    /// surviving successor when no predecessor survives. A row with neither is newer than every history row and
+    /// goes to the end. Appending them moved unpersisted voice consult answers below every later turn.
+    static func insertingRetainedMessages(
+        _ retainedIDs: Set<UUID>,
+        from previous: [OpenClawChatMessage],
+        into reconciled: [OpenClawChatMessage]) -> [OpenClawChatMessage]
+    {
+        var result = reconciled
+        let reconciledIDs = Set(reconciled.map(\.id))
+        var present = reconciledIDs
+        var anchor: UUID?
+        for (offset, message) in previous.enumerated() {
+            if present.contains(message.id) {
+                anchor = message.id
+            } else if retainedIDs.contains(message.id) {
+                let index = if let anchor, let position = result.firstIndex(where: { $0.id == anchor }) {
+                    result.index(after: position)
+                } else if let successor = previous[(offset + 1)...].first(where: { reconciledIDs.contains($0.id) }),
+                          let position = result.firstIndex(where: { $0.id == successor.id })
+                {
+                    position
+                } else {
+                    result.endIndex
+                }
+                result.insert(message, at: index)
+                present.insert(message.id)
+                anchor = message.id
+            }
+        }
+        return result
+    }
+
     static func dedupeMessages(_ messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
         var seen = Set<String>()
         return messages.filter { message in
@@ -733,6 +766,14 @@ extension OpenClawChatViewModel {
         } else {
             Self.reconcileMessageIDs(previous: self.messages, incoming: incoming)
         }
+        // A retained row that precedes a retained provisional answer keeps its place before it. A lagging
+        // snapshot can lack both a submitted question and its answer, and appending only one reverses them.
+        // Keep the existing tail placement for retained rows after the last answer.
+        let lastAnswerIndex = self.messages.lastIndex { unmatchedProvisionalFinalIDs.contains($0.id) }
+        let placedRetainedIDs = lastAnswerIndex.map { index in
+            Set(self.messages[...index].map(\.id)).intersection(retainedMessageIDs)
+        } ?? []
+        nextMessages = Self.insertingRetainedMessages(placedRetainedIDs, from: self.messages, into: nextMessages)
         let reconciledMessageIDs = Set(nextMessages.map(\.id))
         nextMessages.append(contentsOf: self.messages.filter { message in
             retainedMessageIDs.contains(message.id) && !reconciledMessageIDs.contains(message.id)

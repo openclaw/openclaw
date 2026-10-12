@@ -1,5 +1,7 @@
+import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { waitForAgentDatabasePreparation } from "../../state/agent-database-preparation-context.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
@@ -31,6 +33,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import { reclaimIncognitoSessionLifecycle } from "./session-incognito-lifecycle-operations.js";
 import { maintenanceLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -47,11 +50,38 @@ export async function cleanupSessionLifecycleArtifactsCore(
       archivedTranscriptArtifacts: result.archivedTranscripts.length,
     };
   }
+  const incognitoSource = captureIncognitoSessionSource(params);
+  if (incognitoSource && "kind" in incognitoSource) {
+    return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+  }
   const sessionKeySegmentPrefix = params.sessionKeySegmentPrefix.trim();
   const transcriptContentMarker = params.transcriptContentMarker;
   const pluginOwnerId = params.pluginOwnerId?.trim();
   if (!sessionKeySegmentPrefix || !transcriptContentMarker) {
     return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+  }
+  if (incognitoSource) {
+    return cleanupSessionLifecycleArtifactsCore({
+      kind: "incognito",
+      actor: incognitoSource.actor,
+      authority: {
+        assertCurrent() {
+          incognitoSource.actor.assertCurrent();
+        },
+      },
+      admissionSignal: incognitoSource.admissionSignal,
+      env: params.env ?? {
+        OPENCLAW_STATE_DIR: path.resolve(incognitoSource.actor.path, "../../../.."),
+      },
+      ownerStorePath: params.storePath,
+      input: {
+        sessionKeySegmentPrefix,
+        transcriptContentMarker,
+        pluginOwnerId,
+        orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
+        nowMs: params.nowMs ?? Date.now(),
+      },
+    });
   }
 
   const requested = captureLifecycleDatabaseScope(
@@ -62,6 +92,12 @@ export async function cleanupSessionLifecycleArtifactsCore(
     }),
   );
   const requestedOptions = toDatabaseOptions(requested);
+  const preparation = waitForAgentDatabasePreparation(requestedOptions.agentId, {
+    env: requested.env,
+  });
+  if (preparation) {
+    await preparation;
+  }
   const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(requestedOptions);
   const opened = useWorker ? getOpenClawAgentDatabaseIfOpen(requestedOptions) : undefined;
   const openedIdentity = opened ? readOpenClawAgentDatabaseIdentity(opened) : undefined;
@@ -74,6 +110,10 @@ export async function cleanupSessionLifecycleArtifactsCore(
         }
       : readDatabasePathIdentitySync(requested.path)
     : undefined;
+  // An absent store has no historical artifacts, even if startup creates it after capture.
+  if (source?.key.startsWith("path:")) {
+    return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+  }
   const resolved = { ...requested, path: source?.canonicalPath ?? requested.path };
   const databaseOptions = { ...toDatabaseOptions(resolved), path: resolved.path };
   return withSqliteMutationWorkerLifetime(databaseOptions, async ({ assertCurrent, signal }) => {

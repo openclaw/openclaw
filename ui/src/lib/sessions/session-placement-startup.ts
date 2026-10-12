@@ -20,6 +20,7 @@ import {
 import { formatTerminalChatSendAckError } from "../../pages/chat/chat-send-support.ts";
 import type { HumanMention } from "../chat/chat-types.ts";
 import type { SessionCapability } from "./session-capability.ts";
+import { readSessionPlacementPolicy } from "./session-placement-policy.ts";
 import type {
   SessionPlacementStartMode,
   SessionPlacementTarget,
@@ -263,8 +264,9 @@ export async function deleteSessionPlacementDraft(
   requests: SessionPlacementRequests,
   key: string,
   agentId: string,
+  recovered = false,
 ): Promise<string | undefined> {
-  return deletePlacementDraft(requests, key, agentId, false);
+  return deletePlacementDraft(requests, key, agentId, recovered);
 }
 
 async function deletePlacementDraft(
@@ -298,33 +300,19 @@ async function deletePlacementDraft(
   if (!existing.sessionId) {
     return "placement draft session identity is unavailable";
   }
-  return archiveAndDeleteSessionPlacementDraft(client, {
-    key,
-    agentId,
-    sessionId: existing.sessionId,
-  });
-}
-
-async function archiveAndDeleteSessionPlacementDraft(
-  client: Pick<GatewayBrowserClient, "request">,
-  params: { key: string; agentId: string; sessionId: string },
-): Promise<string | undefined> {
+  const target = { key, agentId, expectedSessionId: existing.sessionId };
   try {
     await client.request("sessions.patch", {
-      key: params.key,
-      agentId: params.agentId,
+      ...target,
       archived: true,
-      expectedSessionId: params.sessionId,
     });
   } catch (error) {
     return formatUiError(error);
   }
   try {
     const deleted = await client.request<{ deleted?: boolean }>("sessions.delete", {
-      key: params.key,
-      agentId: params.agentId,
+      ...target,
       deleteTranscript: true,
-      expectedSessionId: params.sessionId,
       archivedOnly: true,
     });
     if (deleted.deleted !== true) {
@@ -335,24 +323,14 @@ async function archiveAndDeleteSessionPlacementDraft(
     const deleteError = formatUiError(error);
     try {
       await client.request("sessions.patch", {
-        key: params.key,
-        agentId: params.agentId,
+        ...target,
         archived: false,
-        expectedSessionId: params.sessionId,
       });
     } catch (restoreError) {
       return `${deleteError}; restoring the placement draft failed: ${formatUiError(restoreError)}`;
     }
     return deleteError;
   }
-}
-
-export async function deleteRecoveredSessionPlacementDraft(
-  requests: SessionPlacementRequests,
-  key: string,
-  agentId: string,
-): Promise<string | undefined> {
-  return deletePlacementDraft(requests, key, agentId, true);
 }
 
 export async function startSessionPlacementInitialTurn(
@@ -381,15 +359,40 @@ export async function startSessionPlacementInitialTurn(
       { key: params.key, agentId: params.agentId, mode, initial, cleanupOnCancellation },
       isCurrent,
     );
-  let resolution: PlacementResolution | undefined;
+  let resolution: PlacementResolution = { status: "dispatch" };
   let dispatchError = "";
-  if (params.mode !== "dispatch") {
+  const requiredTarget =
+    params.target.kind === "profile" && params.target.required ? params.target : undefined;
+  if (requiredTarget) {
+    // A recovered draft carries intent, not authority. Revalidate the policy before
+    // observing placement or admitting a Retry through the ordinary run owner.
+    try {
+      const policy = await readSessionPlacementPolicy(client);
+      if (!isCurrent()) {
+        return cancelSessionPlacement(client, params, cleanupOnCancellation);
+      }
+      if (policy.requiredProfile?.id !== requiredTarget.profileId) {
+        return { status: "dispatch-rejected", error: t("newSession.requiredWorkerChanged") };
+      }
+      if (!policy.requiredProfile.providerId) {
+        return { status: "dispatch-rejected", error: t("newSession.requiredWorkerUnavailable") };
+      }
+    } catch (error) {
+      if (!isCurrent()) {
+        return cancelSessionPlacement(client, params, cleanupOnCancellation);
+      }
+      return { status: "dispatch-rejected", error: formatUiError(error) };
+    }
+  }
+  if (params.mode !== "dispatch" || requiredTarget) {
     resolution = await resolvePlacement(params.mode);
+    if (resolution.status === "dispatch" && !isCurrent()) {
+      return cancelSessionPlacement(client, params, cleanupOnCancellation);
+    }
   }
-  if (resolution?.status === "dispatch" && !isCurrent()) {
-    return cancelSessionPlacement(client, params, cleanupOnCancellation);
-  }
-  if (!resolution || resolution.status === "dispatch") {
+  // Creation already starts mandatory placement. Explicit Retry of a stopped/failed
+  // required worker is admitted by sessions.send, never by the admin dispatch API.
+  if (!requiredTarget && resolution.status === "dispatch") {
     try {
       const dispatched = await client.request<SessionsDispatchResult>(
         "sessions.dispatch",

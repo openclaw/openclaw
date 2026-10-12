@@ -5,6 +5,7 @@ import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
+  runSqliteWorkerTransactionSync,
 } from "./sqlite-transaction.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -39,6 +40,32 @@ afterEach(() => {
 });
 
 describe("SQLite transaction diagnostics", () => {
+  it("waits for transaction admission before BEGIN and still refuses a revoked commit", () => {
+    const db = createDatabase();
+    const phases: Array<[string, boolean]> = [];
+    expect(() =>
+      runSqliteWorkerTransactionSync(
+        {
+          database: db,
+          databasePath: ":memory:",
+          admit(stage) {
+            phases.push([stage, db.isTransaction]);
+            if (stage === "commit") {
+              throw new Error("authority revoked");
+            }
+          },
+        },
+        () => db.prepare("INSERT INTO entries VALUES ('refused', 'value')").run(),
+      ),
+    ).toThrow("authority revoked");
+    expect(phases).toEqual([
+      ["transaction", false],
+      ["commit", true],
+    ]);
+    expect(readEntries(db)).toEqual([]);
+    expect(db.isTransaction).toBe(false);
+  });
+
   it("separates preparation, SQL, host wait and a failed COMMIT", () => {
     const db = createDatabase();
     const logger = { warn: vi.fn() };

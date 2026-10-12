@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["unicorn", "typescript", "oxc", "import"],
+  "settings": { "solid": { "version": 2 } },
   "categories": {
     "correctness": "error",
     "perf": "error",
@@ -246,6 +247,45 @@
     "**/node_modules/**"
   ],
   "overrides": [
+    {
+      "files": ["ui/**/*.tsx"],
+      "jsPlugins": ["./tools/solid-lint/index.mjs"],
+      // eslint-plugin-solid/configs/v2; keep the AST-only rules on the UI boundary.
+      "rules": {
+        "solid/jsx-no-duplicate-props": "error",
+        "solid/jsx-no-undef": "error",
+        "solid/jsx-uses-vars": "error",
+        "solid/no-unknown-namespaces": "error",
+        "solid/no-innerhtml": "error",
+        "solid/jsx-no-script-url": "error",
+        "solid/components-return-once": "warn",
+        "solid/no-destructure": "error",
+        "solid/prefer-for": "error",
+        "solid/reactivity": "warn",
+        "solid/event-handlers": "error",
+        "solid/imports": "warn",
+        "solid/style-prop": "warn",
+        "solid/no-react-deps": "off",
+        "solid/no-react-specific-props": "error",
+        "solid/self-closing-comp": "warn",
+        "solid/no-array-handlers": "off",
+        "solid/prefer-show": "off",
+        "solid/no-proxy-apis": "off",
+        "solid/prefer-classlist": "off",
+        "solid/removed-api": "error",
+        "solid/no-single-arg-create-effect": "error",
+        "solid/no-store-mutation-outside-setter": "error",
+        "solid/no-write-in-pure-computation": "error",
+        "solid/no-unused-signal": "warn",
+        "solid/no-accessor-as-prop": "error",
+        "solid/no-boolean-enumerated-attribute": "error",
+        "solid/prefer-structured-class": "warn",
+        "solid/valid-use-server": "error",
+        "solid/require-async-server-function": "error",
+        "solid/no-invalid-server-capture": "error",
+        "solid/no-browser-globals-in-server-function": "error"
+      }
+    },
     {
       "files": ["packages/worker-runtime/**/*.{js,ts,mts,cts}"],
       "rules": {

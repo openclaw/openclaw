@@ -23,6 +23,10 @@ import {
   SessionSharingProfileFactsChangedError,
 } from "./session-mutation-authorization-error.js";
 import {
+  hasNativeIncognitoSessionSharingSource,
+  type IncognitoSessionSharingTarget,
+} from "./session-sharing-incognito.js";
+import {
   authorizeSessionSharingTarget,
   canManageSessionSharing,
   isGatewayAdmin,
@@ -38,6 +42,7 @@ import {
   loadCachedSessionSharingSnapshot,
   type SessionSharingSnapshot,
 } from "./session-sharing-snapshot-cache.js";
+import type { GatewaySessionStoreSelection } from "./session-utils-store-retained.js";
 
 function sharingSnapshot(
   target: SessionSharingTarget | null,
@@ -196,14 +201,15 @@ export type PreparedSessionSharingProfiles = {
 };
 
 export type PreparedMutationSharing = {
+  selection?: GatewaySessionStoreSelection;
   target: SessionSharingTarget | null;
   storageTarget: Pick<SessionSharingTarget, "agentId" | "canonicalKey" | "storePath">;
-  members: readonly import("../config/sessions/session-sharing-store.kernel.js").SessionMember[];
+  members: readonly import("../config/sessions/session-membership-facts.types.js").SessionMember[];
   isMember?: (identityId: string) => boolean;
   assertCurrent: () => void;
 };
 
-/** Prepared policy and source facts are borrowed only by one synchronous authority consumer. */
+/** Consume live authority or borrow prepared source facts in one synchronous frame. */
 export function createSessionSharingConsumption(params: {
   client: GatewayClient | null;
   sharing: PreparedMutationSharing | undefined;
@@ -223,7 +229,7 @@ export function createSessionSharingConsumption(params: {
           })
         : undefined,
     consume: <T>(
-      prepared: PreparedMutationSharing,
+      prepared: PreparedMutationSharing | undefined,
       consume: () => T,
       profiles: PreparedSessionSharingProfiles | undefined = params.getProfiles(),
     ): T => {
@@ -231,7 +237,7 @@ export function createSessionSharingConsumption(params: {
       Object.assign(current, { sharing: prepared, profiles });
       try {
         profiles?.readCurrent();
-        prepared.assertCurrent();
+        prepared?.assertCurrent();
         const result = consume();
         if (isPromiseLike(result)) {
           throw new Error("Sharing authorization consumers must remain synchronous");
@@ -339,9 +345,10 @@ export function createSessionSharingInputAuthority(
   ownedParams: { client: GatewayClient | null; preparedProfiles?: PreparedSessionSharingProfiles },
   authorization: SessionMutationAuthorization,
   readSharing: () => Parameters<Parameters<typeof withSessionSharingTarget>[1]>[0],
+  targets: readonly IncognitoSessionSharingTarget[],
 ): SessionMutationAuthorization["admittedInputAuthority"] {
   const { withCurrent, withPreparedCurrent } = authorization;
-  if (!withCurrent || !withPreparedCurrent) {
+  if (!withCurrent || !withPreparedCurrent || hasNativeIncognitoSessionSharingSource(targets)) {
     return undefined;
   }
   return {

@@ -7,11 +7,11 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { addSessionSuggestionInWorker as addSessionSuggestion } from "../../config/sessions/session-metadata-write.async.js";
 import {
   addSessionMember,
   listSessionMembers,
 } from "../../config/sessions/session-sharing-store.js";
-import { addSessionSuggestion } from "../../config/sessions/session-suggestion-store.js";
 import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -162,11 +162,6 @@ describe("session metadata writer admission", () => {
         const reservation = runOpenClawAgentWorkerWrite(options, async () => {
           entered.resolve();
           await release.promise;
-          cfg = { session: { store: replacement.storePath } };
-          expect(await disposeOpenClawAgentDatabaseByPath(options.path, { env: state.env })).toBe(
-            true,
-          );
-          renameSync(options.path, retired.storePath);
         });
         await entered.promise;
         const params =
@@ -179,6 +174,12 @@ describe("session metadata writer admission", () => {
         try {
           await setImmediate();
           expect(request.respond).not.toHaveBeenCalled();
+          // External retirement must not inherit the writer whose waiting mutation it revokes.
+          cfg = { session: { store: replacement.storePath } };
+          expect(await disposeOpenClawAgentDatabaseByPath(options.path, { env: state.env })).toBe(
+            true,
+          );
+          renameSync(options.path, retired.storePath);
           release.resolve();
           await Promise.all([reservation, request.done]);
           expect(request.respond.mock.calls.some(([ok]) => ok)).toBe(false);
@@ -207,7 +208,7 @@ describe("session metadata writer admission", () => {
         await addSessionMember(scope, { identityId: other.id, addedBy: owner.id });
       }
       if (method === "session.suggestions.resolve") {
-        addSessionSuggestion(scope, {
+        await addSessionSuggestion(scope, {
           id: "pending",
           authorId: owner.id,
           text: "synthetic suggestion",

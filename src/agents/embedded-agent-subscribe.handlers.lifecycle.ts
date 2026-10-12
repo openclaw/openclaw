@@ -294,30 +294,6 @@ export function handleAgentEnd(
       : flushChannel();
   };
 
-  const runBeforeTerminalDelivery = ():
-    | BeforeTerminalDeliveryDecision
-    | Promise<BeforeTerminalDeliveryDecision> => {
-    // The acceptance hook inspects the answer this turn delivers, including a kept answer.
-    const answerAssistant = ctx.state.keptAnswer?.assistant ?? lastAssistant;
-    return ctx.params.onBeforeTerminalDelivery?.({
-      messages: evt?.messages ?? [],
-      willRetry: evt?.willRetry === true,
-      ...(evt?.assistantEntryId ? { assistantEntryId: evt.assistantEntryId } : {}),
-      ...(answerAssistant ? { lastAssistant: answerAssistant } : {}),
-      assistantTexts: ctx.state.assistantTexts,
-      hasAssistantVisibleText,
-      isError,
-      incompleteTerminalAssistant,
-      hadDeterministicSideEffect: hadBeforeFinalizeSideEffect,
-      hasPendingContinuation:
-        ctx.state.yielded ||
-        ctx.state.deterministicApprovalPromptPending ||
-        ctx.state.deterministicApprovalPromptSent ||
-        hasCompletionMessageSessionSpawn(ctx.state.acceptedSessionSpawns) ||
-        hasAsyncActivity(ctx.state.toolMetas),
-    });
-  };
-
   const rethrowAfterLifecycleTerminal = (error: unknown) => {
     const emitted = emitLifecycleTerminalOnce();
     if (isPromiseLike<void>(emitted)) {
@@ -326,45 +302,6 @@ export function handleAgentEnd(
       });
     }
     throw error;
-  };
-
-  const deliverTerminal = () => {
-    ctx.releaseDeferredReplies();
-    const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({ final: true });
-    finalizeAgentEnd();
-    const flushPendingMediaAndChannelResult = isPromiseLike<void>(flushBlockReplyBufferResult)
-      ? Promise.resolve(flushBlockReplyBufferResult).then(flushPendingMediaAndChannel)
-      : flushPendingMediaAndChannel();
-
-    if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
-      return Promise.resolve(flushPendingMediaAndChannelResult).then(
-        emitLifecycleTerminalOnce,
-        rethrowAfterLifecycleTerminal,
-      );
-    }
-    return emitLifecycleTerminalOnce();
-  };
-
-  const deliverTerminalWithLifecycleErrorFallback = () => {
-    try {
-      return deliverTerminal();
-    } catch (error) {
-      return rethrowAfterLifecycleTerminal(error);
-    }
-  };
-
-  const suppressTerminalDelivery = () => {
-    ctx.clearAssistantStream();
-    ctx.clearDeferredBlockReplies();
-    finalizeAgentEnd();
-  };
-
-  const continueCurrentTurn = () => {
-    // Publish this checkpoint normally, but keep the run and its delivery owner
-    // alive until the already-queued same-prompt follow-up settles.
-    ctx.releaseDeferredReplies();
-    finalizeAgentEnd();
-    return ctx.flushBlockReplyBuffer();
   };
 
   let lifecycleTerminalEmitted = false;
@@ -385,17 +322,61 @@ export function handleAgentEnd(
 
   const applyBeforeTerminalDecision = (decision: BeforeTerminalDeliveryDecision) => {
     if (decision?.suppressTerminalDelivery === true) {
-      suppressTerminalDelivery();
+      ctx.clearAssistantStream();
+      ctx.clearDeferredBlockReplies();
+      finalizeAgentEnd();
       return undefined;
     }
     if (decision?.continueCurrentTurn === true) {
-      return continueCurrentTurn();
+      // Publish this checkpoint normally, but keep the run and its delivery owner
+      // alive until the already-queued same-prompt follow-up settles.
+      ctx.releaseDeferredReplies();
+      finalizeAgentEnd();
+      return ctx.flushBlockReplyBuffer();
     }
-    return deliverTerminalWithLifecycleErrorFallback();
+    try {
+      ctx.releaseDeferredReplies();
+      const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({ final: true });
+      finalizeAgentEnd();
+      const flushPendingMediaAndChannelResult = isPromiseLike<void>(flushBlockReplyBufferResult)
+        ? Promise.resolve(flushBlockReplyBufferResult).then(flushPendingMediaAndChannel)
+        : flushPendingMediaAndChannel();
+
+      if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
+        return Promise.resolve(flushPendingMediaAndChannelResult).then(
+          emitLifecycleTerminalOnce,
+          rethrowAfterLifecycleTerminal,
+        );
+      }
+      return emitLifecycleTerminalOnce();
+    } catch (error) {
+      return rethrowAfterLifecycleTerminal(error);
+    }
   };
 
-  const beforeTerminalDelivery = runTerminalHook(runBeforeTerminalDelivery, (error) =>
-    ctx.log.warn(`before terminal delivery failed: ${String(error)}`),
+  const beforeTerminalDelivery = runTerminalHook(
+    () => {
+      // The acceptance hook inspects the answer this turn delivers, including a kept answer.
+      const answerAssistant = ctx.state.keptAnswer?.assistant ?? lastAssistant;
+      return ctx.params.onBeforeTerminalDelivery?.({
+        messages: evt?.messages ?? [],
+        willRetry: evt?.willRetry === true,
+        ...(evt?.assistantEntryId ? { assistantEntryId: evt.assistantEntryId } : {}),
+        ...(answerAssistant ? { lastAssistant: answerAssistant } : {}),
+        assistantTexts: ctx.state.assistantTexts,
+        hasAssistantVisibleText,
+        isError,
+        incompleteTerminalAssistant,
+        hadDeterministicSideEffect: hadBeforeFinalizeSideEffect,
+        hasPendingContinuation:
+          ctx.state.yielded ||
+          ctx.state.deterministicApprovalPromptPending ||
+          ctx.state.deterministicApprovalPromptSent ||
+          hasCompletionMessageSessionSpawn(ctx.state.acceptedSessionSpawns) ||
+          hasAsyncActivity(ctx.state.toolMetas),
+      });
+    },
+    (error) => ctx.log.warn(`before terminal delivery failed: ${String(error)}`),
   );
 
   if (isPromiseLike<BeforeTerminalDeliveryDecision>(beforeTerminalDelivery)) {

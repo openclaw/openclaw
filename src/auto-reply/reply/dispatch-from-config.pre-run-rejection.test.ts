@@ -91,9 +91,6 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     sessionStoreMocks.loadSessionStoreEntry
       .mockReset()
       .mockImplementation(() => sessionStoreMocks.currentEntry);
-    sessionStoreMocks.readSessionEntry
-      .mockReset()
-      .mockImplementation(() => sessionStoreMocks.currentEntry);
     diagnosticMocks.logMessageProcessed.mockClear();
     diagnosticMocks.logMessageDispatchCompleted.mockClear();
     processedEvents = [];

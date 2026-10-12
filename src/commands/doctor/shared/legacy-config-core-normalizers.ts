@@ -181,7 +181,7 @@ function migrateRuntimeAgent(
   const selected = migrateRuntimeSelection(agent, blockedModelIdentities);
   if (selected.length) {
     changes.push(
-      `Moved ${path}.model legacy runtime primary refs to canonical provider refs and selected ${selected[0]!.runtime} runtime.`,
+      `Moved ${path}.model legacy runtime primary refs to provider references and selected ${selected[0]!.runtime} runtime.`,
     );
   }
   const policy = isRecord(agent.modelPolicy) ? agent.modelPolicy : undefined;
@@ -204,7 +204,7 @@ function migrateRuntimeAgent(
     }
     if (legacy.length) {
       agent.models = models;
-      changes.push(`Moved ${path}.models legacy runtime keys to canonical provider keys.`);
+      changes.push(`Moved ${path}.models legacy runtime keys to provider keys.`);
     }
   }
   if (ensureSelectedModelRuntimePolicies(agent, policyRefs)) {
@@ -221,12 +221,12 @@ function migrateRuntimeAgent(
     const refs = migrateRuntimeSelection(execution, blockedModelIdentities);
     if (refs.length) {
       ensureSelectedModelRuntimePolicies(agent, refs);
-      changes.push(`Moved ${path}.${key}.model to canonical refs with model runtime policy.`);
+      changes.push(`Moved ${path}.${key}.model to provider references with model runtime policy.`);
     }
   }
   if (policy && policyRefs.length) {
     policy.allow = allow;
-    changes.push(`Moved ${path}.modelPolicy.allow legacy runtime refs to canonical provider refs.`);
+    changes.push(`Moved ${path}.modelPolicy.allow legacy runtime refs to provider references.`);
   }
   for (const [ref, entry] of Object.entries(isRecord(agent.models) ? agent.models : {})) {
     if (isRecord(entry) && migrateCodexCliRuntimePolicy(entry.agentRuntime)) {
@@ -351,20 +351,17 @@ export function normalizeLegacyOpenAIModelProviderApi(
   cfg: OpenClawConfig,
   changes: string[],
 ): void {
-  for (const [providerId, provider] of modelProviders(cfg)) {
-    if (provider.api === "openai") {
-      provider.api = "openai-completions";
-      changes.push(
-        `Moved models.providers.${sanitizeForLog(providerId)}.api "openai" → "openai-completions".`,
-      );
+  const migrateApi = (owner: Record<string, unknown>, path: string) => {
+    if (owner.api === "openai") {
+      owner.api = "openai-completions";
+      changes.push(`Moved ${path}.api "openai" → "openai-completions".`);
     }
+  };
+  for (const [providerId, provider] of modelProviders(cfg)) {
+    const path = `models.providers.${sanitizeForLog(providerId)}`;
+    migrateApi(provider, path);
     for (const [index, model] of providerModels(provider)) {
-      if (model.api === "openai") {
-        model.api = "openai-completions";
-        changes.push(
-          `Moved models.providers.${sanitizeForLog(providerId)}.models[${index}].api "openai" → "openai-completions".`,
-        );
-      }
+      migrateApi(model, `${path}.models[${index}]`);
     }
   }
 }

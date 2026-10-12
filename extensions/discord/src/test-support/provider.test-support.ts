@@ -47,8 +47,8 @@ type ProviderMonitorTestMocks = {
       params?: { skillCommands?: unknown[]; provider?: string },
     ) => NativeCommandSpecMock[]
   >;
-  listSkillCommandsForAgentsMock: Mock<
-    (params?: { cfg?: unknown; agentIds?: string[] }) => unknown[]
+  prepareSkillCommandsForAgentsMock: Mock<
+    (params?: { cfg?: unknown; agentIds?: string[] }) => Promise<unknown[]>
   >;
   monitorLifecycleMock: Mock<(params: { threadBindings: { stop: () => void } }) => Promise<void>>;
   resolveDiscordAccountMock: Mock<
@@ -131,9 +131,9 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
         params?: { skillCommands?: unknown[]; provider?: string },
       ) => NativeCommandSpecMock[]
     >(() => [{ name: "cmd", description: "built-in", acceptsArgs: false }]),
-    listSkillCommandsForAgentsMock: vi.fn<
-      (params?: { cfg?: unknown; agentIds?: string[] }) => unknown[]
-    >(() => []),
+    prepareSkillCommandsForAgentsMock: vi.fn<
+      (params?: { cfg?: unknown; agentIds?: string[] }) => Promise<unknown[]>
+    >(async () => []),
     monitorLifecycleMock: vi.fn(async (params: { threadBindings: { stop: () => void } }) => {
       params.threadBindings.stop();
     }),
@@ -175,7 +175,7 @@ const {
   createdBindingManagers,
   getAcpSessionStatusMock,
   listNativeCommandSpecsForConfigMock,
-  listSkillCommandsForAgentsMock,
+  prepareSkillCommandsForAgentsMock,
   monitorLifecycleMock,
   resolveDiscordAccountMock,
   resolveDiscordAllowlistConfigMock,
@@ -234,7 +234,7 @@ export function resetDiscordProviderMonitorMocks(params?: {
     .mockReturnValue(
       params?.nativeCommands ?? [{ name: "cmd", description: "built-in", acceptsArgs: false }],
     );
-  listSkillCommandsForAgentsMock.mockClear().mockReturnValue([]);
+  prepareSkillCommandsForAgentsMock.mockClear().mockResolvedValue([]);
   monitorLifecycleMock.mockClear().mockImplementation(async (monitorParams) => {
     monitorParams.threadBindings.stop();
   });
@@ -353,7 +353,7 @@ vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
   return {
     ...actual,
     listNativeCommandSpecsForConfig: listNativeCommandSpecsForConfigMock,
-    listSkillCommandsForAgents: listSkillCommandsForAgentsMock,
+    prepareSkillCommandsForAgents: prepareSkillCommandsForAgentsMock,
   };
 });
 vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {

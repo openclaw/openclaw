@@ -239,14 +239,10 @@ function parseSourceFile(contents: string): SourceFile {
 }
 
 function splitLineEnding(line: string): SourceLine {
-  if (line.endsWith("\r\n")) {
-    return { text: line.slice(0, -2), ending: "\r\n" };
-  }
-  if (line.endsWith("\r")) {
-    return { text: line.slice(0, -1), ending: "\r" };
-  }
-  if (line.endsWith("\n")) {
-    return { text: line.slice(0, -1), ending: "\n" };
+  for (const ending of ["\r\n", "\r", "\n"] as const) {
+    if (line.endsWith(ending)) {
+      return { text: line.slice(0, -ending.length), ending };
+    }
   }
   return { text: line, ending: "" };
 }

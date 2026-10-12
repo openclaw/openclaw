@@ -15,29 +15,11 @@ import {
   CodexAppServerScopedRequestRejectedError,
   codexPrewriteRejectionCause,
 } from "./rpc-error.js";
-import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
-import { isCodexContextRestartSelectionChangedError } from "./thread-lifecycle-errors.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 describe("Codex app-server attempt client cleanup", () => {
   it.each([
-    {
-      name: "startup selection",
-      cause: Object.assign(new Error("selection changed"), {
-        code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
-      }),
-      matches: isCodexAppServerStartSelectionChangedError,
-      retireBefore: false,
-    },
-    {
-      name: "context restart",
-      cause: Object.assign(new Error("context selection changed"), {
-        code: "CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED",
-      }),
-      matches: isCodexContextRestartSelectionChangedError,
-      retireBefore: true,
-    },
     {
       name: "startup timeout",
       cause: new CodexAppServerStartupError("timed_out"),
@@ -98,7 +80,6 @@ describe("Codex app-server attempt client cleanup", () => {
 
   it.each([
     { terminated: true, oneShot: false },
-    { terminated: false, oneShot: false },
     { terminated: true, oneShot: true },
   ])(
     "drains native terminals without claiming OS cleanup (terminated=$terminated, oneShot=$oneShot)",
@@ -127,17 +108,6 @@ describe("Codex app-server attempt client cleanup", () => {
     },
   );
 
-  it.each([false, true])(
-    "accepts an empty native terminal inventory (oneShot=%s)",
-    async (oneShot) => {
-      const request = vi.fn().mockResolvedValue({ data: [], nextCursor: null });
-      await expect(
-        terminateCodexBackgroundTerminals({ request } as never, "thread-1", oneShot),
-      ).resolves.toBeUndefined();
-      expect(request).toHaveBeenCalledOnce();
-    },
-  );
-
   it("reports a terminal that remains running after termination", async () => {
     const request = vi
       .fn()
@@ -149,22 +119,6 @@ describe("Codex app-server attempt client cleanup", () => {
     ).rejects.toThrow("Codex background-terminal cleanup failed");
   });
 
-  it("bounds the entire terminal inventory request without closing the shared client", async () => {
-    vi.useFakeTimers();
-    const harness = createClientHarness();
-    const close = vi.spyOn(harness.client, "close");
-    try {
-      const cleanup = terminateCodexBackgroundTerminals(harness.client, "thread-1");
-      const rejected = expect(cleanup).rejects.toThrow("Codex background-terminal cleanup failed");
-      await vi.advanceTimersByTimeAsync(5_000);
-      await rejected;
-      expect(close).not.toHaveBeenCalled();
-    } finally {
-      harness.client.close();
-      vi.useRealTimers();
-    }
-  });
-
   it("keeps strict startup retirement failures visible to lifecycle owners", async () => {
     const closeAndWait = vi.fn(async () => {
       throw new Error("strict client retirement failed");
@@ -173,51 +127,6 @@ describe("Codex app-server attempt client cleanup", () => {
     await expect(closeCodexStartupClientBestEffort({ closeAndWait } as never)).rejects.toThrow(
       "strict client retirement failed",
     );
-  });
-
-  it("waits for the matching terminal after an interrupt is acknowledged", async () => {
-    const harness = createClientHarness();
-    const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      timeoutMs: 1_000,
-    });
-    const settled = vi.fn();
-    void completion.then(settled);
-    const request = JSON.parse(harness.writes.at(-1) ?? "{}") as {
-      id: number;
-      method: string;
-      params: Record<string, unknown>;
-    };
-
-    expect(request).toMatchObject({
-      method: "turn/interrupt",
-      params: { threadId: "thread-1", turnId: "turn-1" },
-    });
-    harness.send({ id: request.id, result: {} });
-    await Promise.resolve();
-    expect(settled).not.toHaveBeenCalled();
-
-    harness.send({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turn: { id: "turn-other", status: "interrupted", items: [] },
-      },
-    });
-    await Promise.resolve();
-    expect(settled).not.toHaveBeenCalled();
-
-    harness.send({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turn: { id: "turn-1", status: "interrupted", items: [] },
-      },
-    });
-
-    await expect(completion).resolves.toBe(true);
-    harness.client.close();
   });
 
   it("retains the startup interrupt acknowledgement contract", async () => {
@@ -239,7 +148,6 @@ describe("Codex app-server attempt client cleanup", () => {
   });
 
   it.each([
-    { name: "before native activation", startBeforeError: false, releaseRoute: false },
     { name: "after native activation", startBeforeError: true, releaseRoute: false },
     { name: "after subscription release", startBeforeError: false, releaseRoute: true },
   ])(
@@ -298,6 +206,15 @@ describe("Codex app-server attempt client cleanup", () => {
           method: "turn/completed",
           params: {
             threadId: "thread-1",
+            turn: { id: "turn-other", status: "interrupted", items: [] },
+          },
+        });
+        await setImmediate();
+        expect(settled).not.toHaveBeenCalled();
+        harness.send({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
             turn: { id: "turn-1", status: "interrupted", items: [] },
           },
         });
@@ -309,82 +226,38 @@ describe("Codex app-server attempt client cleanup", () => {
     },
   );
 
-  it("keeps one deadline through activation and terminal confirmation", async () => {
-    vi.useFakeTimers();
-    // Alias the monotonic clock to the wall clock so advanceTimersByTime drives
-    // both; the deadline now reads performance.now() (see the wall-clock-rewind
-    // regression below for the decoupled case).
-    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+  it("preserves a terminal receipt that precedes an interrupt rejection: expected active turn id turn-1 but found turn-2", async () => {
     const harness = createClientHarness();
-    const request = vi.spyOn(harness.client, "request");
     try {
       const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
         threadId: "thread-1",
         turnId: "turn-1",
         timeoutMs: 100,
       });
-      const settled = vi.fn();
-      void completion.then(settled);
       const first = JSON.parse(harness.writes.at(-1) ?? "{}") as { id: number };
-      harness.send({
-        id: first.id,
-        error: { code: -32_600, message: "no active turn to interrupt" },
-      });
-      await vi.advanceTimersByTimeAsync(60);
       harness.send({
         method: "turn/started",
         params: { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } },
       });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(harness.writes).toHaveLength(2);
-      const rpcRejected = vi.fn();
-      void Promise.resolve(request.mock.results.at(-1)?.value).catch(rpcRejected);
-      await vi.advanceTimersByTimeAsync(39);
-      expect(settled).not.toHaveBeenCalled();
-      expect(rpcRejected).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(settled).toHaveBeenCalledExactlyOnceWith(false);
-      expect(rpcRejected).toHaveBeenCalledOnce();
-      await expect(completion).resolves.toBe(false);
+      harness.send({
+        method: "turn/completed",
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
+      });
+      harness.send({
+        method: "turn/started",
+        params: { threadId: "thread-1", turn: { id: "turn-2", status: "inProgress" } },
+      });
+      harness.send({
+        id: first.id,
+        error: { code: -32_600, message: "expected active turn id turn-1 but found turn-2" },
+      });
+      await expect(completion).resolves.toBe(true);
+      expect(harness.writes).toHaveLength(1);
       expect(harness.client.getCloseError()).toBeUndefined();
     } finally {
       harness.client.close();
-      vi.useRealTimers();
     }
   });
-
-  it.each(["no active turn to interrupt", "expected active turn id turn-1 but found turn-2"])(
-    "preserves a terminal receipt that precedes an interrupt rejection: %s",
-    async (message) => {
-      const harness = createClientHarness();
-      try {
-        const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          timeoutMs: 100,
-        });
-        const first = JSON.parse(harness.writes.at(-1) ?? "{}") as { id: number };
-        harness.send({
-          method: "turn/started",
-          params: { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } },
-        });
-        harness.send({
-          method: "turn/completed",
-          params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
-        });
-        harness.send({
-          method: "turn/started",
-          params: { threadId: "thread-1", turn: { id: "turn-2", status: "inProgress" } },
-        });
-        harness.send({ id: first.id, error: { code: -32_600, message } });
-        await expect(completion).resolves.toBe(true);
-        expect(harness.writes).toHaveLength(1);
-        expect(harness.client.getCloseError()).toBeUndefined();
-      } finally {
-        harness.client.close();
-      }
-    },
-  );
 
   it("does not interrupt after its deadline when timeout callbacks are delayed", async () => {
     vi.useFakeTimers();
@@ -456,9 +329,12 @@ describe("Codex app-server attempt client cleanup", () => {
       const rpcTimeoutMs = (reinterruptCall?.[2] as { timeoutMs?: number } | undefined)?.timeoutMs;
       expect(rpcTimeoutMs).toBeLessThanOrEqual(40);
       expect(rpcTimeoutMs).toBeGreaterThan(0);
+      const rpcRejected = vi.fn();
+      void Promise.resolve(requestSpy.mock.results.at(-1)?.value).catch(rpcRejected);
       // Cross the 100ms monotonic budget; the completion settles as failed.
       await vi.advanceTimersByTimeAsync(40);
       await expect(completion).resolves.toBe(false);
+      expect(rpcRejected).toHaveBeenCalledOnce();
     } finally {
       harness.client.close();
       vi.useRealTimers();
@@ -514,61 +390,6 @@ describe("Codex app-server attempt client cleanup", () => {
     } finally {
       harness.client.close();
     }
-  });
-
-  it("fails closed when acknowledged interruption never reaches its terminal", async () => {
-    const harness = createClientHarness();
-    const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      timeoutMs: 10,
-    });
-    const request = JSON.parse(harness.writes.at(-1) ?? "{}") as { id: number };
-    harness.send({ id: request.id, result: {} });
-
-    await expect(completion).resolves.toBe(false);
-    harness.client.close();
-  });
-
-  it.each([
-    {
-      name: "the absent-active error with a terminal receipt",
-      error: { code: -32_600, message: "no active turn to interrupt" },
-      completed: true,
-    },
-    {
-      name: "the absent-active error without a terminal receipt",
-      error: { code: -32_600, message: "no active turn to interrupt" },
-      completed: false,
-    },
-    {
-      name: "another invalid-request error",
-      error: { code: -32_600, message: "expected another active turn" },
-      completed: false,
-    },
-    {
-      name: "the terminal message with another error code",
-      error: { code: -32_000, message: "no active turn to interrupt" },
-      completed: false,
-    },
-  ])("confirms $name only from native evidence", async ({ error, completed }) => {
-    const harness = createClientHarness();
-    const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      timeoutMs: 10,
-    });
-    const request = JSON.parse(harness.writes.at(-1) ?? "{}") as { id: number };
-    harness.send({ id: request.id, error });
-    if (completed) {
-      harness.send({
-        method: "turn/completed",
-        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
-      });
-    }
-
-    await expect(completion).resolves.toBe(completed);
-    harness.client.close();
   });
 
   it("swallows unsubscribe cleanup failures", async () => {

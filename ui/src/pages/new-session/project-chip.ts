@@ -127,6 +127,8 @@ export function renderProjectChip(params: {
 }) {
   const folder = params.folder.trim();
   const cloneInput = projectCloneInput(params.projectQuery);
+  const selectClone = (cloneUrl: string) =>
+    params.onSelectRemoteProject({ identity: cloneUrl, cloneUrl });
   const query = params.projectQuery.trim();
   const browseNeedsAdmin = !params.browseAvailable && !params.isAdmin;
   const recentItems = params.state.recents;
@@ -249,10 +251,7 @@ export function renderProjectChip(params: {
                     @keydown=${(event: KeyboardEvent) => {
                       if (event.key === "Enter" && cloneInput && params.projectAddAvailable) {
                         event.preventDefault();
-                        params.onSelectRemoteProject({
-                          identity: cloneInput,
-                          cloneUrl: cloneInput,
-                        });
+                        selectClone(cloneInput);
                       }
                     }}
                   />
@@ -279,11 +278,7 @@ export function renderProjectChip(params: {
                           icon: icons.gitBranch,
                           sub: t("newSession.cloneProject"),
                           checked: params.selectedRemoteProject?.cloneUrl === cloneInput,
-                          onSelect: () =>
-                            params.onSelectRemoteProject({
-                              identity: cloneInput,
-                              cloneUrl: cloneInput,
-                            }),
+                          onSelect: () => selectClone(cloneInput),
                         },
                         params.submitting,
                       )

@@ -1,9 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as nativeTranscriptAnchor from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import * as transcriptAnchor from "../../config/sessions/session-transcript-anchor-read.js";
+import {
+  runWithoutOwnedSessionTranscriptWrites,
+  withSessionTranscriptWriteAssertion,
+} from "../../config/sessions/transcript-write-context.js";
 import { recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { scheduleSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  completedTurnMessageAnchor,
+  captureCompletedTurnMessageAnchor,
+  sessionManagerReadMessageAnchor,
+} from "../sessions/session-manager-message-anchor.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import {
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
@@ -52,6 +64,66 @@ describe("agent end side effects", () => {
     mockExperienceReview.mockReset();
     mockAwaitAgentEndHook.mockReset();
     mockRunAgentEndHook.mockReset();
+  });
+
+  it("schedules an append receipt without rereading it and refuses a revoked writer", async () => {
+    await withOpenClawTestState({ label: "agent-end-append-receipt" }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionId: "receipt",
+        sessionKey: "agent:main:receipt",
+        storePath: state.statePath("transcript.sqlite"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const manager = await SessionManager.openAsync(target);
+      const appended = await manager.appendMessageWithTranscriptAnchorAsync({
+        role: "user",
+        content: "completed turn",
+        timestamp: 1,
+      });
+      const anchor = manager[sessionManagerReadMessageAnchor](appended.entryId);
+      expect(anchor).toEqual(appended.anchor);
+      const params = {
+        [completedTurnMessageAnchor]: captureCompletedTurnMessageAnchor(manager, appended.entryId),
+        skillExperienceReviewSource: { ...target, entryId: appended.entryId },
+        event: { messages: [], success: true },
+        ctx: {
+          runId: "receipt-run",
+          workspaceDir: state.workspaceDir,
+          config: {},
+          foregroundPromptContext: {
+            agentId: "main",
+            agentDir: state.agentDir("main"),
+            workspaceDir: state.workspaceDir,
+            sandboxSessionKey: target.sessionKey,
+            trigger: "user",
+          },
+        },
+      } satisfies Parameters<typeof runAgentEndSideEffectsAsync>[0];
+      await runAgentEndSideEffectsAsync(params);
+      expect(mockExperienceReview).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ source: anchor }),
+      );
+      expect(transcriptAnchor.readActiveTranscriptEntryAnchorAsync).not.toHaveBeenCalled();
+      let active = true;
+      await withSessionTranscriptWriteAssertion(
+        target,
+        () => {
+          if (!active) {
+            throw new Error("writer revoked");
+          }
+        },
+        async () => {
+          const receipt = captureCompletedTurnMessageAnchor(manager, appended.entryId);
+          active = false;
+          await runWithoutOwnedSessionTranscriptWrites(() =>
+            runAgentEndSideEffectsAsync({ ...params, [completedTurnMessageAnchor]: receipt }),
+          );
+        },
+      );
+      expect(mockExperienceReview).toHaveBeenCalledOnce();
+      expect(mockRunAgentEndHook).toHaveBeenCalledTimes(2);
+    });
   });
 
   it.each(["sdk", "bundled"] as const)(

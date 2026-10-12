@@ -23,33 +23,32 @@ const gatewayAgentCliState = resolveGlobalSingleton(
   },
 );
 
-function renderPosixShim(invocation: OpenClawCliInvocation, profile: string | null): string {
+function renderCliShim(
+  invocation: OpenClawCliInvocation,
+  profile: string | null,
+  windows: boolean,
+): string {
   const args = [...invocation.args, ...(profile ? ["--profile", profile] : [])];
-  const environment = Object.entries(invocation.env ?? {}).map(
-    ([key, value]) => `export ${key}=${quoteCliArg(value)}`,
+  const context = { delayedExpansion: false };
+  const environment = Object.entries(invocation.env ?? {}).map(([key, value]) =>
+    windows ? renderCmdSetAssignment(key, value, context) : `export ${key}=${quoteCliArg(value)}`,
   );
+  if (windows) {
+    const command = [invocation.command, ...args].map((arg) => quoteCmdScriptArg(arg, context));
+    // Own expansion before assigning source paths or forwarding literal user bangs.
+    return [
+      "@echo off",
+      "setlocal DisableDelayedExpansion",
+      ...environment,
+      `${command.join(" ")} %*`,
+      "",
+    ].join("\r\n");
+  }
   return `#!/bin/sh
 set -eu
 ${environment.join("\n")}
 exec ${[invocation.command, ...args].map(quoteCliArg).join(" ")} "$@"
 `;
-}
-
-function renderWindowsShim(invocation: OpenClawCliInvocation, profile: string | null): string {
-  const args = [...invocation.args, ...(profile ? ["--profile", profile] : [])];
-  const context = { delayedExpansion: false };
-  const environment = Object.entries(invocation.env ?? {}).map(([key, value]) =>
-    renderCmdSetAssignment(key, value, context),
-  );
-  const command = [invocation.command, ...args].map((arg) => quoteCmdScriptArg(arg, context));
-  // Own expansion before assigning source paths or forwarding literal user bangs.
-  return [
-    "@echo off",
-    "setlocal DisableDelayedExpansion",
-    ...environment,
-    `${command.join(" ")} %*`,
-    "",
-  ].join("\r\n");
 }
 
 /**
@@ -70,10 +69,7 @@ export async function prepareGatewayAgentCliShim(
   const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
   const binDir = path.join(options.stateDir ?? resolveStateDir(env), AGENT_CLI_BIN_DIR);
   const executablePath = path.join(binDir, platform === "win32" ? "openclaw.cmd" : "openclaw");
-  const content =
-    platform === "win32"
-      ? renderWindowsShim(invocation, profile)
-      : renderPosixShim(invocation, profile);
+  const content = renderCliShim(invocation, profile, platform === "win32");
 
   await fs.mkdir(binDir, { recursive: true, mode: 0o700 });
   await fs.chmod(binDir, 0o700).catch(() => undefined);

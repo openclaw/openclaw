@@ -214,15 +214,10 @@ export async function reconcileTerminalSourceReplyDelivery(params: {
     await cancelRestartRecoveryTerminalDelivery(params.receipt);
     return "not-delivered";
   }
+  const deliveredMirror = { ...params.mirror, deliveredPayload: params.deliveredPayload };
   if (
-    !matchesDeliveredSourceTargets(
-      { ...params.mirror, deliveredPayload: params.deliveredPayload },
-      deliveryFact,
-    ) ||
-    !isCurrentSourceConversation(
-      { ...params.mirror, deliveredPayload: params.deliveredPayload },
-      true,
-    )
+    !matchesDeliveredSourceTargets(deliveredMirror, deliveryFact) ||
+    !isCurrentSourceConversation(deliveredMirror, true)
   ) {
     return "not-source";
   }
@@ -246,10 +241,9 @@ function hasCurrentSourceContext(params: SourceReplyTranscriptMirrorParams): boo
     }
   }
   const currentChannel = normalizeOptionalLowercaseString(toolContext.currentChannelProvider);
-  if (!currentChannel || currentChannel !== normalizeOptionalLowercaseString(params.channel)) {
-    return false;
-  }
-  return true;
+  return Boolean(
+    currentChannel && currentChannel === normalizeOptionalLowercaseString(params.channel),
+  );
 }
 
 function matchesCurrentSourceTarget(
@@ -359,10 +353,7 @@ function isCurrentSourceConversation(
 ): params is MirrorableSourceReplyTranscriptParams {
   // Polls share the send target contract. Transcript mirroring stays send-only
   // because poll params carry no message text to mirror.
-  if (params.action !== "send" && params.action !== "poll") {
-    return false;
-  }
-  if (!hasCurrentSourceContext(params)) {
+  if ((params.action !== "send" && params.action !== "poll") || !hasCurrentSourceContext(params)) {
     return false;
   }
   const threadPlacement = resolveSourceReplyThreadPlacement(
@@ -527,11 +518,9 @@ export async function mirrorDeliveredSourceReplyToTranscript(
   const deliveryFact = projectPluginMessageDeliveryFact(params.deliveredPayload);
   if (
     (deliveryFact && (deliveryFact.status !== "settled" || deliveryFact.partialDelivery)) ||
-    !matchesDeliveredSourceTargets(params, deliveryFact)
+    !matchesDeliveredSourceTargets(params, deliveryFact) ||
+    !isCurrentSourceConversation(params, params.sourceReplyFinal === true)
   ) {
-    return false;
-  }
-  if (!isCurrentSourceConversation(params, params.sourceReplyFinal === true)) {
     return false;
   }
 

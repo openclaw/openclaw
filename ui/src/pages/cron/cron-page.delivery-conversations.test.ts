@@ -1,40 +1,22 @@
 import type { ConversationListItem } from "@openclaw/gateway-protocol";
-import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import type { CronState } from "../../lib/cron/types.ts";
 import {
   createContext,
+  createPage,
   createRequest,
   cronListResponse,
   operatorHello,
   waitForCronPage,
-} from "./cron-page.test-support.ts";
-import type { DeliveryConversationsController } from "./delivery-conversations.ts";
+} from "./cron-page.test-support.tsx";
 import { createCronViewJob } from "./view.test-support.ts";
-import "./cron-page.ts";
+import "./cron-page.tsx";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
-
-type CronTestPage = HTMLElement & {
-  context: ApplicationContext;
-  routeSearch: string;
-  updateComplete: Promise<boolean>;
-  requestUpdate: () => void;
-  render: () => typeof nothing;
-  cron: CronState;
-  cronModelSuggestions: string[];
-  deliveryDirectory: Pick<DeliveryConversationsController, "conversations" | "error">;
-  patchForm: (patch: Partial<CronState["cronForm"]>) => void;
-  closePanel: () => void;
-  submitForm: () => void;
-  selectJob: (job: CronJob) => void;
-  removeJob: (job: CronJob) => Promise<void>;
-};
 
 function conversationTarget(
   target: string,
@@ -86,16 +68,6 @@ function createGateway(client: GatewayBrowserClient, connected: boolean): TestGa
       }
     },
   } as unknown as TestGateway;
-}
-
-function createPage(context: ApplicationContext, options: { render?: boolean } = {}): CronTestPage {
-  const page = document.createElement("openclaw-cron-page") as CronTestPage;
-  page.context = context;
-  if (!options.render) {
-    page.render = () => nothing;
-  }
-  document.body.append(page);
-  return page;
 }
 
 function directoryRequest(
@@ -230,7 +202,7 @@ describe("CronPage lifecycle", () => {
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     await waitForCronPage(() => expect(page.deliveryDirectory.conversations).toHaveLength(2));
     page.patchForm({ deliveryAccountId: "work" });
-    await page.updateComplete;
+    await page.settle();
     expect(request.mock.calls.filter(([method]) => method === "conversations.list")).toHaveLength(
       1,
     );
@@ -350,8 +322,8 @@ describe("CronPage lifecycle", () => {
     await waitForCronPage(() => expect(page.deliveryDirectory.error).toContain("temporary"));
 
     page.cron = { ...page.cron, cronError: "scheduler save failed" };
-    page.requestUpdate();
-    await page.updateComplete;
+    page.refreshView();
+    await page.settle();
     expect(page.textContent).toContain("scheduler save failed");
     expect(page.textContent).not.toContain("temporary directory failure");
     page.cron.cronError = null;
@@ -535,26 +507,29 @@ describe("CronPage lifecycle", () => {
     expect(page.deliveryDirectory.error).toBeNull();
   });
 
-  it("retires the pending directory when conflict recovery changes the channel", async () => {
-    const { page, directoryChannels, directories } = await startConflictRecovery();
-    await waitForCronPage(() => expect(page.cron.cronForm.deliveryChannel).toBe("discord"));
-    await waitForCronPage(() => expect(directoryChannels).toEqual(["telegram", "discord"]));
-    expect(page.cron.cronForm.deliveryAccountId).toBe("default");
-    directories[0]?.resolve({ conversations: [conversationTarget("-100stale")] });
-    await Promise.resolve();
-    expect(page.deliveryDirectory.error).toBeNull();
-    expect(page.deliveryDirectory.conversations).toEqual([]);
-    directories[1]?.resolve({ conversations: [conversationTarget("-100recovered")] });
-    await waitForCronPage(() =>
-      expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
-        "-100recovered",
-      ]),
-    );
-  });
+  it.each(["save", "toggle"] as const)(
+    "retires the pending directory when %s conflict recovery changes the channel",
+    async (operation) => {
+      const { page, directoryChannels, directories } = await startConflictRecovery(operation);
+      await waitForCronPage(() => expect(page.cron.cronForm.deliveryChannel).toBe("discord"));
+      await waitForCronPage(() => expect(directoryChannels).toEqual(["telegram", "discord"]));
+      expect(page.cron.cronForm.deliveryAccountId).toBe("default");
+      directories[0]?.resolve({ conversations: [conversationTarget("-100stale")] });
+      await Promise.resolve();
+      expect(page.deliveryDirectory.error).toBeNull();
+      expect(page.deliveryDirectory.conversations).toEqual([]);
+      directories[1]?.resolve({ conversations: [conversationTarget("-100recovered")] });
+      await waitForCronPage(() =>
+        expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
+          "-100recovered",
+        ]),
+      );
+    },
+  );
 });
 
 // A revision conflict replaces the form through cron.get while keeping its account unchanged.
-async function startConflictRecovery() {
+async function startConflictRecovery(operation: "save" | "toggle" = "save") {
   const directories = [
     createDeferred<{ conversations: ConversationListItem[] }>(),
     createDeferred<{ conversations: ConversationListItem[] }>(),
@@ -590,11 +565,15 @@ async function startConflictRecovery() {
     }
     return fallbackRequest(method);
   });
-  const { page } = await mountPage(request);
+  const { page } = await mountPage(request, { render: operation === "toggle" });
   page.selectJob(editedJob);
   await waitForCronPage(() => expect(directoryChannels).toEqual(["telegram"]));
 
-  page.submitForm();
+  if (operation === "save") {
+    page.submitForm();
+  } else {
+    page.querySelector<HTMLInputElement>('[data-test-id="cron-toggle-enabled"] input')!.click();
+  }
   await waitForCronPage(() => expect(request).toHaveBeenCalledWith("cron.get", { id: "digest" }));
   return { page, request, directories, directoryChannels };
 }

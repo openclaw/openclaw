@@ -5,7 +5,7 @@ import type {
   DiscordGatewayAdapterCreator,
   DiscordGatewayAdapterImplementerMethods,
 } from "@discordjs/voice";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { toErrorObject, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -123,7 +123,7 @@ export class DiscordAudioTransport extends EventEmitter<{
     try {
       this.worker.postMessage(command, transferList);
     } catch (error) {
-      this.finish(error instanceof Error ? error : new Error(String(error)));
+      this.finish(toStringifiedError(error));
     }
   }
 

@@ -12,6 +12,7 @@ import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import * as authProfileRuntime from "../auth-profiles/store-runtime.js";
 import * as modelResolution from "../embedded-agent-runner/model.js";
 import * as modelAuth from "../model-auth.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
@@ -50,6 +51,13 @@ beforeEach(() => {
   agentDir = tempDirs.make("openclaw-pdf-");
   resetPdfToolAuthEnv();
   completeMock.mockReset();
+  // PDF orchestration uses synthetic credentials; both async readers share that empty store.
+  const authStore = { version: 1, profiles: {} };
+  vi.spyOn(authProfileRuntime, "ensureAuthProfileStoreAsync").mockResolvedValue(authStore);
+  vi.spyOn(
+    authProfileRuntime,
+    "ensureAuthProfileStoreWithoutExternalProfilesAsync",
+  ).mockResolvedValue(authStore);
 });
 afterEach(() => {
   vi.restoreAllMocks();

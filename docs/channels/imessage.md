@@ -78,7 +78,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="ssh-wrapper-sends-fail-with-appleevents-1743" />[SSH wrapper sends fail with AppleEvents -1743](/channels/imessage/setup#ssh-wrapper-sends-fail-with-appleevents-1743)
 - <a id="dm-policy" />[DM policy](/channels/imessage/access-control#dm-policy)
 - <a id="group-policy-%2B-mentions" />[Group policy + mentions](/channels/imessage/access-control#group-policy-%2B-mentions)
-- <a id="sessions-and-deterministic-replies" />[Sessions and deterministic replies](/channels/imessage/access-control#sessions-and-deterministic-replies)
+- <a id="sessions-and-deterministic-replies" />[Sessions and reply routing](/channels/imessage/access-control#sessions-and-deterministic-replies)
 - <a id="dedicated-bot-macos-user-separate-imessage-identity" />[Dedicated bot macOS user (separate iMessage identity)](/channels/imessage/deployment#dedicated-bot-macos-user-separate-imessage-identity)
 - <a id="remote-mac-over-tailscale-example" />[Remote Mac over Tailscale (example)](/channels/imessage/deployment#remote-mac-over-tailscale-example)
 - <a id="multi-account-pattern" />[Multi-account pattern](/channels/imessage/deployment#multi-account-pattern)

@@ -8,7 +8,10 @@ import { repairJson } from "@openclaw/ai/internal/runtime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../../infra/errno.js";
-import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
+import {
+  captureAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "../../agent-tool-source-execution-guard.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/tool-results.js";
 import { decodeUtf8File } from "../../utf8-file.js";
@@ -147,13 +150,15 @@ export function createEditTool(
 
       return withFileMutationQueueKeyResolution(queueKey, async () => {
         assertFileToolNotAborted(signal);
-        assertCurrent();
 
         let editCount = 0;
         let expectedContent: string | undefined;
 
         try {
-          await ops.access(absolutePath);
+          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+            assertCurrent();
+            await ops.access(absolutePath);
+          });
         } catch (error: unknown) {
           const errorMessage =
             error instanceof Error && "code" in error
@@ -164,49 +169,64 @@ export function createEditTool(
           });
         }
 
-        const buffer = await ops.readFile(absolutePath);
+        const buffer = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+          assertCurrent();
+          return ops.readFile(absolutePath);
+        });
         const rawContent = decodeUtf8File(buffer, absolutePath);
         try {
           assertFileToolNotAborted(signal);
-          assertCurrent();
 
           const plan = await planFileEdit(
             { path, content: rawContent, edits: originalEdits },
             signal,
           );
           assertFileToolNotAborted(signal);
-          assertCurrent();
           if (!plan.changed) {
             return textResult(plan.message, { changed: false } satisfies EditToolDetails);
           }
           editCount = plan.editCount;
           expectedContent = plan.content;
-          await ops.writeFile(absolutePath, expectedContent);
+          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+            assertCurrent();
+            await ops.writeFile(absolutePath, plan.content);
+          });
           assertFileToolNotAborted(signal);
-          assertCurrent();
-          if (!(await verifyPersistedUtf8File(absolutePath, expectedContent, ops))) {
+          if (
+            !(await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+              assertCurrent();
+              return verifyPersistedUtf8File(absolutePath, plan.content, ops);
+            }))
+          ) {
             throw new Error(
               `Edit verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
             );
           }
 
-          assertCurrent();
           return textResult<EditToolDetails>(
             `Successfully replaced ${editCount} block(s) in ${path}.`,
             { changed: true, ...plan.receipt },
           );
         } catch (error: unknown) {
-          assertCurrent();
           const normalizedError = error instanceof Error ? error : new Error(String(error));
-          const currentContent = await ops
-            .readFile(absolutePath)
-            .then((current) => current.toString("utf-8"))
-            .catch(() => rawContent);
+          const currentContent = await runWithAgentToolSourceExecutionScope(
+            assertCurrent,
+            async () => {
+              assertCurrent();
+              return ops
+                .readFile(absolutePath)
+                .then((current) => current.toString("utf-8"))
+                .catch(() => rawContent);
+            },
+          );
+          const recoveryContent = expectedContent;
           if (
-            expectedContent !== undefined &&
-            (await verifyPersistedUtf8File(absolutePath, expectedContent, ops))
+            recoveryContent !== undefined &&
+            (await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+              assertCurrent();
+              return verifyPersistedUtf8File(absolutePath, recoveryContent, ops);
+            }))
           ) {
-            assertCurrent();
             return textResult<EditToolDetails>(
               `Successfully replaced ${editCount} block(s) in ${path}.`,
               { changed: true, diff: "", patch: "" },

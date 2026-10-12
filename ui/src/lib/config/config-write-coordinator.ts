@@ -94,17 +94,16 @@ export function createConfigWriteCoordinator({
       state.configAutoSaveStatus = "paused";
     }
   };
-  const captureAutoSaveDraftConnection = () => {
-    if (autoSaveRequiresExplicitSubmit) {
+  const captureAutoSaveDraftConnection = (explicit = false) => {
+    if (!explicit && autoSaveRequiresExplicitSubmit) {
       pauseAutoSaveDraftConnection();
       return;
     }
     if (
-      autoSaveDraftConnection ||
       !state.client ||
       !state.connected ||
-      !state.configFormDirty ||
-      state.configFormMode !== "form"
+      state.configFormMode !== "form" ||
+      (!explicit && (autoSaveDraftConnection || !state.configFormDirty))
     ) {
       return;
     }
@@ -112,18 +111,11 @@ export function createConfigWriteCoordinator({
       client: state.client,
       epoch: currentConfigConnectionEpoch(state),
     };
-  };
-  const bindDraftToExplicitSubmit = () => {
-    if (!state.client || !state.connected || state.configFormMode !== "form") {
-      return;
-    }
-    autoSaveDraftConnection = {
-      client: state.client,
-      epoch: currentConfigConnectionEpoch(state),
-    };
-    autoSaveRequiresExplicitSubmit = false;
-    if (state.configAutoSaveStatus === "paused") {
-      state.configAutoSaveStatus = "idle";
+    if (explicit) {
+      autoSaveRequiresExplicitSubmit = false;
+      if (state.configAutoSaveStatus === "paused") {
+        state.configAutoSaveStatus = "idle";
+      }
     }
   };
   // Stale bases and previous connections require explicit recovery, including teardown.
@@ -311,11 +303,10 @@ export function createConfigWriteCoordinator({
     }
     const client = state.client;
     const connectionEpoch = currentConfigConnectionEpoch(state);
-    if (options.flushScheduledDraft) {
-      flushScheduledAutoSave();
-    } else {
-      cancelScheduledAutoSave();
-    }
+    const settleScheduledDraft = options.flushScheduledDraft
+      ? flushScheduledAutoSave
+      : cancelScheduledAutoSave;
+    settleScheduledDraft();
     // With no queued write, dispatch synchronously against the captured connection.
     const start = () =>
       run(async () => {
@@ -323,11 +314,7 @@ export function createConfigWriteCoordinator({
           // The Gateway classifies driver liveness and retained recovery before this interlock can open.
           await refreshWriteAdmission();
           if (!writesSuspended) {
-            if (options.flushScheduledDraft) {
-              flushScheduledAutoSave();
-            } else {
-              cancelScheduledAutoSave();
-            }
+            settleScheduledDraft();
           }
         }
         if (inFlight) {
@@ -456,7 +443,7 @@ export function createConfigWriteCoordinator({
       ? Promise.resolve(false)
       : afterPendingWritesSettled(
           async (onSubmitted) => {
-            bindDraftToExplicitSubmit();
+            captureAutoSaveDraftConnection(true);
             appliedRefresh.cancel();
             try {
               // A drained raw Save may apply; a still-dirty raw draft remains manual-save-only.

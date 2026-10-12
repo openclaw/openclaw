@@ -39,10 +39,10 @@ describe("readLastGatewayErrorLine", () => {
     fs.mkdirSync(stateLogs.logDir, { recursive: true });
     fs.mkdirSync(launchdLogs.logDir, { recursive: true });
     fs.writeFileSync(stateLogs.stderrPath, "failed to bind gateway socket stale\n", "utf8");
-    fs.writeFileSync(launchdLogs.stdoutPath, "gateway stdout current\n", "utf8");
+    fs.writeFileSync(launchdLogs.stdoutPath, "Gateway failed to start: current failure\n", "utf8");
 
     await expect(readLastGatewayErrorLine(env, { platform: "darwin" })).resolves.toBe(
-      "gateway stdout current",
+      "Gateway failed to start: current failure",
     );
   });
 
@@ -80,9 +80,7 @@ describe("readLastGatewayErrorLine", () => {
       "utf8",
     );
 
-    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBe(
-      "gateway stdout current",
-    );
+    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBeNull();
   });
 
   it("ignores a matching partial line at the bounded tail boundary", async () => {
@@ -98,9 +96,7 @@ describe("readLastGatewayErrorLine", () => {
       "utf8",
     );
 
-    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBe(
-      "gateway stdout current",
-    );
+    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBeNull();
   });
 
   it("fills short positional reads before decoding the tail", async () => {
@@ -141,19 +137,5 @@ describe("readLastGatewayErrorLine", () => {
     await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBe(
       "parse/handle error: Error: ENOSPC: no space left on device, write",
     );
-  });
-
-  it("does not return a generic log tail when a pattern match is required", async () => {
-    const stateDir = makeTempStateDir();
-    const homeDir = makeTempStateDir();
-    const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
-    const stateLogs = resolveGatewayLogPaths(env);
-    fs.mkdirSync(stateLogs.logDir, { recursive: true });
-    fs.writeFileSync(stateLogs.stdoutPath, "gateway stdout current\n", "utf8");
-    fs.writeFileSync(stateLogs.stderrPath, "routine gateway stderr\n", "utf8");
-
-    await expect(
-      readLastGatewayErrorLine(env, { platform: "linux", requirePatternMatch: true }),
-    ).resolves.toBeNull();
   });
 });

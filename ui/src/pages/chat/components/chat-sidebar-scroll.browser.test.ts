@@ -4,8 +4,9 @@ import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import "./chat-files-panel.ts";
-import "./chat-detail-panel.ts";
+import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";
+import "./chat-files-panel.tsx";
+import "./chat-detail-panel.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 
@@ -22,7 +23,7 @@ async function mountDetailPanel(
   hideAndReselect: () => Promise<void>;
   release: () => void;
 }> {
-  const container = document.createElement("div");
+  const container = createChatSidebarContainer();
   container.className = "side-panel__panel";
   container.style.cssText = "width:480px;height:320px;";
   const renderDetail = (detail: SidebarContent) => html`<openclaw-chat-detail-panel

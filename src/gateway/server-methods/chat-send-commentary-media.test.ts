@@ -11,6 +11,7 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook
 import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream-message-shared.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
@@ -221,6 +222,7 @@ describe("webchat commentary media", () => {
           transcriptLifecycle.withTranscriptWrite(operation),
       };
       const dispatch = createChatSendReplyDispatch({
+        getRuntimeConfig,
         accountId: undefined,
         requesterContext: { SenderId: "cli" },
         isAgentRunStarted: () => true,

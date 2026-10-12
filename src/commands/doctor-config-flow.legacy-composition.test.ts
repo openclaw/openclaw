@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { readConfigFileSnapshot } from "../config/io.runtime.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
@@ -22,9 +22,12 @@ const runtimeDirs = useAutoCleanupTempDirTracker(afterAll);
 const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
 
 async function repairConfig(configPath: string) {
-  const ctx = await prepareDoctorContext(configPath);
+  await using ctx = await prepareDoctorContext(configPath);
   await runInitialConfigWriteHealth(ctx);
-  return { ...ctx.configResult, configWriteRefusal: ctx.configWriteRefusal };
+  return {
+    shouldWriteConfig: ctx.configResult.shouldWriteConfig,
+    configWriteRefusal: ctx.configWriteRefusal,
+  };
 }
 
 describe("Doctor legacy config composition", () => {
@@ -32,24 +35,27 @@ describe("Doctor legacy config composition", () => {
 
   it("preserves the July TTS preference locator before retiring its config keys", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
-      const prefsPath = path.join(home, "speech-preferences.json");
-      const preferences = '{"tts":{"auto":"off","maxLength":1200}}\n';
-      await fs.writeFile(prefsPath, preferences);
-      const configPath = await writeOpenClawConfig(home, {
-        agents: { list: [{ id: "main" }] },
-        messages: { tts: { prefsPath, personas: { narrator: { prompt: { style: "calm" } } } } },
-        gateway: { mode: "local" },
-        plugins: { enabled: false },
+      // This migration is core-owned; bundled plugin discovery belongs to the CLI fixture below.
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const prefsPath = path.join(home, "speech-preferences.json");
+        const preferences = '{"tts":{"auto":"off","maxLength":1200}}\n';
+        await fs.writeFile(prefsPath, preferences);
+        const configPath = await writeOpenClawConfig(home, {
+          agents: { list: [{ id: "main" }] },
+          messages: { tts: { prefsPath, personas: { narrator: { prompt: { style: "calm" } } } } },
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+        });
+        await repairConfig(configPath);
+        expect((await readConfigFileSnapshot()).valid).toBe(true);
+        expect(readConfigMachineState("tts.prefsPath")).toBe(prefsPath);
+        expect(await fs.readFile(prefsPath, "utf8")).toBe(preferences);
+        const first = await fs.readFile(configPath, "utf8");
+        expect(JSON.parse(first)).not.toHaveProperty("messages.tts");
+        expect(JSON.parse(first)).not.toHaveProperty("tts.prefsPath");
+        expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
+        expect(await fs.readFile(configPath, "utf8")).toBe(first);
       });
-      await repairConfig(configPath);
-      expect((await readConfigFileSnapshot()).valid).toBe(true);
-      expect(readConfigMachineState("tts.prefsPath")).toBe(prefsPath);
-      expect(await fs.readFile(prefsPath, "utf8")).toBe(preferences);
-      const first = await fs.readFile(configPath, "utf8");
-      expect(JSON.parse(first)).not.toHaveProperty("messages.tts");
-      expect(JSON.parse(first)).not.toHaveProperty("tts.prefsPath");
-      expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
-      expect(await fs.readFile(configPath, "utf8")).toBe(first);
     });
   });
 
@@ -253,7 +259,7 @@ describe("Doctor legacy config composition", () => {
               gateway: { mode: "local" },
               plugins: { enabled: false },
             });
-            const ctx = await prepareDoctorContext(configPath);
+            await using ctx = await prepareDoctorContext(configPath);
             await withEnvAsync(
               {
                 DOCTOR_MEMORY_KEY: "rotated-memory-secret-canary",

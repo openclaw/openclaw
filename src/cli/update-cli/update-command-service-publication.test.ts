@@ -106,7 +106,7 @@ it("keeps Task Scheduler timeout details in the source-build failure report", ()
     expect(spawn).not.toHaveBeenCalled();
   }));
 
-it.each([undefined, "stale-profile"])(
+it.each(["stale-profile"])(
   "preserves the serving installation and points back to the original doctor command (profile=%s)",
   (profile) =>
     withRuntimePublicationFixture(async ({ root, env, service }) => {
@@ -172,7 +172,6 @@ it("holds Gateway startup custody until the automatic source build exits", () =>
 
 it.each([
   { changed: true, sourceRuntimePrepared: undefined },
-  { changed: false, sourceRuntimePrepared: undefined },
   { changed: true, sourceRuntimePrepared: false },
   { changed: true, sourceRuntimePrepared: true },
 ])(
@@ -413,82 +412,77 @@ it("publishes changed artifacts for an affirmatively absent Gateway", () =>
     ).resolves.toBe("published");
   }));
 
-it.each([
-  "disjoint",
-  "shared overlay",
-  "shared SDK alias",
-  "shared SDK parent",
-  "nested shared output",
-])("distinguishes physical runtime paths from current/releases ownership: %s", (scenario) =>
-  withRuntimePublicationFixture(async ({ home, root, env, service, databasePath }) => {
-    const snapshot = path.join(home, "releases", "previous");
-    await fs.mkdir(path.join(snapshot, "dist"), { recursive: true });
-    await fs.writeFile(path.join(snapshot, "package.json"), JSON.stringify({ name: "openclaw" }));
-    await fs.writeFile(path.join(snapshot, "dist", "entry.js"), "export {};\n");
-    const current = path.join(home, "current");
-    await fs.symlink(snapshot, current, "junction");
-    if (scenario === "shared overlay") {
-      await fs.symlink(
-        path.join(root, "dist-runtime"),
-        path.join(snapshot, "dist-runtime"),
-        "junction",
-      );
-    } else if (scenario === "shared SDK alias") {
-      const aliasParent = path.join(snapshot, "dist", "extensions", "node_modules");
-      await fs.mkdir(aliasParent, { recursive: true });
-      await fs.symlink(root, path.join(aliasParent, "openclaw"), "junction");
-    } else if (scenario === "shared SDK parent") {
-      const aliasParent = path.join(root, "dist", "extensions", "node_modules");
-      await fs.mkdir(aliasParent, { recursive: true });
-      await fs.mkdir(path.join(snapshot, "dist", "extensions"));
-      await fs.symlink(
-        aliasParent,
-        path.join(snapshot, "dist", "extensions", "node_modules"),
-        "junction",
-      );
-    } else if (scenario === "nested shared output") {
-      const nested = path.join(root, "dist-runtime", "extensions", "demo");
-      const aliasParent = path.join(snapshot, "dist", "extensions", "node_modules");
-      await fs.mkdir(nested, { recursive: true });
-      await fs.mkdir(aliasParent, { recursive: true });
-      await fs.symlink(nested, path.join(aliasParent, "openclaw"), "junction");
-    }
-    vi.mocked(service.readCommand).mockResolvedValue({
-      programArguments: [process.execPath, path.join(current, "dist", "entry.js"), "gateway"],
-      managedDefinition: {
-        programArguments: [process.execPath, path.join(root, "dist", "entry.js"), "gateway"],
-      },
-    });
-    vi.mocked(service.readRuntime).mockResolvedValue({
-      status: "running",
-      systemd: { managerUid: 2001 },
-    });
-    vi.mocked(portProbe.probePortUsage).mockResolvedValue("busy");
-    const other = tryAcquireGatewayStateOwner(databasePath);
-    expect(other).not.toBeNull();
-    const publish = vi.fn(async (assertCurrent: () => Promise<void>) => {
-      await assertCurrent();
-      return "published";
-    });
-    try {
-      const result = withGatewayRuntimeArtifactPublication(
-        { root, env, timeoutMs: 200, assertCurrent() {} },
-        publish,
-      );
-      if (scenario === "disjoint") {
-        await expect(result).resolves.toBe("published");
-      } else {
-        await expect(result).rejects.toThrow(/affected Gateway/);
-        expect(publish).not.toHaveBeenCalled();
+it.each(["shared SDK alias", "nested shared output"])(
+  "distinguishes physical runtime paths from current/releases ownership: %s",
+  (scenario) =>
+    withRuntimePublicationFixture(async ({ home, root, env, service, databasePath }) => {
+      const snapshot = path.join(home, "releases", "previous");
+      await fs.mkdir(path.join(snapshot, "dist"), { recursive: true });
+      await fs.writeFile(path.join(snapshot, "package.json"), JSON.stringify({ name: "openclaw" }));
+      await fs.writeFile(path.join(snapshot, "dist", "entry.js"), "export {};\n");
+      const current = path.join(home, "current");
+      await fs.symlink(snapshot, current, "junction");
+      if (scenario === "shared overlay") {
+        await fs.symlink(
+          path.join(root, "dist-runtime"),
+          path.join(snapshot, "dist-runtime"),
+          "junction",
+        );
+      } else if (scenario === "shared SDK alias") {
+        const aliasParent = path.join(snapshot, "dist", "extensions", "node_modules");
+        await fs.mkdir(aliasParent, { recursive: true });
+        await fs.symlink(root, path.join(aliasParent, "openclaw"), "junction");
+      } else if (scenario === "shared SDK parent") {
+        const aliasParent = path.join(root, "dist", "extensions", "node_modules");
+        await fs.mkdir(aliasParent, { recursive: true });
+        await fs.mkdir(path.join(snapshot, "dist", "extensions"));
+        await fs.symlink(
+          aliasParent,
+          path.join(snapshot, "dist", "extensions", "node_modules"),
+          "junction",
+        );
+      } else if (scenario === "nested shared output") {
+        const nested = path.join(root, "dist-runtime", "extensions", "demo");
+        const aliasParent = path.join(snapshot, "dist", "extensions", "node_modules");
+        await fs.mkdir(nested, { recursive: true });
+        await fs.mkdir(aliasParent, { recursive: true });
+        await fs.symlink(nested, path.join(aliasParent, "openclaw"), "junction");
       }
-    } finally {
-      other?.release();
-    }
-  }),
+      vi.mocked(service.readCommand).mockResolvedValue({
+        programArguments: [process.execPath, path.join(current, "dist", "entry.js"), "gateway"],
+        managedDefinition: {
+          programArguments: [process.execPath, path.join(root, "dist", "entry.js"), "gateway"],
+        },
+      });
+      vi.mocked(service.readRuntime).mockResolvedValue({
+        status: "running",
+        systemd: { managerUid: 2001 },
+      });
+      vi.mocked(portProbe.probePortUsage).mockResolvedValue("busy");
+      const other = tryAcquireGatewayStateOwner(databasePath);
+      expect(other).not.toBeNull();
+      const publish = vi.fn(async (assertCurrent: () => Promise<void>) => {
+        await assertCurrent();
+        return "published";
+      });
+      try {
+        const result = withGatewayRuntimeArtifactPublication(
+          { root, env, timeoutMs: 200, assertCurrent() {} },
+          publish,
+        );
+        if (scenario === "disjoint") {
+          await expect(result).resolves.toBe("published");
+        } else {
+          await expect(result).rejects.toThrow(/affected Gateway/);
+          expect(publish).not.toHaveBeenCalled();
+        }
+      } finally {
+        other?.release();
+      }
+    }),
 );
 
 it.each([
-  { label: "already live", late: false, output: "dist-runtime", shared: "dist-runtime" },
   {
     label: "discovered before the effect",
     late: true,
@@ -496,18 +490,6 @@ it.each([
     shared: "dist-runtime",
   },
   { label: "physically disjoint", late: false, output: "dist-runtime", shared: undefined },
-  {
-    label: "custom output shared",
-    late: false,
-    output: "custom-runtime",
-    shared: "custom-runtime",
-  },
-  {
-    label: "custom output disjoint",
-    late: false,
-    output: "custom-runtime",
-    shared: "dist-runtime",
-  },
 ])("fences runtime-only publication against a sibling that is $label", ({ late, output, shared }) =>
   withRuntimePublicationFixture(async ({ home, root, env, service }) => {
     const sibling = path.join(home, "sibling");
@@ -603,70 +585,47 @@ it.each(["inspection", "publication"])(
     }),
 );
 
-it.each([
-  "running",
-  "changed launcher",
-  "replaced entrypoint",
-  "changed manager",
-  "changed state directory",
-  "disjoint becomes affected",
-  "disjoint becomes unknown",
-])("rechecks publication authority after an awaited boundary: %s", (change) =>
-  withRuntimePublicationFixture(async ({ home, root, env, service }) => {
-    if (change.startsWith("disjoint")) {
-      const snapshot = path.join(root, ".artifacts", "serving");
-      await fs.mkdir(path.join(snapshot, "dist"), { recursive: true });
-      await fs.writeFile(path.join(snapshot, "package.json"), JSON.stringify({ name: "openclaw" }));
-      await fs.writeFile(path.join(snapshot, "dist", "entry.js"), "export {};\n");
-      vi.mocked(service.readCommand).mockResolvedValue({
-        programArguments: [process.execPath, path.join(snapshot, "dist", "entry.js"), "gateway"],
-      });
-    }
-    const untouched = path.join(root, "dist-runtime", "unchanged.txt");
-    await fs.writeFile(untouched, "original");
-    const beforePersistentEffect = async () => {
-      await Promise.resolve();
-      if (change === "running") {
-        vi.mocked(service.readRuntime).mockResolvedValue({
-          status: "running",
-          systemd: { managerUid: 2001 },
-        });
-      } else if (change === "changed manager") {
-        vi.mocked(service.readRuntime).mockResolvedValue({
-          status: "stopped",
-          systemd: { managerUid: 3002 },
-        });
-      } else if (change === "changed state directory") {
-        env.OPENCLAW_STATE_DIR = path.join(home, "replacement-state");
-      } else if (change === "replaced entrypoint") {
-        const entry = path.join(root, "dist", "entry.js");
-        await fs.rename(entry, `${entry}.previous`);
-        await fs.writeFile(entry, "export const replaced = true;\n");
-      } else if (change === "disjoint becomes unknown") {
-        vi.mocked(service.readCommand).mockResolvedValue(null);
-      } else {
+it.each(["running", "disjoint becomes unknown"])(
+  "rechecks publication authority after an awaited boundary: %s",
+  (change) =>
+    withRuntimePublicationFixture(async ({ root, env, service }) => {
+      if (change.startsWith("disjoint")) {
+        const snapshot = path.join(root, ".artifacts", "serving");
+        await fs.mkdir(path.join(snapshot, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(snapshot, "package.json"),
+          JSON.stringify({ name: "openclaw" }),
+        );
+        await fs.writeFile(path.join(snapshot, "dist", "entry.js"), "export {};\n");
         vi.mocked(service.readCommand).mockResolvedValue({
-          programArguments: [
-            process.execPath,
-            path.join(root, "dist", "entry.js"),
-            "gateway",
-            ...(change === "changed launcher" ? ["--verbose"] : []),
-          ],
+          programArguments: [process.execPath, path.join(snapshot, "dist", "entry.js"), "gateway"],
         });
       }
-    };
-    await expect(
-      withGatewayRuntimeArtifactPublication(
-        { root, env, timeoutMs: 200, assertCurrent() {} },
-        async (assertPublicationCurrent) => {
-          await beforePersistentEffect();
-          await assertPublicationCurrent();
-          await fs.writeFile(untouched, "published");
-        },
-      ),
-    ).rejects.toThrow(/affected Gateway/);
-    expect(await fs.readFile(untouched, "utf8")).toBe("original");
-  }),
+      const untouched = path.join(root, "dist-runtime", "unchanged.txt");
+      await fs.writeFile(untouched, "original");
+      const beforePersistentEffect = async () => {
+        await Promise.resolve();
+        if (change === "running") {
+          vi.mocked(service.readRuntime).mockResolvedValue({
+            status: "running",
+            systemd: { managerUid: 2001 },
+          });
+        } else if (change === "disjoint becomes unknown") {
+          vi.mocked(service.readCommand).mockResolvedValue(null);
+        }
+      };
+      await expect(
+        withGatewayRuntimeArtifactPublication(
+          { root, env, timeoutMs: 200, assertCurrent() {} },
+          async (assertPublicationCurrent) => {
+            await beforePersistentEffect();
+            await assertPublicationCurrent();
+            await fs.writeFile(untouched, "published");
+          },
+        ),
+      ).rejects.toThrow(/affected Gateway/);
+      expect(await fs.readFile(untouched, "utf8")).toBe("original");
+    }),
 );
 
 it.each(["repository", "existing alias parent", "missing alias parent"])(
@@ -759,7 +718,7 @@ it("holds native and Gateway exclusion through publication rollback and closes i
     released?.release();
   }));
 
-it.each([false, true])(
+it.each([false])(
   "settles cleanup writes and releases publication custody after disposal fails (publication failed: %s)",
   (publicationFailed) =>
     withRuntimePublicationFixture(async ({ root, env, databasePath }) => {

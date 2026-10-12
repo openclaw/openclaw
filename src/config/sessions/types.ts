@@ -15,6 +15,7 @@ import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/lo
 import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import type { SessionCommunicationPolicy } from "../../../packages/gateway-protocol/src/session-communication.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type {
   CronScheduledToolCallerOrigin,
@@ -314,6 +315,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archiveReason?: SessionEntryArchiveReason;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
+    /** Independent sidebar placement; origin, execution ownership, and access remain unchanged. */
+    sidebarRoot?: boolean;
     /** Epoch ms wake time; suppresses the active session in sidebar lists until then. */
     snoozedUntil?: number;
     /** Server-stamped epoch ms when the current snooze was set. */
@@ -401,6 +404,14 @@ type SessionEntryCore = SessionRestartRecoveryState &
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */
     inheritedToolAllow?: string[];
+    /** Host-created native execution exception; the full inherited snapshot still owns completion. */
+    delegatedToolPolicy?: {
+      requesterSessionKey: string;
+      targetAgentId: string;
+      deny: string[];
+      /** The immediate parent’s effective deny snapshot, separately from revocation fallback. */
+      requesterDeny: string[];
+    };
     systemSent?: boolean;
     abortedLastRun?: boolean;
     /** Interrupted run generations whose late lifecycle events must be ignored. */
@@ -525,6 +536,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     groupActivation?: "mention" | "always";
     groupActivationNeedsSystemIntro?: boolean;
     sendPolicy?: "allow" | "deny";
+    /** Human-selected peer messaging preferences; omitted directions inherit configuration. */
+    communication?: SessionCommunicationPolicy;
     queueMode?: QueueMode;
     queueDebounceMs?: number;
     queueCap?: number;
@@ -571,6 +584,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
+    /** A committed lossy compaction affected this history; cleared with a new session. */
+    compactionQualityDegraded?: true;
     memoryFlush?: MemoryFlushState;
     cliSessionIds?: Record<string, string>;
     cliSessionBindings?: Record<string, CliSessionBinding>;

@@ -97,7 +97,7 @@ describe("WebChat reply media workspace ownership", () => {
       updatedAt: 1,
     };
     await replaceSessionEntry(target, entry);
-    const scope = captureWebchatReplyMediaScope({
+    const scope = await captureWebchatReplyMediaScope({
       cfg,
       agentId: "main",
       sessionKey: TEST_SESSION_KEY,

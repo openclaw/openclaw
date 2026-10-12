@@ -1,6 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -25,7 +25,7 @@ import {
 import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import * as agentWriteAdmission from "../state/openclaw-agent-write-admission.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -151,7 +151,7 @@ describe("session transcript visible cursor SDK", () => {
     );
   });
 
-  it("refuses a queued delta read after its prepared executor generation is replaced", async ({
+  it("refuses a retained delta read after its prepared executor generation is replaced", async ({
     signal,
   }) => {
     const scope = {
@@ -175,8 +175,6 @@ describe("session transcript visible cursor SDK", () => {
     }
     const entered = createDeferred();
     const resume = createDeferred();
-    const writerEntered = createDeferred();
-    const replaceGeneration = createDeferred();
     const reading = withSessionTranscriptDeltaReader(
       scope,
       async (reader) => {
@@ -205,7 +203,6 @@ describe("session transcript visible cursor SDK", () => {
       },
     };
     let writing: Promise<void> | undefined;
-    let restoreAdmission = () => {};
     try {
       await withinTest(
         awaitGateBeforeSettlement(
@@ -216,8 +213,6 @@ describe("session transcript visible cursor SDK", () => {
         signal,
       );
       writing = agentWriteAdmission.runOpenClawAgentWriteAdmission(execution, async () => {
-        writerEntered.resolve();
-        await withinTest(replaceGeneration.promise, signal);
         const failure = new Error("Retire the original native generation");
         await expect(
           execution.runExisting(
@@ -230,31 +225,15 @@ describe("session transcript visible cursor SDK", () => {
         ).rejects.toBe(failure);
         await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 2 });
       });
-      await withinTest(writerEntered.promise, signal);
-      const queued = createDeferred();
-      const admit = agentWriteAdmission.runOpenClawAgentWriteAdmission;
-      const admission = vi
-        .spyOn(agentWriteAdmission, "runOpenClawAgentWriteAdmission")
-        .mockImplementation((...args) => {
-          const pending = admit(...args);
-          if (args[0].path === scope.storePath && args[4] === signal) {
-            queued.resolve();
-          }
-          return pending;
-        });
-      restoreAdmission = () => admission.mockRestore();
-      resume.resolve();
       await withinTest(
         awaitGateBeforeSettlement(
-          queued.promise,
+          writing,
           reading,
-          "Delta read bypassed the earlier admitted writer",
+          "Delta read ended before its captured generation was replaced",
         ),
         signal,
       );
-      restoreAdmission();
-      replaceGeneration.resolve();
-      await withinTest(writing, signal);
+      resume.resolve();
       await refused;
       const fresh = await readSessionTranscriptVisibleMessageDelta({ ...scope, maxMessages: 10 });
       expect(fresh).toMatchObject({
@@ -262,9 +241,7 @@ describe("session transcript visible cursor SDK", () => {
         entries: [{ message: { role: "user", content: "retained transcript" } }],
       });
     } finally {
-      restoreAdmission();
       resume.resolve();
-      replaceGeneration.resolve();
       await Promise.allSettled([reading, writing, refused]);
       await execution.release();
     }

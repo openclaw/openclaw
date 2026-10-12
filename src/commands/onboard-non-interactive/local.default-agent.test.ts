@@ -149,6 +149,14 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
           JSON.stringify(
             {
               ok: false,
+              error: {
+                type: "cli_error",
+                message: [
+                  "Multiple API key flags were provided for non-interactive setup.",
+                  "Use a single provider flag or pass --auth-choice explicitly.",
+                  "Flags: --openai-api-key, --anthropic-api-key",
+                ].join("\n"),
+              },
               phase: "options",
               message: [
                 "Multiple API key flags were provided for non-interactive setup.",

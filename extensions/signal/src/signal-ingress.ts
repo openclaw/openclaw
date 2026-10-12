@@ -31,7 +31,6 @@ type SignalIngressEnvelope = {
 type SignalIngressEventFacts = {
   eventId: string;
   laneKey: string;
-  numberAliasEventId?: string;
 };
 
 type SignalPreparedIngressEvent = [
@@ -137,9 +136,6 @@ function inspectSignalIngressEvent(
   return {
     eventId: JSON.stringify([senderKey, timestamp]),
     laneKey: groupId ? `group:${groupId}` : `direct:${senderKey}`,
-    ...(senderUuid && senderNumber
-      ? { numberAliasEventId: JSON.stringify([`number:${senderNumber}`, timestamp]) }
-      : {}),
   };
 }
 
@@ -195,22 +191,10 @@ export async function startSignalIngressMonitor(params: {
     },
     deliver: ([event, parsedPayload], lifecycle) =>
       parsedPayload ? params.dispatch(event, lifecycle, parsedPayload) : undefined,
-    onDurableAdmission: async (_event, { facts, isNew }) => {
-      const { numberAliasEventId } = facts as SignalIngressEventFacts;
-      if (!numberAliasEventId) {
-        return;
-      }
-      // signal-cli can learn or forget a UUID between redeliveries; bridge both
-      // shipped sender IDs before the monitor releases its admission/claim lock.
-      if (!(await ingressQueue.complete(numberAliasEventId)) && isNew) {
-        await ingressQueue.complete(facts.eventId);
-      }
-    },
     pollIntervalMs: SIGNAL_INGRESS_DRAIN_INTERVAL_MS,
     retention: {
       // Signal previously pruned before every enqueue rather than on a timed cadence.
       pruneIntervalMs: 0,
-      // At most two tombstones per message preserve the prior 1,000-message window.
       completedMaxEntries: 2_000,
       failedMaxEntries: 1_000,
     },

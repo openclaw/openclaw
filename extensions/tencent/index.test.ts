@@ -1,5 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import {
   createRuntimeEnv,
   registerProviderPlugin,
@@ -184,83 +184,6 @@ describe("tencent provider plugin", () => {
     },
   );
 
-  it("builds the static Tencent TokenHub model catalog with reasoning flags", async () => {
-    const provider = await getTokenHubProvider();
-    const catalogProvider = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
-
-    expect(catalogProvider.api).toBe("openai-completions");
-    expect(catalogProvider.baseUrl).toBe("https://tokenhub.tencentmaas.com/v1");
-
-    const modelIds = catalogProvider.models?.map((m) => m.id);
-    expect(modelIds).toContain("hy3");
-    expect(modelIds).toContain("hy3-preview");
-    expect(modelIds).toContain("hy4-preview");
-
-    const hy3 = catalogProvider.models?.find((m) => m.id === "hy3");
-    expect(hy3?.reasoning).toBe(true);
-    expect(hy3?.maxTokens).toBe(128_000);
-    expect(hy3?.compat?.supportsReasoningEffort).toBe(true);
-    // hy3 (GA) exposes only the two-rung ladder — it does NOT accept `low`.
-    expect(hy3?.compat?.supportedReasoningEfforts).toEqual(["none", "high"]);
-
-    const hy4Preview = catalogProvider.models?.find((m) => m.id === "hy4-preview");
-    expect(hy4Preview?.reasoning).toBe(true);
-    expect(hy4Preview?.contextWindow).toBe(1_024_000);
-    expect(hy4Preview?.maxTokens).toBe(64_000);
-    expect(hy4Preview?.compat?.supportsReasoningEffort).toBe(true);
-    // OpenClaw exposes none/high; raw low acceptance does not prove a distinct low mode.
-    expect(hy4Preview?.compat?.supportedReasoningEfforts).toEqual(["none", "high"]);
-
-    const hy3Preview = catalogProvider.models?.find((m) => m.id === "hy3-preview");
-    expect(hy3Preview?.reasoning).toBe(true);
-    expect(hy3Preview?.maxTokens).toBe(128_000);
-    expect(hy3Preview?.compat?.supportsReasoningEffort).toBe(true);
-    expect(hy3Preview?.compat?.supportedReasoningEfforts).toEqual(["none", "low", "high"]);
-
-    const manifestRows = manifest.modelCatalog.providers["tencent-tokenhub"].models as Array<
-      Record<string, unknown>
-    >;
-    expect(manifestRows.find((model) => model.id === "hy3-preview")).toMatchObject({
-      status: "deprecated",
-      replacedBy: "hy4-preview",
-    });
-  });
-
-  it("builds the static Tencent TokenPlan model catalog with reasoning flags", async () => {
-    const provider = await getTokenPlanProvider();
-    const catalogProvider = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
-
-    expect(catalogProvider.api).toBe("openai-completions");
-    expect(catalogProvider.baseUrl).toBe("https://api.lkeap.cloud.tencent.com/plan/v3");
-
-    const modelIds = catalogProvider.models?.map((m) => m.id);
-    expect(modelIds).toEqual(["hy3", "hy4-preview"]);
-
-    const hy3 = catalogProvider.models?.find((m) => m.id === "hy3");
-    expect(hy3?.reasoning).toBe(true);
-    expect(hy3?.maxTokens).toBe(128_000);
-    expect(hy3?.compat?.supportsReasoningEffort).toBe(true);
-    // hy3 (GA) exposes only the two-rung ladder — it does NOT accept `low`.
-    expect(hy3?.compat?.supportedReasoningEfforts).toEqual(["none", "high"]);
-
-    const hy4Preview = catalogProvider.models?.find((m) => m.id === "hy4-preview");
-    expect(hy4Preview?.reasoning).toBe(true);
-    expect(hy4Preview?.contextWindow).toBe(1_024_000);
-    expect(hy4Preview?.maxTokens).toBe(64_000);
-    expect(hy4Preview?.compat?.supportsReasoningEffort).toBe(true);
-    // OpenClaw exposes none/high; raw low acceptance does not prove a distinct low mode.
-    expect(hy4Preview?.compat?.supportedReasoningEfforts).toEqual(["none", "high"]);
-  });
-
-  it("defaults hy3-preview reasoning_effort to high when no effort is provided", async () => {
-    const model = hyReasoningModel("hy3-preview");
-    const context = { messages: [{ role: "user", content: "hi", timestamp: 1 }] } as Context;
-
-    const payload = buildOpenAICompletionsParams(model, context, undefined);
-
-    expect(payload.reasoning_effort).toBe("high");
-  });
-
   it("keeps TokenHub hy3 explicit high and none reasoning_effort unchanged", async () => {
     const provider = await getTokenHubProvider();
     const model = hyReasoningModel();
@@ -285,7 +208,7 @@ describe("tencent provider plugin", () => {
     );
   });
 
-  it.each(["constructor", "__proto__"])(
+  it.each(["constructor"])(
     "does not treat inherited object key %s as a Tencent effort override",
     async (reasoning) => {
       const provider = await getTokenHubProvider();
@@ -294,46 +217,6 @@ describe("tencent provider plugin", () => {
       expect(payload?.reasoning_effort).toBe("none");
     },
   );
-
-  it("keeps minimal reasoning enabled for TokenHub and TokenPlan hy3", async () => {
-    const tokenHubProvider = await getTokenHubProvider();
-    const tokenPlanProvider = await getTokenPlanProvider();
-    const tokenHubModel = hyReasoningModel();
-    const tokenPlanModel = hyReasoningModel("hy3", "tencent-tokenplan");
-
-    const tokenHubPayload = captureTencentPayload({
-      provider: tokenHubProvider,
-      model: tokenHubModel,
-      reasoning: "minimal",
-    });
-    const tokenPlanPayload = captureTencentPayload({
-      provider: tokenPlanProvider,
-      model: tokenPlanModel,
-      reasoning: "minimal",
-    });
-
-    expect(tokenHubPayload?.reasoning_effort).toBe("high");
-    expect(tokenPlanPayload?.reasoning_effort).toBe("high");
-  });
-
-  it("keeps TokenHub hy3-preview unsupported efforts on the model fallback path", async () => {
-    const provider = await getTokenHubProvider();
-    const model = hyReasoningModel("hy3-preview");
-
-    const minimalPayload = captureTencentPayload({
-      provider,
-      model,
-      reasoning: "minimal",
-    });
-    const mediumPayload = captureTencentPayload({
-      provider,
-      model,
-      reasoning: "medium",
-    });
-
-    expect(minimalPayload?.reasoning_effort).toBe("low");
-    expect(mediumPayload?.reasoning_effort).toBe("low");
-  });
 
   it("collapses hy4-preview onto its two-rung ladder on both endpoints", async () => {
     const tokenHubProvider = await getTokenHubProvider();

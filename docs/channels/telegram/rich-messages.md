@@ -35,6 +35,8 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 
     This keeps model text away from Telegram's rich-Markdown sigils, so currency like `$400-600K` is not parsed as math. Long rich text splits automatically across Telegram's limits. Tables over the 20-column limit fall back to a code block.
 
+    A table followed by a quote, list, heading, code block, or paragraph stays a separate block. Tables authored inside a quote or list stay inside that container, including when they are its final content.
+
     Default: off, for client compatibility — some current Desktop, Web, Android, and third-party clients render accepted rich messages as unsupported. Keep this off unless every client used with the bot can render them. `/status` shows whether the current session has rich messages on or off.
 
     Link previews are on by default. `channels.telegram.linkPreview: false` disables automatic entity detection for rich text.

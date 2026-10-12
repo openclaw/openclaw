@@ -17,6 +17,7 @@ import {
   recordOpenClawAgentDatabaseRegistryMutation,
 } from "./openclaw-agent-db-registry-listing.js";
 import {
+  adoptOpenClawAgentDatabaseSchema,
   invalidateOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidationsForAgent,
   setOpenClawAgentDatabaseValidation,
@@ -146,7 +147,10 @@ export function registerOpenClawAgentDatabase(
     { env: params.env },
   );
   if (params.admittedDb) {
-    setOpenClawAgentDatabaseValidation({ ...params, db: params.admittedDb });
+    const database = { ...params, db: params.admittedDb };
+    if (!adoptOpenClawAgentDatabaseSchema(database)) {
+      setOpenClawAgentDatabaseValidation(database);
+    }
   } else {
     invalidateOpenClawAgentDatabaseValidation(params.path);
   }

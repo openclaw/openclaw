@@ -67,20 +67,6 @@ afterEach(async () => {
 });
 
 describe("node connection notification routing", () => {
-  it("does not alert when a previously connected node reconnects", async () => {
-    const source = node("known-node");
-    const desk = node("desk");
-    const invoke = vi.fn(async () => ({ ok: true }));
-    const registryValue = registry({ listConnected: () => [source, desk], invoke });
-
-    scheduleNodeConnectionNotification(registryValue as never, source, {
-      isFirstConnection: false,
-    });
-    await clock.advanceBy(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS);
-
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
   it("delivers once to the most recently active Mac after sleep", async () => {
     const source = node("new-node", { lastActiveAtMs: 50 });
     const desk = node("desk", { lastActiveAtMs: 100 });

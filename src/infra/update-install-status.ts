@@ -117,7 +117,7 @@ export async function prepareStartupUpdateInstall(
 
 type GitScheduleStatus = NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>;
 
-function resolveGitScheduleStatus(
+export function resolveGitScheduleStatus(
   update: UpdateCheckResult,
   installReceipt: VerifiedGitUpdateReceipt | null,
   root: string | null,

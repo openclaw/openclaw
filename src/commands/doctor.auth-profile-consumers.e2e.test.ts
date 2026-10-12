@@ -22,7 +22,6 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   clearUserProfileAuthLink,
   listUserProfileAuthLinks,
-  resolveUserProfileAuthLink,
   setUserProfileAuthLink,
 } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -97,6 +96,8 @@ async function runInteractiveDoctor(env: NodeJS.ProcessEnv, expectImport: boolea
       answeredThrough += prompt.index + prompt[0].length;
       const question = prompt[1]!.trim();
       if (
+        question ===
+          "Pause the managed Gateway while you review repairs? Doctor restores its prior service state when finished." ||
         question === "Migrate auth profile JSON files into SQLite now?" ||
         question === "Apply recommended config repairs now?"
       ) {
@@ -473,9 +474,6 @@ describe("doctor auth-profile consumers", () => {
           expect(repaired.messages?.responsePrefix).toBe(
             "literal anthropic/test-model@claude-cli:work",
           );
-          expect(
-            resolveUserProfileAuthLink({ profileId: person.id, providers: ["anthropic"] }),
-          ).toBe(renamed);
           const links = readStoredLinks(person.id);
           expect(links).toEqual({
             version: 1,

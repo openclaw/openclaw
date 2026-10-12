@@ -227,14 +227,11 @@ export function estimateTokensAfterCompaction(params: {
     return undefined;
   }
   const sanityCheckBaseline = params.observedTokenCount ?? params.fullSessionTokensBefore;
-  if (
-    sanityCheckBaseline > 0 &&
+  return sanityCheckBaseline > 0 &&
     tokensAfter >
       (params.observedTokenCount !== undefined ? sanityCheckBaseline : sanityCheckBaseline * 1.1)
-  ) {
-    return undefined;
-  }
-  return tokensAfter;
+    ? undefined
+    : tokensAfter;
 }
 
 type CompactionHookParams = {

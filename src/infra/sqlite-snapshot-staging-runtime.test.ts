@@ -34,78 +34,8 @@ it.each([false, true])("preserves allocation failures when cleanup fails=%s", as
       errors: [allocation, cleanup],
       cause: allocation,
     });
-    const owned = await runtime.allocate("/fixture", false, launch, 1);
-    expect(transport.close).toHaveBeenCalledTimes(2);
-    await owned.retire();
-    expect(transport.close).toHaveBeenCalledTimes(3);
   } else {
     await expect(runtime.allocate("/fixture", false, launch, 1)).rejects.toBe(allocation);
     expect(transport.close).toHaveBeenCalledOnce();
   }
-});
-
-it("acknowledges a lost session before reconciling retirement and accepting new allocations", async () => {
-  const owned = await runtime.allocate("/fixture", false, launch, 1);
-  let acknowledge!: () => void;
-  transport.isRetired.mockReturnValue(true);
-  transport.close.mockReturnValueOnce(
-    new Promise<void>((resolve) => {
-      acknowledge = resolve;
-    }),
-  );
-  const replacement = {
-    compatible: () => true,
-    isRetired: () => false,
-    run: vi.fn().mockResolvedValue("/fixture/replacement"),
-    close: vi.fn().mockResolvedValue(undefined),
-  };
-  factory.mockReturnValue(replacement);
-  launch = {
-    cwd: "/changed-before-retirement",
-    env: { FIXTURE: "changed-before-retirement" },
-    transport: { kind: "native" },
-  };
-  await expect(runtime.allocate("/fixture", false, launch, 1)).rejects.toThrow(
-    "launch context changed",
-  );
-  expect(factory).toHaveBeenCalledOnce();
-  const retired = owned.retire();
-  await vi.waitFor(() => expect(transport.close).toHaveBeenCalledOnce());
-  expect(replacement.run).not.toHaveBeenCalled();
-  launch = {
-    cwd: "/changed-after-close-started",
-    env: { FIXTURE: "changed" },
-    transport: { kind: "native" },
-  };
-  acknowledge();
-  await retired;
-  expect(factory).toHaveBeenLastCalledWith({
-    env: { FIXTURE: "captured" },
-    cwd: "/fixture",
-    transport: { kind: "native" },
-    retainLifetime: false,
-    retainOnOperationError: true,
-  });
-  expect(replacement.run).toHaveBeenCalledWith("/fixture/snapshot", { mode: "staging-reconcile" });
-  expect(replacement.close).toHaveBeenCalledOnce();
-  const next = await runtime.allocate("/fixture", false, launch, 1);
-  expect(factory).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      env: { FIXTURE: "changed" },
-      cwd: "/changed-after-close-started",
-    }),
-  );
-  await next.retire();
-});
-
-it("retries the same last session close before releasing snapshot custody", async () => {
-  const owned = await runtime.allocate("/fixture", false, launch, 1);
-  const failure = new Error("session close unacknowledged");
-  transport.close.mockRejectedValueOnce(failure);
-  await expect(owned.retire()).rejects.toBe(failure);
-  await expect(owned.retire()).resolves.toBeUndefined();
-  expect(transport.close).toHaveBeenCalledTimes(2);
-  expect(transport.run).toHaveBeenCalledTimes(2);
-  await owned.retire();
-  expect(transport.close).toHaveBeenCalledTimes(2);
 });

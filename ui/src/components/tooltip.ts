@@ -359,6 +359,8 @@ class Tooltip extends OpenClawLitElement {
     // WaTooltip's initial `for` watcher clears a directly assigned anchor.
     // Reapply it after that update or an open tooltip has no popup geometry.
     await tooltip.updateComplete;
+    // Opening Web Awesome's tooltip reads the nested popup's rendered element.
+    await tooltip.popup?.updateComplete;
     if (this.webAwesomeTooltip === tooltip && this.#triggerElement === trigger) {
       tooltip.anchor = trigger;
       const popup = tooltip.popup;

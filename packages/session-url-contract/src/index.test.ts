@@ -24,30 +24,18 @@ const buildSharePath = (
 ) => buildControlUiCatalogSharePath({ shareRoute: SHARE_ROUTE, threadId: THREAD_ID, ...params });
 
 describe("buildControlUiCatalogSessionUrl", () => {
-  it("builds a canonical URL under a nested base path for a non-main agent", () => {
-    expect(
-      buildControlUiCatalogSessionUrl({
-        namespace: "chat",
-        agentId: "research",
-        basePath: "/admin/openclaw/",
-        catalog: "beam",
-        host: "gateway",
-        thread: "beam-1",
-      }),
-    ).toBe("/admin/openclaw/chat/research?catalog=beam&host=gateway&thread=beam-1");
-  });
-
   it("encodes reserved query characters", () => {
     expect(
       buildControlUiCatalogSessionUrl({
         namespace: "dashboard",
-        agentId: "main",
+        agentId: "research",
+        basePath: "/admin/openclaw/",
         catalog: "claude & codex",
         host: "gateway:local/primary",
         thread: "thread?one=1&two=2",
       }),
     ).toBe(
-      "/dashboard/main?catalog=claude+%26+codex&host=gateway%3Alocal%2Fprimary&thread=thread%3Fone%3D1%26two%3D2",
+      "/admin/openclaw/dashboard/research?catalog=claude+%26+codex&host=gateway%3Alocal%2Fprimary&thread=thread%3Fone%3D1%26two%3D2",
     );
   });
 
@@ -69,23 +57,9 @@ describe("buildControlUiCatalogSessionUrl", () => {
 });
 
 describe("buildControlUiCatalogSharePath", () => {
-  it.each([
-    ["Fix: upload flow!", "fix-upload-flow-"],
-    ["🦞", ""],
-    ["x".repeat(60), `${"x".repeat(48)}-`],
-  ])("uses the session title slug for %s", (displayName, prefix) => {
-    expect(buildSharePath({ displayName })).toBe(`/beam/${prefix}0123456789ab`);
-  });
-
   it("builds a lowercase 12-character share id under a nested base path", () => {
-    expect(buildSharePath({ basePath: "/admin/openclaw/" })).toBe(
-      "/admin/openclaw/beam/0123456789ab",
-    );
-  });
-
-  it("can retain the full id for an unambiguous fallback", () => {
-    expect(buildSharePath({ prefixLength: SHARE_ROUTE.fullLength })).toBe(
-      "/beam/0123456789abcdef0123456789abcdef",
+    expect(buildSharePath({ basePath: "/admin/openclaw/", displayName: "x".repeat(60) })).toBe(
+      `/admin/openclaw/beam/${"x".repeat(48)}-0123456789ab`,
     );
   });
 
@@ -209,21 +183,6 @@ describe("buildControlUiSessionPath", () => {
         basePath: " /control/// ",
       }),
     ).toBe("/control/dashboard/research/~key/global");
-  });
-
-  it.each([
-    ["OPS_TEAM", "ops_team"],
-    ["Research Agent!", "research-agent"],
-    ["Kelvin", "kelvin"],
-    ["ſ", "main"],
-  ])("normalizes fallback agent %j", (fallbackAgentId, expectedAgentId) => {
-    expect(buildChatPath({ sessionKey: "control-link", fallbackAgentId })).toBe(
-      `/chat/${expectedAgentId}/control-link`,
-    );
-  });
-
-  it("normalizes an embedded Unicode long-s through the canonical agent helper", () => {
-    expect(buildChatPath({ sessionKey: "agent:AſB:control-link" })).toBe("/chat/a-b/control-link");
   });
 
   it.each([

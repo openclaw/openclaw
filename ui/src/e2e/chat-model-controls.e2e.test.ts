@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
@@ -750,7 +751,7 @@ suite.define(() => {
           .toBe(true);
         if (route === "chat") {
           await page.setViewportSize({ width: 1180, height: 900 });
-          await page.getByRole("button", { name: "Open split view" }).click();
+          await selectChatLayoutAction(page, "Open split view");
           const panes = page.locator(".chat-split-view__pane .agent-chat__input");
           await expect.poll(() => panes.count()).toBe(2);
           await expect

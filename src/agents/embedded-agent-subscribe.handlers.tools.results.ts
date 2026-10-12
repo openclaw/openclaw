@@ -475,20 +475,6 @@ export async function emitToolResultOutput(params: {
   sanitizedResult: unknown;
 }) {
   const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
-  const recordApprovalPromptDeliveryFailure = (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
-    const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
-    const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))({
-      toolName,
-      meta: approvalMeta,
-      executionStarted: false,
-      outcome: "failure",
-      failure: { error: `Approval prompt delivery failed: ${message}` },
-    });
-    ctx.state.lastToolError = terminal.lastToolError;
-    // A later delivery failure does not undo an already delivered pending prompt.
-  };
   const details = readRecordField(asOptionalObjectRecord(result)?.details);
   const hasStructuredMedia = readRecordField(details?.media) !== undefined;
   const approvalPending = readExecApprovalPendingDetails(result);
@@ -515,7 +501,20 @@ export async function emitToolResultOutput(params: {
         );
       }
     } catch (error) {
-      recordApprovalPromptDeliveryFailure(error);
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
+      const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
+      const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))(
+        {
+          toolName,
+          meta: approvalMeta,
+          executionStarted: false,
+          outcome: "failure",
+          failure: { error: `Approval prompt delivery failed: ${message}` },
+        },
+      );
+      ctx.state.lastToolError = terminal.lastToolError;
+      // A later delivery failure does not undo an already delivered pending prompt.
     } finally {
       if (approvalPending) {
         ctx.state.deterministicApprovalPromptPending = false;

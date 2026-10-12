@@ -599,11 +599,11 @@ describe("hosted media bulk read error order", () => {
             dataBase64: Buffer.from(early === "invalid-bytes" ? "x" : "1234").toString("base64"),
           });
         }
-        await chunkStore.register(key(1), { id, index: 1, dataBase64: "NTY3OA==" });
         const { db } = openOpenClawStateDatabase();
+        // Seed corruption before a keyed write receipt can cache a valid chunk.
         db.prepare(
-          "UPDATE plugin_state_entries SET value_json = ? WHERE namespace = ? AND entry_key = ?",
-        ).run("invalid JSON", `chunks-${early}`, key(1));
+          "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, NULL)",
+        ).run("fixture-plugin", `chunks-${early}`, key(1), "invalid JSON", Date.now());
         const store = createHostedOutboundMediaStore({
           metadataStore,
           chunkStore,

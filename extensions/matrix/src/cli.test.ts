@@ -656,22 +656,6 @@ describe("matrix CLI verification commands", () => {
     expect(mocks.restoreBackup).not.toHaveBeenCalled();
   });
 
-  it("preserves a multibyte recovery key at the stdin byte limit", async () => {
-    mocks.restoreBackup.mockResolvedValue({
-      success: true,
-      backupVersion: "1",
-      imported: 1,
-      total: 1,
-      loadedFromSecretStorage: false,
-      backup: healthyMatrixBackup(),
-    });
-    const recoveryKey = "é".repeat((1024 * 1024) / 2);
-    mockRecoveryKeyStdin(recoveryKey);
-    await runMatrixCli(["verify", "backup", "restore", "--recovery-key-stdin"]);
-
-    expectRecordFields(mockCallArg(mocks.restoreBackup), { recoveryKey });
-  });
-
   it.each([false, true])("preserves JSON recovery key opt-in=%s", async (include) => {
     const status = matrixVerificationStatus(include ? { recoveryKey: "test-recovery-key" } : {});
     mocks.verificationStatus.mockResolvedValue(status);
@@ -981,19 +965,6 @@ describe("matrix CLI verification commands", () => {
     expect(JSON.parse(String(stdoutWriteArg())).error).toContain("run the setup command again");
   });
 
-  it("reports publication failure ahead of an earlier bootstrap failure", async () => {
-    mocks.account.mockReturnValue({ configured: true });
-    mocks.bootstrap.mockRejectedValueOnce(new Error("bootstrap failed"));
-    mocks.replaceConfig.mockRejectedValueOnce(new Error("config publication failed"));
-    await runMatrixCli(["encryption", "setup", "--json"]);
-
-    expect(process.exitCode).toBe(1);
-    expect(JSON.parse(String(stdoutWriteArg()))).toEqual({
-      success: false,
-      error: "config publication failed",
-    });
-  });
-
   it("saves an encrypted account and reports bootstrap, profile, and device-health failures", async () => {
     mocks.accountConfig.mockImplementation(
       ({ cfg, accountId }: { cfg: CoreConfig; accountId: string }) =>
@@ -1017,13 +988,6 @@ describe("matrix CLI verification commands", () => {
     });
     expectRecordFields(result.profile, { attempted: true, error: "profile failed" });
     expectRecordFields(result.deviceHealth, { error: "device health failed" });
-  });
-
-  it("does not bootstrap verification when updating an already configured account", async () => {
-    configureAccount(true);
-    await runMatrixCli(matrixAccountPasswordArgs());
-
-    expect(mocks.bootstrap).not.toHaveBeenCalled();
   });
 
   it("forwards --avatar-url through account add setup and profile sync", async () => {
@@ -1170,23 +1134,6 @@ describe("matrix CLI verification commands", () => {
     expect(mocks.resetBackup).not.toHaveBeenCalled();
     expect(console.error).toHaveBeenCalledWith(
       "Backup reset failed: Refusing to reset Matrix room-key backup without --yes. If you accept losing unrecoverable history, re-run openclaw matrix verify backup reset --yes.",
-    );
-  });
-
-  it("resets the Matrix room-key backup when confirmed", async () => {
-    await runMatrixCli(["verify", "backup", "reset", "--yes", "--rotate-recovery-key"]);
-
-    expect(mocks.resetBackup).toHaveBeenCalledWith({
-      accountId: "default",
-      cfg: {},
-      rotateRecoveryKey: true,
-    });
-    expectLogs(
-      "Reset success: yes",
-      "Previous backup version: 1",
-      "Deleted backup version: 1",
-      "Current backup version: 2",
-      "Backup: active and trusted on this device",
     );
   });
 

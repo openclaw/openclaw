@@ -299,6 +299,61 @@ function expectProviderAttemptCounts(expected: { openai: number; groq: number })
 }
 
 describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
+  it.each([
+    { name: "prompt failure", phase: "prompt", fallback: true, promptFailure: true },
+    { name: "aborted assistant", phase: "prompt", fallback: true },
+    { name: "compaction", phase: "compaction", fallback: false },
+    { name: "tool execution", phase: "tool_execution", fallback: false },
+    { name: "external timeout", phase: "prompt", fallback: false, external: true },
+    { name: "committed tool effects", phase: "prompt", fallback: false, wrote: true },
+    { name: "invalid replay", phase: "prompt", fallback: false, replayInvalid: true },
+  ] as const)("preserves attempt timeout fallback eligibility after $name", async (scenario) => {
+    await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeFallbackAuthStore(agentDir);
+      const promptFailure = "promptFailure" in scenario;
+      mockPrimaryFailureThenFallbackSuccess(() =>
+        makeEmbeddedRunnerAttempt({
+          terminal: {
+            kind: "timeout",
+            phase: scenario.phase,
+            source: "external" in scenario ? "external" : "run_budget",
+            aborted: true,
+            ...(promptFailure
+              ? { failure: { source: "prompt", error: new Error("attempt deadline reached") } }
+              : {}),
+          },
+          lastAssistant: promptFailure
+            ? undefined
+            : buildEmbeddedRunnerAssistant({
+                provider: "openai",
+                model: "mock-1",
+                stopReason: "aborted",
+                content: [],
+              }),
+          toolMetas: "wrote" in scenario ? [{ toolName: "write", replaySafe: false }] : [],
+          ...("replayInvalid" in scenario ? { promptTimeoutOutcome: { replayInvalid: true } } : {}),
+        }),
+      );
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:attempt-timeout",
+        runId: "run:attempt-timeout",
+      });
+
+      expectProviderAttemptCounts({ openai: 1, groq: scenario.fallback ? 1 : 0 });
+      if (scenario.fallback) {
+        expect(result.result.payloads?.[0]?.text).toBe("fallback ok");
+        expect(result.result.meta.error).toBeUndefined();
+        expect(
+          runEmbeddedAttemptMock.mock.calls.map(
+            ([params]) => (params as { timeoutMs: number }).timeoutMs,
+          ),
+        ).toEqual([5_000, 5_000]);
+      }
+    });
+  });
+
   it.each(["thrown", "assistant"] as const)(
     "does not replay %s transcript turn assertions through retries or model fallback",
     async (surface) => {

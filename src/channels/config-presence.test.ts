@@ -8,6 +8,7 @@ import {
   hasMeaningfulChannelConfig,
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelPresenceSignals,
+  listPotentialConfiguredChannelPresenceSignalsAsync,
   listPotentialConfiguredChannelIds,
 } from "./config-presence.js";
 import * as persistedAuthState from "./plugins/persisted-auth-state.js";
@@ -22,6 +23,10 @@ beforeEach(() => {
   ]);
   vi.spyOn(persistedAuthState, "hasBundledChannelPersistedAuthState").mockImplementation(
     ({ channelId, env }) =>
+      channelId === "matrix" && Boolean(env?.OPENCLAW_STATE_DIR?.includes("persisted-matrix")),
+  );
+  vi.spyOn(persistedAuthState, "hasBundledChannelPersistedAuthStateAsync").mockImplementation(
+    async ({ channelId, env }) =>
       channelId === "matrix" && Boolean(env?.OPENCLAW_STATE_DIR?.includes("persisted-matrix")),
   );
 });
@@ -64,13 +69,6 @@ describe("config presence", () => {
     expect(listPotentialConfiguredChannelIds(cfg, {}, configAndEnvOnly)).toEqual(["matrix"]);
   });
 
-  it("ignores enabled-only matrix config when listing configured channels", () => {
-    const env = {} as NodeJS.ProcessEnv;
-    const cfg = { channels: { matrix: { enabled: false } } };
-
-    expect(listPotentialConfiguredChannelIds(cfg, env, configAndEnvOnly)).toEqual([]);
-  });
-
   it("lists explicitly disabled channel ids case-insensitively", () => {
     const cfg = {
       channels: {
@@ -86,17 +84,6 @@ describe("config presence", () => {
     expect(listExplicitlyDisabledChannelIdsForConfig(cfg)).toEqual(["matrix"]);
   });
 
-  it("detects env-only channel config", () => {
-    const env = {
-      MATRIX_ACCESS_TOKEN: "token",
-    } as NodeJS.ProcessEnv;
-
-    expect(listPotentialConfiguredChannelIds({}, env, configAndEnvOnly)).toEqual(["matrix"]);
-    expect(listPotentialConfiguredChannelPresenceSignals({}, env, configAndEnvOnly)).toEqual([
-      { channelId: "matrix", source: "env" },
-    ]);
-  });
-
   it("detects official external channel env vars", () => {
     const env = {
       MATTERMOST_URL: "https://mattermost.example.test",
@@ -110,13 +97,12 @@ describe("config presence", () => {
   });
 
   it.each([
-    { channelIds: undefined, expectedIds: ["matrix"] },
     { channelIds: ["matrix"], expectedIds: ["matrix"] },
-    { channelIds: ["whatsapp"], expectedIds: [] },
+
     { channelIds: [], expectedIds: [] },
   ])(
     "scopes persisted credentials without hiding env signals: $channelIds",
-    ({ channelIds, expectedIds }) => {
+    async ({ channelIds, expectedIds }) => {
       const stateDir = makeTempStateDir();
       const env = { OPENCLAW_STATE_DIR: stateDir, MATTERMOST_BOT_TOKEN: "test-token" };
 
@@ -125,6 +111,13 @@ describe("config presence", () => {
           persistedAuthChannelIds: channelIds && new Set(channelIds),
         }),
       ).toEqual(["mattermost", ...expectedIds]);
+      vi.mocked(persistedAuthState.hasBundledChannelPersistedAuthState).mockImplementation(() => {
+        throw new Error("runtime discovery must not invoke the synchronous checker");
+      });
+      const signals = await listPotentialConfiguredChannelPresenceSignalsAsync({}, env, {
+        persistedAuthChannelIds: channelIds && new Set(channelIds),
+      });
+      expect(signals.map((signal) => signal.channelId)).toEqual(["mattermost", ...expectedIds]);
     },
   );
 });

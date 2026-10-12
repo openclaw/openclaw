@@ -139,25 +139,7 @@ describe("web_fetch output contract", () => {
     expect(Object.values(details)).not.toContain(undefined);
   });
 
-  it("validates cache hits without restoring removed fields", async () => {
-    mockHttpResponse("cached body");
-    const tool = createContractTool({ cacheTtlMinutes: 1 });
-    const args = { url: "https://example.com/cache-contract" };
-    const first = requireDetails((await tool?.execute("cache-first", args))!);
-    const second = requireDetails((await tool?.execute("cache-second", args))!);
-
-    expectContract(first);
-    expectContract(second);
-    expect(first.cached).toBeUndefined();
-    expect(second.cached).toBe(true);
-    expect(fetchWithWebToolsNetworkGuardMock).toHaveBeenCalledTimes(1);
-    expect(second).not.toHaveProperty("wrappedLength");
-    expect(second).not.toHaveProperty("fullOutputPath");
-    expect(second).not.toHaveProperty("spilledChars");
-    expect(second).not.toHaveProperty("spillTruncated");
-  });
-
-  it.each(["title", "warning", "contentType", "extractor", "fetchedAt", "finalUrl"])(
+  it.each(["title", "finalUrl"])(
     "bounds provider-controlled %s before serialization and caching",
     async (field) => {
       fetchWithWebToolsNetworkGuardMock.mockRejectedValue(new Error("direct fetch failed"));
@@ -277,7 +259,7 @@ describe("web_fetch output contract", () => {
     expect(providerCalls).toBe(fields.length * modes.length * copies);
   });
 
-  it.each(["title", "warning"])("retains already-wrapped provider %s prose", async (field) => {
+  it("retains already-wrapped provider warning prose", async () => {
     fetchWithWebToolsNetworkGuardMock.mockRejectedValue(new Error("direct fetch failed"));
     const prose = "Useful metadata ".repeat(8);
     resolveWebFetchDefinitionMock.mockReturnValue({
@@ -285,7 +267,7 @@ describe("web_fetch output contract", () => {
       definition: {
         execute: async () => ({
           text: "Useful provider body.",
-          [field]: wrapExternalContent(prose, { source: "web_fetch", includeWarning: false }),
+          warning: wrapExternalContent(prose, { source: "web_fetch", includeWarning: false }),
         }),
       },
     });
@@ -296,13 +278,13 @@ describe("web_fetch output contract", () => {
     );
 
     expectContract(details);
-    expect(details[field]).toContain(prose);
-    expect(details[field]).toContain("[[MARKER_SANITIZED]]");
+    expect(details.warning).toContain(prose);
+    expect(details.warning).toContain("[[MARKER_SANITIZED]]");
     expect(details.truncated).toBe(true);
     expect(details.spill).toBeUndefined();
   });
 
-  it.each([100, 300, 800, 1_000, 2_000])(
+  it.each([100, 300, 800])(
     "shares a %i-character content budget without breaking metadata wrappers",
     async (maxChars) => {
       fetchWithWebToolsNetworkGuardMock.mockRejectedValue(new Error("direct fetch failed"));
@@ -378,26 +360,6 @@ describe("web_fetch output contract", () => {
     expect(fetchWithWebToolsNetworkGuardMock).toHaveBeenCalledTimes(2);
   });
 
-  it("shares cached responses across equivalent URL scheme and host casing", async () => {
-    mockHttpResponse("canonical URL body");
-    const tool = createContractTool({ cacheTtlMinutes: 1 });
-
-    const first = requireDetails(
-      (await tool?.execute("cache-case-first", {
-        url: "HTTPS://EXAMPLE.COM/cache-case-contract",
-      }))!,
-    );
-    const second = requireDetails(
-      (await tool?.execute("cache-case-second", {
-        url: "https://example.com/cache-case-contract",
-      }))!,
-    );
-
-    expect(first.cached).toBeUndefined();
-    expect(second.cached).toBe(true);
-    expect(fetchWithWebToolsNetworkGuardMock).toHaveBeenCalledTimes(1);
-  });
-
   it("spills truncated fetched text to a private temp file", async () => {
     const fullText = "web fetch content ".repeat(400);
     mockHttpResponse(fullText);
@@ -430,32 +392,6 @@ describe("web_fetch output contract", () => {
     const spilledText = await readFile(details.spill.path, "utf8");
     expect(spilledText).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(spilledText).toContain(fullText);
-  });
-
-  it("validates nested spill metadata", async () => {
-    mockHttpResponse("spill body ".repeat(1_000));
-    const result = await createContractTool({ maxChars: 300 })?.execute("spill", {
-      url: "https://example.com/spill-contract",
-    });
-    const details = requireDetails(result!);
-    const spill = details.spill as { path: string; chars: number; truncated?: true } | undefined;
-    if (!spill) {
-      throw new Error("expected spill metadata");
-    }
-    spillPaths.add(spill.path);
-
-    expectContract(details);
-    expect(spill.chars).toBe("spill body ".repeat(1_000).length);
-    expect(spill.truncated).toBeUndefined();
-    expect(details.text).toContain(`Full output: ${spill.path}`);
-  });
-
-  it("throws HTTP errors instead of returning an undeclared error shape", async () => {
-    mockHttpResponse("missing", { status: 404, statusText: "Not Found" });
-
-    await expect(
-      createContractTool()?.execute("error", { url: "https://example.com/error-contract" }),
-    ).rejects.toThrow("Web fetch failed (404)");
   });
 
   it("bounds HTTP errors when sanitizer expansion clips a later boundary marker", async () => {

@@ -221,6 +221,7 @@ it.each([
   "profile",
   "role",
   "role restored",
+  "policy downgraded",
   "policy restored",
   "unrelated policy",
   "target alias",
@@ -293,7 +294,9 @@ it.each([
               revocation !== "model policy narrowed",
             );
             expect(authority.modelPolicy?.allows({ provider: "fixture", model: "b" })).toBe(true);
-            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "c" })).toBe(false);
+            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "c" })).toBe(
+              revocation !== "model policy restored",
+            );
           }
           sideEffect();
         } finally {
@@ -301,6 +304,7 @@ it.each([
         }
       });
       const allowed =
+        revocation === "policy restored" ||
         revocation === "unrelated policy" ||
         revocation === "target alias" ||
         revocation.startsWith("model policy");
@@ -349,7 +353,11 @@ it.each([
         } else {
           currentConfig = structuredClone(cfg);
           const roles = expectDefined(currentConfig.gateway?.roles, "configured roles");
-          roles.definitions[revocation === "policy restored" ? "reader" : "denied"] = {
+          roles.definitions[
+            revocation === "policy restored" || revocation === "policy downgraded"
+              ? "reader"
+              : "denied"
+          ] = {
             agents: [],
             scopes: [],
             sessions: { others: "none" },

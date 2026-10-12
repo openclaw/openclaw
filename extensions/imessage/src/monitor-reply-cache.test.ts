@@ -17,7 +17,7 @@ import {
 
 type ReplyCacheModule = typeof import("./monitor-reply-cache.js");
 let findLatestIMessageEntryForChat: ReplyCacheModule["findLatestIMessageEntryForChat"];
-let isIMessageCurrentMessageInChat: ReplyCacheModule["isIMessageCurrentMessageInChat"];
+let isIMessageCurrentMessageInChatAsync: ReplyCacheModule["isIMessageCurrentMessageInChatAsync"];
 let isKnownFromMeIMessageMessageId: ReplyCacheModule["isKnownFromMeIMessageMessageId"];
 let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
 let resolveIMessageCachedResourceBinding: ReplyCacheModule["resolveIMessageCachedResourceBinding"];
@@ -26,7 +26,7 @@ let resolveIMessageMessageId: ReplyCacheModule["resolveIMessageMessageId"];
 async function loadReplyCache(options?: { preservePersistentState?: boolean }): Promise<void> {
   ({
     findLatestIMessageEntryForChat,
-    isIMessageCurrentMessageInChat,
+    isIMessageCurrentMessageInChatAsync,
     isKnownFromMeIMessageMessageId,
     rememberIMessageReplyCache,
     resolveIMessageCachedResourceBinding,
@@ -350,9 +350,9 @@ describe("SQLite reply-cache hydration", () => {
     }).register(IMESSAGE_REPLY_CACHE_COUNTER_KEY, { counter: 40 });
     const { getIMessageRuntime } = await import("./runtime.js");
     const state = getIMessageRuntime().state;
-    const openKeyedStore = state.openKeyedStore;
+    const openKeyedStore = state.openKeyedStoreV2;
     const open = vi
-      .spyOn(state, "openKeyedStore")
+      .spyOn(state, "openKeyedStoreV2")
       .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
         const store = openKeyedStore<T>(options);
         if (options.namespace === IMESSAGE_REPLY_CACHE_NAMESPACE) {
@@ -586,14 +586,14 @@ describe("current-message chat binding", () => {
       });
 
       expect(
-        isIMessageCurrentMessageInChat({
+        await isIMessageCurrentMessageInChatAsync({
           accountId: "work",
           currentMessageId: entry.shortId,
           chatContext,
         }),
       ).toBe(true);
       expect(
-        isIMessageCurrentMessageInChat({
+        await isIMessageCurrentMessageInChatAsync({
           accountId: "work",
           currentMessageId: "current-guid",
           chatContext,
@@ -613,21 +613,21 @@ describe("current-message chat binding", () => {
     });
 
     expect(
-      isIMessageCurrentMessageInChat({
+      await isIMessageCurrentMessageInChatAsync({
         accountId: "other",
         currentMessageId: "current-guid",
         chatContext: { chatId: 42 },
       }),
     ).toBe(false);
     expect(
-      isIMessageCurrentMessageInChat({
+      await isIMessageCurrentMessageInChatAsync({
         accountId: "work",
         currentMessageId: "current-guid",
         chatContext: { chatId: 99 },
       }),
     ).toBe(false);
     expect(
-      isIMessageCurrentMessageInChat({
+      await isIMessageCurrentMessageInChatAsync({
         accountId: "work",
         currentMessageId: "unknown-guid",
         chatContext: { chatId: 42 },

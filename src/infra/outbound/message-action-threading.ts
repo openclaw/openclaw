@@ -115,11 +115,7 @@ export function resolveAndApplyOutboundReplyToId(
     }
   }
   const currentMessageId = context.toolContext?.currentMessageId;
-  if (currentMessageId == null) {
-    return undefined;
-  }
-
-  if (mode === "off") {
+  if (currentMessageId == null || mode === "off") {
     return undefined;
   }
 

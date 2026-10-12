@@ -91,9 +91,6 @@ function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   if (isProviderWideMissingModel(params)) {
     return false;
   }
-  if (params.terminal.kind === "timeout" && params.terminal.source === "run_budget") {
-    return false;
-  }
   const timeoutFailure = isAssistantTimeoutFailure(params);
   const harnessOwnedTimeout =
     params.harnessOwnsTransport && (timeoutFailure || params.failoverReason === "timeout");
@@ -187,6 +184,15 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       isTerminalFormatFailure(params)
     ) {
       return surfaceError;
+    }
+    if (params.terminal.kind === "timeout" && params.terminal.source === "run_budget") {
+      // This attempt spent its budget; only a replay-safe prompt can move to
+      // the next configured model. The caller owns replay and settlement checks.
+      return params.terminal.phase === "prompt" &&
+        !params.harnessOwnsTransport &&
+        params.fallbackConfigured
+        ? { action: "fallback_model", reason: "timeout" }
+        : { action: "continue_normal" };
     }
     if (params.failoverFailure && params.failoverReason === "tls_certificate") {
       return params.fallbackConfigured

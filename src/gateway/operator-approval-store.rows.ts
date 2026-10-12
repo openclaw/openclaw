@@ -8,15 +8,8 @@ import {
   buildApprovalResolutionRef,
   isApprovalResolutionRef,
 } from "../infra/approval-resolution-ref.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type {
   NewOperatorApproval,
-  OperatorApprovalDatabase,
   OperatorApprovalDecision,
   OperatorApprovalHistoryCursor,
   OperatorApprovalKind,
@@ -352,52 +345,6 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
   };
 }
 
-export function selectOperatorApprovalRow(
-  database: OpenClawStateDatabase,
-  id: string,
-): OperatorApprovalRow | undefined {
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
-  return executeSqliteQueryTakeFirstSync(
-    database.db,
-    stateDb.selectFrom("operator_approvals").selectAll().where("approval_id", "=", id),
-  );
-}
-
-export function selectOperatorApprovalRowByLocator(
-  database: OpenClawStateDatabase,
-  locator: string,
-): OperatorApprovalRow | undefined {
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    stateDb
-      .selectFrom("operator_approvals")
-      .selectAll()
-      .where((eb) => eb.or([eb("approval_id", "=", locator), eb("resolution_ref", "=", locator)]))
-      .limit(2),
-  ).rows;
-  return rows.length === 1 ? rows[0] : undefined;
-}
-
-export function hasApprovalLocatorNamespaceConflict(params: {
-  database: OpenClawStateDatabase;
-  id: string;
-  resolutionRef: string;
-}): boolean {
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(params.database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    params.database.db,
-    stateDb
-      .selectFrom("operator_approvals")
-      .select("approval_id")
-      .where((eb) =>
-        eb.or([eb("approval_id", "=", params.resolutionRef), eb("resolution_ref", "=", params.id)]),
-      )
-      .where("approval_id", "!=", params.id),
-  );
-  return row !== undefined;
-}
-
 export function matchesExpectedApprovalOwner(params: {
   row: OperatorApprovalRow;
   expectedKind?: OperatorApprovalKind;
@@ -407,60 +354,6 @@ export function matchesExpectedApprovalOwner(params: {
     (params.expectedKind === undefined || params.row.kind === params.expectedKind) &&
     (params.runtimeEpoch === undefined || params.row.runtime_epoch === params.runtimeEpoch)
   );
-}
-
-export function denyCorruptPendingRow(params: {
-  database: OpenClawStateDatabase;
-  id: string;
-  nowMs: number;
-  createdAtMs: number;
-}): void {
-  const auditTimestampMs = clampAuditTimestamp(params.nowMs, params.createdAtMs);
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(params.database.db);
-  executeSqliteQuerySync(
-    params.database.db,
-    stateDb
-      .updateTable("operator_approvals")
-      .set({
-        status: "denied",
-        decision: "deny",
-        terminal_reason: "storage-corrupt",
-        resolved_at_ms: auditTimestampMs,
-        resolver_kind: "system",
-        resolver_id: null,
-        updated_at_ms: auditTimestampMs,
-      })
-      .where("approval_id", "=", params.id)
-      .where("status", "=", "pending"),
-  );
-}
-
-export function expirePendingRow(params: {
-  database: OpenClawStateDatabase;
-  id: string;
-  nowMs: number;
-  createdAtMs: number;
-}): OperatorApprovalRow | undefined {
-  const auditTimestampMs = clampAuditTimestamp(params.nowMs, params.createdAtMs);
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(params.database.db);
-  executeSqliteQuerySync(
-    params.database.db,
-    stateDb
-      .updateTable("operator_approvals")
-      .set({
-        status: "expired",
-        decision: "deny",
-        terminal_reason: "timeout",
-        resolved_at_ms: auditTimestampMs,
-        resolver_kind: "system",
-        resolver_id: null,
-        updated_at_ms: auditTimestampMs,
-      })
-      .where("approval_id", "=", params.id)
-      .where("status", "=", "pending")
-      .where("expires_at_ms", "<=", params.nowMs),
-  );
-  return selectOperatorApprovalRow(params.database, params.id);
 }
 
 export function requireDecodedRecord(row: OperatorApprovalRow): OperatorApprovalRecord {

@@ -19,19 +19,10 @@ export async function load(
   let groupCwd = "";
   let groupWorktree = false;
   let groupStatus: NewSessionRouteData["groupStatus"];
-  let groupCatalogGeneration: number | undefined;
-  let groupDefaultsStatus: NewSessionRouteData["groupDefaultsStatus"];
   if (requestedLocation.group) {
-    const startedGeneration = context.sessions.groupsGeneration();
     const settings = await context.sessions.groupsLoad();
-    groupCatalogGeneration = context.sessions.groupsGeneration();
-    groupDefaultsStatus = context.sessions.groupsStatus();
-    const currentSettings =
-      startedGeneration === groupCatalogGeneration && groupDefaultsStatus === "ready"
-        ? settings
-        : null;
-    const group = currentSettings?.find((candidate) => candidate.name === requestedLocation.group);
-    groupStatus = currentSettings === null ? "unavailable" : group ? "resolved" : "missing";
+    const group = settings?.find((candidate) => candidate.name === requestedLocation.group);
+    groupStatus = settings === null ? "unavailable" : group ? "resolved" : "missing";
     groupCwd = group?.cwd ?? "";
     groupWorktree = group?.worktree === true;
   }
@@ -41,8 +32,6 @@ export async function load(
     groupStatus,
     groupCwd,
     groupWorktree,
-    groupCatalogGeneration,
-    groupDefaultsStatus,
     catalogLabel: "",
     startTerminal: false,
   };

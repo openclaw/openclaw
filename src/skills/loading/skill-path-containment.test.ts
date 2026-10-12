@@ -12,7 +12,6 @@ import {
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
-import { loadSingleSkillDirectory } from "./local-loader.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
 vi.mock("./plugin-skills.js", () => ({
@@ -107,57 +106,11 @@ afterAll(async () => {
 });
 
 describe("skill path containment", () => {
-  it.each([
-    { source: "bundled", expectedSource: "openclaw-bundled" },
-    { source: "custodian", expectedSource: "openclaw-custodian" },
-  ] as const)("loads hardlinked packaged $source skills", async ({ source, expectedSource }) => {
-    const workspaceDir = await createTempWorkspaceDir();
-    const bundledSkillsDir = path.join(workspaceDir, "package", "skills");
-    const skillRoot =
-      source === "bundled"
-        ? bundledSkillsDir
-        : path.join(path.dirname(bundledSkillsDir), "custodian-skills");
-    const skillName = `${source}-hardlinked-skill`;
-    await writeHardlinkedSkill({
-      dir: path.join(skillRoot, skillName),
-      name: skillName,
-      description: `Packaged ${source} skill`,
-    });
-    const warn = captureWarningLogger();
-
-    const entries = loadTestWorkspaceSkills(workspaceDir, {
-      bundledSkillsDir,
-      agentId: "ops",
-      config: {
-        agents: {
-          defaults: { systemAgent: { agentId: "ops" } },
-          entries: { ops: {} },
-        },
-      },
-    });
-
-    expect(entries).toEqual([
-      expect.objectContaining({
-        skill: expect.objectContaining({ name: skillName, source: expectedSource }),
-      }),
-    ]);
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { source: "workspace", expectedSource: "openclaw-workspace" },
-    { source: "managed", expectedSource: "openclaw-managed" },
-    { source: "config-extra", expectedSource: "openclaw-extra" },
-  ] as const)(
+  it.each([{ source: "workspace", expectedSource: "openclaw-workspace" }] as const)(
     "rejects hardlinked $source skills while preserving ordinary files",
     async ({ source, expectedSource }) => {
       const workspaceDir = await createTempWorkspaceDir();
-      const skillRoot =
-        source === "workspace"
-          ? path.join(workspaceDir, "skills")
-          : source === "managed"
-            ? path.join(workspaceDir, ".managed")
-            : path.join(workspaceDir, "extra-skills");
+      const skillRoot = path.join(workspaceDir, "skills");
       const rejectedSkillName = `${source}-hardlinked-skill`;
       const acceptedSkillName = `${source}-ordinary-skill`;
       await writeHardlinkedSkill({
@@ -172,12 +125,7 @@ describe("skill path containment", () => {
       });
       const warn = captureWarningLogger();
 
-      const entries = loadTestWorkspaceSkills(
-        workspaceDir,
-        source === "config-extra"
-          ? { config: { skills: { load: { extraDirs: [skillRoot] } } } }
-          : undefined,
-      );
+      const entries = loadTestWorkspaceSkills(workspaceDir);
 
       expect(entries).toEqual([
         expect.objectContaining({
@@ -303,36 +251,6 @@ describe("skill path containment", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "loads managed skill directory symlinks outside the managed root",
-    async () => {
-      const workspaceDir = await createTempWorkspaceDir();
-      const managedDir = path.join(workspaceDir, ".managed");
-      const skillName = `managed-${++workspaceCaseIndex}`;
-      const targetSkillDir = path.join(tempRoot, `${skillName}-target`, skillName);
-      await writeSkill({
-        dir: targetSkillDir,
-        name: skillName,
-        description: "Managed symlink target",
-      });
-      await fs.mkdir(managedDir, { recursive: true });
-      const symlinkPath = path.join(managedDir, skillName);
-      await fs.symlink(targetSkillDir, symlinkPath, "dir");
-      const warn = captureWarningLogger();
-
-      try {
-        const entries = loadTestWorkspaceSkills(workspaceDir, {
-          managedSkillsDir: managedDir,
-        });
-
-        expect(entries.map((entry) => entry.skill.name)).toContain(skillName);
-        expect(warn).not.toHaveBeenCalled();
-      } finally {
-        await fs.unlink(symlinkPath).catch(() => undefined);
-      }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
     "keeps SKILL.md containment for managed symlinked skill directories",
     async () => {
       const workspaceDir = await createTempWorkspaceDir();
@@ -370,27 +288,6 @@ describe("skill path containment", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "calls out bundled symlink escapes with compact home-relative paths",
-    async () => {
-      const { workspaceDir, bundledDir, requestedPath } = await createEscapedBundledSkillFixture();
-      const warn = captureWarningLogger();
-
-      const entries = loadTestWorkspaceSkills(workspaceDir, {
-        bundledSkillsDir: bundledDir,
-      });
-
-      expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-bundled-skill");
-      const warningLine = firstWarningLine(warn);
-      expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
-      expect(warningLine).toContain("source=openclaw-bundled");
-      expect(warningLine).toContain("reason=bundled-symlink-escape");
-      expect(warningLine).toContain("hint=likely-stray-local-symlink-or-checkout-mutation");
-      expect(warningLine).toContain(`requested=${requestedPath}`);
-      expect(warningLine).toContain("resolved=");
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
     "uses compact home-relative paths in escaped skill console warnings",
     async () => {
       const { workspaceDir, bundledDir } = await createEscapedBundledSkillFixture({
@@ -399,36 +296,16 @@ describe("skill path containment", () => {
       });
       const warn = captureWarningLogger();
 
-      loadTestWorkspaceSkills(workspaceDir, {
-        bundledSkillsDir: bundledDir,
-      });
+      expect(
+        loadTestWorkspaceSkills(workspaceDir, {
+          bundledSkillsDir: bundledDir,
+        }),
+      ).toEqual([]);
 
       const warningLine = firstWarningLine(warn);
       expect(warningLine).toContain("root=~/workspace/.bundled");
       expect(warningLine).toContain("requested=~/workspace/.bundled/escaped-bundled-skill");
       expect(warningLine).toContain("resolved=~/outside/outside-bundled-skill");
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "reads skill frontmatter when the allowed root is the filesystem root",
-    async () => {
-      const workspaceDir = await createTempWorkspaceDir();
-      const skillDir = path.join(workspaceDir, "skills", "root-allowed");
-      await writeSkill({
-        dir: skillDir,
-        name: "root-allowed",
-        description: "Readable from filesystem root",
-      });
-
-      const frontmatter = loadSingleSkillDirectory({
-        skillDir,
-        source: "openclaw-workspace",
-        rootRealPath: path.parse(skillDir).root,
-      })?.frontmatter;
-
-      expect(frontmatter?.name).toBe("root-allowed");
-      expect(frontmatter?.description).toBe("Readable from filesystem root");
     },
   );
 

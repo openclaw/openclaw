@@ -7,8 +7,15 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { prepareSessionEntryMutationDatabases } from "../config/sessions/session-accessor.entry-mutation.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  composeSessionSourceAssertion,
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
@@ -46,13 +53,13 @@ export function prepareGatewaySessionLifecycleTargets(params: {
   const creationSelection = params.creation?.selectTargetInLifecycle
     ? createDeferredCore()
     : undefined;
-  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
   let preparedDatabase: { assertCurrent(): void } | undefined;
   const scopes = params.targets.map(({ target }) => ({
     agentId: target.agentId,
     sessionKey: target.canonicalKey,
     storePath: target.storePath,
   }));
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, scopes);
   const creationScope = scopes[0];
   if (params.creation && !creationScope) {
     throw new Error("Session creation preparation requires its original target");
@@ -74,6 +81,20 @@ export function prepareGatewaySessionLifecycleTargets(params: {
     preparedDatabase = prepared;
   });
   const preparations = params.targets.map(async ({ target, entry, storageReady }, index) => {
+    const memory = isIncognitoSessionKey(target.canonicalKey)
+      ? getSessionActorStorageBinding({})
+      : undefined;
+    if (memory) {
+      return {
+        matchesCurrent() {
+          memory.actor.assertCurrent();
+          memory.authority.assertCurrent();
+          return true;
+        },
+        bindCreation() {},
+        release() {},
+      };
+    }
     let preparedStorage: { assertCurrent(): void } | undefined;
     const targetStorageReady = storageReady?.then((prepared) => {
       preparedStorage = prepared;
@@ -357,7 +378,7 @@ export async function rollbackGatewaySessionPreparation(params: {
 export async function commitPreparedSessionWorkspace(params: {
   prepared: PreparedGatewaySessionLifecycle;
   target: { agentId: string; sessionKey: string; storePath: string };
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   assertEntry: (entry: SessionEntry) => void;
   projectId?: string;
   clearPendingIntent?: boolean;
@@ -365,11 +386,11 @@ export async function commitPreparedSessionWorkspace(params: {
   missingSessionMessage: string;
 }): Promise<SessionEntry> {
   const { prepared } = params;
-  const bind = async (assertSourceCurrent: () => void) => {
-    const assertCurrent = () => {
-      params.assertCurrent();
-      assertSourceCurrent();
-    };
+  const bind = async (assertSourceCurrent: SessionSourceAssertion) => {
+    const assertCurrent = composeSessionSourceAssertion([
+      params.assertCurrent,
+      assertSourceCurrent,
+    ]);
     return await patchSessionEntryCore(
       params.target,
       (entry) => {
@@ -386,7 +407,7 @@ export async function commitPreparedSessionWorkspace(params: {
         };
       },
       {
-        assertCommitAllowed: assertCurrent,
+        ...sessionEntryCommitGuardOptions(assertCurrent),
         requireWriteSuccess: true,
         skipMaintenance: true,
         onCommitted: params.onCommitted,
@@ -410,7 +431,7 @@ export async function ensureSessionWorkspaceForPlacement(params: {
   cfg: OpenClawConfig;
   target: { agentId: string; canonicalKey: string; storePath: string; storeKeys: string[] };
   entry: SessionEntry;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   signal?: AbortSignal;
   onCommitted?: () => void;
   canPrepare: () => boolean;

@@ -320,12 +320,12 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   if (opts.wrapper !== undefined) {
     try {
       wrapperPath = await resolveOpenClawWrapperPath(opts.wrapper);
-      if (!wrapperPath) {
-        fail("Invalid --wrapper");
-        return;
-      }
     } catch (err) {
       fail(`Invalid --wrapper: ${String(err)}`);
+      return;
+    }
+    if (!wrapperPath) {
+      fail("Invalid --wrapper");
       return;
     }
   }
@@ -403,14 +403,14 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
           runtime: "node",
           preferCurrentExecPath: true,
         });
-        if (!runtimePath) {
-          fail(
-            `No supported Node runtime is available. Install Node ${SUPPORTED_NODE_VERSIONS}, then rerun openclaw gateway install.`,
-          );
-          return;
-        }
       } catch (error) {
         fail(`Gateway runtime selection failed: ${String(error)}`);
+        return;
+      }
+      if (!runtimePath) {
+        fail(
+          `No supported Node runtime is available. Install Node ${SUPPORTED_NODE_VERSIONS}, then rerun openclaw gateway install.`,
+        );
         return;
       }
       autoRefreshMessage = `Replacing ${replacement} with ${runtimePath}; refreshing the install.`;

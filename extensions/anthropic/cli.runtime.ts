@@ -428,6 +428,8 @@ export async function* executeClaudeCli(
         currentContext: () => session.currentTurn?.context,
         initialize: {
           appendSystemPrompt: context.systemPrompt,
+          // Native snapshots must not override the host's refreshed prompt on resume.
+          systemPromptSnapshot: false,
           excludeDynamicSections,
           hooks: {
             UserPromptSubmit: [{ hookCallbackIds: ["UserPromptSubmit"] }],

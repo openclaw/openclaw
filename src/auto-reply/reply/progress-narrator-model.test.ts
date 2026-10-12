@@ -15,6 +15,7 @@ const prepared: Parameters<typeof generateNarrationWithUtilityModel>[0]["prepare
   model: "gpt-test",
   authProfileId: undefined,
   outputTextPolicy: "strict-visible",
+  thinkLevel: "off",
   agentId: "main",
   agentDir: "/unused-narration-test",
 };

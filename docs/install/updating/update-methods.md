@@ -335,6 +335,17 @@ place, and a running Gateway can otherwise try to load core or plugin files
 mid-swap. Restart the Gateway after the package manager finishes so it picks up
 the new install.
 
+On Windows, the published OpenClaw 2026.9.3 updater can exhaust its fixed
+30-second baseline package-fingerprint budget before replacing any files. It
+then reports `Package rollback verification timed out` and
+`retained package tree changed` even when the installed tree is unchanged.
+A newer candidate cannot repair the updater already running. After creating a
+[verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup),
+stop the Gateway and use its existing package manager to install the target
+release manually. Run `openclaw doctor --fix`, refresh the service with
+`openclaw gateway install --force`, then start and verify the Gateway.
+Published OpenClaw 2026.9.5 and later include the baseline-timeout fallback.
+
 Gateways with installation-replacement detection also check the installed build
 on their maintenance tick. If the running and installed builds differ, the
 Gateway records the replacement, stops accepting new work, and gives active work

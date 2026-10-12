@@ -212,7 +212,8 @@ Your account has a personal owner. Organization owners can have members with
 personal owner or an organization where you have publisher access.
 
 <Steps>
-  <Step title="Ensure your SKILL.md is complete">
+  <Step title="Complete your SKILL.md">
+    <a id="ensure-your-skillmd-is-complete" />
     Make sure `name`, `description`, and any `metadata.openclaw` gating fields
     are set. Add a `homepage` URL if you have a project page.
   </Step>
@@ -240,7 +241,7 @@ personal owner or an organization where you have publisher access.
 
 <Tip>
   - **Be concise** — instruct the model on *what* to do, not how to be an AI.
-  - **Safety first** — if your skill uses `exec`, ensure prompts do not allow
+  - **Safety first** — if your skill uses `exec`, write prompts that do not allow
     arbitrary command injection from untrusted input.
   - **Test locally** — use `openclaw agent --message "..."` before sharing.
   - **Use ClawHub** — browse community skills at [clawhub.ai](https://clawhub.ai)

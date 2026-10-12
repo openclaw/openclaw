@@ -29,7 +29,7 @@ import {
 } from "./session-transcript-retained-data.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 
-/** Loads one raw suffix only after SQL-side row and byte bounds are proven. */
+/** Native adapter for the deprecated synchronous manager and process-held incognito. */
 export function loadTranscriptSuffixEventsBoundedSync(
   scope: SessionTranscriptReadScope,
   startSeq: number,
@@ -129,12 +129,6 @@ export function loadTranscriptSuffixEventsBoundedFromDatabase(
           )
           .orderBy("seq", "asc"),
       ).rows;
-      if (
-        rows.length !== metadata.length ||
-        rows.some((row, index) => row.seq !== metadata[index]?.seq)
-      ) {
-        throw new Error(`SQLite transcript changed while reading suffix for ${resolved.sessionId}`);
-      }
       // SAFETY: Raw transcript rows are parsed through the persisted transcript event union.
       return rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
     },

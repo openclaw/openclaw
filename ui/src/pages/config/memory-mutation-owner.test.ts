@@ -337,18 +337,14 @@ describe("Memory plugin mutation ownership", () => {
         expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
       );
       await element.updateComplete;
-      expect(
-        element.querySelector<HTMLElement & { disabled?: boolean }>(
-          "wa-radio-group.settings-segmented",
-        )?.disabled,
-      ).toBe(true);
+      expect(element.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled).toBe(
+        true,
+      );
 
       secondMutation.resolve(committed("other", true));
       await waitForFast(() =>
         expect(
-          element.querySelector<HTMLElement & { disabled?: boolean }>(
-            "wa-radio-group.settings-segmented",
-          )?.disabled,
+          element.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled,
         ).toBe(false),
       );
     } finally {

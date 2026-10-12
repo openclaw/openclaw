@@ -536,9 +536,11 @@ suite.define(() => {
                         mode + ": " + stage + " anchor",
                       )
                       .toBeLessThanOrEqual(1);
+                    // Persistence can regroup rows above the reader. The visible
+                    // anchor and follow lock must survive that offset correction.
                     expect
-                      .soft(Math.abs(latest.top - before.top), mode + ": " + stage + " scrollTop")
-                      .toBeLessThanOrEqual(1);
+                      .soft(latest.policy?.locked, mode + ": " + stage + " follow lock")
+                      .toBe(true);
                   } else {
                     expect
                       .soft(latest.distance, mode + ": " + stage + " follows")

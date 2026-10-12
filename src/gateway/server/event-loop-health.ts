@@ -1,5 +1,5 @@
 import { cpus, type CpuInfo } from "node:os";
-import { createHistogram, performance, type RecordableHistogram } from "node:perf_hooks";
+import { monitorEventLoopDelay, performance, type ELDHistogram } from "node:perf_hooks";
 import { isMainThread, Worker } from "node:worker_threads";
 import type { Static } from "typebox";
 import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
@@ -11,7 +11,10 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
+import { createMainThreadStallMonitor } from "../../infra/main-thread-stall.js";
 import { getTrackedWorkerCpuSources } from "../../infra/worker-cpu.js";
+import { createStallFlightRecorder } from "../../logging/diagnostic-stall-flight-recorder.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const EVENT_LOOP_MONITOR_RESOLUTION_MS = 20;
 const EVENT_LOOP_DELAY_WARN_MS = 1_000;
@@ -23,6 +26,7 @@ const LOAD_DEGRADATION_DELAY_COEVIDENCE_MS = 25;
 const SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS = 1_000;
 // A native request can wait on a blocked worker. It must not delay the sampler.
 const WORKER_CPU_SAMPLE_BUDGET_MS = 100;
+const log = createSubsystemLogger("gateway/event-loop");
 
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
 
@@ -171,9 +175,11 @@ export function createGatewayEventLoopHealthMonitor(
   const readCpuUsage = deps.cpuUsage ?? process.cpuUsage.bind(process);
   const readEventLoopUtilization =
     deps.eventLoopUtilization ?? performance.eventLoopUtilization.bind(performance);
-  let histogram: RecordableHistogram | null = null;
-  let lastSampleAt = nowMs();
-  let lastWallAt = lastSampleAt;
+  const flightRecorder = createStallFlightRecorder((message) => log.warn(message), nowMs);
+  const stalls = createMainThreadStallMonitor(nowMs);
+  let unattributedDelayMs = 0;
+  let histogram: ELDHistogram | null = null;
+  let lastWallAt = nowMs();
   let lastCpuUsage = readCpuUsage();
   let lastMainThreadCpuUsage = readMainThreadCpuUsage();
   let lastHostCpuTimes = readHostCpuTimes();
@@ -268,8 +274,8 @@ export function createGatewayEventLoopHealthMonitor(
   };
 
   try {
-    // The default range covers 104 days; the int64 maximum fails on Linux Bun.
-    histogram = createHistogram({ lowest: 1_000, figures: 3 });
+    histogram = monitorEventLoopDelay({ resolution: EVENT_LOOP_MONITOR_RESOLUTION_MS });
+    histogram.enable();
   } catch {
     histogram = null;
   }
@@ -280,16 +286,37 @@ export function createGatewayEventLoopHealthMonitor(
     }
 
     const now = nowMs();
-    // A window reset must not erase the pending sample's monotonic anchor.
-    // Native interval histograms reset that anchor before an overdue callback runs.
-    histogram.record(BigInt(Math.max(1, Math.round((now - lastSampleAt) * 1_000_000))));
-    lastSampleAt = now;
+    const attributed = stalls.drain();
+    const delayMaxMs = Math.max(nanosecondsToMilliseconds(histogram.max), attributed.delayMaxMs);
+    let longestStallMs = attributed.stalls.length === 0 ? unattributedDelayMs : 0;
+    for (const stall of attributed.stalls) {
+      longestStallMs = Math.max(longestStallMs, stall.elapsedMs);
+    }
+    const profile = flightRecorder.sample(longestStallMs);
+    if (unattributedDelayMs > 0 && attributed.stalls.length === 0) {
+      log.warn(`main-thread stall: elapsedMs=${Math.round(unattributedDelayMs)} task=unattributed`);
+    }
+    unattributedDelayMs =
+      delayMaxMs > EVENT_LOOP_DELAY_WARN_MS && attributed.stalls.length === 0 ? delayMaxMs : 0;
+    for (const stall of attributed.stalls) {
+      log.warn(
+        `main-thread stall: elapsedMs=${Math.round(stall.elapsedMs)} task=${JSON.stringify(stall.task.slice(0, 160))} taskMs=${Math.round(stall.taskMs)}`,
+      );
+    }
+    // Several callbacks can finish before this sample; the trailing profile is batch evidence.
+    if (profile) {
+      log.warn(`main-thread stall profile: ${profile}`);
+    }
     const intervalMs = Math.max(1, now - lastWallAt);
-    const delayMaxMs = nanosecondsToMilliseconds(histogram.max);
+    if (attributed.dropped > 0) {
+      log.warn(`main-thread stall: omitted=${attributed.dropped} pendingLimit=8`);
+    }
     if (
       delayMaxMs < EVENT_LOOP_DELAY_WARN_MS &&
       intervalMs < SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS
     ) {
+      // Reset can leave an earlier wake pending; finish the new window on time.
+      samplingJob = scheduleSample(SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS - intervalMs);
       return;
     }
     const delayP99Ms = nanosecondsToMilliseconds(histogram.percentile(99));
@@ -358,22 +385,24 @@ export function createGatewayEventLoopHealthMonitor(
     }
   };
 
-  const samplingJob = histogram
-    ? scheduler.schedule({
-        id: "event-loop-health",
-        atMs: scheduler.now() + EVENT_LOOP_MONITOR_RESOLUTION_MS,
-        everyMs: EVENT_LOOP_MONITOR_RESOLUTION_MS,
-        run: sample,
-      })
-    : undefined;
+  const scheduleSample = (delayMs: number) =>
+    scheduler.schedule({
+      id: "event-loop-health",
+      delayMs,
+      everyMs: SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS,
+      // Let the blocking callback's after hook publish its stall before resetting the window.
+      run: () => queueMicrotask(sample),
+    });
+  let samplingJob = histogram ? scheduleSample(SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS) : undefined;
   if (histogram) {
     captureWorkerCpu(lastWallAt);
   }
 
   const reset = () => {
+    stalls.reset();
+    unattributedDelayMs = 0;
     histogram?.reset();
-    lastSampleAt = nowMs();
-    lastWallAt = lastSampleAt;
+    lastWallAt = nowMs();
     lastCpuUsage = readCpuUsage();
     lastMainThreadCpuUsage = readMainThreadCpuUsage();
     lastHostCpuTimes = readHostCpuTimes();
@@ -399,7 +428,10 @@ export function createGatewayEventLoopHealthMonitor(
     },
     reset,
     stop: () => {
+      flightRecorder.stop();
+      stalls.stop();
       samplingJob?.cancel();
+      histogram?.disable();
       histogram = null;
       cancelWorkerCpuSample?.();
       lastWorkerCpuWindow = undefined;

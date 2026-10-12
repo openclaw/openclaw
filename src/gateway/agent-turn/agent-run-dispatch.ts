@@ -55,13 +55,22 @@ import {
 } from "./agent-run-dispatch-outcome.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
+type AgentRunMediaCustody = Pick<
+  ReturnType<typeof createAssistantCommentaryMediaCustody>,
+  "run" | "prepareAssistantTranscriptMessage"
+> & {
+  finalize: NonNullable<
+    Parameters<typeof agentCommandFromGatewayIngress>[0]["beforeTerminalDelivery"]
+  >;
+};
+
 export function dispatchAgentRunFromGateway(params: {
   assertCurrent?: () => void;
   assertSettlementCurrent?: () => void;
   followupCompletion?: FollowupCompletionOwner;
   admittedRunEntry: ChatAbortControllerEntry | undefined;
   ingressOpts: Parameters<typeof agentCommandFromGatewayIngress>[0];
-  loadCommentaryMedia?: () => Promise<ReturnType<typeof createAssistantCommentaryMediaCustody>>;
+  loadMedia?: () => Promise<AgentRunMediaCustody>;
   runId: string;
   cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
   dedupeKeys: readonly string[];
@@ -203,7 +212,7 @@ export function dispatchAgentRunFromGateway(params: {
   const producerRunInstance = registeredRunEntry?.operationalRunInstance;
   const producerLifecycleGeneration = registeredRunEntry?.lifecycleGeneration;
   const producerSessionKey = registeredRunEntry?.sessionKey;
-  const producerCompletion = createDeferredCore();
+  const producerCompletion = createDeferredCore<unknown>();
   let terminalSettlement: Promise<void> | undefined;
   if (registeredRunEntry && params.ingressOpts.abortSignal === params.abortController.signal) {
     registeredRunEntry.resolveTerminalProducer = () => {
@@ -249,25 +258,30 @@ export function dispatchAgentRunFromGateway(params: {
       };
     };
   }
-  const completeTerminalProducer = async () => {
-    producerCompletion.resolve();
+  const completeTerminalProducer = async (producerError?: unknown) => {
+    producerCompletion.resolve(producerError);
     let joined: Promise<void> | undefined;
     do {
       joined = terminalSettlement;
       await joined;
     } while (joined !== terminalSettlement);
   };
-  const activateAgent = (
-    commentaryMedia?: ReturnType<typeof createAssistantCommentaryMediaCustody>,
-  ) => {
+  const activateAgent = (media?: AgentRunMediaCustody) => {
     assertCurrent();
     const ingressOptsWithSpawnFacts = withAgentCommandExecutionIdentitySpawnFacts(
       {
         ...params.ingressOpts,
-        ...(commentaryMedia
-          ? { prepareAssistantTranscriptMessage: commentaryMedia.prepareAssistantTranscriptMessage }
+        ...(media
+          ? { prepareAssistantTranscriptMessage: media.prepareAssistantTranscriptMessage }
           : {}),
-        beforeTerminalDelivery: completeTerminalProducer,
+        beforeTerminalDelivery: async (reply, producerError) => {
+          try {
+            await media?.finalize(reply);
+          } finally {
+            await completeTerminalProducer(producerError);
+          }
+        },
+        isTerminalOutcomeObserved: () => registeredRunEntry?.terminalOutcomeObserved === true,
       },
       readAgentRunDispatchExecutionIdentity(params),
     );
@@ -294,14 +308,12 @@ export function dispatchAgentRunFromGateway(params: {
       }
       followupCompletion.assertExecutionCurrent(params.runId);
     }
-    return commentaryMedia ? commentaryMedia.run(invoke) : invoke();
+    return media ? media.run(invoke) : invoke();
   };
   const runAgent = () => {
     try {
       assertCurrent();
-      return params.loadCommentaryMedia
-        ? params.loadCommentaryMedia().then(activateAgent)
-        : activateAgent();
+      return params.loadMedia ? params.loadMedia().then(activateAgent) : activateAgent();
     } catch (error) {
       const failure = toErrorObject(error, formatErrorMessage(error));
       if (!(error instanceof Error)) {
@@ -336,10 +348,14 @@ export function dispatchAgentRunFromGateway(params: {
     : runOwnedAgent();
   // Startup failures may never enter command finalization; delivery already joined this boundary.
   const agentRun = (async () => {
+    let producerError: unknown;
     try {
       return await agentExecution;
+    } catch (error) {
+      producerError = error;
+      throw error;
     } finally {
-      await completeTerminalProducer();
+      await completeTerminalProducer(producerError);
     }
   })();
   let inputCompletionWriteFailed = false;

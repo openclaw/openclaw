@@ -2,14 +2,9 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { html, nothing } from "lit";
 import type { AgentsListResult } from "../api/types.ts";
 import {
-  cancelRoutePreload,
   isSettingsNavigationRouteVisible,
   navigationIconForRoute,
-  scheduleRoutePreload,
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
-  settingsNavigationLabelForRoute,
-  settingsNavigationOwnerRoute,
-  settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
   visibleSettingsNavigationGroups,
@@ -26,14 +21,21 @@ import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { GatewayStatus } from "../lib/gateway-status.ts";
 import { isComposingKeyboardEvent } from "../lib/ime.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import {
+  settingsNavigationLabelForRoute,
+  settingsNavigationOwnerRoute,
+  settingsSearchTextMatches,
+} from "../lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { renderGatewayStatus } from "./gateway-status.ts";
 import { icons } from "./icons.ts";
 import { renderKbd } from "./kbd.ts";
-import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
+import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.tsx";
+import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 import "./agent-select-registration.ts";
-import "./settings-save-indicator.ts";
+import "./settings-save-indicator.tsx";
 import "../styles/settings.css";
 import "./sidebar-build-chip.ts";
 
@@ -193,7 +195,7 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId) {
       }}
     >
       <span class="settings-sidebar__item-icon" aria-hidden="true"
-        >${icons[navigationIconForRoute(routeId)]}</span
+        >${routeId === "custodian" ? renderThemeBrandIcon() : icons[navigationIconForRoute(routeId)]}</span
       >
       <span class="settings-sidebar__item-label"
         >${settingsNavigationLabelForRoute(routeId, props.nativeDeviceSettings?.snapshot)}</span

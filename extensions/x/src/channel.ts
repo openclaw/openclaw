@@ -122,7 +122,14 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
         : null,
     supportsAction: ({ action }) => action === "send",
     extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
-    handleAction: async ({ action, params, cfg, accountId, assertDirectAdapterHandoff }) => {
+    handleAction: async ({
+      action,
+      params,
+      cfg,
+      accountId,
+      sessionKey,
+      assertDirectAdapterHandoff,
+    }) => {
       if (action !== "send") {
         throw new Error(`X does not support ${action}.`);
       }
@@ -133,6 +140,7 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
         text: readStringParam(params, "message", { required: true }),
         mediaUrl: readStringParam(params, "media"),
         assertDirectAdapterHandoff,
+        sessionKey,
       });
       return jsonResult({ ok: true, messageId: result.messageId });
     },
@@ -167,6 +175,9 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
       configured: account.configured,
       dmPolicy: "disabled",
       guests: await (await import("./guests.js")).getXGuestStatus(getXRuntime(), account, cfg),
+      verifiedFromGitHub: await (
+        await import("./verified-github.js")
+      ).getXGitHubStatus(getXRuntime(), account),
     }),
   },
   gateway: { startAccount: async (ctx) => (await import("./monitor.js")).startXAccount(ctx) },

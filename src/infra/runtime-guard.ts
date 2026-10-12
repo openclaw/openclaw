@@ -15,7 +15,7 @@ import {
   parseNodeReleaseVersion,
   type NodeReleaseVersion,
 } from "../../node-version.mjs";
-import type { RuntimeEnv } from "../runtime.js";
+import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 
@@ -161,24 +161,25 @@ export async function assertSupportedRuntime(
   recoveryEnv?: NodeJS.ProcessEnv,
 ): Promise<void> {
   const details = providedDetails ?? (await detectRuntime());
+  const writeNotice = (message: string) =>
+    providedRuntime ? providedRuntime.error(message) : process.stderr.write(`${message}\n`);
   if (runtimeSatisfies(details)) {
     const note =
       details.kind === "node" && details.sqliteProbe
         ? nodeRuntimeNote(details.version, details.sqliteProbe)
         : null;
     if (note) {
-      if (providedRuntime) {
-        providedRuntime.error(note);
-      } else {
-        process.stderr.write(`${note}\n`);
-      }
+      writeNotice(note);
     }
     return;
   }
   // Only startup callers with a pre-dotenv snapshot may select another runtime.
   if (details.kind === "node" && argv && recoveryEnv) {
     const { recoverNodeRuntime } = await import("../../node-runtime-recovery.mjs");
-    await recoverNodeRuntime({ env: recoveryEnv });
+    if (await recoverNodeRuntime({ env: recoveryEnv })) {
+      // The replacement finished; this unsupported parent must not continue startup.
+      throw new ExitError(Number(process.exitCode ?? 0));
+    }
   }
   if (
     details.kind === "node" &&
@@ -188,11 +189,7 @@ export async function assertSupportedRuntime(
   ) {
     if (emitDiagnosticWarning && !diagnosticWarningPrinted) {
       const warning = formatUnsupportedNodeDiagnosticWarning(details.version);
-      if (providedRuntime) {
-        providedRuntime.error(warning);
-      } else {
-        process.stderr.write(`${warning}\n`);
-      }
+      writeNotice(warning);
       diagnosticWarningPrinted = true;
     }
     return;
@@ -209,7 +206,9 @@ export async function assertSupportedRuntime(
           formatConsoleDiagnosticBlock({ level: "error", message: `${message}\n` }),
         );
       },
-      exit: (code) => process.exit(code),
+      exit: (code) => {
+        throw new ExitError(code);
+      },
     };
   }
 

@@ -1,3 +1,4 @@
+import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import {
   withSessionEntryReadOnlyInWorker,
   type SessionEntryReadWorkerOwner,
@@ -7,6 +8,7 @@ import { captureIncognitoSessionOperation } from "../../config/sessions/session-
 import type { IncognitoSessionAuthority } from "../../config/sessions/session-incognito-contract.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { prepareMemoryAcpSessionEntryRead } from "./session-meta-memory.js";
 import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
 import type {
   AcpSessionEntryReadInput,
@@ -40,6 +42,10 @@ export async function readAcpSessionEntryAsync(
 export function prepareAcpSessionEntryRead(
   params: AcpSessionEntryReadInput,
 ): Promise<PreparedAcpSessionEntryRead> | undefined {
+  const memory = getSessionActorStorageBinding({ ...params, sessionKey: params.sessionKey.trim() });
+  if (memory && params.sessionKey.trim()) {
+    return prepareMemoryAcpSessionEntryRead(params, memory);
+  }
   const binding = captureIncognitoSessionOperation(params);
   return binding && params.sessionKey.trim()
     ? prepareBoundAcpSessionEntryRead(params, binding)
@@ -117,6 +123,16 @@ export async function withAcpSessionEntryRead<T>(
   input.assertCurrent?.();
   if (!sessionKey) {
     return consume(null, undefined);
+  }
+  const memory = getSessionActorStorageBinding({ ...input, sessionKey });
+  if (memory) {
+    const prepared = await prepareMemoryAcpSessionEntryRead(input, memory);
+    try {
+      prepared.assertCurrent();
+      return await consume(prepared.session, undefined);
+    } finally {
+      prepared.release();
+    }
   }
   const binding = incognito ?? captureIncognitoSessionOperation(input);
   if (binding) {

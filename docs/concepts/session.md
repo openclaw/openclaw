@@ -18,6 +18,16 @@ For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
 [The main session](/concepts/main-session).
 
+Delivered command exchanges from the shared dispatcher are conversation history
+too. OpenClaw appends the user's command and delivered reply as ordinary
+user/assistant messages. Native menus and command acknowledgements on Discord
+and Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
+Later turns and chat history can read these exchanges.
+Login, pairing, and sensitive `/config set` or `/debug set` values are redacted before storage.
+`/new` and `/reset` put their confirmation exchange in the new session; they do not
+rewrite the old session. `/btw` and `/side` stay ephemeral, and message edits or
+deletions do not rewrite earlier transcript rows.
+
 ## How messages are routed
 
 | Source          | Behavior                      |
@@ -39,7 +49,7 @@ Session lists, model filters, previews, and sharing controls also retain the
 stored conversation's agent, rather than the aggregate view's default agent.
 Renaming, pinning, or editing session metadata retains the existing message
 preview without rereading the transcript. New messages, transcript replacements,
-and completed transcript repairs refresh previews; changes to model selection
+completed transcript repairs, and cold-storage restoration refresh previews; changes to model selection
 or fallback state refresh the relevant model facts.
 Stopping with `/stop`, deleting, resetting, or archiving a session cancels only that agent's work for
 the selected conversation. Another agent's active turn and queued messages are
@@ -134,13 +144,17 @@ context, and replies to the source room remain unchanged.
 
 Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread expires 24 hours after creation or when the Gateway restarts, whichever comes first. Activity does not extend its lifetime. Expiry stops active work and deletes the session and transcript without an archive. Incognito does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
 
+<Warning>
+On the Codex runtime, the Codex app-server still writes each message you submit to its own diagnostic log database (`logs_2.sqlite` in that agent's Codex home), including messages in incognito threads. Codex currently offers no setting that turns this log off, so OpenClaw cannot prevent it. For conversations that must not reach disk, use an agent on the OpenClaw runtime.
+</Warning>
+
 Delegated work uses its native execution and completion owners. Live subagent activity and completion delivery remain available.
 
 The `incognito-` segment is reserved for dashboard, subagent, and hidden internal session keys; `openclaw doctor --fix` renames any colliding legacy durable keys.
 
 Incognito does not restrict the agent's normal tools. An explicit request to save information, or any tool-driven file write, can still persist data outside the incognito session store. Your configured model provider still processes the messages you send. Incognito content is excluded from ordinary Gateway output, delivery and response diagnostics, WebSocket event previews, raw-stream, cache-trace, and Anthropic payload logs. Live replies remain available, and OpenClaw still records operational diagnostics and content-free audit metadata such as HMAC references.
 
-On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This protects them from storage and other gateway-mediated users, not from the gateway owner or process operator, who can always observe live sessions.
+On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This limits persisted session history and access through other gateway-mediated sessions; it does not make all tool, upload, approval, or configured diagnostic data ephemeral. The gateway owner or process operator can still observe live sessions.
 
 ## Remember across conversations
 
@@ -164,6 +178,10 @@ Lossless Claw remain independent and can run alongside it. See
 and runtime details.
 
 ## Session lifecycle
+
+Independent sessions can initialize their first turns concurrently. Requests for
+the same session remain ordered; parent forks and resets retain their shared-state
+coordination.
 
 Sessions are reused until you reset them manually or opt into an automatic reset policy:
 

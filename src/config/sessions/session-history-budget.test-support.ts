@@ -118,7 +118,7 @@ export function createSessionHistoryBudgetFixture(
       const appended = appendTranscriptMessageInTransaction(owner, resolved, {
         message: { role: "user", content: params.content },
       });
-      assert(appended?.appended, "Historical transcript fixture append was refused");
+      assert(appended?.result.appended, "Historical transcript fixture append was refused");
       writeSessionEntry(owner, resolved.sessionKey, {
         sessionId: params.nextSessionId,
         updatedAt: params.updatedAt + 1,

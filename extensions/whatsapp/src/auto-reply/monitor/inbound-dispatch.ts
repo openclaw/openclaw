@@ -506,11 +506,10 @@ export function updateWhatsAppMainLastRoute(params: {
     sessionKey: params.route.sessionKey,
   });
 
-  if (
-    params.dmRouteTarget &&
-    inboundLastRouteSessionKey === params.route.mainSessionKey &&
-    shouldUpdateMainLastRoute
-  ) {
+  if (!params.dmRouteTarget || inboundLastRouteSessionKey !== params.route.mainSessionKey) {
+    return;
+  }
+  if (shouldUpdateMainLastRoute) {
     params.updateLastRoute({
       cfg: params.cfg,
       backgroundTasks: params.backgroundTasks,
@@ -525,11 +524,7 @@ export function updateWhatsAppMainLastRoute(params: {
     return;
   }
 
-  if (
-    params.dmRouteTarget &&
-    inboundLastRouteSessionKey === params.route.mainSessionKey &&
-    params.pinnedMainDmRecipient
-  ) {
+  if (params.pinnedMainDmRecipient) {
     logVerbose(
       `Skipping main-session last route update for ${params.dmRouteTarget} (pinned owner ${params.pinnedMainDmRecipient})`,
     );

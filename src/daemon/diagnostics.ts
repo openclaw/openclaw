@@ -8,6 +8,7 @@ const GATEWAY_LOG_ERROR_PATTERNS = [
   /refusing to bind gateway/i,
   /gateway auth mode/i,
   /gateway start blocked/i,
+  /gateway failed to start:/i,
   /failed to bind gateway socket/i,
   /tailscale .* requires/i,
 ];
@@ -65,9 +66,10 @@ export async function readGatewayLogTailLines(filePath: string): Promise<string[
   }
 }
 
+/** Matching log evidence only; it is not bound to the current process generation. */
 export async function readLastGatewayErrorLine(
   env: NodeJS.ProcessEnv,
-  options?: { platform?: NodeJS.Platform; requirePatternMatch?: boolean },
+  options?: { platform?: NodeJS.Platform },
 ): Promise<string | null> {
   const platform = options?.platform ?? process.platform;
   const readStderr = platform !== "darwin";
@@ -80,10 +82,10 @@ export async function readLastGatewayErrorLine(
   const stdoutLines = await readGatewayLogTailLines(stdoutPath).catch(() => []);
   // stderr is the strongest failure signal on non-darwin platforms, so place it
   // last and scan from the end: the most recent stderr error line then wins over
-  // any (possibly stale) stdout match, matching the stderr-first fallback below.
+  // any (possibly stale) stdout match. Neither file proves the current generation.
   const lines = [...stdoutLines, ...stderrLines].map((line) => line.trim());
   const match = lines.findLast((line) =>
     GATEWAY_LOG_ERROR_PATTERNS.some((pattern) => pattern.test(line)),
   );
-  return match ?? (options?.requirePatternMatch ? null : (lines.findLast(Boolean) ?? null));
+  return match ?? null;
 }

@@ -26,7 +26,6 @@ import {
   shouldHandleSlackNativeApprovalRequest,
   shouldHandleSlackPluginViaForwardingSession,
   slackTargetsMatch,
-  type SlackNativeApprovalRequest,
   type SlackOriginTarget,
 } from "./approval-native-gates.js";
 import { resolvePluginApprovalSlackApprovers } from "./approval-plugin-policy.js";
@@ -208,16 +207,10 @@ export const slackApprovalCapability: ChannelApprovalCapability = {
         ...baseSlackNativeAdapter,
         describeDeliveryCapabilities: (params) => {
           const capabilities = baseSlackNativeAdapter.describeDeliveryCapabilities(params);
-          const request = params.request as SlackNativeApprovalRequest;
-          const approvalKind = params.approvalKind;
+          const { request, approvalKind } = params;
           const described = {
             ...capabilities,
-            enabled: shouldHandleSlackNativeApprovalRequest({
-              cfg: params.cfg,
-              accountId: params.accountId,
-              approvalKind,
-              request,
-            }),
+            enabled: shouldHandleSlackNativeApprovalRequest(params),
           };
           if (approvalKind !== "plugin" || !isSlackPluginApprovalRequest(request)) {
             return described;
@@ -231,13 +224,7 @@ export const slackApprovalCapability: ChannelApprovalCapability = {
               supportsApproverDmSurface: true,
             };
           }
-          if (
-            !shouldHandleSlackPluginViaForwardingSession({
-              cfg: params.cfg,
-              accountId: params.accountId,
-              request,
-            })
-          ) {
+          if (!shouldHandleSlackPluginViaForwardingSession(params)) {
             return described;
           }
           return {
@@ -245,13 +232,8 @@ export const slackApprovalCapability: ChannelApprovalCapability = {
             preferredSurface: "origin",
             supportsApproverDmSurface:
               getSlackApprovalApproversForTeam({
-                cfg: params.cfg,
-                accountId: params.accountId,
-                teamId: resolveSlackApprovalTeamId({
-                  cfg: params.cfg,
-                  accountId: params.accountId,
-                  request,
-                }),
+                ...params,
+                teamId: resolveSlackApprovalTeamId(params),
                 request,
               }).length > 0,
           };

@@ -9,13 +9,14 @@ export function policyEvidenceFinding(
     readonly requirement: string;
     readonly fixHint: string;
   },
+  location: { readonly path: string; readonly line?: number } = { path: "openclaw config" },
 ): HealthFinding {
   return {
     checkId: params.checkId,
     severity: "error",
     message: params.message,
     source: "policy",
-    path: "openclaw config",
+    ...location,
     ocPath: entry.source,
     target: entry.source,
     requirement: params.requirement,

@@ -105,12 +105,7 @@ export class TwilioProvider implements VoiceCallProvider {
     const webhookUrl = this.callWebhookUrls.get(providerCallId);
     let resolvedCallId = callId;
     if (!resolvedCallId && webhookUrl) {
-      try {
-        resolvedCallId = new URL(webhookUrl).searchParams.get("callId") || undefined;
-      } catch {
-        // The provider only stores URLs it constructed, but cleanup must still
-        // release provider-keyed state if a malformed value is injected.
-      }
+      resolvedCallId = new URL(webhookUrl).searchParams.get("callId") || undefined;
     }
     if (resolvedCallId) {
       this.twimlStorage.delete(resolvedCallId);

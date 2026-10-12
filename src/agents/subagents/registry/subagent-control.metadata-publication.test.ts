@@ -17,7 +17,7 @@ import * as writerQueue from "../../../shared/store-writer-queue.js";
 import { releaseOpenClawAgentDatabaseReadValidation } from "../../../state/openclaw-agent-db-validation-cache.js";
 import type { AgentDatabaseExecutionScope } from "../../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../../state/openclaw-agent-execution.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission-state.js";
 import { enqueueSwarmRun, isSwarmRunActive } from "../swarm/swarm-scheduler.js";
 import * as killScopeOwner from "./subagent-control-kill-scope.js";
 import * as controlSession from "./subagent-control-session.js";
@@ -47,10 +47,13 @@ it.for([
       agentId: "main",
       sessionKey: childKey,
       defaultSessionId: sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
     });
     await registerSubagentRun({
       runId,
       childSessionKey: childKey,
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childKey })?.entry,
       requesterSessionKey: parentKey,
       requesterAgentId: "main",
       requesterDisplayKey: parentKey,
@@ -391,10 +394,13 @@ it("joins a pending session publication before a collector terminal commit", asy
     agentId: "main",
     sessionKey: childKey,
     defaultSessionId: sessionId,
+    lifecycleRevision: `${sessionId}-revision`,
   });
   await registerSubagentRun({
     runId,
     childSessionKey: childKey,
+    childAgentId: "main",
+    sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childKey })?.entry,
     requesterSessionKey: parentKey,
     requesterAgentId: "main",
     requesterDisplayKey: parentKey,

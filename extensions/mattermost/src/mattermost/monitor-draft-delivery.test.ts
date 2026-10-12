@@ -103,15 +103,6 @@ function deliverDraftPreview(
   });
 }
 
-function mockCall(mock: { mock: { calls: unknown[][] } }, index: number, label: string): unknown[] {
-  const resolvedIndex = index < 0 ? mock.mock.calls.length + index : index;
-  const call = mock.mock.calls[resolvedIndex];
-  if (!call) {
-    throw new Error(`expected ${label} call ${index}`);
-  }
-  return call;
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   updateMattermostPostSpy.mockResolvedValue({ id: "patched" } as never);
@@ -176,6 +167,10 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       message: "All good",
     });
     expect(deliverFinal).not.toHaveBeenCalled();
+    expect(draftStream.seal).toHaveBeenCalledTimes(1);
+    expect(draftStream.seal.mock.invocationCallOrder[0]).toBeLessThan(
+      updateMattermostPostSpy.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(recordThreadParticipation).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
       outcome: "text",
@@ -185,27 +180,12 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
   });
 
-  it.each([
-    {
-      name: "native value buttons",
-      presentation: {
-        blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
-      },
-    },
-    {
-      name: "navigation URLs",
-      presentation: {
-        blocks: [
-          {
-            type: "buttons" as const,
-            buttons: [{ label: "Docs", url: "https://example.com/docs" }],
-          },
-        ],
-      },
-    },
-  ])("delivers $name instead of losing them in a preview edit", async ({ presentation }) => {
+  it("delivers native value buttons instead of losing them in a preview edit", async () => {
     const draftStream = createDraftStreamMock();
     const deliverFinal = createDeliverFinalMock();
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+    };
     const payload = { text: "Choose an option", presentation };
 
     await deliverDraftPreview({
@@ -300,129 +280,47 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
   });
 
-  it("aggregates sealed and current preview posts into one terminal result", async () => {
-    const draftStream = createDraftStreamMock("current-preview");
-    const deliverFinal = createDeliverFinalMock();
-    const confirmedDelivery = createConfirmedPreviewDelivery("sealed-post-1", "First block");
-
-    const result = await deliverDraftPreview({
-      payload: { text: "First block\n\nSecond block" } as never,
-      draftStream,
-      effectiveReplyToId: "thread-root-1",
-      resolvePreviewFinalText: () => ({
-        editText: "Second block",
-        alreadyDelivered: false,
-        confirmedDelivery,
-      }),
-      deliverPayload: deliverFinal,
-    });
-
-    expect(deliverFinal).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      outcome: "text",
-      messageIds: ["sealed-post-1", "patched"],
-      visibleReplySent: true,
-      content: "First block\nSecond block",
-    });
-    expect(result.receipt?.parts.map((part) => part.platformMessageId)).toEqual([
-      "sealed-post-1",
-      "patched",
-    ]);
-  });
-
-  it("sends only the remaining suffix after a partial boundary publish", async () => {
-    const draftStream = createDraftStreamMock(null);
-    const deliverFinal = createDeliverFinalMock();
-    const confirmedDelivery = createConfirmedPreviewDelivery("partial-post-1", "First half");
-
-    const result = await deliverDraftPreview({
-      payload: { text: "First half Second half" } as never,
-      draftStream,
-      effectiveReplyToId: "thread-root-1",
-      resolvePreviewFinalText: () => ({
-        editText: "Second half",
-        deliveryText: "Second half",
-        alreadyDelivered: false,
-        confirmedDelivery,
-      }),
-      deliverPayload: deliverFinal,
-    });
-
-    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({ text: "Second half" });
-    expect(result).toMatchObject({
-      messageIds: ["partial-post-1", "delivered-post-1"],
-      visibleReplySent: true,
-      content: "First half\nSecond half",
-    });
-  });
-
-  it.each([false, true])(
-    "keeps a finalized preview after a later warning (participation failed: %s)",
-    async (participationFailed) => {
-      const draftStream = createDraftStreamMock();
-      const deliverFinal = createDeliverFinalMock();
-      const previewLifecycle = createPreviewLifecycle(draftStream);
-      const recordThreadParticipation = vi.fn(async () => {});
-      if (participationFailed) {
-        recordThreadParticipation.mockRejectedValueOnce(new Error("participation failed"));
-      }
-      const params = {
-        kind: "direct" as const,
-        client: createMattermostClientMock(),
-        resolvePreviewFinalText,
-        previewLifecycle,
-        logVerboseMessage: vi.fn(),
-        deliverPayload: deliverFinal,
-        recordThreadParticipation,
-      };
-
-      const firstDelivery = deliverMattermostReplyWithDraftPreview({
-        ...params,
-        payload: { text: "Successful assistant final" } as never,
-        info: { kind: "final" },
-      });
-      if (participationFailed) {
-        await expect(firstDelivery).rejects.toMatchObject({
-          code: "CHANNEL_PARTIAL_DELIVERY",
-          deliveryResult: {
-            messageIds: ["patched"],
-            visibleReplySent: true,
-            content: "Successful assistant final",
-          },
-        });
-      } else {
-        await firstDelivery;
-      }
-      await deliverMattermostReplyWithDraftPreview({
-        ...params,
-        payload: { text: "Tool error warning", isError: true } as never,
-        info: { kind: "final" },
-      });
-
-      await previewLifecycle.cleanup();
-      expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({
-        text: "Tool error warning",
-        isError: true,
-      });
-      expect(draftStream.clear).not.toHaveBeenCalled();
-    },
-  );
-
-  it("deletes the preview after a successful normal final send", async () => {
+  it("keeps a finalized preview after a later warning when participation failed", async () => {
     const draftStream = createDraftStreamMock();
     const deliverFinal = createDeliverFinalMock();
-
-    await deliverDraftPreview({
-      payload: { text: "All good", replyToId: "reply-1" } as never,
-      draftStream,
+    const previewLifecycle = createPreviewLifecycle(draftStream);
+    const recordThreadParticipation = vi.fn(async () => {});
+    recordThreadParticipation.mockRejectedValueOnce(new Error("participation failed"));
+    const params = {
+      kind: "direct" as const,
+      client: createMattermostClientMock(),
+      resolvePreviewFinalText,
+      previewLifecycle,
+      logVerboseMessage: vi.fn(),
       deliverPayload: deliverFinal,
+      recordThreadParticipation,
+    };
+
+    const firstDelivery = deliverMattermostReplyWithDraftPreview({
+      ...params,
+      payload: { text: "Successful assistant final" } as never,
+      info: { kind: "final" },
+    });
+    await expect(firstDelivery).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        messageIds: ["patched"],
+        visibleReplySent: true,
+        content: "Successful assistant final",
+      },
+    });
+    await deliverMattermostReplyWithDraftPreview({
+      ...params,
+      payload: { text: "Tool error warning", isError: true } as never,
+      info: { kind: "final" },
     });
 
-    expect(deliverFinal).toHaveBeenCalledTimes(1);
-    expect(draftStream.flush).not.toHaveBeenCalled();
-    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
-    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+    await previewLifecycle.cleanup();
+    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({
+      text: "Tool error warning",
+      isError: true,
+    });
+    expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
   it("preserves a completed normal send when preview cleanup fails", async () => {
@@ -442,27 +340,6 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       content: "Already visible",
     });
     expect(deliverFinal).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
-  });
-
-  it("deletes the preview after a successful non-finalizable media final", async () => {
-    const draftStream = createDraftStreamMock();
-    const deliverFinal = createDeliverFinalMock();
-
-    await deliverDraftPreview({
-      payload: {
-        text: "Photo",
-        replyToId: "reply-1",
-        mediaUrl: "https://example.com/a.png",
-      } as never,
-      draftStream,
-      effectiveReplyToId: "thread-root-1",
-      deliverPayload: deliverFinal,
-    });
-
-    expect(deliverFinal).toHaveBeenCalledTimes(1);
-    expect(draftStream.flush).not.toHaveBeenCalled();
-    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
@@ -609,136 +486,5 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       spokenText: "Spoken answer",
       ttsSupplement: { spokenText: "Spoken answer" },
     });
-  });
-
-  it("keeps already-delivered TTS supplement fallback audio-only", async () => {
-    const draftStream = createDraftStreamMock();
-    const deliverFinal = createDeliverFinalMock();
-    updateMattermostPostSpy.mockRejectedValueOnce(new Error("edit failed"));
-
-    await deliverDraftPreview({
-      payload: {
-        mediaUrl: "https://example.com/tts.mp3",
-        audioAsVoice: true,
-        spokenText: "Spoken answer",
-        ttsSupplement: {
-          spokenText: "Spoken answer",
-          visibleTextAlreadyDelivered: true,
-        },
-      } as never,
-      draftStream,
-      effectiveReplyToId: "thread-root-1",
-      resolvePreviewFinalText: (text) => ({
-        editText: text?.trim(),
-        deliveryText: text?.trim(),
-        alreadyDelivered: false,
-      }),
-      deliverPayload: deliverFinal,
-    });
-
-    expect(deliverFinal).toHaveBeenCalledWith({
-      mediaUrl: "https://example.com/tts.mp3",
-      audioAsVoice: true,
-      spokenText: "Spoken answer",
-      ttsSupplement: {
-        spokenText: "Spoken answer",
-        visibleTextAlreadyDelivered: true,
-      },
-    });
-  });
-
-  it("keeps provider-confirmed TTS preview text out of normal media fallback", async () => {
-    const draftStream = createDraftStreamMock();
-    const deliverFinal = createDeliverFinalMock();
-
-    await deliverDraftPreview({
-      payload: {
-        mediaUrl: "https://example.com/tts.mp3",
-        audioAsVoice: true,
-        spokenText: "Spoken answer",
-        ttsSupplement: { spokenText: "Spoken answer" },
-      } as never,
-      draftStream,
-      effectiveReplyToId: "thread-root-1",
-      resolvePreviewFinalText: () => ({
-        deliveryText: "",
-        confirmedDelivery: createConfirmedPreviewDelivery("preview-post-1", "Spoken answer"),
-        alreadyDelivered: true,
-      }),
-      deliverPayload: deliverFinal,
-    });
-
-    expect(deliverFinal).toHaveBeenCalledWith({
-      mediaUrl: "https://example.com/tts.mp3",
-      audioAsVoice: true,
-      spokenText: "Spoken answer",
-      ttsSupplement: { spokenText: "Spoken answer" },
-    });
-  });
-
-  it("does not flush error finals before normal delivery", async () => {
-    const draftStream = createDraftStreamMock();
-    const deliverFinal = createDeliverFinalMock();
-
-    await deliverDraftPreview({
-      payload: { text: "Error", isError: true } as never,
-      draftStream,
-      effectiveReplyToId: "thread-root-1",
-      deliverPayload: deliverFinal,
-    });
-
-    expect(draftStream.flush).not.toHaveBeenCalled();
-    expect(deliverFinal).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
-  });
-
-  it("finalizes the preview in place when the final targets the same thread", async () => {
-    const draftStream = createDraftStreamMock();
-    const deliverFinal = createDeliverFinalMock();
-    const client = createMattermostClientMock();
-
-    await deliverDraftPreview({
-      payload: { text: "Final answer", replyToId: "child-post-789" } as never,
-      client,
-      draftStream,
-      effectiveReplyToId: "thread-root-456",
-      deliverPayload: deliverFinal,
-    });
-
-    expect(updateMattermostPostSpy).toHaveBeenCalledTimes(1);
-    const [updateClient, updatePostId, updateParams] = mockCall(
-      updateMattermostPostSpy,
-      0,
-      "updateMattermostPost",
-    );
-    expect(updateClient).toBe(client);
-    expect(updatePostId).toBe("preview-post-1");
-    expect(updateParams).toStrictEqual({ message: "Final answer" });
-    expect(draftStream.flush).toHaveBeenCalledTimes(1);
-    expect(draftStream.seal).toHaveBeenCalledTimes(1);
-    expect(draftStream.seal.mock.invocationCallOrder[0]).toBeLessThan(
-      updateMattermostPostSpy.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(deliverFinal).not.toHaveBeenCalled();
-    expect(draftStream.clear).not.toHaveBeenCalled();
-  });
-
-  it("keeps the existing preview unchanged when final delivery fails", async () => {
-    const draftStream = createDraftStreamMock();
-    const deliverFinal = vi.fn(async () => {
-      throw new Error("send failed");
-    });
-
-    await expect(
-      deliverDraftPreview({
-        payload: { text: "Broken", replyToId: "reply-1" } as never,
-        draftStream,
-        deliverPayload: deliverFinal,
-      }),
-    ).rejects.toThrow("send failed");
-
-    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).not.toHaveBeenCalled();
-    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
   });
 });

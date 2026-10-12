@@ -10,6 +10,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
+import { deriveMeetingTranscriptSessionColumns } from "../../transcripts/store-columns.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 import {
@@ -92,6 +93,7 @@ describe("transcripts bounded export names", () => {
         db,
       );
     // Pre-fix admission could persist an overlong projection before an export failed.
+    const sourceJson = JSON.stringify(session.source);
     executeSqliteQuerySync(
       db,
       queries.insertInto("meeting_transcript_sessions").values({
@@ -101,7 +103,8 @@ describe("transcripts bounded export names", () => {
         session_slug: sessionId,
         export_key: selector,
         provider_id: session.source.providerId,
-        source_json: JSON.stringify(session.source),
+        source_json: sourceJson,
+        ...deriveMeetingTranscriptSessionColumns(sourceJson, null),
         title: null,
         stopped_at: null,
         metadata_json: null,

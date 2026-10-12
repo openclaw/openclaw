@@ -5,8 +5,11 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "./agent-id.js";
-import { CronService } from "./service.js";
-import { setupCronServiceSuite } from "./service.test-harness.js";
+import {
+  createCronServiceWithStateForTest,
+  setupCronServiceSuite,
+} from "./service.test-harness.js";
+import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
@@ -47,7 +50,7 @@ describe("cron jobs with unresolved owners", () => {
     const runCommandJob = vi.fn(async (_params: { job: CronJob }) => ({ status: "ok" as const }));
     const onEvent = vi.fn();
     let currentOwner: string | undefined = phase === "reload" ? "main" : undefined;
-    const cron = new CronService({
+    const { cron, state } = createCronServiceWithStateForTest({
       scheduler: createTestGatewayScheduler(clock.clock),
       storePath,
       cronEnabled: true,
@@ -71,6 +74,7 @@ describe("cron jobs with unresolved owners", () => {
           expect(cron.getDefaultAgentId()).toBeUndefined();
           expect((await cron.listPage({ agentId: "main" })).jobs).toEqual([]);
           await clock.advanceBy(1_000);
+          await onTimer(state);
         }
         expect(sql.count(), `${phase} scheduler SQL stays off the caller thread`).toBe(0);
       } finally {
@@ -99,6 +103,7 @@ describe("cron jobs with unresolved owners", () => {
       );
 
       await clock.advanceBy(60_000);
+      await onTimer(state);
       expect(runCommandJob).toHaveBeenCalledTimes(2);
       expect(runCommandJob.mock.calls.every(([params]) => params.job.id === owned.id)).toBe(true);
     } finally {

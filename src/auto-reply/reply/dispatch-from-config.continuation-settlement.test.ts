@@ -1,4 +1,15 @@
 // Continuation settlement tests cover status delivery and child-terminal handoff.
+// Register dispatch mocks before modules that consume them.
+// oxfmt-ignore
+import {
+  createHookCtx,
+  emptyConfig,
+  hookMocks,
+  mocks,
+  resetPluginTtsAndThreadMocks,
+  sessionStoreMocks,
+  setDiscordTestRegistry,
+} from "./dispatch-from-config.shared.test-harness.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import {
@@ -10,15 +21,6 @@ import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { appendUsageLine } from "./agent-runner-usage-line.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
-import {
-  createHookCtx,
-  emptyConfig,
-  hookMocks,
-  mocks,
-  resetPluginTtsAndThreadMocks,
-  sessionStoreMocks,
-  setDiscordTestRegistry,
-} from "./dispatch-from-config.shared.test-harness.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
@@ -71,14 +73,9 @@ beforeEach(() => {
   sessionStoreMocks.loadSessionStoreEntry
     .mockReset()
     .mockImplementation(() => sessionStoreMocks.currentEntry);
-  sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
-  sessionStoreMocks.readSessionEntry
-    .mockReset()
-    .mockImplementation(() => sessionStoreMocks.currentEntry);
   sessionStoreMocks.resolveSessionStorePathCore
     .mockReset()
     .mockReturnValue("/tmp/mock-sessions.json");
-  sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
   sessionStoreMocks.updateSessionEntry.mockClear();
 });
 
@@ -576,9 +573,6 @@ describe("accepted continuation status delivery", () => {
       sessionKey: "agent:test:session",
       pendingFinalDelivery: pendingFinalDelivery("durable reply", "intent-89115"),
     };
-    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
-      existing: sessionStoreMocks.currentEntry,
-    });
     const abortController = new AbortController();
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({ deliver });

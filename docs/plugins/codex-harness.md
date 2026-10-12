@@ -126,9 +126,7 @@ The page producer and publication remain owned by the list's background completi
 One-shot lists, host-specific lookups, and pagination wait for a usable native
 page or confirmed empty inventory for at most five seconds (or the configured
 app-server request timeout when shorter).
-That single request budget also
-covers loading saved state and draining earlier cache writes after a configuration
-reload. A timed-out caller leaves the shared write drain running. Partial results carry an opaque continuation cursor;
+That single request budget also covers loading saved state. Partial results carry an opaque continuation cursor;
 a continuation that catches up with discovery waits for the next page within its
 request budget. If discovery is still pending at the deadline, the host reports a
 loading error and asks the caller to retry. The shared hydration continues in the
@@ -137,14 +135,13 @@ shown, and initial retries preserve positions already used in continuation curso
 The index persists reconstructible display rows and file fingerprints through
 plugin state in the OpenClaw SQLite database. A valid complete snapshot serves a
 recent unfiltered page without a native request, including on remote app-servers.
-Snapshot restoration waits for earlier cache writes, and mutations received during
-restoration fence stale saved rows from publication. Background work then
-reconciles changed files and native metadata. A
+Background work reconciles changed files and native metadata after snapshot restoration. A
 database-only native metadata walk recovers changes made while the Gateway was
 stopped. A full safety walk becomes due after 15 minutes and runs in the background on the next resident catalog read, including renames, Git branch and other displayed metadata, and the selected rollout
 path after a native revert. An idle catalog does not re-list native history, and the first resident read after an idle interval can return cached rows before the walk finishes. Metadata changes and explicit clears are applied even
-when native activity timestamps do not change. Newer Gateway observations fence
-older background pages. These coalesced background walks reuse previews for
+when native activity timestamps do not change. Overlapping events, snapshot restoration,
+and background pages are best effort: a later completion can temporarily replace
+newer display metadata until the next event or reconciliation. These coalesced background walks reuse previews for
 unchanged rows and do not ask Codex to scan or repair rollouts. Requests over a
 complete snapshot never wait for these refreshes. A local database-only response can omit existing files when
 indexing is incomplete or unavailable, so omission alone does not remove a local
@@ -155,8 +152,7 @@ or receiving its `notLoaded` status withdraws only that connection's observation
 an unrelated helper cannot clear activity observed by another open connection.
 Status resets to **Stored / activity unknown** after restart or when its final
 observing connection closes, until fresh native events or metadata supply current
-status. Overflow pages use this same source-owned status, and their native reads
-cannot overwrite a newer observation received while the request was pending.
+status. Overflow pages use this same source-owned status.
 Late responses from a closed connection cannot restore its active status.
 No native rollouts or transcripts are copied into the state database.
 Live workspace and model-provider settings also stay in memory, with at most
@@ -229,9 +225,10 @@ Explicit native empty previews clear the stored fallback. Empty/nonempty preview
 transitions remain visible even within one exposed timestamp second. Scans advance
 recency only from parsed turn-start facts. This authority flag survives SQLite restore;
 obsolete cached rows without it are discarded and pruned in the background before
-rehydration. Name, status, and live-settings observations have independent
-ordering, so a newer file update can coexist with a concurrent rename. Older
-native metadata responses cannot overwrite newer file updates or removals.
+rehydration. Name, status, and live-settings observations are stored separately
+from file metadata. Overlapping updates are best effort; a native response can
+temporarily replace a newer file update or restore a removed display row until
+the next reconciliation.
 Interrupted updates and transient file-read failures remain eligible for the next scan, even when
 file size and modification time stay unchanged.
 Plain and compressed rollouts share the native logical `.jsonl` identity;
@@ -334,7 +331,7 @@ through Codex's native image input.
 For an unsandboxed local Codex process with file-read permission, OpenClaw also
 supplies verified paths to saved documents. Codex can process the complete file
 when inline extraction is bounded. OpenClaw adds the paths to the admitted native
-input without changing its canonical attachment references or transcript text.
+input without changing its stored attachment references or transcript text.
 If the path note cannot fit the native input budget, OpenClaw omits it and retains
 the original request and inline attachment context.
 JSON escapes keep mention characters in attachment metadata from selecting skills
@@ -354,7 +351,7 @@ synchronized filesystem. Codex images are materialized directly from typed
 app-server events. Saved-path-only images use the same bounded remote reader.
 Uploads always use the Gateway's configured channel identity and request timeout.
 
-Use canonical OpenAI model refs such as `openai/gpt-6-astra`. Do not configure
+Use standard OpenAI model refs such as `openai/gpt-6-astra`. Do not configure
 legacy Codex GPT refs. Put OpenAI agent auth order under `auth.order.openai`.
 Legacy Codex auth profile ids and legacy Codex auth order entries are
 repaired by `openclaw doctor --fix`.
@@ -569,9 +566,11 @@ same child result after the parent replies.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.160.0`. The plugin ships and manages
-  `@openai/codex` `0.160.0` by default, so a `codex` command on `PATH` does not
-  affect normal startup. Explicit custom, remote, and macOS desktop-owned
+- Managed Codex app-server `0.160.0` or newer. The plugin ships
+  `@openai/codex` `0.160.0` and uses a newer stable `codex` from `PATH` only
+  after it passes a version check and an app-server handshake; see
+  [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
+  Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime
   validation.
@@ -710,7 +709,7 @@ nine child pages below. The anchors from the single-page version still resolve h
 - <a id="deployment-patterns"></a>[Deployment patterns](/plugins/codex-harness/routing#deployment-patterns)
 - <a id="basic-codex-deployment"></a>[Basic Codex deployment](/plugins/codex-harness/routing#basic-codex-deployment)
 - <a id="mixed-provider-deployment"></a>[Mixed provider deployment](/plugins/codex-harness/routing#mixed-provider-deployment)
-- <a id="fail-closed-codex-deployment"></a>[Fail-closed Codex deployment](/plugins/codex-harness/routing#fail-closed-codex-deployment)
+- <a id="fail-closed-codex-deployment"></a>[Require Codex for deployment](/plugins/codex-harness/routing#fail-closed-codex-deployment)
 
 ### Codex harness configuration
 

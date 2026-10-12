@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMattermostMonitorSlashCommands } from "./monitor-slash.js";
 
-const listSkillCommandsForAgents = vi.hoisted(() => vi.fn());
+const prepareSkillCommandsForAgents = vi.hoisted(() => vi.fn());
 const fetchMattermostUserTeams = vi.hoisted(() => vi.fn());
 const normalizeMattermostBaseUrl = vi.hoisted(() => vi.fn((value: string | undefined) => value));
 const isSlashCommandsEnabled = vi.hoisted(() => vi.fn());
@@ -11,8 +11,9 @@ const resolveCallbackUrl = vi.hoisted(() => vi.fn());
 const resolveSlashCommandConfig = vi.hoisted(() => vi.fn());
 const activateSlashCommands = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Keep skill discovery and database workers outside slash-registration tests.
 vi.mock("./runtime-api.js", () => ({
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
 }));
 
 vi.mock("./client.js", async () => {
@@ -52,7 +53,7 @@ function requireFirstMockCall<TArgs extends unknown[]>(
 
 describe("mattermost monitor slash", () => {
   beforeEach(() => {
-    listSkillCommandsForAgents.mockReset();
+    prepareSkillCommandsForAgents.mockReset();
     fetchMattermostUserTeams.mockReset();
     normalizeMattermostBaseUrl.mockClear();
     isSlashCommandsEnabled.mockReset();
@@ -89,7 +90,7 @@ describe("mattermost monitor slash", () => {
     isSlashCommandsEnabled.mockReturnValue(true);
     fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }, { id: "team-2" }]);
     resolveCallbackUrl.mockReturnValue("https://openclaw.test/slash");
-    listSkillCommandsForAgents.mockReturnValue([
+    prepareSkillCommandsForAgents.mockResolvedValue([
       { name: "skill", description: "Skill run" },
       { name: "oc_ping", description: "Already prefixed" },
       { name: "   ", description: "ignored" },

@@ -9,6 +9,7 @@ import type {
   ResetSessionEntryLifecycleResult,
 } from "./session-accessor.lifecycle-types.js";
 import { bindPreparedSessionEntryPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
+import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import type { SessionResetCommitted } from "./session-reset.types.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
@@ -19,6 +20,7 @@ export function resetSessionEntryInWorker(
   agentId: string,
   markCommitted: () => void,
 ): Promise<ResetSessionEntryLifecycleResult> {
+  let preparedTarget: SqliteLifecycleTargetSnapshot | undefined;
   return runSessionEntryWorkerOperation<SessionResetCommitted, ResetSessionEntryLifecycleResult>({
     database,
     agentId,
@@ -36,14 +38,14 @@ export function resetSessionEntryInWorker(
     prepareWorker: params.resetBoundary
       ? (execution, source) => ({
           async prepare() {
-            const snapshot = await execution.runExisting(source, (worker) =>
+            preparedTarget = await execution.runExisting(source, (worker) =>
               worker.execute({
                 type: "session.entry.patch.prepare",
                 input: { kind: "target", target: params.target },
               }),
             );
             source.assertCurrent();
-            const sessionId = snapshot?.[0]?.entry.sessionId;
+            const sessionId = preparedTarget?.[0]?.entry.sessionId;
             if (sessionId) {
               const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
               source.assertCurrent();
@@ -59,10 +61,14 @@ export function resetSessionEntryInWorker(
         })
       : undefined,
     async run(worker, commit) {
-      const prepared = await worker.execute({
-        type: "session.entry.patch.prepare",
-        input: { kind: "target", target: params.target },
-      });
+      // Cold restoration only changes transcript rows; the reset transaction still
+      // compares this complete entry snapshot before applying its mutation.
+      const prepared =
+        preparedTarget ??
+        (await worker.execute({
+          type: "session.entry.patch.prepare",
+          input: { kind: "target", target: params.target },
+        }));
       params.commitGuard?.();
       const nextEntry = await params.buildNextEntry({
         currentEntry: prepared[0] ? structuredClone(prepared[0].entry) : undefined,
@@ -82,7 +88,7 @@ export function resetSessionEntryInWorker(
         }),
       );
     },
-    async onCommitted(candidate, published, databaseIdentity) {
+    async onCommitted(candidate, published, databaseIdentity, context) {
       if (candidate.progressCardReset) {
         emitSessionLifecycleEvent({
           agentId,
@@ -112,7 +118,10 @@ export function resetSessionEntryInWorker(
         });
       }
       emitSessionIdentityMutation(event);
-      await params.afterEntryMutation?.(structuredClone(mutation));
+      await params.afterEntryMutation?.(structuredClone(mutation), {
+        ...context,
+        source: { agentId: database.agentId ?? agentId, path: database.path },
+      });
       return { ...mutation, archivedTranscripts: [] };
     },
   });

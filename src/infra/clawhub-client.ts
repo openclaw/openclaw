@@ -224,8 +224,13 @@ async function requestClawHub(params: ClawHubRequestParams) {
   }
   const request = async () => {
     const controller = new AbortController();
+    // Fetch rejects with the abort reason; preserve timeout classification for read retries.
+    const timeoutError = Object.assign(
+      new Error(`ClawHub request timed out after ${timeoutMs}ms`),
+      { code: "ETIMEDOUT" },
+    );
     let timeout: ReturnType<typeof setTimeout> | undefined = setTimeout(
-      () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
+      () => controller.abort(timeoutError),
       timeoutMs,
     );
     // Successful archives keep only their chunk-idle timeout while streaming.

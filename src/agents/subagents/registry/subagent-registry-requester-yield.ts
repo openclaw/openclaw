@@ -8,6 +8,7 @@ import {
   type PreparedRequesterCronAuthority,
 } from "../requester-cron-authority.js";
 import { promoteRequesterFinalAttachment } from "../requester-final-attachment.js";
+import { resolveRecordedRequester } from "./subagent-child-owner-match.js";
 import { trackSubagentProgressYield } from "./subagent-progress-draft.js";
 import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
 import {
@@ -52,7 +53,7 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
           requesterTurnRunId.length > 0 &&
           isSameSubagentRunOwner(entry, params.expected) &&
           entry.requesterSessionKey === params.requesterSessionKey &&
-          entry.requesterAgentId === params.requesterAgentId &&
+          resolveRecordedRequester(entry) === params.requesterAgentId &&
           (!entry.requesterTurnRunId || entry.requesterTurnRunId === requesterTurnRunId) &&
           entry.expectsCompletionMessage === true &&
           entry.collect !== true &&
@@ -106,7 +107,6 @@ export type RequesterInitialTransfer = (params: {
   kind: "intent" | "yielded-cohort" | "completed-cohort";
   entries: readonly SubagentRunRecord[];
   prepare?: () => Promise<void>;
-  assertHandoffCurrent: (entries: readonly SubagentRunRecord[]) => void;
   mutate: (entries: SubagentRunRecord[]) => ReadonlySet<string> | void;
   validateSelection?: () => void;
   finish: (entries: readonly SubagentRunRecord[]) => void;
@@ -154,7 +154,7 @@ export function listUnsettledRequesterChildrenInRuns(params: {
   for (const entry of params.runs.values()) {
     if (
       entry.requesterSessionKey === requesterSessionKey &&
-      (!params.requesterAgentId || entry.requesterAgentId === params.requesterAgentId)
+      (!params.requesterAgentId || resolveRecordedRequester(entry) === params.requesterAgentId)
     ) {
       recordLatestSubagentRun(latestByChildSessionKey, entry.childSessionKey, entry);
     }
@@ -226,7 +226,7 @@ export function selectRequesterTurnChildren(
     .filter(
       (entry) =>
         entry.requesterSessionKey === requesterSessionKey &&
-        (!requesterAgentId || entry.requesterAgentId === requesterAgentId) &&
+        (!requesterAgentId || resolveRecordedRequester(entry) === requesterAgentId) &&
         entry.requesterTurnRunId === requesterTurnRunId &&
         entry.expectsCompletionMessage === true,
     )
@@ -289,11 +289,6 @@ export async function markRequesterTurnYieldedInRuns(params: {
           throw new SubagentRegistryMutationRejectedError(
             "Requester yield membership changed before admission",
           );
-        }
-      },
-      assertHandoffCurrent: (entries) => {
-        if (entries.some((entry) => entry.requesterTurnYielded !== true)) {
-          throw new Error("Requester yield intent no longer owns its handoff");
         }
       },
       prepare: async () => {
@@ -383,7 +378,6 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
   let batchRunIds = selectedBatchRunIds;
   let rearmGeneration: number | undefined;
   let needsCohortRelease = false;
-  let yieldedFinalDeliverable = false;
   const ownsRequester = (
     requester: SubagentRunRecord | undefined,
   ): requester is SubagentRunRecord =>
@@ -427,28 +421,6 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     kind: params.requesterYielded ? "yielded-cohort" : "completed-cohort",
     entries: selectedMembers,
     validateSelection,
-    assertHandoffCurrent: (members) => {
-      if (!needsCohortRelease) {
-        return;
-      }
-      if (
-        children(members).some((entry) => {
-          const wake = entry.requesterSettleWake;
-          return (
-            entry.requesterTurnRunId !== requesterTurnRunId ||
-            entry.requesterTurnYielded !== true ||
-            wake?.status !== "pending" ||
-            wake.attemptCount !== 0 ||
-            (wake.yieldedFinalDeliverable === true) !== yieldedFinalDeliverable ||
-            !isRequesterYieldCohortMember(entry, batchRunIds, rearmGeneration)
-          );
-        })
-      ) {
-        throw new SubagentRegistryMutationRejectedError(
-          "Requester initial cohort no longer owns its handoff",
-        );
-      }
-    },
     mutate: (members) => {
       const entries = children(members);
       for (const entry of entries) {
@@ -504,9 +476,6 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
       batchRunIds = preparedCohort ? preparedBatchRunIds : selectedBatchRunIds;
       rearmGeneration = preparedCohort ? preparedWake.rearmGeneration : undefined;
       needsCohortRelease = params.requesterYielded && !requesterAlreadyDeliveredFinal;
-      yieldedFinalDeliverable = preparedCohort
-        ? preparedWake.yieldedFinalDeliverable === true
-        : needsCohortRelease;
       if (
         needsCohortRelease &&
         ((entries.some((entry) => entry.requesterSettleWake?.requesterYieldBatch === true) &&

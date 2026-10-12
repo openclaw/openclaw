@@ -57,12 +57,18 @@ export function createGatewayInflightSuccess(params: {
   return createGatewayInflightResult({ ...params, result: { ok: true, payload: params.payload } });
 }
 
-export function createGatewayInflightUnavailableFailure(params: {
-  context: GatewayRequestContext;
-  dedupeKey: string | undefined;
-  channel: string;
-  err: unknown;
-}): GatewayInflightResult {
+export function createGatewayInflightFailure(
+  params: {
+    context: GatewayRequestContext;
+    dedupeKey: string | undefined;
+    channel: string;
+    err: unknown;
+  },
+  isAuthorized: () => boolean,
+): GatewayInflightResult {
+  if (!isChannelPartialDeliveryError(params.err) && !isAuthorized()) {
+    return createGatewayInflightAuthorityFailure(params);
+  }
   // Preserve ingress-policy errors only when delivery has no accepted effect or queue custody.
   const unsentError =
     params.err instanceof OutboundDeliveryError &&

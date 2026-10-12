@@ -244,10 +244,8 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
       currentText().push(node);
       stack.push({ span: item, text: container });
     }
-    if (end > start) {
-      // Unlike Bot API HTML mode, rich paragraphs preserve bare newlines verbatim.
-      currentText().push(leaf.kind === "atom" ? leaf.value : text.slice(start, end));
-    }
+    // Unlike Bot API HTML mode, rich paragraphs preserve bare newlines verbatim.
+    currentText().push(leaf.kind === "atom" ? leaf.value : text.slice(start, end));
   }
 
   return normalizeRichText(root);
@@ -285,21 +283,17 @@ function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichB
   return paragraphs;
 }
 
-function renderTableBlock(table: MarkdownTableMeta): {
-  block: InputRichBlock;
-  degradation?: TelegramRichBlocksDegradationReason;
-} {
+function renderTableBlock(
+  table: MarkdownTableMeta,
+  degradationReasons: Set<TelegramRichBlocksDegradationReason>,
+): InputRichBlock {
   const columnCount = Math.max(table.headers.length, ...table.rows.map((row) => row.length), 0);
   if (columnCount > TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT) {
-    return {
-      block: {
-        type: "pre",
-        text: renderTelegramMonospaceGrid([table.headers, ...table.rows], {
-          headerSeparator: true,
-        }),
-      },
-      degradation: "table-ascii",
-    };
+    const text = renderTelegramMonospaceGrid([table.headers, ...table.rows], {
+      headerSeparator: true,
+    });
+    degradationReasons.add("table-ascii");
+    return { type: "pre", text };
   }
   const renderCell = (
     cell: MarkdownTableCell | undefined,
@@ -320,12 +314,10 @@ function renderTableBlock(table: MarkdownTableMeta): {
   );
   const cells = headerRow.length > 0 ? [headerRow, ...bodyRows] : bodyRows;
   return {
-    block: {
-      type: "table",
-      cells,
-      is_bordered: true,
-      is_striped: true,
-    },
+    type: "table",
+    cells,
+    is_bordered: true,
+    is_striped: true,
   };
 }
 
@@ -456,16 +448,6 @@ function emitSegments(
     if (left.start !== right.start) {
       return left.start - right.start;
     }
-    // Tables occupy no IR text. A table before an HTML opener shares its offset,
-    // but Markdown quotes/lists at that offset still own their table children.
-    const ownsTable = (segment: StructuralSegment) =>
-      segment.kind === "blockquote" || segment.kind === "list";
-    if (left.kind === "table" && right.kind !== "table" && !ownsTable(right)) {
-      return -1;
-    }
-    if (right.kind === "table" && left.kind !== "table" && !ownsTable(left)) {
-      return 1;
-    }
     return right.end - left.end || containerRank(left) - containerRank(right);
   });
   const blocks: InputRichBlock[] = [];
@@ -546,11 +528,7 @@ function emitSegments(
         break;
       }
       case "table": {
-        const rendered = renderTableBlock(segment.table);
-        if (rendered.degradation) {
-          degradationReasons.add(rendered.degradation);
-        }
-        blocks.push(rendered.block);
+        blocks.push(renderTableBlock(segment.table, degradationReasons));
         break;
       }
     }
@@ -616,8 +594,7 @@ export function markdownToTelegramRichBlocks(
 
   return {
     blocks,
-    // Tables are zero-width placeholders in ir.text; project the blocks so the
-    // plain fallback keeps table content instead of silently dropping it.
+    // Native-table coordinates carry no cell text; project the blocks to retain it.
     plainText: inputRichBlocksToPlainText(plainBlocks),
     degradationReasons: [...degradationReasons],
   };

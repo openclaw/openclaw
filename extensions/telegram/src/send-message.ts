@@ -84,8 +84,8 @@ export async function sendMessageTelegram(
     });
     const deliveryResults: TelegramSendResult[] = [];
     let finalMediaBatch = true;
-    const reportDelivery: TelegramDeliveryReporter = async (params) => {
-      return await reportTelegramProviderDelivery({
+    const reportDelivery: TelegramDeliveryReporter = (params) =>
+      reportTelegramProviderDelivery({
         ...params,
         successfulSendThread: threadSpec,
         onPrepared: (delivery) => {
@@ -99,7 +99,6 @@ export async function sendMessageTelegram(
         },
         onDeliveryResult: opts.onDeliveryResult,
       });
-    };
     const recordDeliveredPromptContext = async (
       params: Omit<
         Parameters<typeof recordOutboundMessageForPromptContext>[0],
@@ -301,13 +300,12 @@ export async function sendMessageTelegram(
       const { htmlCaption, plainCaption, followUpText } = mediaPlan;
       // If text exceeds Telegram's caption limit, send media without caption
       // then send text as a separate follow-up message.
-      const needsSeparateText = Boolean(followUpText);
       // When splitting, put reply_markup only on the follow-up text (the "main" content),
       // not on the media message.
       const mediaThreadParams = buildThreadParams(!singleUseReplyTo || sender.parts.length === 0);
       const baseMediaParams = {
         ...mediaThreadParams,
-        ...(!needsSeparateText && batchReplyMarkup ? { reply_markup: batchReplyMarkup } : {}),
+        ...(!followUpText && batchReplyMarkup ? { reply_markup: batchReplyMarkup } : {}),
       };
       const videoDimensions =
         mediaPlan.deliveryKind === "video" && !mediaPlan.isVideoNote
@@ -431,7 +429,7 @@ export async function sendMessageTelegram(
             },
           });
           const lastPart = part.result === lastMedia.result;
-          if (!needsSeparateText || !lastPart) {
+          if (!followUpText || !lastPart) {
             await recordMediaPromptPart(part, lastPart);
           }
           logTelegramOutboundSendOk({

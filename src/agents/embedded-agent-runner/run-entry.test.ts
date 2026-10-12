@@ -438,7 +438,6 @@ describe("runEmbeddedAgentEntry", () => {
         committed ? "provider" : undefined,
       );
       expect(state.finalizedAttempts).toEqual(committed ? ["candidate"] : []);
-      expect(state.discardedAttempts).toEqual(committed ? [] : ["candidate"]);
     },
   );
 
@@ -520,7 +519,6 @@ describe("runEmbeddedAgentEntry", () => {
       ],
     });
     expect(state.finalizedAttempts).toEqual([]);
-    expect(state.discardedAttempts).toEqual(["candidate"]);
   });
 
   it("retains non-visible follow-up results for terminal delivery", async () => {

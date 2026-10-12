@@ -63,17 +63,6 @@ function calculateCappedExponentialBackoffMs(params: {
   return Math.min(maxMs, raw);
 }
 
-function keepActiveWindowOrRecompute(params: {
-  existingUntil: number | undefined;
-  now: number;
-  recomputedUntil: number;
-}): number {
-  const { existingUntil, now, recomputedUntil } = params;
-  const hasActiveWindow =
-    typeof existingUntil === "number" && Number.isFinite(existingUntil) && existingUntil > now;
-  return hasActiveWindow ? existingUntil : recomputedUntil;
-}
-
 export function computeNextProfileUsageStats(params: {
   existing: ProfileUsageStats;
   now: number;
@@ -140,11 +129,14 @@ export function computeNextProfileUsageStats(params: {
     : calculateAuthProfileCooldownMs(nextErrorCount);
   const window = disabledFailureReason ? "disabledUntil" : "cooldownUntil";
   // Retries within either active window cannot push recovery further out.
-  updatedStats[window] = keepActiveWindowOrRecompute({
-    existingUntil: params.existing[window],
-    now: params.now,
-    recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
-  });
+  const existingUntil = params.existing[window];
+  const recomputedUntil = resolveUsageWindowUntil(params.now, backoffMs);
+  updatedStats[window] =
+    typeof existingUntil === "number" &&
+    Number.isFinite(existingUntil) &&
+    existingUntil > params.now
+      ? existingUntil
+      : recomputedUntil;
   if (disabledFailureReason) {
     updatedStats.disabledReason = disabledFailureReason;
   } else {

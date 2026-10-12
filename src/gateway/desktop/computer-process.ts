@@ -116,10 +116,12 @@ export function startComputerHostProcess(params: {
   };
   const fail = (error: Error) => {
     failure ??= error;
-    active = false;
-    ready.reject(error);
-    pending.rejectAll(error);
     void close().catch(() => {});
+  };
+  const failWhileOpen = (error: unknown) => {
+    if (!closing) {
+      fail(error instanceof Error ? error : new Error(String(error)));
+    }
   };
   const receive = (chunk: string) => {
     buffer += chunk;
@@ -178,24 +180,13 @@ export function startComputerHostProcess(params: {
         onStdout: receive,
         assertCurrent: assertActive,
       });
-      void run.wait().then(
-        () => {
-          if (!closing) {
-            fail(new Error("Gateway computer process exited"));
-          }
-        },
-        (error: unknown) => {
-          if (!closing) {
-            fail(error instanceof Error ? error : new Error(String(error)));
-          }
-        },
-      );
+      void run
+        .wait()
+        .then(() => failWhileOpen(new Error("Gateway computer process exited")), failWhileOpen);
       assertActive();
       send({ type: "start", pluginIds: params.pluginIds });
     } catch (error) {
-      if (!closing) {
-        fail(error instanceof Error ? error : new Error(String(error)));
-      }
+      failWhileOpen(error);
     }
   });
   return {
@@ -210,9 +201,6 @@ export function startComputerHostProcess(params: {
       sessionKey?: string;
     }) {
       await ready.promise;
-      assertActive();
-      request.assertCurrent();
-      request.signal?.throwIfAborted();
       const id = randomUUID();
       let timedOut = false;
       const cancel = () => {

@@ -22,11 +22,13 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   parseSqliteSessionFileMarker,
+  resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   appendSessionTranscriptMessageByIdentity,
   readLatestAssistantTextByIdentity,
+  readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -146,6 +148,58 @@ describe("Telegram typed command delivery", () => {
     );
   });
 
+  it("records a quoted command once when native quoting requires fallback delivery", async () => {
+    const cfg = commandConfig();
+    cfg.channels!.telegram!.replyToMode = "first";
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "quoted-command",
+      storePath: cfg.session!.store!,
+    };
+    await upsertSessionEntry({
+      ...scope,
+      entry: { sessionId: scope.sessionId, updatedAt: 1 },
+    });
+    await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: { role: "assistant", content: "Earlier answer", timestamp: 1 },
+    });
+    harness.replySpy.mockResolvedValue({ text: "Thinking level set to low.", replyToId: "30102" });
+    const bot = await createBot(true, true, cfg);
+    await bot.handleUpdate({
+      update_id: 3002,
+      message: {
+        ...commandMessage("/think low"),
+        message_id: 30102,
+        reply_to_message: {
+          message_id: 100,
+          date: 1736380790,
+          chat,
+          from,
+          text: "Earlier answer",
+          reply_to_message: undefined,
+        },
+        quote: { text: "Earlier answer", position: 0 },
+      },
+    });
+    expect(apiCalls).toHaveBeenCalledWith(
+      "sendMessage",
+      expect.objectContaining({
+        text: "Thinking level set to low.",
+        reply_parameters: expect.objectContaining({ message_id: 100, quote: "Earlier answer" }),
+      }),
+    );
+    const messages = (await readVisibleSessionTranscriptMessageEntries(scope)).map(
+      ({ message }) => message,
+    );
+    expect(messages).toMatchObject([
+      { role: "assistant", content: "Earlier answer" },
+      { role: "user", content: [{ type: "text", text: "/think low" }] },
+      { role: "assistant", content: [{ type: "text", text: "Thinking level set to low." }] },
+    ]);
+  });
+
   it("preserves the builtin catalog choice when a plugin registers fast", async () => {
     const previousRegistry = getActivePluginRegistry();
     try {
@@ -182,6 +236,32 @@ describe("Telegram typed command delivery", () => {
 });
 
 describe("Telegram native argument menus", () => {
+  it("records native menus in the configured store despite a stale default binding", async () => {
+    const cfg = commandConfig();
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: resolveStorePath(undefined, { agentId: "main" }),
+      sessionKey,
+      entry: { sessionId: "stale-default", updatedAt: 1 },
+    });
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: cfg.session!.store!,
+      sessionKey,
+      entry: { sessionId: "configured-native", updatedAt: 1 },
+    });
+    const bot = await createBot(true, true, cfg, true);
+    await bot.handleUpdate({ update_id: 3100, message: commandMessage("/think") });
+    const latest = await readLatestAssistantTextByIdentity({
+      agentId: "main",
+      sessionKey,
+      sessionId: "configured-native",
+      storePath: cfg.session!.store!,
+    });
+    expect(latest?.text).toContain(sentMenu().text);
+  });
+
   it.each(["parent", "off"] as const)(
     "uses the %s model settings for a DM-topic keyboard",
     async (thinking) => {

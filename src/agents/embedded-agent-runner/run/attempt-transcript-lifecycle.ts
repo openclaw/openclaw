@@ -24,6 +24,8 @@ export function createEmbeddedAttemptTranscriptLifecycle(
   params: {
     runId?: string;
     sessionId?: string;
+    /** Release retained owners after accepted descendants settle, even after a teardown timeout. */
+    onDrained?: () => void | Promise<void>;
   },
   deps: {
     /** Override how the lifecycle owner store is constructed, so tests can hold a reference to the per-attempt AsyncLocalStorage. Defaults to an owned instance. */
@@ -76,39 +78,36 @@ export function createEmbeddedAttemptTranscriptLifecycle(
     } finally {
       owner.active = false;
     }
-    if (primaryError !== undefined) {
-      if (
-        drainError !== undefined &&
-        drainError !== primaryError &&
-        primaryError.cause === undefined
-      ) {
-        try {
-          primaryError.cause = drainError;
-        } catch {
-          // Frozen callback errors remain primary; drain failure is secondary.
-        }
+    if (
+      primaryError !== undefined &&
+      drainError !== undefined &&
+      drainError !== primaryError &&
+      primaryError.cause === undefined
+    ) {
+      try {
+        primaryError.cause = drainError;
+      } catch {
+        // Frozen callback errors remain primary; drain failure is secondary.
       }
-      throw primaryError;
     }
-    if (drainError !== undefined) {
-      throw drainError;
+    const failure = primaryError ?? drainError;
+    if (failure !== undefined) {
+      throw failure;
     }
     return value as T;
   };
   const serializeLifecycle = async <T>(run: () => Promise<T> | T): Promise<T> => {
     const inheritedOwner = lifecycleOwner.getStore();
     if (inheritedOwner?.active) {
-      const operation = inheritedOwner.nestedTail.then(async () => {
-        const childOwner = createLifecycleOwner();
-        return await runLifecycleOwner(childOwner, run);
-      });
-      const queueTail = operation.then(
+      const operation = inheritedOwner.nestedTail.then(
+        async () => await runLifecycleOwner(createLifecycleOwner(), run),
+      );
+      inheritedOwner.nestedTail = operation.then(
         () => undefined,
         () => undefined,
       );
       const propagated = operation.then(() => undefined);
       void propagated.catch(() => {});
-      inheritedOwner.nestedTail = queueTail;
       inheritedOwner.pendingOperations.add(propagated);
       return await operation;
     }
@@ -148,6 +147,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(
     cleanupDrain ??= settleWithinTeardownBudget(
       serializeLifecycle(() => {
         lifecycleOwner.disable();
+        return params.onDrained?.();
       }),
     );
     await cleanupDrain;

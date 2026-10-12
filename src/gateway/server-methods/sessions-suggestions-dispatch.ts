@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import type { StoredSessionSuggestion } from "../../config/sessions/session-sharing-store.types.js";
 import {
   isSessionWorkStartInvalidatedError,
@@ -27,25 +28,6 @@ import type {
   SessionMutationAuthorization,
 } from "./types.js";
 
-function attributedSuggestionClient(
-  client: GatewayClient,
-  suggestion: StoredSessionSuggestion,
-): GatewayClient {
-  const label = suggestion.authorLabel ?? suggestion.authorId;
-  return {
-    ...client,
-    internal: {
-      ...client.internal,
-      syntheticClient: true,
-      senderAttribution: {
-        id: suggestion.authorId,
-        identity: { type: "profile", id: suggestion.authorId },
-        name: `Suggested by ${label}`,
-      },
-    },
-  };
-}
-
 export async function dispatchSuggestion(params: {
   context: GatewayRequestContext;
   client: GatewayClient;
@@ -71,7 +53,20 @@ export async function dispatchSuggestion(params: {
   const captureResponse: RespondFn = (...args) => {
     response = args;
   };
-  const chatClient = attributedSuggestionClient(params.client, params.suggestion);
+  const { client, suggestion } = params;
+  const label = suggestion.authorLabel ?? suggestion.authorId;
+  const chatClient: GatewayClient = {
+    ...client,
+    internal: {
+      ...client.internal,
+      syntheticClient: true,
+      senderAttribution: {
+        id: suggestion.authorId,
+        identity: { type: "profile", id: suggestion.authorId },
+        name: `Suggested by ${label}`,
+      },
+    },
+  };
   const assertRequestCurrent = () => {
     params.signal?.throwIfAborted();
     params.sessionMutationAuthorization?.assertCurrent();
@@ -96,40 +91,58 @@ export async function dispatchSuggestion(params: {
     ) {
       return { ok: false, error: response?.[2] };
     }
-    const authorization = await withReadySessionRows(
-      requireSessionRowProjection(params.context),
-      () => [{ key: params.target.canonicalKey, agentId: params.target.agentId }],
-      (sessionRowRead) => {
-        const row = sessionRowRead.describe({
-          key: params.target.canonicalKey,
-          agentId: params.target.agentId,
-        });
-        const rowSourcePath =
-          row &&
-          (isIncognitoSessionKey(row.key)
-            ? row.storeTarget.storePath
-            : sessionRowRead.readSource(row)?.path);
-        if (!row || rowSourcePath !== current.physicalStorePath) {
-          throw new SessionWorkStartInvalidatedError(
-            "session source changed before suggestion dispatch",
-          );
-        }
-        return resolveSessionMutationAuthorization({
+    const binding = captureIncognitoSessionBinding({
+      agentId: params.target.agentId,
+      sessionKey: params.target.canonicalKey,
+      storePath: current.physicalStorePath,
+    });
+    const authorization = binding
+      ? resolveSessionMutationAuthorization({
           client: chatClient,
           method: "chat.send",
           requestParams: chatParams,
           context: params.context,
-          sessionRowRead,
           expectedTarget: {
             agentId: params.target.agentId,
             sessionKey: params.target.canonicalKey,
-            // Prepared rows retain aliases; the source check above binds the physical store.
-            storePath: row.storeTarget.storePath,
+            storePath: binding.actor.path,
             sessionId: params.expectedSessionId,
           },
-        });
-      },
-    );
+        })
+      : await withReadySessionRows(
+          requireSessionRowProjection(params.context),
+          () => [{ key: params.target.canonicalKey, agentId: params.target.agentId }],
+          (sessionRowRead) => {
+            const row = sessionRowRead.describe({
+              key: params.target.canonicalKey,
+              agentId: params.target.agentId,
+            });
+            const rowSourcePath =
+              row &&
+              (isIncognitoSessionKey(row.key)
+                ? row.storeTarget.storePath
+                : sessionRowRead.readSource(row)?.path);
+            if (!row || rowSourcePath !== current.physicalStorePath) {
+              throw new SessionWorkStartInvalidatedError(
+                "session source changed before suggestion dispatch",
+              );
+            }
+            return resolveSessionMutationAuthorization({
+              client: chatClient,
+              method: "chat.send",
+              requestParams: chatParams,
+              context: params.context,
+              sessionRowRead,
+              expectedTarget: {
+                agentId: params.target.agentId,
+                sessionKey: params.target.canonicalKey,
+                // Prepared rows retain aliases; the source check above binds the physical store.
+                storePath: row.storeTarget.storePath,
+                sessionId: params.expectedSessionId,
+              },
+            });
+          },
+        );
     assertRequestCurrent();
     params.readCurrent();
     if (authorization.error) {

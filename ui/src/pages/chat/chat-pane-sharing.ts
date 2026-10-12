@@ -16,13 +16,16 @@ import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
   resolveUiConversationIdentity,
   scopedSessionArtifactKey,
+  uiConversationMatches,
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
+import { readSessionChangedEvent } from "../../lib/sessions/session-row-reconcile.ts";
 import { ChatPaneReactions } from "./chat-pane-reactions.ts";
 import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   typingActorIdForSessionMessage,
+  typingDraftPreview,
   type ChatTypingActorState,
   type ChatTypingActorView,
   type ChatTypingOverflow,
@@ -44,6 +47,25 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
   private typingRequestTimer?: number;
   private typingRequestSentAt?: number;
   private pendingTypingRequest?: () => void;
+
+  protected invalidateSessionSharing(payload: unknown): void {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const event = readSessionChangedEvent(payload);
+    const states = new Map(this.sessionSharingStates);
+    for (const cacheKey of states.keys()) {
+      const [agentId, sessionKey] = cacheKey.split("\0");
+      if (event && !uiConversationMatches(state, sessionKey, event.key, event.agentId, agentId)) {
+        continue;
+      }
+      // Removing the request slot also fences reads started before the change.
+      states.delete(cacheKey);
+      this.sessionSharingHydrationTargets.delete(cacheKey);
+    }
+    this.sessionSharingStates = states;
+  }
 
   protected syncSelectedSessionSharing(session: GatewaySessionRow | undefined): void {
     const sessionId = session?.sessionId?.trim();
@@ -344,18 +366,13 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       if (!isCurrentTarget()) {
         return;
       }
-      if (result.suggestion.author.id === this.context.gateway.snapshot.selfUser?.id) {
-        this.sessionSuggestions = [
-          ...this.sessionSuggestions.filter((item) => item.id !== suggestion.id),
-          result.suggestion,
-        ].toSorted(
-          (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
-        );
-      } else {
-        this.sessionSuggestions = this.sessionSuggestions.filter(
-          (item) => item.id !== suggestion.id,
-        );
-      }
+      const remaining = this.sessionSuggestions.filter((item) => item.id !== suggestion.id);
+      this.sessionSuggestions =
+        result.suggestion.author.id === this.context.gateway.snapshot.selfUser?.id
+          ? [...remaining, result.suggestion].toSorted(
+              (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
+            )
+          : remaining;
     } catch (error) {
       if (isCurrentTarget()) {
         if (
@@ -458,7 +475,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     const actor: ChatTypingActorState = {
       label: event.actor.label ?? event.actor.id,
       retireAt: event.preview ? idleDeadline : now + activeMs,
-      ...(event.preview ? { preview: event.preview } : {}),
+      ...(event.preview ? { preview: event.preview, cursor: event.cursor } : {}),
     };
     this.typingActiveIds.add(event.actor.id);
     // Updating a Map entry preserves its arrival order and the two preview slots.
@@ -548,6 +565,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
         id,
         label: actor.label,
         ...(actor.preview ? { preview: actor.preview } : {}),
+        ...(actor.cursor !== undefined ? { cursor: actor.cursor } : {}),
         ...(actor.paused ? { paused: true } : {}),
         ...(actor.exitDurationMs !== undefined ? { exitDurationMs: actor.exitDurationMs } : {}),
       });
@@ -581,6 +599,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
           previous?.id === view.id &&
           previous.label === view.label &&
           previous.preview === view.preview &&
+          previous.cursor === view.cursor &&
           previous.paused === view.paused &&
           previous.exitDurationMs === view.exitDurationMs
         );
@@ -598,7 +617,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     return this.typingViews;
   }
 
-  protected sendTypingState(typing: boolean, preview?: string): void {
+  protected sendTypingState(typing: boolean, preview?: string, cursor?: number): void {
     const scope = this.captureConnectionScope();
     const row = scope ? selectedChatSessionRow(scope.state) : undefined;
     if (!scope || !row?.sessionId || !this.hasMultipleIdentities()) {
@@ -619,15 +638,14 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       ) {
         return;
       }
-      const draft = typing ? preview?.trim() : undefined;
-      const draftPreview = draft ? Array.from(draft).slice(-300).join("") : undefined;
+      const draftPreview = typing && preview ? typingDraftPreview(preview, cursor) : undefined;
       this.typingRequestSentAt = typing ? Date.now() : undefined;
       void scope.client
         .request("session.typing", {
           sessionKey,
           sessionId,
           typing,
-          ...(draftPreview ? { preview: draftPreview } : {}),
+          ...draftPreview,
           ...scopedAgentParamsForSession(scope.state, sessionKey),
         })
         .catch(() => undefined);

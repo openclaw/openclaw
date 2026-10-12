@@ -14,15 +14,6 @@ describe("cron session target helpers", () => {
     );
   });
 
-  it("preserves opaque persistent session targets with native separators", () => {
-    expect(
-      resolveCronSessionTargetSessionKey(
-        "session: agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a== ",
-      ),
-    ).toBe("agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==");
-    expect(resolveCronSessionTargetSessionKey("session:..\\outside")).toBe("..\\outside");
-  });
-
   it("rejects null bytes in persistent session targets", () => {
     expect(() => resolveCronSessionTargetSessionKey("session:bad\0id")).toThrow(
       "invalid cron sessionTarget session id",

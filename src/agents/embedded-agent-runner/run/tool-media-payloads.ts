@@ -112,22 +112,17 @@ function mergeSelectedToolMedia(
         )
       : mediaUrls;
   const appendOwnedMedia = (nextPayloads: EmbeddedRunPayload[]): EmbeddedRunPayload[] => {
-    const owned: EmbeddedRunPayload[] = [];
-    if (shouldSplitHostOwnedMedia) {
-      owned.push(
+    const owned = [
+      shouldSplitHostOwnedMedia &&
         markReplyPayloadForSourceSuppressionDelivery(buildMediaPayload(hostOwnedMediaUrls, false)),
-      );
-    }
-    // Contract-owned media remains separate from private assistant text and
-    // generic tool media so only its explicit provenance bypasses suppression.
-    if (shouldSplitAutoDeliveryMedia) {
-      owned.push(
+      // Contract-owned media remains separate from private assistant text and
+      // generic tool media so only its explicit provenance bypasses suppression.
+      shouldSplitAutoDeliveryMedia &&
         markReplyPayloadForSourceSuppressionDelivery({
           ...buildMediaPayload(autoDeliveryOnlyMediaUrls, true),
           trustedLocalMedia: true,
         }),
-      );
-    }
+    ].filter((payload) => payload !== false);
     return owned.length ? [...nextPayloads, ...owned] : nextPayloads;
   };
 

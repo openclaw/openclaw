@@ -145,12 +145,38 @@ describe("guarded model fetch logging", () => {
     },
   );
 
-  it("keeps transport failures at warning level", async () => {
-    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("network down"));
+  it.each([
+    { abort: false, error: new Error("network down"), level: "warn" },
+    { abort: false, error: new DOMException("upstream abort", "AbortError"), level: "warn" },
+    { abort: false, error: new DOMException("fetch deadline", "TimeoutError"), level: "warn" },
+    { abort: true, error: new DOMException("caller deadline", "TimeoutError"), level: "warn" },
+    { abort: true, error: new Error("unknown caller failure"), level: "warn" },
+    { abort: true, error: new DOMException("caller cancelled", "AbortError"), level: "debug" },
+    {
+      abort: true,
+      error: new DOMException("caller cancelled", "AbortError"),
+      level: "debug",
+      request: true,
+    },
+  ] as const)("logs $error at $level (caller abort: $abort, Request: $request)", async (test) => {
+    const controller = new AbortController();
+    fetchWithSsrFGuardMock.mockImplementationOnce(async () => {
+      if (test.abort) {
+        controller.abort(test.error);
+      }
+      throw test.error;
+    });
+    const fetch = buildGuardedModelFetch(model);
+    const pending =
+      "request" in test
+        ? fetch(new Request(requestUrl, { signal: controller.signal }))
+        : fetch(requestUrl, { signal: controller.signal });
 
-    await expect(buildGuardedModelFetch(model)(requestUrl)).rejects.toThrow("network down");
+    await expect(pending).rejects.toBe(test.error);
 
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("[model-fetch] error "));
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("message=network down"));
+    expect(log[test.level]).toHaveBeenCalledWith(
+      expect.stringContaining(`[model-fetch] ${test.level === "debug" ? "aborted" : "error"} `),
+    );
+    expect(log.warn).toHaveBeenCalledTimes(test.level === "warn" ? 1 : 0);
   });
 });

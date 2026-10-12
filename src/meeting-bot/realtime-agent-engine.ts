@@ -3,27 +3,20 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSession } from "../realtime-transcription/provider-types.js";
 import {
-  createRealtimeVoiceSessionHarness,
-  type RealtimeVoiceSessionHarness,
-} from "../talk/realtime-session-harness.js";
-import {
   convertMeetingBridgeAudioForStt,
   convertMeetingTtsAudioForBridge,
 } from "./realtime-audio-format.js";
 import {
+  createMeetingRealtimeHarness,
   formatMeetingAgentAudioModelLog,
   formatMeetingAgentTtsResultLog,
   formatMeetingTranscriptSummaryLog,
-  meetingOutputBytesPerMs,
   normalizeMeetingTtsPromptText,
   resolveMeetingRealtimeTranscriptionProvider,
 } from "./realtime-engine-support.js";
-import {
-  MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS,
-  MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
-  MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS,
-  type MeetingRealtimeAudioEngineHandle,
-  type startMeetingRealtimeEngine,
+import type {
+  MeetingRealtimeAudioEngineHandle,
+  startMeetingRealtimeEngine,
 } from "./realtime-engine.js";
 
 export async function startMeetingAgentRealtimeEngine(
@@ -38,7 +31,7 @@ export async function startMeetingAgentRealtimeEngine(
   let realtimeReady = false;
   let ttsQueue = Promise.resolve();
   const agentLogScope = params.logPrefix ? `${params.logPrefix} agent` : "agent";
-  const resolved = resolveMeetingRealtimeTranscriptionProvider({
+  const resolved = await resolveMeetingRealtimeTranscriptionProvider({
     config: params.config,
     fullConfig: params.fullConfig,
     providers: params.providers,
@@ -165,9 +158,7 @@ export async function startMeetingAgentRealtimeEngine(
       });
   };
 
-  // The closures above only run after harness creation; they capture this later `const`.
-  // Annotated because the consult closure references harness inside its own initializer.
-  const harness: RealtimeVoiceSessionHarness = createRealtimeVoiceSessionHarness({
+  const harness = createMeetingRealtimeHarness(params, {
     talk: {
       sessionId: `${params.platform.sessionIdPrefix}:${params.meetingSessionId}:agent`,
       mode: "stt-tts",
@@ -190,29 +181,8 @@ export async function startMeetingAgentRealtimeEngine(
       }),
       outputAudioDone: () => ({ meetingSessionId: params.meetingSessionId }),
     },
-    echoSuppression: params.transport.inputAudioIsolated
-      ? undefined
-      : {
-          bytesPerMs: meetingOutputBytesPerMs(params.config.chrome.audioFormat),
-          tailMs: MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
-          transcriptLookbackMs: MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS,
-        },
-    talkback: {
-      debounceMs: MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS,
-      logger: params.logger,
-      logPrefix: `${params.platform.logScope} ${agentLogScope}`,
-      responseStyle: "Brief, natural spoken answer for a live meeting.",
-      fallbackText: "I hit an error while checking that. Please try again.",
-      consult: ({ question, responseStyle, signal }) =>
-        params.consultAgent({
-          meetingSessionId: params.meetingSessionId,
-          requesterSessionKey: params.requesterSessionKey,
-          args: { question, responseStyle },
-          transcript: harness.transcript,
-          abortSignal: signal,
-        }),
-      deliver: enqueueSpeakText,
-    },
+    logPrefix: `${params.platform.logScope} ${agentLogScope}`,
+    deliver: enqueueSpeakText,
   });
 
   params.transport.onFatal(() => {

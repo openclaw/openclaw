@@ -8,6 +8,7 @@ import {
 } from "../../../auto-reply/reply/message-injection-authority.js";
 import { toErrorObject } from "../../../infra/errors.js";
 import { hasPromptImageInput } from "../../../media/prompt-image-input.js";
+import { runBestEffortCallback } from "../../embedded-agent-subscribe.callback.js";
 import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
@@ -43,6 +44,10 @@ function hasAcceptedSteeringCustody(error: unknown): boolean {
   return collectErrorGraphCandidates(error, readErrorCauses).some(
     (candidate) => candidate instanceof MessageInjectionAcceptedUnconfirmedError,
   );
+}
+
+function notifyQueueObserver(callback: (() => void) | undefined): void {
+  runBestEffortCallback({ callback: () => callback?.(), label: "queued steering", log });
 }
 
 /**
@@ -108,20 +113,12 @@ async function steerWithTranscriptLifecycle(
     let acceptanceReported = false;
     let cancellation: Promise<boolean> | undefined;
     let acceptanceOpen = true;
-    const observerErrors: unknown[] = [];
-    const notifyObserver = (callback: (() => void) | undefined) => {
-      try {
-        callback?.();
-      } catch (error) {
-        observerErrors.push(error);
-      }
-    };
     const reportAcceptance = (value: boolean) => {
       if (acceptanceReported) {
         return;
       }
       acceptanceReported = true;
-      notifyObserver(() => onQueueAccepted?.(value));
+      notifyQueueObserver(() => onQueueAccepted?.(value));
     };
     const reportRejection = () => {
       if (!accepted) {
@@ -134,29 +131,12 @@ async function steerWithTranscriptLifecycle(
       }
       settled = true;
       clearTimeout(timer);
-      notifyObserver(unsubscribe);
-      notifyObserver(unsubscribePersistenceFailure);
+      notifyQueueObserver(unsubscribe);
+      notifyQueueObserver(unsubscribePersistenceFailure);
       abortSignal?.removeEventListener("abort", onAbort);
-      notifyObserver(onQueueSettled);
-      const errors = err === undefined ? observerErrors : [err, ...observerErrors];
-      if (errors.length > 0) {
-        const failure =
-          errors.length === 1
-            ? errors[0]
-            : new AggregateError(errors, "Steering completion observers failed", {
-                cause: err === undefined ? errors[0] : err,
-              });
-        reject(
-          accepted &&
-            observerErrors.length > 0 &&
-            !hasAcceptedSteeringCustody(err) &&
-            !(err instanceof MessageInjectionWithdrawnError)
-            ? new EmbeddedSteeringAcceptedUnconfirmedError(
-                "Queued steering was accepted but its completion observer failed",
-                { cause: failure },
-              )
-            : toErrorObject(failure, "Non-Error rejection"),
-        );
+      notifyQueueObserver(onQueueSettled);
+      if (err !== undefined) {
+        reject(toErrorObject(err, "Non-Error rejection"));
         return;
       }
       resolve();
@@ -286,10 +266,6 @@ async function steerWithTranscriptLifecycle(
           return;
         }
         reportAcceptance(true);
-        if (observerErrors.length > 0) {
-          finish();
-          return;
-        }
         if (abortRequested) {
           rejectAfterCancellation("queued steering message was cancelled before delivery");
         } else if (waitForTranscriptCommit !== true && acceptanceOpen) {
@@ -314,9 +290,7 @@ async function steerWithTranscriptLifecycle(
     function onAbort() {
       abortRequested = true;
       rejectAfterCancellation(
-        accepted
-          ? "queued steering message was cancelled before delivery"
-          : "queued steering message was cancelled before acceptance",
+        `queued steering message was cancelled before ${accepted ? "delivery" : "acceptance"}`,
       );
     }
     abortSignal?.addEventListener("abort", onAbort, { once: true });
@@ -377,12 +351,11 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     isPlainTextAnswer &&
     (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey, canInject, authority))
   ) {
-    options?.onQueueAccepted?.(true);
-    options?.onQueueSettled?.();
+    notifyQueueObserver(() => options?.onQueueAccepted?.(true));
+    notifyQueueObserver(options?.onQueueSettled);
     return;
   }
   if (!options || (options.waitForTranscriptCommit === undefined && !options.onQueueSettled)) {
-    let steered = false;
     try {
       await activeSession.steer(
         text,
@@ -395,31 +368,13 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
         options?.currentInboundContext,
         prepareInjection,
       );
-      steered = true;
-      options?.onQueueAccepted?.(true);
     } catch (error) {
-      if (steered) {
-        throw new MessageInjectionAcceptedUnconfirmedError({ cause: error });
-      }
       if (!hasAcceptedSteeringCustody(error)) {
-        let observerFailure: { error: unknown } | undefined;
-        try {
-          options?.onQueueAccepted?.(false);
-        } catch (observerError) {
-          observerFailure = { error: observerError };
-        }
-        if (observerFailure) {
-          throw new AggregateError(
-            [error, observerFailure.error],
-            "Steering rejection observer failed",
-            {
-              cause: error,
-            },
-          );
-        }
+        notifyQueueObserver(() => options?.onQueueAccepted?.(false));
       }
       throw error;
     }
+    notifyQueueObserver(() => options?.onQueueAccepted?.(true));
     return;
   }
   try {

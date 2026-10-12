@@ -162,6 +162,21 @@ otherwise they log at `debug`. Persistent Gateway degradation can warn even when
 no tracked work is active. Other idle liveness samples remain diagnostic events
 without escalating to a warning.
 
+The Gateway also emits an always-on `main-thread stall` warning after a synchronous
+callback blocks for more than one second. Each line names the longest-running
+known task segment from scheduled jobs, diagnostic phases, timeline spans, or
+worker message handling, with elapsed and task milliseconds. Time awaiting I/O
+does not count as task execution. A task label expires when its callback returns
+or its returned promise settles; detached work does not retain a completed startup
+phase's label. Unknown callbacks use `task=unattributed`;
+process suspension can also produce an unattributed delay. Reporting is bounded
+to eight pending stalls, with an omitted count if that limit is exceeded. This
+requires neither an inspector connection nor a sampling profiler.
+
+Detailed attribution of asynchronous continuations requires Node's `async_hooks`
+callback boundaries. Bun currently reports explicit synchronous task scopes and
+otherwise retains unattributed delay warnings.
+
 Startup phases emit `diagnostic.phase.completed` events with wall-clock and
 whole-process CPU timing, including worker and native threads. Phase CPU can
 include concurrent work outside that phase; it is not exclusive attribution.
@@ -209,10 +224,16 @@ Managed worktree preparation emits one info-level `managed worktree preparation`
 record on return or failure. `kind=managed` covers checkout creation;
 `kind=sandbox` covers a managed guest projection through backend readiness,
 including workspace/skill layout and container provisioning. `durationMs` measures
-the whole operation. `phaseDurationsMs` attributes allocation admission, checkout,
-setup execution, template preparation and application, snapshot capture, synchronization in each
-direction, workspace layout, and container startup. Phases include nested work
-and asynchronous waits, so do not add them to the total. Unentered phases are
+the whole operation. `phaseDurationsMs` separates repository and source preparation,
+allocation and checkout-lease waits and release, slot reservation, base resolution, checkout
+registration, disk admission, ignored-file provisioning, source-custody release, and registry publication.
+Base resolution distinguishes the shared remote refresh, object hydration, local
+fast-forward, and each caller's wait for that preparation. Template preparation
+and application, index refresh, setup execution, snapshot capture, synchronization
+in each direction, workspace layout, and container startup have their own phases.
+Phases include nested work and asynchronous waits, so do not add them to the
+total. `unattributedMs` measures elapsed time outside all recorded phases without
+double-counting overlaps. Unentered phases are
 absent. `template` is `warm`, `cold`, `unavailable`, or `reused` for an existing
 projection; records contain no repository paths, session keys, or setup output.
 With diagnostics enabled, the same observation feeds the
@@ -367,53 +388,75 @@ messages. Keep them on the host, review any transfer separately, and delete them
 manually after analysis. Successful snapshots are retained until removed; there
 is no automatic snapshot collection or retention job.
 
-RPC snapshots reset object IDs after each capture. Inspect their retaining paths
-individually; do not correlate their object IDs or use them as inputs to the
-identity-based diff below. For an identity-based comparison, capture two points
-through the same continuously attached debugger on an isolated analysis process,
-then compare them from a source checkout:
+RPC snapshots reset object IDs after each capture. Compare standalone RPC
+snapshots with independent object-ID spaces:
 
 ```bash
-node scripts/heap-snapshot-diff.mjs before.heapsnapshot after.heapsnapshot
+node scripts/heap-snapshot-diff.mjs before.heapsnapshot after.heapsnapshot --independent-ids
 ```
 
-The tool reports retained bytes by constructor/class and the largest changes by
-dominator (the object through which all strong root paths pass). It streams input
-and analyzes snapshots sequentially, but still needs memory proportional to the
-object graph; run large diffs on a separate analysis host with enough memory.
-Weak and shortcut edges are excluded. Class totals count nested instances of the
-same class once; totals across different classes can overlap. Object IDs match
-only while the same isolate's object-ID map remains active. Use Chrome DevTools for interactive retaining
-paths and V8-specific weak/ephemeron semantics; the script is a strong-edge graph
-summary. `--json` produces machine-readable output. Treat diff output as sensitive
-too: it contains unredacted heap names.
+This mode compares retained bytes by constructor/class and reports the largest
+retained objects and their paths separately for each snapshot. Object IDs belong
+to one snapshot: equal IDs do not establish that an object survived between
+captures. With `--json`, `before` and `after` each contain their own `dominators`
+and `retainers`; `classes` contains the cross-snapshot totals.
 
-Add `--top 40 --max-depth 60` to include named strong retaining paths and
-dominator chains for the largest growers. `--node <id>` selects a particular
-object in the later snapshot. A shortest root path shows reachability;
-the separate dominator chain identifies exclusive retention in that graph.
+For two captures from the same continuously attached debugger on an isolated
+analysis process, omit `--independent-ids`. This preserves object-ID matching and
+reports individual dominator changes. A dominator is an object through which all
+strong root paths pass. This comparison requires the same isolate's object-ID
+map to remain active between captures.
 
-From a built source checkout, an isolated synthetic workload can collect a
-pair of standalone RPC snapshots without connecting to an existing Gateway:
+The tool streams input and needs memory proportional to the object graphs; run
+large comparisons on an analysis host with enough memory. Weak and shortcut edges
+are excluded. Class totals count nested instances of the same class once; totals
+across different classes can overlap. Use Chrome DevTools for interactive
+retaining paths and V8-specific weak/ephemeron semantics; the script is a
+strong-edge graph summary. Treat output as sensitive: it contains unredacted
+heap names.
+
+Use `--top 40 --max-depth 60` to adjust the number of reported objects and path
+depth. `--node <id>` selects a particular object in the later snapshot in either
+mode. A shortest root path shows reachability; the separate dominator chain
+identifies exclusive retention in that graph.
+
+From a built source checkout, an isolated synthetic workload can collect a pair
+of standalone RPC snapshots without connecting to an existing Gateway:
 
 ```bash
-node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90
+node --import ./scripts/tsx.mjs scripts/gateway-heap-rig.mjs \
+  --root ../heap-rig/baseline --minutes 180 --snapshot-minutes 60,180 \
+  --rpc-interval-ms 440 --turn-interval-ms 5000
 ```
 
 Run this on a dedicated host with enough memory for snapshots. It starts the
 dist Gateway and local mock model servers on loopback ports 19548–19550,
-seeds 2,000 sessions across two agents, and drives ten reconnecting Control UI
-WebSocket clients plus mock model, Code Mode, and subagent turns. A synthetic
-catalog plugin exercises Gateway projection and publication ownership; it does
-not emulate a native provider's caches or remote-node transport.
-The root must be new. All state, logs, minute samples, and snapshots stay there.
-The rig stops its children on completion or interruption and retains evidence.
-Successful RPC counts and any retried refusals are recorded separately. If
-`projects.list` refuses a read because access facts changed, the rig retries it
-once; a second refusal or another error stops the run.
+seeds 2,000 sessions with 32 KiB histories across two agents, and drives ten
+reconnecting Control UI WebSocket clients. The workload polls session, history,
+model, and cron APIs and sends mock `chat.send` turns with 8 KiB replies, Code
+Mode calls, subagents, uploaded artifact previews, and manually triggered cron
+jobs. Terminal receipts, persisted replies, artifact previews, and cron history
+must match the synthetic fixtures. A synthetic catalog plugin exercises Gateway
+projection and publication ownership; it does not emulate a native provider's
+caches or remote-node transport.
+
+Eight text sessions retain conversation history. Tool sessions rotate through
+32 slots, and the archive cohort retains at most 64 churn sessions. Lifecycle
+mutations use the observed session IDs. The evidence records these populations
+and turn counts so intentional history growth can be distinguished from leaked
+state. Snapshots wait for admitted turns and RPCs to settle and keep the same
+clients connected for both captures.
+
+The root must be new. Each synthetic workspace has its own empty Git repository,
+keeping Git baseline discovery away from the rig's live SQLite files. State,
+logs, ten-second samples, ten-minute heap minima, and snapshots stay under the
+root. The rig records successful RPC counts and stops its children on completion,
+interruption, or a failed workload check. Evidence remains for analysis.
+
 Use the same script and settings with another Node binary for a runtime control;
-choose another root and three-port block for each run. Raw minute samples include
+choose another root and three-port block for each run. Raw samples include
 allocation churn; compare the snapshot `heapUsedAfter` anchors for post-GC growth.
+Use `--independent-ids` when analyzing the rig's RPC snapshot pair.
 
 ## Sampling heap profile
 

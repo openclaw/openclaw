@@ -2,7 +2,6 @@ import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
-  type SessionSuggestionEvent,
   type SessionSuggestionResolution,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -10,8 +9,13 @@ import {
   SessionWorkStartInvalidatedError,
   isSessionWorkStartInvalidatedError,
 } from "../../config/sessions/lifecycle.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { hasOperatorBoundary, operatorSessionCap } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import type { SessionRowReadView } from "../session-row-prepared-read.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
+import type { captureIncognitoSessionMutationFacts } from "../session-sharing-incognito.js";
 import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import {
   prepareSessionMutationFacts,
@@ -180,7 +184,7 @@ export async function createSessionSuggestionMutation(params: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
 }) {
-  const scope = { ...suggestionScope(params.target), env: { ...process.env } };
+  const scope = captureSessionTranscriptTargetBinding(suggestionScope(params.target));
   const expectedSessionId = params.target.entry.sessionId;
   const facts = await prepareSessionMutationFacts({
     cfg: params.context.getRuntimeConfig(),
@@ -286,16 +290,30 @@ export async function createSessionSuggestionMutation(params: {
   return { run, readCurrent, release: facts.release };
 }
 
-export function publishSuggestion(
-  context: GatewayRequestContext,
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
-  requestedSessionKey: string,
-  event: SessionSuggestionEvent,
-): void {
-  context.broadcast("session.suggestion", event, {
-    sessionKeys: [
-      ...new Set([requestedSessionKey, target.canonicalKey, target.storeKey]),
-    ].toSorted(),
-    agentId: event.suggestion.agentId,
-  });
+export function readCollaborationTarget(
+  projection: Pick<SessionRowProjection, "describe" | "sharingTargetState">,
+  query: { key: string; agentId: string },
+  read: Pick<SessionRowReadView, "describe"> = projection,
+  actorFacts?: ReturnType<typeof captureIncognitoSessionMutationFacts>,
+) {
+  if (actorFacts) {
+    const target = actorFacts.readCurrent().target;
+    return target && { ...target, generation: target.readSource.databaseIdentity };
+  }
+  if (isIncognitoSessionKey(query.key)) {
+    const row = read.describe(query);
+    return (
+      row && {
+        agentId: row.agentId,
+        canonicalKey: row.key,
+        storeKey: row.key,
+        storeKeys: [row.key],
+        storePath: row.storeTarget.storePath,
+        entry: row.entry,
+        generation: row.generation,
+      }
+    );
+  }
+  const current = projection.sharingTargetState(query);
+  return current.status === "ready" ? current.target : null;
 }

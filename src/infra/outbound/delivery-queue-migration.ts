@@ -52,7 +52,6 @@ import {
 import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 const LEGACY_PREPARATION_LEASE_MS = 5 * 60_000;
-const LEGACY_PREPARATION_LEASE_RENEW_MS = 30_000;
 
 function withLegacyPreparationLease(
   entry: LegacyQueuedDeliveryPreparation,
@@ -95,7 +94,6 @@ function buildLegacyPreparationParams(entry: LegacyQueuedDelivery, cfg: OpenClaw
 
 async function prepareLegacyEntryCheckpoint(params: {
   entry: LegacyQueuedDeliveryPreparation;
-  ownerId: string;
   cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
@@ -140,7 +138,6 @@ async function prepareLegacyEntryCheckpoint(params: {
   let sourceEntry = params.entry;
   let preparedBatch;
   if (prepareForReplay) {
-    let leaseLost = false;
     const replaceSourceEntry = (replacementEntry: LegacyQueuedDeliveryPreparation): boolean => {
       const replaced = replacePendingDeliveryQueueEntry({
         queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
@@ -153,30 +150,10 @@ async function prepareLegacyEntryCheckpoint(params: {
       }
       return replaced;
     };
-    const renewLeaseSafely = (): void => {
-      try {
-        if (leaseLost) {
-          return;
-        }
-        if (!replaceSourceEntry(withLegacyPreparationLease(sourceEntry, params.ownerId))) {
-          leaseLost = true;
-        }
-      } catch (error) {
-        leaseLost = true;
-        params.log.warn(
-          `Legacy delivery ${params.entry.id} preparation lease renewal failed: ${String(error)}`,
-        );
-      }
-    };
-    const leaseTimer = setInterval(renewLeaseSafely, LEGACY_PREPARATION_LEASE_RENEW_MS);
-    leaseTimer.unref();
     try {
       preparedBatch = await prepareOutboundPayloadBatch(preparationParams, {
         hookRunner: params.hookRunner,
         onBeforeFirstModifier: async () => {
-          if (leaseLost) {
-            throw new Error(`Legacy delivery ${params.entry.id} preparation lease was lost`);
-          }
           if (
             !replaceSourceEntry({
               ...sourceEntry,
@@ -187,18 +164,14 @@ async function prepareLegacyEntryCheckpoint(params: {
           }
         },
       });
-      if (leaseLost) {
-        throw new Error(`Legacy delivery ${params.entry.id} preparation lease was lost`);
-      }
     } catch (error) {
-      clearInterval(leaseTimer);
       if (sourceEntry.legacyPreparationState === "modifiers_started") {
         await failInterruptedLegacyPreparation({
           entry: sourceEntry,
           log: params.log,
           stateDir: params.stateDir,
         });
-      } else if (!leaseLost) {
+      } else {
         replaceSourceEntry({
           ...sourceEntry,
           legacyPreparationOwnerId: undefined,
@@ -207,7 +180,6 @@ async function prepareLegacyEntryCheckpoint(params: {
       }
       throw error;
     }
-    clearInterval(leaseTimer);
   } else {
     preparedBatch = createUnavailablePreparedOutboundBatch(params.entry.payloads.length);
   }
@@ -451,12 +423,9 @@ export async function migrateLegacyPendingOutboundDeliveries(params: {
   );
 }
 
-async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
-  cfg: OpenClawConfig;
-  log: RecoveryLogger;
-  stateDir?: string;
-  hookRunner?: HookRunner;
-}): Promise<LegacyOutboundDeliveryMigrationResult> {
+async function migrateLegacyPendingOutboundDeliveriesOwned(
+  params: Parameters<typeof migrateLegacyPendingOutboundDeliveries>[0],
+): Promise<LegacyOutboundDeliveryMigrationResult> {
   let moved = 0;
   let skipped = 0;
   const ownerId = randomUUID();
@@ -504,7 +473,7 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
   }
   for (const entry of claimedPreparations) {
     try {
-      if ((await prepareLegacyEntryCheckpoint({ ...params, entry, ownerId })) === "skipped") {
+      if ((await prepareLegacyEntryCheckpoint({ ...params, entry })) === "skipped") {
         skipped += 1;
       }
     } catch (error) {

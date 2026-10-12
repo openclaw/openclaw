@@ -98,7 +98,7 @@ export async function buildClawRemovePlan(
     blockers.push(...packagePlan.blockers);
     const config = options.config ?? getRuntimeConfig();
     try {
-      assertAgentSessionStoreDeletionSafe(config, record.install.agentId, options);
+      await assertAgentSessionStoreDeletionSafe(config, record.install.agentId, options);
     } catch (error) {
       if (!(error instanceof AgentSharedStoreOwnerError)) {
         throw error;
@@ -112,7 +112,7 @@ export async function buildClawRemovePlan(
       options.env,
     );
     const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
-      readAgentDeleteDatabaseRegistry(options),
+      await readAgentDeleteDatabaseRegistry(options),
       record.install.agentId,
       options.env,
     );
@@ -502,15 +502,16 @@ export async function applyClawRemovePlan(
       quiesceMonitors: (operationId) => monitorGateway.quiesce(agentId, operationId, monitors),
       drainMonitors: async (operationId) => await monitorGateway.drain(agentId, operationId),
     },
-    async (commitRemoval, assertCurrent) => {
-      assertCurrent();
+    async (commitRemoval, deletion) => {
+      const assertCurrent = deletion.assertCurrentHost;
+      await deletion.assertCurrentAsync();
       const mcpRemoval = await removeClawMcpServers({
         agentId,
         servers: record.mcpServers,
         options,
-        assertCurrent,
+        deletion,
       });
-      assertCurrent();
+      await deletion.assertCurrentAsync();
       result.mcpServers = mcpRemoval.mcpServers;
       if (mcpRemoval.error) {
         return partial("mcp_cleanup_failed", mcpRemoval.error);
@@ -540,7 +541,7 @@ export async function applyClawRemovePlan(
                 `Cron declaration ${JSON.stringify(cron.manifestId)} changed after planning.`,
               );
             }
-            assertCurrent();
+            deletion.assertCurrentFinal();
             if (live != null) {
               try {
                 await options.cronGateway!.remove(cron.schedulerJobId!);
@@ -552,7 +553,7 @@ export async function applyClawRemovePlan(
                 }
               }
             }
-            assertCurrent();
+            deletion.assertCurrentFinal();
             markClawCronRefRemoved(agentId, cron.manifestId, options);
           }
           deleteClawCronRef(agentId, cron.manifestId, options);
@@ -573,11 +574,11 @@ export async function applyClawRemovePlan(
         }
       }
       const configRemoval = await commitRemoval();
-      const { cleanupTargets, configBeforeDelete, completeDeletion } = configRemoval;
+      const { cleanupTargets, configBeforeDelete } = configRemoval;
       result.agentRemoved = configRemoval.agentRemoved;
       try {
         await configRemoval.drainMonitors();
-        configRemoval.assertCurrent();
+        await deletion.assertCurrentAsync();
       } catch (error) {
         return partial("monitor_cleanup_failed", coerceErrorMessage(error));
       }
@@ -586,9 +587,9 @@ export async function applyClawRemovePlan(
         (await import("../config/sessions/cleanup-service.js")).purgeAgentSessionStoreEntries;
       const purgeFailed = await purgeSessions(configBeforeDelete, agentId, {
         env: options.env,
-        runDatabaseCleanup: configRemoval.runDatabaseCleanup,
+        runDatabaseCleanup: deletion.runDatabaseCleanup,
       });
-      assertCurrent();
+      await deletion.assertCurrentAsync();
       if (purgeFailed) {
         return partial(
           "session_cleanup_failed",
@@ -599,8 +600,11 @@ export async function applyClawRemovePlan(
         const removed = await applyClawPackageRemovalPhase(packageDecisions, {
           ...options,
           agentId,
-          operationId: configRemoval.operationId,
+          operationId: deletion.entry.operationId,
           assertCurrent,
+          assertCurrentFinal: deletion.assertCurrentFinal,
+          assertCurrentAsync: deletion.assertCurrentAsync,
+          deletion,
         });
         result.packages = removed.packages;
         result.pluginRuntime = removed.application;
@@ -608,18 +612,17 @@ export async function applyClawRemovePlan(
       } catch (error) {
         return partial("package_cleanup_failed", coerceErrorMessage(error));
       }
-      assertCurrent();
+      await deletion.assertCurrentAsync();
       const packageErrors = result.packages.filter((pkg) => pkg.action === "error");
       if (packageErrors.length > 0) {
         return partial("package_cleanup_failed", packageErrors.map((pkg) => pkg.reason).join("; "));
       }
       const workspaceFiles = result.workspaceFiles;
       for (const file of record.workspaceFiles) {
-        assertCurrent();
-        workspaceFiles.push(await removeClawWorkspaceFile(file, assertCurrent));
+        workspaceFiles.push(await removeClawWorkspaceFile(file, deletion));
       }
-      assertCurrent();
-      const bootstrap = await removeClawBootstrap(record, assertCurrent);
+      await deletion.assertCurrentAsync();
+      const bootstrap = await removeClawBootstrap(record, deletion);
       const cleanupErrors = workspaceFiles
         .filter((file) => file.action === "error")
         .map((file) => file.message ?? `Could not remove ${file.path}.`);
@@ -631,7 +634,7 @@ export async function applyClawRemovePlan(
           cleanupTargets.workspaceDir,
           record.workspaceFiles.map((file) => file.path),
         );
-        configRemoval.assertCurrent();
+        await deletion.assertCurrentAsync();
         cleanupErrors.push(
           ...(await cleanupClawAgentFilesystem({
             agentId,
@@ -640,7 +643,7 @@ export async function applyClawRemovePlan(
             runtime: clawRemoveQuietRuntime,
             trashPath: options.trashPath,
             stateDatabase: options,
-            assertCurrent,
+            deletion,
             retainWorkspace:
               workspaceHasRemainingEntries ||
               bootstrap?.action === "retainedModified" ||
@@ -648,12 +651,10 @@ export async function applyClawRemovePlan(
           })),
         );
       }
-      const complete = releaseClawRemoveRows(
-        agentId,
+      const complete = await releaseClawRemoveRows(
+        deletion,
         workspaceFiles,
         cleanupErrors,
-        configRemoval.assertCurrent,
-        completeDeletion,
         options,
       );
       return {

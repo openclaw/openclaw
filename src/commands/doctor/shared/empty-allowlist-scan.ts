@@ -16,7 +16,7 @@ type ScanEmptyAllowlistPolicyWarningsParams = Partial<ChannelDoctorEmptyAllowlis
   doctorFixCommand: string;
 };
 
-function isActiveAccount(value: unknown): boolean {
+function isActiveAccount(value: unknown): value is DoctorAccountRecord {
   return Boolean(value && typeof value === "object" && asNullableRecord(value)?.enabled !== false);
 }
 
@@ -67,11 +67,7 @@ export async function scanEmptyAllowlistPolicyWarnings(
       continue;
     }
     const accounts = asNullableRecord(channelConfig.accounts);
-    const activeAccounts = accounts
-      ? Object.values(accounts).filter((account): account is DoctorAccountRecord =>
-          isActiveAccount(account),
-        )
-      : [];
+    const activeAccounts = Object.values(accounts ?? {}).filter(isActiveAccount);
     const accountIds = await resolveDoctorChannelAccountIds(
       channelName,
       cfg,
@@ -111,7 +107,7 @@ export async function scanEmptyAllowlistPolicyWarnings(
         continue;
       }
       checkAccount(
-        account as DoctorAccountRecord,
+        account,
         `channels.${channelName}.accounts.${accountId}`,
         channelName,
         channelConfig,

@@ -7,6 +7,7 @@ import type {
   SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
@@ -163,7 +164,9 @@ it.each([
                         if (sweep) {
                           sweepDispatches++;
                           if (continuation === "retires-between-batches" && sweepDispatches === 2) {
-                            closing = closeOpenClawAgentDatabasesAsync(stateDir);
+                            closing = runInDetachedAsyncContext(() =>
+                              closeOpenClawAgentDatabasesAsync(stateDir),
+                            );
                           }
                         }
                         const result = await worker
@@ -210,7 +213,9 @@ it.each([
                               hasMore: false,
                             });
                             // Revocation is immediate; awaiting close would join this operation.
-                            closing = closeOpenClawAgentDatabasesAsync(stateDir);
+                            closing = runInDetachedAsyncContext(() =>
+                              closeOpenClawAgentDatabasesAsync(stateDir),
+                            );
                           } else if (continuation === "retires-between-batches") {
                             expect(result).toMatchObject({
                               hasMore: true,
@@ -222,7 +227,9 @@ it.each([
                               hasMore: false,
                             });
                             // Closing joins this accepted task; await it after the owner settles.
-                            closing = closeSessionTranscriptReconcileWorkerPool();
+                            closing = runInDetachedAsyncContext(
+                              closeSessionTranscriptReconcileWorkerPool,
+                            );
                           }
                         }
                         return result;
@@ -268,15 +275,15 @@ it.each([
       if (retires || closesPool) {
         expect(closing).toBeDefined();
         await closing;
-        expect(sweepDispatches).toBe(continuation === "retires-between-batches" ? 2 : 1);
-        expect(sweepResults).toBe(1);
+        if (retires) {
+          expect(sweepDispatches).toBe(continuation === "retires-between-batches" ? 2 : 1);
+          expect(sweepResults).toBe(1);
+        }
       } else if (!failsBeforeCancellation) {
         await waitForSessionTranscriptIndexReconcile(options);
       }
       expect(worklists).toEqual(
-        retires || closesPool || failsBeforeCancellation
-          ? [["first"]]
-          : [["first"], [continuedSession]],
+        retires || failsBeforeCancellation ? [["first"]] : [["first"], [continuedSession]],
       );
       if (continuation === "redirtied") {
         expect(dirtiedAgain).toBe(true);
@@ -290,7 +297,7 @@ it.each([
           .all(),
       ).toEqual([
         { session_id: "first", needs_rebuild: 0 },
-        { session_id: "second", needs_rebuild: retires || closesPool ? 1 : 0 },
+        { session_id: "second", needs_rebuild: retires ? 1 : 0 },
       ]);
       expect(
         verified.db
@@ -299,7 +306,7 @@ it.each([
           )
           .all(continuedSession),
       ).toEqual(
-        retires || closesPool
+        retires
           ? []
           : [{ session_id: continuedSession, message_id: `${continuedSession}-message` }],
       );

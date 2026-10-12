@@ -13,6 +13,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
@@ -50,6 +51,7 @@ let cfg: OpenClawConfig;
 let profileId: string;
 let proxyListener: Awaited<ReturnType<typeof reserveTestPortListener>>;
 let ownerListener: Awaited<ReturnType<typeof reserveTestPortListener>>;
+let releaseProfileCatalog: (() => void) | undefined;
 
 beforeAll(async () => {
   state = await createOpenClawTestState({ label: "http-session-sandbox", scenario: "minimal" });
@@ -92,12 +94,14 @@ beforeAll(async () => {
   profileId = ensureProfileForEmail("sandbox-guest@example.test").id;
   const ordinary = ensureProfileForEmail("ordinary@example.test");
   setUserProfileRole(ordinary.id, "ordinary");
+  releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
   const context = createGatewayRequestContext(makeContextParams());
   context.resolveGatewayContext = () => context;
   const overrides = {
     openAiChatCompletionsEnabled: true,
     openResponsesEnabled: true,
     getGatewayRequestContext: () => context,
+    httpRequestLifetime: context,
   };
   proxyListener = await reserveTestPortListener({
     offsets: [0],
@@ -116,6 +120,7 @@ afterAll(async () => {
       await reservation.claim.release();
     }
   }
+  releaseProfileCatalog?.();
   await state?.cleanup();
 });
 

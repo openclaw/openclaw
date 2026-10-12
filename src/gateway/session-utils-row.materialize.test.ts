@@ -17,6 +17,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
+import { readRecentSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import {
   buildGatewaySessionRow,
@@ -492,6 +493,18 @@ test("preserves complete base rows across time and caller presentation fixtures"
         rowContext: fixture.omitRowContext ? undefined : rowContext,
         includeSwarmChildren: true,
         skipTranscriptUsageFallback: !fixture.transcript,
+        transcriptUsage:
+          fixture.transcript && fixture.entry
+            ? await readRecentSessionUsageFromTranscriptAsync(
+                {
+                  agentId: "main",
+                  sessionId: fixture.entry.sessionId,
+                  sessionKey: fixture.key,
+                  storePath,
+                },
+                256 * 1024,
+              )
+            : undefined,
         lightweightListRow: !fixture.transcript,
         includeDerivedTitles: fixture.transcript,
         includeLastMessage: fixture.transcript,
@@ -541,12 +554,18 @@ test("preserves complete base rows across time and caller presentation fixtures"
         expect(row.createdSurface).toBe(fixture.entry?.createdSurface);
         expect(row.isDock).toBe(fixture.expectedIsDock ?? false);
         expect(row.sessionModelRevision).toEqual(expect.any(String));
+        expect(row.sidebarRoot).toBe(fixture.entry?.sidebarRoot === true);
         // Assert additive fields separately while preserving the frozen wire-byte coverage.
+        expect(row.communication).toBeUndefined();
+        expect(row.effectiveCommunication).toEqual({ send: "always", receive: "always" });
         const {
           snapshotAt: _snapshotAt,
           createdSurface: _createdSurface,
           isDock: _isDock,
           sessionModelRevision: _sessionModelRevision,
+          communication: _communication,
+          effectiveCommunication: _effectiveCommunication,
+          sidebarRoot: _sidebarRoot,
           ...previousWireFields
         } = row;
         const json = JSON.stringify(previousWireFields);

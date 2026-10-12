@@ -83,7 +83,12 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
     const worktree =
       kind === "empty"
         ? await worktrees.createEmpty(owner)
-        : await worktrees.create({ ...owner, repoRoot: source, runSetupScript: false });
+        : await worktrees.create({
+            ...owner,
+            repoRoot: source,
+            baseRef: "HEAD",
+            runSetupScript: false,
+          });
     await writeSkill({
       dir: path.join(remote, "skills", "agent-only"),
       name: "agent-only",

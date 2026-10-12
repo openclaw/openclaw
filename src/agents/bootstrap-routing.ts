@@ -46,9 +46,6 @@ type WorkspaceBootstrapRouting = {
 export async function resolveWorkspaceBootstrapRouting(
   params: WorkspaceBootstrapRoutingInput,
 ): Promise<WorkspaceBootstrapRouting> {
-  const workspaceBootstrapPending = await params.isWorkspaceBootstrapPending(
-    params.resolvedWorkspace,
-  );
   const hasBootstrapContent =
     params.bootstrapFiles?.some(
       (file) =>
@@ -57,8 +54,10 @@ export async function resolveWorkspaceBootstrapRouting(
         typeof file.content === "string" &&
         file.content.trim().length > 0,
     ) ?? false;
+  const workspaceBootstrapPending =
+    hasBootstrapContent || (await params.isWorkspaceBootstrapPending(params.resolvedWorkspace));
   const bootstrapMode = resolveBootstrapMode({
-    bootstrapPending: workspaceBootstrapPending || hasBootstrapContent,
+    bootstrapPending: workspaceBootstrapPending,
     runKind: params.bootstrapContextRunKind ?? "default",
     isInteractiveUserFacing: params.trigger === "user" || params.trigger === "manual",
     isPrimaryRun: params.isPrimaryRun,

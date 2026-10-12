@@ -84,6 +84,25 @@ function installStateRuntime({
   });
 }
 
+async function mutateOfflineCallStore(
+  storePath: string,
+  mutate: (db: ReturnType<typeof openOpenClawStateDatabase>["db"]) => void,
+): Promise<void> {
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginStateStoreForTests();
+  const databasePath = path.join(storePath, "state", "openclaw.sqlite");
+  const replacementPath = `${databasePath}.corruption-fixture`;
+  // A cold physical copy models restart corruption without stale in-process write receipts.
+  fs.copyFileSync(databasePath, replacementPath, fs.constants.COPYFILE_EXCL);
+  fs.renameSync(replacementPath, databasePath);
+  try {
+    mutate(openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: storePath } }).db);
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+  }
+}
+
 describe("voice-call call record store", () => {
   beforeEach(() => {
     resetPluginStateStoreForTests();
@@ -232,32 +251,41 @@ describe("voice-call call record store", () => {
         );
         const first = expectDefined(rows[0], "earlier persisted event");
         const second = expectDefined(rows[1], "later persisted event");
-        const { db } = openOpenClawStateDatabase({ env });
-        const update = db.prepare(
-          "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = 'voice-call' AND namespace = ? AND entry_key = ?",
-        );
-        db.prepare(
-          "UPDATE plugin_state_entries SET created_at = ? WHERE namespace = ? AND entry_key = ?",
-        ).run(1, CALL_RECORD_EVENTS_NAMESPACE, first.key);
-        db.prepare(
-          "UPDATE plugin_state_entries SET created_at = ? WHERE namespace = ? AND entry_key = ?",
-        ).run(2, CALL_RECORD_EVENTS_NAMESPACE, second.key);
-        update.run("null", CALL_RECORD_EVENTS_NAMESPACE, second.key);
-        update.run("invalid JSON", CALL_RECORD_EVENT_CHUNKS_NAMESPACE, `${first.key}:chunk:0000`);
+        await mutateOfflineCallStore(storePath, (db) => {
+          const update = db.prepare(
+            "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = 'voice-call' AND namespace = ? AND entry_key = ?",
+          );
+          db.prepare(
+            "UPDATE plugin_state_entries SET created_at = ? WHERE namespace = ? AND entry_key = ?",
+          ).run(1, CALL_RECORD_EVENTS_NAMESPACE, first.key);
+          db.prepare(
+            "UPDATE plugin_state_entries SET created_at = ? WHERE namespace = ? AND entry_key = ?",
+          ).run(2, CALL_RECORD_EVENTS_NAMESPACE, second.key);
+          update.run("null", CALL_RECORD_EVENTS_NAMESPACE, second.key);
+          update.run("invalid JSON", CALL_RECORD_EVENT_CHUNKS_NAMESPACE, `${first.key}:chunk:0000`);
+        });
         await expect(findCallInStore(storePath, "later")).rejects.toThrowError(
           expect.objectContaining({ code: "PLUGIN_STATE_CORRUPT" }),
         );
-        update.run(
-          JSON.stringify({ index: -1, dataBase64: "" }),
-          CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
-          `${first.key}:chunk:0000`,
-        );
+        await mutateOfflineCallStore(storePath, (db) => {
+          db.prepare(
+            "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = 'voice-call' AND namespace = ? AND entry_key = ?",
+          ).run(
+            JSON.stringify({ index: -1, dataBase64: "" }),
+            CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
+            `${first.key}:chunk:0000`,
+          );
+        });
         await expect(findCallInStore(storePath, "later")).rejects.toBeInstanceOf(TypeError);
-        update.run(
-          JSON.stringify({ chunkCount: 0, byteLength: 0 }),
-          CALL_RECORD_EVENTS_NAMESPACE,
-          second.key,
-        );
+        await mutateOfflineCallStore(storePath, (db) => {
+          db.prepare(
+            "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = 'voice-call' AND namespace = ? AND entry_key = ?",
+          ).run(
+            JSON.stringify({ chunkCount: 0, byteLength: 0 }),
+            CALL_RECORD_EVENTS_NAMESPACE,
+            second.key,
+          );
+        });
         await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([]);
       } finally {
         await closeOpenClawStateDatabaseAsync();
@@ -287,14 +315,13 @@ describe("voice-call call record store", () => {
       ).toEqual(call.transcript);
       await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([call]);
       const env = { ...process.env, OPENCLAW_STATE_DIR: storePath };
-      const chunks = createPluginStateKeyedStoreForTests<{ index: number; dataBase64: string }>(
-        "voice-call",
-        {
+      const openChunks = () =>
+        createPluginStateKeyedStoreForTests<{ index: number; dataBase64: string }>("voice-call", {
           namespace: CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
           maxEntries: CALL_RECORD_CHUNK_MAX_ENTRIES,
           env,
-        },
-      );
+        });
+      let chunks = openChunks();
       const rows = await chunks.entries();
       const first = rows.find((row) => row.value.index === 0);
       const later = rows.find((row) => row.value.index === 1);
@@ -305,11 +332,13 @@ describe("voice-call call record store", () => {
         makePersistedCall({ callId: "good-call", transcript: [] }),
       );
       await persistCallRecord(storePath, good);
-      const { db } = openOpenClawStateDatabase({ env });
-      db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
-        "invalid JSON",
-        later.key,
-      );
+      await mutateOfflineCallStore(storePath, (db) => {
+        db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
+          "invalid JSON",
+          later.key,
+        );
+      });
+      chunks = openChunks();
       await chunks.register(first.key, { ...first.value, index: -1 });
       await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([good]);
       expect(await findCallInStore(storePath, good.callId)).toEqual(good);

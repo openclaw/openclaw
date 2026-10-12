@@ -7,21 +7,23 @@ import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
-import {
-  ensureSessionEntrySync,
-  replaceTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+import { ensureSessionEntrySync } from "../config/sessions/session-accessor.js";
 import {
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
 } from "../config/sessions/session-accessor.sqlite-archive-artifact.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
-import {
-  runWithSessionTranscriptReadFence,
-  SessionTranscriptReadFenceError,
-} from "../config/sessions/session-transcript-read-fence.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import * as brokerReply from "../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { appendSessionTranscriptMessageByIdentity } from "../plugin-sdk/session-transcript-runtime.js";
@@ -198,9 +200,30 @@ describe("managed attachment SQLite visibility", () => {
         });
       }
       expect(await f.download()).toBeNull();
+      expect(
+        await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
+      ).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
       expect(fs.existsSync(f.originalPath)).toBe(true);
     },
   );
+
+  it("collects media after an in-process session replacement invalidates the selected entry", async () => {
+    const f = await fixture();
+    await seed(f, [message(f.messageId, null, [f.block])]);
+    expect(await cleanupManagedOutgoingMediaRecords({ stateDir })).toMatchObject({
+      deletedRecordCount: 0,
+      retainedCount: 1,
+    });
+
+    await replaceSessionEntry(f.scope, { sessionId: "replacement-session", updatedAt: Date.now() });
+
+    expect(await cleanupManagedOutgoingMediaRecords({ stateDir })).toMatchObject({
+      deletedRecordCount: 1,
+      retainedCount: 0,
+    });
+    expect(await readManagedImageRecord(f.attachmentId, stateDir)).toBeNull();
+    expect(fs.existsSync(f.originalPath)).toBe(false);
+  });
 
   it("reads managed attachment membership without validating unrelated payloads", async () => {
     const f = await fixture();
@@ -278,7 +301,7 @@ describe("managed attachment SQLite visibility", () => {
     expect(await f.download()).not.toBeNull();
   });
 
-  it("validates the admitted generation on both matching and missing IDs", async () => {
+  it("uses the admitted bounds for both matching and missing IDs", async () => {
     const f = await fixture();
     await seed(f, [message(f.messageId, null, [f.block])]);
     const admitted = await appendSessionTranscriptMessageByIdentity({
@@ -302,11 +325,6 @@ describe("managed attachment SQLite visibility", () => {
           ),
         );
       });
-      await expect(
-        runWithSessionTranscriptReadFence({ ...receipt, generation: "stale" }, () =>
-          readSessionMessagesMatchingIdAsync(f.scope, id),
-        ),
-      ).rejects.toBeInstanceOf(SessionTranscriptReadFenceError);
     }
     expect(openOpenClawAgentDatabase({ agentId: "main" }).db.isTransaction).toBe(false);
   });
@@ -333,7 +351,10 @@ describe("managed attachment SQLite visibility", () => {
       };
       // Match runtime connection admission instead of failing immediately on an
       // unrelated transient lock. The write still commits inside the read snapshot.
-      const writer = new DatabaseSync(database.path, { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS });
+      const writer = openNodeSqliteDatabase(database.path, {
+        timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      });
+      admitSqliteSchema(writer);
       const parse = JSON.parse;
       let rewrote = false;
       const spy = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
@@ -399,9 +420,15 @@ describe("managed attachment SQLite visibility", () => {
       { type: "reset", id: "reset", parentId: f.messageId, timestamp, reason: "new" },
     ]);
     expect(await f.download()).toBeNull();
-    expect(
-      await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
-    ).toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
+    const hostSql = observeHostDataSql();
+    try {
+      expect(
+        await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
+      ).toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
+      expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+    } finally {
+      hostSql.restore();
+    }
     expect(await readManagedImageRecord(f.attachmentId, stateDir)).toBeNull();
     expect(fs.existsSync(f.originalPath)).toBe(false);
     expect(await f.download()).toBeNull();

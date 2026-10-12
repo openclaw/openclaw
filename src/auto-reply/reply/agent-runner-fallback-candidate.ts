@@ -13,6 +13,7 @@ import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-termina
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { CommandLane } from "../../process/lanes.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import { formatThinkingLevelClampNotice } from "../thinking.shared.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import { runCliFallbackCandidate } from "./agent-runner-cli-candidate.js";
@@ -30,6 +31,7 @@ import type {
 } from "./agent-runner-fallback-cycle.types.js";
 import { buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
+  buildModelResolveContext,
   mintReplyMessageActionTurnCapability,
   resolveModelFallbackOptions,
   resolveRunFastModeForFallbackCandidate,
@@ -37,6 +39,7 @@ import {
 } from "./agent-runner-utils.js";
 import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
+import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 import {
   bindSourceReplyDeliveryRuntime,
   createSourceReplyDeliveryRuntime,
@@ -70,7 +73,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   bindSourceReplyDeliveryRuntime(turn.followupRun.run, sourceReplyDeliveryRuntime);
   const sourceReplyDeliveryModeOrigin = sourceReplyDeliveryRuntime.origin;
   const preserveProgressCallbackStartOrder = turn.opts?.preserveProgressCallbackStartOrder === true;
-  const runLane = turn.isHeartbeat ? CommandLane.CronNested : CommandLane.Main;
+  const runLane =
+    turn.isHeartbeat || turn.followupRun.run.internalEventExecution
+      ? CommandLane.CronNested
+      : CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
   const messageToolDeliveryState: MessageToolDeliveryState = {
     toolCallIds: new Set(),
@@ -120,6 +126,20 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   return params.timing.measure("model_fallback", () =>
     runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
       preparedRunAdmission: params.preparedRunAdmission,
+      modelResolve: {
+        prompt: turn.commandBody,
+        awaitSessionDiffBaseline: turn.opts?.awaitSessionDiffBaseline,
+        images: params.currentTurnImages.images,
+        cwd: turn.followupRun.run.cwd,
+        modelSelectionLocked: turn.followupRun.run.modelSelectionLocked,
+        context: buildModelResolveContext({
+          run: turn.followupRun.run,
+          replyRoute: turn.followupRun,
+          sessionCtx: turn.sessionCtx,
+          hasRepliedRef: turn.opts?.hasRepliedRef,
+          trigger: resolveReplyRunTrigger(turn),
+        }),
+      },
       selection: buildRunEntrySelection(selection, turn.followupRun.run),
       identity: {
         runId: params.runId,
@@ -272,17 +292,14 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         try {
           const common = {
             ...runOptions,
-            preparedRunAdmission: params.preparedRunAdmission,
-            messageActionTurnCapability,
+            ...params,
             turn,
+            messageActionTurnCapability,
             candidateRun,
-            runtimeConfig: params.runtimeConfig,
             provider,
             model,
             candidateThinkLevel,
             candidateFastMode,
-            runId: params.runId,
-            runAbortSignal: params.runAbortSignal,
             runLane,
             suppressQueuedUserPersistenceForCandidate:
               (turn.followupRun.run.suppressNextUserMessagePersistence ?? false) ||
@@ -295,13 +312,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             fastModeAutoProgressState,
             bootstrapContextRunKind,
             bootstrapPromptWarningSignaturesSeen: params.state.bootstrapPromptWarningSignaturesSeen,
-            currentTurnImages: params.currentTurnImages,
             signalExecutionPhaseForTyping: signalExecutionPhaseForCandidate,
             prepareAgentRunStart: runStart.prepareAgentRunStart,
             notifyAgentRunStart: runStart.notifyAgentRunStart,
             preserveProgressCallbackStartOrder,
-            presentation: params.presentation,
-            timing: params.timing,
             onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => {
               params.state.pendingLifecycleTerminal = { provider, model, backstop };
             },
@@ -313,21 +327,24 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
               ...common,
               cliExecutionProvider: runtime.cliExecutionProvider,
               lifecycleGeneration: params.state.lifecycleGeneration,
+              onSessionWriter: (writer) => {
+                params.state.sessionWriter = writer;
+              },
             });
           } else {
             const candidate = await runEmbeddedFallbackCandidate({
               ...common,
               candidateAgentRuntime,
-              effectiveRun: params.effectiveRun,
-              directBlockDeliveries: params.directBlockDeliveries,
               getLifecycleGeneration: () => params.state.lifecycleGeneration,
               onLifecycleGeneration: (generation) => {
                 params.state.lifecycleGeneration = generation;
               },
-              notifyUserAboutCompaction: params.notifyUserAboutCompaction,
               messageToolDeliveryState,
               onCompactionFacts: ({ accounting, postCompactionModelAttempted }) => {
                 if (accounting) {
+                  if (accounting.kind === "durable") {
+                    params.state.sessionWriter = accounting.target;
+                  }
                   recordTurnCompaction(params.state.compaction, accounting);
                 }
                 params.state.postCompactionModelAttempted ||= postCompactionModelAttempted;
@@ -336,6 +353,22 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             params.state.maintenanceAuthProfile = candidate.maintenanceAuthProfile;
             params.state.compactionRequestBudget = candidate.compactionRequestBudget;
             result = candidate.result;
+          }
+          const thinking = result.meta.requestShaping?.thinking ?? candidateThinkLevel;
+          const thinkingClamp = formatThinkingLevelClampNotice({
+            requested: turn.followupRun.run.thinkLevel,
+            effective: thinking,
+            provider: result.meta.agentMeta?.provider ?? provider,
+            model: result.meta.agentMeta?.model ?? model,
+          });
+          if (thinkingClamp) {
+            result = {
+              ...result,
+              meta: {
+                ...result.meta,
+                requestShaping: { ...result.meta.requestShaping, thinking, thinkingClamp },
+              },
+            };
           }
           params.state.bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,

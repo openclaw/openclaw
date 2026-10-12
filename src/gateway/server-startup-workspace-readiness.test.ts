@@ -8,6 +8,10 @@ import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js"
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { getRuntimeConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshotWithPluginMetadata } from "../config/io.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../config/runtime-write-application.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import {
   detectLegacyWorkspaceState,
@@ -236,7 +240,8 @@ describe("Gateway workspace migration readiness", () => {
       state.envVars.OPENCLAW_TEST_MINIMAL_GATEWAY = undefined;
       state.applyEnv();
       const oldWorkspace = state.workspaceDir;
-      const nextWorkspace = state.path("retained");
+      // A long path must not crowd repair guidance out of the RPC error preview.
+      const nextWorkspace = state.path("retained", "workspace-".repeat(10));
       const reloadError = vi.spyOn(gatewayKernelLogs.logReload, "error");
       const cfg: OpenClawConfig = {
         gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
@@ -319,10 +324,12 @@ describe("Gateway workspace migration readiness", () => {
       await state.writeConfig(cfg);
       server = await start(port);
       await server.startupSettled;
-      await writeConfigFile(nextConfig);
-      await expect
-        .poll(() => resolveAgentWorkspaceDir(getRuntimeConfig(), "main"))
-        .toBe(nextWorkspace);
+      reloadError.mockClear();
+      const application = createRuntimeConfigWriteApplication();
+      await writeConfigFile(nextConfig, attachRuntimeConfigWriteApplication({}, application));
+      expect(application.claimed).toBe(true);
+      expect(await application.result, JSON.stringify(reloadError.mock.calls)).toBe("applied");
+      expect(resolveAgentWorkspaceDir(getRuntimeConfig(), "main")).toBe(nextWorkspace);
       await expect(ensureAgentWorkspace({ dir: nextWorkspace })).resolves.toMatchObject({
         dir: nextWorkspace,
       });

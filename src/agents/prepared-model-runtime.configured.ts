@@ -167,6 +167,13 @@ export function prepareConfiguredRuntimeModels(params: {
   for (const { modelId, provider } of dedupeByKey(params.configuredModelRefs, (ref) =>
     buildModelCatalogMergeKey(ref.provider, ref.modelId),
   )) {
+    const matches = (candidate: Pick<InlineModelEntry, "id" | "provider">) =>
+      params.matchesStaticModelId({
+        candidateId: candidate.id,
+        rowProvider: candidate.provider,
+        provider,
+        modelId,
+      });
     // Match request-time fallback precedence exactly: manifest/runtime-discovery rows win,
     // and the provider-static catalog fills only models absent from that surface.
     let model =
@@ -178,23 +185,9 @@ export function prepareConfiguredRuntimeModels(params: {
         modelId,
         matchesStaticModelId: params.matchesStaticModelId,
       }) ??
-      params.providerStaticModels.find((candidate) =>
-        params.matchesStaticModelId({
-          candidateId: candidate.id,
-          rowProvider: candidate.provider,
-          provider,
-          modelId,
-        }),
-      );
+      params.providerStaticModels.find(matches);
     if (!model) {
-      const inlineModel = params.inlineProviderModels.find((candidate) =>
-        params.matchesStaticModelId({
-          candidateId: candidate.id,
-          rowProvider: candidate.provider,
-          provider,
-          modelId,
-        }),
-      );
+      const inlineModel = params.inlineProviderModels.find(matches);
       const providerConfig =
         inlineModel &&
         findNormalizedProviderValue(params.config.models?.providers, inlineModel.provider);

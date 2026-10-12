@@ -81,7 +81,7 @@ beforeEach(() => {
     }
   }
   write("dist/control-ui/assets/entry.js");
-  write("dist/control-ui/asset-manifest.json", '{"assets":["assets/entry.js"]}');
+  write("dist/control-ui/sw.js");
   writeBuildInfo({ rootDir: root, env: fixtureBuildEnv });
   writeMatchingUi();
   writeBuildStamp({ cwd: root });

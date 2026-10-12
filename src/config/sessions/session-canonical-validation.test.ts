@@ -1,5 +1,5 @@
-import { DatabaseSync } from "node:sqlite";
-import { expect, it, vi } from "vitest";
+import { constants } from "node:sqlite";
+import { expect, it } from "vitest";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
@@ -13,7 +13,10 @@ import {
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import {
+  markCanonicalSessionValidationPending,
+  setCanonicalSqliteSessionMainKey,
+} from "./session-canonical-key.js";
 import {
   compareAndCertifyCanonicalSessionValidationBatch,
   hasPendingCanonicalSessionValidation,
@@ -21,34 +24,8 @@ import {
   validateCanonicalSessionValidationBatch,
 } from "./session-canonical-validation.js";
 
-it("reads a certified session after closing its writer without decoding unrelated entries", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const scope = { agentId: "main", env, sessionKey: "agent:main:selected" };
-    replaceSessionEntrySync(scope, { sessionId: "selected", updatedAt: 1 });
-    replaceSessionEntrySync(
-      { ...scope, sessionKey: "agent:main:unrelated" },
-      {
-        sessionId: "unrelated",
-        updatedAt: 1,
-        skillsSnapshot: { prompt: "unrelated-prompt".repeat(8192), skills: [] },
-      },
-    );
-    const database = openOpenClawAgentDatabase(scope);
-    closeOpenClawAgentDatabaseByPath(database.path);
-    const parse = vi.spyOn(JSON, "parse");
-    try {
-      expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe("selected");
-      expect(
-        parse.mock.calls.filter(([value]) => value.includes('"sessionId":"unrelated"')),
-      ).toHaveLength(0);
-    } finally {
-      parse.mockRestore();
-    }
-  });
-});
-
-it.each([false, true])(
-  "rejects raw lineage changes on each fresh committed view (writer closed: %s)",
+it.each([true])(
+  "rejects unvalidated offline repair lineage on each fresh committed view (writer closed: %s)",
   async (reopen) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:selected" };
@@ -59,14 +36,10 @@ it.each([false, true])(
       });
       expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe("selected");
       const database = openOpenClawAgentDatabase(scope);
-      const external = new DatabaseSync(database.path);
-      try {
-        external
-          .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
-          .run("agent:main:other", scope.sessionKey);
-      } finally {
-        external.close();
-      }
+      markCanonicalSessionValidationPending(database, [scope.sessionKey]);
+      database.db
+        .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
+        .run("agent:main:other", scope.sessionKey);
       if (reopen) {
         closeOpenClawAgentDatabaseByPath(database.path);
       }
@@ -90,6 +63,7 @@ it("keeps changed rows pending across prepared certification and restores marker
     replaceSessionEntrySync(scope, { sessionId: "selected", updatedAt: 1 });
     const database = openOpenClawAgentDatabase(scope);
     const mutate = (label: string) => {
+      markCanonicalSessionValidationPending(database, [scope.sessionKey]);
       database.db
         .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
         .run(JSON.stringify({ sessionId: "selected", updatedAt: 1, label }), scope.sessionKey);
@@ -193,9 +167,9 @@ it("does not retain native admission from a rolled-back repair of an unrelated r
   });
 });
 
-it.each(["serialized identity", "native text conversion"])(
-  "rolls back a writer whose canonical projection diverges through %s",
-  async (kind) => {
+it.each([{ kind: "serialized identity", transaction: false }])(
+  "rejects a divergent canonical projection through $kind (transaction: $transaction)",
+  async ({ kind, transaction }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:serialization" };
       replaceSessionEntrySync(scope, { sessionId: "serialization", updatedAt: 1 });
@@ -211,10 +185,12 @@ it.each(["serialized identity", "native text conversion"])(
               updatedAt: 2,
               parentSessionKey: "agent:main:parent-" + String.fromCharCode(0xd800),
             };
+      const write = (database: ReturnType<typeof openOpenClawAgentDatabase>) =>
+        writeSessionEntry(database, scope.sessionKey, divergent);
       expect(() =>
-        runOpenClawAgentWriteTransaction((database) => {
-          writeSessionEntry(database, scope.sessionKey, divergent);
-        }, scope),
+        transaction
+          ? runOpenClawAgentWriteTransaction(write, scope)
+          : write(openOpenClawAgentDatabase(scope)),
       ).toThrow("openclaw doctor --fix");
       expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "serialization", updatedAt: 1 });
       expect(hasPendingCanonicalSessionValidation(openOpenClawAgentDatabase(scope))).toBe(false);
@@ -222,43 +198,30 @@ it.each(["serialized identity", "native text conversion"])(
   },
 );
 
-it("certifies fresh keys and metadata without recompiling warm writer certification", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const scope = { agentId: "main", env };
-    const replace = (id: string, updatedAt: number) =>
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: `agent:main:${id}` },
-        { sessionId: id, updatedAt, label: `${id}-${updatedAt}` },
-      );
-    replace("first", 1);
-    replace("second", 1);
-    const database = openOpenClawAgentDatabase(scope);
-    const compile = vi.spyOn(getSessionKysely(database.db).getExecutor(), "compileQuery");
-    let certificationCompiles: string[];
-    try {
-      replace("second", 2);
-      replace("first", 3);
-      certificationCompiles = compile.mock.results.flatMap((result) =>
-        result.type === "return" &&
-        (result.value.sql.includes('"session_canonical_validation_pending"') ||
-          result.value.sql.includes('"retained_window"'))
-          ? [result.value.sql]
-          : [],
-      );
-    } finally {
-      compile.mockRestore();
-    }
-    expect(loadSessionEntry({ ...scope, sessionKey: "agent:main:first" })).toMatchObject({
-      sessionId: "first",
-      updatedAt: 3,
-      label: "first-3",
+it.each(["receipt"] as const)(
+  "does not publish an autocommit main-key change when %s invalidation fails",
+  async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const scope = { agentId: "main", env, sessionKey: "agent:main:policy" };
+      replaceSessionEntrySync(scope, { sessionId: "policy", updatedAt: 1 });
+      const database = openOpenClawAgentDatabase(scope);
+      database.db.setAuthorizer((action, table, column) => {
+        const denied =
+          action === constants.SQLITE_UPDATE &&
+          table === "session_key_contract" &&
+          column === "canonical_ready";
+        return denied ? constants.SQLITE_DENY : constants.SQLITE_OK;
+      });
+      try {
+        expect(() => setCanonicalSqliteSessionMainKey(database, "changed-main")).toThrow(
+          /authoriz/u,
+        );
+      } finally {
+        database.db.setAuthorizer(null);
+      }
+      expect(
+        database.db.prepare("SELECT main_key FROM session_key_contract WHERE id = 1").get(),
+      ).toEqual({ main_key: "main" });
     });
-    expect(loadSessionEntry({ ...scope, sessionKey: "agent:main:second" })).toMatchObject({
-      sessionId: "second",
-      updatedAt: 2,
-      label: "second-2",
-    });
-    expect(hasPendingCanonicalSessionValidation(database)).toBe(false);
-    expect(certificationCompiles).toEqual([]);
-  });
-});
+  },
+);

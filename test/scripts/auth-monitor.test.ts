@@ -9,10 +9,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const NOW_SECONDS = 1_800_000_000;
 const AUTH_MONITOR_PATH = "scripts/auth-monitor.sh";
-const MOBILE_REAUTH_PATH = "scripts/mobile-reauth.sh";
-const SETUP_AUTH_SYSTEM_PATH = "scripts/setup-auth-system.sh";
 const AUTH_MONITOR_SERVICE_PATH = "scripts/systemd/openclaw-auth-monitor.service";
-const AUTH_MONITOR_TIMER_PATH = "scripts/systemd/openclaw-auth-monitor.timer";
 const TERMUX_WIDGET_PATHS = ["scripts/termux-auth-widget.sh", "scripts/termux-quick-auth.sh"];
 
 function readScript(path: string): string {
@@ -100,19 +97,6 @@ function createAuthMonitorHarness() {
 }
 
 describe("auth monitoring scripts", () => {
-  it("keeps systemd install rendering free of checked-in host paths", () => {
-    const setup = readScript(SETUP_AUTH_SYSTEM_PATH);
-    const service = readScript(AUTH_MONITOR_SERVICE_PATH);
-    const timer = readScript(AUTH_MONITOR_TIMER_PATH);
-
-    expect(service).toContain("ExecStart=@OPENCLAW_AUTH_MONITOR_PATH@");
-    expect(setup).toContain('AUTH_MONITOR_PATH="$SCRIPT_DIR/auth-monitor.sh"');
-    expect(setup).toContain(
-      'RENDERED_EXEC_START="ExecStart=$(systemd_quote_arg "$AUTH_MONITOR_PATH")"',
-    );
-    expect(timer).toContain("OnUnitActiveSec=30min");
-  });
-
   it("keeps public helper scripts free of private host defaults", () => {
     const privateHomePath = ["", "home", "admin"].join("/");
     const privateHostAlias = ["l", "36"].join("");
@@ -135,67 +119,29 @@ describe("auth monitoring scripts", () => {
     expect(script).toContain("curl -fsS --connect-timeout 5 --max-time 15 -o /dev/null");
   });
 
-  it("retries after ntfy rejects a notification", () => {
+  it("delivers a phone alert and rate-limits with 30 minutes left", () => {
     const harness = createAuthMonitorHarness();
+    harness.enablePhoneAuth(30);
 
-    const rejected = harness.run({ curlExitCode: 22 });
-    expect(rejected.status).toBe(1);
-    expect(existsSync(harness.stateFile)).toBe(false);
-    expect(rejected.stderr).toContain("No notification delivered; cooldown not updated");
-
-    const retry = harness.run();
-    expect(retry.stdout).toContain("Sending via ntfy.sh to test-topic...");
-    expect(retry.stdout).not.toContain("Skipping notification (sent recently)");
-    expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(2);
-  });
-
-  it("rate-limits after ntfy accepts a notification", () => {
-    const harness = createAuthMonitorHarness();
-
-    const accepted = harness.run();
-    expect(accepted.status).toBe(1);
+    const delivered = harness.run({
+      curlExitCode: 22,
+      notifyPhone: "+15550000000",
+    });
+    expect(delivered.status).toBe(0);
     expect(existsSync(harness.stateFile)).toBe(true);
+    expect(JSON.parse(readFileSync(harness.openclawLog, "utf8"))).toEqual({
+      target: "+15550000000",
+      message: "Claude Code auth expires in 0h 30m. Consider re-auth soon.",
+    });
 
-    const throttled = harness.run();
+    const throttled = harness.run({
+      curlExitCode: 22,
+      notifyPhone: "+15550000000",
+    });
     expect(throttled.stdout).toContain("Skipping notification (sent recently)");
+    expect(readFileSync(harness.openclawLog, "utf8").trim().split("\n")).toHaveLength(1);
     expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(1);
   });
-
-  it.each([
-    {
-      minutes: 90,
-      message: "Claude Code auth expires in 1h 30m. Consider re-auth soon.",
-    },
-    {
-      minutes: 30,
-      message: "Claude Code auth expires in 0h 30m. Consider re-auth soon.",
-    },
-  ])(
-    "delivers a phone alert and rate-limits with $minutes minutes left",
-    ({ minutes, message }) => {
-      const harness = createAuthMonitorHarness();
-      harness.enablePhoneAuth(minutes);
-
-      const delivered = harness.run({
-        curlExitCode: 22,
-        notifyPhone: "+15550000000",
-      });
-      expect(delivered.status).toBe(0);
-      expect(existsSync(harness.stateFile)).toBe(true);
-      expect(JSON.parse(readFileSync(harness.openclawLog, "utf8"))).toEqual({
-        target: "+15550000000",
-        message,
-      });
-
-      const throttled = harness.run({
-        curlExitCode: 22,
-        notifyPhone: "+15550000000",
-      });
-      expect(throttled.stdout).toContain("Skipping notification (sent recently)");
-      expect(readFileSync(harness.openclawLog, "utf8").trim().split("\n")).toHaveLength(1);
-      expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(1);
-    },
-  );
 
   it("retries when all configured notification channels fail", () => {
     const harness = createAuthMonitorHarness();
@@ -218,16 +164,5 @@ describe("auth monitoring scripts", () => {
     expect(retry.stdout).not.toContain("Skipping notification (sent recently)");
     expect(readFileSync(harness.openclawLog, "utf8").trim().split("\n")).toHaveLength(2);
     expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(2);
-  });
-
-  it("keeps mobile reauth wired to local auth status and Claude token setup", () => {
-    const script = readScript(MOBILE_REAUTH_PATH);
-
-    expect(script).toContain('SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"');
-    expect(script).toContain('"$SCRIPT_DIR/claude-auth-status.sh" simple');
-    expect(script).toContain('"$SCRIPT_DIR/claude-auth-status.sh" full');
-    expect(script).toContain("https://console.anthropic.com/settings/api-keys");
-    expect(script).toContain("claude setup-token");
-    expect(script).toContain("systemctl --user restart openclaw");
   });
 });

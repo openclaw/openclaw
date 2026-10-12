@@ -40,6 +40,7 @@ import {
   type HooksListOptions,
   type HooksReportOptions,
 } from "./hooks-cli.format.js";
+import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import type { RunPluginInstallCommandParams } from "./plugins-install-preflight.js";
@@ -181,7 +182,23 @@ async function runOneShotHooksCliAction(
   requestExitAfterOneShotOutput(defaultRuntime, exitCode);
 }
 async function setHookEnabled(hookName: string, enabled: boolean, agentId?: string): Promise<void> {
+  return await runWithLocalStateOwner({
+    method: `hooks.${enabled ? "enable" : "disable"}`,
+    params: {},
+    target: `hook "${hookName}"`,
+    onForeignOwner: "refuse",
+    runLocal: ({ assertCurrent }) => setHookEnabledLocal(hookName, enabled, agentId, assertCurrent),
+  });
+}
+
+async function setHookEnabledLocal(
+  hookName: string,
+  enabled: boolean,
+  agentId: string | undefined,
+  assertCurrent: () => void,
+): Promise<void> {
   const committed = await transformConfigFile({
+    writeOptions: { assertConfigPathForWrite: assertCurrent },
     transform: (config) =>
       withHooksReport(config, resolveHooksReportTarget(config, agentId), (report) => {
         const hook = resolveHookSelection(report, hookName);

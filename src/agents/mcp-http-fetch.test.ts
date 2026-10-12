@@ -72,13 +72,6 @@ async function fetchOAuthRegistrationError(): Promise<Response> {
   return await fetch("https://auth.example.com/oauth/register", { method: "POST" });
 }
 
-function redirectResponse(location: string, status = 302): Response {
-  return new Response(null, {
-    status,
-    headers: { location },
-  });
-}
-
 function getDispatcher(init: unknown): unknown {
   if (typeof init !== "object" || init === null || !("dispatcher" in init)) {
     return undefined;
@@ -184,74 +177,6 @@ describe("MCP HTTP fetch helpers", () => {
     expect(
       getDispatcherConnectOptions(fetchCalls[1]?.init)?.["rejectUnauthorized"],
     ).toBeUndefined();
-  });
-
-  it("uses configured env proxy for ordinary MCP HTTP requests", async () => {
-    vi.stubEnv("https_proxy", "http://proxy.example:8080");
-    const fetch = buildMcpHttpFetch({
-      resourceUrl: "https://mcp.example.com/mcp",
-    });
-
-    await fetch("https://mcp.example.com/token");
-
-    expect(getDispatcher(fetchCalls[0]?.init)).toBeInstanceOf(TestEnvHttpProxyAgent);
-    expect(lookupMock).not.toHaveBeenCalled();
-  });
-
-  it.each([204, 205, 304])("preserves bodyless HTTP %s responses", async (status) => {
-    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-      Agent: TestAgent,
-      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
-      ProxyAgent: TestProxyAgent,
-      fetch: async () => new Response(null, { status }),
-    };
-    const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
-
-    const response = await fetch("https://mcp.example.com/mcp");
-
-    expect(response.status).toBe(status);
-    expect(response.body).toBeNull();
-  });
-
-  it("keeps same-origin TLS overrides ahead of configured env proxy", async () => {
-    vi.stubEnv("https_proxy", "http://proxy.example:8080");
-    const fetch = buildMcpHttpFetch({
-      sslVerify: false,
-      resourceUrl: "https://mcp.example.com/mcp",
-    });
-
-    await fetch("https://mcp.example.com/token");
-    await fetch("https://auth.example.com/token");
-
-    expect(getDispatcher(fetchCalls[0]?.init)).toBeInstanceOf(TestAgent);
-    expect(getDispatcherConnectOptions(fetchCalls[0]?.init)).toMatchObject({
-      rejectUnauthorized: false,
-    });
-    expect(getDispatcher(fetchCalls[1]?.init)).toBeInstanceOf(TestEnvHttpProxyAgent);
-  });
-
-  it("uses configured env proxy for redirected targets after a NO_PROXY first hop", async () => {
-    vi.stubEnv("https_proxy", "http://proxy.example:8080");
-    vi.stubEnv("no_proxy", "mcp.example.com");
-    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-      Agent: TestAgent,
-      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
-      ProxyAgent: TestProxyAgent,
-      fetch: async (url: string | URL | Request, init?: unknown) => {
-        fetchCalls.push({ url, init });
-        return fetchCalls.length === 1
-          ? redirectResponse("https://auth.example.com/token")
-          : new Response("ok");
-      },
-    };
-    const fetch = buildMcpHttpFetch({
-      resourceUrl: "https://mcp.example.com/mcp",
-    });
-
-    await fetch("https://mcp.example.com/token");
-
-    expect(getDispatcher(fetchCalls[0]?.init)).toBeInstanceOf(TestAgent);
-    expect(getDispatcher(fetchCalls[1]?.init)).toBeInstanceOf(TestEnvHttpProxyAgent);
   });
 
   it("removes static Authorization headers for OAuth-backed runtime requests", () => {

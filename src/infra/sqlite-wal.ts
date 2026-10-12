@@ -11,6 +11,7 @@ import {
   runWithSqliteBusyTimeout,
   setSqliteBusyTimeout,
 } from "./sqlite-busy-timeout.js";
+import { readSqliteDatabaseWriteRevision } from "./sqlite-database-admission.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
@@ -327,6 +328,7 @@ export function configureSqliteWalMaintenance(
   const maintenanceId = `sqlite-wal:${++nextMaintenanceId}`;
   // The periodic pass sets the vacuum budget; the next run consumes it, ticks add none.
   let nextPageBudget = 0;
+  let completedTickRevision: number | undefined;
   const maintainPeriodic = (
     request: SqliteWalPeriodicRequest,
     admit?: (stage: "transaction" | "commit") => void,
@@ -340,11 +342,20 @@ export function configureSqliteWalMaintenance(
     }
     let reclaimedPages = 0;
     const quiet = request.maxPages === 0;
+    const checkpointOnly = quiet && request.checkpointMode === "PASSIVE";
+    const writeRevision = checkpointOnly ? readSqliteDatabaseWriteRevision(db) : undefined;
+    if (
+      writeRevision !== undefined &&
+      writeRevision === completedTickRevision &&
+      checkpointOwner.health?.state === "complete"
+    ) {
+      return { reclaimedPages: 0, checkpoint: checkpointOwner.snapshot };
+    }
     const runTickCheckpoint = (mode: SqliteWalCheckpointMode) =>
       checkpointOwner.checkpoint(mode, { quiet });
-    runMaintenance(() => {
+    const completed = runMaintenance(() => {
       let checkpointed: boolean;
-      if (quiet && request.checkpointMode === "PASSIVE") {
+      if (checkpointOnly) {
         // SQLite never calls the busy handler for PASSIVE; this pass cannot vacuum.
         admit?.("transaction");
         checkpointed = runTickCheckpoint("PASSIVE");
@@ -388,6 +399,10 @@ export function configureSqliteWalMaintenance(
       }
       return checkpointed;
     });
+    // A sibling commit during the checkpoint is picked up by the next tick.
+    // Blocked/error observations keep retrying even without another write.
+    completedTickRevision =
+      completed && checkpointOwner.health?.state === "complete" ? writeRevision : undefined;
     return { reclaimedPages, checkpoint: checkpointOwner.snapshot };
   };
   const maintain = createSqliteWalMaintenanceScheduler(
@@ -405,47 +420,42 @@ export function configureSqliteWalMaintenance(
       return budget;
     },
   );
-  if (timerIntervalMs > 0) {
+  const schedule = (phase: string, intervalMs: number, run: () => Promise<void>) =>
     runInSqliteMaintenanceContext(() =>
       scope.schedule({
-        id: `${maintenanceId}:periodic`,
-        delayMs: timerIntervalMs,
-        everyMs: timerIntervalMs,
-        run: () => {
-          // Inspect the published handle before identity admission or synchronous cleanup.
-          if (tripwireDatabasePath && splitBrainDetectionEnabled) {
-            let splitBrain: SqliteWalSplitBrainEvent | undefined;
-            try {
-              splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
-            } catch (error) {
-              splitBrainDetectionEnabled = false;
-              log.warn("SQLite WAL split-brain detection disabled", {
-                databaseLabel: options.databaseLabel,
-                databasePath: tripwireDatabasePath,
-                error: error instanceof Error ? error.message : String(error),
-              });
-            }
-            if (splitBrain) {
-              invalidated = true;
-              scope.beginClose();
-              terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
-            }
-          }
-          nextPageBudget = 512;
-          return maintain();
-        },
+        id: `${maintenanceId}:${phase}`,
+        delayMs: intervalMs,
+        everyMs: intervalMs,
+        run,
       }),
     );
+  if (timerIntervalMs > 0) {
+    schedule("periodic", timerIntervalMs, () => {
+      // Inspect the published handle before identity admission or synchronous cleanup.
+      if (tripwireDatabasePath && splitBrainDetectionEnabled) {
+        let splitBrain: SqliteWalSplitBrainEvent | undefined;
+        try {
+          splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
+        } catch (error) {
+          splitBrainDetectionEnabled = false;
+          log.warn("SQLite WAL split-brain detection disabled", {
+            databaseLabel: options.databaseLabel,
+            databasePath: tripwireDatabasePath,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        if (splitBrain) {
+          invalidated = true;
+          scope.beginClose();
+          terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
+        }
+      }
+      nextPageBudget = 512;
+      return maintain();
+    });
   }
   if (checkpointTickMs > 0) {
-    runInSqliteMaintenanceContext(() =>
-      scope.schedule({
-        id: `${maintenanceId}:tick`,
-        delayMs: checkpointTickMs,
-        everyMs: checkpointTickMs,
-        run: maintain,
-      }),
-    );
+    schedule("tick", checkpointTickMs, maintain);
   }
 
   const beginClose = () => {

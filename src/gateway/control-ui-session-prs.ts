@@ -415,13 +415,8 @@ async function refreshBranchPullRequests(
     // rate-limits at the list fetch must serve the proven PRs, not an empty
     // list that would resurrect the Create PR row mid-outage. The shortened
     // expiry makes the next window retry full detail.
-    entry.lastGood = {
-      pullRequests: result.pullRequests,
-      publicationCandidates: result.publicationCandidates,
-      mergedHeads: result.mergedHeads,
-      workingBranchHasLivePullRequest: result.workingBranchHasLivePullRequest,
-      repository,
-    };
+    const { rateLimited: _rateLimited, ...lastGood } = result;
+    entry.lastGood = lastGood;
     return result;
   } catch (error) {
     read.assertCurrent();

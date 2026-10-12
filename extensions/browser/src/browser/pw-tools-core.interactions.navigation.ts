@@ -27,6 +27,14 @@ import { toAIFriendlyError } from "./pw-tools-core.shared.js";
 export type InteractionTargetOptions = {
   cdpUrl: string;
   browserFilesystemLocal?: boolean;
+  /**
+   * Extension-backed uploads take the byte-payload branch because Store-installed
+   * extensions cannot read gateway-local paths, but the user's browser still runs
+   * on this machine. At or above the relay-safe payload bound (files whose base64
+   * form would not fit a single extension-relay WebSocket message), keep the local
+   * path handoff that file-access extensions accept instead of rejecting the upload.
+   */
+  uploadPathsFallbackOnPayloadLimit?: boolean;
   targetId?: string;
   assertCurrent?: () => void | Promise<void>;
 };
@@ -442,11 +450,9 @@ export async function awaitNavigationGuardedInteraction<T>(
           action: async () => {
             try {
               // Preserve native dispatch ordering for callers without an authority check.
-              if (opts.assertCurrent) {
-                const assertion = assertInteractionCurrent(opts);
-                if (assertion) {
-                  await assertion;
-                }
+              const assertion = assertInteractionCurrent(opts);
+              if (assertion) {
+                await assertion;
               }
               throwIfInteractionAborted(signal);
               return await opts.action();

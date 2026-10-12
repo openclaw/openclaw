@@ -42,6 +42,7 @@ import {
   getWorkerTurnExecutionIdentityCapability,
   runWorkerTurnAdmissionContinuation,
 } from "./placement-turn-claim-events.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerTranscriptCommitStore } from "./transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 
@@ -466,6 +467,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     () => {},
   );
   const placementCapability = getWorkerTurnExecutionIdentityCapability(store, placementClosedClaim);
+  const placementGate = createWorkerSessionPlacementGate(store);
   if (!placementCapability) {
     throw new Error("expected placement-bound lineage capability");
   }
@@ -485,6 +487,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     expect(getWorkerTurnExecutionIdentityCapability(store, placementClosedClaim)).toBe(
       placementCapability,
     );
+    expect(placementGate.validateWorkerTurn(placementClosedClaim)).toBe(true);
     await placementCapability.run((identity) => {
       placementReceiptAuthority = identity.receiptAuthority;
       identity.receiptAuthority();
@@ -494,6 +497,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     sql.restore();
   }
   await store.releaseTurn(placementClosedClaim);
+  expect(placementGate.validateWorkerTurn(placementClosedClaim)).toBe(false);
   expect(() => placementReceiptAuthority?.()).toThrow("worker turn authority changed");
   await expect(placementCapability.run(async () => "stale")).rejects.toThrow(
     "worker turn authority changed",

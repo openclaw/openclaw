@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   AgentToolResultMiddleware,
@@ -7,8 +6,6 @@ import type {
   AgentToolResultMiddlewareEvent,
   OpenClawAgentToolResult,
 } from "../../plugins/agent-tool-result-middleware-types.js";
-import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
-import { getPluginInstanceGatewayOwner } from "../../plugins/registry-lifecycle.js";
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
@@ -19,94 +16,10 @@ import { isToolResultError } from "../tool-result-error.js";
 const log = createSubsystemLogger("agents/harness");
 const MAX_MIDDLEWARE_CONTENT_BLOCKS = 200;
 const MAX_MIDDLEWARE_TEXT_CHARS = 100_000;
-const MAX_MIDDLEWARE_IMAGE_DATA_CHARS = 5_000_000;
 const MAX_MIDDLEWARE_CONTENT_DEPTH = 20;
-const MAX_MIDDLEWARE_DETAILS_BYTES = 100_000;
-const MAX_MIDDLEWARE_DETAILS_DEPTH = 20;
-const MAX_MIDDLEWARE_DETAILS_KEYS = 1_000;
 const NESTED_TOOL_RESULT_BLOCK_TYPES = new Set(["toolresult", "tool_result"]);
 
 type MiddlewareContentBlock = OpenClawAgentToolResult["content"][number];
-type MiddlewareContentCoerceState = { depth: number; seen: Set<object> };
-
-function isValidMiddlewareContentBlock(value: unknown): boolean {
-  if (!isRecord(value) || typeof value.type !== "string") {
-    return false;
-  }
-  if (value.type === "text") {
-    return typeof value.text === "string" && value.text.length <= MAX_MIDDLEWARE_TEXT_CHARS;
-  }
-  if (value.type === "image") {
-    return (
-      typeof value.mimeType === "string" &&
-      value.mimeType.trim().length > 0 &&
-      typeof value.data === "string" &&
-      value.data.length <= MAX_MIDDLEWARE_IMAGE_DATA_CHARS
-    );
-  }
-  return false;
-}
-
-function hasValidMiddlewareDetailsShape(
-  value: unknown,
-  state: { keys: number; seen: WeakSet<object> } = { keys: 0, seen: new WeakSet() },
-  depth = 0,
-): boolean {
-  if (value === undefined || value === null) {
-    return true;
-  }
-  if (depth > MAX_MIDDLEWARE_DETAILS_DEPTH) {
-    return false;
-  }
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return true;
-  }
-  if (typeof value !== "object" || state.seen.has(value)) {
-    return false;
-  }
-  state.seen.add(value);
-  const entries = Array.isArray(value) ? value : Object.values(value);
-  state.keys += entries.length;
-  return (
-    state.keys <= MAX_MIDDLEWARE_DETAILS_KEYS &&
-    entries.every((entry) => hasValidMiddlewareDetailsShape(entry, state, depth + 1))
-  );
-}
-
-function isValidMiddlewareDetails(value: unknown): boolean {
-  if (value === undefined) {
-    return true;
-  }
-  if (!hasValidMiddlewareDetailsShape(value)) {
-    return false;
-  }
-  const size = boundedJsonUtf8Bytes(value, MAX_MIDDLEWARE_DETAILS_BYTES);
-  return size.complete && size.bytes <= MAX_MIDDLEWARE_DETAILS_BYTES;
-}
-
-function isValidMiddlewareToolResult(value: unknown): value is OpenClawAgentToolResult {
-  if (!isRecord(value) || !Array.isArray(value.content)) {
-    return false;
-  }
-  if (value.content.length > MAX_MIDDLEWARE_CONTENT_BLOCKS) {
-    return false;
-  }
-  return (
-    value.content.every(isValidMiddlewareContentBlock) && isValidMiddlewareDetails(value.details)
-  );
-}
-
-function descendMiddlewareContentCoerceState(
-  value: object,
-  state: MiddlewareContentCoerceState,
-): MiddlewareContentCoerceState | undefined {
-  if (state.depth >= MAX_MIDDLEWARE_CONTENT_DEPTH) {
-    return undefined;
-  }
-  return state.seen.has(value)
-    ? undefined
-    : { depth: state.depth + 1, seen: new Set([...state.seen, value]) };
-}
 
 function serializeMiddlewareValue(value: unknown): string | undefined {
   const seen = new WeakSet<object>();
@@ -131,32 +44,24 @@ function serializeMiddlewareValue(value: unknown): string | undefined {
   }
 }
 
-function coerceMiddlewareText(
-  value: unknown,
-  state: MiddlewareContentCoerceState,
-  sanitize = false,
-): string | undefined {
+function coerceMiddlewareText(value: unknown, depth: number): string | undefined {
   if (typeof value === "string") {
     return value;
   }
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
     return String(value);
   }
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const nextState = descendMiddlewareContentCoerceState(value, state);
-  if (!nextState) {
+  if (!isRecord(value) || depth >= MAX_MIDDLEWARE_CONTENT_DEPTH) {
     return undefined;
   }
   for (const key of ["text", "output", "result", "message"]) {
-    const text = coerceMiddlewareText(value[key], nextState, sanitize);
+    const text = coerceMiddlewareText(value[key], depth + 1);
     if (text !== undefined) {
       return text;
     }
   }
   if (Array.isArray(value.content)) {
-    const text = coerceMiddlewareContentArray(value.content, nextState, sanitize)
+    const text = coerceMiddlewareContentArray(value.content, depth + 1)
       .flatMap((block) => (block.type === "text" && block.text ? [block.text] : []))
       .join("\n");
     return text || undefined;
@@ -194,8 +99,7 @@ function appendMiddlewareContentBlock(
 
 function coerceMiddlewareContentArray(
   content: unknown[],
-  state: MiddlewareContentCoerceState,
-  sanitize = false,
+  depth: number,
   level: "result" | "nested" = "nested",
 ): MiddlewareContentBlock[] {
   const blocks: MiddlewareContentBlock[] = [];
@@ -203,12 +107,12 @@ function coerceMiddlewareContentArray(
     if (blocks.length >= MAX_MIDDLEWARE_CONTENT_BLOCKS) {
       break;
     }
-    const coerced = coerceMiddlewareContentBlocks(entry, state, sanitize);
+    const coerced = coerceMiddlewareContentBlocks(entry, depth);
     if (level === "result") {
       blocks.push(...coerced.slice(0, MAX_MIDDLEWARE_CONTENT_BLOCKS - blocks.length));
       continue;
     }
-    const text = coerced.length === 0 ? coerceMiddlewareText(entry, state, sanitize) : undefined;
+    const text = coerced.length === 0 ? coerceMiddlewareText(entry, depth) : undefined;
     for (const block of text
       ? [{ type: "text" as const, text: truncateUtf16Safe(text, MAX_MIDDLEWARE_TEXT_CHARS) }]
       : coerced) {
@@ -218,22 +122,21 @@ function coerceMiddlewareContentArray(
   return blocks;
 }
 
-function coerceMiddlewareContentBlocks(
-  value: unknown,
-  state: MiddlewareContentCoerceState,
-  sanitize = false,
-): MiddlewareContentBlock[] {
-  if (isValidMiddlewareContentBlock(value)) {
-    return [value as MiddlewareContentBlock];
-  }
-  // Tool emitters can produce legitimate transcript text larger than the
-  // middleware cap. Normalize that only before the first handler; handlers
-  // remain fail-closed if they return an oversized replacement.
-  if (sanitize && isRecord(value) && value.type === "text" && typeof value.text === "string") {
-    return [{ type: "text", text: truncateUtf16Safe(value.text, MAX_MIDDLEWARE_TEXT_CHARS) }];
-  }
+function coerceMiddlewareContentBlocks(value: unknown, depth: number): MiddlewareContentBlock[] {
   if (!isRecord(value) || typeof value.type !== "string") {
     return [];
+  }
+  if (value.type === "text" && typeof value.text === "string") {
+    return [
+      { ...value, type: "text", text: truncateUtf16Safe(value.text, MAX_MIDDLEWARE_TEXT_CHARS) },
+    ];
+  }
+  if (
+    value.type === "image" &&
+    typeof value.data === "string" &&
+    typeof value.mimeType === "string"
+  ) {
+    return [{ ...value, type: "image", data: value.data, mimeType: value.mimeType }];
   }
   const normalizedType = value.type.toLowerCase();
   if (!NESTED_TOOL_RESULT_BLOCK_TYPES.has(normalizedType)) {
@@ -241,11 +144,11 @@ function coerceMiddlewareContentBlocks(
   }
   const content = value.content;
   if (Array.isArray(content) && content.length > 0) {
-    const nextState = descendMiddlewareContentCoerceState(value, state);
-    return nextState ? coerceMiddlewareContentArray(content, nextState, sanitize) : [];
+    return depth < MAX_MIDDLEWARE_CONTENT_DEPTH
+      ? coerceMiddlewareContentArray(content, depth + 1)
+      : [];
   }
-  const text =
-    coerceMiddlewareText(content, state, sanitize) ?? coerceMiddlewareText(value, state, sanitize);
+  const text = coerceMiddlewareText(content, depth) ?? coerceMiddlewareText(value, depth);
   if (!text) {
     return [];
   }
@@ -257,69 +160,24 @@ function coerceMiddlewareContentBlocks(
   ];
 }
 
-function coerceMiddlewareToolResult(
-  value: unknown,
-  sanitize = false,
-): OpenClawAgentToolResult | undefined {
-  if (isValidMiddlewareToolResult(value)) {
+/** Older native runtimes wrap content in toolResult blocks (issue #82912). */
+function normalizeNativeToolResult(value: OpenClawAgentToolResult): OpenClawAgentToolResult {
+  if (
+    !Array.isArray(value.content) ||
+    !value.content.some(
+      (block) =>
+        isRecord(block) &&
+        typeof block.type === "string" &&
+        NESTED_TOOL_RESULT_BLOCK_TYPES.has(block.type.toLowerCase()),
+    )
+  ) {
     return value;
   }
-  if (!isRecord(value) || !Array.isArray(value.content)) {
-    return undefined;
-  }
-  const state: MiddlewareContentCoerceState = { depth: 0, seen: new Set() };
-  const content = coerceMiddlewareContentArray(value.content, state, sanitize, "result");
+  const content = coerceMiddlewareContentArray(value.content, 0, "result");
   if (content.length === 0) {
-    return undefined;
+    throw new Error("Native tool result contains no usable content");
   }
-  const details = isValidMiddlewareDetails(value.details)
-    ? value.details
-    : sanitize
-      ? sanitizeMiddlewareDetailsValue(value.details)
-      : undefined;
-  if (details === undefined && !isValidMiddlewareDetails(value.details)) {
-    return undefined;
-  }
-  const result = {
-    ...value,
-    content,
-    details,
-  };
-  return isValidMiddlewareToolResult(result) ? result : undefined;
-}
-
-// Normalize incoming details to satisfy the validator's byte and shape limits.
-function sanitizeMiddlewareDetailsValue(value: unknown): unknown {
-  const serialized = serializeMiddlewareValue(value);
-  if (serialized === undefined) {
-    return null;
-  }
-  const bytes = Buffer.byteLength(serialized, "utf8");
-  if (bytes <= MAX_MIDDLEWARE_DETAILS_BYTES) {
-    const parsed = JSON.parse(serialized);
-    if (hasValidMiddlewareDetailsShape(parsed)) {
-      return parsed;
-    }
-  }
-  return { truncated: true, originalSizeBytes: bytes };
-}
-
-/**
- * Coerce an incoming tool result into a shape the validator will accept,
- * before any middleware runs. Tool emitters legitimately produce raw
- * dependency payloads on `details` (channel SDK objects with methods, exec
- * traces with cycles back to the runner, large attachment metadata). The
- * harness owes a registered middleware a JSON-safe view of that payload;
- * subsequent middleware-side mutations are still validated strictly.
- */
-function sanitizeToolResultForMiddleware(result: OpenClawAgentToolResult): OpenClawAgentToolResult {
-  const coerced = coerceMiddlewareToolResult(result, true);
-  if (coerced) {
-    return coerced;
-  }
-  return result.details == null || isValidMiddlewareDetails(result.details)
-    ? result
-    : { ...result, details: sanitizeMiddlewareDetailsValue(result.details) };
+  return { ...value, content };
 }
 
 function buildMiddlewareFailureResult(): OpenClawAgentToolResult {
@@ -379,27 +237,6 @@ function reconcileDeliveredMessagingFailure(
     : result;
 }
 
-/**
- * A run resolves middleware once. When a handler's own plugin was retired and is
- * gone from its Gateway's current registry, its post-processing no longer applies. The runner
- * checks this before choosing a path and again before each call, so a skipped
- * plugin never runs and cannot have touched the result.
- */
-function isRemovedPluginMiddleware(handler: AgentToolResultMiddleware): boolean {
-  const instance = getPluginValueInstance(handler);
-  if (!instance?.owner || (!instance.disposing && instance.acceptingCalls)) {
-    return false;
-  }
-  // Decide against the plugin's own Gateway; without that owner a stale handler fails closed.
-  const successor = getPluginInstanceGatewayOwner(instance.owner)?.current();
-  return (
-    successor !== undefined &&
-    !successor.plugins.some(
-      (record) => record.id === instance.pluginId && record.enabled && record.status === "loaded",
-    )
-  );
-}
-
 export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
@@ -415,20 +252,11 @@ export function createAgentToolResultMiddlewareRunner(
     async applyToolResultMiddleware(
       event: AgentToolResultMiddlewareEvent,
     ): Promise<OpenClawAgentToolResult> {
-      // Drop removed plugins' handlers before choosing a path, so a run whose
-      // only middleware was removed keeps the untouched no-middleware result.
-      const handlersForRun = (await (handlers ?? resolvedHandlersLoader.load())).filter(
-        (handler) => !isRemovedPluginMiddleware(handler),
-      );
-      // Fast path: with no middleware registered the result is delivered
-      // unchanged; skip validation entirely so tool emitters that produce
-      // dependency payloads on `details` (SDK objects with methods, cycles)
-      // are not penalized for behavior the validator was added to police.
+      const handlersForRun = await (handlers ?? resolvedHandlersLoader.load());
       if (handlersForRun.length === 0) {
         return event.result;
       }
-      // Snapshot the confirmed side effect before legacy middleware can mutate
-      // or sanitization can collapse the receipt; never expose the raw result.
+      // Retain confirmed delivery before middleware can change its presentation.
       const deliveredMessagingFallback = buildDeliveredMessagingFailureFallback(
         event,
         event.result,
@@ -440,29 +268,18 @@ export function createAgentToolResultMiddlewareRunner(
           deliveredMessagingFallback,
         );
       };
-      let current = sanitizeToolResultForMiddleware(event.result);
-      for (const handler of handlersForRun) {
-        // An earlier handler can await while a later handler's plugin is removed.
-        if (isRemovedPluginMiddleware(handler)) {
-          continue;
-        }
-        try {
+      try {
+        // Loaded middleware follows the SDK's by-reference value contract;
+        // only the legacy native content wrapper needs adaptation here.
+        let current = normalizeNativeToolResult(event.result);
+        for (const handler of handlersForRun) {
           const next = await handler({ ...event, result: current }, ctx);
-          // Middleware may mutate event.result in place for legacy runtime parity.
-          // Validate the current object after every handler so in-place writes
-          // cannot bypass the same shape and size bounds as returned results.
-          const candidate = next?.result ?? current;
-          const coercedCandidate = coerceMiddlewareToolResult(candidate);
-          if (coercedCandidate) {
-            current = coercedCandidate;
-          } else {
-            return fail("discarded invalid tool result middleware output");
-          }
-        } catch {
-          return fail("tool result middleware failed");
+          current = normalizeNativeToolResult(next?.result ?? current);
         }
+        return reconcileDeliveredMessagingFailure(current, deliveredMessagingFallback);
+      } catch {
+        return fail("tool result middleware failed");
       }
-      return reconcileDeliveredMessagingFailure(current, deliveredMessagingFallback);
     },
   };
 }

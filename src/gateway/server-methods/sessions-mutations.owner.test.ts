@@ -17,12 +17,14 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { dispatchGatewayMethodInProcess } from "../server-plugins.js";
 import { isSessionPermissionChangePending } from "../session-permission-change.js";
@@ -162,22 +164,18 @@ describe("sessions.patch", () => {
       const requestContext = context({});
       let revoked = false;
       let reachedCommitAdmission = false;
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (
-              request.stage === "commit" &&
-              isRecord(request.facts) &&
-              isRecord(request.facts.publication) &&
-              request.facts.publication.kind === "session-entry-replacements"
-            ) {
-              reachedCommitAdmission = true;
-              revoked = true;
-            }
-            admit(request, grant);
-          }, attachment),
-      );
+      probe.admission(workerAdmission, (request, grant, admit) => {
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          isRecord(request.facts.publication) &&
+          request.facts.publication.kind === "session-entry-replacements"
+        ) {
+          reachedCommitAdmission = true;
+          revoked = true;
+        }
+        admit(request, grant);
+      });
       const tool = createDashboardTool({ agentSessionKey: sessionKey, agentId: "main" });
       await expect(
         withGatewayToolCallerIdentity(
@@ -451,7 +449,7 @@ describe("sessions.patch", () => {
             updatedAt: 1,
             permissionMode: "guarded",
             ...(restore ? { archivedAt: 1 } : {}),
-            ...(index === 1 ? { thinkingLevel: "off" } : {}),
+            ...(index === 1 ? { contextWindow: "extended" } : {}),
           });
         }
         const cfg: OpenClawConfig = {};
@@ -574,6 +572,7 @@ describe("sessions.patch", () => {
   it("keeps a newly created session visible to its identified non-admin creator", async () => {
     await withSessionMutationState(async (state) => {
       const profileId = ensureProfileForEmail(`patch-creator-${caseNumber}@example.test`).id;
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const sessionKey = "agent:main:patch-created";
       const requestClient = client(profileId);
       const cfg: OpenClawConfig = {

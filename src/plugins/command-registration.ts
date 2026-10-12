@@ -274,23 +274,12 @@ function normalizeAgentPromptGuidance(
 }
 
 function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
-  const keys = new Set<string>();
-  const push = (value: string | undefined) => {
-    const normalized = normalizeOptionalLowercaseString(value);
-    if (!normalized) {
-      return;
-    }
-    keys.add(`/${normalized}`);
-  };
-
-  push(command.name);
-  for (const alias of Object.values(command.nativeNames ?? {})) {
-    if (typeof alias === "string") {
-      push(alias);
-    }
-  }
-
-  return [...keys];
+  const names = [command.name, ...Object.values(command.nativeNames ?? {})];
+  const keys = names.flatMap((name) => {
+    const normalized = normalizeOptionalLowercaseString(name);
+    return normalized ? [`/${normalized}`] : [];
+  });
+  return [...new Set(keys)];
 }
 
 export function registerPluginCommand(

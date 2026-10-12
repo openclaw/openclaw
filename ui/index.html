@@ -453,7 +453,7 @@
         var recoveryTimer;
         var recoveryAttempt = 0;
         var recoveryNavigation = false;
-        var appStarted = false;
+        var bootSettled = false;
         var documentLoaded = document.readyState === "complete";
         var recoveryController;
 
@@ -494,14 +494,14 @@
 
         function scheduleRecovery() {
           window.clearTimeout(recoveryTimer);
-          if (appStarted || recoveryAttempt >= maxRecoveryAttempts) return;
+          if (bootSettled || recoveryAttempt >= maxRecoveryAttempts) return;
           var retryDelay = Math.min(delay, 1000 * Math.pow(2, recoveryAttempt));
           recoveryTimer = window.setTimeout(retryCurrentDocument, retryDelay);
         }
 
         function finishRecoveryAttempt() {
           recoveryController = undefined;
-          if (appStarted) return;
+          if (bootSettled) return;
           if (recoveryAttempt >= maxRecoveryAttempts) {
             setSummary(
               "The gateway is still unavailable. Try again, then check the troubleshooting guide if the problem persists.",
@@ -532,7 +532,7 @@
 
         function retryCurrentDocument() {
           if (
-            appStarted ||
+            bootSettled ||
             recoveryController ||
             recoveryAttempt >= maxRecoveryAttempts ||
             typeof window.fetch !== "function"
@@ -560,7 +560,7 @@
             })
             .then(function (response) {
               if (!response.ok) throw new Error("gateway unavailable");
-              if (!appStarted && recoveryController === controller)
+              if (!bootSettled && recoveryController === controller)
                 window.location.replace(documentUrl.href);
             })
             .catch(function () {
@@ -574,7 +574,7 @@
         }
 
         function showFallback() {
-          if (appStarted) return;
+          if (bootSettled) return;
           title.textContent = documentLoaded
             ? "Control UI did not start"
             : "Control UI is still loading";
@@ -614,13 +614,32 @@
           { once: true },
         );
 
+        function retireMountRecovery() {
+          bootSettled = true;
+          window.clearTimeout(timer);
+          cancelRecovery();
+          hideFallback();
+        }
+
+        window.addEventListener("openclaw-control-ui-rendered", retireMountRecovery, {
+          once: true,
+        });
+        // Admission rejection is terminal even while its fallback assets are still loading.
+        window.addEventListener("openclaw-control-ui-unsupported-browser", retireMountRecovery, {
+          once: true,
+        });
+
         window.addEventListener(
-          "openclaw-control-ui-rendered",
+          "openclaw-control-ui-unsupported-browser-failed",
           function () {
-            appStarted = true;
-            window.clearTimeout(timer);
-            cancelRecovery();
-            hideFallback();
+            title.textContent = "Browser guidance could not load";
+            setSummary("Check your connection, then try again to load the browser requirements.");
+            fallback.querySelector("ul").hidden = true;
+            wait.hidden = true;
+            fallback.hidden = false;
+            document.body.replaceChildren(fallback);
+            document.body.classList.add("openclaw-mount-fallback-active");
+            retry.focus();
           },
           { once: true },
         );

@@ -76,12 +76,6 @@ describe("media-understanding missing provider errors", () => {
       /Media provider not available: groq .*openclaw plugins install .*@openclaw\/groq-provider.*openclaw plugins registry --refresh.*stop and start the gateway service.*openclaw doctor --fix/,
     );
   });
-
-  it("keeps the legacy error for providers without a media contract", async () => {
-    await expect(missingProvider("mystery-provider")).rejects.toThrow(
-      "Media provider not available: mystery-provider",
-    );
-  });
 });
 
 describe("media-understanding SecretRef owner isolation", () => {

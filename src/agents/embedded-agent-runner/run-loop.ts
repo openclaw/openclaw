@@ -315,8 +315,6 @@ export async function runPreparedEmbeddedLoop(
             sessionPromptState,
             terminalRetryState,
             replayState: accumulatedReplayState,
-            provider,
-            modelId,
             startupStagesEmitted,
             bootstrapPromptWarningSignaturesSeen,
             resolveRuntimeFallbackReason,
@@ -520,9 +518,7 @@ export async function runPreparedEmbeddedLoop(
       );
       const {
         attempt: terminalAttempt,
-        attemptAssistant: terminalAttemptAssistant,
         terminalState: resolvedTerminalState,
-        attemptCompactionCount: terminalAttemptCompactionCount,
         prepared: terminalPrepared,
         finalizationOutcome: settledTurnFinalizationOutcome,
       } = finalizedTerminal;
@@ -552,16 +548,12 @@ export async function runPreparedEmbeddedLoop(
         terminalAuthPlan.deferredRouteSupport?.requestTransportOverrides ??
         "none";
       const terminalResolution = await resolveEmbeddedRunTerminal({
-        prepared: terminalPrepared,
+        ...finalizedTerminal,
         runParams: params,
         retryState: terminalRetryState,
-        attempt: terminalAttempt,
-        attemptAssistant: terminalAttemptAssistant,
         activeErrorContext,
         modelApi: effectiveModel.api,
         executionContract,
-        terminalState: resolvedTerminalState,
-        attemptCompactionCount: terminalAttemptCompactionCount,
         replayState: accumulatedReplayState,
         sessionPromptState,
         armPostCompactionGuard: () => postCompactionGuard.armPostCompaction(),

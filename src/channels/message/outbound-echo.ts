@@ -27,13 +27,11 @@ function resolveIdentityKeys(identity: OutboundMessageIdentity): string[] {
   }
   const scope = [channel, normalizeAccountId(identity.accountId), conversationId];
   const keys: string[] = [];
-  const messageId = identity.messageId?.trim();
-  if (messageId) {
-    keys.push(JSON.stringify([...scope, "message", messageId]));
-  }
-  const sourceId = identity.sourceId?.trim();
-  if (sourceId) {
-    keys.push(JSON.stringify([...scope, "source", sourceId]));
+  for (const kind of ["message", "source"] as const) {
+    const id = identity[`${kind}Id`]?.trim();
+    if (id) {
+      keys.push(JSON.stringify([...scope, kind, id]));
+    }
   }
   return keys;
 }

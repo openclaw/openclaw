@@ -38,7 +38,9 @@ Status starts one monotonic check deadline when the command begins. Local readin
 
 When no matching Gateway service or live foreground owner exists and its port is
 free, status checks directly instead of waiting for a Gateway startup. Local-only
-agent environments therefore report an unavailable Gateway promptly. Observed startup
+agent environments therefore report an unavailable Gateway promptly. A listener positively
+identified as another process reports a port conflict with diagnostic guidance instead
+of waiting for the readiness budget. Unknown listener attribution keeps startup grace. Observed startup
 migrations retain startup grace across the handoff to Gateway ownership; unverifiable
 ownership also retains that grace. Lock and native process inspection consume the
 same remaining check allowance.

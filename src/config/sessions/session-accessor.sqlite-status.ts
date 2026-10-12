@@ -13,8 +13,10 @@ import {
 } from "./session-entry-json.js";
 import {
   attachSessionEntrySnapshots,
-  sessionEntrySnapshotColumnsForKeys,
   type SessionEntryProjection,
+} from "./session-entry-snapshot-values.js";
+import {
+  sessionEntrySnapshotColumnsForKeys,
   type SessionEntrySnapshotRow,
 } from "./session-entry-snapshots.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
@@ -49,7 +51,7 @@ export function selectSessionEntryRows(
     );
 }
 
-// Canonical writers settle entry_valid; raw writes clear it. Inventory readers need
+// Canonical writers persist validated entry identity. Inventory readers need
 // no payload for settled rows, but must retain parser semantics for pending/retained rows.
 export const sessionEntryInventoryJson =
   /* kysely-allow-raw: reuse the writer-owned validity projection without loading saved prompts. */ sql<

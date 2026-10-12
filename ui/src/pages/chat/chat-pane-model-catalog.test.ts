@@ -24,6 +24,8 @@ import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
+  applyChatModelCatalogSnapshot,
+  refreshChatMetadata,
   refreshChatModelCatalogOnDemand,
   refreshPageChat,
   retireChatMetadataRequests,
@@ -45,6 +47,85 @@ function composerControls(state: ChatPageHost) {
 
 describe("chat pane composer controls", () => {
   const cachedModels = [{ id: "cached-model", name: "Cached Model", provider: "openai" }];
+  it.each([
+    { entry: "direct", retained: false },
+    { entry: "direct", retained: true },
+    { entry: "automatic", retained: false },
+    { entry: "automatic", retained: true },
+  ])(
+    "rechecks a failed $entry catalog with retained models $retained",
+    async ({ entry, retained }) => {
+      const checking = createDeferred<ModelCatalogResult>();
+      const request = makeRequestMock({ "models.list": () => checking.promise });
+      const client = createTestGatewayClient(request);
+      const { state } = createRefreshChatPane(client);
+      state.sessionKey = "agent:main:main";
+      state.chatModelCatalogInitialized = false;
+      const container = document.createElement("div");
+      const draw = () => render(composerControls(state), container);
+      onTestFinished(() => {
+        checking.resolve({ models: [] });
+        retireChatMetadataRequests(state);
+      });
+      if (retained) {
+        const scope = { agentId: "main", sessionKey: state.sessionKey };
+        expect(
+          publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, {
+            models: cachedModels,
+          }),
+        ).toBe(true);
+        await refreshChatModelCatalogOnDemand(state);
+        invalidateModelCatalogCache(client, scope);
+      }
+      request.mockRejectedValueOnce(new Error("Previous runtime preparation failed"));
+      await refreshChatModelCatalogOnDemand(state);
+      expect(state.chatModelCatalogError).toContain("Previous runtime preparation failed");
+      expect(state.chatModelCatalog).toEqual(retained ? cachedModels : []);
+      const failureLabel = retained
+        ? "Some models could not be refreshed. Open Models to try again."
+        : "Models unavailable";
+      draw();
+      expect(container.textContent).toContain(failureLabel);
+
+      const refresh =
+        entry === "automatic"
+          ? refreshChatMetadata(state, { automatic: true })
+          : refreshChatModelCatalogOnDemand(state);
+      expect(applyChatModelCatalogSnapshot(state)).toBe(false);
+      draw();
+      expect(state.chatModelsLoading).toBe(true);
+      expect(container.querySelector('[data-chat-model-catalog-state="error"]')).toBeNull();
+      expect(container.querySelector(".btn__spinner")).not.toBeNull();
+      expect(container.textContent).not.toContain(failureLabel);
+      if (retained) {
+        expect(container.querySelector("[data-chat-model-refresh]")).not.toBeNull();
+        expect(container.textContent).toContain("Refreshing models…");
+        expect(
+          container.querySelector<HTMLButtonElement>("[data-chat-model-option]")?.disabled,
+        ).toBe(false);
+        expect(container.textContent).toContain("Cached Model");
+      } else {
+        expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).not.toBeNull();
+        expect(container.textContent).toContain("Loading models…");
+      }
+
+      checking.reject(new Error("Runtime preparation still failed"));
+      await refresh;
+      draw();
+      expect(container.querySelector('[data-chat-model-catalog-state="error"]')).not.toBeNull();
+      expect(container.textContent).toContain(failureLabel);
+      expect(container.querySelector(".btn__spinner")).toBeNull();
+      expect(container.textContent).not.toContain("Loading models…");
+      expect(state.chatModelCatalogError).toContain("Runtime preparation still failed");
+
+      request.mockResolvedValueOnce({ models: cachedModels });
+      await refreshChatModelCatalogOnDemand(state);
+      draw();
+      expect(container.textContent).toContain("Cached Model");
+      expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
+    },
+  );
+
   it.each<{ label: string; cachedCatalog?: ModelCatalogResult }>([
     {
       label: "warm restricted",

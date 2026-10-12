@@ -34,9 +34,10 @@ vi.mock("../plugins/update.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/update.js")>()),
   updateNpmInstalledPlugins: vi.fn(),
 }));
-const gateway = vi.hoisted(() => ({ online: false, call: vi.fn() }));
-vi.mock("./plugins-lifecycle-client.js", () => ({
-  resolvePluginLifecycleGateway: async () => (gateway.online ? gateway.call : null),
+const gateway = vi.hoisted(() => ({ call: vi.fn() }));
+vi.mock("./plugins-lifecycle-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugins-lifecycle-client.js")>()),
+  resolvePluginLifecycleGateway: async () => gateway.call,
 }));
 afterEach(() => vi.restoreAllMocks());
 
@@ -409,25 +410,7 @@ describe("installed plugin update config migration", () => {
           "write-failure",
           "revoked",
         ].includes(scenario);
-        gateway.online =
-          failure ||
-          acceptedFailure ||
-          pendingState ||
-          scenario === "unchanged" ||
-          scenario === "partial-update";
-        gateway.call.mockReset().mockImplementation(async (method: string) => {
-          if (method === "plugins.refresh") {
-            const current = JSON.parse(fs.readFileSync(state.configPath, "utf8"));
-            expect(current.plugins.entries[pluginId].config).toEqual({
-              listener: { port: 57597 },
-              label: "kept",
-            });
-            expect(readDeferredPluginMigrations({ env: state.env })).toEqual(
-              retainsOther ? [unrelated] : [],
-            );
-          }
-          return { runtime: { generation: 1 } };
-        });
+        gateway.call.mockReset();
         if (scenario === "write-failure") {
           vi.spyOn(configIo, "replaceConfigFile").mockRejectedValueOnce(
             new Error("fixture publication refused"),
@@ -638,9 +621,7 @@ describe("installed plugin update config migration", () => {
           );
           expect(payload.commit).toHaveBeenCalledTimes(1);
           expect(payload.rollback).not.toHaveBeenCalled();
-          expect(gateway.call.mock.calls.map(([method]) => method)).toEqual(
-            installScenario ? [] : ["plugins.list"],
-          );
+          expect(gateway.call).not.toHaveBeenCalled();
           expect(log).not.toHaveBeenCalledWith(
             "Updates saved; they will load on the next Gateway start.",
           );
@@ -695,7 +676,7 @@ describe("installed plugin update config migration", () => {
               ? nextRecords
               : previousRecords,
           );
-          expect(gateway.call.mock.calls.map(([method]) => method)).toEqual(["plugins.list"]);
+          expect(gateway.call).not.toHaveBeenCalled();
           expect(log).not.toHaveBeenCalledWith(
             "Updates saved; they will load on the next Gateway start.",
           );
@@ -706,6 +687,7 @@ describe("installed plugin update config migration", () => {
         } else {
           await command;
         }
+        expect(gateway.call).not.toHaveBeenCalled();
         const saved = JSON.parse(fs.readFileSync(state.configPath, "utf8"));
         if (scenario === "unrelated-core-legacy") {
           expect(saved.memory).toEqual({ search: { provider: "auto" } });
@@ -745,9 +727,7 @@ describe("installed plugin update config migration", () => {
         }
         if (pendingState) {
           expect(applyRuntime).not.toHaveBeenCalled();
-          expect(gateway.call.mock.calls.map(([method]) => method)).toEqual(
-            installScenario ? [] : ["plugins.list"],
-          );
+          expect(gateway.call).not.toHaveBeenCalled();
           expect(log.mock.calls.flat().join("\n")).toContain("openclaw doctor --fix");
           expect(fs.existsSync(previousPath)).toBe(true);
         } else if (settled) {
@@ -755,11 +735,6 @@ describe("installed plugin update config migration", () => {
           expect(log).not.toHaveBeenCalledWith(
             "Updates saved; they will load on the next Gateway start.",
           );
-        } else if (scenario === "unchanged" || scenario === "partial-update") {
-          expect(gateway.call.mock.calls.map(([method]) => method)).toEqual([
-            "plugins.list",
-            "plugins.refresh",
-          ]);
         } else if (scenario !== "install-replacement" && scenario !== "disabled-install") {
           expect(log).toHaveBeenCalledWith(
             "Updates saved; they will load on the next Gateway start.",

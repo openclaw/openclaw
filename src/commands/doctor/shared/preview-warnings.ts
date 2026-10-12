@@ -16,8 +16,8 @@ import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ToolPolicyConfig } from "../../../config/types.tools.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "../../../plugins/official-runtime-plugins.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
-import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./configured-runtime-plugin-installs.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
 import {
   collectUnavailableSourceReplyTargets,
@@ -40,7 +40,7 @@ function hasSubagentAllowlistConfig(cfg: OpenClawConfig): boolean {
     return true;
   }
   return listAgentRecords(cfg).some((agent) => {
-    const subagents = hasRecord(agent.subagents) ? agent.subagents : undefined;
+    const subagents = asOptionalRecord(agent.subagents);
     return Array.isArray(subagents?.allowAgents);
   });
 }
@@ -128,16 +128,11 @@ function collectConfiguredToolSectionGrantEntries(params: {
   tools?: Record<string, unknown> | null;
   pathLabel: string;
 }): ConfiguredToolSectionGrantEntry[] {
-  const entries: ConfiguredToolSectionGrantEntry[] = [];
-  for (const section of PROFILE_CONFIGURED_TOOL_SECTIONS) {
-    if (hasRecord(params.tools?.[section.key])) {
-      entries.push({
-        label: `${params.pathLabel}.${section.key}`,
-        grants: [...section.grants],
-      });
-    }
-  }
-  return entries;
+  return PROFILE_CONFIGURED_TOOL_SECTIONS.flatMap((section) =>
+    hasRecord(params.tools?.[section.key])
+      ? [{ label: `${params.pathLabel}.${section.key}`, grants: [...section.grants] }]
+      : [],
+  );
 }
 
 function readPreviewStringList(value: unknown): string[] | undefined {
@@ -229,15 +224,13 @@ function collectByProviderConfiguredToolSectionWarnings(params: {
   pathLabel: string;
   configuredEntries: ConfiguredToolSectionGrantEntry[];
 }): string[] {
-  const byProvider = hasRecord(params.tools?.byProvider) ? params.tools.byProvider : undefined;
+  const byProvider = asOptionalRecord(params.tools?.byProvider);
   if (!byProvider || params.configuredEntries.length === 0) {
     return [];
   }
-  const inheritedByProvider = hasRecord(params.inheritedTools?.byProvider)
-    ? params.inheritedTools.byProvider
-    : undefined;
+  const inheritedByProvider = asOptionalRecord(params.inheritedTools?.byProvider);
   return Object.entries(byProvider).flatMap(([providerKey, policyValue]) => {
-    const policy = hasRecord(policyValue) ? policyValue : undefined;
+    const policy = asOptionalRecord(policyValue);
     const profile = policy?.profile;
     if (typeof profile !== "string" || !profile) {
       return [];
@@ -284,15 +277,11 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
   modelProvider?: string;
   modelId?: string;
 }): string[] {
-  const inheritedByProvider = hasRecord(params.inheritedTools?.byProvider)
-    ? params.inheritedTools.byProvider
-    : undefined;
+  const inheritedByProvider = asOptionalRecord(params.inheritedTools?.byProvider);
   if (!inheritedByProvider || params.configuredEntries.length === 0) {
     return [];
   }
-  const overridingByProvider = hasRecord(params.overridingTools?.byProvider)
-    ? params.overridingTools.byProvider
-    : undefined;
+  const overridingByProvider = asOptionalRecord(params.overridingTools?.byProvider);
   const inheritedEntryForModel = resolveProviderToolPolicyEntry({
     byProvider: inheritedByProvider,
     modelProvider: params.modelProvider,
@@ -302,7 +291,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
     if (params.modelProvider && inheritedEntryForModel?.key !== providerKey) {
       return [];
     }
-    const inheritedPolicy = hasRecord(policyValue) ? policyValue : undefined;
+    const inheritedPolicy = asOptionalRecord(policyValue);
     const profile = inheritedPolicy?.profile;
     if (typeof profile !== "string" || !profile) {
       return [];
@@ -334,7 +323,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
 
 function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
-  const globalTools = hasRecord(cfg.tools) ? cfg.tools : undefined;
+  const globalTools = asOptionalRecord(cfg.tools);
   const globalConfiguredEntries = collectConfiguredToolSectionGrantEntries({
     tools: globalTools,
     pathLabel: "tools",
@@ -353,7 +342,7 @@ function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): strin
   );
 
   for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
-    const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
+    const agentTools = asOptionalRecord(agent.tools);
     const agentId = typeof agent.id === "string" ? agent.id : undefined;
     const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
     const modelRef = resolveDoctorPrimaryModelRef(cfg, agentConfig?.model);

@@ -12,6 +12,7 @@ import {
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import { scopePreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   loadPublishedGatewayReplyDispatchRuntime,
@@ -261,6 +262,7 @@ export async function prepareAgentRunDispatch(
     cwd: params.sessionEntry?.spawnedCwd,
   });
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
+  let dispatchRuntimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
   let capturedOperator: Awaited<ReturnType<typeof retainGatewayOperatorRun>> | undefined;
   let followupCompletion: FollowupCompletionOwner | undefined;
   let adoptedParentResume: SubagentRunRecord | undefined;
@@ -372,41 +374,52 @@ export async function prepareAgentRunDispatch(
     const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
       agentId: params.activeSessionAgentId,
       abortSignal: activeRunAbort.controller.signal,
+      onRuntimeLease: (lease) => {
+        dispatchRuntimeLease = scopePreparedModelRuntimeLease(lease);
+        preparedModelRuntimeLease = dispatchRuntimeLease;
+      },
     });
     const publishedAdmission = revalidateAdmission();
     if (publishedAdmission !== true) {
       return publishedAdmission;
     }
-    if (!publishedRuntime) {
+    const runtimeLease = dispatchRuntimeLease;
+    if (!publishedRuntime || !runtimeLease) {
       throw new Error(`published reply runtime missing for ${params.activeSessionAgentId}`);
     }
     replyDispatchRuntime = publishedRuntime;
     const acquireRuntime = (workspaceDir: string | undefined) =>
-      acquireAgentRunPreparedModelRuntime(
-        {
-          config: replyDispatchRuntime.config,
-          agentId: replyDispatchRuntime.agentId,
-          agentDir: replyDispatchRuntime.agentDir,
-          allowGatewaySubagentBinding: true,
-          workspaceDir: workspaceDir ?? replyDispatchRuntime.workspaceDir,
-          runtimePluginSelections: [
-            {
-              provider: resolvedRuntime.provider,
-              modelId: resolvedRuntime.model,
-              runtime: resolvedRuntime.harness,
-            },
-          ],
-        },
-        {
-          catalogMode: "static",
-          pluginGeneration: replyDispatchRuntime.pluginGeneration,
-          abortSignal: activeRunAbort.controller.signal,
-        },
+      runtimeLease.run(() =>
+        acquireAgentRunPreparedModelRuntime(
+          {
+            config: replyDispatchRuntime.config,
+            agentId: replyDispatchRuntime.agentId,
+            agentDir: replyDispatchRuntime.agentDir,
+            allowGatewaySubagentBinding: true,
+            workspaceDir: workspaceDir ?? replyDispatchRuntime.workspaceDir,
+            runtimePluginSelections: [
+              {
+                provider: resolvedRuntime.provider,
+                modelId: resolvedRuntime.model,
+                runtime: resolvedRuntime.harness,
+              },
+            ],
+          },
+          {
+            catalogMode: "static",
+            pluginGeneration: replyDispatchRuntime.pluginGeneration,
+            abortSignal: activeRunAbort.controller.signal,
+          },
+        ),
       );
     if (canPrepareAgentSessionWorktree(params.resolvedSessionKey, params.sessionEntry)) {
-      preparedModelRuntime = { acquireWorkspaceModelRuntime: acquireRuntime };
+      preparedModelRuntime = {
+        preparedModelRuntimeLease: runtimeLease,
+        acquireWorkspaceModelRuntime: acquireRuntime,
+      };
     } else {
       preparedModelRuntimeLease = await acquireRuntime(workspaceOverride);
+      await runtimeLease[Symbol.asyncDispose]();
       preparedModelRuntime = { preparedModelRuntimeLease };
       const runtimeAdmission = revalidateAdmission();
       if (runtimeAdmission !== true) {

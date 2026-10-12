@@ -15,10 +15,6 @@ import {
   type IncognitoProjectionBinding,
 } from "./session-incognito-projection.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
-import {
-  captureSessionTranscriptReconcileGeneration,
-  isSessionTranscriptReconcileGenerationCurrent,
-} from "./session-transcript-reconcile-pool.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 export type SessionTranscriptReconcileParams = OpenClawAgentDatabaseOptions & {
@@ -29,7 +25,6 @@ export type SessionTranscriptReconcileParams = OpenClawAgentDatabaseOptions & {
 
 export type PreparedReconcileParams = SessionTranscriptReconcileParams & {
   env: NodeJS.ProcessEnv;
-  generation: number;
   incognito?: IncognitoProjectionBinding;
 };
 export function prepareReconcileParams(
@@ -55,7 +50,6 @@ export function prepareReconcileParams(
     path,
     agentId: params.agentId ?? incognito?.actor.agentId,
     env: { ...(params.env ?? process.env) },
-    generation: captureSessionTranscriptReconcileGeneration(),
     incognito: incognito && { ...incognito, target: structuredClone(incognito.target) },
   };
 }
@@ -94,9 +88,8 @@ export async function readSessionTranscriptProjectionStatus(
     });
     if (closing) {
       await racePromiseWithAbortSignal(closing, abortSignal);
-      if (!isSessionTranscriptReconcileGenerationCurrent(databaseOptions.generation)) {
-        return false;
-      }
+      // A probe in the retiring lifetime must not reopen resources after close.
+      return false;
     }
     const execution = captureOpenClawAgentDatabaseExecution(databaseOptions);
     try {

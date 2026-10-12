@@ -5,13 +5,17 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
-import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { loadExecApprovalsReadOnlyAsync } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
-  getSessionEntry,
+  captureSessionEntryCurrentCheckAsync,
+  composeSessionEntryCommitGuards,
+} from "openclaw/plugin-sdk/session-binding-runtime";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
+import {
+  getSessionEntryByIdAsync,
   resolveStorePath,
-  resolveTranscriptSessionKeyBySessionId,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server/app-server-policy.js";
 import { closeCodexStartupClientBestEffort } from "./app-server/attempt-client-cleanup.js";
 import {
@@ -34,6 +38,7 @@ import {
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexAppServerRuntimeOptions,
 } from "./app-server/config.js";
+import { resolveCodexNativeExecutionPolicy } from "./app-server/native-execution-policy.js";
 import {
   buildDisabledAppsConfigPatch,
   mergeCodexThreadConfigs,
@@ -46,6 +51,7 @@ import type {
   CodexThreadStartParams,
   CodexThreadStartResponse,
 } from "./app-server/protocol.js";
+import { resolveCodexNativeExecutionBlock } from "./app-server/sandbox-guard.js";
 import {
   assertCodexBindingMayBeReplaced,
   sessionBindingIdentity,
@@ -59,9 +65,8 @@ import {
 } from "./app-server/session-permission-policy.js";
 import {
   getLeasedSharedCodexAppServerClient,
-  retainSharedCodexAppServerClientByInstanceId,
   releaseCodexAppServerClientLease,
-  withLeasedCodexAppServerClientStartSelectionRetry,
+  withCodexAppServerClientRequestScope,
   type CodexAppServerClientLease,
   type CodexAppServerClientOptions,
   type CodexAppServerLeasedRequestOptions,
@@ -78,11 +83,11 @@ import {
   withExclusiveCodexAppServerThread,
 } from "./app-server/thread-ownership.js";
 import { resumeCodexAppServerThread } from "./app-server/thread-resume.js";
-import { projectBoundedCodexVisibleSessionHistory } from "./app-server/transcript-history-projection.js";
 import {
   resolveCodexDefaultWorkspaceDir,
   type CodexAppServerConversationBindingData,
 } from "./conversation-binding-data.js";
+import { projectConversationSourceHistory } from "./conversation-binding-history.js";
 import {
   buildCodexConversationAgentLookup,
   resolveThreadRequestModelProvider,
@@ -98,14 +103,12 @@ export async function resolveConversationAppServerRuntime(params: {
   agentId?: string;
   agentDir?: string;
   sessionKey?: string;
+  storePath?: string;
   source?: CodexAppServerConversationBindingData["source"];
   workspaceDir: string;
   modelProvider?: string;
   model?: string;
-}): Promise<{
-  runtime: ReturnType<typeof resolveCodexAppServerRuntimeOptions>;
-  workspaceDir: string;
-}> {
+}) {
   const source = params.source;
   const agentId =
     source?.agentId ??
@@ -116,27 +119,61 @@ export async function resolveConversationAppServerRuntime(params: {
       : undefined);
   const storePath =
     agentId && (source || params.sessionKey)
-      ? resolveStorePath(params.config?.session?.store, { agentId })
+      ? (source?.storePath ??
+        params.storePath ??
+        resolveStorePath(params.config?.session?.store, { agentId }))
       : undefined;
-  const sessionKey = source
-    ? (source.sessionKey ??
-      (storePath
-        ? resolveTranscriptSessionKeyBySessionId({
-            agentId: source.agentId,
-            sessionId: source.sessionId,
-            storePath,
-          })
-        : undefined))
-    : params.sessionKey;
-  const storedEntry =
-    sessionKey && storePath
-      ? getSessionEntry({ agentId, storePath, sessionKey, readConsistency: "latest" })
+  const selectedById =
+    source && !source.sessionKey && storePath
+      ? await getSessionEntryByIdAsync({
+          agentId: source.agentId,
+          sessionId: source.sessionId,
+          storePath,
+        })
       : undefined;
+  const sessionKey = source ? (source.sessionKey ?? selectedById?.sessionKey) : params.sessionKey;
+  const ownsSession = source || (parseAgentSessionKey(sessionKey)?.agentId ?? agentId) === agentId;
+  const current =
+    sessionKey && storePath && agentId && ownsSession
+      ? await captureSessionEntryCurrentCheckAsync({
+          agentId,
+          storePath,
+          sessionKey,
+          fields: [
+            "permissionMode",
+            "sessionRoot",
+            "execHost",
+            "execNode",
+            "sandbox",
+            "sandboxMode",
+            "incognito",
+          ],
+          ...(selectedById ? { expected: selectedById.entry } : {}),
+        })
+      : undefined;
+  const storedEntry = current?.entry;
   const entry = !source || storedEntry?.sessionId === source.sessionId ? storedEntry : undefined;
   if (source && !entry) {
     throw new Error(
       "Codex conversation source session is missing or no longer current; rebind this conversation before retrying.",
     );
+  }
+  const block = resolveCodexNativeExecutionBlock({
+    config: params.config,
+    agentId,
+    sessionKey,
+    storePath,
+    executionPolicy: resolveCodexNativeExecutionPolicy({
+      config: params.config,
+      agentId,
+      sessionKey,
+      sessionEntry: entry,
+      readRuntimeSessionEntry: false,
+    }),
+    surface: "conversation binding",
+  });
+  if (block) {
+    throw new Error(block);
   }
   const permissionMode = entry?.permissionMode;
   const sessionRoot = permissionMode ? entry?.sessionRoot : undefined;
@@ -153,7 +190,7 @@ export async function resolveConversationAppServerRuntime(params: {
     execOverrides: permissionMode
       ? { mode: CODEX_SESSION_PERMISSION_EXEC_MODES[permissionMode] }
       : undefined,
-    approvals: permissionMode === "full" ? undefined : loadExecApprovals(),
+    approvals: permissionMode === "full" ? undefined : await loadExecApprovalsReadOnlyAsync(),
   });
   const sandboxForPolicy =
     execPolicy.touched && execPolicy.security === "full" && execPolicy.ask !== "off"
@@ -189,7 +226,15 @@ export async function resolveConversationAppServerRuntime(params: {
     requirementsToml: readCodexRequirementsToml({}),
     execMode: execPolicy.mode,
   });
+  const assertCurrent = current?.assertCurrent ?? (async () => {});
+  await assertCurrent();
   return {
+    assertCurrent,
+    source: current?.source,
+    incognito:
+      source || sessionKey
+        ? entry?.incognito === true || isIncognitoSessionKey(sessionKey)
+        : undefined,
     runtime: resolveCodexAppServerForModelProvider({
       appServer: runtime,
       provider: params.modelProvider,
@@ -225,36 +270,41 @@ type CodexThreadBindingRuntime = Awaited<ReturnType<typeof resolveThreadBindingR
 
 async function resolveThreadBindingRuntime(params: CodexThreadBindingParams) {
   const agentLookup = buildCodexConversationAgentLookup(params);
-  const modelProvider = resolveThreadRequestModelProvider({
+  const modelProvider = await resolveThreadRequestModelProvider({
     authProfileId: params.authProfileId,
     modelProvider: params.modelProvider,
     ...agentLookup,
   });
   const modelSelection = params.model?.trim()
-    ? resolveCodexAppServerRequestModelSelection({
+    ? await resolveCodexAppServerRequestModelSelection({
         model: params.model,
         modelProvider,
         authProfileId: params.authProfileId,
         ...agentLookup,
       })
     : undefined;
-  const reviewerModelProvider = resolveModelBackedReviewerPolicyProvider({
+  const reviewerModelProvider = await resolveModelBackedReviewerPolicyProvider({
     authProfileId: params.authProfileId,
     modelProvider: params.modelProvider,
     ...agentLookup,
   });
-  const { runtime, workspaceDir } = await resolveConversationAppServerRuntime({
-    ...params,
-    modelProvider: reviewerModelProvider,
-  });
+  const { runtime, workspaceDir, assertCurrent, source, incognito } =
+    await resolveConversationAppServerRuntime({
+      ...params,
+      modelProvider: reviewerModelProvider,
+    });
   assertNativeConversationApprovalPolicySupported(runtime);
   const clientOptions = {
+    assertCurrentAsync: assertCurrent,
     startOptions: runtime.start,
     timeoutMs: runtime.requestTimeoutMs,
     authProfileId: params.authProfileId,
     ...agentLookup,
   } satisfies CodexAppServerClientOptions;
   return {
+    assertCurrent,
+    source,
+    incognito: incognito ?? params.incognito,
     runtime,
     workspaceDir,
     agentLookup,
@@ -270,12 +320,14 @@ export async function buildConversationThreadRequestForClient(
   serviceTier: CodexServiceTier | null | undefined,
   requestOptions: () => CodexAppServerLeasedRequestOptions,
 ): Promise<CodexThreadStartParams> {
+  await resolved.assertCurrent();
   const effectiveConfig = await readCodexEffectiveConfig(
     client,
     resolved.workspaceDir,
     requestOptions(),
   );
   requestOptions();
+  await resolved.assertCurrent();
   const { runtime } = resolved;
   // Bound conversations have no app approval/tool bridge. Per-app config
   // overrides apps._default, so disable the feature for this handlerless runtime.
@@ -310,7 +362,7 @@ async function writeThreadBindingFromResponse(
   try {
     const current = params.bindingStore.read(params.identity);
     assertCodexBindingMayBeReplaced(current, "storing a conversation-bound Codex thread");
-    const trackSubscription = !params.incognito && isCodexAppServerClientRuntimeLive(client);
+    const trackSubscription = !resolved.incognito && isCodexAppServerClientRuntimeLive(client);
     sameOwner = isSameCodexAppServerThreadOwner(current, {
       threadId: response.thread.id,
       clientId: client.getInstanceId(),
@@ -324,11 +376,12 @@ async function writeThreadBindingFromResponse(
       }
     }
     if (current && !sameOwner) {
-      const { assertCurrent } = requestOptions();
+      const { assertCurrent, withCurrent } = requestOptions();
       // Keep the old identity visible until its sole native subscription is
       // released; a concurrent owner must not adopt it between clear and cleanup.
       await releaseCodexAppServerBindingSubscription(current, {
         assertCurrent,
+        withCurrent,
         retainedClientId: client.getInstanceId(),
       });
     }
@@ -341,9 +394,10 @@ async function writeThreadBindingFromResponse(
           threadId: response.thread.id,
           clientId: client.getInstanceId(),
           cwd: resolved.workspaceDir,
+          ...(resolved.incognito ? { conversationIncognito: true } : {}),
           authProfileId: params.authProfileId,
           model: response.model ?? resolved.model ?? params.model,
-          modelProvider: normalizeCodexAppServerBindingModelProvider({
+          modelProvider: await normalizeCodexAppServerBindingModelProvider({
             authProfileId: params.authProfileId,
             modelProvider: response.modelProvider ?? resolved.modelProvider ?? params.modelProvider,
             ...resolved.agentLookup,
@@ -353,7 +407,12 @@ async function writeThreadBindingFromResponse(
           networkProxyConfigFingerprint: resolved.runtime.networkProxy?.configFingerprint,
         },
       },
-      requestOptions,
+      composeSessionEntryCommitGuards([
+        () => {
+          requestOptions();
+        },
+        resolved.source,
+      ]),
     );
     if (!committed) {
       throw new Error("Codex conversation binding changed while storing its thread.");
@@ -368,18 +427,29 @@ async function writeThreadBindingFromResponse(
   }
 }
 
-async function bindThread(params: CodexThreadBindingParams, threadId?: string): Promise<void> {
-  const current = params.bindingStore.read(params.identity);
+async function bindThread(params: CodexThreadBindingParams, threadId?: string) {
+  const current = await params.bindingStore.readAsync(params.identity);
   assertCodexBindingMayBeReplaced(current, "binding a conversation-bound Codex thread");
   const resolved = await resolveThreadBindingRuntime(params);
   const clientLease: CodexAppServerClientLease = {
     client: await getLeasedSharedCodexAppServerClient(resolved.clientOptions),
   };
   try {
-    await withLeasedCodexAppServerClientStartSelectionRetry({
+    await withCodexAppServerClientRequestScope({
       lease: clientLease,
       options: resolved.clientOptions,
-      run: async (client, requestOptions) => {
+      run: async (client, connectionRequestOptions) => {
+        const requestOptions = () => {
+          const options = connectionRequestOptions();
+          return {
+            ...options,
+            withCurrent: async (write: () => void) => {
+              await resolved.assertCurrent();
+              options.assertCurrent();
+              write();
+            },
+          };
+        };
         const request = await buildConversationThreadRequestForClient(
           client,
           resolved,
@@ -401,10 +471,10 @@ async function bindThread(params: CodexThreadBindingParams, threadId?: string): 
             requestOptions(),
           );
           assertCodexThreadAcceptsDirectInput(thread);
-          const { assertCurrent } = requestOptions();
+          const { assertCurrent, withCurrent } = requestOptions();
           // Codex ignores resume config while any connection is still
           // subscribed; interactive threads must drop the previous configuration.
-          await releaseCodexAppServerLiveThread(client, threadId, assertCurrent);
+          await releaseCodexAppServerLiveThread(client, threadId, assertCurrent, withCurrent);
           if (isCodexAppServerLiveThreadClaimed(client, threadId)) {
             throw new Error(
               `Codex thread ${threadId} has an active run; stop it before binding its conversation.`,
@@ -424,7 +494,7 @@ async function bindThread(params: CodexThreadBindingParams, threadId?: string): 
               ...request,
               developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
               experimentalRawEvents: true,
-              ...(params.incognito ? { ephemeral: true } : {}),
+              ...(resolved.incognito ? { ephemeral: true } : {}),
             },
             requestOptions(),
           );
@@ -435,6 +505,7 @@ async function bindThread(params: CodexThreadBindingParams, threadId?: string): 
   } finally {
     releaseCodexAppServerClientLease(clientLease);
   }
+  return { assertCurrent: resolved.assertCurrent, source: resolved.source };
 }
 
 export function assertNativeConversationApprovalPolicySupported(
@@ -460,10 +531,10 @@ export async function prepareCodexConversationBinding(
   options: { forceNew?: boolean } = {},
 ): Promise<void> {
   const identity = { kind: "conversation" as const, bindingId: params.data.bindingId };
-  const snapshot = params.bindingStore.read(identity);
+  const snapshot = await params.bindingStore.readAsync(identity);
   const run = () =>
     params.bindingStore.withLease(identity, async () => {
-      const current = params.bindingStore.read(identity);
+      const current = await params.bindingStore.readAsync(identity);
       if (current?.threadId !== snapshot?.threadId || current?.clientId !== snapshot?.clientId) {
         throw new Error("Codex conversation binding changed before preparation.");
       }
@@ -482,7 +553,9 @@ export async function prepareCodexConversationBinding(
             config: params.config,
           })
         : undefined;
-      const sourceBinding = sourceIdentity ? params.bindingStore.read(sourceIdentity) : undefined;
+      const sourceBinding = sourceIdentity
+        ? await params.bindingStore.readAsync(sourceIdentity)
+        : undefined;
       assertCodexBindingMayBeReplaced(current, "initializing a conversation-bound Codex thread");
       assertCodexBindingMayBeReplaced(
         sourceBinding,
@@ -514,24 +587,34 @@ export async function prepareCodexConversationBinding(
       // Harness threads retain immutable tools, developer instructions, and app
       // policy. Transfer bounded visible history into a fresh bound-only thread.
       const threadId = requested?.threadId;
-      await bindThread(bindingParams, options.forceNew ? undefined : threadId);
-      const stored = params.bindingStore.read(identity);
+      const sourceAuthority = await bindThread(
+        bindingParams,
+        options.forceNew ? undefined : threadId,
+      );
+      await sourceAuthority.assertCurrent();
+      const sourceGuard = sourceAuthority.source;
+      const stored = await params.bindingStore.readAsync(identity);
       if (!stored) {
         throw new Error("Codex conversation binding disappeared while initializing its thread.");
       }
       if (sourceIdentity && params.data.source && !current?.conversationSourceTransferComplete) {
         await params.bindingStore.withLease(sourceIdentity, async () => {
-          const source = params.bindingStore.read(sourceIdentity);
+          await sourceAuthority.assertCurrent();
+          const source = await params.bindingStore.readAsync(sourceIdentity);
           if (source && source.threadId === params.data.source?.threadId) {
             const sourceSessionKey =
               sourceIdentity.sessionKey ??
-              resolveTranscriptSessionKeyBySessionId({
-                agentId: sourceIdentity.agentId,
-                sessionId: sourceIdentity.sessionId,
-                storePath: resolveStorePath(params.config?.session?.store, {
+              (
+                await getSessionEntryByIdAsync({
                   agentId: sourceIdentity.agentId,
-                }),
-              });
+                  sessionId: sourceIdentity.sessionId,
+                  storePath:
+                    params.data.source.storePath ??
+                    resolveStorePath(params.config?.session?.store, {
+                      agentId: sourceIdentity.agentId,
+                    }),
+                })
+              )?.sessionKey;
             if (
               sourceSessionKey &&
               resolveActiveEmbeddedRunSessionId(sourceSessionKey) === sourceIdentity.sessionId
@@ -541,24 +624,42 @@ export async function prepareCodexConversationBinding(
               );
             }
             if (source.threadId !== stored.threadId) {
-              await releaseCodexAppServerBindingSubscription(source);
-              await projectConversationSourceHistory(params.data.source, stored, params.config);
+              await releaseCodexAppServerBindingSubscription(source, {
+                withCurrent: async (write) => {
+                  await sourceAuthority.assertCurrent();
+                  write();
+                },
+              });
+              await projectConversationSourceHistory(
+                params.data.source,
+                stored,
+                params.config,
+                sourceAuthority.assertCurrent,
+              );
             }
-            await params.bindingStore.mutate(sourceIdentity, {
-              kind: "clear",
-              threadId: source.threadId,
-            });
+            await params.bindingStore.mutate(
+              sourceIdentity,
+              {
+                kind: "clear",
+                threadId: source.threadId,
+              },
+              sourceAuthority.source,
+            );
           }
         });
       }
-      const patched = await params.bindingStore.mutate(identity, {
-        kind: "patch",
-        threadId: stored.threadId,
-        patch: {
-          ...(params.data.start ? { conversationStartId: params.data.start.id } : {}),
-          ...(sourceIdentity ? { conversationSourceTransferComplete: true } : {}),
+      const patched = await params.bindingStore.mutate(
+        identity,
+        {
+          kind: "patch",
+          threadId: stored.threadId,
+          patch: {
+            ...(params.data.start ? { conversationStartId: params.data.start.id } : {}),
+            ...(sourceIdentity ? { conversationSourceTransferComplete: true } : {}),
+          },
         },
-      });
+        sourceGuard,
+      );
       if (!patched) {
         throw new Error("Codex conversation binding changed while initializing its thread.");
       }
@@ -577,57 +678,15 @@ export async function prepareCodexConversationBinding(
   }
 }
 
-async function projectConversationSourceHistory(
-  source: { agentId: string; sessionId: string; sessionKey?: string; threadId: string },
-  target: { threadId: string; clientId?: string },
-  config?: CodexConversationConfig,
-): Promise<void> {
-  const storePath = resolveStorePath(config?.session?.store, { agentId: source.agentId });
-  const sessionKey =
-    source.sessionKey ??
-    resolveTranscriptSessionKeyBySessionId({
-      agentId: source.agentId,
-      sessionId: source.sessionId,
-      storePath,
-    });
-  if (!sessionKey) {
-    return;
-  }
-  // Local visible transcripts remain readable for ephemeral and paginated
-  // Codex threads, both of which reject native includeTurns history reads.
-  const entries = await readVisibleSessionTranscriptMessageEntries({
-    agentId: source.agentId,
-    sessionId: source.sessionId,
-    sessionKey,
-    storePath,
-  });
-  const history = projectBoundedCodexVisibleSessionHistory(entries);
-  if (history.length === 0) {
-    return;
-  }
-  const clientLease = await retainSharedCodexAppServerClientByInstanceId(target.clientId);
-  if (!clientLease) {
-    throw new Error("Codex conversation source history lost its bound client owner.");
-  }
-  try {
-    await clientLease.client.request("thread/inject_items", {
-      threadId: target.threadId,
-      items: history,
-    });
-  } finally {
-    await clientLease.release();
-  }
-}
-
-export function resolveModelBackedReviewerPolicyProvider(params: {
+export async function resolveModelBackedReviewerPolicyProvider(params: {
   authProfileId?: string;
   modelProvider?: string;
   agentDir?: string;
   config?: CodexAppServerAuthProfileLookup["config"];
-}): string | undefined {
+}): Promise<string | undefined> {
   const modelProvider = params.modelProvider?.trim();
   if (modelProvider && modelProvider.toLowerCase() !== "codex") {
     return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;
   }
-  return isCodexAppServerNativeAuthProfile(params) ? "openai" : undefined;
+  return (await isCodexAppServerNativeAuthProfile(params)) ? "openai" : undefined;
 }

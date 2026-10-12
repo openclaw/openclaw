@@ -57,14 +57,18 @@ describe("AppSidebar main-chat metadata", () => {
     const header = sidebar.querySelector(
       '[data-agent-group="working"] .sidebar-agent-roster__header',
     )!;
-    expect(header.querySelector(".session-owner-chip")).not.toBeNull();
-    expect(header.querySelector(".session-row-draft-indicator")).not.toBeNull();
-    expect(header.querySelector(".session-row-badge--draft")).not.toBeNull();
-    expect(header.querySelector('[aria-label="2 messages need attention"]')).not.toBeNull();
-    expect(header.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(1);
-    expect(header.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
-    expect(header.querySelector("[data-agent-collapse]")).toBeNull();
-    expect(sessionKeys(sidebar)).toEqual([]);
+    // Subscription admission precedes the render that commits the main-row metadata.
+    await vi.waitFor(() => {
+      // Upstream #168575 makes the agent avatar the header’s only identity.
+      expect(header.querySelector(".session-owner-chip")).toBeNull();
+      expect(header.querySelector(".session-row-draft-indicator")).not.toBeNull();
+      expect(header.querySelector(".session-row-badge--draft")).not.toBeNull();
+      expect(header.querySelector('[aria-label="2 messages need attention"]')).not.toBeNull();
+      expect(header.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(1);
+      expect(header.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
+      expect(header.querySelector("[data-agent-collapse]")).toBeNull();
+      expect(sessionKeys(sidebar)).toEqual([]);
+    });
     await sidebar.updateComplete;
     // These snapshots arrive while a different agent is selected. Header decoration
     // must watch Home itself, not depend on a duplicate main row or opening its chat.

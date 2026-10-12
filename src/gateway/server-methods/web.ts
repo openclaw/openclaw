@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -73,16 +72,16 @@ function resolveMissingWebLoginPluginHint(context: GatewayRequestContext): strin
     config: cfg,
     channelIds: Object.keys(channels),
   });
-  if (hints.length === 0) {
+  const first = hints[0];
+  if (!first) {
     return null;
   }
   if (hints.length === 1) {
-    return expectDefined(hints[0], "hints entry at 0").repairHint;
+    return first.repairHint;
   }
   const labels = [...new Set(hints.map((hint) => hint.label))];
   const installCommands = [...new Set(hints.map((hint) => hint.installCommand))];
-  const doctorFixCommand = expectDefined(hints[0], "hints entry at 0").doctorFixCommand;
-  return `Configured official external channel plugins are missing for ${labels.join(", ")}. Install them with: ${installCommands.join("; ")}, or run: ${doctorFixCommand}.`;
+  return `Configured official external channel plugins are missing for ${labels.join(", ")}. Install them with: ${installCommands.join("; ")}, or run: ${first.doctorFixCommand}.`;
 }
 
 function webLoginHandler<

@@ -388,7 +388,7 @@ export function preparePluginModule(params: PluginModuleBoundaryParams) {
     throw new Error(`Unable to open ${params.surfaceLabel}`, { cause: opened.error });
   }
   fs.closeSync(opened.fd);
-  if (!sameFileIdentity(opened.stat, fs.statSync(opened.path))) {
+  if (!sameFileIdentity(opened.exactIdentity, fs.statSync(opened.path, { bigint: true }))) {
     throw new Error(`${params.surfaceLabel} changed after validation`);
   }
   const root = bindPluginCacheRoot(params.boundaryRoot, opened.rootRealPath);
@@ -409,9 +409,10 @@ export function preparePluginModule(params: PluginModuleBoundaryParams) {
 export function loadPluginPublicSurfaceModuleSync(
   params: PluginModuleBoundaryParams & {
     loadModule: (modulePath: string) => unknown;
+    capturedSource?: true;
   },
 ): object {
-  const instance = resolvePublicSurfaceInstance(params);
+  const instance = params.capturedSource ? undefined : resolvePublicSurfaceInstance(params);
   if (instance) {
     // SAFETY: Public-surface entrypoints have object exports; the instance owns this exact source.
     return instance.loadModule(params.modulePath) as object;

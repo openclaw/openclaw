@@ -214,7 +214,7 @@ function registerBackupScheduleCommands(backup: Command): void {
 function registerBackupGitCommands(backup: Command): void {
   const git = backup
     .command("git")
-    .description("Create and restore deterministic versioned SQLite dumps in Git")
+    .description("Create and restore reproducible versioned SQLite dumps in Git")
     .action(() => {
       git.outputHelp();
       process.exitCode = 1;

@@ -1,5 +1,10 @@
+import type { PluginControlUiModule } from "../../packages/gateway-protocol/src/schema/plugins.js";
+
 /** HTTP path for the Control UI bootstrap config payload. */
 export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
+
+/** Authenticated document copy of the canonical bootstrap payload. */
+export const CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE = "data-openclaw-bootstrap-config";
 
 /** Fragment marker selecting the host-authorized browser-owner bootstrap profile. */
 export const CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM = "bootstrapProfile";
@@ -60,6 +65,8 @@ export type ControlUiBootstrapConfig = {
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   automaticallyFetchFavicons?: boolean;
+  /** Whether experimental speech-bubble presentation is available. */
+  chatBubblesEnabled?: boolean;
   seamColor?: string;
   environment?: ControlUiEnvironment;
   /** Whether this Gateway's served UI may show the Discord community invitation. */
@@ -79,4 +86,5 @@ export type ControlUiBootstrapConfig = {
   /** Only explicit no-auth Gateways permit native asset loading without scoped cookies. */
   pluginAssetsRequireAuth?: boolean;
   pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
+  pluginControlUiModules?: PluginControlUiModule[];
 };

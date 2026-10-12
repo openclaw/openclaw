@@ -58,11 +58,6 @@ function isToolCallBlock(block: AnthropicContentBlock): boolean {
   return block.type === "toolUse" || block.type === "toolCall" || block.type === "functionCall";
 }
 
-function isAbortedAssistantTurn(message: AgentMessage): boolean {
-  const stopReason = (message as { stopReason?: unknown }).stopReason;
-  return stopReason === "aborted" || stopReason === "error";
-}
-
 function extractToolResultMatchIds(record: object): Set<string> {
   const ids = new Set<string>();
   for (const value of [
@@ -150,13 +145,7 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
     if (!msg) {
       continue;
     }
-    if (typeof msg !== "object") {
-      result.push(msg);
-      continue;
-    }
-
-    const msgRole = (msg as { role?: unknown }).role as string | undefined;
-    if (msgRole !== "assistant") {
+    if (typeof msg !== "object" || msg.role !== "assistant") {
       result.push(msg);
       continue;
     }
@@ -165,14 +154,7 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       content?: AnthropicContentBlock[];
     };
     const originalContent = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
-    if (originalContent.length === 0) {
-      result.push(msg);
-      continue;
-    }
-    if (
-      extractToolCallsFromAssistant(msg as Extract<AgentMessage, { role: "assistant" }>).length ===
-      0
-    ) {
+    if (originalContent.length === 0 || extractToolCallsFromAssistant(msg).length === 0) {
       result.push(msg);
       continue;
     }
@@ -181,9 +163,11 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       messages,
       i,
     );
-    const omittedContent: AnthropicContentBlock[] = isAbortedAssistantTurn(msg)
-      ? []
-      : [{ type: "text", text: "[tool calls omitted]" }];
+    const stopReason = msg.stopReason;
+    const omittedContent: AnthropicContentBlock[] =
+      stopReason === "aborted" || stopReason === "error"
+        ? []
+        : [{ type: "text", text: "[tool calls omitted]" }];
 
     let nextContent = originalContent;
     if (hasThinking) {
@@ -248,30 +232,20 @@ function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(p
   let lastRole: string | undefined;
 
   for (const msg of messages) {
-    if (!msg || typeof msg !== "object") {
-      result.push(msg);
-      continue;
-    }
-
-    const msgRole = (msg as { role?: unknown }).role as string | undefined;
-    if (!msgRole) {
-      result.push(msg);
-      continue;
-    }
-
-    if (msgRole === lastRole && lastRole === role) {
-      const lastMsg = result[result.length - 1];
-      const currentMsg = msg as Extract<AgentMessage, { role: TRole }>;
-
-      if (lastMsg && typeof lastMsg === "object") {
-        const lastTyped = lastMsg as Extract<AgentMessage, { role: TRole }>;
-        result[result.length - 1] = merge(lastTyped, currentMsg);
-        continue;
+    const msgRole = msg && typeof msg === "object" ? msg.role : undefined;
+    if (msgRole) {
+      if (msgRole === lastRole && lastRole === role) {
+        const lastMsg = result[result.length - 1];
+        const currentMsg = msg as Extract<AgentMessage, { role: TRole }>;
+        if (lastMsg && typeof lastMsg === "object") {
+          const lastTyped = lastMsg as Extract<AgentMessage, { role: TRole }>;
+          result[result.length - 1] = merge(lastTyped, currentMsg);
+          continue;
+        }
       }
+      lastRole = msgRole;
     }
-
     result.push(msg);
-    lastRole = msgRole;
   }
 
   return result.length === messages.length ? messages : result;

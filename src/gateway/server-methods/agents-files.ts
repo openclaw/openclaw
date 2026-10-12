@@ -11,7 +11,10 @@ import {
   validateAgentsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { buildIdentityMarkdownForWrite } from "../../agents/identity-file.js";
+import {
+  buildIdentityMarkdownForWrite,
+  loadAgentIdentityFromWorkspaceAsync,
+} from "../../agents/identity-file.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
 import {
@@ -472,6 +475,11 @@ export const agentFileHandlers: Pick<
     const meta: Partial<FileMeta> | null = access
       ? { size: Buffer.byteLength(content) }
       : await statWorkspaceFileSafely(workspaceRoot, name);
+    if (name === DEFAULT_IDENTITY_FILENAME) {
+      // Drain reads admitted before the write before clients start their replacement read.
+      await loadAgentIdentityFromWorkspaceAsync(workspaceDir);
+      context.broadcast("agent.identity.changed", { agentId });
+    }
     respond(
       true,
       {

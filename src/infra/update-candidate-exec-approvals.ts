@@ -5,13 +5,13 @@ import { root } from "@openclaw/fs-safe";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { hasNodeErrorCode } from "./path-guards.js";
 import {
   detectLegacyExecApprovals,
   DOCTOR_CLAIM_SUFFIX,
   MAX_LEGACY_EXEC_APPROVALS_BYTES,
 } from "./state-migrations.exec-approvals.js";
 import { resolveLegacyMigrationSourceKey } from "./state-migrations.receipts.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 
 /** Project retired policy inputs and their receipt authority into the private rehearsal copy. */
 export function createUpdateCandidateExecApprovalsProjection(
@@ -51,12 +51,7 @@ export function createUpdateCandidateExecApprovalsProjection(
         // lstat keeps broken links visible to the same refusal as ordinary links.
         const exists = await fs.lstat(source).then(
           () => true,
-          (error: unknown) => {
-            if (hasNodeErrorCode(error, "ENOENT")) {
-              return false;
-            }
-            throw error;
-          },
+          (error: unknown) => ignoreMissingUpdateCandidateFile(error) ?? false,
         );
         if (!exists) {
           continue;

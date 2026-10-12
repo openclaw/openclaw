@@ -40,6 +40,7 @@ import {
 } from "./chat-abort-authorization.js";
 import { abortControlledSubagents, descendantAbortError } from "./chat-abort-descendants.js";
 import { abortChatRunsForSessionKeyWithPartials } from "./chat-abort-runtime.js";
+import type { ChatSessionEmbeddedAbortOutcome } from "./chat-abort-runtime.types.js";
 import {
   abortedPartialPersistenceError,
   captureAbortedPartial,
@@ -53,7 +54,8 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ChatAbortLifecycle = {
-  onAuthorizedAfterQueuedAbort?: () => boolean;
+  onAuthorizedBeforeEmbeddedAbort?: () => boolean;
+  onAuthorizedAfterQueuedAbort?: (embedded: ChatSessionEmbeddedAbortOutcome) => boolean;
   onDescendantsCancelled?: () => void;
   cascadeDescendants?: true;
 };
@@ -207,7 +209,9 @@ export async function handleChatAbortRequestWithLifecycle(
       stopReason: "rpc",
       requester,
       assertCurrent,
+      stopEmbeddedRun: true,
       preserveSideRuns,
+      onAuthorizedBeforeEmbeddedAbort: lifecycle.onAuthorizedBeforeEmbeddedAbort,
       onAuthorizedAfterQueuedAbort: lifecycle.onAuthorizedAfterQueuedAbort,
       cascadeDescendants: lifecycle.cascadeDescendants,
     });
@@ -215,7 +219,7 @@ export async function handleChatAbortRequestWithLifecycle(
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
       return;
     }
-    if (res.descendants?.killed) {
+    if (res.descendants?.killed || res.descendants?.continuationRetired) {
       lifecycle.onDescendantsCancelled?.();
     }
     const error = res.error ?? descendantAbortError(res.descendants, "Session");

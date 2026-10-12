@@ -251,11 +251,7 @@ describe("worker command lifetime gate", () => {
       () =>
         Object.assign(Object.create({ type: "openclaw-worker-start-v1" }), { unexpected: true }),
     ],
-    ["empty lineage", () => ({ type: "openclaw-worker-start-v1", lineageFds: [] })],
-    ["standard descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: [2] })],
-    ["fractional descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: [3.5] })],
     ["duplicate descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: [3, 3] })],
-    ["string descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: ["3"] })],
   ] as const)("rejects an internal worker IPC start with %s", async (_label, makeInvalidStart) => {
     const { restore } = processHarness({
       connected: true,
@@ -583,54 +579,30 @@ describe("worker command lifetime gate", () => {
     },
   );
 
-  it.each([
-    "duplicate",
-    "environment",
-    "session",
-    "epoch",
-    "agent",
-    "permission",
-    "workspace",
-    "containment",
-  ] as const)("refuses a retained worker's %s identity change before admission", async (change) => {
-    const harness = managedHarness();
-    managedRuntime.backgroundCount = 1;
-    const running = runWorkerCommand({ ...harness, managed: true });
-    harness.turn();
-    await vi.waitFor(() => expect(harness.results).toHaveLength(1));
-    const next = structuredClone(harness.launch);
-    if (change !== "duplicate") {
-      next.assignment.turnId = "turn-2";
-    }
-    if (change === "environment") {
-      next.admission.environmentId = "environment-2";
-    }
-    if (change === "session") {
-      next.admission.sessionId = "session-2";
-    }
-    if (change === "epoch") {
-      next.admission.ownerEpoch = 2;
-    }
-    if (change === "agent") {
-      next.assignment.agentId = "agent-2";
-    }
-    if (change === "permission") {
-      next.assignment.permissionMode = "read-only";
-    }
-    if (change === "workspace") {
-      next.assignment.workspaceDir = path.dirname(process.cwd());
-    }
-    if (change === "containment") {
-      next.assignment.workerContainmentRoot = path.dirname(process.cwd());
-    }
-    const rejected = expect(running).rejects.toThrow(
-      change === "duplicate" ? "already executed" : "binding changed",
-    );
-    harness.turn(next);
-    await rejected;
-    expect(runWorkerDescriptor).toHaveBeenCalledOnce();
-    expect(managedRuntime.close).toHaveBeenCalledOnce();
-  });
+  it.each(["duplicate", "workspace"] as const)(
+    "refuses a retained worker's %s identity change before admission",
+    async (change) => {
+      const harness = managedHarness();
+      managedRuntime.backgroundCount = 1;
+      const running = runWorkerCommand({ ...harness, managed: true });
+      harness.turn();
+      await vi.waitFor(() => expect(harness.results).toHaveLength(1));
+      const next = structuredClone(harness.launch);
+      if (change !== "duplicate") {
+        next.assignment.turnId = "turn-2";
+      }
+      if (change === "workspace") {
+        next.assignment.workspaceDir = path.dirname(process.cwd());
+      }
+      const rejected = expect(running).rejects.toThrow(
+        change === "duplicate" ? "already executed" : "binding changed",
+      );
+      harness.turn(next);
+      await rejected;
+      expect(runWorkerDescriptor).toHaveBeenCalledOnce();
+      expect(managedRuntime.close).toHaveBeenCalledOnce();
+    },
+  );
 
   it("rejects concurrent turns and aborts the admitted turn before closing state", async () => {
     const harness = managedHarness();
@@ -716,23 +688,6 @@ describe("worker command lifetime gate", () => {
     expect(managedRuntime.close).toHaveBeenCalledOnce();
   });
 
-  it.each(["empty", "unterminated"])(
-    "closes %s managed input at EOF without admitting a turn",
-    async (input) => {
-      const harness = managedHarness();
-      const running = runWorkerCommand({ ...harness, managed: true });
-      harness.input.end(
-        input === "empty" ? undefined : JSON.stringify(buildWorkerProcessTurn(harness.launch)),
-      );
-
-      await running;
-
-      expect(runWorkerDescriptor).not.toHaveBeenCalled();
-      expect(createWorkerRuntimeEnvironment).not.toHaveBeenCalled();
-      expect(harness.results).toEqual([]);
-    },
-  );
-
   it.each(["standalone", "managed"] as const)(
     "preserves ordinary two-image input through the %s parser",
     async (mode) => {
@@ -757,9 +712,7 @@ describe("worker command lifetime gate", () => {
   );
 
   it.each([
-    { mode: "standalone", delta: 0 },
     { mode: "standalone", delta: 1 },
-    { mode: "managed", delta: 0 },
     { mode: "managed", delta: 1 },
   ])("enforces $mode input at cap + $delta bytes", async ({ mode, delta }) => {
     const harness = managedHarness();

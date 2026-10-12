@@ -29,15 +29,9 @@ const handlers: Record<string, GatewayRequestHandler> = {
 describe("client upload policy at the input commit owner", () => {
   const fixture = installAgentAuthorityProofFixture();
 
-  it.each([
-    "chat.send",
-    "sessions.send",
-    "sessions.steer",
-    "sessions.create",
-    "direct-chat",
-  ] as const)(
+  it.each(["chat.send", "sessions.send", "sessions.steer", "sessions.create"] as const)(
     "replays accepted %s uploads after disable without admitting fresh bytes",
-    async (route) => {
+    async (method) => {
       const f = await fixture({ imageCapable: true });
       const originalConfig = f.context.getCommittedRuntimeConfig;
       const initialConfig = f.context.getRuntimeConfig();
@@ -46,7 +40,6 @@ describe("client upload policy at the input commit owner", () => {
         ...initialConfig,
         gateway: { ...initialConfig.gateway, uploads: { enabled } },
       });
-      const method = route === "direct-chat" ? "chat.send" : route;
       const params = {
         agentId: "main",
         ...(method === "chat.send"
@@ -82,11 +75,7 @@ describe("client upload policy at the input commit owner", () => {
           respond,
           isWebchatConnect: () => false,
         } satisfies Parameters<GatewayRequestHandler>[0];
-        if (route === "direct-chat") {
-          await handleDirectExternalChatSend(options);
-        } else {
-          await handleGatewayRequest(options);
-        }
+        await handleGatewayRequest(options);
         return respond;
       };
       try {

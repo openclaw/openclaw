@@ -1,8 +1,4 @@
 import { getRuntimeConfig } from "../../../config/config.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-} from "../../../config/sessions.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
@@ -12,6 +8,8 @@ import {
   getSessionWorkAdmissionRelease,
   isSessionWorkAdmissionActive,
 } from "../../../sessions/session-lifecycle-admission.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   isRetiredSubagentExecution,
   isRetiredSubagentSessionOwner,
@@ -46,9 +44,11 @@ export async function loadSubagentRecoverySession(params: {
   retained?: Extract<RestartRecoveryResult, { status: "handled" }>["retained"];
 } | null> {
   const sessionKey = params.entry.childSessionKey.trim();
-  const agentId = params.entry.childAgentId ?? resolveAgentIdFromSessionKey(sessionKey);
-  const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId });
-  const scope = { storePath, sessionKey, agentId, projection: "list" as const };
+  if (resolveSubagentChildAuthority(params.entry).status === "mismatch") {
+    return null;
+  }
+  const { agentId, storePath } = resolveSubagentChildSessionOwner(params.entry, getRuntimeConfig());
+  const scope = { agentId, storePath, sessionKey, projection: "list" as const };
   const { sessionEntry, currentRead } = await withSessionEntryReadOnlyInWorker(
     scope,
     () => {
@@ -66,8 +66,13 @@ export async function loadSubagentRecoverySession(params: {
       };
     },
   );
+  const authority = resolveSubagentChildAuthority(params.entry, sessionEntry);
+  if (authority.status === "mismatch") {
+    throw new Error(authority.error);
+  }
   const retained = retainSessionOwner(storePath, sessionKey, sessionEntry?.sessionId);
   if (
+    authority.status === "legacy-unverified" ||
     retained ||
     params.entry.execution.restartRecovery ||
     sessionEntry?.abortedLastRun === true ||

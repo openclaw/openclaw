@@ -8,11 +8,7 @@ import {
   findVerifiedGatewayListenerPidsOnPortSync,
   signalVerifiedGatewayPidSync,
 } from "./gateway-processes.js";
-import {
-  cleanStaleGatewayProcessesSync,
-  findGatewayPidsOnPortSync,
-  inspectSelfAndAncestorPidsSync,
-} from "./restart-stale-pids.js";
+import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -42,9 +38,6 @@ vi.mock("./windows-port-pids.js", () => ({
   readWindowsListeningPidsResultSync: mocks.windowsListeners,
   readWindowsProcessArgsResultSync: mocks.windowsArgs,
 }));
-vi.mock("./windows-process-start.js", () => ({
-  readWindowsProcessAncestorsSync: () => ({ pids: [], complete: false }),
-}));
 vi.mock("../process/supervisor/darwin-process-command.js", () => ({
   readDarwinProcessCommand: mocks.darwinCommand,
 }));
@@ -53,15 +46,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
-});
-
-it("reports complete Linux ancestry through PID 1", () => {
-  vi.stubGlobal("process", { ...process, platform: "linux", pid: 41, ppid: 40 });
-  mocks.read.mockReturnValue("PPid:\t1\n");
-  expect(inspectSelfAndAncestorPidsSync()).toEqual({
-    pids: new Set([41, 40, 1]),
-    complete: true,
-  });
 });
 
 it("reports an unclassified Windows listener without reclaiming its process", () => {

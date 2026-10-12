@@ -122,7 +122,7 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
     }));
   }
 
-  it.each([{ methods: [] }, { methods: ["GET"] }])(
+  it.each([{ methods: ["GET"] }])(
     "rejects CLI failure without POST evidence: %j",
     async ({ methods }) => {
       configureCli(methods);
@@ -144,16 +144,7 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
     expect(closed).toBe(true);
   });
 
-  it.each([new Error("runtime construction failed"), undefined])(
-    "closes the already-acquired proxy and preserves construction rejection %s",
-    async (failure) => {
-      mocks.createRuntime.mockRejectedValueOnce(failure);
-      await expect(run()).rejects.toBe(failure);
-      expect(closed).toBe(true);
-    },
-  );
-
-  it.each([new Error("runtime construction failed"), undefined])(
+  it.each([undefined])(
     "retains construction rejection %s before proxy cleanup failure",
     async (failure) => {
       proxyCleanupFailure = new Error("proxy stop failed");

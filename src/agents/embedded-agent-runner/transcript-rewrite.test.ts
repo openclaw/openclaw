@@ -5,7 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -14,7 +14,6 @@ import {
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
   replaceSessionEntry,
-  replaceTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -23,9 +22,11 @@ import {
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { useTranscriptRewriteTempDirs } from "./transcript-rewrite.test-support.js";
 
@@ -886,17 +887,12 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       const originalMessages = getBranchMessages(sessionManager);
       const originalRows = await loadTranscriptEvents(target);
       await waitForSessionTranscriptProjection(target);
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      const admission = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit") {
-              throw new Error("suffix replay interrupted");
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === "commit") {
+          throw new Error("suffix replay interrupted");
+        }
+        admit(request, grant);
+      });
       try {
         await expect(
           rewriteTranscriptEntriesInSessionManager({

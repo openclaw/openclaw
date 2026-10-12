@@ -19,6 +19,14 @@ export type WorkerWriteOperationContext = WorkerOperationContext & {
       "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
     >,
   ) => T;
+  writeAdmitted: <T>(
+    operation: (database: OpenClawStateDatabase) => T,
+    options?: Parameters<WorkerWriteOperationContext["write"]>[1] & {
+      receipt?: "result";
+      /** Preserve worker-process ownership checks for native-default callers. */
+      transactionEnvironment?: "process";
+    },
+  ) => T;
 };
 
 export type WorkerOperationHandlers<Context = WorkerOperationContext> = Record<
@@ -32,6 +40,18 @@ export type WorkerOperations<Handlers extends WorkerOperationHandlers<never>> = 
     output: ReturnType<Handlers[Key]>;
   };
 };
+
+type IntersectUnion<T> = (T extends unknown ? (value: T) => void : never) extends (
+  value: infer Intersection,
+) => void
+  ? Intersection
+  : never;
+
+export type WorkerOperationsFromLoaders<
+  Loaders extends Record<string, () => Promise<WorkerOperationHandlers<never>>>,
+> = IntersectUnion<
+  { [Key in keyof Loaders]: WorkerOperations<Awaited<ReturnType<Loaders[Key]>>> }[keyof Loaders]
+>;
 
 type Namespace<Key> = Key extends `${infer Domain}.${string}` ? Domain : never;
 type DomainLoaders<Operations extends SqliteWorkerOperations, Context, Domains extends string> = {

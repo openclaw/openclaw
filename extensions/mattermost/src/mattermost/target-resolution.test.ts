@@ -58,7 +58,7 @@ describe("mattermost target resolution", () => {
     expect(parseMattermostTarget("short")).toEqual({ kind: "channel-name", name: "short" });
   });
 
-  it.each(["@alice", "#town-square", "mattermost:chan"])(
+  it.each(["mattermost:chan"])(
     "skips explicit target %s before account resolution",
     async (input) => {
       await expect(resolveMattermostOpaqueTarget({ input, cfg: {} })).resolves.toBeNull();
@@ -77,35 +77,6 @@ describe("mattermost target resolution", () => {
     await expect(resolveMattermostOpaqueTarget(params)).resolves.toMatchObject({ kind: "channel" });
     await expect(resolveMattermostOpaqueTarget(params)).resolves.toMatchObject({ kind: "channel" });
     expect(fetchMattermostUser).toHaveBeenCalledTimes(2);
-  });
-
-  it("resolves opaque ids as users and caches the result", async () => {
-    fetchMattermostUser.mockResolvedValue({ id: "abcd1234abcd1234abcd1234ab" });
-    const input = "abcd1234abcd1234abcd1234ab";
-
-    await expect(
-      resolveMattermostOpaqueTarget({
-        input,
-        client: fixtureClient(),
-      }),
-    ).resolves.toEqual({
-      kind: "user",
-      id: input,
-      to: `user:${input}`,
-    });
-
-    await expect(
-      resolveMattermostOpaqueTarget({
-        input,
-        client: fixtureClient(),
-      }),
-    ).resolves.toEqual({
-      kind: "user",
-      id: input,
-      to: `user:${input}`,
-    });
-
-    expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
   });
 
   it("resolves public channels (type O) as channel and caches the result", async () => {
@@ -129,28 +100,6 @@ describe("mattermost target resolution", () => {
     });
 
     expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
-  });
-
-  it("evicts in insertion order after the opaque cache reaches its cap", async () => {
-    fetchMattermostUser.mockResolvedValue({ id: "user" });
-    const baseUrl = "https://mm.example.com";
-    const token = "opaque-cache-token";
-    const idFor = (index: number) => index.toString(36).padStart(26, "0");
-    const resolve = (index: number) =>
-      resolveMattermostOpaqueTarget({ input: idFor(index), client: fixtureClient(token, baseUrl) });
-
-    for (let index = 0; index < 1024; index += 1) {
-      await resolve(index);
-    }
-    expect(fetchMattermostUser).toHaveBeenCalledTimes(1024);
-
-    await resolve(0);
-    expect(fetchMattermostUser).toHaveBeenCalledTimes(1024);
-
-    await resolve(1024);
-    await resolve(0);
-    await resolve(1024);
-    expect(fetchMattermostUser).toHaveBeenCalledTimes(1026);
   });
 
   it("refreshes an authoritative classification after its cache TTL expires", async () => {

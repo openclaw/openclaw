@@ -27,35 +27,39 @@ const WRITER_TEST_TIMEOUT_MS = process.platform === "win32" ? 360_000 : 120_000;
 const it = createDeclarationTest();
 
 describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () => {
-  it.concurrent("retains private stages and both compiler errors when a child is unjoined", ({
-    command,
-  }) =>
-    command.lifetime.run(async () => {
-      const { root, write } = createFixture(command);
-      write("dist/plugin-sdk/core.d.ts", "previous generation");
-      const before = treeHashes(path.join(root, "dist"));
-      // Inject the executor's terminal error contract, without leaving a real process behind.
-      write(
-        "scripts/lib/declaration-stage.mts",
-        `export async function publishStagedDeclarations() {
+  // POSIX uses the nested-writer retention case in dist-artifact-ownership.test.ts.
+  it.skipIf(process.platform !== "win32").concurrent(
+    "retains private stages and both compiler errors when a child is unjoined",
+    ({ command }) =>
+      command.lifetime.run(async () => {
+        const { root, write } = createFixture(command);
+        write("dist/plugin-sdk/core.d.ts", "previous generation");
+        const before = treeHashes(path.join(root, "dist"));
+        // Inject the executor's terminal error contract, without leaving a real process behind.
+        write(
+          "scripts/lib/declaration-stage.mts",
+          `export async function publishStagedDeclarations() {
         throw new AggregateError([
           new Error("first compiler failed"),
           Object.assign(new Error("second compiler unjoined"), { processTreeState: "live" }),
         ], "compiler batch failed");
       }`,
-      );
-      const result = await runWriter(command, root, true);
-      expect(result.status).not.toBe(0);
-      expect(result.stdout + result.stderr).toContain("first compiler failed");
-      expect(result.stdout + result.stderr).toContain("second compiler unjoined");
-      expect(treeHashes(path.join(root, "dist"))).toEqual(before);
-      expect(
-        fs
-          .readdirSync(path.join(root, ".artifacts"))
-          .filter((name) => name.startsWith("plugin-sdk-staging-")),
-      ).toHaveLength(2);
-      expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/unjoined"))).toBe(true);
-    }));
+        );
+        const result = await runWriter(command, root, true);
+        expect(result.status).not.toBe(0);
+        expect(result.stdout + result.stderr).toContain("first compiler failed");
+        expect(result.stdout + result.stderr).toContain("second compiler unjoined");
+        expect(treeHashes(path.join(root, "dist"))).toEqual(before);
+        expect(
+          fs
+            .readdirSync(path.join(root, ".artifacts"))
+            .filter((name) => name.startsWith("plugin-sdk-staging-")),
+        ).toHaveLength(2);
+        expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/unjoined"))).toBe(
+          true,
+        );
+      }),
+  );
 
   it.concurrent("preserves repository input metadata during direct declaration builds", ({
     command,
@@ -319,7 +323,6 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
     { source: "missing entry", diagnostics: ["core.ts"] },
     { source: "invalid config", diagnostics: ["missing-config.json"] },
     { source: "missing declaration", diagnostics: ["contract"] },
-    { source: "input mutation after emit", diagnostics: ["changed during compilation"] },
   ])(
     "rejects $source before replacing published or local declarations",
     ({ source, diagnostics }, { command }) =>
@@ -340,20 +343,6 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
           write("tsconfig.json", '{"extends":"./missing-config.json"}');
         } else if (source === "missing declaration") {
           fs.rmSync(path.join(root, "src/contract.d.ts"));
-        } else {
-          write(
-            "tsdown.config.ts",
-            `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
-for (const config of configs) {
-  if (!config.dts?.emitDtsOnly) continue;
-  const register = config.hooks;
-  config.hooks = async hooks => {
-    await register(hooks);
-    hooks.hook("build:done", () => fs.appendFileSync("src/shared.ts", "\\n"));
-  };
-}
-`,
-          );
         }
         const failed = await runWriter(command, root, true);
         expect(failed.error).toBeUndefined();

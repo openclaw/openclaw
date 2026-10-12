@@ -251,7 +251,7 @@ describe("models.list account service tiers", () => {
               },
               routeResolverFactory: routeResolverFactory(dualRoutes),
             });
-          const a = await prepare(accountA);
+          const a = await prepare(accountA, false, true);
           const readRuntime = (result: typeof a, runtimeId: string) => {
             const row = result.read().models.find((entry) => entry.id === model.id);
             return row?.agentRuntime?.id === runtimeId
@@ -287,7 +287,7 @@ describe("models.list account service tiers", () => {
           const repeated = await prepare(accountA);
           expect(readRuntime(repeated, "codex")?.serviceTiers).toEqual(["priority", "ultrafast"]);
           expect(discover).toHaveBeenCalledOnce();
-          const b = await prepare(accountB);
+          const b = await prepare(accountB, false, true);
           expect(readRuntime(b, "codex")?.serviceTiers).toEqual([]);
           expect(discover).toHaveBeenCalledTimes(2);
           const preparedOnly = await prepare(accountA, true);

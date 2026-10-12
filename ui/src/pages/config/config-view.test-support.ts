@@ -73,6 +73,8 @@ export const baseProps = () => ({
   onImportCustomTheme: vi.fn(),
   onClearCustomTheme: vi.fn(),
   onOpenCustomThemeImport: vi.fn(),
+  tabIcon: undefined,
+  setTabIconMode: vi.fn(),
   textScale: 100,
   textScaleOverridden: false,
   setTextScale: vi.fn(),

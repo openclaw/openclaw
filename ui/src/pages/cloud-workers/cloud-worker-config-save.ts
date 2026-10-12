@@ -1,4 +1,3 @@
-import type { ReactiveControllerHost } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -8,11 +7,11 @@ type SaveState = { busy: boolean; error: string | null; notice: string | null };
 export class CloudWorkerConfigSave {
   readonly state: SaveState = { busy: false, error: null, notice: null };
 
-  constructor(private readonly host: ReactiveControllerHost) {}
+  constructor(private readonly notify: () => void) {}
 
   update(patch: Partial<SaveState>) {
     Object.assign(this.state, patch);
-    this.host.requestUpdate();
+    this.notify();
   }
 
   async save(

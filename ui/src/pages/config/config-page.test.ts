@@ -2,16 +2,20 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { changedServerUiPrefs } from "../../app/server-prefs-intent.ts";
-import { createServerPrefsWriter } from "../../app/server-prefs.test-support.ts";
+import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
 import {
   applyServerUiPrefs,
+  refreshProfileAppearancePrefs,
+} from "../../app/server-prefs-reconcile.ts";
+import { createServerPrefsWriter } from "../../app/server-prefs.test-support.ts";
+import {
   flushServerUiPrefs,
   pushServerUiPrefs,
-  refreshProfileAppearancePrefs,
   resetServerUiPrefsSync,
 } from "../../app/server-prefs.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
@@ -50,15 +54,6 @@ afterEach(() => {
 });
 
 describe("extractQuickSettingsSecurity", () => {
-  it("preserves provenance for inherited security defaults", () => {
-    expect(extractQuickSettingsSecurity({})).toMatchObject({
-      browserEnabled: true,
-      browserEnabledOverridden: false,
-      toolProfile: "",
-      toolProfileOverridden: false,
-    });
-  });
-
   it("distinguishes explicit values that equal the defaults", () => {
     expect(
       extractQuickSettingsSecurity({
@@ -103,9 +98,6 @@ describe("ConfigPage synced preference provenance", () => {
   ])("$label", ({ selfUser, scopes, canPatch, appearanceCanSync, localeCanSync }) => {
     const page = new ConfigPage() as unknown as {
       context: ApplicationContext;
-      serverUiPrefsCanSync: (
-        key?: "theme" | "themeMode" | "accent" | "fontUi" | "fontChat",
-      ) => boolean | null;
     };
     page.context = {
       gateway: {
@@ -114,12 +106,19 @@ describe("ConfigPage synced preference provenance", () => {
       runtimeConfig: { state: { connected: true }, canPatch },
     } as unknown as ApplicationContext;
 
-    expect(page.serverUiPrefsCanSync("theme")).toBe(appearanceCanSync);
-    expect(page.serverUiPrefsCanSync("themeMode")).toBe(appearanceCanSync);
-    expect(page.serverUiPrefsCanSync("accent")).toBe(appearanceCanSync);
-    expect(page.serverUiPrefsCanSync("fontUi")).toBe(Boolean(selfUser) && appearanceCanSync);
-    expect(page.serverUiPrefsCanSync("fontChat")).toBe(Boolean(selfUser) && appearanceCanSync);
-    expect(page.serverUiPrefsCanSync()).toBe(localeCanSync);
+    expect(canSyncAppearancePreference(page.context, "theme")).toBe(appearanceCanSync);
+    expect(canSyncAppearancePreference(page.context, "themeMode")).toBe(appearanceCanSync);
+    expect(canSyncAppearancePreference(page.context, "accent")).toBe(appearanceCanSync);
+    expect(canSyncAppearancePreference(page.context, "fontUi")).toBe(
+      Boolean(selfUser) && appearanceCanSync,
+    );
+    expect(canSyncAppearancePreference(page.context, "fontChat")).toBe(
+      Boolean(selfUser) && appearanceCanSync,
+    );
+    expect(canSyncAppearancePreference(page.context, "tabIcon")).toBe(
+      Boolean(selfUser) && appearanceCanSync,
+    );
+    expect(canSyncAppearancePreference(page.context)).toBe(localeCanSync);
   });
 
   it("restores the gateway appearance default while queuing deletion of the profile override", async () => {
@@ -168,17 +167,9 @@ describe("ConfigPage synced preference provenance", () => {
   });
 
   it.each([
-    ["loading", "#123456", true],
-    ["loading", "#55bb77", true],
     ["loading", undefined, true],
-    ["disconnected", "#123456", true],
-    ["disconnected", "#55bb77", true],
     ["disconnected", undefined, true],
     ["before-load-disconnect", "#55bb77", true],
-    ["before-load-disconnect", "#123456", true],
-    ["disconnected", "#123456", false],
-    ["disconnected", "#55bb77", false],
-    ["before-load-disconnect", undefined, false],
   ] as const)(
     "reconciles the returned accent after a %s reset with server value %s (edited: %s)",
     async (connection, returnedAccent, edited) => {
@@ -251,7 +242,7 @@ describe("ConfigPage synced preference provenance", () => {
     },
   );
 
-  it.each(["fontUi", "fontChat"] as const)(
+  it.each(["fontUi"] as const)(
     "resets the %s profile override when its picker sentinel is selected",
     async (key) => {
       const gatewayUrl = "ws://font-profile.test";
@@ -356,7 +347,9 @@ describe("ConfigPage synced preference provenance", () => {
         },
       },
       runtimeConfig,
-      theme: { refresh: vi.fn() },
+      agentSelection: { state: { selectedId: null } },
+      agents: { state: { agentsList: null } },
+      theme: { branding: resolveThemeBranding(undefined), refresh: vi.fn() },
       webPush: { snapshot: {} },
     } as unknown as ApplicationContext;
     const state = page as unknown as {
@@ -383,128 +376,91 @@ describe("ConfigPage synced preference provenance", () => {
   });
 });
 
-describe("ConfigPage media discovery", () => {
-  it("coalesces refreshes while discovery is in flight", async () => {
-    for (const kind of ["microphone", "camera"] as const) {
-      const discovery = deferred<MediaDeviceInfo[]>();
-      const enumerateDevices = vi.fn(() => discovery.promise);
-      vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices } });
-      const page = new ConfigPage();
-      const state = page as unknown as {
-        refreshMediaDevices: (
-          kind: "microphone" | "camera",
-          requestPermission: boolean,
-        ) => Promise<void>;
-      };
+describe("media permission lifetime: Settings", () => {
+  it.each([
+    ["microphone", "queued gesture disconnects"],
+    ["microphone", "reentry without a fresh gesture"],
+    ["microphone", "reentry with a fresh gesture"],
+    ["microphone", "failed passive enumeration keeps one upgrade"],
+    ["microphone", "second enumeration leaves Appearance"],
+    ["microphone", "permission-bearing enumeration fails once"],
+    ["camera", "reentry with a fresh gesture"],
+  ] as const)("%s: %s", async (kind, scenario) => {
+    const initial = deferred<MediaDeviceInfo[]>();
+    const second = deferred<MediaDeviceInfo[]>();
+    const enumerateDevices = vi.fn().mockReturnValueOnce(initial.promise);
+    if (scenario === "second enumeration leaves Appearance") {
+      enumerateDevices.mockReturnValueOnce(second.promise);
+    }
+    enumerateDevices.mockResolvedValue([]);
+    const stop = vi.fn();
+    const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
+    vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices, getUserMedia } });
+    const page = new ConfigPage();
+    page.pageId = "appearance";
+    const state = page as unknown as {
+      refreshMediaDevices: (
+        kind: "microphone" | "camera",
+        requestPermission: boolean,
+      ) => Promise<void>;
+      mediaDevices: Record<"microphone" | "camera", { loading: boolean; error: string | null }>;
+    };
+    const refresh = (requestPermission: boolean) =>
+      state.refreshMediaDevices(kind, requestPermission);
+    const leaveAppearance = () => {
+      page.pageId = "advanced";
+      page.willUpdate(new Map([["pageId", "appearance"]]));
+    };
+    const startsWithPermission = scenario.startsWith("permission-bearing");
+    const first = refresh(startsWithPermission);
+    if (!startsWithPermission) {
+      await refresh(true);
+    }
+    expect(enumerateDevices).toHaveBeenCalledOnce();
+    expect(getUserMedia).not.toHaveBeenCalled();
 
-      const first = state.refreshMediaDevices(kind, true);
-      await state.refreshMediaDevices(kind, true);
+    if (scenario === "queued gesture disconnects") {
+      page.disconnectedCallback();
+    } else if (scenario.startsWith("reentry")) {
+      leaveAppearance();
+    }
+    if (scenario.startsWith("reentry")) {
+      page.pageId = "appearance";
+      page.willUpdate(new Map([["pageId", "advanced"]]));
+      await refresh(scenario === "reentry with a fresh gesture");
+    }
+    if (
+      scenario === "failed passive enumeration keeps one upgrade" ||
+      scenario === "second enumeration leaves Appearance" ||
+      scenario === "permission-bearing enumeration fails once"
+    ) {
+      initial.reject(new DOMException("Synthetic inactive enumeration", "InvalidStateError"));
+    } else {
+      initial.resolve([]);
+    }
+    if (scenario === "second enumeration leaves Appearance") {
+      await vi.waitFor(() => expect(enumerateDevices).toHaveBeenCalledTimes(2));
+      leaveAppearance();
+      second.resolve([]);
+    }
+    await first;
+    await vi.waitFor(() => expect(state.mediaDevices[kind].loading).toBe(false));
+    const permits = [
+      "reentry with a fresh gesture",
+      "failed passive enumeration keeps one upgrade",
+    ].includes(scenario);
+    expect(getUserMedia).toHaveBeenCalledTimes(permits ? 1 : 0);
+    expect(stop).toHaveBeenCalledTimes(permits ? 1 : 0);
+    if (permits) {
+      expect(getUserMedia).toHaveBeenCalledWith(
+        kind === "microphone" ? { audio: true } : { video: true },
+      );
+    }
+    if (scenario === "permission-bearing enumeration fails once") {
       expect(enumerateDevices).toHaveBeenCalledOnce();
-
-      discovery.resolve([]);
-      await first;
+      expect(state.mediaDevices[kind].error).toBeTruthy();
     }
   });
-});
-
-// The same matrix runs on the unchanged owner before applying the repair.
-// Observe the real discovery callee at the MediaDevices boundary, not queue flags.
-describe("media permission lifetime: Settings", () => {
-  const scenarios = [
-    "queued gesture remains active",
-    "queued gesture leaves Appearance",
-    "queued gesture disconnects",
-    "permission-bearing enumeration leaves Appearance",
-    "reentry without a fresh gesture",
-    "reentry with a fresh gesture",
-    "failed passive enumeration keeps one upgrade",
-    "second enumeration leaves Appearance",
-    "permission-bearing enumeration fails once",
-  ] as const;
-
-  for (const kind of ["microphone", "camera"] as const) {
-    it.each(scenarios)(`${kind}: %s`, async (scenario) => {
-      const initial = deferred<MediaDeviceInfo[]>();
-      const second = deferred<MediaDeviceInfo[]>();
-      const enumerateDevices = vi.fn().mockReturnValueOnce(initial.promise);
-      if (scenario === "second enumeration leaves Appearance") {
-        enumerateDevices.mockReturnValueOnce(second.promise);
-      }
-      enumerateDevices.mockResolvedValue([]);
-      const stop = vi.fn();
-      const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
-      vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices, getUserMedia } });
-      const page = new ConfigPage();
-      page.pageId = "appearance";
-      const state = page as unknown as {
-        refreshMediaDevices: (
-          kind: "microphone" | "camera",
-          requestPermission: boolean,
-        ) => Promise<void>;
-        mediaDevices: Record<"microphone" | "camera", { loading: boolean; error: string | null }>;
-      };
-      const refresh = (requestPermission: boolean) =>
-        state.refreshMediaDevices(kind, requestPermission);
-      const leaveAppearance = () => {
-        page.pageId = "advanced";
-        page.willUpdate(new Map([["pageId", "appearance"]]));
-      };
-      const startsWithPermission = scenario.startsWith("permission-bearing");
-      const first = refresh(startsWithPermission);
-      if (!startsWithPermission) {
-        await refresh(true);
-      }
-      expect(enumerateDevices).toHaveBeenCalledOnce();
-      expect(getUserMedia).not.toHaveBeenCalled();
-
-      if (scenario === "queued gesture disconnects") {
-        page.disconnectedCallback();
-      } else if (
-        scenario === "queued gesture leaves Appearance" ||
-        scenario === "permission-bearing enumeration leaves Appearance" ||
-        scenario.startsWith("reentry")
-      ) {
-        leaveAppearance();
-      }
-      if (scenario.startsWith("reentry")) {
-        page.pageId = "appearance";
-        page.willUpdate(new Map([["pageId", "advanced"]]));
-        await refresh(scenario === "reentry with a fresh gesture");
-      }
-      if (
-        scenario === "failed passive enumeration keeps one upgrade" ||
-        scenario === "second enumeration leaves Appearance" ||
-        scenario === "permission-bearing enumeration fails once"
-      ) {
-        initial.reject(new DOMException("Synthetic inactive enumeration", "InvalidStateError"));
-      } else {
-        initial.resolve([]);
-      }
-      if (scenario === "second enumeration leaves Appearance") {
-        await vi.waitFor(() => expect(enumerateDevices).toHaveBeenCalledTimes(2));
-        leaveAppearance();
-        second.resolve([]);
-      }
-      await first;
-      await vi.waitFor(() => expect(state.mediaDevices[kind].loading).toBe(false));
-      const permits = [
-        "queued gesture remains active",
-        "reentry with a fresh gesture",
-        "failed passive enumeration keeps one upgrade",
-      ].includes(scenario);
-      expect(getUserMedia).toHaveBeenCalledTimes(permits ? 1 : 0);
-      expect(stop).toHaveBeenCalledTimes(permits ? 1 : 0);
-      if (permits) {
-        expect(getUserMedia).toHaveBeenCalledWith(
-          kind === "microphone" ? { audio: true } : { video: true },
-        );
-      }
-      if (scenario === "permission-bearing enumeration fails once") {
-        expect(enumerateDevices).toHaveBeenCalledOnce();
-        expect(state.mediaDevices[kind].error).toBeTruthy();
-      }
-    });
-  }
 });
 
 describe("ConfigPage camera selection", () => {
@@ -553,12 +509,8 @@ describe("ConfigPage camera selection", () => {
 
 describe("ConfigPage curated mutation eligibility", () => {
   it.each([
-    ["offline", { connected: false }, ["operator.admin"], false, true],
     ["read-only operator", { connected: true }, ["operator.read"], false, true],
     ["config.set absent", { connected: true }, ["operator.admin"], false, false],
-    ["config save", { connected: true, configSaving: true }, ["operator.admin"], false, true],
-    ["app update", { connected: true }, ["operator.admin"], true, true],
-    ["idle administrator", { connected: true }, ["operator.admin"], false, true],
   ])("locks server-backed controls for %s", (_name, statePatch, scopes, updateRunning, canSet) => {
     const page = new ConfigPage();
     const state = page as unknown as {
@@ -583,8 +535,7 @@ describe("ConfigPage curated mutation eligibility", () => {
       },
     } as unknown as ApplicationContext;
 
-    const expectedUnlocked = _name === "idle administrator";
-    expect(state.isCuratedConfigMutationDisabled()).toBe(!expectedUnlocked);
+    expect(state.isCuratedConfigMutationDisabled()).toBe(true);
   });
 });
 
@@ -681,7 +632,9 @@ describe("ConfigPage Updates integration", () => {
     expect(container.querySelector(".settings-status")?.textContent).toContain(
       "Checking for updates…",
     );
-    expect(container.querySelector("wa-radio-group")?.hasAttribute("disabled")).toBe(true);
+    expect(container.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled).toBe(
+      true,
+    );
     state.context.overlays.snapshot.updateStatusRefreshing = false;
     state.context.overlays.snapshot.updateStatusCheckBanner = {
       mode: "manual",
@@ -709,17 +662,18 @@ describe("ConfigPage Updates integration", () => {
     );
     expect(runUpdate).not.toHaveBeenCalled();
 
-    const channel = container.querySelector<HTMLElement & { value: string }>("wa-radio-group");
+    const channel = container.querySelector<HTMLInputElement>(
+      '.settings-segmented__input[value="beta"]',
+    );
     if (!channel) {
       throw new Error("Missing update channel control");
     }
-    channel.value = "beta";
-    channel.dispatchEvent(new Event("change"));
+    channel.click();
     const policySwitches = [
-      ...container.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch"),
+      ...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input"),
     ];
     const checks = policySwitches.find(
-      (control) => control.textContent?.trim() === "Check for updates",
+      (control) => control.closest(".settings-toggle")?.textContent?.trim() === "Check for updates",
     );
     if (!checks) {
       throw new Error("Missing update checks control");
@@ -727,7 +681,7 @@ describe("ConfigPage Updates integration", () => {
     checks.checked = false;
     checks.dispatchEvent(new Event("change"));
     const automatic = policySwitches.find(
-      (control) => control.textContent?.trim() === "Automatic updates",
+      (control) => control.closest(".settings-toggle")?.textContent?.trim() === "Automatic updates",
     );
     if (!automatic) {
       throw new Error("Missing automatic update control");

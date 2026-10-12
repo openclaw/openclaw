@@ -106,7 +106,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
     expect(registry.getSubagentRunByRunId("old-grandchild")?.cleanupCompletedAt).toBeUndefined();
   });
 
-  it("caps a stale requester batch despite foreign active work in a global session", async () => {
+  it("delivers a stale requester batch despite foreign active work in a global session", async () => {
     vi.setSystemTime(100_000);
     useGlobalSessionScope();
     await registry.addSubagentRunForTests({
@@ -194,7 +194,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
         },
         completeBatch: async (entries, _rearmGeneration, outcome) => {
           if (!outcome) {
-            throw new Error("Expected the exhausted requester deferral outcome");
+            throw new Error("Expected a requester delivery outcome");
           }
           const publication = await mutateRequesterCompletionBatch({
             entries,
@@ -215,13 +215,14 @@ export function registerRequesterWakeSettlementBoundaryTests({
     expect(transitions).toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(30_000);
-    await expect(runWake()).resolves.toBe(false);
-    expect(completions).toEqual([
-      {
-        delivered: false,
-        error: "requester settle wake deferred too many times",
-      },
-    ]);
+    // The spent stale-blocker wait delivers the completed batch instead of
+    // terminalizing it as undelivered.
+    await expect(runWake()).resolves.toBe(true);
+    expect(getRequesterWakeCalls()).toHaveLength(1);
+    expect(getRequesterWakeCalls()[0]?.params?.message).toContain(
+      "a descendant result below it was still undelivered",
+    );
+    expect(completions).toEqual([{ delivered: true, error: undefined }]);
     expect(registry.getSubagentRunByRunId("run-main-batch")?.requesterSettleWake).toBeUndefined();
     expect(countActiveDescendantRunsFromRuns(subagentRuns, requesterSessionKey)).toBe(1);
     expect(countActiveDescendantRunsFromRuns(subagentRuns, requesterSessionKey, "main")).toBe(0);

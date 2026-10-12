@@ -5,6 +5,7 @@ import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
+import { withSandboxRegistryPublication } from "./registry-publication.js";
 import type { SandboxRegistryEntry } from "./registry.types.js";
 
 const lifetimes = new Map<string, ReturnType<typeof createLifetime>>();
@@ -144,7 +145,11 @@ export async function finishSandboxRegistryRemoval(
       (scope) => scope.execute({ type: "sandboxRegistry.finishRemoval", input: entry }),
       cleanupContext,
       assertOwned,
-      createSqliteWorkerWriteAdmission(assertOwned, [context.admission.databasePath]),
+      withSandboxRegistryPublication(
+        createSqliteWorkerWriteAdmission(assertOwned, [context.admission.databasePath]),
+        () => identity.key,
+        assertOwned,
+      ),
     );
   } catch (error) {
     errors.push(error);

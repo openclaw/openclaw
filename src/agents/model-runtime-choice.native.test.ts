@@ -113,6 +113,7 @@ it.each(["configured", "literal"] as const)(
         cfg: config,
         model: entry.id,
         catalog: entries,
+        thinkingPolicyRequired: false,
       });
       expect(result).toMatchObject({
         status: "ready",

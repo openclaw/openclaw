@@ -101,6 +101,7 @@ describe("Control UI release-only inventories", () => {
   const sidebar = "ui/src/components/app-sidebar.stress.browser.test.ts";
   const embed = "ui/src/e2e/native-embed-settings.e2e.test.ts";
   const entry = "ui/src/e2e/chat-session-entry.e2e.test.ts";
+  const staleBuild = "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts";
   const automationManagement =
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
   const releaseOnlyRealGateway = new Set([
@@ -152,6 +153,7 @@ describe("Control UI release-only inventories", () => {
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
     expect(groups.e2e[0]?.includePatterns).toContain(embed);
     expect(groups.e2e[0]?.includePatterns).toContain(entry);
+    expect(groups.e2e[0]?.includePatterns).not.toContain(staleBuild);
     expect(
       uiE2eRealGatewayTestFiles.filter((file) => groups.e2e[0]?.includePatterns?.includes(file)),
     ).toEqual(uiE2eRealGatewayTestFiles.filter((file) => !releaseOnlyRealGateway.has(file)));
@@ -172,6 +174,7 @@ describe("Control UI release-only inventories", () => {
       includeReleaseOnlyTests: false,
       changedPaths: [
         entry,
+        staleBuild,
         ...releaseOnlyRealGateway,
         "ui/src/components/app-sidebar.ts",
         "ui/src/e2e",
@@ -179,6 +182,7 @@ describe("Control UI release-only inventories", () => {
     };
     const groups = createUiTestShardGroups(options);
     expect(groups.e2e[0]?.includePatterns).toContain(entry);
+    expect(groups.e2e[0]?.includePatterns).toContain(staleBuild);
     expect(
       groups.e2e[0]?.includePatterns?.filter((file) => releaseOnlyRealGateway.has(file)).toSorted(),
     ).toEqual(
@@ -2000,6 +2004,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/auto-reply/reply/new.test.tsx",
       "src/infra/outbound/new.test.ts",
       "test/tsconfig/tsconfig.core.test.messaging.json",
+      "test/tsconfig/tsconfig.core.test.ui-e2e-chat.json",
     ]) {
       expect(resolvePolicyTestTargets([changedPath]), changedPath).toContain(guard);
       expect(isPolicyTestOwnedPath(changedPath), changedPath).toBe(false);
@@ -2111,6 +2116,22 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(isPolicyTestOwnedPath(lookalike), lookalike).toBe(false);
       expect(resolvePolicyTestTargets([lookalike]), lookalike).toEqual([]);
     }
+  });
+
+  it("bounds Gateway cache collections without dropping or repeating owner files", () => {
+    const config = "test/vitest/vitest.gateway-methods.config.ts";
+    const groups = createVitestCacheWarmGroups().filter((group) => group.configs.includes(config));
+    const files = groups.flatMap((group) => group.includePatterns ?? []);
+    expect(groups.length).toBeGreaterThan(1);
+    expect(groups.every((group) => group.includePatterns!.length <= 32)).toBe(true);
+    expect(new Set(groups.map((group) => group.shard_name)).size).toBe(groups.length);
+    expect(new Set(files).size).toBe(files.length);
+    expect(files).toEqual(nodeTestInventory.listNodeTestConfigFiles(config));
+    expect(
+      createVitestCacheWarmGroups().filter((group) =>
+        group.configs.includes("test/vitest/vitest.gateway-methods-isolated.config.ts"),
+      ),
+    ).toHaveLength(1);
   });
 
   it("bounds the hybrid hosted seed to real consumer configs without runtime builds", () => {
@@ -3751,7 +3772,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         "src/gateway/server-worker-placement-session-evidence.worker.test.ts",
         "src/gateway/session-lifecycle-run-failure.test.ts",
         "src/gateway/session-lifecycle-state.persistence.test.ts",
-        "src/gateway/talk/client-spoken-confirmation.test.ts",
+        "src/gateway/talk/client-permission-parity.test.ts",
         "src/gateway/tool-resolution.swarm-collector.test.ts",
         "src/gateway/tool-resolution.terminal.test.ts",
         "src/gateway/worker-workspace-recovery-transcript.test.ts",

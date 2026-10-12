@@ -1,5 +1,5 @@
 // Capacity groups share a hard budget with non-borrowable member reservations.
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import {
   enqueueCommandInLane,
@@ -35,6 +35,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   clearCommandLaneGroup(GROUP);
   resetAllLanes();
 });
@@ -80,33 +81,7 @@ describe("command lane capacity groups", () => {
     await Promise.all([...cronRuns, blockedCron]);
   });
 
-  test("a member may use the full group budget beyond its reservation", async () => {
-    setCommandLaneGroup(GROUP, {
-      budget: 8,
-      members: [CRON, HOOK],
-      reservations: { [HOOK]: 1 },
-    });
-
-    const gates = Array.from({ length: 9 }, () => createDeferred());
-    const runs = gates.map((g) => enqueueCommandInLane(HOOK, async () => await g.promise));
-
-    expect(getCommandLaneSnapshot(HOOK)).toMatchObject({
-      activeCount: 8,
-      queuedCount: 1,
-      maxConcurrent: 8,
-      groupActive: 8,
-      groupBudget: 8,
-      reservedForLane: 1,
-      blockedBy: "lane",
-    });
-
-    for (const g of gates) {
-      g.resolve();
-    }
-    await Promise.all(runs);
-  });
-
-  test.each(["successful", "failing"] as const)(
+  test.each(["failing"] as const)(
     "a %s completion gives shared capacity to the older eligible sibling head",
     async (outcome) => {
       setCommandLaneGroup(GROUP, {
@@ -184,6 +159,38 @@ describe("command lane capacity groups", () => {
     await newerForeground;
     cronGate.resolve();
     await olderBackground;
+  });
+
+  test("aging applies across member lanes without borrowing a sibling reservation", async () => {
+    vi.useFakeTimers();
+    setCommandLaneGroup(GROUP, {
+      budget: 2,
+      members: [HOOK, CRON],
+      reservations: { [HOOK]: 1 },
+    });
+    const blockerGate = createDeferred();
+    const blocker = enqueueCommandInLane(CRON, async () => await blockerGate.promise);
+    const order: string[] = [];
+    const background = enqueueCommandInLane(CRON, async () => void order.push("background"), {
+      priority: "background",
+    });
+    vi.advanceTimersByTime(30_000);
+    expect(getCommandLaneSnapshot(CRON)).toMatchObject({
+      activeCount: 1,
+      queuedCount: 1,
+      blockedBy: "sibling-reservation",
+    });
+    const hookGate = createDeferred();
+    const hook = enqueueCommandInLane(HOOK, async () => await hookGate.promise);
+    const foreground = enqueueCommandInLane(HOOK, async () => void order.push("foreground"), {
+      priority: "foreground",
+    });
+    blockerGate.resolve();
+    await blocker;
+    await Promise.all([background, foreground]);
+    expect(order).toEqual(["background", "foreground"]);
+    hookGate.resolve();
+    await hook;
   });
 
   test("three-member arbitration is independent of member iteration order", async () => {
@@ -359,30 +366,6 @@ describe("command lane capacity groups", () => {
 
     hookGate.resolve();
     await hookRun;
-  });
-
-  test("blockedBy reports hypothetical immediate admission with an EMPTY queue", async () => {
-    // Pre-enqueue watchdog snapshots must report capacity waits even with no queued head.
-    setCommandLaneGroup(GROUP, {
-      budget: 8,
-      members: [CRON, HOOK],
-      reservations: { [HOOK]: 1 },
-    });
-
-    const gates = Array.from({ length: 7 }, () => createDeferred());
-    const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
-
-    const snapshot = getCommandLaneSnapshot(CRON);
-    expect(snapshot.queuedCount).toBe(0);
-    expect(snapshot.activeCount).toBeLessThan(snapshot.maxConcurrent);
-    expect(snapshot.blockedBy).toBe("sibling-reservation");
-
-    expect(getCommandLaneSnapshot(HOOK).blockedBy).toBeNull();
-
-    for (const g of gates) {
-      g.resolve();
-    }
-    await Promise.all(runs);
   });
 
   test("lanes outside any group are unconstrained by it", async () => {

@@ -8,6 +8,7 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../../agents/admitted-run-context.js";
 import { normalizeModelRef } from "../../agents/model-ref-shared.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { logVerbose } from "../../globals.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
@@ -112,6 +113,28 @@ export async function runManagerTurn(params: {
   // Each release is fenced so a retired actor cannot erase its successor.
   let releaseActiveTurn = markAcpTurnActive(params);
   let spawnedByWatcher: string | undefined;
+  const recordTerminalState = async (
+    outcomeStatus: Parameters<typeof recordSubagentTerminalState>[0]["outcomeStatus"],
+    cancelling: boolean,
+  ) => {
+    if (cancelling) {
+      await params.acceptedTurn.revalidateCancel?.("publication");
+      assertCancellationPublicationCurrent();
+    }
+    if (spawnedByWatcher) {
+      await recordSubagentTerminalState(
+        {
+          childSessionKey: sessionKey,
+          agentId,
+          runId: input.requestId,
+          requesterSessionKey: spawnedByWatcher,
+          outcomeStatus,
+        },
+        cancelling ? assertCancellationPublicationCurrent : assertActorCurrent,
+        cancelling ? params.acceptedTurn.cancelConstraint : undefined,
+      );
+    }
+  };
 
   try {
     let initialResolution: Awaited<ReturnType<ResolveManagerSessionAsync>>;
@@ -160,23 +183,13 @@ export async function runManagerTurn(params: {
         ...(cancelled ? {} : { errorCode: acpError.code }),
       });
       if (spawnedByWatcher && params.isCurrentActor()) {
-        if (cancelled) {
-          await params.acceptedTurn.revalidateCancel?.("publication");
-          assertCancellationPublicationCurrent();
-        }
-        await recordSubagentTerminalState(
-          {
-            childSessionKey: sessionKey,
-            runId: input.requestId,
-            requesterSessionKey: spawnedByWatcher,
-            outcomeStatus: cancelled
-              ? "cancelled"
-              : acpError.detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE
-                ? "timeout"
-                : "error",
-          },
-          cancelled ? assertCancellationPublicationCurrent : assertActorCurrent,
-          cancelled ? params.acceptedTurn.cancelConstraint : undefined,
+        await recordTerminalState(
+          cancelled
+            ? "cancelled"
+            : acpError.detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE
+              ? "timeout"
+              : "error",
+          cancelled,
         );
       }
       throw acpError;
@@ -205,22 +218,13 @@ export async function runManagerTurn(params: {
         errorCode: errorToRecord.code,
       });
       const cancelling = params.acceptedTurn.abortController.signal.aborted;
-      if (cancelling) {
-        await params.acceptedTurn.revalidateCancel?.("publication");
-        assertCancellationPublicationCurrent();
+      if (cancelling || spawnedByWatcher) {
+        await recordTerminalState(
+          errorToRecord.detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE ? "timeout" : "error",
+          cancelling,
+        );
       }
       if (spawnedByWatcher) {
-        await recordSubagentTerminalState(
-          {
-            childSessionKey: sessionKey,
-            runId: input.requestId,
-            requesterSessionKey: spawnedByWatcher,
-            outcomeStatus:
-              errorToRecord.detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE ? "timeout" : "error",
-          },
-          cancelling ? assertCancellationPublicationCurrent : assertActorCurrent,
-          cancelling ? params.acceptedTurn.cancelConstraint : undefined,
-        );
         assertActorCurrent();
       }
       await params.setSessionState({
@@ -368,6 +372,12 @@ export async function runManagerTurn(params: {
           const eventGate = { open: true };
           const turnPromise = consumeAcpTurnStream({
             runtime,
+            source: composeSessionSourceAssertion([assertSignalAdmission], (assertSource) => {
+              assertActorCurrent();
+              input.signal?.throwIfAborted();
+              modelExecution?.assertCurrent();
+              assertSource();
+            }),
             turn: {
               handle,
               text: input.text,
@@ -472,21 +482,10 @@ export async function runManagerTurn(params: {
           });
           const cancelled = turnOutcome.terminalStatus === "cancelled";
           const cancelling = cancelled || params.acceptedTurn.abortController.signal.aborted;
-          if (cancelling) {
-            await params.acceptedTurn.revalidateCancel?.("publication");
-            assertCancellationPublicationCurrent();
+          if (cancelling || spawnedByWatcher) {
+            await recordTerminalState(cancelled ? "cancelled" : "ok", cancelling);
           }
           if (spawnedByWatcher) {
-            await recordSubagentTerminalState(
-              {
-                childSessionKey: sessionKey,
-                runId: input.requestId,
-                requesterSessionKey: spawnedByWatcher,
-                outcomeStatus: cancelled ? "cancelled" : "ok",
-              },
-              cancelling ? assertCancellationPublicationCurrent : assertActorCurrent,
-              cancelling ? params.acceptedTurn.cancelConstraint : undefined,
-            );
             assertActorCurrent();
           }
           await params.setSessionState({

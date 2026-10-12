@@ -352,14 +352,11 @@ export function resolveSettledToolTerminalContinuationInstruction(
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     attempt.clientToolCalls ||
     attempt.yieldDetected ||
-    attempt.didSendDeterministicApprovalPrompt
+    attempt.didSendDeterministicApprovalPrompt ||
+    attempt.hasToolMediaBlockReply ||
+    resolveSourceReplyDelivery(attempt) !== "missing" ||
+    !shouldApplyNonVisibleTurnRetryGuard(params)
   ) {
-    return null;
-  }
-  if (attempt.hasToolMediaBlockReply || resolveSourceReplyDelivery(attempt) !== "missing") {
-    return null;
-  }
-  if (!shouldApplyNonVisibleTurnRetryGuard(params)) {
     return null;
   }
   return allToolsProvenSettled && failedToolNames.size > 0
