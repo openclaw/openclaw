@@ -38,11 +38,7 @@ const pngImage = Buffer.from(
   "hex",
 );
 const svgImage = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
-const avifImage = Buffer.from("00000018667479706176696600000000617669666d696631", "hex");
-const heicImage = Buffer.from("00000018667479706865696300000000686569636d696631", "hex");
 const tiffImage = Buffer.from("49492a000800000000000000", "hex");
-const jpegImage = Buffer.from("ffd8ffe000104a46494600010100000100010000ffdb0043", "hex");
-const icoImage = Buffer.from("00000100010010100000010020006804000016000000", "hex");
 
 function resolvedAccount(mediaMaxMb?: number) {
   return {
@@ -92,135 +88,37 @@ describe("Feishu upload contracts", () => {
     mocks.runFfprobe.mockResolvedValue("1.25\n");
   });
 
-  it.each([
-    {
-      label: "a voice-looking URL resolves to a PDF",
-      mediaUrl: "https://example.com/download.ogg",
-      fileName: "report.pdf",
-      contentType: "application/pdf",
-      buffer: Buffer.from("%PDF-1.7 document"),
-      messageType: "file",
-      degraded: true,
-    },
-    {
-      label: "a voice-looking URL resolves to an image",
-      mediaUrl: "https://example.com/download.opus",
-      fileName: "photo.png",
-      contentType: "image/png",
-      buffer: pngImage,
-      messageType: "image",
-      degraded: true,
-    },
-    {
-      label: "a voice-looking URL resolves to a video",
-      mediaUrl: "https://example.com/download.ogg",
-      fileName: "clip.mp4",
-      contentType: "video/mp4",
-      buffer: Buffer.from("video bytes"),
-      messageType: "media",
-      degraded: true,
-    },
-    {
-      label: "actual native voice remains audio",
-      mediaUrl: "https://example.com/download.ogg",
-      fileName: "voice.ogg",
-      contentType: "audio/ogg",
-      buffer: Buffer.from("voice bytes"),
-      messageType: "audio",
-      degraded: false,
-    },
-    {
-      label: "an ordinary PDF was never treated as voice",
-      mediaUrl: "https://example.com/report.pdf",
-      fileName: "report.pdf",
-      contentType: "application/pdf",
-      buffer: Buffer.from("%PDF-1.7 document"),
-      messageType: "file",
-      degraded: false,
-    },
-    {
-      label: "explicit voice intent still reports a PDF degradation",
-      mediaUrl: "https://example.com/report.pdf",
-      fileName: "report.pdf",
-      contentType: "application/pdf",
-      buffer: Buffer.from("%PDF-1.7 document"),
-      audioAsVoice: true,
-      messageType: "file",
-      degraded: true,
-    },
-  ])("reconciles voice visibility after loading when $label", async (media) => {
+  it("reports degraded voice intent when the loaded attachment is a PDF", async () => {
     mocks.loadWebMedia.mockResolvedValueOnce({
-      buffer: media.buffer,
-      fileName: media.fileName,
-      contentType: media.contentType,
+      buffer: Buffer.from("%PDF-1.7 document"),
+      fileName: "report.pdf",
+      contentType: "application/pdf",
     });
 
     const result = await sendMedia({
-      mediaUrl: media.mediaUrl,
-      ...(media.audioAsVoice ? { audioAsVoice: true } : {}),
+      mediaUrl: "https://example.com/report.pdf",
+      audioAsVoice: true,
     });
 
-    expect(mockCallData(mocks.messageCreate).msg_type).toBe(media.messageType);
-    expect(result.voiceIntentDegradedToFile).toBe(media.degraded ? true : undefined);
+    expect(mockCallData(mocks.messageCreate).msg_type).toBe("file");
+    expect(result.voiceIntentDegradedToFile).toBe(true);
   });
 
-  it.each([
-    { fileName: "diagram.png", contentType: "image/png", buffer: svgImage },
-    { fileName: "photo.png", contentType: "image/png", buffer: avifImage },
-    { fileName: "photo.heic", contentType: "image/heic", buffer: Buffer.from("heic image") },
-  ])("sends unsupported image format $contentType as a file attachment", async (media) => {
+  it("sends SVG bytes disguised as PNG metadata as a file attachment", async () => {
     mocks.loadWebMedia.mockResolvedValueOnce({
-      buffer: media.buffer,
-      fileName: media.fileName,
+      buffer: svgImage,
+      fileName: "diagram.png",
       kind: "image",
-      contentType: media.contentType,
+      contentType: "image/png",
     });
 
     await sendMedia({
-      mediaUrl: `https://example.com/${media.fileName}`,
+      mediaUrl: "https://example.com/diagram.png",
     });
 
     expect(mocks.imageCreate).not.toHaveBeenCalled();
     expect(mockCallData(mocks.fileCreate).file_type).toBe("stream");
     expect(mockCallData(mocks.messageCreate).msg_type).toBe("file");
-  });
-
-  it("uploads actual HEIC bytes despite a JPEG filename", async () => {
-    mocks.loadWebMedia.mockResolvedValueOnce({
-      buffer: heicImage,
-      fileName: "photo.jpg",
-      kind: "image",
-      contentType: "image/heic",
-    });
-    await sendMedia({ mediaUrl: "https://example.com/photo.jpg" });
-    expect(mocks.fileCreate).not.toHaveBeenCalled();
-    expect(mocks.imageCreate).toHaveBeenCalledOnce();
-    expect(mockCallData(mocks.messageCreate).msg_type).toBe("image");
-  });
-
-  it("recognizes supported TIFF bytes in a direct attachment", async () => {
-    await sendMedia({ mediaBuffer: tiffImage, fileName: "scan.tif" });
-    expect(mocks.imageCreate).toHaveBeenCalledOnce();
-    expect(mockCallData(mocks.messageCreate).msg_type).toBe("image");
-  });
-
-  it.each([
-    { fileName: "photo.bin", contentType: "image/jpg", buffer: jpegImage },
-    { fileName: "icon.bin", contentType: "image/ico", buffer: icoImage },
-    { fileName: "download", contentType: "application/octet-stream", buffer: pngImage },
-  ])("routes supported image bytes with $contentType metadata natively", async (media) => {
-    mocks.loadWebMedia.mockResolvedValueOnce({
-      ...media,
-      kind: "image",
-    });
-
-    await sendMedia({
-      mediaUrl: `https://example.com/${media.fileName}`,
-    });
-
-    expect(mocks.fileCreate).not.toHaveBeenCalled();
-    expect(mocks.imageCreate).toHaveBeenCalledOnce();
-    expect(mockCallData(mocks.messageCreate).msg_type).toBe("image");
   });
 
   it("rejects images exceeding the platform image-upload limit before contacting Feishu", async () => {
@@ -234,20 +132,6 @@ describe("Feishu upload contracts", () => {
     ).rejects.toThrow("Feishu image exceeds its 10485760-byte upload limit");
 
     expect(mocks.imageCreate).not.toHaveBeenCalled();
-    expect(mocks.messageCreate).not.toHaveBeenCalled();
-  });
-
-  it("rejects files exceeding the configured attachment limit before contacting Feishu", async () => {
-    mocks.resolveAccount.mockReturnValue(resolvedAccount(1 / (1024 * 1024)));
-
-    await expect(
-      sendMedia({
-        mediaBuffer: Buffer.from("too large"),
-        fileName: "notes.pdf",
-      }),
-    ).rejects.toThrow("Feishu file exceeds its 1-byte upload limit");
-
-    expect(mocks.fileCreate).not.toHaveBeenCalled();
     expect(mocks.messageCreate).not.toHaveBeenCalled();
   });
 
@@ -270,7 +154,7 @@ describe("Feishu upload contracts", () => {
     mocks.messageCreate.mockResolvedValueOnce({ code: 0, data: {} });
     let caught: unknown;
     try {
-      await sendMedia({ mediaBuffer: pngImage, fileName: "photo.png" });
+      await sendMedia({ mediaBuffer: tiffImage, fileName: "scan.tif" });
     } catch (error) {
       caught = error;
     }

@@ -260,7 +260,7 @@ describe("AppSidebar agent chip", () => {
     expect(
       menu
         ?.querySelector('[role="separator"]')
-        ?.previousElementSibling?.classList.contains("sidebar-agent-menu__agent-grid"),
+        ?.previousElementSibling?.classList.contains("sidebar-agent-menu__agent-list"),
     ).toBe(true);
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).toBeNull();
@@ -295,7 +295,7 @@ describe("AppSidebar agent chip", () => {
     const agentRows = [...(menu?.querySelectorAll('wa-dropdown-item[value^="agent:"]') ?? [])];
     expect(agentRows).toHaveLength(2);
     expect(agentRows[0]?.classList.contains("sidebar-agent-menu__agent-switch--active")).toBe(true);
-    expect(agentRows[0]?.querySelector(".sidebar-agent-menu__agent-tile")).not.toBeNull();
+    expect(agentRows[0]?.querySelector(".sidebar-agent-menu__agent-row")).not.toBeNull();
     expect(menu?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦞");
     expect(menu?.querySelector<HTMLImageElement>(".agent-select__avatar img")?.src).toContain(
       "data:image/png;base64,eA==",
@@ -460,7 +460,7 @@ describe("AppSidebar agent chip", () => {
     { count: 12, pins: [], order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] },
     { count: 12, pins: ["deleted-agent"], order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] },
   ])(
-    "keeps all $count agents in pin order without a filter (pins=$pins)",
+    "keeps all $count agents in pin order and searches only larger lists (pins=$pins)",
     async ({ count, pins, order }) => {
       const { sidebar, context } = await mountSidebar(
         createGateway({} as GatewayBrowserClient),
@@ -474,8 +474,8 @@ describe("AppSidebar agent chip", () => {
       await sidebar.updateComplete;
       sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
       await sidebar.updateComplete;
-      expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
-      expect(sidebar.querySelector(".sidebar-agent-menu__agent-grid")).not.toBeNull();
+      expect(Boolean(sidebar.querySelector(".sidebar-agent-menu__filter"))).toBe(count > 6);
+      expect(sidebar.querySelector(".sidebar-agent-menu__agent-list")).not.toBeNull();
       expect(
         [
           ...sidebar.querySelectorAll(

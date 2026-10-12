@@ -71,6 +71,50 @@ export async function withStoredAgentCommandRecoverySession(
 export function registerAgentCommandRecoveryCases(
   getFixture: () => AgentCommandRecoveryFixture,
 ): void {
+  it("preserves bounded delivery evidence when strict post-turn delivery throws", async () => {
+    const fixture = getFixture();
+    const { state, agentCommand, setupSingleAttemptFallback, makeSuccessResult } = fixture;
+    await withStoredAgentCommandRecoverySession(fixture, async (scope) => {
+      setupSingleAttemptFallback();
+      state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+      const secret = ["sk", "strict-delivery-secret-value"].join("-");
+      state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
+        (
+          params as {
+            onDeliveryResult?: (result: { deliveryStatus: Record<string, unknown> }) => void;
+          }
+        ).onDeliveryResult?.({
+          deliveryStatus: {
+            status: "failed",
+            errorMessage: `Authorization: Bearer ${secret}`,
+            target: "discord:dm:private",
+          },
+        });
+        throw new Error("strict delivery failed");
+      });
+      await expect(
+        agentCommand({
+          message: "hello",
+          sessionKey: scope.sessionKey,
+          channel: "discord",
+          to: "discord:dm:123",
+          accountId: "main",
+          deliver: true,
+        }),
+      ).rejects.toThrow("strict delivery failed");
+
+      const lifecycleError = state.emitAgentEventMock.mock.calls
+        .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
+        .find((event) => event.stream === "lifecycle" && event.data?.phase === "error");
+      expect(lifecycleError?.data?.terminalDelivery).toEqual({ status: "failed", resultCount: 0 });
+      for (const field of ["stopReason", "terminalReceipt", "terminalReply"]) {
+        expect(lifecycleError?.data).not.toHaveProperty(field);
+      }
+      expect(JSON.stringify(lifecycleError)).not.toContain(secret);
+      expect(JSON.stringify(lifecycleError)).not.toContain("discord:dm:private");
+    });
+  });
+
   it("preserves rejected best-effort delivery intent without private Incognito diagnostics", async () => {
     const {
       state,
@@ -211,7 +255,6 @@ export function registerAgentCommandRecoveryCases(
           expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
         },
         {
-          status: "running",
           activeWriterRunId: runId,
           lifecycleRunId: runId,
           restartRecoveryDeliveryRunId: runId,

@@ -32,7 +32,6 @@ const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "probe",
   "health",
   "discover",
-  "call",
   "install",
   "uninstall",
   "start",
@@ -46,26 +45,6 @@ let configSnapshotPromise: Promise<Awaited<ReturnType<typeof readConfigFileSnaps
 function resetConfigGuardStateForTests() {
   didRunStartupConfigPreflight = false;
   configSnapshotPromise = null;
-}
-
-function shouldPrepareGatewayState(commandPath: string[]): boolean {
-  const commandName = commandPath[0];
-  const subcommandName = commandPath[1];
-  return (
-    commandName === "gateway" &&
-    (subcommandName === undefined || subcommandName === "run" || subcommandName.trim() === "")
-  );
-}
-
-function isGatewayStartupCommand(commandPath: string[]): boolean {
-  const [commandName, subcommandName] = commandPath;
-  return (
-    commandName === "gateway" &&
-    (subcommandName === undefined ||
-      subcommandName === "run" ||
-      subcommandName === "start" ||
-      subcommandName === "restart")
-  );
 }
 
 async function getConfigSnapshot(
@@ -102,6 +81,9 @@ export async function ensureConfigReady(params: {
   const commandPath = params.commandPath ?? [];
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
+  const prepareGatewayState =
+    commandName === "gateway" &&
+    (subcommandName === undefined || subcommandName === "run" || subcommandName.trim() === "");
   const existingStatePath = getExistingOpenClawStateSchemaPath();
   const isManagedNodeRuntime =
     existingStatePath !== undefined &&
@@ -125,20 +107,18 @@ export async function ensureConfigReady(params: {
     commandName !== "health" &&
     commandName !== "logs" &&
     commandName !== "sessions" &&
-    // Remote RPC clients validate without preparing state owned by the running Gateway.
-    !(commandName === "gateway" && subcommandName === "call") &&
     // A newer restart client may be controlling an older live Gateway. Validate
     // config without advancing the persistent schema owned by that process.
     !isRestartController &&
     !(commandName === "update" && subcommandName === "status");
-  const runStartupPreflight = async () => {
+  if (!didRunStartupConfigPreflight && shouldRunStartupPreflight) {
     didRunStartupConfigPreflight = true;
     const runStartupConfigPreflight = async () =>
       (await import("../../commands/startup-config-preflight.js")).runStartupConfigPreflight({
-        gateway: shouldPrepareGatewayState(commandPath),
+        gateway: prepareGatewayState,
         ...(params.measure ? { measure: params.measure } : {}),
         ...(commandName === "status" ? { observe: false } : {}),
-        ...(shouldPrepareGatewayState(commandPath)
+        ...(prepareGatewayState
           ? {
               validateStartupConfig: async (snapshot: ConfigFileSnapshot) => {
                 const { getGatewayStartGuardErrors } =
@@ -160,11 +140,11 @@ export async function ensureConfigReady(params: {
           : {}),
       });
     try {
-      return !params.suppressDoctorStdout
+      preflightResult = !params.suppressDoctorStdout
         ? await runStartupConfigPreflight()
         : await withSuppressedNotes(runStartupConfigPreflight);
     } catch (error) {
-      if (shouldPrepareGatewayState(commandPath)) {
+      if (prepareGatewayState) {
         await (
           await import("../gateway-cli/startup-maintenance.js")
         ).handleGatewayStartupMaintenance(error);
@@ -175,9 +155,6 @@ export async function ensureConfigReady(params: {
       }
       throw error;
     }
-  };
-  if (!didRunStartupConfigPreflight && shouldRunStartupPreflight) {
-    preflightResult = await runStartupPreflight();
   }
 
   // Read-only diagnostics must not record config health. Core-only validation
@@ -185,10 +162,7 @@ export async function ensureConfigReady(params: {
   const configSnapshotOptions =
     params.validateConfigOnly || commandName === "logs"
       ? ({ observe: false, pluginValidation: "core-only" } as const)
-      : isManagedNodeRuntime ||
-          commandName === "status" ||
-          (commandName === "gateway" && subcommandName === "call") ||
-          isRestartController
+      : isManagedNodeRuntime || commandName === "status" || isRestartController
         ? ({ observe: false } as const)
         : undefined;
   const snapshot =
@@ -215,10 +189,21 @@ export async function ensureConfigReady(params: {
   const invalid = snapshot.exists && !snapshot.valid;
   if (!invalid) {
     setRuntimeConfigSnapshot(snapshot.runtimeConfig ?? snapshot.config, snapshot.sourceConfig);
-    if (shouldPrepareGatewayState(commandPath) && preflightResult?.pluginMetadataSnapshot) {
+    if (prepareGatewayState && preflightResult?.pluginMetadataSnapshot) {
       // Carry verified package facts into the final config reread without publishing Gateway policy.
       adoptProcessPluginCache(
         getPluginMetadataSnapshotCache(preflightResult.pluginMetadataSnapshot),
+      );
+    }
+    if (prepareGatewayState && preflightResult && snapshot.exists) {
+      const [{ getDeferredPluginMigrationConfigFacts }, { acceptGatewayRunPreflightMigrations }] =
+        await Promise.all([
+          import("../../config/deferred-plugin-migration-config.js"),
+          import("../gateway-cli/pre-bootstrap.js"),
+        ]);
+      // Gateway preflight reads resolve migration rows; snapshots record only nonempty sets.
+      acceptGatewayRunPreflightMigrations(
+        getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig) ?? [],
       );
     }
     return;
@@ -257,7 +242,12 @@ export async function ensureConfigReady(params: {
   params.runtime.error("");
   const isPluginPackagingFailure = isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot);
   const isReadOnlyConfig = resolveIsConfigReadOnly();
-  const isGatewayStartup = isGatewayStartupCommand(commandPath);
+  const isGatewayStartup =
+    commandName === "gateway" &&
+    (subcommandName === undefined ||
+      subcommandName === "run" ||
+      subcommandName === "start" ||
+      subcommandName === "restart");
   const mustBlockInvalid = !allowInvalid || (isGatewayStartup && params.allowInvalid !== true);
   const shouldOfferRecovery =
     mustBlockInvalid &&

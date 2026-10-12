@@ -1,6 +1,7 @@
 import { clearEmbeddedSessionPromptStates } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { killSessionSubagentRuns } from "../../agents/subagents/registry/subagent-control-kill.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import {
@@ -28,15 +29,18 @@ export function createSessionResetCleanupGuard(params: {
   expectedSession: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
   assertCurrent?: () => void;
 }): () => void {
+  const binding = captureIncognitoSessionOperation(params);
   const sessionId = params.expectedSession?.sessionId;
   const lifecycleRevision = params.expectedSession?.lifecycleRevision;
   return () => {
     params.assertCurrent?.();
-    const current = loadExactSessionEntryReadOnly({
-      storePath: params.storePath,
-      sessionKey: params.sessionKey,
-      clone: false,
-    })?.entry;
+    const current = binding
+      ? binding.actor.sessions.readSharing(params.sessionKey)?.entry
+      : loadExactSessionEntryReadOnly({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          clone: false,
+        })?.entry;
     if (current?.sessionId !== sessionId || current?.lifecycleRevision !== lifecycleRevision) {
       throw new SessionResetCleanupError(
         "Reset did not complete because the session changed before cleanup. Retry /reset.",

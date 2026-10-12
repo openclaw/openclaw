@@ -25,12 +25,9 @@ import {
   type IncognitoComputeTarget,
   type IncognitoUsageCacheOperations,
 } from "./session-incognito-compute-contract.js";
-import {
-  deleteOrphanedTranscriptIndexRowsInTransaction,
-  listSessionsNeedingTranscriptIndexReconcile,
-  sessionTranscriptIndexNeedsReconcile,
-} from "./session-transcript-index.js";
-import type { TranscriptProjectionPublicationOperations } from "./session-transcript-projection-publication.worker.js";
+import { maintainSessionTranscriptIndexStatus } from "./session-transcript-index-status.worker.js";
+import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
+import type { TranscriptProjectionRebuildOperations } from "./session-transcript-projection-publication.worker.js";
 import { deletePreparedSessionTranscriptProjectionChunkInTransaction } from "./session-transcript-projection-rebuild.js";
 import {
   createMemoryTranscriptProjectionSource,
@@ -148,12 +145,15 @@ export function createIncognitoComputeWorker(
           "sessions.transcript-index.preflight",
           "Incognito store projection",
           () => {
-            deleteOrphanedTranscriptIndexRowsInTransaction(database.db);
-            const pending = new Set(listSessionsNeedingTranscriptIndexReconcile(database.db));
+            const status = maintainSessionTranscriptIndexStatus(database.db);
+            const pending = new Set(status.sessionIds);
             admit("commit", keys);
             return command.type === "session.compute.store.sweep"
-              ? null
-              : inventory(true).filter((entry) => pending.has(entry.sessionId));
+              ? status
+              : {
+                  ...status,
+                  targets: instances.filter((entry) => pending.has(entry.sessionId)),
+                };
           },
         );
       case "session.compute.store.refreshLock":
@@ -217,7 +217,7 @@ export function createIncognitoComputeWorker(
       const input = command.input;
       keys = [input.sessionKey];
       const executeProjection = (
-        inner: SqliteWorkerCommand<TranscriptProjectionPublicationOperations>,
+        inner: SqliteWorkerCommand<TranscriptProjectionRebuildOperations>,
       ) => {
         if (!projection) {
           throw new Error("Incognito projection domain was not prepared");
@@ -225,6 +225,19 @@ export function createIncognitoComputeWorker(
         return projection.execute(inner);
       };
       try {
+        // Bounded reads own only buffers; cleanup cannot publish a session mutation.
+        if (command.type === "session.compute.source.close") {
+          const held = sources.get(command.input.sourceId);
+          if (held) {
+            sourceFor(command.input);
+            if (held.projection || held.claimId !== undefined) {
+              throw new Error("Projection cleanup requires its write-capable source release");
+            }
+            held.source.clear();
+            sources.delete(command.input.sourceId);
+          }
+          return { value: undefined, keys };
+        }
         // Exact source cleanup remains possible after its session was deleted.
         if (command.type === "session.compute.source.release") {
           const held = sources.get(command.input.sourceId);

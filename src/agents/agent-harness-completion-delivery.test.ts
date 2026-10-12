@@ -6,7 +6,7 @@ import {
   captureHarnessCompletionRecovery,
   createHarnessCompletionSourceAssertion,
   getOwedHarnessCompletionTask,
-  readAdmittedHarnessCompletionInput,
+  readAdmittedHarnessCompletionInputAsync,
 } from "../agents/agent-harness-completion-recovery.js";
 import { createAgentHarnessCompletionScope } from "../agents/agent-harness-completion-scope.js";
 import {
@@ -48,6 +48,7 @@ import {
 } from "./agent-command-restart-recovery.js";
 import { reconcileHarnessCompletionDelivery } from "./agent-harness-completion-delivery.js";
 import { captureAdmittedHarnessCompletionForTest } from "./agent-harness-completion.test-support.js";
+import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
 
 const sessionKey = "agent:main:main";
 const runId = "harness:child-1";
@@ -68,7 +69,6 @@ async function admit(
     sessionId: "physical-1",
     lifecycleRevision: "revision-1",
     updatedAt: Date.now(),
-    status: "running",
   };
   const claim = await captureAdmittedHarnessCompletionForTest({
     agentId: "main",
@@ -182,11 +182,13 @@ describe("host-owned harness completion recovery", () => {
         const admission = prepareCompletionAdmission({ claim, target }, recoveryRunId);
         try {
           const context = await admission.admit("embedded");
-          const effect = resolveAdmittedRunActiveAssertion(context);
-          if (!effect) {
+          const assertion = resolveAdmittedRunActiveAssertion(context);
+          if (!assertion) {
             throw new Error("Source effect was not captured.");
           }
-          effect();
+          const effect = () =>
+            runWithAgentToolSourceExecutionScope(assertion, async () => assertion());
+          await effect();
           if (phase === "reset") {
             await appendTranscriptEvent(transcript, {
               type: "reset",
@@ -209,14 +211,14 @@ describe("host-owned harness completion recovery", () => {
             if (!anchor) {
               throw new Error("Missing admission fence anchor.");
             }
-            expect(() =>
+            await expect(
               runWithSessionTranscriptReadFence(
                 { ...anchor, logicalTurnId: recoveryRunId, role: "user" },
                 effect,
               ),
-            ).not.toThrow();
+            ).resolves.toBeUndefined();
           } else {
-            expect(effect).toThrow();
+            await expect(effect()).rejects.toThrow();
           }
         } finally {
           admission.close();
@@ -225,7 +227,7 @@ describe("host-owned harness completion recovery", () => {
     },
   );
 
-  it.each(["before-admission", "after-admission"])(
+  it.each(["before-admission", "after-admission", "at-effect"])(
     "revokes requester custody %s through the execution authority",
     async (phase) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -237,14 +239,27 @@ describe("host-owned harness completion recovery", () => {
             await expect(admission.admit("embedded")).rejects.toThrow();
           } else {
             const context = await admission.admit("embedded");
-            const effect = resolveAdmittedRunActiveAssertion(context);
-            expect(effect).toBeDefined();
-            if (!effect) {
+            const assertion = resolveAdmittedRunActiveAssertion(context);
+            expect(assertion).toBeDefined();
+            if (!assertion) {
               throw new Error("Source effect was not captured.");
             }
-            effect();
-            await replaceSessionEntry(target, { ...entry, lifecycleRevision: "revoked-revision" });
-            expect(effect).toThrow();
+            const effect = () =>
+              runWithAgentToolSourceExecutionScope(assertion, async () => assertion());
+            await effect();
+            const revoke = () =>
+              replaceSessionEntry(target, { ...entry, lifecycleRevision: "revoked-revision" });
+            if (phase === "at-effect") {
+              await expect(
+                runWithAgentToolSourceExecutionScope(assertion, async () => {
+                  await revoke();
+                  assertion();
+                }),
+              ).rejects.toThrow();
+            } else {
+              await revoke();
+              await expect(effect()).rejects.toThrow();
+            }
           }
         } finally {
           admission.close();
@@ -264,7 +279,7 @@ describe("host-owned harness completion recovery", () => {
         });
       }
       expect(
-        readAdmittedHarnessCompletionInput({
+        await readAdmittedHarnessCompletionInputAsync({
           claim,
           entry,
           storePath: target.storePath,
@@ -280,7 +295,7 @@ describe("host-owned harness completion recovery", () => {
         });
       }
       expect(
-        readAdmittedHarnessCompletionInput({
+        await readAdmittedHarnessCompletionInputAsync({
           claim,
           entry,
           storePath: target.storePath,
@@ -325,7 +340,7 @@ describe("host-owned harness completion recovery", () => {
         };
         await replaceSessionEntry(target, saved);
         expect(
-          readAdmittedHarnessCompletionInput({
+          await readAdmittedHarnessCompletionInputAsync({
             claim,
             entry: saved,
             storePath: target.storePath,
@@ -481,6 +496,7 @@ describe("host-owned harness completion recovery", () => {
       expect(joined).toMatchObject({ delivered: false, recoveryPending: true });
       const reserved = {
         ...entry,
+        status: "interrupted" as const,
         abortedLastRun: true,
         restartRecoveryDeliveryRunId: "recovery-R",
       };
@@ -591,7 +607,11 @@ describe("host-owned harness completion recovery", () => {
           },
         );
         expect(
-          readAdmittedHarnessCompletionInput({ claim, entry, storePath: target.storePath }),
+          await readAdmittedHarnessCompletionInputAsync({
+            claim,
+            entry,
+            storePath: target.storePath,
+          }),
         ).toBe(scenario === "valid");
         expect(() =>
           captureHarnessCompletionRecovery({
@@ -692,7 +712,11 @@ describe("review3 custody ownership", () => {
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const { entry, target, request } = await admit(state);
-        await replaceSessionEntry(target, { ...entry, abortedLastRun: true });
+        await replaceSessionEntry(target, {
+          ...entry,
+          status: "interrupted",
+          abortedLastRun: true,
+        });
         if (kind !== "missing-source") {
           await appendCompletionSource({ target, entry });
         }

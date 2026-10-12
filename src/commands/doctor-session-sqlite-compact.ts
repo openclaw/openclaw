@@ -9,9 +9,9 @@ import {
   assertOpenClawAgentDatabaseForMaintenance,
   migrateOpenClawAgentDatabaseForMaintenance,
 } from "../state/openclaw-agent-db-maintenance.js";
+import { ensureOpenClawAgentDatabasePermissions } from "../state/openclaw-agent-db-permissions.js";
 import {
   clearOpenClawAgentDatabaseOpenFailure,
-  ensureOpenClawAgentDatabasePermissions,
   isOpenClawAgentDatabaseOpen,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
@@ -25,7 +25,7 @@ export async function compactDoctorSessionSqliteTarget(
   const databaseOptions = resolveTargetSqliteOptions(target, options.env);
   const sqlitePath = resolveOpenClawAgentSqlitePath(databaseOptions);
   const walSizeBytes = safeStatSync(`${sqlitePath}-wal`)?.size ?? 0;
-  const stat = readSessionDatabaseStat(sqlitePath);
+  const stat = fs.lstatSync(sqlitePath, { throwIfNoEntry: false });
   if (!stat) {
     return {
       dbSizeAfterBytes: 0,
@@ -93,15 +93,4 @@ export async function compactDoctorSessionSqliteTarget(
         return compactTarget();
       })
     : compactTarget();
-}
-
-function readSessionDatabaseStat(sqlitePath: string): fs.Stats | undefined {
-  try {
-    return fs.lstatSync(sqlitePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
 }

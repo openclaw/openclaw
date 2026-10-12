@@ -7,9 +7,15 @@ import {
   storageTargetForGateway,
 } from "../../lib/chat/outbox-store.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import { createStagedAttachment } from "./chat-delivery-attachments.test-support.ts";
-import { findChatSendPayload, makeChatHost } from "./chat-host.test-support.ts";
+import {
+  findChatSendPayload,
+  findRequestPayload,
+  makeChatHost,
+  requestCalls,
+} from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
@@ -23,8 +29,6 @@ useChatSendBrowserFixture();
 it.each([
   { hold: "access", connected: true, message: "keep this later draft" },
   { hold: "access", connected: false, message: "keep this later draft" },
-  { hold: "initial turn", connected: true, message: "keep this later draft" },
-  { hold: "initial turn", connected: false, message: "keep this later draft" },
   { hold: "recovery", connected: true, message: "later turn" },
   { hold: "recovery", connected: true, message: "" },
   { hold: "session", connected: true, message: "keep this draft" },
@@ -32,8 +36,7 @@ it.each([
   "retains the composer behind $hold (connected: $connected, text: $message)",
   async ({ hold, connected, message }) => {
     const attachment = createStagedAttachment("held-att");
-    const earlierError =
-      hold === "access" || hold === "initial turn" ? "Earlier request failed" : undefined;
+    const earlierError = hold === "access" ? "Earlier request failed" : undefined;
     const replyTarget =
       hold === "session"
         ? { messageId: "reply-1", sourceMessageId: "source-1", text: "original message" }
@@ -46,7 +49,6 @@ it.each([
       chatReplyTarget: replyTarget,
       lastError: earlierError ?? null,
       chatError: earlierError,
-      hasPendingInitialTurn: () => hold === "initial turn",
       requestHandlers: { "chat.send": { status: "started" } },
       sessionsResult: {
         ...createSessionsListResult(),
@@ -85,6 +87,49 @@ it.each([
         attachments: [expect.objectContaining({ fileName: "brief.pdf" })],
       });
     }
+  },
+);
+
+it.each([true, false])(
+  "queues later text and attachments behind an initial turn (connected: %s)",
+  async (connected) => {
+    let pending = true;
+    const attachment = createStagedAttachment("held-att");
+    const host = makeChatHost({
+      connected,
+      chatMessage: "keep this later draft",
+      chatAttachments: [attachment],
+      lastError: "Earlier request failed",
+      chatError: "Earlier request failed",
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: { key: "agent:main", status: "done", hasActiveRun: false },
+        },
+        "chat.send": { status: "started" },
+      },
+      hasPendingInitialTurn: () => pending,
+      chatFollowUpMode: connected ? "steer" : "interrupt",
+    });
+    await handleSendChat(host);
+    expect(host.chatMessage).toBe("");
+    expect(host.chatAttachments).toEqual([]);
+    expect(host.chatQueue).toMatchObject([{ text: "keep this later draft", sendAttempts: 0 }]);
+    expect(host.chatQueue[0]).not.toHaveProperty("queueMode");
+    const queuedId = host.chatQueue[0]!.sendRunId;
+    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
+      timeoutMs: 30_000,
+    });
+    host.chatMessage = "next unfinished draft";
+    host.connected = true;
+    pending = false;
+    await resumeStoredChatOutboxes(host);
+    expect(findChatSendPayload(host)).toMatchObject({
+      message: "keep this later draft",
+      idempotencyKey: queuedId,
+      attachments: [expect.objectContaining({ fileName: "brief.pdf" })],
+    });
+    expect(host.chatMessage).toBe("next unfinished draft");
   },
 );
 
@@ -229,6 +274,69 @@ it.each([true, false])(
         agentId: "writer",
         message: queued.text,
       });
+    }
+  },
+);
+
+it.each(["scope missing", "scope revoked", "equivalent alias", "run started", "confirmed"])(
+  "sends reset through its FIFO owner when %s",
+  async (outcome) => {
+    const confirmation = createDeferred<boolean>();
+    const confirming = createDeferred();
+    const host = makeChatHost({
+      chatMessage: "/reset now",
+      sessionKey: "main",
+      hello: {
+        ...gatewayHelloForMethods(
+          ["chat.send"],
+          outcome === "scope missing" ? ["operator.read"] : ["operator.admin"],
+        ),
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+            scope: "per-sender",
+          },
+        },
+      },
+      requestHandlers: { "chat.send": { status: "started" } },
+      confirmConversationReset: () => {
+        confirming.resolve();
+        return confirmation.promise;
+      },
+    });
+    const sending = handleSendChat(host);
+    if (outcome !== "scope missing") {
+      await confirming.promise;
+      if (outcome === "scope revoked") {
+        host.hello = {
+          ...host.hello!,
+          auth: { role: "operator", scopes: ["operator.write"] },
+        };
+      } else if (outcome === "equivalent alias") {
+        host.sessionKey = "agent:main:main";
+      } else if (outcome === "run started") {
+        host.chatRunId = "run-started-during-confirmation";
+      }
+      confirmation.resolve(true);
+    }
+    await sending;
+
+    if (outcome === "equivalent alias" || outcome === "confirmed") {
+      expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
+      expect(findRequestPayload(host.request, "chat.send", "reset payload")).toMatchObject({
+        message: "/reset now",
+      });
+    } else {
+      expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
+      expect(listStoredChatOutboxes(host)[0]?.queue[0]).toMatchObject({
+        localCommandName: "reset",
+        sendState: outcome === "run started" ? "waiting-idle" : "failed",
+      });
+      if (outcome !== "run started") {
+        expect(host.lastError).toContain("operator.admin");
+      }
     }
   },
 );

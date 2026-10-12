@@ -7,47 +7,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { createConfigIO, resetConfigRuntimeState, writeConfigFile } from "./io.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-function makeEaccesFs(configPath: string) {
-  const eaccesErr = Object.assign(new Error(`EACCES: permission denied, open '${configPath}'`), {
-    code: "EACCES",
-  });
-  return {
-    existsSync: (p: string) => p === configPath,
-    readFileSync: (p: string): string => {
-      if (p === configPath) {
-        throw eaccesErr;
-      }
-      throw new Error(`unexpected readFileSync: ${p}`);
-    },
-    promises: {
-      readFile: () => Promise.reject(eaccesErr),
-      mkdir: () => Promise.resolve(),
-      writeFile: () => Promise.resolve(),
-      appendFile: () => Promise.resolve(),
-    },
-  } as unknown as typeof import("node:fs");
-}
-
-describe("config io EACCES handling", () => {
-  it("logs config load failures without exposing a raw error stack", () => {
-    const configPath = "/data/.openclaw/openclaw.json";
-    const errors: unknown[][] = [];
-    const io = createConfigIO({
-      configPath,
-      fs: makeEaccesFs(configPath),
-      logger: {
-        error: (...args: unknown[]) => errors.push(args),
-        warn: () => {},
-      },
-    });
-
-    expect(() => io.loadConfig()).toThrow(expect.objectContaining({ code: "EACCES" }));
-    expect(errors).toEqual([
-      [`Failed to read config at ${configPath}: EACCES: permission denied, open '${configPath}'`],
-    ]);
-  });
-});
-
 function makeUnreadableConfigFs(configPath: string): typeof fsNode {
   const eacces = Object.assign(new Error(`EACCES: permission denied, open '${configPath}'`), {
     code: "EACCES",

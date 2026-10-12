@@ -44,6 +44,7 @@ export async function saveModelProviderApiKey(params: {
   apiKey: string;
   profileId?: string;
   agentDir: string;
+  assertCurrent?: () => void;
 }): Promise<{ profileId: string; warning?: string }> {
   const provider = normalizeManualAuthProvider(params.provider);
   const key = normalizeSecretInput(params.apiKey);
@@ -137,6 +138,7 @@ export async function saveModelProviderApiKey(params: {
     }
   };
   const validateReplacement = (existing: AuthProfileCredential | undefined) => {
+    params.assertCurrent?.();
     validateCurrentCredential(existing);
     validateSharedBinding();
   };
@@ -146,7 +148,9 @@ export async function saveModelProviderApiKey(params: {
     credential: { type: "api_key", provider, key },
     agentDir,
     preserveApiKeyMetadata: true,
+    resetFailureState: true,
     validateCurrentCredential: validateReplacement,
+    assertCurrent: params.assertCurrent,
   });
   const application = createRuntimeConfigWriteApplication(
     captureGatewayRootWorkAdmissionContinuationScope()?.run,
@@ -154,6 +158,7 @@ export async function saveModelProviderApiKey(params: {
   let configChanged = false;
   await updateConfig(
     (current) => {
+      params.assertCurrent?.();
       const id = params.profileId ? undefined : configuredKey(current);
       if (
         !params.profileId &&
@@ -188,8 +193,8 @@ export async function saveModelProviderApiKey(params: {
       return next;
     },
     undefined,
-    undefined,
-    attachRuntimeConfigWriteApplication({}, application),
+    params.assertCurrent,
+    attachRuntimeConfigWriteApplication({ assertCurrent: params.assertCurrent }, application),
   ).catch((error: unknown) => {
     throw new Error(
       "API key saved, but provider settings could not be applied: " +

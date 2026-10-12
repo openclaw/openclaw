@@ -68,11 +68,11 @@ extension GatewayConnection {
             throw OpenClawChatTransportSendError.notDispatched
         }
         let configuredSessionKey = snapshot.config?["session"]?.dictionaryValue?["mainKey"]?
-            .stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            .stringValue?.nonEmpty
         return RealtimeTalkBootstrap(
             transport: self.realtimeTalkTransport(ifCurrentServerLease: lease),
             configSnapshot: snapshot,
-            sessionKey: configuredSessionKey?.isEmpty == false ? configuredSessionKey! : "main")
+            sessionKey: configuredSessionKey ?? "main")
     }
 
     /// Creates a realtime Talk transport bound to one physical Gateway socket.

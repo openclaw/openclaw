@@ -8,6 +8,7 @@ import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statem
 import * as agentScope from "../agents/agent-scope.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as sessionEntryStatus from "../config/sessions/session-accessor.sqlite-status.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
@@ -89,17 +90,17 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
     const sessionId = `session-${agentId}`;
     const sessionKey = `agent:${agentId}:main`;
     const storePath = storeTemplate.replace("{agentId}", agentId);
-    await writeSessionStore({
-      agentId,
-      entries: {
-        [sessionKey]: sessionStoreEntry(sessionId, {
-          updatedAt: 1_781_000_000_000 - index,
-          displayName: `Title ${agentId}`,
-        }),
-      },
-      storePath,
+    const entry = sessionStoreEntry(sessionId, {
+      updatedAt: 1_781_000_000_000 - index,
+      displayName: `Title ${agentId}`,
     });
-    await sessionAccessor.replaceTranscriptEvents({ agentId, sessionId, sessionKey, storePath }, [
+    if (index === 0) {
+      // Publish fixture config once; the remaining stores only need pristine row seeding.
+      await writeSessionStore({ agentId, entries: { [sessionKey]: entry }, storePath });
+    } else {
+      sessionAccessor.replaceSessionEntrySync({ agentId, sessionKey, storePath }, entry);
+    }
+    await replaceTranscriptEvents({ agentId, sessionId, sessionKey, storePath }, [
       { type: "session", version: 3, id: sessionId, cwd: "/tmp" },
       {
         type: "message",

@@ -1,7 +1,5 @@
-type PostUpgradeFindingLevel = "ok" | "warn" | "error";
-
 export type PostUpgradeFinding = {
-  level: PostUpgradeFindingLevel;
+  level: "ok" | "warn" | "error";
   code: string;
   message: string;
   plugin?: string;

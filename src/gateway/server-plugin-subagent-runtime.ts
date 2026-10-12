@@ -287,6 +287,7 @@ export function createGatewaySubagentRuntime(
                   const isSelectedPrimary =
                     provider === selection.provider && model === selection.modelId;
                   const result = await runIsolatedCompletion({
+                    purpose: "plugin-completion",
                     config: cfg,
                     agentId,
                     provider,

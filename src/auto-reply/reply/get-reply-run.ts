@@ -2,19 +2,10 @@ import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prep
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import type { ReplyPayload } from "../types.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
-import { prepareReplyRunContext, type PreparedReplyRunContext } from "./get-reply-run-context.js";
+import { prepareReplyRunContext } from "./get-reply-run-context.js";
 import { executePreparedReplyRun } from "./get-reply-run-execute.js";
 import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
-
-async function executePreparedReplyContext(context: PreparedReplyRunContext) {
-  const admission = await prepareReplyRunAdmission(context);
-  if (admission.kind === "reply") {
-    return admission.reply;
-  }
-
-  return executePreparedReplyRun(admission);
-}
 
 /** Runs a prepared reply turn after session, prompt, queue, and policy state are resolved. */
 export async function runPreparedReply(
@@ -24,10 +15,14 @@ export async function runPreparedReply(
   if (context.kind === "reply") {
     return context.reply;
   }
+  const execute = async () => {
+    const admission = await prepareReplyRunAdmission(context);
+    return admission.kind === "reply" ? admission.reply : executePreparedReplyRun(admission);
+  };
 
   const dispatchRuntime = getPreparedReplyDispatchRuntime();
   if (!dispatchRuntime) {
-    return executePreparedReplyContext(context);
+    return execute();
   }
 
   const { acquireAgentRunPreparedModelRuntime } =
@@ -57,10 +52,7 @@ export async function runPreparedReply(
   try {
     return await withPreparedModelRuntimePluginGenerationScope(
       lease.pluginGeneration,
-      () =>
-        withPluginRuntimeGenerationScope(lease.snapshot, () =>
-          executePreparedReplyContext(context),
-        ),
+      () => withPluginRuntimeGenerationScope(lease.snapshot, execute),
       () => (leaseActive ? lease.snapshot : undefined),
     );
   } finally {

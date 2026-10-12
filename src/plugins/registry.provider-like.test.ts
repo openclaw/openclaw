@@ -32,16 +32,6 @@ describe("plugin registry provider-like registrations", () => {
       builder.registry.modelCatalogProviders[0]?.provider.staticCatalog?.(catalogContext),
     ).resolves.toEqual(rows);
   });
-
-  it("does not duplicate manifest-declared provider IDs", () => {
-    const builder = createTestRegistry();
-    const { record, api } = createCatalogOwner(builder, "owner", {
-      contracts: { speechProviders: ["speech"] },
-    });
-    registerReservedProvider(api, "speech", "speech", async () => null);
-    expect(record.speechProviderIds).toEqual(["speech"]);
-    expect(builder.registry.speechProviders).toHaveLength(1);
-  });
 });
 
 const reservationCases = [
@@ -236,21 +226,6 @@ describe("text catalog composition", () => {
 });
 
 describe("catalog reservation lifecycle", () => {
-  it("reserves each capability's catalog kind through its public registrar", () => {
-    for (const [family, registryKey, kind] of reservationCases) {
-      const builder = createTestRegistry();
-      const { api } = createCatalogOwner(builder, "owner");
-      registerReservedProvider(api, family, "catalog-provider", async () => null);
-
-      expect(builder.registry[registryKey]).toMatchObject([
-        { pluginId: "owner", provider: { id: "catalog-provider" } },
-      ]);
-      expect(catalogOwners(builder)).toEqual([
-        { pluginId: "owner", provider: "catalog-provider", kinds: [kind] },
-      ]);
-    }
-  });
-
   it.each(["none", "static", "live"] as const)("reserves text only when eligible (%s)", (mode) => {
     const builder = createTestRegistry();
     const { api } = createCatalogOwner(builder, "owner");
@@ -274,8 +249,11 @@ describe("catalog reservation lifecycle", () => {
     const alpha = createCatalogOwner(builder, "alpha");
     const beta = createCatalogOwner(builder, "beta");
     const run = vi.fn(async () => null);
-    for (const [family] of reservationCases) {
+    for (const [family, registryKey] of reservationCases) {
       registerReservedProvider(alpha.api, family, "catalog-provider", run);
+      expect(builder.registry[registryKey]).toMatchObject([
+        { pluginId: "alpha", provider: { id: "catalog-provider" } },
+      ]);
     }
     beta.api.registerModelCatalogProvider({ provider: "other-provider", kinds: ["voice"] });
     const explicit = vi.fn(() => []);

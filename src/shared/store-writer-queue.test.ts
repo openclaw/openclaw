@@ -5,6 +5,7 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, drainStoreWriterQueuesForTest } from "../../test/helpers/promise.js";
 import {
+  assertStoreWriterReleased,
   runQueuedStoreWrite,
   clearStoreWriterQueuesForTest,
   type StoreWriterQueue,
@@ -26,6 +27,37 @@ function createQueue(storePath = "store") {
 
 beforeEach(async () => {
   await nextTurn();
+});
+
+it("guards live writer ancestors without retaining completed admission", async () => {
+  const outer = createQueue("outer");
+  const inner = createQueue("inner");
+  let assertReleased = () => {};
+  await outer.write("outer", async () => {
+    await inner.write("inner", async () => {
+      assertReleased = AsyncLocalStorage.bind(() =>
+        assertStoreWriterReleased(outer.queues, "close readers"),
+      );
+      expect(assertReleased).toThrow("while holding a store writer");
+    });
+    // The captured inner writer has settled, but its parent still holds admission.
+    expect(assertReleased).toThrow("while holding a store writer");
+  });
+  expect(assertReleased).not.toThrow();
+});
+
+it("allows cleanup under a different queue owner", async () => {
+  const database = createQueue();
+  const lifecycle = createQueue();
+  await lifecycle.write("lifecycle", async () => {
+    expect(() => assertStoreWriterReleased(database.queues, "close readers")).not.toThrow();
+    await database.write("database", async () => {
+      expect(() => assertStoreWriterReleased(database.queues, "close readers")).toThrow(
+        "while holding a store writer",
+      );
+    });
+    expect(() => assertStoreWriterReleased(database.queues, "close readers")).not.toThrow();
+  });
 });
 
 it("marks synchronous idle and reentrant execution across runtime chunks", async () => {

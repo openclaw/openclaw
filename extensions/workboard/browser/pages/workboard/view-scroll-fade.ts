@@ -1,5 +1,8 @@
+import { onCleanup } from "solid-js";
+
 function scrollViewportRef(onUpdate: (element: HTMLElement) => void) {
   let dispose = () => {};
+  onCleanup(() => dispose());
   return (element: Element | undefined) => {
     dispose();
     if (!(element instanceof HTMLElement)) {
@@ -9,17 +12,26 @@ function scrollViewportRef(onUpdate: (element: HTMLElement) => void) {
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(update) : null;
     // Ref runs before children commit. Observe their final sizes too:
     // async content can grow without resizing the scroll viewport itself.
-    const frame = requestAnimationFrame(() => {
+    let frame = 0;
+    const observeChildren = () => {
       update();
+      observer?.disconnect();
       observer?.observe(element);
       for (const child of element.children) {
         observer?.observe(child);
       }
+    };
+    const childrenObserver = new MutationObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(observeChildren);
     });
+    childrenObserver.observe(element, { childList: true });
+    frame = requestAnimationFrame(observeChildren);
     element.addEventListener("scroll", update, { passive: true });
     dispose = () => {
       cancelAnimationFrame(frame);
       observer?.disconnect();
+      childrenObserver.disconnect();
       element.removeEventListener("scroll", update);
     };
   };

@@ -35,10 +35,6 @@ export type DraftRemoteProject = Readonly<{
   projectId?: string;
 }>;
 
-function inputValue(event: Event): string {
-  return event.target instanceof HTMLInputElement ? event.target.value : "";
-}
-
 type ProjectChipState = Readonly<{
   label: string;
   localProjects: readonly ProjectRecord[];
@@ -131,6 +127,8 @@ export function renderProjectChip(params: {
 }) {
   const folder = params.folder.trim();
   const cloneInput = projectCloneInput(params.projectQuery);
+  const selectClone = (cloneUrl: string) =>
+    params.onSelectRemoteProject({ identity: cloneUrl, cloneUrl });
   const query = params.projectQuery.trim();
   const browseNeedsAdmin = !params.browseAvailable && !params.isAdmin;
   const recentItems = params.state.recents;
@@ -246,14 +244,14 @@ export function renderProjectChip(params: {
                     placeholder=${t("newSession.projectSearchPlaceholder")}
                     .value=${params.projectQuery}
                     ?disabled=${params.submitting || params.pendingPlacement}
-                    @input=${(event: Event) => params.onProjectQueryInput(inputValue(event))}
+                    @input=${(event: Event) =>
+                      params.onProjectQueryInput(
+                        event.target instanceof HTMLInputElement ? event.target.value : "",
+                      )}
                     @keydown=${(event: KeyboardEvent) => {
                       if (event.key === "Enter" && cloneInput && params.projectAddAvailable) {
                         event.preventDefault();
-                        params.onSelectRemoteProject({
-                          identity: cloneInput,
-                          cloneUrl: cloneInput,
-                        });
+                        selectClone(cloneInput);
                       }
                     }}
                   />
@@ -280,11 +278,7 @@ export function renderProjectChip(params: {
                           icon: icons.gitBranch,
                           sub: t("newSession.cloneProject"),
                           checked: params.selectedRemoteProject?.cloneUrl === cloneInput,
-                          onSelect: () =>
-                            params.onSelectRemoteProject({
-                              identity: cloneInput,
-                              cloneUrl: cloneInput,
-                            }),
+                          onSelect: () => selectClone(cloneInput),
                         },
                         params.submitting,
                       )

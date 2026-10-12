@@ -114,17 +114,6 @@ export function readToolSearchLimit(value: unknown, config: ToolSearchConfig): n
   return Math.min(value, config.maxSearchLimit);
 }
 
-function readBatchToolSearchQuery(value: unknown, field: string, maxGraphemes?: number): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new ToolInputError(`${field} must be a non-empty string.`);
-  }
-  const query = value.trim();
-  if (maxGraphemes !== undefined && !Guard.IsMaxLength(query, maxGraphemes)) {
-    throw new ToolInputError(`${field} must not exceed ${maxGraphemes} characters.`);
-  }
-  return query;
-}
-
 function readToolSearchArgs(
   params: Record<string, unknown>,
   config: ToolSearchConfig,
@@ -150,11 +139,16 @@ function readBatchToolSearchEntry(
   if (!isRecord(value)) {
     throw new ToolInputError(`queries[${index}] must be an object.`);
   }
-  const query = readBatchToolSearchQuery(
-    value.query,
-    `queries[${index}].query`,
-    MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
-  );
+  const rawQuery = value.query;
+  const query = typeof rawQuery === "string" ? rawQuery.trim() : "";
+  if (!query) {
+    throw new ToolInputError(`queries[${index}].query must be a non-empty string.`);
+  }
+  if (!Guard.IsMaxLength(query, MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES)) {
+    throw new ToolInputError(
+      `queries[${index}].query must not exceed ${MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES} characters.`,
+    );
+  }
   try {
     return { query, limit: readToolSearchLimit(value.limit, config) };
   } catch (error) {

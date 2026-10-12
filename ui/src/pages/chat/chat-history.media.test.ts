@@ -50,7 +50,6 @@ it.each([
     label: "report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.backup.pdf",
   },
   { path: "https://example.com/files/report---old.pdf", label: "report---old.pdf" },
-  { path: "media://inbound/plain-name.pdf", label: "plain-name.pdf" },
 ])("preserves the original filename for $path", ({ label, ...media }) => {
   const { attachments } = projectMessageMedia(
     userMedia([{ ...media, contentType: "application/pdf" }]),

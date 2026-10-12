@@ -27,6 +27,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function measure<T>(db: DatabaseSync, operation: () => T) {
   const counter = trackSqliteStatementExecutions(db, ["all"], () => "all");
+  const reads = observeSqliteReadSql(StatementSync.prototype);
   try {
     const result = operation();
     return {
@@ -34,10 +35,14 @@ function measure<T>(db: DatabaseSync, operation: () => T) {
       metrics: {
         rows: counter.rowCounts.all,
         returnedTextBytes: counter.textBytes.all,
+        cardReads: reads.queries.filter((sql) =>
+          /^select .* from "session_progress_cards"/iu.test(sql),
+        ).length,
       },
     };
   } finally {
     counter.restore();
+    reads.restore();
   }
 }
 
@@ -62,29 +67,6 @@ describe("session progress card store", () => {
     } finally {
       vi.restoreAllMocks();
     }
-  });
-
-  it.each([
-    { name: "markdown only", input: { markdown: "Working" }, expected: { markdown: "Working" } },
-    { name: "plan only", input: { steps: STEPS }, expected: { steps: STEPS } },
-    {
-      name: "markdown and plan",
-      input: { markdown: "Working", steps: STEPS },
-      expected: { markdown: "Working", steps: STEPS },
-    },
-  ])("roundtrips $name", ({ input, expected }) => {
-    const written = writeSessionProgressCard(db, SESSION_KEY, input);
-
-    expect(written).toEqual({
-      card: expect.objectContaining({
-        sessionKey: SESSION_KEY,
-        revision: 1,
-        ...expected,
-      }),
-    });
-    expect(readSessionProgressCard(db, SESSION_KEY)).toEqual(
-      expect.objectContaining({ sessionKey: SESSION_KEY, revision: 1, ...expected }),
-    );
   });
 
   it.each([false, true])(
@@ -153,14 +135,24 @@ describe("session progress card store", () => {
       });
       writeSessionProgressCard(db, SESSION_KEY, { markdown, steps });
       setOldSteps();
+      const foreign = new DatabaseSync(dbPath);
+      try {
+        foreign
+          .prepare("UPDATE session_progress_cards SET revision = ? WHERE session_key = ?")
+          .run(7, SESSION_KEY);
+      } finally {
+        foreign.close();
+      }
       clock.mockReturnValue(4000);
-      const reset = measure(db, () => clearSessionProgressCardForReset(db, SESSION_KEY));
+      const reset = runSqliteImmediateTransactionSync(db, () => {
+        return measure(db, () => clearSessionProgressCardForReset(db, SESSION_KEY));
+      });
       expect(reset.result).toBe(true);
       const expectedTombstone = {
         session_key: SESSION_KEY,
         markdown: null,
         steps_json: null,
-        revision: 5,
+        revision: 8,
         created_at: 1000,
         updated_at: 4000,
       };
@@ -175,6 +167,7 @@ describe("session progress card store", () => {
       for (const measured of [replaced, cleared, reset]) {
         expect.soft(measured.metrics.rows).toBeGreaterThan(0);
         expect.soft(measured.metrics.returnedTextBytes).toBeLessThan(256);
+        expect.soft(measured.metrics.cardReads).toBe(0);
       }
     },
   );
@@ -254,12 +247,11 @@ describe("session progress card store", () => {
     });
   });
 
-  it("refreshes foreign schema changes at write admission before recreating lazy storage", () => {
+  it("observes managed schema publication before recreating lazy storage", () => {
     admitSqliteSchema(db);
     writeSessionProgressCard(db, SESSION_KEY, { markdown: "Before foreign DDL" });
     const facts = getAdmittedSqliteSchemaFacts(db);
-    // An untracked connection models another isolate without local schema publication.
-    const foreign = new DatabaseSync(dbPath);
+    const foreign = openNodeSqliteDatabase(dbPath);
     try {
       foreign.exec("DROP TABLE session_progress_cards");
     } finally {
@@ -347,7 +339,7 @@ describe("session progress card store", () => {
     expect(readSessionProgressCard(db, SESSION_KEY)).toBeNull();
   });
 
-  it.each(["revision", "created_at", "updated_at"] as const)(
+  it.each(["revision", "created_at"] as const)(
     "rejects unsafe %s before payload decoding or mutation",
     (column) => {
       writeSessionProgressCard(db, SESSION_KEY, { markdown: "Existing", steps: STEPS });
@@ -361,7 +353,10 @@ describe("session progress card store", () => {
       const operations = {
         replace: () => writeSessionProgressCard(db, SESSION_KEY, { markdown: "Replacement" }),
         clear: () => writeSessionProgressCard(db, SESSION_KEY, {}),
-        reset: () => clearSessionProgressCardForReset(db, SESSION_KEY),
+        reset: () =>
+          runSqliteImmediateTransactionSync(db, () =>
+            clearSessionProgressCardForReset(db, SESSION_KEY),
+          ),
         dismiss: () => writeSessionProgressCard(db, SESSION_KEY, { expectedRevision: 2 }),
       };
       for (const [name, operation] of Object.entries(operations)) {

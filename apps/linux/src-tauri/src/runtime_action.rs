@@ -41,7 +41,7 @@ struct LauncherFile {
     entry: PathBuf,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct ExpectedPin {
     revision: String,
     definition: Option<String>,
@@ -81,10 +81,6 @@ impl Observation {
         })
     }
 
-    pub(crate) fn is_current(&self, runtime: &BundledRuntime) -> bool {
-        self.uses_runtime_path(&runtime.bun)
-    }
-
     pub(crate) fn paused(&self) -> bool {
         self.command().is_some()
             && (self.flag("/service/loaded") == Some(false)
@@ -114,18 +110,7 @@ impl Observation {
         if intent.get("status").and_then(Value::as_str) != Some("known") {
             return Err(UPGRADE.into());
         }
-        Ok(ExpectedPin {
-            revision: intent
-                .get("revision")
-                .and_then(Value::as_str)
-                .ok_or(UPGRADE)?
-                .into(),
-            definition: match intent.get("definition") {
-                None | Some(Value::Null) => None,
-                Some(Value::String(value)) => Some(value.clone()),
-                _ => return Err(UPGRADE.into()),
-            },
-        })
+        serde_json::from_value(intent.clone()).map_err(|_| UPGRADE.into())
     }
 
     fn admit(&self, fresh: bool) -> Result<(), String> {
@@ -180,7 +165,7 @@ impl Observation {
         let Some(port) = self.number("/port/port").filter(|port| *port > 0) else {
             return false;
         };
-        self.is_current(runtime)
+        self.uses_runtime_path(&runtime.bun)
             && self.text("/service/runtimeIntent/pin/runtime") == Some("bun")
             && self
                 .text("/service/runtimeIntent/pin/path")
@@ -205,15 +190,12 @@ impl Observation {
     }
 
     fn previous_runtime_command(&self) -> String {
-        let pin = self.0.pointer("/service/runtimeIntent/pin");
-        let path = pin
-            .and_then(|pin| pin.get("path"))
-            .and_then(Value::as_str)
+        let path = self
+            .text("/service/runtimeIntent/pin/path")
             .map(Path::new)
             .or_else(|| self.runtime_path());
-        let kind = pin
-            .and_then(|pin| pin.get("runtime"))
-            .and_then(Value::as_str)
+        let kind = self
+            .text("/service/runtimeIntent/pin/runtime")
             .unwrap_or_else(|| {
                 if path
                     .and_then(Path::file_name)
@@ -404,7 +386,7 @@ pub(crate) fn bind_runtime(
 ) -> Result<(), String> {
     validate_runtime(runtime)?;
     let launcher =
-        read_launcher(cli)?.ok_or("The CLI launcher is not a canonical managed installation.")?;
+        read_launcher(cli)?.ok_or("The CLI launcher is not a recognized managed installation.")?;
     publish_launcher(&launcher, runtime, purpose)
 }
 

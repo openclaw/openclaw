@@ -38,28 +38,22 @@ type CodexSessionPermissionTuple = {
   sandbox: CodexSandboxMode;
 };
 
+const SESSION_SANDBOX_MODES = {
+  "read-only": "read-only",
+  guarded: "workspace-write",
+  workspace: "workspace-write",
+  full: "danger-full-access",
+} satisfies Record<SessionPermissionMode, CodexSandboxMode>;
+
 function tupleForMode(
   mode: SessionPermissionMode,
   canUseAutoReview: boolean,
 ): CodexSessionPermissionTuple {
-  switch (mode) {
-    case "read-only":
-      return { sandbox: "read-only", approvalPolicy: "on-request", approvalsReviewer: "user" };
-    case "guarded":
-    case "workspace":
-      return {
-        sandbox: "workspace-write",
-        approvalPolicy: "on-request",
-        approvalsReviewer: mode === "workspace" && canUseAutoReview ? "auto_review" : "user",
-      };
-    case "full":
-      return {
-        sandbox: "danger-full-access",
-        approvalPolicy: "never",
-        approvalsReviewer: "user",
-      };
-  }
-  return mode satisfies never;
+  return {
+    sandbox: SESSION_SANDBOX_MODES[mode],
+    approvalPolicy: mode === "full" ? "never" : "on-request",
+    approvalsReviewer: mode === "workspace" && canUseAutoReview ? "auto_review" : "user",
+  };
 }
 
 function requirementsAllowTuple(

@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ClawHubPackageSecurityResponse } from "../infra/clawhub-packages.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { captureEnv } from "../test-utils/env.js";
 
 const PACKAGE_NAME = "@openclaw/telemetry-demo";
 const PACKAGE_VERSION = "1.0.0";
@@ -222,24 +223,14 @@ function buildEnv(stateDir: string, registry: string): NodeJS.ProcessEnv {
 }
 
 async function readPersistedInstallRecord(stateDir: string) {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  const previousEnv = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   try {
     const records = await loadInstalledPluginIndexInstallRecords();
     return records[PLUGIN_ID];
   } finally {
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousConfigPath === undefined) {
-      delete process.env.OPENCLAW_CONFIG_PATH;
-    } else {
-      process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
-    }
+    previousEnv.restore();
   }
 }
 

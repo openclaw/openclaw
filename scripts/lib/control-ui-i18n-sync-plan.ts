@@ -1,13 +1,8 @@
-export interface TranslationMap {
-  [key: string]: string | TranslationMap;
-}
+import type { TranslationMap } from "../../ui/src/i18n/lib/types.ts";
+import type controlUiLocaleEntries from "./control-ui-i18n-config.json";
 
-export type LocaleEntry = {
-  exportName: string;
-  fileName: string;
-  languageKey: string;
-  locale: string;
-};
+export type { TranslationMap };
+export type LocaleEntry = (typeof controlUiLocaleEntries)[number];
 
 export type GlossaryEntry = {
   source: string;

@@ -2,7 +2,7 @@ import type { Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveTelegramPrimaryMedia,
   resolveTelegramRichMessageBody,
@@ -78,25 +78,11 @@ export function isTelegramMessageFromCurrentBot(msg: Message, botUserId?: number
   return msg.from?.id === currentBotUserId || msg.sender_business_bot?.id === currentBotUserId;
 }
 
-function resolveMessageBody(msg: Message, preserveWhitespace: boolean): string | undefined {
-  const text = getTelegramTextParts(msg).text;
-  if (text.trim()) {
-    return preserveWhitespace ? text : text.trim();
-  }
-  const location = extractTelegramLocation(msg);
-  if (location) {
-    return formatLocationText(location);
-  }
-  return resolveTelegramRichMessageBody(msg);
-}
-
 function resolveMessageTimestamp(msg: MessageWithPromptContextTimestamp): number | undefined {
-  const promptContextTimestamp = msg.openclaw_prompt_context_timestamp_ms;
-  return typeof promptContextTimestamp === "number" && Number.isFinite(promptContextTimestamp)
-    ? promptContextTimestamp
-    : msg.date
-      ? msg.date * 1000
-      : undefined;
+  return (
+    asFiniteNumber(msg.openclaw_prompt_context_timestamp_ms) ??
+    (msg.date ? msg.date * 1000 : undefined)
+  );
 }
 
 export function normalizeMessageNode(
@@ -113,7 +99,15 @@ export function normalizeMessageNode(
   const fileId = media?.fileRef.file_id;
   const forwardedFrom = normalizeForwardedContext(msg);
   const replyMessage = resolveReplyMessage(msg);
-  const body = resolveMessageBody(msg, params.promptContextProjectionMarker !== undefined);
+  const preserveWhitespace = params.promptContextProjectionMarker !== undefined;
+  const text = getTelegramTextParts(msg).text;
+  let body: string | undefined;
+  if (text.trim()) {
+    body = preserveWhitespace ? text : text.trim();
+  } else {
+    const location = extractTelegramLocation(msg);
+    body = location ? formatLocationText(location) : resolveTelegramRichMessageBody(msg);
+  }
   const threadBinding = normalizeTelegramMessageThreadBinding(params.threadBinding);
   const threadId =
     threadBinding?.threadSpec.scope === "none"
@@ -296,9 +290,12 @@ export function mergeCachedMessageNode(
     (existing.sourceMessage.edit_date !== undefined &&
       existing.sourceMessage.edit_date >
         (incoming.sourceMessage.edit_date ?? incoming.sourceMessage.date));
-  const mergedSourceMessage = preferExisting
-    ? mergeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage)
-    : mergeTelegramSourceMessage(incoming.sourceMessage, existing.sourceMessage);
+  const preferred = preferExisting ? existing : incoming;
+  const other = preferExisting ? incoming : existing;
+  const mergedSourceMessage = mergeTelegramSourceMessage(
+    preferred.sourceMessage,
+    other.sourceMessage,
+  );
   const syntheticOutboundFrom =
     existing.senderId === "0" && incoming.sourceMessage.sender_chat
       ? existing.sourceMessage.from
@@ -307,8 +304,6 @@ export function mergeCachedMessageNode(
   const sourceMessage = syntheticOutboundFrom
     ? { ...mergedSourceMessage, from: syntheticOutboundFrom }
     : mergedSourceMessage;
-  const preferred = preferExisting ? existing : incoming;
-  const other = preferExisting ? incoming : existing;
   const promptContextProjectionMarker =
     preferred.promptContextProjectionMarker ?? other.promptContextProjectionMarker;
   const threadBinding =
@@ -321,12 +316,9 @@ export function mergeCachedMessageNode(
           threadBinding?.threadSpec.id ?? preferred.threadId ?? other.threadId,
         );
   const primaryMediaId = resolveTelegramPrimaryMedia(sourceMessage)?.fileRef.file_unique_id;
-  const resolvedMedia =
-    preferred.resolvedMedia?.fileUniqueId === primaryMediaId
-      ? preferred.resolvedMedia
-      : other.resolvedMedia?.fileUniqueId === primaryMediaId
-        ? other.resolvedMedia
-        : undefined;
+  const resolvedMedia = [preferred.resolvedMedia, other.resolvedMedia].find(
+    (media) => media?.fileUniqueId === primaryMediaId,
+  );
   return normalizeMessageNode(sourceMessage, {
     threadId,
     promptContextProjectionMarker,

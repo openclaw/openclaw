@@ -10,6 +10,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -32,7 +33,7 @@ import { registerQueuedRegistrationClaimCases } from "./subagent-registry-queued
 import { withQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
 import { registerQueuedUnknownKillAuthorityTest } from "./subagent-registry-queued-uncertain-kill.test-support.js";
 import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
-import * as runManager from "./subagent-registry-run-manager.js";
+import * as runPause from "./subagent-registry-run-pause.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentCompletionRequest } from "./subagent-registry.types.js";
 
@@ -192,12 +193,10 @@ it("rejects and terminalizes an intent superseded while descriptor admission wai
   });
 });
 
-it.each(["recorded child", "persisted store owner"] as const)(
-  "terminalizes a committed intent after a definite descriptor refusal using its %s usage",
-  async (owner) => {
+it.each(["main", "research"] as const)(
+  "terminalizes a committed intent using its recorded child usage with %s as the configured store owner",
+  async (configuredStoreOwner) => {
     await withQueuedRegistrationFixture(async (f) => {
-      const recordedChild = owner === "recorded child";
-      const configuredStoreOwner = recordedChild ? "main" : "research";
       const cfg = {
         session: { store: path.join(resolveStateDir(), "queued-registration-sessions.sqlite") },
         agents: {
@@ -208,7 +207,11 @@ it.each(["recorded child", "persisted store owner"] as const)(
       } satisfies OpenClawConfig;
       f.options.getRuntimeConfig = () => cfg;
       f.registration.childSessionKey = "global";
-      f.registration.childAgentId = recordedChild ? "research" : undefined;
+      f.registration.childAgentId = "research";
+      f.registration.sessionEntry = {
+        sessionId: "research-collector-session",
+        lifecycleRevision: "research-collector-lifecycle",
+      };
       f.registration.queuedLaunch!.request.sessionKey = "global";
       for (const [agentId, inputTokens, outputTokens] of [
         ["main", 11, 13],
@@ -282,9 +285,9 @@ it.each(["open", "restart", "suspend"] as const)(
     await withQueuedRegistrationFixture(async (f) => {
       await f.register();
       const release = createDeferred();
-      const preserve = runManager.preserveSubagentRunForRestart;
+      const preserve = runPause.preserveSubagentRunForRestart;
       const preservation = vi
-        .spyOn(runManager, "preserveSubagentRunForRestart")
+        .spyOn(runPause, "preserveSubagentRunForRestart")
         .mockImplementation((params) => f.track(release.promise.then(() => preserve(params))));
       let emit: ((event: AgentEventPayload) => void) | undefined;
       const complete = vi.fn(async () => {});
@@ -528,19 +531,14 @@ it.each(["transaction", "commit"] as const)(
     await withQueuedRegistrationFixture(async (f) => {
       await f.register();
       const original = f.current();
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
       let rotated = false;
-      const admission = vi
-        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage && !rotated) {
-              rotated = true;
-              rotateAgentEventLifecycleGeneration();
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+        if (request.stage === stage && !rotated) {
+          rotated = true;
+          rotateAgentEventLifecycleGeneration();
+        }
+        admit(request, grant);
+      });
       try {
         await expect(
           f.manager.startQueuedSubagentRun(original.runId, "accepted-run"),

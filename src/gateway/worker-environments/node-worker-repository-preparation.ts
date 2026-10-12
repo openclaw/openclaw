@@ -276,38 +276,35 @@ export function createNodeWorkerRepositoryPreparation(
     ): Promise<NodeWorkerRepositoryOutcome> {
       const seedKey = createHash("sha256").update(identity.origin).digest("hex");
       let outcome: NodeWorkerRepositoryOutcome | undefined;
-      {
-        try {
-          const applied = await exec({
-            argv: ["openclaw-internal-workspace-seed"],
-            seed: { action: "apply", key: seedKey },
-            timeoutMs: GIT_TIMEOUT_MS,
-            transportRetry: "never",
-          });
-          if (succeeded(applied) && applied.stdout.trim() === "applied") {
-            const remote = await git(identity, ["remote", "get-url", "origin"]);
-            if (!succeeded(remote) || remote.stdout.trim() !== identity.origin) {
-              throw new Error("Node workspace seed origin mismatch");
-            }
-            outcome = await checkoutAndCapture(
-              identity,
-              applied.workspaceDir,
-              expectedManifestRef,
-              true,
-            );
+      try {
+        const applied = await exec({
+          argv: ["openclaw-internal-workspace-seed"],
+          seed: { action: "apply", key: seedKey },
+          timeoutMs: GIT_TIMEOUT_MS,
+          transportRetry: "never",
+        });
+        if (succeeded(applied) && applied.stdout.trim() === "applied") {
+          const remote = await git(identity, ["remote", "get-url", "origin"]);
+          if (!succeeded(remote) || remote.stdout.trim() !== identity.origin) {
+            throw new Error("Node workspace seed origin mismatch");
           }
-        } catch (error) {
-          authorize?.();
-          if (error instanceof Error && error.message.includes("INVALID_REQUEST")) {
-            throw error;
-          } else {
-            // Seeded failure self-heals through the clone path; without this line the
-            // degradation would be invisible behind an ordinary "published-origin" sync.
-            workspaceSyncLog.info("node worker workspace seeded sync failed; cloning", {
-              error: boundedWorkerError(error),
-            });
-          }
+          outcome = await checkoutAndCapture(
+            identity,
+            applied.workspaceDir,
+            expectedManifestRef,
+            true,
+          );
         }
+      } catch (error) {
+        authorize?.();
+        if (error instanceof Error && error.message.includes("INVALID_REQUEST")) {
+          throw error;
+        }
+        // Seeded failure self-heals through the clone path; without this line the
+        // degradation would be invisible behind an ordinary "published-origin" sync.
+        workspaceSyncLog.info("node worker workspace seeded sync failed; cloning", {
+          error: boundedWorkerError(error),
+        });
       }
       if (outcome?.kind !== "prepared") {
         const cloned = await git(

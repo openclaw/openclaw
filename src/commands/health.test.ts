@@ -241,7 +241,7 @@ describe("healthCommand", () => {
     await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime);
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
-    expect(output).toContain("Gateway probe duration: 5ms");
+    expect(output).toContain("Gateway check duration: 5ms");
     expect(output).toContain(`Session store (main): ${parsed.sessions.path}`);
     expect(output).toContain(
       "Plugin calendar: failed - service scheduler: address already in use; run openclaw doctor",

@@ -83,7 +83,7 @@ export function resolvePluginUpdateSelection(params: {
   rejectedPluginIds?: ReadonlyMap<string, string>;
   rawIds: readonly string[];
   all?: boolean;
-}): Omit<TrackedUpdateSelection, "ids"> & { pluginIds: string[] } {
+}) {
   const { ids, ...selection } = resolveTrackedUpdateSelection({
     ...params,
     packageName: (install) =>
@@ -97,7 +97,7 @@ export function resolveHookPackUpdateSelection(params: {
   installs: Record<string, HookInstallRecord>;
   rawIds: readonly string[];
   all?: boolean;
-}): Omit<TrackedUpdateSelection, "ids"> & { hookIds: string[] } {
+}) {
   const { ids, ...selection } = resolveTrackedUpdateSelection({
     ...params,
     packageName: installedNpmPackageName,

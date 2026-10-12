@@ -16,8 +16,8 @@ export const SESSION_LIST_SOURCES = [
 export const SessionsListParamsSchema = closedObject({
   /** Bounded caller attribution for response diagnostics; does not affect selection. */
   source: Type.Optional(Type.Enum(SESSION_LIST_SOURCES)),
-  /** Omit detail-only capability metadata; sessions.describe retains the full row. */
-  rowMode: Type.Optional(Type.Literal("compact")),
+  /** Compact omits capabilities; dashboard retains gallery and membership facts only. */
+  rowMode: Type.Optional(Type.Union([Type.Literal("compact"), Type.Literal("dashboard")])),
   /** Maximum rows to return; omitted Gateway RPC calls use a bounded default. */
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),

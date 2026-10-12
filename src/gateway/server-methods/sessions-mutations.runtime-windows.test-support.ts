@@ -55,117 +55,41 @@ export function registerSessionRuntimeWindowTests(harness: {
       return { base, native, snapshot, requestContext };
     }
 
-    it.each(["create", "patch"])(
-      "accepts the selected runtime window through %s and projects it after persistence",
-      async (operation) => {
-        const cfg = harness.getConfig();
-        const openClawTestState = harness.getState();
-        const sessionKey = `agent:main:runtime-window-${operation}`;
-        const { base, native, snapshot, requestContext } = runtimeWindowFixture();
-        if (operation === "create") {
-          const options = {
-            cfg,
-            key: sessionKey,
-            model: "openai/gpt-5.6-sol",
-            agentRuntime: "codex",
-            contextWindow: "64k",
-            commandSource: "test",
-            operatorRoleActor: { kind: "system" as const },
-            loadGatewayModelCatalogSnapshot: requestContext.loadGatewayModelCatalogSnapshot,
-          };
-          expect(await createGatewaySession(options)).toMatchObject({
-            ok: true,
-            entry: { contextWindow: "64k", agentRuntimeOverride: "codex" },
-          });
-        } else {
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey },
+    it("accepts the selected runtime window through patch and projects it after persistence", async () => {
+      const cfg = harness.getConfig();
+      const openClawTestState = harness.getState();
+      const sessionKey = "agent:main:runtime-window-patch";
+      const { base, native, snapshot, requestContext } = runtimeWindowFixture();
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: sessionKey,
+          updatedAt: 1,
+          providerOverride: "openai",
+          modelOverride: "gpt-5.6-sol",
+        },
+      );
+      expect(
+        (
+          await patchSession(
             {
-              sessionId: sessionKey,
-              updatedAt: 1,
-              providerOverride: "openai",
-              modelOverride: "gpt-5.6-sol",
+              key: sessionKey,
+              model: "openai/gpt-5.6-sol",
+              agentRuntime: "codex",
+              contextWindow: "64k",
             },
-          );
-          expect(
-            (
-              await patchSession(
-                {
-                  key: sessionKey,
-                  model: "openai/gpt-5.6-sol",
-                  agentRuntime: "codex",
-                  contextWindow: "64k",
-                },
-                ["operator.admin"],
-                requestContext,
-              )
-            )[0],
-          ).toBe(true);
-        }
-        const stored = loadSessionEntry({ agentId: "main", sessionKey });
-        expect(stored).toMatchObject({ contextWindow: "64k", agentRuntimeOverride: "codex" });
-        if (!stored) {
-          throw new Error("Session was not persisted");
-        }
-        expect(
-          projectSessionPatchResult({
-            preparedAcpMeta: null,
-            cfg,
-            canonicalKey: sessionKey,
-            entry: stored,
-            modelCatalog: snapshot.entries,
-            modelCatalogRouteVariants: snapshot.routeVariants,
-            targetAgentId: "main",
-            storePath: openClawTestState.statePath("agents", "main", "sessions", "sessions.json"),
-          }).resolved,
-        ).toMatchObject({ contextWindow: "64k", contextWindows: native.contextWindows });
-        const row = buildGatewaySessionRow({
-          cfg,
-          agentId: "main",
-          key: sessionKey,
-          entry: stored,
-          store: { [sessionKey]: stored },
-          storePath: openClawTestState.statePath("agents", "main", "sessions", "sessions.json"),
-          modelCatalog: new Map([
-            ["main", { entries: snapshot.entries, routeVariants: snapshot.routeVariants }],
-          ]),
-          lightweightListRow: true,
-          skipTranscriptUsageFallback: true,
-        });
-        expect(row).toMatchObject({
-          contextWindow: "64k",
-          contextWindows: native.contextWindows,
-          contextTokens: 64_000,
-        });
-        const contextOnly = await patchSession(
-          { key: sessionKey, contextWindow: "64k" },
-          ["operator.admin"],
-          requestContext,
-        );
-        expect(contextOnly[0]).toBe(true);
-        expect(contextOnly[1]).toMatchObject({
-          resolved: { contextWindow: "64k", contextWindows: native.contextWindows },
-        });
-        const invalid = await patchSession(
-          { key: sessionKey, contextWindow: "32k" },
-          ["operator.admin"],
-          requestContext,
-        );
-        expect(invalid[0]).toBe(false);
-        expect(invalid[2]?.message).toContain("use 64k");
-        expect(loadSessionEntry({ agentId: "main", sessionKey })?.contextWindow).toBe("64k");
-        snapshot.routeVariants = [
-          base,
-          { ...native, contextWindows: undefined, contextWindowDefault: undefined },
-        ];
-        const missing = await patchSession(
-          { key: sessionKey, contextWindow: "32k" },
-          ["operator.admin"],
-          requestContext,
-        );
-        expect(missing[0]).toBe(false);
-        expect(missing[2]?.message).not.toContain("use 32k");
-        const withoutNativeWindows = projectSessionPatchResult({
+            ["operator.admin"],
+            requestContext,
+          )
+        )[0],
+      ).toBe(true);
+      const stored = loadSessionEntry({ agentId: "main", sessionKey });
+      expect(stored).toMatchObject({ contextWindow: "64k", agentRuntimeOverride: "codex" });
+      if (!stored) {
+        throw new Error("Session was not persisted");
+      }
+      expect(
+        projectSessionPatchResult({
           preparedAcpMeta: null,
           cfg,
           canonicalKey: sessionKey,
@@ -174,80 +98,121 @@ export function registerSessionRuntimeWindowTests(harness: {
           modelCatalogRouteVariants: snapshot.routeVariants,
           targetAgentId: "main",
           storePath: openClawTestState.statePath("agents", "main", "sessions", "sessions.json"),
-        });
-        expect(withoutNativeWindows.resolved?.contextWindows).toBeUndefined();
-        expect(
-          (
-            await patchSession(
-              { key: sessionKey, model: "openai/gpt-5.6-sol", agentRuntime: "openclaw" },
-              ["operator.admin"],
-              requestContext,
-            )
-          )[0],
-        ).toBe(true);
-        expect(loadSessionEntry({ agentId: "main", sessionKey })).not.toHaveProperty(
-          "contextWindow",
-        );
-      },
-    );
-    it.each([50_000, 70_000])(
-      "bounds native alternative forks at 64k for a %s-token parent",
-      async (parentTokens) => {
-        const cfg = harness.getConfig();
-        const { snapshot } = runtimeWindowFixture();
-        const parentKey = `agent:main:window-parent-${parentTokens}`;
-        const childKey = `agent:main:window-child-${parentTokens}`;
-        const parent = await createGatewaySession({
-          cfg,
-          key: parentKey,
-          commandSource: "test",
-          operatorRoleActor: { kind: "system" },
-        });
-        expect(parent.ok).toBe(true);
-        const scope = { agentId: "main", sessionKey: parentKey };
-        const stored = loadSessionEntry(scope);
-        if (!stored) {
-          throw new Error("Parent was not persisted");
-        }
-        appendTranscriptMessageSync(
-          { ...scope, sessionId: stored.sessionId },
-          { message: { role: "user", content: "Context-window fork fixture", timestamp: 1 } },
-        );
-        await upsertSessionEntryCore(scope, {
-          ...stored,
-          totalTokens: parentTokens,
-          totalTokensFresh: true,
-          totalTokensVersion: 1,
-        });
-        const child = await createGatewaySession({
-          cfg,
-          key: childKey,
-          parentSessionKey: parentKey,
-          fork: true,
-          model: "openai/gpt-5.6-sol",
-          agentRuntime: "codex",
-          contextWindow: "64k",
-          loadGatewayModelCatalogSnapshot: async () => snapshot,
-          commandSource: "test",
-          operatorRoleActor: { kind: "system" },
-        });
-        if (parentTokens < 64_000) {
-          expect(child).toMatchObject({
-            ok: true,
-            entry: {
-              contextWindow: "64k",
-              agentRuntimeOverride: "codex",
-              forkSource: { sessionKey: parentKey },
-            },
-          });
-        } else {
-          expect(child).toMatchObject({
-            ok: false,
-            error: { message: expect.stringContaining("70000/64000 tokens") },
-          });
-          expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toBeUndefined();
-        }
-      },
-    );
+        }).resolved,
+      ).toMatchObject({ contextWindow: "64k", contextWindows: native.contextWindows });
+      const row = buildGatewaySessionRow({
+        cfg,
+        agentId: "main",
+        key: sessionKey,
+        entry: stored,
+        store: { [sessionKey]: stored },
+        storePath: openClawTestState.statePath("agents", "main", "sessions", "sessions.json"),
+        modelCatalog: new Map([
+          ["main", { entries: snapshot.entries, routeVariants: snapshot.routeVariants }],
+        ]),
+        lightweightListRow: true,
+        skipTranscriptUsageFallback: true,
+      });
+      expect(row).toMatchObject({
+        contextWindow: "64k",
+        contextWindows: native.contextWindows,
+        contextTokens: 64_000,
+      });
+      const contextOnly = await patchSession(
+        { key: sessionKey, contextWindow: "64k" },
+        ["operator.admin"],
+        requestContext,
+      );
+      expect(contextOnly[0]).toBe(true);
+      expect(contextOnly[1]).toMatchObject({
+        resolved: { contextWindow: "64k", contextWindows: native.contextWindows },
+      });
+      const invalid = await patchSession(
+        { key: sessionKey, contextWindow: "32k" },
+        ["operator.admin"],
+        requestContext,
+      );
+      expect(invalid[0]).toBe(false);
+      expect(invalid[2]?.message).toContain("use 64k");
+      expect(loadSessionEntry({ agentId: "main", sessionKey })?.contextWindow).toBe("64k");
+      snapshot.routeVariants = [
+        base,
+        { ...native, contextWindows: undefined, contextWindowDefault: undefined },
+      ];
+      const missing = await patchSession(
+        { key: sessionKey, contextWindow: "32k" },
+        ["operator.admin"],
+        requestContext,
+      );
+      expect(missing[0]).toBe(false);
+      expect(missing[2]?.message).not.toContain("use 32k");
+      const withoutNativeWindows = projectSessionPatchResult({
+        preparedAcpMeta: null,
+        cfg,
+        canonicalKey: sessionKey,
+        entry: stored,
+        modelCatalog: snapshot.entries,
+        modelCatalogRouteVariants: snapshot.routeVariants,
+        targetAgentId: "main",
+        storePath: openClawTestState.statePath("agents", "main", "sessions", "sessions.json"),
+      });
+      expect(withoutNativeWindows.resolved?.contextWindows).toBeUndefined();
+      expect(
+        (
+          await patchSession(
+            { key: sessionKey, model: "openai/gpt-5.6-sol", agentRuntime: "openclaw" },
+            ["operator.admin"],
+            requestContext,
+          )
+        )[0],
+      ).toBe(true);
+      expect(loadSessionEntry({ agentId: "main", sessionKey })).not.toHaveProperty("contextWindow");
+    });
+    it("bounds native alternative forks at 64k for a 70000-token parent", async () => {
+      const parentTokens = 70_000;
+      const cfg = harness.getConfig();
+      const { snapshot } = runtimeWindowFixture();
+      const parentKey = `agent:main:window-parent-${parentTokens}`;
+      const childKey = `agent:main:window-child-${parentTokens}`;
+      const parent = await createGatewaySession({
+        cfg,
+        key: parentKey,
+        commandSource: "test",
+        operatorRoleActor: { kind: "system" },
+      });
+      expect(parent.ok).toBe(true);
+      const scope = { agentId: "main", sessionKey: parentKey };
+      const stored = loadSessionEntry(scope);
+      if (!stored) {
+        throw new Error("Parent was not persisted");
+      }
+      appendTranscriptMessageSync(
+        { ...scope, sessionId: stored.sessionId },
+        { message: { role: "user", content: "Context-window fork fixture", timestamp: 1 } },
+      );
+      await upsertSessionEntryCore(scope, {
+        ...stored,
+        totalTokens: parentTokens,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      });
+      const child = await createGatewaySession({
+        cfg,
+        key: childKey,
+        parentSessionKey: parentKey,
+        fork: true,
+        model: "openai/gpt-5.6-sol",
+        agentRuntime: "codex",
+        contextWindow: "64k",
+        loadGatewayModelCatalogSnapshot: async () => snapshot,
+        commandSource: "test",
+        operatorRoleActor: { kind: "system" },
+      });
+      expect(child).toMatchObject({
+        ok: false,
+        error: { message: expect.stringContaining("70000/64000 tokens") },
+      });
+      expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toBeUndefined();
+    });
   });
 }

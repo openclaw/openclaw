@@ -1,4 +1,3 @@
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
 import type { RunCliAgentParams } from "./types.js";
@@ -28,11 +27,7 @@ export function resolveCliRuntimeToolPolicy(input: {
       params = { ...params, toolsAllow: undefined };
     } else {
       runtimeToolsAllowPolicy = [...params.toolsAllow];
-      const fallbackOpenClawTools = uniqueStrings(
-        expandToolGroups(params.toolsAllow)
-          .map((toolName) => normalizeToolPolicyName(toolName))
-          .filter(Boolean),
-      );
+      const fallbackOpenClawTools = expandToolGroups(params.toolsAllow);
       if (
         fallbackOpenClawTools.includes("write") &&
         !fallbackOpenClawTools.includes("apply_patch")
@@ -84,7 +79,11 @@ export function resolveCliRuntimeToolPolicy(input: {
           modelId: params.model,
         }).policy;
   const senderRestricted = requesterPolicy?.inheritedToolPolicySource === "sender";
-  if ((params.trustedInternalHandoff || senderRestricted) && params.disableTools !== true) {
+  const delegatedExecution = Boolean(requesterPolicy?.delegatedToolPolicy);
+  if (
+    (params.trustedInternalHandoff || senderRestricted || delegatedExecution) &&
+    params.disableTools !== true
+  ) {
     if (
       !input.canEnforceExactToolAvailability ||
       !input.bundleMcp ||
@@ -93,7 +92,7 @@ export function resolveCliRuntimeToolPolicy(input: {
       params.trustedInternalHandoff?.settleBatch !== undefined
     ) {
       throw new Error(
-        `CLI backend ${input.backendId} cannot enforce ${senderRestricted ? "conversation" : "completion"} tool policy`,
+        `CLI backend ${input.backendId} cannot enforce ${senderRestricted ? "conversation" : delegatedExecution ? "delegated execution" : "completion"} tool policy`,
       );
     }
     runtimeToolsAllowPolicy ??= senderRestricted

@@ -14,17 +14,24 @@ import {
   type AgentHarnessToolSurfaceRuntime,
   type AgentHarnessToolSurfaceRuntimeParams,
 } from "./agent-harness-tool-runtime.js";
-import { createOpenClawCodingTools } from "./agent-harness.js";
+import { createOpenClawCodingTools, createOpenClawCodingToolsAsync } from "./agent-harness.js";
 import type { createAgentHarnessHostCapabilitiesForTest } from "./plugin-test-runtime.js";
 
 type PrivateControls = "disableToolSearch" | "sessionReadScopeKey";
 type CodingToolsOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
+type AsyncCodingToolsOptions = NonNullable<Parameters<typeof createOpenClawCodingToolsAsync>[0]>;
 type HostToolsOptions = Parameters<
   NonNullable<AgentHarnessAttemptParamsV2["hostCapabilities"]["createToolSurface"]>
 >[0];
 type HostTestAttempt = Parameters<typeof createAgentHarnessHostCapabilitiesForTest>[0]["attempt"];
 
 describe("agent harness private options", () => {
+  it("accepts the optional host run trigger for tool presentation", () => {
+    expectTypeOf<Pick<AgentHarnessToolSurfaceRuntimeParams, "trigger">>().toEqualTypeOf<{
+      trigger?: AgentHarnessAttemptParamsV2["trigger"];
+    }>();
+  });
+
   it("keeps Side chat controls out of every public attempt and tool-surface input", () => {
     type PublicInputs = {
       attempt: AgentHarnessAttemptParams;
@@ -54,6 +61,8 @@ describe("agent harness private options", () => {
     }>();
     expectTypeOf<CodingToolsOptions>().not.toHaveProperty("onProgressCardPlanSaved");
     expectTypeOf<CodingToolsOptions>().not.toHaveProperty("authProfileStoreSource");
+    expectTypeOf<CodingToolsOptions>().not.toHaveProperty("onWebSearchConfiguration");
+    expectTypeOf<AsyncCodingToolsOptions>().not.toHaveProperty("onWebSearchConfiguration");
     expectTypeOf<CodingToolsOptions>().toMatchTypeOf<
       NonNullable<Parameters<typeof createCoreCodingTools>[0]>
     >();

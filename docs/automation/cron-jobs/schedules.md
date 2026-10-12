@@ -106,6 +106,8 @@ An event trigger adds a headless condition script to an `every`, `cron`, or `str
 }
 ```
 
+Forced manual runs bypass this gate: `openclaw automations run <job-id>` (forced by default) and the `automations` tool with `action: "run", runMode: "force"` skip `trigger.script` and execute the payload directly. An `agentTurn` payload wakes the model even if the script would return `fire: false`. To test the gate, wait for a scheduled evaluation or use `openclaw automations run <job-id> --due` when the job is due. The tool's default `runMode: "due"` also honors the gate; neither due mode makes a job due early.
+
 `openclaw doctor --fix` converts persisted trigger scripts that call `tools.call('exec', args)` and read the `.result.details` envelope. Doctor leaves custom or ambiguous scripts unchanged and identifies each affected job for manual conversion; standalone script payloads are not converted.
 
 The script must return `{ fire, message?, state? }`. The previous JSON state is available as the deeply frozen `trigger.state`; stream gates also receive the current batch as `trigger.streamBatch`. Return a new `state` value to persist it. State is capped at 16 KB. When a firing result includes `message`, the scheduler appends it to the system-event text or agent-turn message before execution. `once: true` disables the job after its first successful fired payload.

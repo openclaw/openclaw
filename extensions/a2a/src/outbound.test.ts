@@ -1,4 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { withEnv, withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { sendA2aChannelText } from "./outbound.js";
 import type { A2aCoreConfig, A2aPeerConfig } from "./types.js";
@@ -266,5 +270,59 @@ describe("A2A outbound channel delivery", () => {
     expect(String(failure.cause)).not.toContain(outboundToken);
     expect(failure.cause).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("A2A outbound sends with unresolved authored credentials", () => {
+  async function loadPeerConfig(stateDir: string, peer: Record<string, unknown>) {
+    const configPath = path.join(stateDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ channels: { a2a: { peers: { hermes: peer } } } }),
+    );
+    return withEnv(
+      { OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_A2A_OUTBOUND_TEST_UNSET: undefined },
+      // Each case needs a fresh load; the default read pins the first snapshot.
+      () => getRuntimeConfig({ pin: false }),
+    );
+  }
+
+  it("refuses to send, and performs no network I/O, when the authored outboundToken did not resolve", async () => {
+    await withStateDirEnv("a2a-outbound-unresolved-", async ({ stateDir }) => {
+      const cfg = await loadPeerConfig(stateDir, {
+        token: "inbound-token",
+        url: "https://hermes.example/a2a/v1",
+        outboundToken: "${OPENCLAW_A2A_OUTBOUND_TEST_UNSET}",
+      });
+
+      await expect(sendA2aChannelText({ cfg, to: "a2a:hermes", text: "hello" })).rejects.toThrow(
+        /outboundToken reference did not resolve/,
+      );
+      expect(ssrfRuntime.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    });
+  });
+
+  it("still sends anonymously to a peer that never authored an outboundToken", async () => {
+    await withStateDirEnv("a2a-outbound-anonymous-", async ({ stateDir }) => {
+      const cfg = await loadPeerConfig(stateDir, {
+        token: "inbound-token",
+        url: "https://hermes.example/a2a/v1",
+      });
+      vi.mocked(ssrfRuntime.fetchWithSsrFGuard).mockImplementationOnce(async () => ({
+        response: createA2aJsonResponse({
+          jsonrpc: "2.0",
+          id: "1",
+          result: { task: { id: "t1" } },
+        }),
+        finalUrl: "https://hermes.example/a2a/v1",
+        release: async () => {},
+      }));
+
+      await expect(
+        sendA2aChannelText({ cfg, to: "a2a:hermes", text: "hello" }),
+      ).resolves.toMatchObject({ to: "a2a:hermes" });
+      const init = vi.mocked(ssrfRuntime.fetchWithSsrFGuard).mock.calls[0]?.[0].init;
+      expect(init?.headers).not.toHaveProperty("authorization");
+    });
   });
 });

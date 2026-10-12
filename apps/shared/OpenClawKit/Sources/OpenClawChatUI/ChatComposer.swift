@@ -66,6 +66,16 @@ private struct SlashPanelHeightKey: PreferenceKey {
     }
 }
 
+/// Evaluates part of the composer in its own body. Debug builds keep every nested `some View` temporary on
+/// the stack, and the whole composer evaluated in one body nearly fills the 1 MB main-thread stack of a device.
+struct ChatComposerSection<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        self.content()
+    }
+}
+
 struct OpenClawChatComposerPresentationOwner: Equatable {
     let viewModelID: ObjectIdentifier
     let session: OpenClawChatViewModel.SessionSnapshot
@@ -279,7 +289,7 @@ struct OpenClawChatComposer: View {
 
 extension OpenClawChatComposer {
     private var styledComposer: some View {
-        self.composerContent
+        ChatComposerSection { self.composerContent }
             .padding(composerPadding)
             .background { self.composerBackground }
     }
@@ -633,7 +643,7 @@ extension OpenClawChatComposer {
     }
 
     private var editor: some View {
-        self.editorContent
+        ChatComposerSection { self.editorContent }
             .overlay(alignment: .top) {
                 if self.isSlashPopoverPresented {
                     self.slashCommandPanel

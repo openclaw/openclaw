@@ -48,9 +48,17 @@ export function readToolAllowlistIntersection(
   return (toolsAllow as ToolAllowlistWithIntersection)[TOOL_ALLOWLIST_INTERSECTION];
 }
 
-/** Refusal for a tool that keeps its schema but sits outside the run's execution allowlist. */
-export const TOOL_EXECUTION_GATED_MESSAGE =
-  "Unavailable in this run. Continue with the tools permitted by the run's instructions.";
+/**
+ * Normal (non-error) result for a tool that keeps its schema but sits outside the run's
+ * execution allowlist. Background runs treat it as guidance, never as a run failure.
+ */
+export function formatToolExecutionGatedMessage(
+  toolName: string,
+  allowNames: readonly string[],
+): string {
+  const allowed = allowNames.length > 0 ? allowNames.join(", ") : "the tools named in your task";
+  return `${toolName} is not available in this background run. Use ${allowed} instead; do not retry ${toolName}.`;
+}
 
 export function isToolExecutionAllowed(allowNames: readonly string[], toolName: string): boolean {
   const target = normalizeToolPolicyName(toolName);

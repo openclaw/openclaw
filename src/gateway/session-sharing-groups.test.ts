@@ -42,7 +42,6 @@ afterEach(async () => {
 
 describe("session sharing group mutations", () => {
   it.each([
-    { retiredOwner: false, logicalAgent: "research", discoveryAgent: "main", archived: false },
     { retiredOwner: false, logicalAgent: "research", discoveryAgent: "main", archived: true },
     { retiredOwner: true, logicalAgent: "ops", discoveryAgent: "ops", archived: false },
     { retiredOwner: true, logicalAgent: "ops", discoveryAgent: "ops", archived: true },

@@ -6,6 +6,7 @@ import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
 import { splitNullBuffer } from "../../agents/worktrees/git-path-inventory.js";
 import { requireGit, requireGitBuffer } from "../../agents/worktrees/git.js";
+import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { prepareLocalWorkspaceCheckout } from "./local-workspace-checkout.js";
@@ -13,7 +14,7 @@ import {
   admitLocalWorkspaceSourcePaths,
   selectLocalWorkspaceCanonicalPaths,
 } from "./local-workspace-inventory.js";
-import { localWorkspaceStore, type LocalWorkspaceProjection } from "./local-workspace-store.js";
+import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
@@ -64,10 +65,10 @@ async function assertOwnedDirectory(directory: string) {
 
 export function projectionOperations(
   owner: LocalWorkspaceOwner,
-  signal: AbortSignal,
+  store: LocalWorkspaceStore,
   initialRow: LocalWorkspaceProjection | undefined,
 ) {
-  const store = localWorkspaceStore(owner.env);
+  const signal = store.signal;
   let row = initialRow;
   const selectCurrent = (assertCurrent: () => void) => {
     if (!row) {
@@ -85,21 +86,23 @@ export function projectionOperations(
         "Local sandbox workspace belongs to a different session incarnation; pending edits were preserved",
       );
     }
-    if (
-      row.projection_path !== projectionPath(owner) ||
-      store.revision(row.worktree_id) !== row.revision
-    ) {
+    if (row.projection_path !== projectionPath(owner) || store.get()?.revision !== row.revision) {
       throw new Error("Local workspace binding changed");
     }
     return row;
   };
   const current = () => selectCurrent(() => owner.assertCurrent());
+  const assertCurrent = () => {
+    current();
+  };
   const workerAuthority: WorktreeWorkerAuthority = {
     ...owner.workerAuthority,
-    assertCurrent: () => selectCurrent(() => owner.workerAuthority?.assertCurrent?.()),
+    assertCurrent: () => {
+      selectCurrent(() => owner.workerAuthority?.assertCurrent?.());
+    },
   };
-  const update = (patch: Parameters<typeof store.update>[1]) => {
-    row = store.update(current(), patch, current);
+  const update = async (patch: Parameters<typeof store.update>[1]) => {
+    row = await store.update(current(), patch, owner.workerAuthority);
   };
   const sourcePath = (target: Direction) =>
     target === "canonical" ? current().projection_path : owner.worktree.path;
@@ -111,7 +114,7 @@ export function projectionOperations(
       root: owner.worktree.path,
       admittedPaths: selected.source_paths_json,
       signal,
-      assertCurrent: current,
+      assertCurrent,
       baseline:
         selected.baseline_json && selected.baseline_ref
           ? parseWorkerWorkspaceManifest(selected.baseline_json, selected.baseline_ref)
@@ -153,8 +156,9 @@ export function projectionOperations(
     await recoverWorkerWorkspaceReconciliation({
       root: targetPath(selected.pending_target),
       journal,
+      assertCurrent,
     });
-    update({ journal_json: null, journal_pack: null });
+    await update({ journal_json: null, journal_pack: null });
   };
   const cleanupAccepted = async () => {
     const selected = current();
@@ -164,8 +168,9 @@ export function projectionOperations(
     await deleteStagedWorkerWorkspaceResult({
       root: owner.worktree.repoRoot,
       stagedResultRef: selected.pending_ref,
+      assertCurrent,
     });
-    update({ pending_ref: null });
+    await update({ pending_ref: null });
   };
   const settle = async (retainAccepted = false) => {
     await recover();
@@ -201,6 +206,7 @@ export function projectionOperations(
         currentManifestRef: snapshot.manifestRef,
         baseManifestRaw: selected.baseline_json,
         currentManifestRaw: snapshot.rawManifest,
+        assertCurrent,
       });
       current();
     }
@@ -216,16 +222,17 @@ export function projectionOperations(
           currentManifestRef: snapshot.currentManifestRef,
           base: snapshot.base,
           current: snapshot.current,
+          assertCurrent,
           journal: {
             load: async () => undefined,
             begin: async (journal) => {
-              update({
+              await update({
                 journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
                 journal_pack: journal.basePack,
               });
             },
             abort: async () => {
-              update({ journal_json: null, journal_pack: null });
+              await update({ journal_json: null, journal_pack: null });
             },
             commit: async () => {
               if (!conflictPaths) {
@@ -234,7 +241,7 @@ export function projectionOperations(
               // A conflicting result remains a durable pending receipt. No guest
               // bytes are discarded or silently replaced by the canonical side.
               try {
-                update(
+                await update(
                   conflictPaths.length
                     ? { journal_json: null, journal_pack: null }
                     : {
@@ -280,7 +287,7 @@ export function projectionOperations(
     if (snapshot.manifestRef === current().baseline_ref) {
       return;
     }
-    update({ pending_ref: workerWorkspaceResultRef(randomUUID()), pending_target: target });
+    await update({ pending_ref: workerWorkspaceResultRef(randomUUID()), pending_target: target });
     await settle();
   };
   const prepare = async (dependencies?: {
@@ -299,7 +306,7 @@ export function projectionOperations(
         assertCurrent: owner.assertCurrent,
       });
       owner.assertCurrent();
-      row = store.create(
+      row = await store.create(
         {
           worktree_id: owner.worktree.id,
           agent_id: owner.agentId,
@@ -318,7 +325,7 @@ export function projectionOperations(
           paused_runtimes_json: null,
           created_at_ms: Date.now(),
         },
-        owner.assertCurrent,
+        owner.workerAuthority,
       );
     }
     const selected = current();
@@ -340,7 +347,7 @@ export function projectionOperations(
           baseCommit: selected.base_commit,
           branch: owner.worktree.branch,
           signal,
-          assertCurrent: current,
+          assertCurrent,
         };
         const cloned =
           dependencies &&
@@ -364,23 +371,29 @@ export function projectionOperations(
             },
           }));
         if (!cloned) {
-          await prepareLocalWorkspaceCheckout(checkout);
+          await timeWorktreePreparationPhase("checkout", () =>
+            prepareLocalWorkspaceCheckout(checkout),
+          );
         }
-        const initial = await captureWorkspaceSnapshot({
-          root: repo,
-          baseCommit: selected.base_commit,
-          signal,
-        });
+        const initial = await timeWorktreePreparationPhase("snapshot", () =>
+          captureWorkspaceSnapshot({
+            root: repo,
+            baseCommit: selected.base_commit,
+            signal,
+          }),
+        );
         current();
         await fs.rename(repo, selected.projection_path);
-        update({ baseline_json: initial.rawManifest, baseline_ref: initial.manifestRef });
+        await update({ baseline_json: initial.rawManifest, baseline_ref: initial.manifestRef });
       } finally {
         await fs.rm(temporary, { recursive: true, force: true });
       }
     }
     await assertOwnedDirectory(current().projection_path);
-    await synchronize("canonical");
-    await synchronize("projection");
+    if (selected.baseline_ref) {
+      await timeWorktreePreparationPhase("synchronizeCanonical", () => synchronize("canonical"));
+    }
+    await timeWorktreePreparationPhase("synchronizeProjection", () => synchronize("projection"));
     return current().projection_path;
   };
   return {
@@ -409,7 +422,7 @@ export function projectionOperations(
         if (receipt.currentManifestRef !== selected.baseline_ref) {
           throw new Error("Archive restore receipt changed");
         }
-        update({
+        await update({
           baseline_json: serializeWorkerWorkspaceManifest(receipt.base),
           baseline_ref: receipt.baseManifestRef,
           pending_target: "canonical",
@@ -461,7 +474,7 @@ export function projectionOperations(
       const resultRef = workerWorkspaceResultRef(randomUUID());
       // Reservation precedes the Git effect. Interrupted staging recaptures the
       // still-owned projection against this same reduced base on ordinary recovery.
-      update({
+      await update({
         baseline_json: base,
         baseline_ref: baseRef,
         pending_ref: resultRef,
@@ -475,6 +488,7 @@ export function projectionOperations(
         baseManifestRef: baseRef,
         currentManifestRaw: serializeWorkerWorkspaceManifest(accepted.manifest),
         currentManifestRef: accepted.manifestRef,
+        assertCurrent,
       });
       current();
     },
@@ -522,17 +536,22 @@ export function projectionOperations(
       current();
       // Once expiry starts, an older restore must not find a usable Git snapshot
       // after its accepted overlay has been retired.
-      await retireSnapshot?.(current);
+      await retireSnapshot?.(assertCurrent);
       current();
       if (selected.pending_ref && accepted) {
-        update({ baseline_json: accepted.raw, baseline_ref: accepted.ref, pending_target: null });
+        await update({
+          baseline_json: accepted.raw,
+          baseline_ref: accepted.ref,
+          pending_target: null,
+        });
         await cleanupAccepted();
       }
+      current();
       await fs.rm(parent, { recursive: true, force: true });
-      store.delete(current(), owner.assertCurrent);
+      await store.delete(current(), owner.workerAuthority);
     },
-    rememberPaused: (value: string | null) => {
-      update({ paused_runtimes_json: value });
+    rememberPaused: async (value: string | null) => {
+      await update({ paused_runtimes_json: value });
     },
   };
 }

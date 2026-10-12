@@ -1,4 +1,3 @@
-// OpenClaw assistant planning converts fuzzy user text into one safe command.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -19,10 +18,14 @@ import {
 import { resolveSystemAgentAssistantTimeoutMs } from "./assistant-timeout.js";
 import type { SystemAgentGreetingFacts, SystemAgentGreetingPlan } from "./greeting.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
+import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
+import {
+  systemAgentRuntimeFailureGuidance,
+  systemAgentTerminalFailureGuidance,
+} from "./inference-run-errors.js";
 import type { SystemAgentOverview } from "./overview.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
-  resolveSystemAgentVerifiedInferenceRoute,
   type SystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
@@ -111,7 +114,11 @@ async function runConfiguredSystemAgentText(params: {
   timeoutMs?: number;
   responseFormat?: Record<string, unknown>;
 }): Promise<{ text: string; modelLabel: string } | null> {
-  const route = await requireVerifiedPlannerRoute(params.verifiedInference, params.deps);
+  const route = await requireSystemAgentInferenceRoute(
+    params.verifiedInference,
+    params.deps,
+    "planner",
+  );
   let expectedAgentHarnessRuntimeArtifact: ReturnType<
     typeof resolveSystemAgentExpectedAgentHarnessRuntimeArtifact
   >;
@@ -187,12 +194,20 @@ async function runConfiguredSystemAgentText(params: {
           });
     const terminalError = extractAgentRunTerminalError(result);
     if (terminalError) {
-      throw new SystemAgentInferenceUnavailableError("planner", [new Error(terminalError)]);
+      throw new SystemAgentInferenceUnavailableError(
+        "planner",
+        [new Error(terminalError)],
+        systemAgentTerminalFailureGuidance(result),
+      );
     }
-    text = extractAgentRunText(result)?.trim();
+    text = extractAgentRunText(result);
   } catch (error) {
     if (error instanceof SystemAgentInferenceUnavailableError) {
       throw error;
+    }
+    const guidance = systemAgentRuntimeFailureGuidance(error);
+    if (guidance) {
+      throw new SystemAgentInferenceUnavailableError("planner", [error], guidance);
     }
     text = undefined;
   } finally {
@@ -204,24 +219,6 @@ async function runConfiguredSystemAgentText(params: {
   }
   // Cleanup is the final suspension before callers can display model text, so
   // authority must still match after cleanup completes.
-  await requireVerifiedPlannerRoute(params.verifiedInference, params.deps);
+  await requireSystemAgentInferenceRoute(params.verifiedInference, params.deps, "planner");
   return { text, modelLabel: route.modelLabel };
-}
-
-async function requireVerifiedPlannerRoute(
-  binding: SystemAgentVerifiedInferenceBinding | undefined,
-  deps: SystemAgentVerifiedInferenceDeps | undefined,
-) {
-  if (!binding) {
-    throw new SystemAgentInferenceUnavailableError("planner");
-  }
-  try {
-    const route = await resolveSystemAgentVerifiedInferenceRoute(binding, deps);
-    if (route) {
-      return route;
-    }
-  } catch (error) {
-    throw new SystemAgentInferenceUnavailableError("planner", [error]);
-  }
-  throw new SystemAgentInferenceUnavailableError("planner");
 }

@@ -172,22 +172,14 @@ public sealed class OpenClawPrivatePlanFile : IDisposable
             return 6;
         }
         uint written;
-        if (content.Length > 0 &&
-            (!WriteFile(handle, content, (uint)content.Length, out written, IntPtr.Zero) ||
-             written != (uint)content.Length))
+        if ((content.Length > 0 &&
+             (!WriteFile(handle, content, (uint)content.Length, out written, IntPtr.Zero) ||
+              written != (uint)content.Length)) ||
+            !FlushFileBuffers(handle) ||
+            !SetDeleteOnClose(handle, false))
         {
-            var writeError = Marshal.GetLastWin32Error();
-            return writeError == 0 ? 29 : writeError;
-        }
-        if (!FlushFileBuffers(handle))
-        {
-            var flushError = Marshal.GetLastWin32Error();
-            return flushError == 0 ? 29 : flushError;
-        }
-        if (!SetDeleteOnClose(handle, false))
-        {
-            var dispositionError = Marshal.GetLastWin32Error();
-            return dispositionError == 0 ? 29 : dispositionError;
+            var nativeError = Marshal.GetLastWin32Error();
+            return nativeError == 0 ? 29 : nativeError;
         }
         handle.Dispose();
         handle = null;
@@ -220,24 +212,6 @@ public sealed class OpenClawPrivatePlanFile : IDisposable
 function readWindowsEnv(env: NodeJS.ProcessEnv, name: string): string | undefined {
   const lower = name.toLowerCase();
   return Object.entries(env).find(([key]) => key.toLowerCase() === lower)?.[1];
-}
-
-async function resolvePrivateWindowsCompilerTempDir(env: NodeJS.ProcessEnv): Promise<string> {
-  const candidate = readWindowsEnv(env, "TEMP") ?? readWindowsEnv(env, "TMP");
-  if (!candidate || !path.win32.isAbsolute(candidate)) {
-    throw new Error(
-      "Unable to resolve an absolute Windows temp directory for private plan creation.",
-    );
-  }
-  return await resolveTrustedPlanDirectoryPath(candidate);
-}
-
-async function resolveTrustedPowerShell(targetPath: string): Promise<string> {
-  const powershell = resolveSystemBin("powershell");
-  if (!powershell || powershell.toLowerCase() !== targetPath.toLowerCase()) {
-    throw new Error("Unable to resolve trusted Windows PowerShell for private plan creation.");
-  }
-  return await resolveTrustedWindowsSystemExecutablePath(targetPath);
 }
 
 export async function createPrivateWindowsPlanFile(
@@ -282,8 +256,18 @@ export async function createPrivateWindowsPlanFile(
     "v1.0",
     "powershell.exe",
   );
-  const powershell = await resolveTrustedPowerShell(powershellCandidate);
-  const compilerTempDir = await resolvePrivateWindowsCompilerTempDir(env);
+  const systemPowerShell = resolveSystemBin("powershell");
+  if (!systemPowerShell || systemPowerShell.toLowerCase() !== powershellCandidate.toLowerCase()) {
+    throw new Error("Unable to resolve trusted Windows PowerShell for private plan creation.");
+  }
+  const powershell = await resolveTrustedWindowsSystemExecutablePath(powershellCandidate);
+  const tempDir = readWindowsEnv(env, "TEMP") ?? readWindowsEnv(env, "TMP");
+  if (!tempDir || !path.win32.isAbsolute(tempDir)) {
+    throw new Error(
+      "Unable to resolve an absolute Windows temp directory for private plan creation.",
+    );
+  }
+  const compilerTempDir = await resolveTrustedPlanDirectoryPath(tempDir);
   const input = Buffer.from(
     JSON.stringify({
       content: Buffer.from(content, "utf8").toString("base64"),

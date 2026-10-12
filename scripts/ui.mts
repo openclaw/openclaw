@@ -369,6 +369,18 @@ function renameWithRetry(from: string, to: string): void {
   }
 }
 
+function normalizeUiBuildPermissions(directory: string): void {
+  fs.chmodSync(directory, 0o755);
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      normalizeUiBuildPermissions(entryPath);
+    } else if (entry.isFile()) {
+      fs.chmodSync(entryPath, 0o644);
+    }
+  }
+}
+
 function buildAndPublishUi(toolCall: UiSpawnCall, env: NodeJS.ProcessEnv): UiSpawnResult {
   const dist = path.join(repoRoot, "dist");
   const output = path.join(dist, "control-ui");
@@ -413,6 +425,7 @@ function buildAndPublishUi(toolCall: UiSpawnCall, env: NodeJS.ProcessEnv): UiSpa
         return result;
       }
     }
+    normalizeUiBuildPermissions(staging);
     const hadOutput = fs.existsSync(output);
     if (hadOutput) {
       renameWithRetry(output, retired);

@@ -29,9 +29,7 @@ it("preserves update custody when database timestamps drift during hashing", () 
     if (stat.dev === identity.dev && stat.ino === identity.ino) {
       // Model delayed filesystem metadata publication on the pinned source.
       stat.ctimeNs += BigInt(++observations) * 1_000_000_000n;
-      if (process.platform === "linux") {
-        stat.birthtimeNs = stat.ctimeNs;
-      }
+      stat.birthtimeNs = stat.ctimeNs;
     }
     return stat;
   });

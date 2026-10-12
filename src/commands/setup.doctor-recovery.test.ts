@@ -76,7 +76,7 @@ it("points failed setup to a repair that works without a terminal", async () => 
         );
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
 
-        const guided = await prepareDoctorContext(configPath, { options: {} });
+        await using guided = await prepareDoctorContext(configPath, { options: {} });
         expect(guided.prompter.repairMode.nonInteractive).toBe(true);
         expect(guided.configResult.shouldWriteConfig).toBe(false);
         expect(
@@ -86,7 +86,7 @@ it("points failed setup to a repair that works without a terminal", async () => 
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         expect((await readConfigFileSnapshot()).valid).toBe(false);
 
-        const repair = await prepareDoctorContext(configPath, { options: { repair: true } });
+        await using repair = await prepareDoctorContext(configPath, { options: { repair: true } });
         expect(repair.configResult.shouldWriteConfig).toBe(true);
         await runInitialConfigWriteHealth(repair);
         expect(repair.configResultWriteCommitted).toBe(true);

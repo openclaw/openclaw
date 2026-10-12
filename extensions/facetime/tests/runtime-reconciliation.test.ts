@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HelperActionResult } from "../src/helper-results.js";
 import type { FaceTimeHelperPeer } from "../src/helper-rpc.js";
+import { PendingFaceTimeDialStore } from "../src/pending-dial-store.js";
 import {
   createRuntime,
   FaceTimeHelperActionError,
@@ -49,15 +50,25 @@ function deferred() {
   return { promise, resolve };
 }
 
-function observeDeletion(state: Awaited<ReturnType<typeof pendingDialState>>) {
+function observeDeletion() {
   const deleted = deferred();
-  const compareAndApply = state.compareAndApply.bind(state);
-  vi.spyOn(state, "compareAndApply").mockImplementation(async (...args) => {
-    const result = await compareAndApply(...args);
-    if (result.status === "applied") {
-      deleted.resolve();
-    }
-    return result;
+  // oxlint-disable-next-line typescript/unbound-method -- The interceptor calls the original with the runtime store as its explicit receiver below.
+  const clear = PendingFaceTimeDialStore.prototype.clear;
+  vi.spyOn(PendingFaceTimeDialStore.prototype, "clear").mockImplementation(function (
+    this: PendingFaceTimeDialStore,
+    ...args
+  ) {
+    const clearing = clear.apply(this, args);
+    void clearing.then(
+      (applied) => {
+        if (applied) {
+          // Let the runtime publish the completed clear before observing its status.
+          queueMicrotask(deleted.resolve);
+        }
+      },
+      () => undefined,
+    );
+    return clearing;
   });
   return deleted.promise;
 }
@@ -82,6 +93,7 @@ describe("FaceTime pending dial reconciliation", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("preserves newly identified carriers when an older absence reply arrives", async () => {
@@ -145,8 +157,8 @@ describe("FaceTime pending dial reconciliation", () => {
   it("requires two matching absence snapshots after native identity changes", async () => {
     const state = await pendingDialState();
     mocks.helper.findOutgoingCall.mockResolvedValue(topologyResult([absentPeer(originalPeer)]));
+    const deleted = observeDeletion();
     const runtime = await createRuntime(state);
-    const deleted = observeDeletion(state);
     try {
       mocks.helperParams?.onConnect(originalPeer.bundleIdentifier);
       await vi.advanceTimersByTimeAsync(0);
@@ -218,8 +230,8 @@ describe("FaceTime pending dial reconciliation", () => {
       }
     }
     mocks.helper.cancelOutgoingCall.mockResolvedValue(cancellation);
+    const deleted = observeDeletion();
     const runtime = await createRuntime(state);
-    const deleted = observeDeletion(state);
     const cancellationPublished = deferred();
     const register = state.register.bind(state);
     vi.spyOn(state, "register").mockImplementation(async (...args) => {

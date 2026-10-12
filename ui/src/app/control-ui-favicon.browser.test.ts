@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { commands } from "vitest/browser";
+import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
@@ -7,6 +8,7 @@ import { sessionsResult } from "../lib/sessions/session-capability.test-support.
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import {
+  applyControlUiFaviconImage,
   applyControlUiFaviconStatus,
   applyControlUiPresentation,
 } from "./control-ui-environment-presentation.runtime.ts";
@@ -44,7 +46,7 @@ describe("favicon presentation ownership", () => {
     previousBranding = currentThemeBranding();
     document.documentElement.dataset.theme = "dark";
     document.documentElement.dataset.themeMode = "dark";
-    setCurrentThemeBranding({ mascot: "claw", critters: [] });
+    setCurrentThemeBranding(resolveThemeBranding({ mascot: "claw", critters: [] }));
     document.documentElement.dataset.themeMascot = "claw";
     for (const [name, value] of [
       ["--warn", "rgb(210, 150, 60)"],
@@ -75,8 +77,9 @@ describe("favicon presentation ownership", () => {
   });
 
   afterEach(() => {
-    setCurrentThemeBranding({ mascot: "claw", critters: [] });
+    setCurrentThemeBranding(resolveThemeBranding({ mascot: "claw", critters: [] }));
     document.documentElement.dataset.themeMascot = "claw";
+    applyControlUiFaviconImage(null);
     applyControlUiFaviconStatus("idle");
     applyControlUiPresentation({ environment: null });
     svgIcon.remove();
@@ -105,6 +108,101 @@ describe("favicon presentation ownership", () => {
     }
     setCurrentThemeBranding(previousBranding);
     vi.restoreAllMocks();
+  });
+
+  it("keeps personal artwork SVG-preferred without cropping or changing its status colors", async () => {
+    const artwork = new Image();
+    artwork.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><rect width="64" height="32" fill="rgb(180,40,110)"/></svg>')}`;
+    await artwork.decode();
+    const decode = vi.spyOn(HTMLImageElement.prototype, "decode");
+    applyControlUiFaviconImage(artwork);
+    applyControlUiPresentation({
+      environment: { label: "Preview", color: "blue" },
+      seamColor: "#5078a0",
+    });
+    await Promise.resolve();
+    const idleHref = svgIcon.href;
+    // Firefox prefers any queued SVG candidate over a newer PNG, including a
+    // default restored briefly while personal artwork is being decoded.
+    expect(idleHref).toMatch(/^data:image\/svg\+xml,/u);
+    expect([svgIcon.type, pngIcon.type]).toEqual(["image/svg+xml", "image/svg+xml"]);
+    expect(decode).not.toHaveBeenCalled();
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 32;
+    const drawing = canvas.getContext("2d")!;
+    for (const [status, dot] of [
+      ["working", [80, 120, 160]],
+      ["attention", [210, 150, 60]],
+      ["done", [100, 180, 120]],
+      ["disconnected", [130, 130, 130]],
+    ] as const) {
+      decode.mockClear();
+      const changed = createDeferred();
+      const observer = new MutationObserver(() => changed.resolve());
+      observer.observe(svgIcon, { attributes: true, attributeFilter: ["href"] });
+      try {
+        applyControlUiFaviconStatus(status);
+        await changed.promise;
+      } finally {
+        observer.disconnect();
+      }
+      expect(decode).not.toHaveBeenCalled();
+      const image = new Image();
+      image.src = svgIcon.href;
+      await image.decode();
+      drawing.clearRect(0, 0, 32, 32);
+      drawing.drawImage(image, 0, 0);
+      expect([...drawing.getImageData(8, 12, 1, 1).data]).toEqual([180, 40, 110, 255]);
+      expect(drawing.getImageData(16, 1, 1, 1).data[3]).toBe(0);
+      expect([...drawing.getImageData(25, 25, 1, 1).data]).toEqual([...dot, 255]);
+      expect(pngIcon.href).toBe(svgIcon.href);
+    }
+    applyControlUiFaviconStatus("idle");
+    await Promise.resolve();
+    expect(svgIcon.href).toBe(idleHref);
+    applyControlUiFaviconImage(null);
+    expect(svgDocument().querySelector('path[fill="rgb(40, 100, 180)"]')).not.toBeNull();
+    applyControlUiPresentation({ environment: null });
+    expectOriginals();
+  });
+
+  it("clips avatar shapes without clipping status dots and replaces same-image shapes", async () => {
+    const artwork = new Image();
+    artwork.src =
+      "data:image/svg+xml," +
+      encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><rect width="64" height="32" fill="rgb(180,40,110)"/></svg>',
+      );
+    await artwork.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 32;
+    const drawing = canvas.getContext("2d")!;
+    const pixels = async () => {
+      await Promise.resolve();
+      const result = new Image();
+      result.src = svgIcon.href;
+      await result.decode();
+      drawing.clearRect(0, 0, 32, 32);
+      drawing.drawImage(result, 0, 0);
+      expect(pngIcon.href).toBe(svgIcon.href);
+      return (x: number, y: number) => [...drawing.getImageData(x, y, 1, 1).data];
+    };
+    for (const shape of ["rounded", "circle", "square"] as const) {
+      applyControlUiFaviconImage(artwork, shape);
+      applyControlUiFaviconStatus("idle");
+      const pixel = await pixels();
+      expect(pixel(16, 16)).toEqual([180, 40, 110, 255]);
+      expect(pixel(0, 0)[3]).toBe(0);
+      expect(pixel(16, 1)[3]).toBe(shape === "square" ? 0 : 255);
+      expect(pixel(3, 3)[3]).toBe(shape === "rounded" ? 255 : 0);
+      applyControlUiFaviconStatus("working");
+      const activePixel = await pixels();
+      expect(activePixel(25, 25)).toEqual([80, 120, 160, 255]);
+      expect(activePixel(27, 27)).toEqual([80, 120, 160, 255]);
+    }
+    applyControlUiFaviconImage(null);
+    applyControlUiFaviconStatus("idle");
+    expectOriginals();
   });
 
   function expectOriginals() {
@@ -145,9 +243,7 @@ describe("favicon presentation ownership", () => {
       state: { agentsList: null },
       subscribe: () => () => {},
     });
-    const sessions = createSessionCapability(harness.gateway, selection, {
-      rosterCache: { read: async () => null, write: () => {} },
-    });
+    const sessions = createSessionCapability(harness.gateway, selection);
     const overlays = createApplicationOverlays(harness.gateway);
     const shell = document.createElement("div");
     document.body.append(shell);
@@ -188,6 +284,19 @@ describe("favicon presentation ownership", () => {
         agentSelection: selection,
         sessions,
         overlays,
+        theme: {
+          settings: {},
+          get branding() {
+            return currentThemeBranding();
+          },
+          subscribe: () => () => {},
+        },
+        agents: { state: { agentsList: null }, subscribe: () => () => {} },
+        agentIdentity: {
+          get: () => null,
+          ensure: async () => {},
+          subscribe: () => () => {},
+        },
       });
       await vi.waitFor(() => expect(warning).toHaveBeenCalledOnce());
       const styleReads = vi.spyOn(globalThis, "getComputedStyle");
@@ -221,7 +330,7 @@ describe("favicon presentation ownership", () => {
       );
       await expectDot("rgb(20, 100, 180)");
       await changePresentation(() => {
-        setCurrentThemeBranding({ mascot: "none", critters: [] });
+        setCurrentThemeBranding(resolveThemeBranding({ mascot: "none", critters: [] }));
         document.documentElement.dataset.themeMascot = "none";
       });
       expect(svgDocument().querySelector("rect")?.getAttribute("fill")).toBe("rgb(180, 20, 40)");
@@ -244,7 +353,7 @@ describe("favicon presentation ownership", () => {
       });
       expect(svgDocument().querySelector("rect")?.getAttribute("fill")).toBe("rgb(160, 40, 60)");
       await changePresentation(() => {
-        setCurrentThemeBranding({ mascot: "claw", critters: [] });
+        setCurrentThemeBranding(resolveThemeBranding({ mascot: "claw", critters: [] }));
         document.documentElement.dataset.themeMascot = "claw";
       });
       expect(svgDocument().querySelector('path[fill="rgb(40, 100, 180)"]')).not.toBeNull();
@@ -258,14 +367,14 @@ describe("favicon presentation ownership", () => {
       publishRow({ status: "failed", hasActiveRun: false, activeRunIds: [] });
       expectOriginals();
       await changePresentation(() => {
-        setCurrentThemeBranding({ mascot: "none", critters: [] });
+        setCurrentThemeBranding(resolveThemeBranding({ mascot: "none", critters: [] }));
         document.documentElement.dataset.themeMascot = "none";
       });
       expect(svgDocument().querySelector("rect")?.getAttribute("fill")).toBe("rgb(190, 30, 50)");
       expect(svgDocument().querySelector("circle")).toBeNull();
       expect(pngIcon.href).toBe(svgIcon.href);
       await changePresentation(() => {
-        setCurrentThemeBranding({ mascot: "claw", critters: [] });
+        setCurrentThemeBranding(resolveThemeBranding({ mascot: "claw", critters: [] }));
         document.documentElement.dataset.themeMascot = "claw";
       });
       expectOriginals();

@@ -55,8 +55,9 @@ private func openClawEnvironmentPath(_ key: String, environment: [String: String
 }
 
 func loadGatewayConfig(from configURL: URL) -> GatewayConfig {
-    guard let data = try? Data(contentsOf: configURL) else { return GatewayConfig() }
-    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+    guard let data = try? Data(contentsOf: configURL),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else {
         return GatewayConfig()
     }
 
@@ -80,7 +81,7 @@ func parseInt(_ value: Any?) -> Int? {
     case let number as Int:
         number
     case let number as Double:
-        Int(number)
+        Int(exactly: number.rounded(.towardZero))
     case let raw as String:
         Int(raw.trimmingCharacters(in: .whitespacesAndNewlines))
     default:

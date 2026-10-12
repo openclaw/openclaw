@@ -48,6 +48,7 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
       },
     ],
     ["silent-overflow protection", { silentOverflowProneProvider: true }],
+    ["compaction-forbidden operation", { compactionForbidden: true }],
   ];
 
   it.each(forcedDisableCases)(

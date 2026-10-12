@@ -198,7 +198,7 @@ ElevenLabs for both agent-mode listening and speaking:
 }
 ```
 
-The persistent Meet voice comes from `tts.providers.elevenlabs.speakerVoiceId`. Agent replies can also use per-reply `[[tts:speakerVoiceId=... model=eleven_v3]]` directives when TTS model overrides are enabled, but config is the deterministic default for meetings. On join, logs show `transcriptionProvider=elevenlabs`, and each spoken reply logs `provider=elevenlabs model=eleven_v3 speakerVoiceId=<voiceId>`.
+The persistent Meet voice comes from `tts.providers.elevenlabs.speakerVoiceId`. Agent replies can also use per-reply `[[tts:speakerVoiceId=... model=eleven_v3]]` directives when TTS model overrides are enabled, but config supplies the fixed default for meetings. On join, logs show `transcriptionProvider=elevenlabs`, and each spoken reply logs `provider=elevenlabs model=eleven_v3 speakerVoiceId=<voiceId>`.
 
 Twilio-only config:
 
@@ -219,6 +219,6 @@ With `voiceCall.enabled: true` (the default) and Twilio transport, Voice Call pl
 
 Leave `voiceCall.gatewayUrl` unset to use the local trusted Gateway runtime, which preserves the
 invoking agent for the full call. A configured Gateway URL remains an explicit WebSocket target and
-cannot authenticate plugin provenance; non-default agent joins fail closed instead of silently
+cannot authenticate plugin provenance; non-default agent joins are rejected instead of silently
 using another agent. Run Google Meet and Voice Call in the same Gateway process when per-agent
 routing is required.

@@ -143,7 +143,7 @@ export async function reconcileInterruptedUpdateRuns(
     observed: InterruptedUpdateGatewayObservation,
   ) => {
     const detail =
-      `Interrupted update settle probe: ${observed.outcome} after ${observed.elapsedMs} ms during ${observed.phase}.` +
+      `Interrupted update settle check: ${observed.outcome} after ${observed.elapsedMs} ms during ${observed.phase}.` +
       (observed.waitOutcome ? ` Health wait: ${observed.waitOutcome}.` : "") +
       (observed.timeout
         ? ` Deadline timed-out after ${observed.timeout.elapsedMs} ms during ${observed.timeout.phase}.`
@@ -156,7 +156,7 @@ export async function reconcileInterruptedUpdateRuns(
             ? " Installed and serving candidate verified."
             : managed
               ? " Continuing without verified completion; will retry. Check openclaw update status."
-              : " No completed managed-service restart was recorded; probing skipped.");
+              : " No completed managed-service restart was recorded; checking skipped.");
     const result = await persistInterruptedUpdateObservationAsync(
       context,
       {

@@ -15,9 +15,15 @@ export { normalizeGithubCopilotDomain, resolveAuthProfileOrder };
 export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 export {
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreForLocalUpdate,
+  ensureAuthProfileStoreForLocalUpdateAsync,
 } from "../agents/auth-profiles/store-runtime.js";
-export { listProfilesForProvider, upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
+export {
+  listProfilesForProvider,
+  upsertAuthProfile,
+  upsertAuthProfileAsync,
+} from "../agents/auth-profiles/profiles.js";
 export {
   removeProviderAuthProfilesWithLockCompat as removeProviderAuthProfilesWithLock,
   updateAuthProfileStoreWithLockCompat as updateAuthProfileStoreWithLock,
@@ -42,7 +48,6 @@ export {
 export {
   ensureApiKeyFromEnvOrPrompt,
   ensureApiKeyFromOptionEnvOrPrompt,
-  normalizeSecretInputModeInput,
   promptSecretRefForSetup,
   resolveSecretInputModeForEnvSelection,
 } from "../plugins/provider-auth-input.js";
@@ -55,6 +60,7 @@ export {
   applyAuthProfileConfig,
   buildApiKeyCredential,
   upsertApiKeyProfile,
+  upsertApiKeyProfileAsync,
   writeOAuthCredentials,
   type ApiKeyStorageOptions,
   type WriteOAuthCredentialsOptions,
@@ -98,7 +104,10 @@ export {
 
 export {
   isProviderApiKeyConfigured,
+  isProviderApiKeyConfiguredAsync,
   isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
   listUsableProviderAuthProfileIds,
+  listUsableProviderAuthProfileIdsAsync,
   resolveProviderAuthProfileApiKey,
 } from "../plugins/provider-auth-availability.js";

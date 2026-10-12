@@ -1,6 +1,5 @@
 // Prepares presentation-only catalog facts and owns their metadata-scoped cache.
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginCatalogEntry } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
@@ -299,23 +298,6 @@ export function normalizeKinds(kind: string | readonly string[] | undefined): st
     .map((value) => value.trim())
     .filter(Boolean);
   return values.length > 0 ? [...new Set(values)] : undefined;
-}
-
-export function normalizeCatalogMetadata(
-  value: unknown,
-): { featured?: boolean; order?: number } | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const featured = typeof value.featured === "boolean" ? value.featured : undefined;
-  const order =
-    typeof value.order === "number" && Number.isFinite(value.order) ? value.order : undefined;
-  return featured === undefined && order === undefined
-    ? undefined
-    : {
-        ...(featured !== undefined ? { featured } : {}),
-        ...(order !== undefined ? { order } : {}),
-      };
 }
 
 export function normalizeFeaturedAt(value: unknown): number | undefined {

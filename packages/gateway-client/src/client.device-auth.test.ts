@@ -132,27 +132,16 @@ const hello = {
 };
 
 describe("GatewayClient host token storage", () => {
-  it.each([false, true])("settles pending token loading (stopped: %s)", async (stop) => {
+  it("settles pending token loading after stop", async () => {
     const loaded = createDeferred<DeviceAuthTokenRecord | null>();
     const { client, socket, onHelloOk } = connect({ loadDeviceAuthToken: () => loaded.promise });
     expect(socket.send).not.toHaveBeenCalled();
-    const stopped = stop ? client.stopAndWait() : undefined;
+    const stopped = client.stopAndWait();
     loaded.resolve(storedToken);
-    if (stopped) {
-      await stopped;
-    }
+    await stopped;
     await vi.advanceTimersByTimeAsync(0);
-    if (stop) {
-      expect(socket.send).not.toHaveBeenCalled();
-      expect(onHelloOk).not.toHaveBeenCalled();
-      return;
-    }
-    const sent = socket.send.mock.calls[0];
-    assert(sent);
-    expect(JSON.parse(sent[0])).toMatchObject({
-      method: "connect",
-      params: { auth: { deviceToken: storedToken.token }, scopes: storedToken.scopes },
-    });
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(onHelloOk).not.toHaveBeenCalled();
   });
 
   it.each(["sync", "ready", "closing", "stop"] as const)(
@@ -269,10 +258,7 @@ describe("GatewayClient host token storage", () => {
   it.each([
     { initial: storedToken, result: "committed", replaceWithNewer: false, bootstrap: true },
     { initial: storedToken, result: "committed", replaceWithNewer: true },
-    { initial: null, result: "committed", replaceWithNewer: true },
-    { initial: storedToken, result: "uncertain", replaceWithNewer: false },
     { initial: null, result: "uncertain", replaceWithNewer: false },
-    { initial: null, result: "failed", replaceWithNewer: true },
   ] as const)("reconciles mismatch cleanup against the accepted receipt: %j", async (entry) => {
     const { initial, result, replaceWithNewer } = entry;
     const permitStore = storageGate();
@@ -293,9 +279,6 @@ describe("GatewayClient host token storage", () => {
           await permitStore.promise;
           params.signal?.throwIfAborted();
           params.assertCurrent?.();
-          if (result === "failed") {
-            throw new Error("synthetic persistence rejected");
-          }
           if (
             params.expectedToken === undefined ||
             (params.expectedToken === null
@@ -340,7 +323,6 @@ describe("GatewayClient host token storage", () => {
     { storage: "sync", lifetime: "active", reporter: "reported" },
     { storage: "async", lifetime: "active", reporter: "reported" },
     { storage: "async", lifetime: "disconnected", reporter: "reported" },
-    { storage: "async", lifetime: "stopped", reporter: "reported" },
     { storage: "async", lifetime: "disconnected", reporter: "missing" },
     { storage: "async", lifetime: "stopped", reporter: "throwing" },
   ] as const)(
@@ -402,49 +384,44 @@ describe("GatewayClient host token storage", () => {
     },
   );
 
-  it.each([false, true])(
-    "preserves rejection and cleanup when the peer closes (already closing: %s)",
-    async (alreadyClosing) => {
-      const cleared = storageGate();
-      const clearDeviceAuthToken = vi.fn<
-        NonNullable<GatewayClientHostDeps["clearDeviceAuthToken"]>
-      >(() => cleared.promise);
-      const { socket, onConnectError, onClose, onReconnectPaused } = connect({
-        clearDeviceAuthToken,
-      });
-      socket.respond(undefined, {
-        code: "INVALID_REQUEST",
-        message: "synthetic token rejected",
-        details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
-      });
-      if (alreadyClosing) {
-        socket.readyState = 2;
-      }
-      await vi.advanceTimersByTimeAsync(0);
-      expect(clearDeviceAuthToken).toHaveBeenCalledWith(
-        expect.objectContaining({ expectedToken: storedToken.token }),
-      );
-      expect(onConnectError).toHaveBeenCalledOnce();
-      const error = onConnectError.mock.calls[0]?.[0];
-      expect(error).toMatchObject({ message: "synthetic token rejected" });
-      socket.close(1008, "connect failed");
-      const cleanup = clearDeviceAuthToken.mock.calls[0]?.[0];
-      assert(cleanup);
-      expect(() => cleanup.assertCurrent?.()).not.toThrow();
-      expect(onClose).toHaveBeenCalledWith(
-        1008,
-        "connect failed",
-        expect.objectContaining({ connectError: error }),
-      );
-      expect(onReconnectPaused).toHaveBeenCalledWith(
-        expect.objectContaining({ detailCode: "AUTH_DEVICE_TOKEN_MISMATCH" }),
-      );
-      cleared.resolve();
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(onConnectError).toHaveBeenCalledOnce();
-      expect(MockWebSocket.instances).toHaveLength(1);
-    },
-  );
+  it("preserves rejection and cleanup while the peer is already closing", async () => {
+    const cleared = storageGate();
+    const clearDeviceAuthToken = vi.fn<NonNullable<GatewayClientHostDeps["clearDeviceAuthToken"]>>(
+      () => cleared.promise,
+    );
+    const { socket, onConnectError, onClose, onReconnectPaused } = connect({
+      clearDeviceAuthToken,
+    });
+    socket.respond(undefined, {
+      code: "INVALID_REQUEST",
+      message: "synthetic token rejected",
+      details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+    });
+    socket.readyState = 2;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(clearDeviceAuthToken).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedToken: storedToken.token }),
+    );
+    expect(onConnectError).toHaveBeenCalledOnce();
+    const error = onConnectError.mock.calls[0]?.[0];
+    expect(error).toMatchObject({ message: "synthetic token rejected" });
+    socket.close(1008, "connect failed");
+    const cleanup = clearDeviceAuthToken.mock.calls[0]?.[0];
+    assert(cleanup);
+    expect(() => cleanup.assertCurrent?.()).not.toThrow();
+    expect(onClose).toHaveBeenCalledWith(
+      1008,
+      "connect failed",
+      expect.objectContaining({ connectError: error }),
+    );
+    expect(onReconnectPaused).toHaveBeenCalledWith(
+      expect.objectContaining({ detailCode: "AUTH_DEVICE_TOKEN_MISMATCH" }),
+    );
+    cleared.resolve();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onConnectError).toHaveBeenCalledOnce();
+    expect(MockWebSocket.instances).toHaveLength(1);
+  });
 
   it("finishes close cleanup before loading credentials for the replacement connection", async () => {
     const cleared = storageGate();

@@ -64,7 +64,7 @@ export function parseLocalWorkspacePausedRuntimes(
 export async function quiesceLocalWorkspace(params: {
   workspaceDir: string;
   retained: LocalWorkspacePausedRuntime[];
-  persist: (runtimes: LocalWorkspacePausedRuntime[]) => void;
+  persist: (runtimes: LocalWorkspacePausedRuntime[]) => void | Promise<void>;
   assertCurrent: () => void;
 }) {
   const selected = (await readLocalWorkspaceRuntimes(params.workspaceDir)).map((runtime) => ({
@@ -148,7 +148,7 @@ export async function quiesceLocalWorkspace(params: {
     }
     if (!retained) {
       paused.push({ name: entry.containerName, id });
-      params.persist(paused);
+      await params.persist(paused);
     }
     if (isPaused !== "true") {
       // A retained receipt may outlive an unpause. Re-fence the live writer
@@ -190,7 +190,7 @@ export async function quiesceLocalWorkspace(params: {
       }
       params.assertCurrent();
       paused = paused.filter((held) => held.name !== entry.containerName || held.id !== id);
-      params.persist(paused);
+      await params.persist(paused);
     });
   }
   return {
@@ -207,7 +207,7 @@ export async function quiesceLocalWorkspace(params: {
         await release();
       }
       params.assertCurrent();
-      params.persist([]);
+      await params.persist([]);
     },
   };
 }

@@ -5,7 +5,7 @@ import { routePageSpec } from "../../app-route-paths.ts";
 export const page = definePage({
   ...routePageSpec("approvals"),
   component: () =>
-    import("./approvals-page.ts").then(() => ({
+    import("./approvals-page.tsx").then(() => ({
       header: true,
       render: () => html`<openclaw-approvals-page></openclaw-approvals-page>`,
     })),

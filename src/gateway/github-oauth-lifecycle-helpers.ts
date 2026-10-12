@@ -1,30 +1,54 @@
 import { isDeepStrictEqual } from "node:util";
-import { matchesAgentLifecycleBinding } from "../agents/agent-lifecycle-registry.js";
+import {
+  matchesAgentLifecycleBinding,
+  matchesAgentLifecycleBindingAsync,
+} from "../agents/agent-lifecycle-registry.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentConfig } from "../agents/agent-scope.js";
-import type {
-  GitHubDeviceAuthorizationRecord,
-  GitHubIdentityScope,
+import {
+  listGitHubDeviceAuthorizationRecords,
+  listGitHubOAuthRecords,
+  type GitHubDeviceAuthorizationRecord,
+  type GitHubIdentityScope,
 } from "../agents/github-oauth-records.js";
-import type { GitHubToolAccount } from "../agents/github-tool-account.js";
 import { resolveConfiguredGitHubToolIdentity } from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
+import { readSqliteDatabaseWriteTokenForPath } from "../infra/sqlite-database-admission.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 export const REFRESH_SKEW_MS = 10 * 60_000;
 export const MAINTENANCE_INTERVAL_MS = 60_000;
 export const SHUTDOWN_DRAIN_TIMEOUT_MS = 31_000;
+
+export function createGitHubOAuthInventoryReader() {
+  let empty: { databasePath: string; writeToken: string } | undefined;
+  return async () => {
+    const databasePath = resolveOpenClawStateSqlitePath();
+    const writeToken = readSqliteDatabaseWriteTokenForPath(databasePath);
+    if (
+      writeToken !== undefined &&
+      empty?.databasePath === databasePath &&
+      empty.writeToken === writeToken
+    ) {
+      return { deviceRecords: [], oauthRecords: [] };
+    }
+    const deviceRecords = await listGitHubDeviceAuthorizationRecords();
+    const oauthRecords = await listGitHubOAuthRecords();
+    // Keep the pre-read token: a write during either scan invalidates the next reuse.
+    empty =
+      writeToken !== undefined && deviceRecords.length === 0 && oauthRecords.length === 0
+        ? { databasePath, writeToken }
+        : undefined;
+    return { deviceRecords, oauthRecords };
+  };
+}
 
 export type ConfiguredOAuthIdentity = {
   scope: GitHubIdentityScope;
   agentId: string;
   identity: GitHubToolIdentityConfig & { kind: "oauth" };
 };
-
-export const defaultGitAuthor = (account: GitHubToolAccount) => ({
-  name: account.login,
-  email: `${account.accountId}+${account.login}@users.noreply.github.com`,
-});
 
 export function identityStillSelected(
   config: OpenClawConfig,
@@ -45,6 +69,20 @@ export function authorizationStillOwned(
       (record.agentLifecycleBinding !== undefined &&
         matchesAgentLifecycleBinding(config, record.agentLifecycleBinding)))
   );
+}
+
+export async function authorizationStillOwnedAsync(
+  getConfig: () => OpenClawConfig,
+  record: GitHubDeviceAuthorizationRecord,
+): Promise<boolean> {
+  if (
+    record.scope !== "system" &&
+    (!record.agentLifecycleBinding ||
+      !(await matchesAgentLifecycleBindingAsync(getConfig, record.agentLifecycleBinding)))
+  ) {
+    return false;
+  }
+  return identityStillSelected(getConfig(), record, record.expectedIdentity);
 }
 
 export function configuredOAuthIdentities(config: OpenClawConfig): ConfiguredOAuthIdentity[] {

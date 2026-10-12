@@ -15,7 +15,7 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
+import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
 import {
   captureAgentRunProviderReview,
   readAgentRunProviderReview,
@@ -47,7 +47,6 @@ it("keeps embedded completion pending until its incognito pause fences the next 
       lifecycleRunId: runId,
       updatedAt: 1_000,
       startedAt: 1_000,
-      status: "running" as const,
     };
     writeSessionEntry(database, target.sessionKey, entry);
     appendTranscriptMessageSync(
@@ -105,7 +104,7 @@ it("keeps embedded completion pending until its incognito pause fences the next 
         },
       });
       // This is the production capture path, with no CLI-specific context binding.
-      const captured = captureAgentRunTerminalWriteContext(runId);
+      const captured = captureAgentRunTerminalPersistence(runId).writeContext;
       if (!captured) {
         throw new Error("Embedded terminal persistence was not retained");
       }
@@ -206,7 +205,6 @@ it("records an incognito pause in its existing terminal entry write and fences s
         lifecycleRunId: variant === "writer" ? "replacement-writer" : runId,
         updatedAt: 1_000,
         startedAt: 1_000,
-        status: "running" as const,
         ...(variant === "newer-review"
           ? { providerReview: { ...review, id: "newer-review" } }
           : {}),
@@ -284,9 +282,9 @@ it("records an incognito pause in its existing terminal entry write and fences s
           });
           if (variant === "revoked") {
             await expect(persistence).rejects.toThrow("Source authority expired");
-            expect(readExactSessionEntryRow(database, target.sessionKey)?.entry).toMatchObject({
-              status: "running",
-            });
+            expect(
+              readExactSessionEntryRow(database, target.sessionKey)?.entry.status,
+            ).toBeUndefined();
           } else {
             await persistence;
           }

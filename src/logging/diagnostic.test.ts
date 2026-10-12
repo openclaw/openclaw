@@ -544,7 +544,7 @@ describe("stuck session diagnostics threshold", () => {
         reason: "repeated_model_requests_without_progress",
         repeatedRequestNoProgressAgeMs: stuckSessionAbortMs,
         activeWorkKind,
-        activeToolAgeMs: activeWorkKind === "tool_call" ? stuckSessionAbortMs : undefined,
+        activeToolAgeMs: activeWorkKind === "tool_call" ? (stuckSessionAbortMs * 4) / 3 : undefined,
       });
       expect(recoverStuckSession).toHaveBeenCalledTimes(1);
       expectRecoveryCall(recoverStuckSession, {
@@ -680,10 +680,10 @@ describe("stuck session diagnostics threshold", () => {
     );
     await vi.advanceTimersByTimeAsync(0);
 
-    // Semantic progress gives the next request its full provider allowance.
-    vi.advanceTimersByTime(30_000);
+    // Semantic progress grants the full allowance; recovery waits for the next heartbeat.
+    vi.advanceTimersByTime(requestTimeoutMs - 30_000);
     expect(recoverStuckSession).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(120_000);
+    vi.advanceTimersByTime(60_000);
 
     expectRecoveryCall(recoverStuckSession, { ...ref, queueDepth: 0, allowActiveAbort: true });
   });

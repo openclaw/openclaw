@@ -417,13 +417,7 @@ class MeetingCaptureSettings extends OpenClawLightDomElement {
           typeof source?.title === "string"
             ? source.title
             : (normalizeOptionalString(source?.providerId) ?? t("transcripts.unknown")),
-        description: [
-          provider?.name,
-          source?.accountId,
-          source?.guildId,
-          source?.channelId,
-          source?.meetingUrl,
-        ]
+        description: [provider?.name, ...LOCATOR_FIELDS.map((key) => source?.[key])]
           .filter((value) => typeof value === "string" && value)
           .join(" · "),
         control: html`<button
@@ -576,10 +570,7 @@ class MeetingCaptureSettings extends OpenClawLightDomElement {
                     renderSettingsRow({
                       title: item.title ?? item.source.providerId,
                       description: [
-                        item.source.accountId,
-                        item.source.guildId,
-                        item.source.channelId,
-                        item.source.meetingUrl,
+                        ...LOCATOR_FIELDS.map((key) => item.source[key]),
                         item.startDiagnostic
                           ? t(`meetingCapture.startDiagnostics.${item.startDiagnostic}`)
                           : undefined,

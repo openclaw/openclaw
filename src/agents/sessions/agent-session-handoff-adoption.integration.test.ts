@@ -1,6 +1,11 @@
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { runActiveReplySteer } from "../../auto-reply/reply/agent-runner-steer-adoption.js";
 import {
   admitFollowupRunLifecycle,
@@ -44,7 +49,9 @@ import type { ToolDefinition } from "./extensions/types.js";
 registerAgentSessionLoopTestLifecycle();
 
 describe("AgentSession handoff adoption integration", () => {
-  it("cancels a pending-acceptance steer before one follow-up reuses the session", async () => {
+  it("cancels a pending-acceptance steer before one follow-up reuses the session", async ({
+    signal,
+  }) => {
     const queueKey = "agent:main:telegram:direct:handoff-proof";
     const sessionId = "handoff-proof-session";
     const steerText = "STEER-DURING-HANDOFF";
@@ -104,8 +111,10 @@ describe("AgentSession handoff adoption integration", () => {
       },
     };
     const requests: Context[] = [];
+    const firstRequest = createDeferred();
     streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
       requests.push(context);
+      firstRequest.resolve();
       return createAssistantResultStream(
         createAssistant(
           activeModel,
@@ -168,8 +177,8 @@ describe("AgentSession handoff adoption integration", () => {
       sessionId,
       resetTriggered: false,
     });
-    activeOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
-    const toolAuthorityFingerprint = activeOperation.bindToolAuthorityRoute({
+    await activeOperation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
+    const toolAuthorityFingerprint = await activeOperation.bindToolAuthorityRouteAsync({
       provider: followupRun.run.provider,
       model: followupRun.run.model,
     });
@@ -266,7 +275,15 @@ describe("AgentSession handoff adoption integration", () => {
       setActiveEmbeddedRun(sessionId, queueHandle, queueKey);
 
       const initialPrompt = session.prompt("yield now");
-      await vi.waitFor(() => expect(requests).toHaveLength(1));
+      await withinTest(
+        awaitGateBeforeSettlement(
+          firstRequest.promise,
+          initialPrompt,
+          "Initial prompt settled before its first provider request",
+        ),
+        signal,
+      );
+      expect(requests).toHaveLength(1);
       await Promise.all([runActiveReplySteer(steerParams), initialPrompt]);
       releaseSteerPromise();
       await steerReturned;

@@ -3,6 +3,10 @@ import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
+import {
+  deriveMeetingTranscriptSessionColumns,
+  deriveMeetingTranscriptSummaryColumns,
+} from "./store-columns.js";
 import { TranscriptSessionConflictError, TranscriptsSummaryChangedError } from "./store-errors.js";
 import {
   parseTranscriptExportManifest,
@@ -40,17 +44,6 @@ type TranscriptSummaryValues = Pick<
   "generated_at" | "summary_json" | "markdown" | "utterance_count"
 >;
 
-function assertMeetingTranscriptSelectorAvailableInDatabase(
-  database: DatabaseSync,
-  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
-  selector: string,
-): void {
-  const owner = readTranscriptCanonicalSessionRow(database, selector);
-  if (owner && (owner.session_id !== session.sessionId || owner.started_at !== session.startedAt)) {
-    throw new TranscriptSessionConflictError();
-  }
-}
-
 export function writeMeetingTranscriptSessionInDatabase(
   database: DatabaseSync,
   params: {
@@ -67,7 +60,10 @@ export function writeMeetingTranscriptSessionInDatabase(
   ) {
     throw new TranscriptsSummaryChangedError();
   }
-  assertMeetingTranscriptSelectorAvailableInDatabase(database, session, sessionValues.selector);
+  const owner = readTranscriptCanonicalSessionRow(database, sessionValues.selector);
+  if (owner && (owner.session_id !== session.sessionId || owner.started_at !== session.startedAt)) {
+    throw new TranscriptSessionConflictError();
+  }
   const previous = executeSqliteQueryTakeFirstSync(
     database,
     meetingTranscriptSessionQuery(database, session).selectAll(),
@@ -83,6 +79,13 @@ export function writeMeetingTranscriptSessionInDatabase(
     }
     sessionValues.metadata_json = metadata ? JSON.stringify(metadata) : null;
   }
+  const values = {
+    ...sessionValues,
+    ...deriveMeetingTranscriptSessionColumns(
+      sessionValues.source_json,
+      sessionValues.metadata_json,
+    ),
+  };
   executeSqliteQuerySync(
     database,
     meetingTranscriptDb(database)
@@ -90,7 +93,7 @@ export function writeMeetingTranscriptSessionInDatabase(
       .values({
         session_id: session.sessionId,
         started_at: session.startedAt,
-        ...sessionValues,
+        ...values,
         export_manifest_json: "{}",
         export_pending_json: "[]",
         next_utterance_seq: 0,
@@ -99,7 +102,7 @@ export function writeMeetingTranscriptSessionInDatabase(
       })
       .onConflict((conflict) =>
         conflict.columns(["session_id", "started_at"]).doUpdateSet({
-          ...sessionValues,
+          ...values,
           updated_at_ms: now,
         }),
       ),
@@ -131,6 +134,10 @@ export function writeMeetingTranscriptSummaryInDatabase(
       throw new TranscriptsSummaryChangedError();
     }
   }
+  const values = {
+    ...summaryValues,
+    ...deriveMeetingTranscriptSummaryColumns(summaryValues.summary_json),
+  };
   executeSqliteQuerySync(
     database,
     meetingTranscriptDb(database)
@@ -138,10 +145,10 @@ export function writeMeetingTranscriptSummaryInDatabase(
       .values({
         session_id: session.sessionId,
         session_started_at: session.startedAt,
-        ...summaryValues,
+        ...values,
       })
       .onConflict((conflict) =>
-        conflict.columns(["session_id", "session_started_at"]).doUpdateSet(summaryValues),
+        conflict.columns(["session_id", "session_started_at"]).doUpdateSet(values),
       ),
   );
 }

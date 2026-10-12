@@ -503,49 +503,36 @@ final class ComputerActionService {
             inputScopeId: scope)
         { [weak self] params, lifecycleGeneration in
             guard let self else { throw CancellationError() }
-            return try await self.performImmediately(
-                params,
-                lifecycleGeneration: lifecycleGeneration,
-                inputScopeId: scope,
-                checkScopeAllowed: checkScopeAllowed)
-        }
-    }
-
-    private func performImmediately(
-        _ params: OpenClawComputerActParams,
-        lifecycleGeneration: UInt64,
-        inputScopeId: UUID,
-        checkScopeAllowed: @escaping @MainActor () throws -> Void) async throws -> OpenClawComputerActResult
-    {
-        try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
-        try checkScopeAllowed()
-        if params.deliveryMode == .background,
-           params.windowRef == nil,
-           !params.action.isWindowScopedOnly
-        {
-            return OpenClawComputerActResult(
-                ok: false,
-                effect: .suspectedNoop,
-                escalation: OpenClawComputerEscalation(
-                    recommended: "window-pixel",
-                    reasonCode: "no_window_target"))
-        }
-        let checkExecutionAllowed: @MainActor () throws -> Void = { [weak self] in
-            guard let self else { throw CancellationError() }
-            try self.executionQueue.checkExecutionAllowed(
-                lifecycleGeneration: lifecycleGeneration)
+            try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
             try checkScopeAllowed()
-        }
-        if params.isWindowScopedRequest {
-            return try await self.window.perform(
+            if params.deliveryMode == .background,
+               params.windowRef == nil,
+               !params.action.isWindowScopedOnly
+            {
+                return OpenClawComputerActResult(
+                    ok: false,
+                    effect: .suspectedNoop,
+                    escalation: OpenClawComputerEscalation(
+                        recommended: "window-pixel",
+                        reasonCode: "no_window_target"))
+            }
+            let checkExecutionAllowed: @MainActor () throws -> Void = { [weak self] in
+                guard let self else { throw CancellationError() }
+                try self.executionQueue.checkExecutionAllowed(
+                    lifecycleGeneration: lifecycleGeneration)
+                try checkScopeAllowed()
+            }
+            if params.isWindowScopedRequest {
+                return try await self.window.perform(
+                    params,
+                    lifecycleGeneration: lifecycleGeneration,
+                    checkExecutionAllowed: checkExecutionAllowed)
+            }
+            return try await self.screen.perform(
                 params,
-                lifecycleGeneration: lifecycleGeneration,
+                inputScopeId: scope,
                 checkExecutionAllowed: checkExecutionAllowed)
         }
-        return try await self.screen.perform(
-            params,
-            inputScopeId: inputScopeId,
-            checkExecutionAllowed: checkExecutionAllowed)
     }
 
     static func validateInputPermissions(_ permissions: ComputerControlPermissionSnapshot) throws {

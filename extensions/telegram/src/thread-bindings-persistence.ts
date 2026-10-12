@@ -21,18 +21,15 @@ function openThreadBindingStore(): TelegramThreadBindingStore {
 export async function loadBindingsFromStore(
   accountId: string,
 ): Promise<TelegramThreadBindingRecord[]> {
+  let operation = "open";
   let store: TelegramThreadBindingStore;
-  try {
-    store = openThreadBindingStore();
-  } catch (err) {
-    logVerbose(`telegram thread bindings store open failed (${accountId}): ${String(err)}`);
-    return [];
-  }
   let entries: Array<{ key: string; value: TelegramThreadBindingRecord }>;
   try {
+    store = openThreadBindingStore();
+    operation = "read";
     entries = await store.entries();
   } catch (err) {
-    logVerbose(`telegram thread bindings store read failed (${accountId}): ${String(err)}`);
+    logVerbose(`telegram thread bindings store ${operation} failed (${accountId}): ${String(err)}`);
     return [];
   }
   const bindings: TelegramThreadBindingRecord[] = [];

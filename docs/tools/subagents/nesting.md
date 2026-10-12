@@ -123,7 +123,10 @@ authority from session lookups.
 A child reset preserves its recorded parent grant, so a newly resolved audience
 can still inherit from the same root. A reset or removal of any recorded parent
 invalidates an already captured audience, so the next protected provider or tool
-operation fails its audience currency check. Legacy children without the
+operation fails its audience currency check. Later turns of that child receive
+no memory audience. With a native memory provider, the Gateway log warns that the
+child's lineage is stale and that it must be respawned or recreated from a current
+session; resetting the child keeps the stale lineage. Legacy children without the
 complete lineage stamps receive no inherited memory audience: their turns run
 without private or conversation memory, and the Gateway log warns that the
 session predates memory lineage receipts and must be respawned from its parent.

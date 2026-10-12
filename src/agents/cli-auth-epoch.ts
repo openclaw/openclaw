@@ -7,7 +7,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   ensureAuthProfileStore,
-  loadAuthProfileStoreForRuntime,
+  ensureAuthProfileStoreAsync,
+  loadAuthProfileStoreForRuntimeAsync,
 } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
@@ -138,7 +139,6 @@ function getLocalCliCredential(
   }
 }
 
-/** Resolves the stable auth epoch hash for a CLI runtime/provider session. */
 export async function resolveCliAuthEpoch(params: {
   provider: string;
   agentDir?: string;
@@ -157,7 +157,7 @@ export async function resolveCliAuthEpoch(params: {
   }
 
   if (authProfileId) {
-    const store = loadAuthProfileStoreForRuntime(params.agentDir, {
+    const store = await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
       readOnly: true,
       allowKeychainPrompt: false,
     });
@@ -334,7 +334,7 @@ export async function resolveCliRuntimeOwnerFingerprint(params: {
   }
   let authProfileOwnerFingerprint: string | undefined;
   if (authProfileId) {
-    const store = ensureAuthProfileStore(params.agentDir, {
+    const store = await ensureAuthProfileStoreAsync(params.agentDir, {
       config: params.config,
       readOnly: true,
       allowKeychainPrompt: false,

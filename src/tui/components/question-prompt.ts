@@ -101,7 +101,7 @@ export class QuestionPrompt implements Component, Focusable {
   private message = "";
   private pasteBuffer: string | null = null;
   private rejectedSecretPaste = false;
-  private readonly answers: Record<string, string[]> = {};
+  private answers: Record<string, string[]> = {};
   private readonly selections = new Map<number, Set<number>>();
   private readonly freeText = new Map<number, string>();
   private input = new Input();
@@ -395,8 +395,6 @@ export class QuestionPrompt implements Component, Focusable {
     this.secretInput.clear();
     this.freeText.clear();
     this.selections.clear();
-    for (const key of Object.keys(this.answers)) {
-      delete this.answers[key];
-    }
+    this.answers = {};
   }
 }

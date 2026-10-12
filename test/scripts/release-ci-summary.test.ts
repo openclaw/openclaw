@@ -3852,6 +3852,18 @@ describe("release CI summary child correlation", () => {
     expect(validateEvidenceReuseChain(makeCurrent(paths), root, root, compare(paths))).toBe(
       root.targetSha,
     );
+    const betaPaths = [
+      "CHANGELOG.md",
+      `CHANGELOG/${targetVersion}.md`,
+      `CHANGELOG/records/${targetVersion}.md`,
+    ];
+    expect(validateEvidenceReuseChain(makeCurrent(betaPaths), root, root, compare(betaPaths))).toBe(
+      root.targetSha,
+    );
+    const mixedPaths = [...paths, ...betaPaths.slice(1)];
+    expect(() =>
+      validateEvidenceReuseChain(makeCurrent(mixedPaths), root, root, compare(mixedPaths)),
+    ).toThrow("invalid target delta");
     for (const unrelated of [
       "CHANGELOG/2026.8.1.md",
       "CHANGELOG/records/2026.8.1.md",
@@ -3880,16 +3892,7 @@ describe("release CI summary child correlation", () => {
         ).toThrow("failed commit comparison");
       }
     }
-    if (targetVersion.endsWith("-beta.1")) {
-      const betaPaths = [
-        "CHANGELOG.md",
-        `CHANGELOG/${targetVersion}.md`,
-        `CHANGELOG/records/${targetVersion}.md`,
-      ];
-      expect(() =>
-        validateEvidenceReuseChain(makeCurrent(betaPaths), root, root, compare(betaPaths)),
-      ).toThrow("invalid target delta");
-    }
+
     expect(() =>
       validateEvidenceReuseChain(
         makeCurrent(["CHANGELOG.md"]),

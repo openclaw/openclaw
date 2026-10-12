@@ -87,7 +87,7 @@ Minimal config:
 ## What it is
 
 - A Twitch channel owned by the Gateway.
-- Deterministic routing: replies always go back to the Twitch channel the message came from.
+- Replies always go back to the Twitch channel the message came from.
 - Each joined channel maps to an isolated group session key `agent:<agentId>:twitch:group:<channel>`.
 - `username` is the bot's account (who authenticates), `channel` is which chat room to join. One account entry joins exactly one channel.
 - Tokens work with or without the `oauth:` prefix; OpenClaw normalizes both ways (the setup wizard expects the `oauth:` form).
@@ -256,7 +256,7 @@ openclaw channels status --probe
 
 <AccordionGroup>
   <Accordion title="Bot does not respond to messages">
-    - **Check access control:** Ensure your user ID is in `allowFrom`, or temporarily remove `allowFrom` and set `allowedRoles: ["all"]` to test.
+    - **Check access control:** Check that your user ID is in `allowFrom`, or temporarily remove `allowFrom` and set `allowedRoles: ["all"]` to test.
     - **Check the mention gate:** With `requireMention: true` (default), messages must @mention the bot username.
     - **Check the bot is in the channel:** The bot only joins the channel named in `channel`.
 
@@ -279,8 +279,8 @@ openclaw channels status --probe
 
     If you see `token refresh disabled (no refresh token)`:
 
-    - Ensure `clientSecret` is provided
-    - Ensure `refreshToken` is provided
+    - Provide `clientSecret`
+    - Provide `refreshToken`
 
   </Accordion>
 </AccordionGroup>

@@ -109,6 +109,17 @@ describe("tab eligibility", () => {
     });
   });
 
+  it("rejects discarded tabs until Chrome reloads them", () => {
+    expect(tabEligibility({ id: 1, url: "https://example.com", discarded: true })).toEqual({
+      eligible: false,
+      reason: "discarded",
+    });
+    expect(tabEligibility({ id: 1, url: "https://example.com", discarded: false })).toEqual({
+      eligible: true,
+      reason: null,
+    });
+  });
+
   it("treats a pending destination as an additional eligibility restriction", () => {
     expect(
       tabEligibility({
@@ -178,6 +189,20 @@ describe("tab access policy", () => {
     harness.policy.setMode("selected");
     await expect(harness.policy.requireTab(1)).rejects.toThrow("restricted or unavailable");
     await expect(harness.policy.requireTab(2)).rejects.toThrow("incognito");
+  });
+
+  it("withholds discarded tabs until Chrome reloads them", async () => {
+    const harness = createHarness({
+      tabs: [
+        { id: 1, url: "https://live.example", groupId: 7 },
+        { id: 2, url: "https://discarded.example", discarded: true, groupId: 7 },
+      ],
+    });
+    await harness.policy.initialize("all", true);
+    await expect(harness.policy.listAccessibleTabs()).resolves.toEqual([
+      expect.objectContaining({ id: 1 }),
+    ]);
+    await expect(harness.policy.requireTab(2)).rejects.toThrow("discarded by Chrome");
   });
 
   it("invalidates captured authority across mode and per-tab deny changes", async () => {

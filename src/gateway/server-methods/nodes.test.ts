@@ -142,14 +142,14 @@ function createContext() {
       info: vi.fn(),
       warn: vi.fn(),
     },
-    nodeRegistry: {
+    nodeRegistry: Object.assign(new NodeRegistry(), {
       get: vi.fn(),
       listConnected: vi.fn(() => []),
       listConnectedForPairingStates: vi.fn(() => []),
       getActiveNode: vi.fn(),
       updateSurface: vi.fn(),
       updateNodeSkills: vi.fn(),
-    },
+    }),
   };
 }
 

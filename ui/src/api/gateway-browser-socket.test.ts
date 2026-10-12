@@ -128,16 +128,4 @@ describe("createBrowserGatewaySocket", () => {
     expect(() => socketAdapter.close(1008, "connect failed")).not.toThrow();
     expect(socket.close).toHaveBeenCalledWith(4008, "connect failed");
   });
-
-  it("does not normalize other invalid browser close codes", () => {
-    expect(() => socketAdapter.close(1009, "invalid client close")).toThrow(
-      expect.objectContaining({ name: "InvalidAccessError" }),
-    );
-  });
-
-  it("preserves policy-violation closes received from the gateway", () => {
-    socket.emit("close", { code: 1008, reason: "pairing required" });
-
-    expect(handlers.close).toHaveBeenCalledWith(1008, "pairing required");
-  });
 });

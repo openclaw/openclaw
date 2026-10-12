@@ -71,11 +71,8 @@ interface TunnelConfig {
 }
 
 export interface TunnelResult {
-  /** The public URL */
   publicUrl: string;
-  /** Function to stop the tunnel */
   stop: () => Promise<void>;
-  /** Tunnel provider name */
   provider: string;
 }
 

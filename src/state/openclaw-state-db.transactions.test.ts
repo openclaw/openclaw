@@ -107,7 +107,6 @@ it.each(["unchanged schema", "future schema"] as const)(
 
 it.each([
   { phase: "cached", publication: "schema" },
-  { phase: "supplied", publication: "incomplete" },
   { phase: "entered callback", publication: "schema" },
   { phase: "failed rollback", publication: "incomplete" },
 ] as const)(
@@ -115,8 +114,7 @@ it.each([
   ({ phase, publication }) => {
     const options = { path: path.join(tempDirs.make("state-no-write-replay-"), "state.sqlite") };
     const marker = resolveGatewayStateOwnerPath(options.path);
-    const existing =
-      phase === "cached" || phase === "supplied" ? openOpenClawStateDatabase(options) : undefined;
+    const existing = phase === "cached" ? openOpenClawStateDatabase(options) : undefined;
     if (existing) {
       publishForeignSchemaOwner(existing.path, publication === "incomplete");
     }
@@ -150,12 +148,7 @@ it.each([
       throw new Error("Unsafe transaction replay attempted");
     });
     try {
-      expect(() =>
-        runOpenClawStateWriteTransaction(
-          callback,
-          phase === "supplied" ? { ...options, database: existing } : options,
-        ),
-      ).toThrow();
+      expect(() => runOpenClawStateWriteTransaction(callback, options)).toThrow();
       expect(callback).toHaveBeenCalledTimes(phase === "entered callback" ? 1 : 0);
       expect(wait).not.toHaveBeenCalled();
       using reader = new DatabaseSync(options.path, { readOnly: true });
@@ -189,40 +182,36 @@ it("refuses a savepoint in an unmanaged enclosing transaction", () => {
   }
 });
 
-it.each(["cached", "supplied"] as const)(
-  "lets SQLite exclude a competing %s writer and resumes after its commit",
-  (handle) => {
-    const options = { path: path.join(tempDirs.make("state-native-contention-"), "state.sqlite") };
-    const database = openOpenClawStateDatabase(options);
-    const writeOptions = handle === "supplied" ? { ...options, database } : options;
-    const other = new DatabaseSync(database.path);
-    const write = vi.fn(() => {
-      database.db
-        .prepare(
-          "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
-        )
-        .run("native-transaction", "committed", "{}", 1);
-    });
-    try {
-      other.exec("BEGIN IMMEDIATE");
-      expect(() =>
-        runOpenClawStateWriteTransaction(write, writeOptions, { busyTimeoutMs: 0 }),
-      ).toThrow(/locked|busy/i);
-      expect(write).not.toHaveBeenCalled();
-      expect(database.db.isTransaction).toBe(false);
-      other.exec("COMMIT");
-      runOpenClawStateWriteTransaction(write, writeOptions, { busyTimeoutMs: 0 });
-      expect(write).toHaveBeenCalledOnce();
-      expect(
-        other
-          .prepare("SELECT event_key FROM diagnostic_events WHERE scope=?")
-          .all("native-transaction"),
-      ).toEqual([{ event_key: "committed" }]);
-    } finally {
-      if (other.isTransaction) {
-        other.exec("ROLLBACK");
-      }
-      other.close();
+it("lets SQLite exclude a competing cached writer and resumes after its commit", () => {
+  const options = { path: path.join(tempDirs.make("state-native-contention-"), "state.sqlite") };
+  const database = openOpenClawStateDatabase(options);
+  const other = new DatabaseSync(database.path);
+  const write = vi.fn(() => {
+    database.db
+      .prepare(
+        "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
+      )
+      .run("native-transaction", "committed", "{}", 1);
+  });
+  try {
+    other.exec("BEGIN IMMEDIATE");
+    expect(() => runOpenClawStateWriteTransaction(write, options, { busyTimeoutMs: 0 })).toThrow(
+      /locked|busy/i,
+    );
+    expect(write).not.toHaveBeenCalled();
+    expect(database.db.isTransaction).toBe(false);
+    other.exec("COMMIT");
+    runOpenClawStateWriteTransaction(write, options, { busyTimeoutMs: 0 });
+    expect(write).toHaveBeenCalledOnce();
+    expect(
+      other
+        .prepare("SELECT event_key FROM diagnostic_events WHERE scope=?")
+        .all("native-transaction"),
+    ).toEqual([{ event_key: "committed" }]);
+  } finally {
+    if (other.isTransaction) {
+      other.exec("ROLLBACK");
     }
-  },
-);
+    other.close();
+  }
+});

@@ -177,10 +177,12 @@ suite.define(() => {
         expect(await skeleton.count()).toBe(3);
         expect(await menu.getByRole("option").count()).toBe(0);
         expect(
-          await skeleton
-            .locator(".skeleton")
-            .first()
-            .evaluate((element) => getComputedStyle(element, "::after").animationName),
+          await menu.evaluate((element) => {
+            const currentSkeleton = element.querySelector(".mention-menu__loading .skeleton");
+            return currentSkeleton
+              ? getComputedStyle(currentSkeleton, "::after").animationName
+              : null;
+          }),
         ).toBe("none");
         const loading = await menu.boundingBox();
         await gateway.resolveDeferred("users.mentionable", {

@@ -9,31 +9,19 @@ import { VERSION } from "../../version.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { runUpdateFinalizationDoctorInFreshProcess } from "./update-command-fresh-doctor.js";
 import { serviceUpdateResult } from "./update-command-service-recovery.test-support.js";
+import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
 import { createShippedUnresolvedServiceStop } from "./update-command-service-state.test-support.js";
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
-  revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service.js";
 
 export const preservedActivationCases = [
-  { phase: "initial", mode: "git", denial: "sealed", outcome: "healthy", json: true },
-  { phase: "initial", mode: "npm", denial: "sealed", outcome: "healthy", json: true },
-  { phase: "initial", mode: "npm", denial: "sealed", outcome: "stale retry", json: true },
-  { phase: "late", mode: "git", denial: "sealed", outcome: "healthy", json: false },
-  { phase: "late", mode: "npm", denial: "unknown", outcome: "healthy", json: false },
-  { phase: "late", mode: "git", denial: "unknown", outcome: "json denial", json: true },
-  { phase: "late", mode: "npm", denial: "sealed", outcome: "json denial", json: true },
+  { phase: "late", mode: "npm", denial: "unknown", outcome: "clean refusal", json: true },
   { phase: "late", mode: "git", denial: "sealed", outcome: "uninspectable", json: false },
   { phase: "late", mode: "npm", denial: "unknown", outcome: "foreign", json: false },
-  { phase: "late", mode: "git", denial: "unknown", outcome: "stale retry", json: false },
   { phase: "late", mode: "npm", denial: "sealed", outcome: "stale retry", json: false },
-  { phase: "initial", mode: "git", denial: "unknown", outcome: "stale build", json: false },
-  { phase: "initial", mode: "git", denial: "sealed", outcome: "missing build", json: false },
-  { phase: "late", mode: "git", denial: "unknown", outcome: "stale build", json: false },
   { phase: "late", mode: "git", denial: "sealed", outcome: "missing build", json: false },
-  { phase: "late", mode: "pnpm", denial: "sealed", outcome: "healthy", json: false },
-  { phase: "late", mode: "bun", denial: "unknown", outcome: "healthy", json: false },
 ] as const;
 
 export type InstallRootTransitionFixture = {

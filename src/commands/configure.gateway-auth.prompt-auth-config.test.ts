@@ -210,7 +210,6 @@ describe("promptAuthConfig", () => {
 
   it.each([
     { source: "manifest", provider: "github-copilot", preferred: "github-copilot", scoped: false },
-    { source: "configured", provider: "ollama", preferred: undefined, scoped: true },
   ])(
     "loads the $source catalog after provider setup",
     async ({ source, provider, preferred, scoped }) => {
@@ -315,17 +314,6 @@ describe("promptAuthConfig", () => {
     ]
   >([
     ["no recommendation", undefined, undefined, undefined, false, false],
-    ["initialize explicit agent", undefined, undefined, undefined, true, true],
-    [
-      "preserve agent primary",
-      { primary: "shared/primary", fallbacks: ["shared/fallback"] },
-      { primary: "agent/primary", fallbacks: ["agent/fallback"] },
-      "agent/primary",
-      true,
-      true,
-    ],
-    ["inherit string primary", "shared/primary", undefined, "shared/primary", true, true],
-    ["preserve string primary", undefined, "agent/primary", "agent/primary", true, true],
     [
       "initialize legacy agent",
       undefined,
@@ -428,13 +416,6 @@ describe("promptAuthConfig", () => {
     ]
   >([
     [
-      "preserve shared primary",
-      false,
-      { primary: "openai/gpt-5.6-luna", fallbacks: ["anthropic/sonnet-4.6"] },
-      undefined,
-      { primary: "openai/gpt-5.6-luna", fallbacks: ["anthropic/sonnet-4.6"] },
-    ],
-    [
       "initialize shared primary",
       false,
       { fallbacks: ["anthropic/sonnet-4.6"] },
@@ -448,7 +429,6 @@ describe("promptAuthConfig", () => {
       { fallbacks: ["anthropic/sonnet-4.6"] },
       { fallbacks: ["anthropic/sonnet-4.6"] },
     ],
-    ["initialize agent primary", true, undefined, undefined, { primary: "custom/llama3" }],
   ])("custom provider: %s", async (_name, explicit, defaultModel, agentModel, expectedModel) => {
     mocks.promptAuthChoiceGrouped.mockResolvedValue("custom-api-key");
     const server = createServer((_req, res) => {

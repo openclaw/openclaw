@@ -1,4 +1,3 @@
-/** Builds prompt body and envelope metadata for reply runs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
@@ -33,7 +32,6 @@ type ReplyPromptEnvelope = ReplyPromptEnvelopeBase & {
   transcriptCommandBody: string;
 };
 
-/** Base prompt envelope fields before body variants are added. */
 type ReplyPromptEnvelopeBase = {
   /** Model-visible body before media, thread context, and inter-session annotation are applied. */
   effectiveBaseBody: string;
@@ -136,7 +134,6 @@ function buildResumableRoomContext(roomContext: string): string {
     .join("\n\n");
 }
 
-/** Builds prompt envelope metadata shared by all body variants. */
 export function buildReplyPromptEnvelopeBase(
   params: ReplyPromptEnvelopeBaseParams,
 ): ReplyPromptEnvelopeBase {
@@ -175,7 +172,7 @@ export function buildReplyPromptEnvelopeBase(
       }).text
     : params.isBareSessionReset
       ? softResetTail || `[OpenClaw session ${params.startupAction}]`
-      : (roomEventBody ?? (params.hasUserBody ? params.baseBody : MEDIA_ONLY_USER_TEXT));
+      : effectiveBaseBody;
   const fragments: RuntimeContextFragment[] = [
     ...(isRoomEvent ? [{ kind: "runtime-instruction" as const, text: ROOM_EVENT_PROMPT }] : []),
     ...(inboundUserContext
@@ -203,7 +200,6 @@ export function buildReplyPromptEnvelopeBase(
   };
 }
 
-/** Builds the full reply prompt envelope for a prepared run. */
 export function buildReplyPromptEnvelope(
   params: ReplyPromptEnvelopeBaseParams & {
     prefixedBody?: string;
@@ -237,18 +233,14 @@ export function buildReplyPromptEnvelope(
         sourceContext.map((text) => ({ kind: "conversation-data", text })),
       )
     : base.currentInboundContext;
+  const annotateBody = (body: string) =>
+    annotateInterSessionPromptText(prependMediaNote(body), params.sessionCtx.InputProvenance);
   return {
     mediaNote,
     inboundMediaIndexes: generatedMedia.mediaIndexes,
     ...(media.length > 0 ? { media } : {}),
-    prefixedCommandBody: annotateInterSessionPromptText(
-      prependMediaNote(params.prefixedBody ?? base.effectiveBaseBody),
-      params.sessionCtx.InputProvenance,
-    ),
-    queuedBody: annotateInterSessionPromptText(
-      prependMediaNote(base.effectiveBaseBody),
-      params.sessionCtx.InputProvenance,
-    ),
+    prefixedCommandBody: annotateBody(params.prefixedBody ?? base.effectiveBaseBody),
+    queuedBody: annotateBody(base.effectiveBaseBody),
     transcriptCommandBody,
     ...base,
     currentInboundContext,

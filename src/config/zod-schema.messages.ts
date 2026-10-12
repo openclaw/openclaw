@@ -1,9 +1,7 @@
 import { z } from "zod";
 
-const VisibleRepliesValueSchema = z.enum(["automatic", "message_tool"]);
-
 const VisibleRepliesSchema = z
-  .union([VisibleRepliesValueSchema, z.boolean()])
+  .union([z.enum(["automatic", "message_tool"]), z.boolean()])
   .overwrite((value) => {
     if (value === true) {
       return "automatic";
@@ -39,23 +37,7 @@ const QueueModeSchema = z.union([
   z.literal("collect"),
   z.literal("interrupt"),
 ]);
-const QueueDropSchema = z.union([z.literal("old"), z.literal("new"), z.literal("summarize")]);
-const QueueModeBySurfaceSchema = z
-  .strictObject({
-    whatsapp: QueueModeSchema.optional(),
-    telegram: QueueModeSchema.optional(),
-    discord: QueueModeSchema.optional(),
-    irc: QueueModeSchema.optional(),
-    googlechat: QueueModeSchema.optional(),
-    slack: QueueModeSchema.optional(),
-    mattermost: QueueModeSchema.optional(),
-    signal: QueueModeSchema.optional(),
-    imessage: QueueModeSchema.optional(),
-    msteams: QueueModeSchema.optional(),
-    webchat: QueueModeSchema.optional(),
-    matrix: QueueModeSchema.optional(),
-  })
-  .optional();
+const QueueModeBySurfaceSchema = z.record(z.string(), QueueModeSchema).optional();
 const DebounceMsBySurfaceSchema = z.record(z.string(), z.number().int().nonnegative()).optional();
 
 export const QueueSchema = z
@@ -64,7 +46,7 @@ export const QueueSchema = z
     byChannel: QueueModeBySurfaceSchema,
     debounceMsByChannel: DebounceMsBySurfaceSchema,
     cap: z.number().int().positive().optional(),
-    drop: QueueDropSchema.optional(),
+    drop: z.union([z.literal("old"), z.literal("new"), z.literal("summarize")]).optional(),
   })
   .optional();
 
@@ -105,7 +87,6 @@ export const MessagesSchema = z
   })
   .optional();
 
-const BroadcastStrategySchema = z.enum(["parallel", "sequential"]);
 const BroadcastGroupSchema = z.strictObject({
   agents: z.array(z.string()).max(16),
   mentionGating: z.boolean().optional(),
@@ -115,7 +96,7 @@ const BroadcastGroupSchema = z.strictObject({
 
 export const BroadcastSchema = z
   .object({
-    strategy: BroadcastStrategySchema.optional(),
+    strategy: z.enum(["parallel", "sequential"]).optional(),
   })
   .catchall(z.union([z.array(z.string()), BroadcastGroupSchema]))
   .superRefine((broadcast, ctx) => {

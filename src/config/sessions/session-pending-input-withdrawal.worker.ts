@@ -9,8 +9,8 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { parseSessionPendingInputMessage } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
 
 export type SessionPendingInputWithdrawal = {
   sessionKey: string;

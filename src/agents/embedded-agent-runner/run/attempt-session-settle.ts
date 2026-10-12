@@ -22,6 +22,11 @@ export function createEmbeddedAttemptSessionSettleTracker(
 ) {
   const inFlight = new Set<Promise<void>>();
   let abortCleanupFailed = false;
+  const recordAbortCleanupFailure = () => {
+    if (abortCleanupFailed) {
+      recordAgentCleanupFailure();
+    }
+  };
   const trackSettlePromise = (promise: Promise<void>): Promise<void> => {
     inFlight.add(promise);
     const settled = () => {
@@ -42,16 +47,10 @@ export function createEmbeddedAttemptSessionSettleTracker(
     buildAbortSettlePromise: () => {
       // Abort callbacks can run outside the caller's async context. Record their
       // retained failure from the cleanup owner that joins settlement.
-      if (abortCleanupFailed) {
-        recordAgentCleanupFailure();
-      }
+      recordAbortCleanupFailure();
       return inFlight.size === 0
         ? null
-        : Promise.allSettled(inFlight).then(() => {
-            if (abortCleanupFailed) {
-              recordAgentCleanupFailure();
-            }
-          });
+        : Promise.allSettled(inFlight).then(recordAbortCleanupFailure);
     },
     trackPromptSettlePromise: trackSettlePromise,
   };
@@ -72,10 +71,7 @@ export type EmbeddedAttemptSessionResources = {
 };
 
 /** Keep retained review callbacks outside the attempt's tool-execution closure scope. */
-export function createEmbeddedAttemptSessionResources(
-  config: EmbeddedRunAttemptParams["config"],
-  signal: AbortSignal,
-) {
+export function createEmbeddedAttemptSessionResources(signal: AbortSignal) {
   const resources: EmbeddedAttemptSessionResources = {
     trajectoryRecorder: null,
     buildAbortSettlePromise: () => null,
@@ -88,7 +84,6 @@ export function createEmbeddedAttemptSessionResources(
         return undefined;
       }
       return buildExecAutoReviewTranscript({
-        config,
         messages: live.session.messages,
         userTurnOrigins: new Map(
           live
@@ -170,12 +165,9 @@ export async function cleanupEmbeddedAttemptSessionPhase(
       cleanupState.timedOutDuringCompaction;
     const cleanupAbortLike = cleanupAborted || initialState.cleanupYieldAborted;
     await cleanupEmbeddedAttemptResources({
-      removeToolResultContextGuard: input.removeToolResultContextGuard,
-      flushPendingToolResultsAfterIdle,
-      session: input.session,
+      ...input,
       sessionManager: input.sessionManager,
-      bundleMcpRuntime: input.bundleMcpRuntime,
-      bundleLspRuntime: input.bundleLspRuntime,
+      flushPendingToolResultsAfterIdle,
       // Aborted runs skip the idle wait so teardown cannot strand the lock.
       aborted: cleanupAbortLike,
       abortSignal: attempt.abortSignal,

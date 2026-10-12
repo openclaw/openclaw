@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
@@ -24,7 +25,7 @@ type AgentHarnessHookParams<Event> = {
   ctx: AgentHarnessHookContext;
   hookRunner?: AgentHarnessHookRunner;
 };
-type FinalizeRetryBudget = Map<string, Map<string, number>>;
+type FinalizeRetryBudget = Map<string, number>;
 
 /** Returns the current global hook runner for harness lifecycle hooks. */
 export function getAgentHarnessHookRunner(): AgentHarnessHookRunner {
@@ -33,31 +34,6 @@ export function getAgentHarnessHookRunner(): AgentHarnessHookRunner {
 
 function getFinalizeRetryBudget(): FinalizeRetryBudget {
   return resolveGlobalSingleton<FinalizeRetryBudget>(FINALIZE_RETRY_BUDGET_KEY, () => new Map());
-}
-
-function countFinalizeRetryBudgetEntries(budget: FinalizeRetryBudget): number {
-  let count = 0;
-  for (const runBudget of budget.values()) {
-    count += runBudget.size;
-  }
-  return count;
-}
-
-function pruneFinalizeRetryBudget(budget: FinalizeRetryBudget): void {
-  while (countFinalizeRetryBudgetEntries(budget) > FINALIZE_RETRY_BUDGET_MAX_ENTRIES) {
-    const [oldestRunId, oldestRunBudget] = budget.entries().next().value!;
-    const oldestRetryKey = oldestRunBudget.keys().next().value;
-    if (oldestRetryKey !== undefined) {
-      oldestRunBudget.delete(oldestRetryKey);
-    }
-    if (oldestRunBudget.size === 0) {
-      budget.delete(oldestRunId);
-    }
-  }
-}
-
-function buildFinalizeRetryInstructionKey(instruction: string): string {
-  return `instruction:${createHash("sha256").update(instruction).digest("hex")}`;
 }
 
 /** Dispatches best-effort LLM input hooks for a harness attempt. */
@@ -164,46 +140,43 @@ function normalizeBeforeAgentFinalizeResult(
     const reason = normalizeTrimmedString(result.reason);
     return reason ? { action: "finalize", reason } : { action: "finalize" };
   }
-  if (result?.action === "revise") {
-    const retryCandidates = readBeforeAgentFinalizeRetryCandidates(result);
-    if (retryCandidates.length > 0) {
-      const reason = normalizeTrimmedString(result.reason);
-      for (const retry of retryCandidates) {
-        const retryInstruction = normalizeTrimmedString(retry.instruction);
-        if (!retryInstruction) {
-          continue;
-        }
-        const maxAttempts =
-          typeof retry.maxAttempts === "number" && Number.isFinite(retry.maxAttempts)
-            ? Math.max(1, Math.floor(retry.maxAttempts))
-            : 1;
-        const retryRunId = event?.runId ?? event?.sessionId ?? "unknown-run";
-        const retryKey =
-          normalizeTrimmedString(retry.idempotencyKey) ||
-          buildFinalizeRetryInstructionKey(retryInstruction);
-        // Track retry attempts per run+instruction to prevent finalize hooks
-        // from creating an unbounded revise loop.
-        const budget = getFinalizeRetryBudget();
-        const runBudget = budget.get(retryRunId) ?? new Map<string, number>();
-        const nextCount = (runBudget.get(retryKey) ?? 0) + 1;
-        runBudget.delete(retryKey);
-        runBudget.set(retryKey, nextCount);
-        budget.delete(retryRunId);
-        budget.set(retryRunId, runBudget);
-        pruneFinalizeRetryBudget(budget);
-        if (nextCount > maxAttempts) {
-          continue;
-        }
-        const revisedReason =
-          reason && reason.includes(retryInstruction)
-            ? reason
-            : [reason, retryInstruction].filter(Boolean).join("\n\n");
-        return { action: "revise", reason: revisedReason };
-      }
-      return { action: "continue" };
-    }
-    const reason = normalizeTrimmedString(result.reason);
+  if (result?.action !== "revise") {
+    return { action: "continue" };
+  }
+  const retryCandidates = readBeforeAgentFinalizeRetryCandidates(result);
+  const reason = normalizeTrimmedString(result.reason);
+  if (retryCandidates.length === 0) {
     return reason ? { action: "revise", reason } : { action: "continue" };
+  }
+  for (const retry of retryCandidates) {
+    const retryInstruction = normalizeTrimmedString(retry.instruction);
+    if (!retryInstruction) {
+      continue;
+    }
+    const maxAttempts =
+      typeof retry.maxAttempts === "number" && Number.isFinite(retry.maxAttempts)
+        ? Math.max(1, Math.floor(retry.maxAttempts))
+        : 1;
+    const retryRunId = event?.runId ?? event?.sessionId ?? "unknown-run";
+    const retryKey =
+      normalizeTrimmedString(retry.idempotencyKey) ||
+      `instruction:${createHash("sha256").update(retryInstruction).digest("hex")}`;
+    // Track retry attempts per run+instruction to prevent finalize hooks
+    // from creating an unbounded revise loop.
+    const budget = getFinalizeRetryBudget();
+    const key = JSON.stringify([retryRunId, retryKey]);
+    const nextCount = (budget.get(key) ?? 0) + 1;
+    budget.delete(key);
+    budget.set(key, nextCount);
+    pruneMapToMaxSize(budget, FINALIZE_RETRY_BUDGET_MAX_ENTRIES);
+    if (nextCount > maxAttempts) {
+      continue;
+    }
+    const revisedReason =
+      reason && reason.includes(retryInstruction)
+        ? reason
+        : [reason, retryInstruction].filter(Boolean).join("\n\n");
+    return { action: "revise", reason: revisedReason };
   }
   return { action: "continue" };
 }

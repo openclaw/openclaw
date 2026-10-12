@@ -7,7 +7,9 @@ export type PoolFixtureInput = {
   label: string;
   readStartupOptions?: boolean;
   exchanges?: number;
+  opaqueRequest?: boolean;
   consumeInput?: boolean;
+  notifications?: number;
   counters?: SharedArrayBuffer;
   wait?: boolean;
   exitCode?: number;
@@ -32,6 +34,9 @@ serveWorkerTasks<PoolFixtureResult>(
       assert.ok(typeof input.exitCode === "number");
       process.exit(input.exitCode);
     }
+    for (let index = 0; index < Number(input.notifications ?? 0); index++) {
+      channel?.notify({ label: input.label, index });
+    }
     if (input.counters) {
       assert.ok(input.counters instanceof SharedArrayBuffer);
       const counters = new Int32Array(input.counters);
@@ -51,7 +56,11 @@ serveWorkerTasks<PoolFixtureResult>(
         const buffer =
           input.relayBuffer && input.buffer instanceof ArrayBuffer ? input.buffer : undefined;
         const response = await channel.request(
-          { label: input.label, buffer },
+          {
+            kind: input.opaqueRequest ? undefined : "fixture-exchange",
+            label: input.label,
+            buffer,
+          },
           buffer ? [buffer] : undefined,
         );
         if (buffer) {

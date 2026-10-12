@@ -96,8 +96,10 @@ export function dispatchUiCommandToRequester({
 }
 
 export const uiCommandHandlers: GatewayRequestHandlers = {
-  "ui.command": defineValidatedGatewayMethod("ui.command", validateUiCommandParams, (options) => {
-    try {
+  "ui.command": defineValidatedGatewayMethod(
+    "ui.command",
+    validateUiCommandParams,
+    (options) => {
       assertActiveAgentRuntimeAuthority(options.client, options.context);
       const result = dispatchUiCommandToRequester(options);
       if (result.ok) {
@@ -105,15 +107,11 @@ export const uiCommandHandlers: GatewayRequestHandlers = {
       } else {
         options.respond(false, undefined, result.error);
       }
-    } catch (error) {
-      options.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          error instanceof Error ? error.message : String(error),
-        ),
-      );
-    }
-  }),
+    },
+    (error) =>
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        error instanceof Error ? error.message : String(error),
+      ),
+  ),
 };

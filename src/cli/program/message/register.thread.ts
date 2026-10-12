@@ -1,4 +1,3 @@
-// Thread command registration, including channel-specific create request normalization.
 import type { Command } from "commander";
 import { getChannelPlugin } from "../../../channels/plugins/index.js";
 import { resolveMessageSecretScope } from "../../message-secret-scope.js";

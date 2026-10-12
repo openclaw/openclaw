@@ -326,41 +326,7 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
     expect(starts).toEqual(["partial:First", "block:Block."]);
   });
 
-  it("publishes an authoritative clear with normalized final media", async () => {
-    const onAgentEvent = vi.fn();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-final-media-clear",
-      onAgentEvent,
-    });
-    emitAssistantTextDelta({ emit, delta: "Hello" });
-    emit({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "\nMEDIA:https://example.com/a.png",
-            textSignature: JSON.stringify({ v: 1, id: "answer", phase: "final_answer" }),
-          },
-        ],
-      },
-    });
-    await subscription.waitForPendingEvents();
-    const final = onAgentEvent.mock.calls.findLast(([event]) => event.stream === "assistant")?.[0]
-      .data;
-    expect(final?.text).toBe("");
-    expect(final?.delta).toBe("");
-    expect(final?.replace).toBe(true);
-    expect(final?.mediaUrls).toEqual(["https://example.com/a.png"]);
-    expect(final?.managedMediaUrls).toBeUndefined();
-    expect(final?.phase).toBe("final_answer");
-    subscription.unsubscribe();
-  });
-  it.each([
-    { name: "sanitized empty", text: "<think>hidden reasoning</think>", preambles: 0 },
-    { name: "duplicate", text: "Working.", preambles: 1 },
-  ])(
+  it.each([{ name: "sanitized empty", text: "<think>hidden reasoning</think>", preambles: 0 }])(
     "retires pending partials at a $name generic commentary boundary",
     async ({ text, preambles }) => {
       const pending = createDeferred();

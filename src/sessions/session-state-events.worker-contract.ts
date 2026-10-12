@@ -15,11 +15,16 @@ export type SessionStateWatchAddress = {
 };
 
 export type SessionStateWorkerOperations = {
+  "sessionState.cleanup": {
+    input:
+      | { kind: "reset"; sessionKey: string }
+      | { kind: "delete"; sessionKey: string; agentId: string };
+    output: void;
+  };
   "sessionState.sweep": {
     input: {
       cursors: readonly SessionStateSweepAddress[];
       now: number;
-      sessionEntryCurrentSources?: readonly SessionEntryCurrentSource[];
     };
     output: SessionStateNotice[];
   };

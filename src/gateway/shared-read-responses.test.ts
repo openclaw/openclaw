@@ -27,12 +27,17 @@ function createReadHarness(
   broadcast: GatewayRequestContext["broadcast"] = vi.fn(),
 ) {
   let config: OpenClawConfig = {};
+  let runnerRevision = 0;
   // The dispatch fixture supplies the owners touched by these read-only methods.
   const context = {
     getRuntimeConfig: () => config,
     getCommittedRuntimeConfig: () => config,
     broadcast,
     logGateway: { warn: vi.fn() },
+    workerPlacementRunnerAvailabilityReader: {
+      read: () => undefined,
+      version: () => runnerRevision,
+    },
   } as unknown as GatewayRequestContext;
   const methodRegistry = createGatewayMethodRegistry(
     method.startsWith("workboard.")
@@ -51,6 +56,7 @@ function createReadHarness(
       config = next;
     },
     invalidate: (event?: string) => invalidateSharedReadResponses(context.broadcast, event),
+    runnerChanged: () => runnerRevision++,
     request(id: string, params: Record<string, unknown> = {}, profileId = "alice") {
       const client: GatewayClient = {
         connId: `connection-${id}`,
@@ -175,17 +181,6 @@ describe("shared read response dispatch", () => {
     expect(produce).toHaveBeenCalledTimes(21);
   });
 
-  it("retires responses when their method registry is replaced", async () => {
-    const produce = vi.fn((respond: RespondFn) => respond(true, { value: "current" }));
-    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
-    await harness.request("old-registry").done;
-    harness.invalidate();
-    const current = harness.request("new-registry");
-    await current.done;
-    expectPayload(current, { value: "current" });
-    expect(produce).toHaveBeenCalledTimes(2);
-  });
-
   it("does not certify a pending response against a replacement config", async () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -212,6 +207,29 @@ describe("shared read response dispatch", () => {
     await current.done;
     expectPayload(original, {});
     expectPayload(current, { port: 18790 });
+    expect(produce).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes runner status before its asynchronous session change event is published", async () => {
+    let available = true;
+    const produce = vi.fn((respond: RespondFn) => respond(true, { available }));
+    const harness = createReadHarness(
+      createPreparedReadHandler(() => ({ run: produce })),
+      "sessions.list",
+    );
+    const first = harness.request("before-disconnect");
+    await first.done;
+    expectPayload(first, { available: true });
+
+    available = false;
+    harness.runnerChanged();
+    const second = harness.request("before-row-event");
+    await second.done;
+    expectPayload(second, { available: false });
+
+    const third = harness.request("same-runner-revision");
+    await third.done;
+    expectPayload(third, { available: false });
     expect(produce).toHaveBeenCalledTimes(2);
   });
 
@@ -260,38 +278,6 @@ describe("shared read response dispatch", () => {
       payloadBytes.add(frame.slice(frame.indexOf('"payload":') + '"payload":'.length, -1));
     }
     expect(payloadBytes.size).toBe(1);
-  });
-
-  it("serializes a root array once and preserves ordinary JSON fallback", async () => {
-    const toJSON = vi.fn((key: string) => ({ key, text: 'Array é🦞 \\"' }));
-    const produce = vi.fn((respond: RespondFn) => respond(true, [{ toJSON }]));
-    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
-    const first = harness.request("array-first");
-    await first.done;
-    const second = harness.request("array-second");
-    await second.done;
-
-    const expected = [{ key: "0", text: 'Array é🦞 \\"' }];
-    expectPayload(first, expected);
-    expectPayload(second, expected);
-    expect(JSON.stringify({ payload: first.respond.mock.calls[0]![1] })).toBe(
-      JSON.stringify({ payload: expected }),
-    );
-    expect(produce).toHaveBeenCalledOnce();
-    expect(toJSON).toHaveBeenCalledExactlyOnceWith("0");
-  });
-
-  it.each([null, true, 17, 'Scalar é🦞 \\"'])("shares scalar payload %j", async (payload) => {
-    const produce = vi.fn((respond: RespondFn) => respond(true, payload));
-    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
-    const first = harness.request("scalar-first");
-    await first.done;
-    const second = harness.request("scalar-second");
-    await second.done;
-
-    expectPayload(first, payload);
-    expectPayload(second, payload);
-    expect(produce).toHaveBeenCalledOnce();
   });
 
   it("keeps an omitted toJSON payload valid across shared and ordinary JSON responses", async () => {

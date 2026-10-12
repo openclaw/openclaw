@@ -153,6 +153,7 @@ const runtimeConsumers = [
     "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
+    "src/agents/prepared-model-catalog-worker.oauth-peers.integration.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.infra.config.ts"],
@@ -270,7 +271,7 @@ const runtimeConsumers = [
   ...[
     "src/infra/update-candidate-canary.integration.test.ts",
     "src/infra/update-managed-service-handoff-lifecycle.test.ts",
-    "src/plugin-state/plugin-state-store.authority.test.ts",
+    "src/plugin-state/plugin-state-store.runtime.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.infra.config.ts"],
@@ -297,7 +298,7 @@ const runtimeConsumers = [
   },
   {
     file: "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
-    configs: ["test/vitest/vitest.tooling.config.ts"],
+    configs: ["test/vitest/vitest.infra.config.ts"],
     mode: "private-qa",
     dir: "",
   },

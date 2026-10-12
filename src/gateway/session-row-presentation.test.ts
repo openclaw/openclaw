@@ -13,7 +13,7 @@ import {
   getAgentRunLifecycleGeneration,
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { readUserProfileIdentity, retainUserProfileCatalog } from "../state/user-profile-list.js";
+import { readUserProfileIdentity, prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -580,7 +580,7 @@ it("preserves selected account across role changes but rejects a changed merge i
     const target = ensureProfileForEmail("target@expected-profile.test");
     const client = sharingPolicyClient({ user: source.id }) as GatewayWsClient;
     prepareGatewayRecipientProfile(client);
-    const release = retainUserProfileCatalog();
+    const release = (await prepareUserProfileCatalog()).release;
     try {
       const binding = (await createExpectedProfileBinding(source.id, client))!;
       const targetBinding = (await createExpectedProfileBinding(

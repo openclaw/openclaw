@@ -1176,7 +1176,7 @@ export function hasReplyPayloadContent(
   },
 ): boolean {
   return hasReplyContent({
-    text: options?.trimText ? payload.text?.trim() : payload.text,
+    text: payload.text,
     mediaUrl: payload.mediaUrl,
     mediaUrls: payload.mediaUrls,
     interactive: payload.interactive,

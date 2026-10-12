@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -7,10 +8,14 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
-import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import {
+  isSameOpenClawAgentDatabasePath,
+  resolveOpenClawAgentSqlitePath,
+} from "./openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 type AgentCreationClaimScope = {
+  kind: "host";
   agentId: string;
   statePath: string;
   isActive: () => boolean;
@@ -18,12 +23,17 @@ type AgentCreationClaimScope = {
   retryClose: () => Promise<void>;
 };
 type AgentCreationClaimResource = Pick<OpenClawAgentDatabase, "agentId" | "path">;
+export type AgentCreationClaimWitness = { agentId: string; statePath: string };
+type DelegatedAgentCreationClaim = AgentCreationClaimWitness & {
+  kind: "worker";
+  assertCurrent: () => void;
+};
 
 // Only a creation receipt may admit its identity beneath a completed tombstone.
 // Failed disposal retains handle custody, never the expired scope's write authority.
 const creationClaim = resolveGlobalSingleton(
   Symbol.for("openclaw.agentCreationClaim"),
-  () => new AsyncLocalStorage<AgentCreationClaimScope>(),
+  () => new AsyncLocalStorage<AgentCreationClaimScope | DelegatedAgentCreationClaim>(),
 );
 const creationResources = resolveGlobalSingleton(
   Symbol.for("openclaw.agentCreationClaimResources"),
@@ -56,6 +66,7 @@ export async function runWithAgentCreationClaim<T>(
     return pendingClose;
   };
   const scope: AgentCreationClaimScope = {
+    kind: "host",
     agentId: normalizeAgentId(target.agentId),
     statePath: path.resolve(resolveOpenClawStateSqlitePath(target.env ?? process.env)),
     isActive: () => active,
@@ -115,6 +126,7 @@ function getActiveAgentCreationClaim(
   const scope = creationClaim.getStore();
   if (
     !scope ||
+    scope.kind !== "host" ||
     !scope.isActive() ||
     scope.agentId !== normalizeAgentId(agentId) ||
     scope.statePath !== path.resolve(statePath)
@@ -129,7 +141,51 @@ export function resolveAgentCreationClaimAgentId(
   claimAgentId: string,
   statePath: string,
 ): string | undefined {
+  const scope = creationClaim.getStore();
+  if (
+    scope &&
+    scope.kind === "worker" &&
+    scope.agentId === normalizeAgentId(claimAgentId) &&
+    scope.statePath === path.resolve(statePath)
+  ) {
+    scope.assertCurrent();
+    return scope.agentId;
+  }
   return getActiveAgentCreationClaim(claimAgentId, statePath)?.agentId;
+}
+
+/** The transport carries identity; the retained host scope remains the authority. */
+export function captureAgentCreationClaim(
+  options: OpenClawAgentDatabaseOptions,
+): { witness: AgentCreationClaimWitness; assertCurrent: () => void } | undefined {
+  const scope = getActiveAgentCreationClaim(
+    options.agentId,
+    resolveOpenClawStateSqlitePath(options.env ?? process.env),
+  );
+  if (!scope) {
+    return undefined;
+  }
+  return {
+    witness: { agentId: scope.agentId, statePath: scope.statePath },
+    assertCurrent() {
+      if (!scope.isActive() || creationClaim.getStore() !== scope) {
+        throw new Error("Agent database belongs to an active agent creation claim.");
+      }
+    },
+  };
+}
+
+/** Native admission borrows the host claim; its executor already owns native cleanup. */
+export function withAgentCreationClaimWitness<T>(
+  witness: AgentCreationClaimWitness,
+  assertCurrent: () => void,
+  run: () => T,
+): T {
+  if (isMainThread) {
+    throw new Error("Agent creation witnesses require their native worker");
+  }
+  assertCurrent();
+  return creationClaim.run({ kind: "worker", ...witness, assertCurrent }, run);
 }
 
 /** Hold pending native custody until publication hands it to the handle, or disposal succeeds. */
@@ -198,6 +254,7 @@ export function assertAgentCreationClaimCurrent(options: OpenClawAgentDatabaseOp
   const scope = creationClaim.getStore();
   if (
     scope &&
+    scope.kind === "host" &&
     !scope.isActive() &&
     scope.agentId === normalizeAgentId(options.agentId) &&
     scope.statePath === path.resolve(resolveOpenClawStateSqlitePath(options.env ?? process.env))
@@ -207,13 +264,10 @@ export function assertAgentCreationClaimCurrent(options: OpenClawAgentDatabaseOp
 }
 
 /** A different spelling or state root must not borrow a creation-owned physical store. */
-export function assertAgentCreationClaimAliases(
-  options: OpenClawAgentDatabaseOptions,
-  isSamePath: (left: string, right: string) => boolean,
-): void {
+export function assertAgentCreationClaimAliases(options: OpenClawAgentDatabaseOptions): void {
   const pathname = resolveOpenClawAgentSqlitePath(options);
   for (const owned of creationResources.keys()) {
-    if (isSamePath(owned.path, pathname)) {
+    if (isSameOpenClawAgentDatabasePath(owned.path, pathname)) {
       assertAgentCreationClaimAccess(owned, options);
     }
   }

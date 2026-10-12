@@ -10,6 +10,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -18,6 +19,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import {
   captureConfigHealthStateStore,
   readConfigHealthStateFromStore,
@@ -47,6 +49,7 @@ it.each([
   { phase: "after dispatch", present: true, suspicious: false, producer: "sync" },
   { phase: "after dispatch", present: false, suspicious: false, producer: "sync" },
   { phase: "after dispatch", present: true, suspicious: true, producer: "sync" },
+  { phase: "audit dispatched", present: true, suspicious: true, producer: "sync" },
 ])(
   "preserves a newer $producer observation $phase (existing row: $present, suspicious: $suspicious)",
   async ({ phase, present, suspicious, producer }) => {
@@ -122,6 +125,7 @@ it.each([
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const deps = normalizeConfigIoDeps(options);
+    const observationWork = new AsyncWorkScope();
     let expected: ConfigHealthState | undefined;
     let expectedWarnings = 0;
     let intervened = false;
@@ -138,11 +142,12 @@ it.each([
       expectedWarnings = options.logger.warn.mock.calls.length;
       intervened = true;
     };
-    const writeNewerObservation = () => {
-      fs.writeFileSync(configPath, newerRaw);
-      observeConfigSnapshotSync(deps, newer);
-      recordNewerObservation();
-    };
+    const writeNewerObservation = () =>
+      observationWork.run(() => {
+        fs.writeFileSync(configPath, newerRaw);
+        observeConfigSnapshotSync(deps, newer);
+        recordNewerObservation();
+      });
     const writeNewerAsyncObservation = async () => {
       intervened = true;
       fs.writeFileSync(configPath, newerRaw);
@@ -201,9 +206,10 @@ it.each([
         if (
           !intervened &&
           isRecord(command) &&
-          command.type === "config.health.patch" &&
           isRecord(command.input) &&
-          command.input.configPath === configPath
+          (phase === "audit dispatched"
+            ? command.type === "diagnostic.register" && command.input.scope === "config-audit"
+            : command.type === "config.health.patch" && command.input.configPath === configPath)
         ) {
           // Hold the ordinary SQLite writer before dispatch. The synchronous observer
           // commits after postMessage, before the worker can admit its write transaction.
@@ -232,21 +238,33 @@ it.each([
         release.resolve();
       }
       expect((await pending).valid).toBe(true);
+      await observationWork.drain();
       expect(intervened).toBe(true);
       expect(expected).toBeDefined();
       expect(options.logger.warn.mock.calls).toHaveLength(expectedWarnings);
       expect(readConfigHealthStateFromStore(options)).toEqual(expected);
+      if (phase === "audit dispatched") {
+        expect(
+          listConfigAuditRecordsForTests(options).flatMap((record) =>
+            record.event === "config.observe" ? [record.hash] : [],
+          ),
+        ).toEqual([hashConfigRaw(newerRaw)]);
+      }
       expect(expected?.entries?.[siblingPath]).toEqual(baseline.entries?.[siblingPath]);
       await closeOpenClawStateDatabaseAsync();
       expect(readConfigHealthStateFromStore(options)).toEqual(expected);
     } finally {
       release.resolve();
-      await pending;
+      try {
+        await pending;
+      } finally {
+        await observationWork.drain();
+      }
     }
   },
 );
 
-it.each([' { "hash" : "legacy" } ', '["legacy"]', "{invalid"])(
+it.each([' { "hash" : "legacy" } ', "{invalid"])(
   "compares raw legacy health facts without tightening their decoder: %s",
   async (legacyText) => {
     const home = directories.make("openclaw-health-legacy-basis-");

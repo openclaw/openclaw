@@ -54,8 +54,7 @@ export function prepareEmbeddedRunPermissionChange(sessionId: string) {
         }
       };
       const apply = () => applyPermissionMode(mode, revoke);
-      const application = owner ? withAuthorizedPermissionChange(owner, mode, apply) : apply();
-      const applied = await application;
+      const applied = await (owner ? withAuthorizedPermissionChange(owner, mode, apply) : apply());
       return (
         applied &&
         isAgentEventLifecycleGenerationCurrent(generation) &&

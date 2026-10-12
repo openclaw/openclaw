@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 import { createHost } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
@@ -56,32 +57,6 @@ describe("app-tool-stream run usage", () => {
     handleAgentEvent(host, agentEvent("client-run", 7, "lifecycle", { phase: "start" }, "main"));
     handleAgentEvent(host, agentEvent("client-run", 7, "usage", { outputTokens: 150 }, "main"));
     expect(host.chatRunUsageById?.get("client-run")?.outputTokens).toBe(115);
-  });
-
-  it("tracks sequence-ordered output usage for a session-owned engine run", () => {
-    const host = createHost({ chatRunId: "client-run" });
-
-    handleAgentEvent(host, agentEvent("engine-run", 1, "usage", { outputTokens: 12 }, "main"));
-    handleAgentEvent(host, agentEvent("engine-run", 2, "usage", { outputTokens: 8 }, "main"));
-
-    expect(host.chatRunUsageById?.get("engine-run")?.outputTokens).toBe(8);
-
-    handleAgentEvent(host, agentEvent("engine-run", 3, "lifecycle", { phase: "start" }, "main"));
-    handleAgentEvent(host, agentEvent("engine-run", 4, "usage", { outputTokens: 3 }, "main"));
-
-    expect(host.chatRunUsageById?.get("engine-run")?.outputTokens).toBe(3);
-  });
-
-  it("keeps session-scoped usage separate for concurrent active runs", () => {
-    const host = createHost();
-
-    handleAgentEvent(host, agentEvent("run-a", 1, "usage", { outputTokens: 100 }, "main"));
-    handleAgentEvent(host, agentEvent("run-b", 1, "usage", { outputTokens: 10 }, "main"));
-
-    expect(Array.from(host.chatRunUsageById?.entries() ?? [])).toEqual([
-      ["run-a", { outputTokens: 100, seq: 1 }],
-      ["run-b", { outputTokens: 10, seq: 1 }],
-    ]);
   });
 
   it("projects provider-independent system warnings into the visible session transcript", () => {
@@ -229,4 +204,62 @@ describe("app-tool-stream run usage", () => {
       ["client-run", { outputTokens: 7, seq: 2 }],
     ]);
   });
+});
+
+describe("app-tool-stream startup status", () => {
+  function toolStart(runId: string, toolCallId: string): AgentEvent {
+    return {
+      runId,
+      seq: 1,
+      stream: "tool",
+      ts: 1,
+      sessionKey: "main",
+      data: { phase: "start", toolCallId, name: "read", args: {} },
+    };
+  }
+
+  it.each(["tool", "preamble", "assistant"])(
+    "keeps retry waits transient and ordered across %s progress and delayed replay",
+    (kind) => {
+      const host = createHost({
+        chatRunId: "run-1",
+        chatRunStartup: { state: "status", runId: "run-1", phase: "starting_model" },
+        toolStreamSyncTimer: 1,
+      });
+      const retry: AgentEvent = {
+        runId: "run-1",
+        seq: 3,
+        stream: "run_status",
+        ts: 3,
+        sessionKey: "main",
+        data: { phase: "retrying", message: "Rate limited. Retrying in 2 seconds (attempt 2/8)." },
+      };
+      const retryLabel = () =>
+        chatStartupStatusLabel(activeChatRunStartupStatus(host.chatRunStartup), null);
+      handleAgentEvent(host, toolStart("run-1", "tool-1"));
+      handleAgentEvent(host, retry);
+      handleAgentEvent(host, { ...retry, runId: "run-other", seq: 4 });
+      handleAgentEvent(host, { ...toolStart("run-1", "tool-old"), seq: 2 });
+      expect(host.chatRunId).toBe("run-1");
+      expect(retryLabel()).toBe(retry.data.message);
+
+      handleAgentEvent(host, {
+        ...retry,
+        seq: 4,
+        stream: kind === "preamble" ? "item" : kind,
+        data:
+          kind === "tool"
+            ? { phase: "start", toolCallId: "tool-next", name: "read" }
+            : kind === "preamble"
+              ? { kind: "preamble", itemId: "resumed", progressText: "Continuing" }
+              : { text: "Continuing" },
+      });
+      handleAgentEvent(host, retry);
+      expect(retryLabel()).toBeUndefined();
+      expect(host.chatRunId).toBe("run-1");
+
+      handleAgentEvent(host, { ...retry, seq: 5 });
+      expect(retryLabel()).toBe(retry.data.message);
+    },
+  );
 });

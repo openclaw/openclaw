@@ -52,21 +52,14 @@ enum BoundedProcess {
                     let deadline = await exitSignal.wait(timeout: timeout)
                     try Task.checkCancellation()
                     // Terminate before joining the observer: its callback may be awaiting a busy UI actor.
-                    switch deadline {
-                    case .exited:
-                        // The body still owns the unreaped leader, so its process-group ID cannot be reused.
-                        try? execution.send(signal: .kill, toProcessGroup: true)
-                        return false
-                    case .timedOut:
-                        if exitSignal.hasExited() {
-                            try? execution.send(signal: .kill, toProcessGroup: true)
-                            return false
-                        }
+                    let timedOut = deadline == .timedOut && !exitSignal.hasExited()
+                    if timedOut {
                         try? execution.send(signal: .terminate, toProcessGroup: true)
                         try? await Task.sleep(for: .milliseconds(100))
-                        try? execution.send(signal: .kill, toProcessGroup: true)
-                        return true
                     }
+                    // The body still owns the unreaped leader, so its process-group ID cannot be reused.
+                    try? execution.send(signal: .kill, toProcessGroup: true)
+                    return timedOut
                 }
                 group.addTask {
                     try await whileRunning(exitSignal)

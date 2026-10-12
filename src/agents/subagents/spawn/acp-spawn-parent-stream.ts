@@ -7,6 +7,8 @@ import {
   isAcpTagVisible,
   resolveAcpProjectionSettings,
 } from "../../../auto-reply/reply/acp-stream-settings.js";
+import type { SessionEventTarget } from "../../../auto-reply/reply/session-event-contract.js";
+import { enqueueSessionEventForHost as enqueueSessionEvent } from "../../../auto-reply/reply/session-event-handoff.js";
 import {
   resolveChannelStreamingProgressCommentary,
   type StreamingCompatEntry,
@@ -15,17 +17,13 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { onAgentEventForRun } from "../../../infra/agent-events.js";
 import {
   resolveEventSessionKeyForPolicy,
-  scopedHeartbeatWakeOptionsForPolicy,
   type EventSessionRoutingPolicy,
 } from "../../../infra/event-session-routing.js";
-import { requestHeartbeat } from "../../../infra/heartbeat-wake.js";
 import { isSqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
-import { resolveSystemEventQueueKey } from "../../../infra/system-event-ownership.js";
-import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { getBoundLegacyPluginSdkResourceHost } from "../../../plugins/legacy-sdk-resource-host.js";
 import { resolveChannelAccountEntry } from "../../../routing/account-lookup.js";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import { normalizeAccountId } from "../../../routing/session-key.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { normalizeAssistantPhase } from "../../../shared/chat-message-content.js";
 import { truncateUtf16WithEllipsis as truncate } from "../../../shared/text-truncate.js";
@@ -109,10 +107,12 @@ function resolveParentProgressStreamingEntry(params: {
 export function startAcpSpawnParentStreamRelay(params: {
   runId: string;
   parentSessionKey: string;
-  requesterAgentId?: string;
+  requesterAgentId: string;
+  expectedTarget: SessionEventTarget;
   childSessionKey: string;
   childSessionId?: string;
   agentId: string;
+  ownerAgentId?: string;
   env?: NodeJS.ProcessEnv;
   eventRouting: EventSessionRoutingPolicy;
   deliveryContext?: DeliveryContext;
@@ -131,7 +131,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   try {
     if (childSessionId) {
       recorder = createAcpParentStreamRecorder({
-        agentId: params.agentId,
+        agentId: params.ownerAgentId ?? params.agentId,
         env: stateEnv,
         sessionId: childSessionId,
         runId,
@@ -262,34 +262,31 @@ export function startAcpSpawnParentStreamRelay(params: {
     true,
   );
   const acpProjectionSettings = resolveAcpProjectionSettings(params.cfg ?? {});
-  const wake = () => {
-    requestHeartbeat(
-      scopedHeartbeatWakeOptionsForPolicy(
-        parentSessionKey,
-        {
-          source: "acp-spawn",
-          intent: "event",
-          reason: "acp:spawn:stream",
-        },
-        eventRouting,
-      ),
-    );
-  };
+  const eventSessionKey = resolveEventSessionKeyForPolicy(parentSessionKey, eventRouting);
+  const deliveryContext = structuredClone(params.deliveryContext);
   const emit = (text: string, contextKey: string) => {
-    const cleaned = text.trim();
+    const cleaned = truncate(text.trim(), STREAM_BUFFER_MAX_CHARS);
     if (disposed || !cleaned) {
       return;
     }
     logEvent("system_event", { contextKey, text: cleaned });
-    enqueueSystemEvent(cleaned, {
-      sessionKey: resolveSystemEventQueueKey(
-        resolveEventSessionKeyForPolicy(parentSessionKey, eventRouting),
-        resolveAgentIdFromSessionKey(parentSessionKey, params.requesterAgentId),
-      ),
-      contextKey,
-      deliveryContext: params.deliveryContext,
-    });
-    wake();
+    try {
+      const receipt = enqueueSessionEvent(cleaned, {
+        agentId: params.requesterAgentId,
+        sessionKey: eventSessionKey,
+        source: "task",
+        contextKey,
+        deliveryContext,
+        expectedTarget: params.expectedTarget,
+      });
+      void receipt.settled.then((outcome) => {
+        if (outcome.status !== "completed") {
+          log.warn("ACP parent relay follow-up failed", { runId, contextKey, ...outcome });
+        }
+      });
+    } catch (error) {
+      log.warn("ACP parent relay follow-up rejected", { runId, contextKey, error: String(error) });
+    }
   };
   const emitStartNotice = () => {
     emit(
@@ -402,13 +399,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   };
 
   const noOutputWatcherTimer = setInterval(() => {
-    if (disposed) {
-      return;
-    }
-    if (stallNotified) {
-      return;
-    }
-    if (Date.now() - lastProgressAt < NO_OUTPUT_NOTICE_MS) {
+    if (disposed || stallNotified || Date.now() - lastProgressAt < NO_OUTPUT_NOTICE_MS) {
       return;
     }
     stallNotified = true;

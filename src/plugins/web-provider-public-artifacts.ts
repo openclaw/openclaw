@@ -1,4 +1,3 @@
-import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { readBundledDiscoveryModeMemoized } from "./bundled-discovery-state.js";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
 import { normalizePluginId } from "./config-state.js";
@@ -39,9 +38,7 @@ function filterAllowlistedBundledPluginIds(
   if (!Array.isArray(allow) || allow.length === 0) {
     return [...pluginIds];
   }
-  const allowedPluginIds = new Set(
-    normalizeUniqueStringEntries(allow.map((pluginId) => normalizePluginId(pluginId))),
-  );
+  const allowedPluginIds = new Set(allow.map(normalizePluginId).filter(Boolean));
   return pluginIds.filter((pluginId) => allowedPluginIds.has(pluginId));
 }
 

@@ -2,7 +2,6 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { supportsOpenAIResponsesFastMode } from "../llm/providers/openai-fast-mode.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
-import type { PreparedAccountCatalogAccess } from "./prepared-model-runtime-auth.js";
 import { modelMatchesProviderModelRoute } from "./provider-model-route.js";
 
 /** Account observations are never model metadata donors or native-login readiness. */
@@ -11,7 +10,6 @@ export function resolveModelCatalogServiceTiers(params: {
   entry: Pick<ModelCatalogEntry, "provider" | "id">;
   evaluation: ModelAuthAvailabilityEvaluation;
   runtimeId?: string;
-  accountCatalog?: PreparedAccountCatalogAccess;
   modelServiceTiers?: readonly string[];
   isCurrent: () => boolean;
 }): string[] | undefined {
@@ -37,16 +35,7 @@ export function resolveModelCatalogServiceTiers(params: {
     route.api === "openai-responses" &&
     supportsOpenAIResponsesFastMode({ provider: "openai", ...route })
   ) {
-    const observed = params.accountCatalog?.readServiceTiers({
-      identityKey: credential.identityKey,
-      modelId: entry.id,
-      runtimeId,
-      api: route.api,
-      baseUrl: route.baseUrl,
-    }) ?? ["priority", "ultrafast"];
-    return params.modelServiceTiers
-      ? params.modelServiceTiers.filter((tier) => tier === "default" || observed.includes(tier))
-      : [...observed];
+    return [...(params.modelServiceTiers ?? ["priority", "ultrafast"])];
   }
   if (
     credential.source !== "profile" ||

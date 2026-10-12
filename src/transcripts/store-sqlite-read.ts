@@ -27,12 +27,6 @@ import type { TranscriptSummarySnapshot } from "./store-types.js";
 import type { TranscriptsSummary } from "./summary.js";
 
 type TranscriptSessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
-type TranscriptSessionEntry = {
-  session: TranscriptSessionDescriptor;
-  selector: string;
-  hasSummary: boolean;
-};
-type TranscriptSessionMatchEntry = TranscriptSessionEntry & { inputRevision: string };
 
 export function readTranscriptCanonicalSessionRow(database: DatabaseSync, selector: string) {
   return executeSqliteQueryTakeFirstSync(
@@ -138,7 +132,7 @@ export function readTranscriptSummarySnapshot(
   };
 }
 
-export function readTranscriptSessionEntries(database: DatabaseSync): TranscriptSessionEntry[] {
+export function readTranscriptSessionEntries(database: DatabaseSync) {
   const rows = executeSqliteQuerySync(
     database,
     meetingTranscriptDb(database)
@@ -239,15 +233,9 @@ function createTranscriptSessionMatchQueries(database: DatabaseSync) {
   };
 }
 
-export function readTranscriptSessionMatches(
-  database: DatabaseSync,
-  value: string,
-): {
-  qualified: TranscriptSessionMatchEntry[];
-  unqualified: TranscriptSessionMatchEntry[];
-} {
+export function readTranscriptSessionMatches(database: DatabaseSync, value: string) {
   const queries = sessionMatchQueries(database);
-  const entries = (result: ReturnType<typeof queries.canonical>): TranscriptSessionMatchEntry[] =>
+  const entries = (result: ReturnType<typeof queries.canonical>) =>
     result.rows.map((row) => ({
       session: sessionFromRow(row),
       selector: row.selector,

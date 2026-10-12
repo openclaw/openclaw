@@ -5,3 +5,5 @@ export {
   loadSessionEntry,
   loadSessionEntryReadOnly,
 } from "../../config/sessions/session-accessor.js";
+export { captureSessionEntryCurrentRead } from "../../config/sessions/session-entry-current-runtime.js";
+export { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";

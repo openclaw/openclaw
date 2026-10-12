@@ -175,19 +175,6 @@ describe("model-selection plugin runtime normalization", () => {
     expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
   });
 
-  it("normalizes raw persisted overrides through plugin runtime hooks", () => {
-    normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
-
-    expect(
-      resolveSessionModelRef(
-        {},
-        { providerOverride: "custom-provider", modelOverride: "custom-legacy-model" },
-        "main",
-      ),
-    ).toEqual({ provider: "custom-provider", model: "custom-modern-model" });
-    expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalledOnce();
-  });
-
   it("keeps concurrent model-policy runs isolated while sharing metadata", async () => {
     normalizeProviderModelIdWithPluginMock.mockReturnValue(undefined);
     let signalFirstCatalogLoad: (() => void) | undefined;

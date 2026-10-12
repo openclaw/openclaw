@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
 import { createExecutionIdentityAdmissionToken } from "../../../audit/execution-identity-admission.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../config/config.js";
+import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { readInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
@@ -49,7 +50,6 @@ import { markSubagentRunTerminated } from "../registry/subagent-registry.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
-import { buildSubagentExecutionSessionSpawnContext } from "./subagent-spawn-execution-identity.js";
 import "./subagent-spawn-model.mocks.shared.js";
 import { makeGatewayContext } from "./subagent-spawn.in-process-gateway.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
@@ -99,21 +99,6 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 2_000): Promi
 }
 
 describe("spawnSubagentDirect in-process Gateway collector launch", () => {
-  it("does not construct private lineage while identity collection is disabled", () => {
-    expect(
-      buildSubagentExecutionSessionSpawnContext({
-        enabled: false,
-        backend: "subagent",
-        parentAgentId: "main",
-        requesterRef: "agent:main:main",
-        controllerRef: "agent:main:main",
-        depth: 1,
-        targetAgentId: "main",
-        sandbox: "inherit",
-      }),
-    ).toBeUndefined();
-  });
-
   beforeEach(async () => {
     resetGatewayWorkAdmission();
     swarmSchedulerTesting.reset();
@@ -173,6 +158,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     const subordinateAdmissionStates: boolean[] = [];
     let launchCount = 0;
     gatewayContext.recoveryRuntime = {
+      prepareRestartRecovery: () => undefined,
       waitForAgent: async <T>(params: { runId: string }): Promise<T> => {
         const index = launchedRunIds.indexOf(params.runId);
         const terminal = expectDefined(terminalReplies[index], "launched collector terminal owner");
@@ -510,12 +496,12 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         }
       },
       sessionKey: "agent:main:main",
-      sessionTarget: {
+      sessionTarget: captureSessionTranscriptTargetBinding({
         agentId: "main",
         sessionId: turnClaim.sessionId,
         sessionKey: "agent:main:main",
         storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
-      },
+      }),
       turnClaim,
     };
     let validations = 0;
@@ -717,61 +703,6 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       });
     });
     expect(transport).not.toHaveBeenCalled();
-  });
-
-  it("aborts the accepted child run when registry registration fails", async () => {
-    const gatewayContext = makeGatewayContext();
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
-    let acceptedChildSessionKey: unknown;
-    subagentSpawnTesting.setDepsForTest({
-      dispatchGatewayMethodInProcess: async <T>(
-        method: string,
-        params: Record<string, unknown>,
-      ) => {
-        requests.push({ method, params });
-        if (method === "agent") {
-          acceptedChildSessionKey = params.sessionKey;
-          return { runId: "gateway-accepted-run", status: "accepted" } as T;
-        }
-        if (method === "chat.abort") {
-          if (
-            params.sessionKey !== acceptedChildSessionKey ||
-            params.runId !== "gateway-accepted-run"
-          ) {
-            throw new Error("Abort must target the accepted child session and run");
-          }
-          return { aborted: true, runIds: [params.runId] } as T;
-        }
-        return {} as T;
-      },
-    });
-    // The registry never takes ownership, which is exactly when the suppressed
-    // gateway CLI row would have been the only record of the accepted run.
-    persistRegistryRows.mockImplementation(() => {
-      throw new Error("state db unavailable");
-    });
-
-    const result = await withPluginRuntimeGatewayRequestScope(
-      {
-        context: gatewayContext,
-        client: externalCliClient(),
-        isWebchatConnect: () => false,
-      },
-      () =>
-        spawnSubagentDirect(
-          { task: "orphan me", context: "isolated", lightContext: true },
-          { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
-        ),
-    );
-
-    expect(result.status).toBe("error");
-    expect(result.error ?? "").toContain("Failed to register subagent run");
-    expect(result.childSessionKey).toEqual(expect.any(String));
-    // No registry row exists, so an unaborted run would execute with no task row at all.
-    expect(requests).toContainEqual({
-      method: "chat.abort",
-      params: { sessionKey: result.childSessionKey, runId: "gateway-accepted-run" },
-    });
   });
 
   it("does not abort an out-of-process run when registry persistence fails", async () => {

@@ -78,7 +78,7 @@ describe("memory source inspection extra-path diagnostics", () => {
       await fs.symlink(vaultDir, path.join(workspaceDir, ".openclaw-repair", "root-memory"), "dir");
 
       const inspection = await inspectMemorySourceState({
-        db,
+        readIndexedRows: async () => loadMemorySourceFileState({ db, source: "memory" }),
         workspaceDir,
         settings: {
           extraPaths: [
@@ -114,7 +114,7 @@ describe("memory source inspection extra-path diagnostics", () => {
       await fs.symlink(nestedTarget, path.join(vaultDir, "nested"), "dir");
 
       const inspection = await inspectMemorySourceState({
-        db,
+        readIndexedRows: async () => loadMemorySourceFileState({ db, source: "memory" }),
         workspaceDir,
         settings: {
           extraPaths: [{ path: vaultDir }],

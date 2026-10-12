@@ -38,14 +38,7 @@ function replayableTranscriptRole(record: SessionRecord | null): "user" | "assis
   return role === "user" || role === "assistant" ? role : undefined;
 }
 
-export function selectRecentUserAssistantReplayRecords(
-  records: readonly unknown[],
-  maxMessages = DEFAULT_REPLAY_MAX_MESSAGES,
-): unknown[] {
-  const max = Math.max(0, maxMessages);
-  if (max === 0) {
-    return [];
-  }
+export function selectRecentUserAssistantReplayRecords(records: readonly unknown[]): unknown[] {
   const kept: KeptParsedRecord[] = [];
   for (const record of records) {
     const role = replayableTranscriptRole(record as SessionRecord | null);
@@ -53,7 +46,7 @@ export function selectRecentUserAssistantReplayRecords(
       kept.push({ role, record });
     }
   }
-  let startIdx = Math.max(0, kept.length - max);
+  let startIdx = Math.max(0, kept.length - DEFAULT_REPLAY_MAX_MESSAGES);
   while (startIdx < kept.length && kept[startIdx]?.role === "assistant") {
     startIdx += 1;
   }

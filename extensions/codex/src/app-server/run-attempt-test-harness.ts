@@ -76,7 +76,10 @@ export {
 } from "./run-attempt-hook-test-support.js";
 
 const execApprovalsRuntimeMocks = vi.hoisted(() => ({
-  loadExecApprovals: vi.fn<() => ExecApprovalsFile>(() => ({ version: 1, agents: {} })),
+  loadExecApprovalsReadOnlyAsync: vi.fn<() => Promise<ExecApprovalsFile>>(async () => ({
+    version: 1,
+    agents: {},
+  })),
 }));
 
 function createHarnessHostCapabilities(
@@ -112,7 +115,7 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
     await importOriginal<typeof import("openclaw/plugin-sdk/exec-approvals-runtime")>();
   return {
     ...actual,
-    loadExecApprovals: execApprovalsRuntimeMocks.loadExecApprovals,
+    loadExecApprovalsReadOnlyAsync: execApprovalsRuntimeMocks.loadExecApprovalsReadOnlyAsync,
   };
 });
 
@@ -567,6 +570,9 @@ function defaultAttemptHarnessResponse(method: string) {
   if (method === "config/read") {
     return { config: {}, origins: {}, layers: [] };
   }
+  if (method === "skills/list") {
+    return { data: [] };
+  }
   if (method === "turn/start") {
     return turnStartResult();
   }
@@ -638,7 +644,9 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
   };
 }
 
-export function setupRunAttemptTestHooks(options: { sessionOwner?: null } = {}): void {
+export function setupRunAttemptTestHooks(
+  options: { isolateNativeSkillHome?: boolean; sessionOwner?: null } = {},
+): void {
   // Keep unique test roots alive while the suite reuses native database workers.
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterAll(async () => {
@@ -648,6 +656,7 @@ export function setupRunAttemptTestHooks(options: { sessionOwner?: null } = {}):
       cleanup();
     }),
   );
+  let nativeSkillTestHome: string | undefined;
 
   beforeEach(async (context) => {
     if (!context.codexAttemptRuntime) {
@@ -663,8 +672,11 @@ export function setupRunAttemptTestHooks(options: { sessionOwner?: null } = {}):
     // Machine-managed sandbox requirements must not leak into policy fixtures.
     vi.spyOn(codexRequirements, "readCodexRequirementsToml").mockReturnValue(undefined);
     // An uninitialized real host approvals store intentionally fails closed.
-    execApprovalsRuntimeMocks.loadExecApprovals.mockReset();
-    execApprovalsRuntimeMocks.loadExecApprovals.mockReturnValue({ version: 1, agents: {} });
+    execApprovalsRuntimeMocks.loadExecApprovalsReadOnlyAsync.mockReset();
+    execApprovalsRuntimeMocks.loadExecApprovalsReadOnlyAsync.mockResolvedValue({
+      version: 1,
+      agents: {},
+    });
     defaultCodexAppInventoryCache.clear();
     defaultCodexPluginMetadataCache.clear();
     resetCodexTestBindingStore();
@@ -679,6 +691,11 @@ export function setupRunAttemptTestHooks(options: { sessionOwner?: null } = {}):
     vi.stubEnv("OPENAI_API_KEY", "");
     stubCodexInferenceTransportEnv();
     tempDir = tempDirs.make("openclaw-codex-run-", resolvePreferredOpenClawTmpDir());
+    if (options.isolateNativeSkillHome) {
+      nativeSkillTestHome ??= tempDir;
+      vi.stubEnv("HOME", nativeSkillTestHome);
+      vi.stubEnv("CODEX_HOME", "");
+    }
     await context.codexAttemptRuntime.start();
     // createParams models an ordinary durable session; seeded native bindings
     // must have the same authoritative core owner as a real resumed conversation.

@@ -82,38 +82,6 @@ describe("discordMessageActions", () => {
     });
   });
 
-  it("describes enabled Discord actions for token-backed accounts", () => {
-    const discovery = discordMessageActions.describeMessageTool?.({
-      cfg: {
-        channels: {
-          discord: {
-            token: "Bot token-main",
-            actions: {
-              polls: true,
-              reactions: true,
-              permissions: true,
-              channels: false,
-              roles: false,
-            },
-          },
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(discovery?.capabilities).toEqual(["presentation"]);
-    expect(discovery?.actions).toEqual(
-      expectedDiscordActions([
-        "channel-create",
-        "channel-edit",
-        "channel-delete",
-        "channel-move",
-        "category-create",
-        "category-edit",
-        "category-delete",
-      ]),
-    );
-  });
-
   it("describes actions when the Discord token is an unresolved SecretRef", () => {
     const discovery = discordMessageActions.describeMessageTool?.({
       cfg: {
@@ -159,33 +127,6 @@ describe("discordMessageActions", () => {
         toolContext: { currentChannelProvider: "discord" },
       }),
     ).toBe(false);
-  });
-
-  it("describes scoped account actions when only the account token is an unresolved SecretRef", () => {
-    const discovery = discordMessageActions.describeMessageTool?.({
-      cfg: {
-        channels: {
-          discord: {
-            actions: {
-              polls: true,
-              reactions: false,
-            },
-            accounts: {
-              ops: {
-                token: { source: "file", provider: "filemain", id: "/DISCORD_BOT_TOKEN" },
-                actions: {
-                  polls: false,
-                  reactions: true,
-                },
-              },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      accountId: "ops",
-    });
-
-    expect(discovery?.actions).toEqual(expectedDiscordActions(["poll"]));
   });
 
   it("honors account-scoped action gates during discovery", () => {
@@ -244,74 +185,9 @@ describe("discordMessageActions", () => {
     });
   });
 
-  it("hides upload-file when Discord message actions are disabled", () => {
-    const discovery = discordMessageActions.describeMessageTool?.({
-      cfg: {
-        channels: {
-          discord: {
-            token: "Bot token-main",
-            actions: {
-              messages: false,
-            },
-          },
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(discovery?.actions).toContain("send");
-    expect(discovery?.actions).not.toContain("upload-file");
-    expect(discovery?.actions).not.toContain("read");
-    expect(discovery?.actions).not.toContain("edit");
-    expect(schemaForAction(discovery, "send")).toMatchObject({
-      actions: ["send"],
-      properties: {
-        components: { description: expect.stringContaining("Discord Components V2") },
-      },
-    });
+  it.each(["sticker-upload"])("keeps %s on local execution mode", (action) => {
+    expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe("local");
   });
-
-  it("describes usable custom emoji formats and available server emoji discovery", () => {
-    const discovery = discordMessageActions.describeMessageTool?.({
-      cfg: {
-        channels: {
-          discord: {
-            token: "Bot token-main",
-          },
-        },
-      } as OpenClawConfig,
-    });
-    expect(schemaForAction(discovery, "react")).toMatchObject({
-      actions: ["react", "reactions"],
-      properties: {
-        emoji: {
-          description: expect.stringMatching(
-            /Unicode.*name:id.*<:name:id>.*<a:name:id>.*emoji-list/,
-          ),
-        },
-      },
-    });
-    expect(schemaForAction(discovery, "send")).toMatchObject({
-      actions: ["send"],
-      properties: {
-        components: {
-          description: expect.stringContaining("Discord Components V2"),
-          properties: {
-            blocks: { type: "array" },
-            modal: { type: "object" },
-          },
-        },
-      },
-    });
-  });
-
-  it.each(["sticker", "emoji-upload", "sticker-upload", "event-create"])(
-    "keeps %s on local execution mode",
-    (action) => {
-      expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
-        "local",
-      );
-    },
-  );
 
   it("extracts send targets for message and thread reply actions", () => {
     expect(

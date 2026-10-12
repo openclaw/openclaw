@@ -29,20 +29,16 @@ function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | nu
     return null;
   }
   const normalized = value.replace(/\s+/g, "");
-  if (!normalized || normalized.length % 4 !== 0) {
-    return null;
-  }
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) {
-    return null;
-  }
-  if (normalized.length > maxEncodedBytes) {
+  if (
+    !normalized ||
+    normalized.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized) ||
+    normalized.length > maxEncodedBytes
+  ) {
     return null;
   }
   const decoded = Buffer.from(normalized, "base64");
-  if (decoded.byteLength > maxDecodedBytes) {
-    return null;
-  }
-  return decoded;
+  return decoded.byteLength > maxDecodedBytes ? null : decoded;
 }
 
 type SubagentInlineAttachment = NonNullable<SpawnSubagentParams["attachments"]>[number];
@@ -77,19 +73,7 @@ type PreparedSubagentAttachment = {
   name: string;
   mimeType: string;
   buf: Buffer;
-  bytes: number;
 };
-
-function resolveAttachmentLimits(config: OpenClawConfig): AttachmentLimits {
-  const attachmentsCfg = config.tools?.sessions_spawn?.attachments;
-  return {
-    enabled: attachmentsCfg?.enabled === true,
-    maxTotalBytes: resolveNonNegativeIntegerOption(attachmentsCfg?.maxTotalBytes, 5 * 1024 * 1024),
-    maxFiles: resolveNonNegativeIntegerOption(attachmentsCfg?.maxFiles, 50),
-    maxFileBytes: resolveNonNegativeIntegerOption(attachmentsCfg?.maxFileBytes, 1024 * 1024),
-    retainOnSessionKeep: attachmentsCfg?.retainOnSessionKeep === true,
-  };
-}
 
 function resolveSubagentAttachmentRequest(params: {
   config: OpenClawConfig;
@@ -100,7 +84,14 @@ function resolveSubagentAttachmentRequest(params: {
     return null;
   }
 
-  const limits = resolveAttachmentLimits(params.config);
+  const attachmentsCfg = params.config.tools?.sessions_spawn?.attachments;
+  const limits: AttachmentLimits = {
+    enabled: attachmentsCfg?.enabled === true,
+    maxTotalBytes: resolveNonNegativeIntegerOption(attachmentsCfg?.maxTotalBytes, 5 * 1024 * 1024),
+    maxFiles: resolveNonNegativeIntegerOption(attachmentsCfg?.maxFiles, 50),
+    maxFileBytes: resolveNonNegativeIntegerOption(attachmentsCfg?.maxFileBytes, 1024 * 1024),
+    retainOnSessionKeep: attachmentsCfg?.retainOnSessionKeep === true,
+  };
   if (!limits.enabled) {
     return {
       status: "forbidden" as const,
@@ -185,8 +176,7 @@ function prepareSubagentAttachments(params: {
   for (const raw of params.attachments) {
     const name = normalizeOptionalString(raw?.name) ?? "";
     const content = typeof raw?.content === "string" ? raw.content : "";
-    const encodingRaw = normalizeOptionalString(raw?.encoding) ?? "utf8";
-    const encoding = encodingRaw === "base64" ? "base64" : "utf8";
+    const encoding = normalizeOptionalString(raw?.encoding) ?? "utf8";
     const mimeType = normalizeOptionalString(raw?.mimeType) ?? "";
 
     validateAttachmentName(name, { promptSafe: params.promptSafeNames === true });
@@ -217,16 +207,14 @@ function prepareSubagentAttachments(params: {
       }
       buf = Buffer.from(content, "utf8");
     }
-    const bytes = buf.byteLength;
-
-    totalBytes += bytes;
+    totalBytes += buf.byteLength;
     if (totalBytes > params.limits.maxTotalBytes) {
       throw new Error(
         `attachments_total_bytes_exceeded (totalBytes=${totalBytes} maxTotalBytes=${params.limits.maxTotalBytes})`,
       );
     }
 
-    attachments.push({ name, mimeType, buf, bytes });
+    attachments.push({ name, mimeType, buf });
   }
 
   return { attachments, totalBytes };
@@ -241,19 +229,12 @@ export function resolveAcpSessionsSpawnImageAttachments(params: {
   | { status: "error"; error: string }
   | null {
   const request = resolveSubagentAttachmentRequest(params);
-  if (!request) {
-    return null;
-  }
-  if (request.status !== "ok") {
+  if (!request || request.status !== "ok") {
     return request;
   }
 
   try {
-    const prepared = prepareSubagentAttachments({
-      attachments: request.attachments,
-      limits: request.limits,
-      requireImageMime: true,
-    });
+    const prepared = prepareSubagentAttachments({ ...request, requireImageMime: true });
     return {
       status: "ok",
       attachments: prepared.attachments.map((attachment) => ({
@@ -279,10 +260,7 @@ export async function materializeSubagentAttachments(params: {
   mountPathHint?: string;
 }): Promise<MaterializeSubagentAttachmentsResult | null> {
   const request = resolveSubagentAttachmentRequest(params);
-  if (!request) {
-    return null;
-  }
-  if (request.status !== "ok") {
+  if (!request || request.status !== "ok") {
     return request;
   }
   if (params.sandboxed) {
@@ -313,11 +291,7 @@ export async function materializeSubagentAttachments(params: {
   const relDir = path.posix.join(".openclaw", "attachments", attachmentId);
   const absDir = path.join(absRootDir, attachmentId);
   try {
-    const prepared = prepareSubagentAttachments({
-      attachments: request.attachments,
-      limits: request.limits,
-      promptSafeNames: true,
-    });
+    const prepared = prepareSubagentAttachments({ ...request, promptSafeNames: true });
     const exposedDir = params.sandboxed
       ? path.posix.join(SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT, attachmentId)
       : absDir;
@@ -332,11 +306,11 @@ export async function materializeSubagentAttachments(params: {
     const attachmentStore = privateFileStore(absRootDir);
 
     const files: SubagentAttachmentReceipt["files"] = [];
-    for (const { name, buf, bytes } of prepared.attachments) {
+    for (const { name, buf } of prepared.attachments) {
       const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
       params.assertActive?.();
       await attachmentStore.writeText(path.posix.join(attachmentId, name), buf);
-      files.push({ name, bytes, sha256 });
+      files.push({ name, bytes: buf.byteLength, sha256 });
     }
 
     const receipt = {

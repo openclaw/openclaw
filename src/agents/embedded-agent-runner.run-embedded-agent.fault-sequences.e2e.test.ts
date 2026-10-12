@@ -461,7 +461,9 @@ async function expectPreparationInvalidationToDropRoutingWork(
           await replacementAdmission.admit("embedded");
         }
         releasePreparation.resolve();
-        await expect(run).rejects.toThrow("admitted run authority is no longer active");
+        await expect(run).rejects.toThrow(
+          "embedded attempt reached dispatch without an active admitted run",
+        );
       });
 
       expect(decisionWork).toHaveLength(0);

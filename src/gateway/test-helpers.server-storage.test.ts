@@ -63,7 +63,7 @@ test("joins a direct history projection's accepted read before retiring the Gate
       ...source,
       createTransport(command) {
         const transport = source.createTransport(command);
-        if (command.type !== "acpSessions.metadata") {
+        if (command.type !== "sessionRows.sharedFacts") {
           return transport;
         }
         return {
@@ -136,9 +136,7 @@ test("joins external-store workers before deleting their Gateway lease coordinat
       return worker;
     });
   try {
-    await expect(
-      runSqliteSessionReclamation({ plan, forceInProcess: false }),
-    ).resolves.toMatchObject({
+    await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
       kind: "lifecycle-artifacts",
       value: { removedEntries: 1 },
     });

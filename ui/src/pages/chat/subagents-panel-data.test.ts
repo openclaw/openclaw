@@ -146,7 +146,7 @@ describe("Subagents panel data ownership", () => {
         throw new Error(`Unexpected method: ${method}`);
       });
       f.open();
-      await f.when(() => f.data.rows[0]?.callCount === 0);
+      await f.when(() => f.data.rows[0]?.callCount?.count === 0);
       await vi.advanceTimersByTimeAsync(0);
       expect(f.subscriptions.has(row.key)).toBe(true);
 
@@ -218,10 +218,10 @@ describe("Subagents panel data ownership", () => {
       }
       blocked[0]!.resolve(history(oldRows[0]!, 4));
       await f.when(
-        () => f.data.rows[0]?.session.key === current.key && f.data.rows[0]?.callCount === 0,
+        () => f.data.rows[0]?.session.key === current.key && f.data.rows[0]?.callCount?.count === 0,
       );
       expect(f.data.rows.map((row) => [row.session.key, row.callCount])).toEqual([
-        [current.key, 0],
+        [current.key, { count: 0, exact: true }],
       ]);
       expect(f.data.error).toBeNull();
       blocked[1]!.resolve(history(oldRows[1]!, 4));
@@ -248,7 +248,7 @@ describe("Subagents panel data ownership", () => {
       throw new Error(`Unexpected method: ${method}`);
     });
     f.open();
-    await f.when(() => f.data.rows[0]?.callCount === 0);
+    await f.when(() => f.data.rows[0]?.callCount?.count === 0);
     expect(f.subscriptions.has(row.key)).toBe(true);
     denied = true;
     await f.data.refresh();
@@ -258,36 +258,46 @@ describe("Subagents panel data ownership", () => {
     expect(f.subscriptions.has(row.key)).toBe(false);
   });
 
-  it("keeps later child pages available while excluding Swarm and persistent sessions", async () => {
-    const first = child("first");
-    const last = child("last", { key: "agent:research:subagent:last", agentId: "research" });
-    const swarm = child("swarm", { swarmGroupId: "parallel-audits" });
-    const persistent = child("persistent", {
-      key: "agent:main:dashboard:persistent",
-      classification: undefined,
-    });
-    const f = fixture((method, params) => {
-      if (method === "sessions.list") {
-        if (!params.spawnedBy) {
-          return page([]);
+  it.each([undefined, "parallel-audits"])(
+    "loads older running children beyond the first page (%s)",
+    async (swarmGroupId) => {
+      const finished = Array.from({ length: 20 }, (_, index) => child(`finished-${index}`));
+      const last = child("last", {
+        key: "agent:research:subagent:last",
+        agentId: "research",
+        swarmGroupId,
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["run-1"],
+      });
+      const persistent = child("persistent", {
+        key: "agent:main:dashboard:persistent",
+        classification: undefined,
+      });
+      const f = fixture((method, params) => {
+        if (method === "sessions.list") {
+          if (!params.spawnedBy) {
+            return page([]);
+          }
+          return params.offset === 21
+            ? page([last], { offset: 21, totalCount: 22 })
+            : page([...finished, persistent], { hasMore: true, nextOffset: 21, totalCount: 22 });
         }
-        return params.offset === 3
-          ? page([last], { offset: 3, totalCount: 4 })
-          : page([first, swarm, persistent], { hasMore: true, nextOffset: 3, totalCount: 4 });
-      }
-      if (method === "chat.history") {
-        return history(params.sessionKey === last.key ? last : first);
-      }
-      throw new Error(`Unexpected method: ${method}`);
-    });
-    f.open();
-    await f.when(() => f.data.hasResult && !f.data.loading);
-    expect(f.data.rows.map((row) => row.session.key)).toEqual([first.key]);
-    expect(f.data.hasMore).toBe(true);
-    await f.data.loadMore();
-    expect(f.data.rows.map((row) => row.session.key)).toEqual([first.key, last.key]);
-    expect(f.data.hasMore).toBe(false);
-  });
+        if (method === "chat.history") {
+          return history(params.sessionKey === last.key ? last : finished[0]!);
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      });
+      f.open();
+      await f.data.refresh();
+      expect(f.data.rows.map((row) => row.session.key)).toEqual([
+        ...finished.map((row) => row.key),
+        last.key,
+      ]);
+      expect(f.data.rows.at(-1)?.canStop).toBe(true);
+      expect(f.data.loading).toBe(false);
+    },
+  );
 
   it("rejects a stale Stop target while allowing the current run to be stopped exactly", async () => {
     let row = child("stop", {
@@ -335,7 +345,7 @@ describe("Subagents panel data ownership", () => {
       throw new Error(`Unexpected method: ${method}`);
     });
     f.open();
-    await f.when(() => f.data.rows[0]?.callCount === 0);
+    await f.when(() => f.data.rows[0]?.callCount?.count === 0);
     const data = {
       itemId: "item-read",
       kind: "tool",
@@ -359,8 +369,130 @@ describe("Subagents panel data ownership", () => {
     expect(f.data.rows[0]?.callCount).toBeUndefined();
     expect(f.data.rows[0]?.activity).toBe("Reading source");
     publish({ ...data, phase: "update", toolCallId: "call-read" }, 2);
-    expect(f.data.rows[0]?.callCount).toBeUndefined();
+    expect(f.data.rows[0]?.callCount).toEqual({ count: 1, exact: false });
     expect(f.data.rows[0]?.activity).toBe("Reading source");
+  });
+
+  it("prefers public progress and tool purpose over the observer digest while hiding routine calls", async () => {
+    const row = child("tool-only", {
+      status: "running",
+      hasActiveRun: true,
+      activeRunIds: ["run-1"],
+      observerDigest: {
+        runId: "run-1",
+        headline: "Reviewing the benchmark results",
+        health: "on-track",
+        revision: 1,
+        updatedAt: 1,
+      },
+    });
+    const f = fixture((method, params) => {
+      if (method === "sessions.list") {
+        return page(params.spawnedBy ? [row] : []);
+      }
+      if (method === "chat.history") {
+        return history(row);
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    f.open();
+    await f.when(() => f.data.rows[0]?.callCount !== undefined);
+    expect(f.data.rows[0]?.activity).toBe(row.observerDigest?.headline);
+    const item = {
+      itemId: "exec-item",
+      toolCallId: "exec-call",
+      kind: "tool",
+      name: "exec",
+      phase: "update",
+      status: "running",
+      title: "Exec Retry failed benchmark targets",
+      meta: "Retry failed benchmark targets",
+    };
+    const publish = (data: Record<string, unknown>) =>
+      f.connection.publishEvent("agent", {
+        sessionKey: row.key,
+        agentId: "worker",
+        runId: "run-1",
+        stream: "item",
+        data,
+      });
+    publish(item);
+    expect(f.data.rows[0]?.activity).toBe(item.meta);
+    for (const flag of ["hideFromChannelProgress", "suppressChannelProgress"]) {
+      publish({
+        ...item,
+        itemId: flag,
+        toolCallId: flag,
+        title: "Exec Hidden purpose",
+        meta: "Hidden purpose",
+        [flag]: true,
+      });
+      expect(f.data.rows[0]?.activity).toBe(item.meta);
+    }
+    publish({ ...item, progressText: "Public progress" });
+    expect(f.data.rows[0]?.activity).toBe("Public progress");
+    publish({ ...item, itemId: "next-item", toolCallId: "next-call", meta: "Next tool purpose" });
+    expect(f.data.rows[0]?.activity).toBe("Next tool purpose");
+  });
+
+  it("keeps previous-run steps out of a continuation headline while counting the whole session", async () => {
+    const row = child("continuation", {
+      status: "running",
+      hasActiveRun: true,
+      activeRunIds: ["continuation-run"],
+    });
+    const previous = {
+      itemId: "previous-item",
+      toolCallId: "exec-call",
+      kind: "tool",
+      name: "exec",
+      phase: "end",
+      status: "failed",
+      title: "Exec Previous attempt",
+      meta: "Previous attempt",
+    };
+    const messages = [
+      { role: "assistant", runId: "previous-run", content: [], activity: [previous] },
+    ];
+    const f = fixture((method, params) => {
+      if (method === "sessions.list") {
+        return page(params.spawnedBy ? [row] : []);
+      }
+      if (method === "chat.history") {
+        return {
+          sessionId: row.sessionId,
+          messages,
+          hasMore: false,
+          totalMessages: messages.length,
+        };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const publish = (runId: string, data: Record<string, unknown>) =>
+      f.connection.publishEvent("agent", {
+        sessionKey: row.key,
+        agentId: "worker",
+        runId,
+        stream: "item",
+        data,
+      });
+    f.open();
+    await f.when(() => f.data.rows[0]?.callCount?.count === 1);
+    expect(f.data.rows[0]?.activity).toBeUndefined();
+    publish("previous-run", previous);
+    expect(f.data.rows[0]?.activity).toBeUndefined();
+    expect(f.data.rows[0]?.callCount).toEqual({ count: 1, exact: true });
+
+    publish("continuation-run", {
+      ...previous,
+      itemId: "continuation-item",
+      phase: "update",
+      status: "running",
+      title: "Exec Continue the repair",
+      meta: "Continue the repair",
+    });
+    expect(f.data.rows[0]?.activity).toBe("Continue the repair");
+    expect(f.data.rows[0]?.callCount).toEqual({ count: 2, exact: true });
   });
 
   it("ignores unrelated deltas without skipping lifecycle activity cleanup", async () => {
@@ -375,7 +507,7 @@ describe("Subagents panel data ownership", () => {
       throw new Error(`Unexpected method: ${method}`);
     });
     f.open();
-    await f.when(() => f.data.rows[0]?.callCount === 0);
+    await f.when(() => f.data.rows[0]?.callCount?.count === 0);
     const publish = (runId: string, stream: string, data: Record<string, unknown>) =>
       f.connection.publishEvent("agent", {
         sessionKey: row.key,
@@ -406,11 +538,11 @@ describe("Subagents panel data ownership", () => {
       title: "Thinking",
     });
     expect(f.changed).not.toHaveBeenCalled();
-    expect(f.data.rows[0]?.callCount).toBe(1);
+    expect(f.data.rows[0]?.callCount).toEqual({ count: 1, exact: true });
 
     row = { ...row, activeRunIds: ["run-2"], updatedAt: 2 };
     await f.data.refresh();
-    await f.when(() => f.data.rows[0]?.callCount === 0);
+    await f.when(() => f.data.rows[0]?.callCount?.count === 0);
     f.changed.mockClear();
     publish("run-2", "lifecycle", { phase: "start" });
     expect(f.data.rows[0]?.activity).toBeUndefined();

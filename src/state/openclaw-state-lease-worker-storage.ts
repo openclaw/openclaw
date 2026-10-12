@@ -1,4 +1,5 @@
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerWriteAdmission,
   type SqliteWorkerStore,
@@ -33,6 +34,7 @@ export async function acquireLease(
   },
   assertCurrent: () => void,
   signal?: AbortSignal,
+  captureSource?: (context: OpenClawStateWorkerContext, identity: DatabasePathIdentity) => void,
 ) {
   if (database.options?.readOnly) {
     throw new Error("State lease acquisition requires writable storage");
@@ -46,6 +48,7 @@ export async function acquireLease(
     ...database.options,
     path: opened?.path ?? resolveLeaseDatabasePath(database),
   });
+  const sourceIdentity = Object.freeze({ ...context.admission.identity });
   const assertAdmission = () => {
     context.admission.assertCurrent();
     assertCurrent();
@@ -78,6 +81,10 @@ export async function acquireLease(
   );
   if (!result) {
     throw new Error("State lease acquisition requires an existing database");
+  }
+  if (result.kind === "acquired") {
+    assertAdmission();
+    captureSource?.(context, sourceIdentity);
   }
   return result;
 }
@@ -202,9 +209,7 @@ export function createOpenClawStateLeaseWorkerStorage(
       const timer = startOpenClawStateLeaseTimer({
         observation: params.observation,
         heartbeatMs: params.heartbeatMs,
-        async renew() {
-          await renew();
-        },
+        renew,
         onRenewError(error) {
           try {
             owner.rethrowIfUncertain(error, undefined);

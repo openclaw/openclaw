@@ -66,11 +66,7 @@ protocol HealthSummaryServicing: Sendable {
 }
 
 actor HealthSummaryService: HealthSummaryServicing {
-    private let healthStore: HKHealthStore
-
-    init(healthStore: HKHealthStore = HKHealthStore()) {
-        self.healthStore = healthStore
-    }
+    private let healthStore = HKHealthStore()
 
     func summary(params: OpenClawHealthSummaryParams) async throws -> OpenClawHealthSummaryPayload {
         guard HealthAuthorization.isEnabled else {

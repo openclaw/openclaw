@@ -92,14 +92,6 @@ function readAzureVoiceTagStrings(value: unknown): string[] | undefined {
     : undefined;
 }
 
-function formatVoiceDescription(
-  tailoredScenarios: string[] | undefined,
-  personalities: string[] | undefined,
-): string | undefined {
-  const parts = [...(tailoredScenarios ?? []), ...(personalities ?? [])];
-  return parts.length > 0 ? parts.join(", ") : undefined;
-}
-
 function isDeprecatedVoice(entry: Record<string, unknown>): boolean {
   if (entry.IsDeprecated === true) {
     return true;
@@ -149,11 +141,12 @@ export async function listAzureSpeechVoices(params: {
           const voiceTag = asOptionalRecord(voice.VoiceTag);
           const tailoredScenarios = readAzureVoiceTagStrings(voiceTag?.TailoredScenarios);
           const personalities = readAzureVoiceTagStrings(voiceTag?.VoicePersonalities);
+          const description = [...(tailoredScenarios ?? []), ...(personalities ?? [])];
           return [
             {
               id,
               name: trimToUndefined(voice.DisplayName) ?? trimToUndefined(voice.LocalName),
-              description: formatVoiceDescription(tailoredScenarios, personalities),
+              description: description.length > 0 ? description.join(", ") : undefined,
               locale: trimToUndefined(voice.Locale),
               gender: trimToUndefined(voice.Gender),
               personalities,

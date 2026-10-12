@@ -152,8 +152,8 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas - 76% complete</span></span>
     </a>
 
-    <a className="maturity-surface-link" href="#fleet-containers-and-cloud-execution">
-      <span className="maturity-surface-title">Fleet, containers, and cloud execution</span>
+    <a className="maturity-surface-link" href="#containers-and-cloud-execution">
+      <span className="maturity-surface-title">Containers and cloud execution</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>4 areas - 71% complete</span></span>
     </a>
 
@@ -635,7 +635,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Protocol](/gateway/protocol), [Index](/gateway/security/index), [Multi User](/concepts/multi-user), [Agent Bindings](/concepts/agent-bindings), [Multi Tenant Hosting](/gateway/multi-tenant-hosting), [Audit](/gateway/audit)
+    [Protocol](/gateway/protocol), [Index](/gateway/security/index), [Multi User](/concepts/multi-user), [Agent Bindings](/concepts/agent-bindings), [Trust Model](/gateway/security/trust-model), [Audit](/gateway/audit)
 
     </div>
       </div>
@@ -3414,11 +3414,11 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="Fleet, containers, and cloud execution - M3 Beta - 4 areas">
-    <a id="fleet-containers-and-cloud-execution" />
+  <Accordion title="Containers and cloud execution - M3 Beta - 4 areas">
+    <a id="containers-and-cloud-execution" />
     <a id="docker-and-podman-hosting" />
 
-    OpenClaw supports local container hosting, isolated fleet cells, and cloud-worker execution. The main workflows exist, but fleet and cloud lifecycle, recovery, placement, and image guarantees remain less mature than the local Docker and Podman path.
+    OpenClaw supports local container hosting and cloud-worker execution. The main workflows exist, but cloud lifecycle, recovery, placement, and image guarantees remain less mature than the local Docker and Podman path.
 
     <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Alpha - 67%</span><span>Completeness Beta - 71%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
@@ -3447,28 +3447,28 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <div className="maturity-category-row">
         <div className="maturity-category-area">
           <span className="maturity-category-title">Container Setup</span>
-          <span>8 capabilities</span>
+          <span>7 capabilities</span>
         </div>
         <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>74%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "74%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Docker](/install/docker), [Podman](/install/podman), [Fleet](/cli/fleet), [Cloud Workers](/gateway/cloud-workers), [Setup And Bundle Installation](/gateway/cloud-workers/setup-and-bundle-installation)
+    [Docker](/install/docker), [Podman](/install/podman), [Cloud Workers](/gateway/cloud-workers), [Setup And Bundle Installation](/gateway/cloud-workers/setup-and-bundle-installation)
 
     </div>
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
           <span className="maturity-category-title">Container Operations</span>
-          <span>13 capabilities</span>
+          <span>12 capabilities</span>
         </div>
         <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>64%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "64%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>70%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "70%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Podman](/install/podman), [Docker Vm Runtime](/install/docker-vm-runtime), [Docker](/install/docker), [Hetzner](/install/hetzner), [Hostinger](/install/hostinger), [Fleet](/cli/fleet), [Worker](/cli/worker), [Cloud Sessions](/gateway/cloud-sessions), [Session Lifecycle](/gateway/cloud-workers/session-lifecycle)
+    [Podman](/install/podman), [Docker Vm Runtime](/install/docker-vm-runtime), [Docker](/install/docker), [Hetzner](/install/hetzner), [Hostinger](/install/hostinger), [Worker](/cli/worker), [Cloud Sessions](/gateway/cloud-sessions), [Session Lifecycle](/gateway/cloud-workers/session-lifecycle)
 
     </div>
       </div>

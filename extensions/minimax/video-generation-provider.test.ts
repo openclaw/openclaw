@@ -21,13 +21,8 @@ const {
 let buildMinimaxVideoGenerationProvider: Awaited<
   ReturnType<typeof loadMinimaxVideoGenerationProviderModule>
 >["buildMinimaxVideoGenerationProvider"];
-let buildMinimaxPortalVideoGenerationProvider: Awaited<
-  ReturnType<typeof loadMinimaxVideoGenerationProviderModule>
->["buildMinimaxPortalVideoGenerationProvider"];
-
 beforeAll(async () => {
-  ({ buildMinimaxVideoGenerationProvider, buildMinimaxPortalVideoGenerationProvider } =
-    await loadMinimaxVideoGenerationProviderModule());
+  ({ buildMinimaxVideoGenerationProvider } = await loadMinimaxVideoGenerationProviderModule());
 });
 
 installMinimaxProviderHttpMockCleanup();
@@ -347,7 +342,7 @@ describe("minimax video generation provider", () => {
       arrayBuffer: async () => Buffer.from("mp4-bytes"),
     });
 
-    const provider = buildMinimaxPortalVideoGenerationProvider();
+    const provider = buildMinimaxVideoGenerationProvider("minimax-portal");
     await provider.generateVideo(
       videoRequest({
         provider: "minimax-portal",

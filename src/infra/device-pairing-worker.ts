@@ -146,18 +146,14 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
   const operation = withDevicePairingLock(async () => {
     context.admission.assertCurrent();
     options.assertCurrent?.();
-    // Join codes never change paired records or their live authority projection.
+    // Join codes and retained setup cleanup cannot change paired-device authority.
     const publication =
       captured.type === "devicePairing.registerJoinCode" ||
-      captured.type === "devicePairing.redeemJoinCode"
+      captured.type === "devicePairing.redeemJoinCode" ||
+      captured.type === "bootstrap.prune"
         ? undefined
         : captureDevicePairingPublication(context.admission);
-    // Runtime facts preserve pairing identity; publishing them must not interrupt live node work.
-    const mutation = publication?.beginMutation(
-      captured.type !== "node.updateSessionHost" &&
-        captured.type !== "node.recordHostStats" &&
-        captured.type !== "node.updateBins",
-    );
+    const mutation = publication?.beginMutation();
     let admission: SqliteWorkerOperationAdmission | undefined;
     let published = false;
     let publishEnvironment: ReturnType<typeof reserveWorkerEnvironmentNativePublication>;
@@ -177,10 +173,10 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
             updatedAtMs: environment.updatedAtMs,
           });
         }
-        mutation.publish(receipt);
-        invalidatePairedCardRendererCache();
         // A callback can throw or read publication recursively; the commit is already installed.
         published = true;
+        mutation.publish(receipt);
+        invalidatePairedCardRendererCache();
         if (environmentPublished) {
           sessionChanges.emit({ all: true, scope: "worker-environments" });
         }
@@ -210,8 +206,8 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
               }
               context.admission.assertCurrent();
               options.assertCurrent?.();
-              for (const facts of admissionFacts(request.facts)) {
-                options.admit?.(facts);
+              for (const fact of admissionFacts(request.facts)) {
+                options.admit?.(fact);
               }
               if (request.stage === "commit" && captured.type === "bootstrap.consume") {
                 publishEnvironment = reserveWorkerEnvironmentNativePublication(

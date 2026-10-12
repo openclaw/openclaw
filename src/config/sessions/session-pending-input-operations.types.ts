@@ -1,10 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import type {
   SessionPendingInputRow,
-  readSessionInputCompletion,
-} from "./session-accessor.sqlite-pending-inputs.js";
+  SessionInputCompletion,
+} from "./session-pending-input.types.js";
 
 type PendingInputIdentity = {
   sessionKey: string;
@@ -35,11 +36,12 @@ export type PendingInputSnapshot = {
   kind: "stage";
   current: boolean;
   existing?: SessionPendingInputRow;
-  previous?: ReturnType<typeof readSessionInputCompletion>;
+  previous?: SessionInputCompletion;
   committed?: { messageId: string; message: PersistedUserTurnMessage };
 };
 
 type PendingInputSettlementIdentity = PendingInputIdentity & {
+  authorityAgentId?: string;
   runId: string;
   requestHash: string;
   lifecycleGeneration: string;
@@ -70,12 +72,15 @@ export type PendingInputMutationReceipt = PendingInputIdentity & {
   requestHash: string;
   lifecycleGeneration: string;
   outcome?: AgentRunTerminalOutcome;
+  withdrawnInputId?: string;
+  stagedInput?: SessionPendingInputRow;
 };
 
 export type PendingInputCustodyGrant = {
   kind: "pending-input-settlement-custody";
   candidate?: SessionPendingInputRow;
   receipt: PendingInputMutationReceipt;
+  authority?: SessionPendingInputAuthorityFacts;
 };
 
 /** Only the paired kernel's receipt for this exact accepted input may settle its custody. */

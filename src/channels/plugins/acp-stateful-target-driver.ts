@@ -113,6 +113,7 @@ export async function resetConfiguredAcpBindingTargetInPlace(params: {
       ok: true,
       sessionKey: result.key,
       sessionId: result.entry.sessionId,
+      lifecycleRevision: result.entry.lifecycleRevision,
       storePath: result.storePath,
     };
   }

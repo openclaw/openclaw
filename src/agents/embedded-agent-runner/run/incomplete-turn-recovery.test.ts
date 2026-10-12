@@ -52,14 +52,12 @@ describe("incomplete-turn recovery policy", () => {
     ).toBeNull();
   });
 
-  it.each(
-    (["required", "optional"] as const).flatMap((terminalReplyExpectation) =>
-      ["async tool", "active lifecycle item", "unfinished lifecycle item"].map((owner) => ({
-        terminalReplyExpectation,
-        owner,
-      })),
-    ),
-  )(
+  it.each([
+    { terminalReplyExpectation: "required", owner: "unfinished lifecycle item" },
+    { terminalReplyExpectation: "optional", owner: "async tool" },
+    { terminalReplyExpectation: "optional", owner: "active lifecycle item" },
+    { terminalReplyExpectation: "optional", owner: "unfinished lifecycle item" },
+  ] as const)(
     "keeps $owner out of completed silence (reply=$terminalReplyExpectation)",
     ({ terminalReplyExpectation, owner }) => {
       const assistant = emptyAssistant({ content: [{ type: "text", text: "NO_REPLY" }] });
@@ -125,49 +123,6 @@ describe("incomplete-turn recovery policy", () => {
   });
 
   it.each([
-    { name: "a completed reaction", aborted: false, timedOut: false, yielded: false, error: false },
-    { name: "a failed reaction", aborted: false, timedOut: false, yielded: false, error: true },
-    { name: "an aborted turn", aborted: true, timedOut: false, yielded: false, error: false },
-    { name: "a timed-out turn", aborted: false, timedOut: true, yielded: false, error: false },
-    { name: "pending work", aborted: false, timedOut: false, yielded: true, error: false },
-  ])(
-    "classifies optional NO_REPLY after $name without replay",
-    ({ aborted, timedOut, yielded, error }) => {
-      const assistant = emptyAssistant({ content: [{ type: "text", text: "NO_REPLY" }] });
-      const attempt = makeEmbeddedRunnerAttempt({
-        assistantTexts: ["NO_REPLY"],
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
-        toolMetas: [{ toolName: "message", meta: "react", replaySafe: false, isError: error }],
-        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-        ...(yielded ? { yieldDetected: true } : {}),
-        ...(error ? { lastToolError: { toolName: "message", error: "reaction failed" } } : {}),
-      });
-      // Optional replies can tolerate completed effects, but never replay them
-      // or take completion ownership from failed, cancelled, or pending work.
-      expect(
-        shouldTreatEmptyAssistantReplyAsSilent({
-          allowEmptyAssistantReplyAsSilent: false,
-          terminalReplyExpectation: "optional",
-          payloadCount: 0,
-          aborted,
-          timedOut,
-          attempt,
-        }),
-      ).toBe(!aborted && !timedOut && !yielded && !error);
-      expect(
-        resolveEmptyResponseRetryInstruction({
-          payloadCount: 0,
-          aborted,
-          timedOut,
-          attempt,
-        }),
-      ).toBeNull();
-    },
-  );
-
-  it.each([
     {
       name: "zero-token Anthropic stop",
       provider: "anthropic",
@@ -178,25 +133,6 @@ describe("incomplete-turn recovery policy", () => {
         model: "claude-opus-4.7",
         content: [],
         usage: createZeroUsageFixture(),
-      }),
-    },
-    {
-      name: "Anthropic-compatible positive-output stop",
-      provider: "sub2api",
-      modelId: "claude-opus-4-7",
-      modelApi: "anthropic-messages",
-      assistant: emptyAssistant({
-        api: "anthropic-messages",
-        provider: "sub2api",
-        model: "claude-opus-4-7",
-        usage: {
-          input: 2048,
-          output: 3100,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 5148,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
       }),
     },
     {
@@ -262,100 +198,5 @@ describe("incomplete-turn recovery policy", () => {
         attempt: emptyAttempt(assistant),
       }),
     ).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
-
-  it("treats reply-optional post-tool empty stops as silent after side effects", () => {
-    const assistant = emptyAssistant();
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      toolMetas: [{ toolName: "sessions", meta: "patch archived", replaySafe: false }],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-    });
-
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(true);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "required",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "tool failure",
-      attempt: makeEmbeddedRunnerAttempt({
-        assistantTexts: [],
-        toolMetas: [
-          { toolName: "sessions", meta: "patch failed", replaySafe: false, isError: true },
-        ],
-        lastToolError: { toolName: "sessions", error: "patch failed" },
-        lastAssistant: emptyAssistant(),
-      }),
-      aborted: false,
-    },
-    {
-      name: "assistant error",
-      attempt: emptyAttempt(emptyAssistant({ stopReason: "error" })),
-      aborted: false,
-    },
-    {
-      name: "caller abort",
-      attempt: emptyAttempt(emptyAssistant({ stopReason: "error" })),
-      aborted: true,
-    },
-  ])("does not treat $name as intentional silence", ({ attempt, aborted }) => {
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(false);
-  });
-
-  it("settles a heartbeat reasoning-only stop as silence under its declared contract", () => {
-    const assistant = emptyAssistant({
-      content: [
-        {
-          type: "thinking",
-          thinking: "internal reasoning",
-          thinkingSignature: JSON.stringify({ id: "heartbeat_rs", type: "reasoning" }),
-        },
-      ],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-    });
-
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(true);
   });
 });

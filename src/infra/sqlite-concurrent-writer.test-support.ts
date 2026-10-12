@@ -96,7 +96,10 @@ export function startSqliteConcurrentWriter(
               report("busy");
             }
           }
-          setImmediate(writeBatch);
+          // WAL checkpoints stay disabled for source-artifact assertions. Pace
+          // commits instead of busy-spinning an uncheckpointed WAL during slow inspection.
+          if (journal === "WAL") setTimeout(writeBatch, 1);
+          else setImmediate(writeBatch);
         }
         writeBatch();
       `,

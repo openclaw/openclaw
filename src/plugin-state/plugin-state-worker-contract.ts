@@ -2,10 +2,15 @@ import type { Result } from "@openclaw/normalization-core/result";
 import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type {
+  PluginStateOperationInput,
+  PluginStateOperationResult,
+} from "./plugin-state-operation-contract.js";
+import type {
   PluginStateComparisonLimits,
   PluginStatePreparedComparison,
-} from "./plugin-state-store.comparison.js";
+} from "./plugin-state-store.comparison.worker.js";
 import type { PluginStateSequencedJournalParams } from "./plugin-state-store.journal.js";
+import type { PluginStateReadRow } from "./plugin-state-store.kernel.js";
 import type { PluginStateMoveEntriesParams } from "./plugin-state-store.mutations.js";
 import type { PluginStateKeyRangeParams } from "./plugin-state-store.reads.js";
 import type { PluginStateRegisterEntryParams } from "./plugin-state-store.retention.js";
@@ -24,6 +29,10 @@ type Key = Namespace & { key: string };
 type Register = Omit<PluginStateRegisterEntryParams, "createdAtMs">;
 
 export type PluginStateWorkerRequests = {
+  "pluginState.executeOperation": {
+    input: PluginStateOperationInput;
+    output: PluginStateOperationResult;
+  };
   "pluginState.appendJournal": {
     input: PluginStateSequencedJournalParams;
     output: number;
@@ -38,7 +47,7 @@ export type PluginStateWorkerRequests = {
   };
   "pluginState.observe": {
     input: Key;
-    output: PluginStateObservation<unknown>;
+    output: PluginStateObservation<unknown> & { row?: PluginStateReadRow };
   };
   "pluginState.compareUpdate": {
     input: PluginStatePreparedComparison & PluginStateComparisonLimits & { operation: "update" };
@@ -49,6 +58,13 @@ export type PluginStateWorkerRequests = {
     output: PluginStateCompareResult<unknown>;
   };
   "pluginState.register": { input: Register; output: void };
+  "pluginState.replaceEntry": { input: Register; output: void };
+  "pluginState.replace": {
+    input: Omit<Register, "key" | "valueJson" | "ttlMs"> & {
+      entries: readonly Pick<Register, "key" | "valueJson" | "ttlMs">[];
+    };
+    output: void;
+  };
   "pluginState.registerIfAbsent": {
     input: Register;
     output: boolean;
@@ -74,7 +90,6 @@ export type PluginStateWorkerRequests = {
     input: Namespace & { processId: number; selection: RuntimeHealthClearSelection };
     output: void;
   };
-  "pluginState.sweep": { input: undefined; output: number };
 };
 
 export type PluginStateWorkerOperations = {
@@ -89,6 +104,11 @@ export type PluginStateWorkerOperations = {
 };
 
 export const pluginStateWorkerOperations = {
+  "pluginState.executeOperation": {
+    operation: "register",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to execute plugin state operation.",
+  },
   "pluginState.appendJournal": {
     operation: "register",
     code: "PLUGIN_STATE_WRITE_FAILED",
@@ -123,6 +143,16 @@ export const pluginStateWorkerOperations = {
     operation: "register",
     code: "PLUGIN_STATE_WRITE_FAILED",
     message: "Failed to register plugin state entry.",
+  },
+  "pluginState.replace": {
+    operation: "register",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to replace plugin state namespace.",
+  },
+  "pluginState.replaceEntry": {
+    operation: "register",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to replace plugin state entry.",
   },
   "pluginState.registerIfAbsent": {
     operation: "register",
@@ -173,11 +203,6 @@ export const pluginStateWorkerOperations = {
     operation: "clear",
     code: "PLUGIN_STATE_WRITE_FAILED",
     message: "Failed to clear runtime health records.",
-  },
-  "pluginState.sweep": {
-    operation: "sweep",
-    code: "PLUGIN_STATE_WRITE_FAILED",
-    message: "Failed to sweep expired plugin state entries.",
   },
 } as const satisfies Record<
   keyof PluginStateWorkerOperations,

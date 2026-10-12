@@ -1,9 +1,4 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-/**
- * Builds prepared runtime plans consumed by embedded agent runs. A plan
- * centralizes provider hooks, auth, tool schema policy, transcript policy,
- * transport params, delivery, and observability for one attempt.
- */
 import type { TSchema } from "typebox";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -86,7 +81,6 @@ export function resolvePreparedProviderRuntimeHandle(
   };
 }
 
-/** Build delivery-specific runtime decisions for one provider/model. */
 export function buildAgentRuntimeDeliveryPlan(
   params: BuildAgentRuntimeDeliveryPlanParams,
 ): AgentRuntimeDeliveryPlan {
@@ -122,7 +116,6 @@ export function buildAgentRuntimeDeliveryPlan(
   };
 }
 
-/** Build the complete runtime plan for an embedded agent attempt. */
 export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
   const config = asOpenClawConfig(params.config);
   const model = asProviderRuntimeModel(params.model);
@@ -216,6 +209,17 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
     env: process.env,
     runtimeHandle: providerRuntimeHandleForPlugins,
   });
+  const systemPromptParams = <
+    Context extends Parameters<AgentRuntimePlan["prompt"]["resolveSystemPromptContribution"]>[0],
+  >(
+    context: Context,
+  ) => ({
+    provider: params.provider,
+    config,
+    workspaceDir: context.workspaceDir ?? params.workspaceDir,
+    runtimeHandle: providerRuntimeHandleForPlugins,
+    context: { ...context, config: asOpenClawConfig(context.config) },
+  });
 
   return {
     resolvedRef,
@@ -226,28 +230,10 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       modelId: params.modelId,
       textTransforms: providerTextTransforms,
       resolveSystemPromptContribution(context) {
-        return resolveProviderSystemPromptContribution({
-          provider: params.provider,
-          config,
-          workspaceDir: context.workspaceDir ?? params.workspaceDir,
-          runtimeHandle: providerRuntimeHandleForPlugins,
-          context: {
-            ...context,
-            config: asOpenClawConfig(context.config),
-          },
-        });
+        return resolveProviderSystemPromptContribution(systemPromptParams(context));
       },
       transformSystemPrompt(context) {
-        return transformProviderSystemPrompt({
-          provider: params.provider,
-          config,
-          workspaceDir: context.workspaceDir ?? params.workspaceDir,
-          runtimeHandle: providerRuntimeHandleForPlugins,
-          context: {
-            ...context,
-            config: asOpenClawConfig(context.config),
-          },
-        });
+        return transformProviderSystemPrompt(systemPromptParams(context));
       },
     },
     tools: {

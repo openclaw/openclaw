@@ -41,7 +41,7 @@ const PROBE_ERROR_MESSAGES: Record<Exclude<AuthProbeStatus, "ok">, string> = {
   billing: "The provider reported a billing problem.",
   timeout: "The connection timed out.",
   format: "The provider rejected the model or request format.",
-  unknown: "The connection probe failed.",
+  unknown: "The connection check failed.",
   no_model: "No model is available for this provider.",
 };
 
@@ -180,17 +180,17 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
       });
       const result = mapProbeResult(provider, summary.results);
       if (result.results.length === 0) {
-        result.error = "No probe targets are available for this provider.";
+        result.error = "No check targets are available for this provider.";
       }
       respond(true, result, undefined);
     } catch (error) {
-      context.logGateway.warn("Model connection probe failed.", {
+      context.logGateway.warn("Model connection check failed.", {
         event: "models_probe_failed",
         provider,
         timeoutMs,
         error: redactAuthProbeError(formatForLog(error)),
       });
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "Connection probe failed."));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "Connection check failed."));
     }
   },
 };

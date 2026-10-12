@@ -77,8 +77,11 @@ reader until conditional deletion can validate metadata at the mutation owner.
 Their inactive incognito composition accepts a prepared session reader whose
 current-source assertion reaches the binding transaction and commit grants.
 The preparation retains the original actor revision and ACP metadata publication
-fence until cleanup releases it. Production does not supply that reader until
-the atomic incognito activation; guarded durable cleanup remains separate work.
+fence until cleanup releases it. The local `prepareAcpSessionEntryRead` helper captures an existing private actor
+binding and supplies that retained reader; it returns `undefined` without a binding.
+Discord and Telegram startup cleanup use it by default. Ordinary production
+acquisition stays native until atomic incognito activation; guarded durable
+cleanup remains separate work.
 `IncognitoSessionEndedError` and `IncognitoSessionSyncAccessError`, exposed through
 the local `openclaw/plugin-sdk/acp-runtime` facade, must propagate through cleanup and status
 probes. Use `rethrowIncognitoSessionError(error)` before treating other failures
@@ -86,6 +89,62 @@ as an absent session or an uncertain probe; it also recognizes nested refusals.
 Removing the synchronous contracts
 requires a separately announced breaking SDK release. Incognito reads retain
 their existing native in-memory owner until that owner's worker migration.
+
+### Session and command preparation
+
+Use `getSessionEntryAsync`, `readSessionUpdatedAtAsync`,
+`getConversationSessionAsync`, `readAmbientTranscriptWatermarkAsync`,
+`loadTranscriptEvents`, and `readTranscriptStatsAsync` from
+`openclaw/plugin-sdk/session-store-runtime` for ordinary session reads. The
+runtime equivalent is `api.runtime.agent.session.getSessionEntryAsync`. These
+operations read through the existing session worker and observe committed
+in-process writes. Missing entries remain `undefined`; read failures propagate.
+`loadTranscriptEventsSync` and `readTranscriptStatsSync` are deprecated; their
+awaited replacements preserve ordered events and transcript statistics while
+keeping durable reads off the Gateway thread.
+
+Await `UserTurnTranscriptRecorder.completeProcessingAsync(outcome)` to settle an
+accepted input through its session owner. The deprecated `completeProcessing`
+method preserves synchronous completion and returns after the terminal outcome
+commits, with a migration warning, until the next Plugin SDK major. Recorders
+without an accepted input keep their existing no-op behavior.
+
+Use `readSessionTranscriptCatalogTitleAsync` from
+`openclaw/plugin-sdk/session-transcript-runtime` for catalog titles. The
+synchronous `readSessionTranscriptCatalogTitle` remains deprecated until the
+next Plugin SDK major.
+
+Use `resolveStoredModelOverrideAsync` and `resolveCommandArgMenuAsync` from
+`openclaw/plugin-sdk/command-auth-native` when preparing native commands.
+`resolveCommandArgMenuAsync` is also exported by
+`openclaw/plugin-sdk/native-command-registry`. An inherited-model loader may
+return a promise; direct overrides still need no parent read. Menu preparation
+reads the current session's verbose setting before returning its choices.
+
+The corresponding synchronous APIs are deprecated for ordinary runtime use.
+Released signatures remain supported until the next Plugin SDK major. New
+legacy calls emit a bounded deprecation warning. Bundled callers use the awaited
+operations; final tool, disclosure, and mutation authority checks retain their
+current owner and timing.
+
+For a complete cross-session store view, await
+`loadCombinedSessionStoreForGatewayAsync` from
+`openclaw/plugin-sdk/session-transcript-hit`. It preserves full session entries
+and excludes incognito sessions while reading durable stores through the existing
+database worker. The synchronous `loadCombinedSessionStoreForGateway` retains its
+return value and emits a bounded deprecation warning; it remains supported until
+the next Plugin SDK major.
+
+### Exec approval reads
+
+Await `loadExecApprovalsReadOnlyAsync` or `readExecApprovalsSnapshotAsync` from
+`openclaw/plugin-sdk/exec-approvals-runtime`. Both use the existing shared-state
+read worker. The synchronous `loadExecApprovals` and `readExecApprovalsSnapshot`
+exports retain their signatures for the current Plugin SDK major, emit a bounded
+deprecation warning, and are scheduled for removal in the next major. Bundled
+runtime callers use the awaited reads. The execution owner still checks current
+approval policy immediately before command execution using committed in-process
+policy publications; that final check does not query SQLite.
 
 ### Session reset freshness
 

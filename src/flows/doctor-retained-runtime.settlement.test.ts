@@ -165,7 +165,7 @@ it.each([
             await import("../infra/worker-native-lifecycle.js");
           await executeExistingOpenClawStateRead(
             { path: database, env: state.env },
-            { type: "fleet.list" },
+            { type: "backup.runs" },
           );
           readSource = captureRetainedNativeWorkerSource();
           expect(readSource.hasActiveWorkers).toBe(true);

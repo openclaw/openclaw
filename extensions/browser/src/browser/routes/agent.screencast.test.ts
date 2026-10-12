@@ -177,7 +177,7 @@ describe("browser screencast mint route", () => {
     await expect(token.checkNavigationAllowed("http://127.0.0.1/")).resolves.toBeUndefined();
     state.resolved.ssrfPolicy = { allowPrivateNetwork: false };
     await expect(token.checkNavigationAllowed("http://127.0.0.1/")).rejects.toThrow();
-    getProfileLifecycle(runtime).generation += 1;
+    getProfileLifecycle(runtime).controller.abort();
     expect(() => token.assertCurrent()).toThrow("superseded");
   });
 

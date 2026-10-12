@@ -111,35 +111,28 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
     );
 
     // Report USER.md's fixed cap separately from tunable per-file limits.
-    const fixedUserCapApplied = analysis.truncatedFiles.some(
-      (file) => isFixedUserCapFile(file) && file.causes.includes("per-file-limit"),
-    );
-    const fixedUserCapNearLimit = analysis.nearLimitFiles.some(isFixedUserCapFile);
-    const fixedUserCapRelevant = fixedUserCapApplied || fixedUserCapNearLimit;
-    const needsPerFileTip =
-      analysis.truncatedFiles.some(
-        (file) => file.causes.includes("per-file-limit") && !isFixedUserCapFile(file),
-      ) || analysis.nearLimitFiles.some((file) => !isFixedUserCapFile(file));
+    const perFileWarnings = [
+      ...analysis.truncatedFiles.filter((file) => file.causes.includes("per-file-limit")),
+      ...analysis.nearLimitFiles,
+    ];
+    const fixedUserCapRelevant = perFileWarnings.some(isFixedUserCapFile);
+    const needsPerFileTip = perFileWarnings.some((file) => !isFixedUserCapFile(file));
     const needsTotalTip =
       analysis.truncatedFiles.some((file) => file.causes.includes("total-limit")) ||
       analysis.totalNearLimit;
-    if (needsPerFileTip || needsTotalTip || fixedUserCapRelevant) {
-      lines.push("");
-    }
-    if (fixedUserCapRelevant) {
-      lines.push(
-        `USER.md has a fixed ${formatInt(USER_BOOTSTRAP_MAX_CHARS)}-character bootstrap cap; keep it compact.`,
-      );
-    }
-    if (needsPerFileTip) {
-      lines.push(
-        "- Tip: tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
-      );
-    }
-    if (needsTotalTip) {
-      lines.push(
-        "- Tip: tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits.",
-      );
+    const tips = [
+      fixedUserCapRelevant
+        ? `USER.md has a fixed ${formatInt(USER_BOOTSTRAP_MAX_CHARS)}-character bootstrap cap; keep it compact.`
+        : "",
+      needsPerFileTip
+        ? "- Tip: tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits."
+        : "",
+      needsTotalTip
+        ? "- Tip: tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits."
+        : "",
+    ].filter(Boolean);
+    if (tips.length > 0) {
+      lines.push("", ...tips);
     }
 
     note(lines.join("\n"), "Bootstrap file size");

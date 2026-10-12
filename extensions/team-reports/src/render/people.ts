@@ -62,7 +62,7 @@ export function renderPeoplePage(
       .map((day) => day.dayKey)
       .toSorted()
       .at(-1) ??
-    new Date(ctx.nowMs ?? Date.now()).toISOString().slice(0, 10);
+    new Date(Date.now()).toISOString().slice(0, 10);
   const end = Date.parse(`${last}T00:00:00Z`);
   const keys = Array.from({ length: 28 }, (_, index) =>
     new Date(end - (27 - index) * DAY_MS).toISOString().slice(0, 10),

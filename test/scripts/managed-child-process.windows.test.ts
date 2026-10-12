@@ -12,7 +12,6 @@ import {
 } from "../../scripts/lib/managed-child-process.mts";
 import type { ManagedWindowsJob } from "../../scripts/lib/managed-windows-job.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
-import { createWindowsJobBindings } from "../../src/process/supervisor/service-child-windows-job-native.js";
 import { testing } from "../helpers/openclaw-test-instance.js";
 import { waitForFile } from "../helpers/process-wait.js";
 import { createDeferred } from "../helpers/promise.js";
@@ -80,9 +79,9 @@ it.runIf(process.platform === "win32")(
     const close = vi.spyOn(job, "close");
     try {
       await closed;
-      await expect(testing.stopGatewayProcess(child, Date.now() + 5_000, 2_000)).resolves.toBe(
-        true,
-      );
+      await expect(
+        testing.stopWindowsGatewayProcess(child, Date.now() + 5_000, 2_000),
+      ).resolves.toBe(true);
       expect(close).toHaveBeenCalledOnce();
       expect(() => job.inspect()).toThrow("Windows command Job is closed");
     } finally {
@@ -95,9 +94,6 @@ it.runIf(process.platform === "win32").for(["abort", "normal exit"])(
   "joins native Job descendants with independent output after %s",
   { timeout: 30_000 },
   async (mode, { signal }) => {
-    const koffi = (await import("koffi")).default;
-    createWindowsJobBindings(koffi).assertLayouts();
-    createWindowsJobBindings(koffi).assertLayouts();
     const root = dirs.make("windows-job-survivor-");
     const ready = path.join(root, "ready");
     const owner = createVitestResourceOwner(root);

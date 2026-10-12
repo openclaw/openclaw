@@ -97,23 +97,20 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
   const credential = input.profileId ? input.profileStore.profiles[input.profileId] : undefined;
   const pluginHarnessApiKeyInfo = resolvePluginHarnessApiKeyInfo(input);
   const authFingerprint =
-    credential?.type === "oauth" && input.profileId
-      ? fingerprintResolvedAuthProfileCredential({
-          profileId: input.profileId,
-          credential,
-          resolvedAuth: input.apiKeyInfo,
-        })
-      : credential && input.profileId && input.pluginHarnessOwnsAuthBootstrap
-        ? input.attempt.authBindingFingerprint
-        : credential && input.profileId && input.pluginHarnessOwnsTransport
-          ? fingerprintResolvedAuthProfileCredential({
-              profileId: input.profileId,
-              credential,
-              resolvedAuth: pluginHarnessApiKeyInfo,
-            })
-          : input.apiKeyInfo
-            ? fingerprintResolvedProviderAuth(input.apiKeyInfo)
-            : undefined;
+    credential &&
+    input.profileId &&
+    credential.type !== "oauth" &&
+    input.pluginHarnessOwnsAuthBootstrap
+      ? input.attempt.authBindingFingerprint
+      : credential &&
+          input.profileId &&
+          (credential.type === "oauth" || input.pluginHarnessOwnsTransport)
+        ? fingerprintResolvedAuthProfileCredential({
+            profileId: input.profileId,
+            credential,
+            resolvedAuth: credential.type === "oauth" ? input.apiKeyInfo : pluginHarnessApiKeyInfo,
+          })
+        : fingerprintResolvedProviderAuth(input.apiKeyInfo);
   const authProfileOwnerFingerprint =
     input.profileId && credential !== undefined
       ? fingerprintAuthProfileOwnerShape({ profileId: input.profileId, credential })

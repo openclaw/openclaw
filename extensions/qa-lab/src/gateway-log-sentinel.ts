@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   extractQaMessageText,
-  readQaMessageFunctionCalls,
+  readQaMessageToolCalls,
   readQaTranscriptMessages,
 } from "./runtime-transcript.js";
 
@@ -12,6 +12,7 @@ type GatewayLogSentinelKind =
   | "plugin-hook-failure"
   | "plugin-contract-error"
   | "direct-reply-self-message"
+  | "final-reply-delivery-failure"
   | "codex-app-server-timeout"
   | "stalled-agent-run"
   | "cron-model-allowlist"
@@ -46,7 +47,7 @@ type GatewayLogSentinelScanOptions = {
   ignoreKinds?: readonly GatewayLogSentinelKind[];
 };
 
-type GatewayLogSentinelRule = Omit<GatewayLogSentinelFinding, "line" | "text"> & {
+type GatewayLogSentinelRule = Omit<GatewayLogSentinelFinding, "line" | "text" | "qaImpact"> & {
   test: (line: string) => boolean;
 };
 
@@ -56,7 +57,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "qa-harness-bug",
     owner: "plugin",
     productImpact: "P1",
-    qaImpact: "P0",
     test: (line) =>
       /\bbefore_(?:prompt_build|tool_call)\b/iu.test(line) &&
       /\b(?:crash(?:ed)?|exception|failed|failure|error)\b/iu.test(line),
@@ -66,7 +66,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "qa-harness-bug",
     owner: "plugin",
     productImpact: "P1",
-    qaImpact: "P0",
     test: (line) =>
       /\bcontracts\.tools\b/iu.test(line) &&
       /\b(?:missing|invalid|registration|register|manifest|contract|schema|declare|error)\b/iu.test(
@@ -74,11 +73,20 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
       ),
   },
   {
+    // Channel reply dispatchers log `<channel> final reply failed: <error>` when
+    // the final answer never reached the chat; the channel may only show a
+    // generic notice, so the log line is the actionable evidence.
+    kind: "final-reply-delivery-failure",
+    verdict: "product-bug",
+    owner: "openclaw-routing",
+    productImpact: "P1",
+    test: (line) => /\bfinal reply failed\b/iu.test(line),
+  },
+  {
     kind: "codex-app-server-timeout",
     verdict: "product-bug",
     owner: "codex-runtime",
     productImpact: "P1",
-    qaImpact: "P0",
     test: (line) =>
       /\bcodex app-server\b.*\btimed out\b|\btimed out\b.*\bcodex app-server\b/iu.test(line),
   },
@@ -87,7 +95,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "product-bug",
     owner: "codex-runtime",
     productImpact: "P1",
-    qaImpact: "P0",
     test: (line) =>
       /\bcodex_app_server\b.*\b(?:stalled|no progress|progress stalled)\b|\b(?:stalled|no progress|progress stalled)\b.*\bcodex_app_server\b/iu.test(
         line,
@@ -98,7 +105,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "product-bug",
     owner: "openclaw-cron",
     productImpact: "P2",
-    qaImpact: "P0",
     test: (line) =>
       /\bcron\b/iu.test(line) &&
       (/\bmodel allowlist\b/iu.test(line) ||
@@ -110,7 +116,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "environment-blocked",
     owner: "environment",
     productImpact: "P4",
-    qaImpact: "P0",
     test: (line) =>
       /\b(?:quota exceeded|insufficient_quota|subscription exhausted|no active subscription|billing hard limit|usage limit)\b/iu.test(
         line,
@@ -130,13 +135,6 @@ function filterGatewayLogSentinelFindings(
     }
     return !ignoreKinds.has(finding.kind);
   });
-}
-
-function lineNumberForOffset(logs: string, offset: number) {
-  if (offset <= 0) {
-    return 1;
-  }
-  return logs.slice(0, offset).split(/\r?\n/u).length;
 }
 
 export function extractGatewayMessageText(message: Record<string, unknown>) {
@@ -163,31 +161,15 @@ function parseJsonArguments(value: unknown): unknown {
 }
 
 function hasCurrentChatMessageSend(message: Record<string, unknown>) {
-  const rawContent = message.content;
-  if (Array.isArray(rawContent)) {
-    for (const block of rawContent) {
-      if (!isRecord(block)) {
-        continue;
-      }
-      const type = readNonEmptyString(block.type)?.toLowerCase();
-      if (
-        type !== "tool_use" &&
-        type !== "toolcall" &&
-        type !== "tool_call" &&
-        type !== "function_call"
-      ) {
-        continue;
-      }
-      if (
-        isCurrentChatMessageSend(block.name, block.input ?? block.arguments ?? block.args ?? null)
-      ) {
-        return true;
-      }
-    }
-  }
-
-  for (const call of readQaMessageFunctionCalls(message)) {
-    if (isCurrentChatMessageSend(call.tool, call.args)) {
+  for (const { block, tool, args } of readQaMessageToolCalls(message, {
+    includeFunctionCalls: true,
+  })) {
+    if (
+      isCurrentChatMessageSend(
+        tool,
+        block ? (block.input ?? block.arguments ?? block.args ?? null) : args,
+      )
+    ) {
       return true;
     }
   }
@@ -213,22 +195,6 @@ function isCurrentChatMessageSend(name: unknown, rawArgs: unknown) {
   return /\b(?:current|same-chat|qa-operator|dm:qa-operator)\b/iu.test(explicitTarget);
 }
 
-function normalizeTranscriptText(text: string) {
-  return text.replace(/\s+/gu, " ").trim();
-}
-
-function createDirectReplyFinding(): GatewayLogSentinelFinding {
-  return {
-    kind: "direct-reply-self-message",
-    verdict: "product-bug",
-    owner: "openclaw-routing",
-    productImpact: "P1",
-    qaImpact: "P0",
-    line: 1,
-    text: "assistant called message(action=send) and then produced final text Sent.",
-  };
-}
-
 export function createDirectReplyTranscriptSentinelScanner() {
   let lastAssistantText = "";
   let sentToCurrentChat = false;
@@ -244,9 +210,20 @@ export function createDirectReplyTranscriptSentinelScanner() {
       sentToCurrentChat ||= hasCurrentChatMessageSend(message);
     },
     findings(): GatewayLogSentinelFinding[] {
-      const hasDirectReply =
-        sentToCurrentChat && normalizeTranscriptText(lastAssistantText).toLowerCase() === "sent.";
-      return hasDirectReply ? [createDirectReplyFinding()] : [];
+      if (!sentToCurrentChat || lastAssistantText.toLowerCase() !== "sent.") {
+        return [];
+      }
+      return [
+        {
+          kind: "direct-reply-self-message",
+          verdict: "product-bug",
+          owner: "openclaw-routing",
+          productImpact: "P1",
+          qaImpact: "P0",
+          line: 1,
+          text: "assistant called message(action=send) and then produced final text Sent.",
+        },
+      ];
     },
   };
 }
@@ -269,23 +246,20 @@ export function scanGatewayLogSentinels(
     return [];
   }
   const startOffset = Math.max(0, Math.min(logs.length, Math.floor(options?.since ?? 0)));
-  const lineOffset = lineNumberForOffset(logs, startOffset) - 1;
+  const lineOffset = logs.slice(0, startOffset).split(/\r?\n/u).length - 1;
   const findings: GatewayLogSentinelFinding[] = [];
   for (const [index, rawLine] of logs.slice(startOffset).split(/\r?\n/u).entries()) {
     const text = rawLine.trim();
     if (!text) {
       continue;
     }
-    for (const rule of GATEWAY_LOG_SENTINEL_RULES) {
-      if (!rule.test(text)) {
+    for (const { test, ...finding } of GATEWAY_LOG_SENTINEL_RULES) {
+      if (!test(text)) {
         continue;
       }
       findings.push({
-        kind: rule.kind,
-        verdict: rule.verdict,
-        owner: rule.owner,
-        productImpact: rule.productImpact,
-        qaImpact: rule.qaImpact,
+        ...finding,
+        qaImpact: "P0",
         line: lineOffset + index + 1,
         text,
       });

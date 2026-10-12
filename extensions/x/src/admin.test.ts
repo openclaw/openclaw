@@ -226,6 +226,7 @@ describe("X allowlist Gateway methods", () => {
     async (route) => {
       const blockedAgent = route === "default route" ? "front" : "thread";
       const { invoke, getConfig } = gateway(undefined, {
+        messages: { queue: { byChannel: { x: "followup" } } },
         agents: {
           entries: {
             front: { skills: [], tools: { fs: { workspaceOnly: route !== "default route" } } },
@@ -271,6 +272,36 @@ describe("X allowlist Gateway methods", () => {
       getConfig().agents!.entries![blockedAgent]!.tools = { fs: { workspaceOnly: true } };
       const repaired = await invoke("x.allowlist.list");
       expect(repaired.mock.calls[0]?.[1].guests.blockedReason).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { mode: "steer", byChannel: undefined, blocked: true },
+    { mode: "interrupt", byChannel: undefined, blocked: true },
+    { mode: "followup", byChannel: undefined, blocked: false },
+    { mode: "collect", byChannel: undefined, blocked: false },
+    { mode: "followup", byChannel: { x: "steer" }, blocked: true },
+    { mode: "steer", byChannel: { x: "followup" }, blocked: false },
+    { mode: "interrupt", byChannel: { x: "collect" }, blocked: false },
+  ] as const)(
+    "reports effective guest queue readiness for $mode / $byChannel",
+    async ({ mode, byChannel, blocked }) => {
+      const { invoke } = gateway(undefined, {
+        messages: { queue: { mode, byChannel } },
+        agents: {
+          entries: { front: { skills: [], tools: { fs: { workspaceOnly: true } } } },
+        },
+        bindings: [{ agentId: "front", match: { channel: "x" } }],
+        channels: { x: { userId: "100", username: "example_bot", guests: { enabled: true } } },
+      });
+      const listed = await invoke("x.allowlist.list");
+      expect(listed.mock.calls[0]?.[0]).toBe(true);
+      const reason = listed.mock.calls[0]?.[1].guests.blockedReason;
+      if (blocked) {
+        expect(reason).toContain('messages.queue.byChannel.x="followup" or "collect"');
+      } else {
+        expect(reason).toBeUndefined();
+      }
     },
   );
 

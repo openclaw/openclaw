@@ -17,16 +17,24 @@ import androidx.exifinterface.media.ExifInterface
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowContentResolver
+import org.robolectric.shadows.ShadowNativeBitmap
+import org.robolectric.util.ReflectionHelpers
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.OutputStream
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -148,6 +156,31 @@ class ChatImageCodecTest {
       decoded,
       OrientationCase(ExifInterface.ORIENTATION_FLIP_HORIZONTAL, GREEN, RED, YELLOW, BLUE),
     )
+  }
+
+  @Test
+  @Config(shadows = [AttachmentEncodingBitmap::class])
+  fun pickedImageReleasesDecodedPixelsAfterEncodingOrFailure() {
+    val image = createTaggedImage(ExifInterface.ORIENTATION_NORMAL)
+    val resolver = RuntimeEnvironment.getApplication().contentResolver
+    for (fails in listOf(false, true)) {
+      AttachmentEncodingBitmap.encoded = null
+      AttachmentEncodingBitmap.failCompression = fails
+      try {
+        if (fails) {
+          val error = assertThrows(IllegalStateException::class.java) { loadSizedImageAttachment(resolver, Uri.fromFile(image)) }
+          assertEquals("attachment encode failed", error.message)
+        } else {
+          loadSizedImageAttachment(resolver, Uri.fromFile(image))
+        }
+        val decoded = requireNotNull(AttachmentEncodingBitmap.encoded)
+        assertTrue("decoded pixels must be released when attachment encoding finishes (failure=$fails)", decoded.isRecycled)
+      } finally {
+        AttachmentEncodingBitmap.encoded?.recycle()
+        AttachmentEncodingBitmap.encoded = null
+        AttachmentEncodingBitmap.failCompression = false
+      }
+    }
   }
 
   @Test
@@ -291,6 +324,32 @@ class ChatImageCodecTest {
     val GREEN = Color.rgb(0, 255, 0)
     val BLUE = Color.rgb(0, 0, 255)
     val YELLOW = Color.rgb(255, 255, 0)
+  }
+}
+
+@Implements(value = Bitmap::class, isInAndroidSdk = false, callNativeMethodsByDefault = true)
+class AttachmentEncodingBitmap : ShadowNativeBitmap() {
+  @Implementation
+  fun compress(
+    format: Bitmap.CompressFormat,
+    quality: Int,
+    stream: OutputStream,
+  ): Boolean {
+    encoded = realBitmap
+    if (failCompression) return false
+    return Shadow.directlyOn(
+      realBitmap,
+      Bitmap::class.java,
+      "compress",
+      ReflectionHelpers.ClassParameter.from(Bitmap.CompressFormat::class.java, format),
+      ReflectionHelpers.ClassParameter.from(Integer.TYPE, quality),
+      ReflectionHelpers.ClassParameter.from(OutputStream::class.java, stream),
+    )
+  }
+
+  companion object {
+    var encoded: Bitmap? = null
+    var failCompression = false
   }
 }
 

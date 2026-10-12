@@ -5,7 +5,7 @@ import {
 } from "../agents/agent-scope-config.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
-import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import { resolveModelAuthLabelAsync } from "../agents/model-auth-label.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -18,11 +18,11 @@ import {
 } from "../status/codex-synthetic-usage.js";
 import { resolveStatusGatewayProbeTimeoutMs } from "./status.gateway-probe-budget.js";
 
-function shouldUseConfiguredCodexSyntheticUsage(params: {
+async function shouldUseConfiguredCodexSyntheticUsage(params: {
   config: OpenClawConfig;
   agentDir: string;
   agentId?: string;
-}): boolean {
+}): Promise<boolean> {
   const configuredDefault = resolveDefaultModelForAgent({
     cfg: params.config,
     agentId: params.agentId,
@@ -42,7 +42,7 @@ function shouldUseConfiguredCodexSyntheticUsage(params: {
   ) {
     return false;
   }
-  const authLabel = resolveModelAuthLabel({
+  const authLabel = await resolveModelAuthLabelAsync({
     provider: configuredDefault.provider,
     acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
       provider: configuredDefault.provider,
@@ -90,11 +90,11 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     agentDir,
   });
   if (
-    !shouldUseConfiguredCodexSyntheticUsage({
+    !(await shouldUseConfiguredCodexSyntheticUsage({
       config: params.config,
       agentDir,
       agentId: resolvedAgentId,
-    })
+    }))
   ) {
     return usage;
   }

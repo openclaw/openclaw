@@ -18,11 +18,10 @@ const SURFACE_PATTERNS = [
   ["app", /^(?:apps\/|Swabble\/|appcast(?:-(?:arm64|x86_64))?\.xml$)/u],
   ["rootTest", /^test\//u],
   ["testFixture", /^test-fixtures\//u],
-  // These hidden helpers own maintainer reports and release artifact validation.
-  // Match the reviewed leaf exactly so unreviewed skill executables still fail safe.
+  // Match reviewed skill owners so other hidden executables still fail safe.
   [
     "rootTooling",
-    /^\.agents\/skills\/(?:openclaw-pr-maintainer\/scripts\/github-activity\.sh|openclaw-changelog-update\/scripts\/verify-release-notes\.mjs)$/u,
+    /^\.agents\/skills\/(?:openclaw-pr-maintainer\/scripts\/github-activity\.sh|openclaw-changelog-update\/scripts\/verify-release-notes\.mjs|update-team-server\/controller\/[^/]+)$/u,
   ],
   [
     "rootTooling",

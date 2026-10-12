@@ -2,8 +2,6 @@
 
 ## What Went Wrong
 
-- Full validation was started before all provider keys were proven valid.
-- GitHub secret presence was confused with key validity.
 - Repeated `gh run view` and log fetches exhausted REST quota.
 - Parent run state was less useful than child run evidence.
 - Replacement parent runs were dispatched while an existing parent was still
@@ -19,12 +17,6 @@
 
 ## Better Defaults
 
-- Run provider-secret preflight first. Required providers need a real completion
-  to prove inference entitlement; a successful `/models` request proves only
-  authentication. The current verifier probes inference only for Anthropic;
-  OpenAI and Fireworks remain authentication-only. Record and complete their
-  missing inference proof before expensive dispatch, using the existing live
-  provider lane with the same credential source.
 - Keep one `pnpm frv watch` open; its default one-minute polling is enough.
 - Fetch failed-job logs only after a job reaches a terminal failing state.
 - Prefer same-parent failed-job reruns when the original inputs still select the

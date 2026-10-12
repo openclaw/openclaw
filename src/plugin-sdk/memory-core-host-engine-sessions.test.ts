@@ -21,7 +21,8 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   loadArchivedSessions,
   loadArchivedSessionsAsync,
-  loadMemorySessionMetadata,
+  loadMemorySessionMetadataAsync,
+  loadMemorySessionMetadataBatchAsync,
   resolveMemorySessionTargets,
   resolveMemorySessionTargetsAsync,
 } from "./memory-core-host-engine-sessions.js";
@@ -60,17 +61,37 @@ describe("memory source sessions", () => {
         await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
 
-        expect(loadMemorySessionMetadata({ ...scope, sessionId, sessionKey })).toMatchObject({
+        expect(
+          await loadMemorySessionMetadataAsync({ ...scope, sessionId, sessionKey }),
+        ).toMatchObject({
           sessionId,
           sessionKey,
           hookExternalContentSource: "gmail",
           chatType: "group",
         });
+        expect(
+          await loadMemorySessionMetadataBatchAsync({
+            ...scope,
+            sessions: [{ sessionId, sessionKey }, { sessionId: "missing" }],
+          }),
+        ).toEqual([
+          expect.objectContaining({ sessionId, sessionKey, hookExternalContentSource: "gmail" }),
+        ]);
+        expect(
+          await loadMemorySessionMetadataBatchAsync({
+            ...scope,
+            sessions: [{ sessionId, sessionKey: "agent:main:another-session" }],
+          }),
+        ).toEqual([]);
         expect(resolveMemorySessionTargets({ ...scope, sessionIds: [sessionId] })).toEqual([
           expect.objectContaining({ sessionId, sessionKey, resolution: "live" }),
         ]);
         const targetSql = observeHostDataSql();
         try {
+          expect(await loadMemorySessionMetadataAsync({ ...scope, sessionId })).toMatchObject({
+            sessionId,
+            hookExternalContentSource: "gmail",
+          });
           expect(
             await resolveMemorySessionTargetsAsync({ ...scope, participants: ["profile-source"] }),
           ).toEqual([expect.objectContaining({ sessionId, sessionKey, resolution: "live" })]);
@@ -174,12 +195,18 @@ describe("memory source sessions", () => {
         ]);
       }
       expect(
-        loadMemorySessionMetadata({
+        await loadMemorySessionMetadataAsync({
           ...mainScope,
           sessionId: "other-source",
           sessionKey: "agent:other:source",
         }),
       ).toBeUndefined();
+      expect(
+        await loadMemorySessionMetadataBatchAsync({
+          ...mainScope,
+          sessions: [{ sessionId: "other-source", sessionKey: "agent:other:source" }],
+        }),
+      ).toEqual([]);
       await deleteSessionEntryLifecycle({
         agentId: "other",
         storePath,
@@ -203,7 +230,9 @@ describe("memory source sessions", () => {
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       for (const source of ["email", "webhook"] as const) {
-        expect(loadMemorySessionMetadata({ agentId: "main", sessionId: source })).toMatchObject({
+        expect(
+          await loadMemorySessionMetadataAsync({ agentId: "main", sessionId: source }),
+        ).toMatchObject({
           hookExternalContentSource: source,
         });
         expect(
@@ -212,15 +241,40 @@ describe("memory source sessions", () => {
           expect.objectContaining({ sessionId: source, hookExternalContentSource: source }),
         ]);
       }
+      const batch = {
+        agentId: "main",
+        sessions: [{ sessionId: "email" }, { sessionId: "webhook" }],
+      };
+      expect(await loadMemorySessionMetadataBatchAsync(batch)).toEqual([
+        expect.objectContaining({ sessionId: "email", hookExternalContentSource: "email" }),
+        expect.objectContaining({ sessionId: "webhook", hookExternalContentSource: "webhook" }),
+      ]);
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:email" },
+        {
+          sessionId: "email",
+          updatedAt: 1_001,
+          hookExternalContentSource: "email",
+          chatType: "group",
+        },
+      );
+      expect(await loadMemorySessionMetadataBatchAsync(batch)).toContainEqual(
+        expect.objectContaining({ sessionId: "email", chatType: "group" }),
+      );
       const emailScope = { agentId: "main", sessionKey: "agent:main:email" };
       await appendTranscriptMessage(
         { ...emailScope, sessionId: "email" },
         { message: { role: "user", content: "Retained email content." } },
       );
       await replaceSessionEntry(emailScope, { sessionId: "replacement", updatedAt: 2_000 });
-      expect(loadMemorySessionMetadata({ agentId: "main", sessionId: "email" })).toMatchObject({
+      expect(
+        await loadMemorySessionMetadataAsync({ agentId: "main", sessionId: "email" }),
+      ).toMatchObject({
         hookExternalContentSource: null,
       });
+      expect(await loadMemorySessionMetadataBatchAsync(batch)).toContainEqual(
+        expect.objectContaining({ sessionId: "email", hookExternalContentSource: null }),
+      );
       expect(
         await resolveMemorySessionTargetsAsync({ agentId: "main", hookSources: ["webhook"] }),
       ).toEqual([expect.objectContaining({ sessionId: "webhook" })]);
@@ -236,7 +290,13 @@ describe("memory source sessions", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = path.join(state.root, "absent", "sessions.json");
       const scope = { agentId: "main", storePath, sessionId: "missing" };
-      expect(loadMemorySessionMetadata(scope)).toBeUndefined();
+      expect(await loadMemorySessionMetadataAsync(scope)).toBeUndefined();
+      expect(
+        await loadMemorySessionMetadataBatchAsync({
+          ...scope,
+          sessions: [{ sessionId: "missing" }],
+        }),
+      ).toEqual([]);
       expect(await loadArchivedSessionsAsync({ ...scope, sessionIds: ["missing"] })).toEqual([]);
       expect(await resolveMemorySessionTargetsAsync({ ...scope, sessionIds: ["missing"] })).toEqual(
         [expect.objectContaining({ sessionId: "missing", resolution: "unresolved" })],

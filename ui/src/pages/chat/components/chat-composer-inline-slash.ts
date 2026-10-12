@@ -123,10 +123,7 @@ export function findDirectInlineSlashArgumentInvocation(
   let invocation: InlineSlashArgumentInvocation | null = null;
 
   for (const match of prefix.matchAll(commandPattern)) {
-    const typedName = match[1]?.toLowerCase();
-    if (!typedName || match.index === undefined) {
-      continue;
-    }
+    const typedName = match[1]!.toLowerCase();
     const command = getSlashCommandCompletions(typedName, {
       showAll: true,
       inlineOnly: true,

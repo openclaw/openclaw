@@ -215,18 +215,16 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
 
 function renderUpdateFailureReportNotice(notice: UpdateFailureReportNotice) {
   const result = notice.result;
-  const label =
-    result.status === "created"
-      ? t("updates.page.reportCreated")
-      : result.status === "fallback"
-        ? t("updates.page.reportFallback")
-        : result.status === "pending"
-          ? t("updates.page.reportPending")
-          : result.status === "retryable"
-            ? t("updates.page.reportRetryable")
-            : result.status === "duplicate"
-              ? t("updates.page.reportDuplicate")
-              : t("updates.page.reportError");
+  const label = t(
+    {
+      created: "updates.page.reportCreated",
+      fallback: "updates.page.reportFallback",
+      pending: "updates.page.reportPending",
+      retryable: "updates.page.reportRetryable",
+      duplicate: "updates.page.reportDuplicate",
+      error: "updates.page.reportError",
+    }[result.status],
+  );
   const url = "url" in result && result.url ? result.url : null;
   const fallbackUrl = "fallbackUrl" in result && result.fallbackUrl ? result.fallbackUrl : null;
   return renderSettingsRow({
@@ -234,22 +232,18 @@ function renderUpdateFailureReportNotice(notice: UpdateFailureReportNotice) {
     stacked: true,
     control: html`<div class="updates-attempt-details" role="status">
       <div>${label}</div>
-      ${
-        url
+      ${(
+        [
+          [url, "updates.page.openIssue"],
+          [fallbackUrl, "updates.page.openPrefilledIssue"],
+        ] as const
+      ).map(([href, labelKey]) =>
+        href
           ? html`<div>
-              <a href=${url} target="_blank" rel="noreferrer">${t("updates.page.openIssue")}</a>
+              <a href=${href} target="_blank" rel="noreferrer">${t(labelKey)}</a>
             </div>`
-          : nothing
-      }
-      ${
-        fallbackUrl
-          ? html`<div>
-              <a href=${fallbackUrl} target="_blank" rel="noreferrer"
-                >${t("updates.page.openPrefilledIssue")}</a
-              >
-            </div>`
-          : nothing
-      }
+          : nothing,
+      )}
       ${"message" in result && result.message ? html`<div>${result.message}</div>` : nothing}
     </div>`,
   });

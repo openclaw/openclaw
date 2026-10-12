@@ -21,7 +21,6 @@ function normalizeCapabilities(capabilities: CapabilitiesConfig | undefined): st
   return normalized.length > 0 ? normalized : undefined;
 }
 
-/** Resolves normalized string capabilities for a channel/account config pair. */
 export function resolveChannelCapabilities(params: {
   cfg?: Partial<OpenClawConfig>;
   channel?: string | null;

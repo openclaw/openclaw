@@ -4,7 +4,7 @@ import type { GitCheckoutContext } from "../infra/git-read-operations.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
-import { resolveUserProfileId } from "../state/user-profiles.js";
+import { readResidentUserProfileId } from "../state/user-profile-list.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 import {
@@ -34,6 +34,7 @@ export type ControlUiSessionPrTarget = {
   readSource: { agentId: string; path: string };
   source: string | GitCheckoutContext | null;
   githubHost?: string;
+  refreshIndex?: boolean;
   assertCurrent?: () => void;
 };
 
@@ -86,6 +87,7 @@ export function resolveControlUiSessionPrTarget(
       githubHost,
     ]),
     source,
+    refreshIndex: Boolean(entry.worktree && !entry.repositoryWorkspaceId),
   };
 }
 
@@ -203,7 +205,7 @@ export async function prepareControlUiSessionPrRead(params: {
       }
       const currentAliasRevision = readUserProfileAliasRevision();
       if (currentAliasRevision !== aliasRevision) {
-        if (actorProfile && resolveUserProfileId(actorProfile) !== actorProfile) {
+        if (actorProfile && readResidentUserProfileId(actorProfile) !== actorProfile) {
           return undefined;
         }
         aliasRevision = currentAliasRevision;

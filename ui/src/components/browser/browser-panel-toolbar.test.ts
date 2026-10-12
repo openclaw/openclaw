@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createBrowserClient, createView } from "./browser-panel-controller-test-support.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import "./browser-panel.ts";
@@ -27,7 +28,7 @@ describe("Browser toolbar", () => {
       refreshOnPresentation: boolean;
       client: GatewayBrowserClient;
       browserPanelController: BrowserPanelController;
-      renderRoot: ShadowRoot;
+      renderRoot: HTMLElement;
       requestUpdate: () => void;
       updateComplete: Promise<unknown>;
     };
@@ -38,7 +39,7 @@ describe("Browser toolbar", () => {
     panel.client = createBrowserClient(async () => ({
       download: { path: "/managed/preview.png", suggestedFilename: "preview.png" },
     })).client;
-    document.body.append(panel);
+    mountSolid(() => panel);
     await panel.updateComplete;
     const controller = panel.browserPanelController;
     controller.activeTargetId = "asset";
@@ -48,7 +49,7 @@ describe("Browser toolbar", () => {
     return panel;
   }
 
-  it("renders all toolbar glyphs in a shared, stroked SVG coordinate system inside its shadow root", async () => {
+  it("renders all toolbar glyphs in a shared, stroked SVG coordinate system inside its light-DOM host", async () => {
     const panel = await mount();
     const glyphs = panel.renderRoot.querySelectorAll(".bp-toolbar button > svg");
     expect(glyphs).toHaveLength(8);
@@ -78,7 +79,7 @@ describe("Browser toolbar", () => {
     panel.renderRoot
       .querySelector<HTMLButtonElement>('button[aria-label="Download file"]')!
       .click();
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(panel.renderRoot.textContent).toContain("HTTP 401: Unauthorized"),
     );
   });
@@ -103,7 +104,7 @@ describe("Browser toolbar", () => {
     expect(panel.renderRoot.querySelector(".bp-shot")).toBe(preview);
 
     body.resolve(new Blob(["complete asset"], { type: "image/png" }));
-    await waitForFast(() => expect(button.getAttribute("aria-busy")).toBe("false"));
+    await waitForSolid(() => expect(button.getAttribute("aria-busy")).toBe("false"));
     expect(button.getAttribute("aria-label")).toBe("Download file");
     expect(button.disabled).toBe(false);
     expect(button.querySelector("svg")!.innerHTML).toBe(downloadShape);

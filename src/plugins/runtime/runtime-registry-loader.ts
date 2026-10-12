@@ -5,10 +5,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../activation-context.js";
 import {
   resolveChannelPluginIds,
-  resolveConfiguredChannelPluginIds,
+  resolveConfiguredChannelPluginIdsAsync,
 } from "../channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../config-state.js";
-import { resolveEffectivePluginIds } from "../effective-plugin-ids.js";
+import { resolveEffectivePluginIdsAsync } from "../effective-plugin-ids.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../gateway-startup-plugin-ids.js";
 import { createInstalledPluginIndexScopeLookup } from "../installed-plugin-index-scope-lookup.js";
 import { loadAndActivateRootPluginRegistry } from "../loader.js";
@@ -79,41 +79,6 @@ function resolveSandboxBackendPluginIds(
   return [...pluginIds].toSorted();
 }
 
-function resolveScopePluginIds(params: {
-  scope: PluginRegistryScope;
-  context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
-  persistedSandboxBackendIds?: readonly string[];
-}): string[] {
-  if (params.scope === "configured-channels") {
-    return resolveConfiguredChannelPluginIds({
-      config: params.context.config,
-      activationSourceConfig: params.context.activationSourceConfig,
-      workspaceDir: params.context.workspaceDir,
-      env: params.context.env,
-    });
-  }
-  if (params.scope === "channels") {
-    return resolveChannelPluginIds({
-      config: params.context.config,
-      workspaceDir: params.context.workspaceDir,
-      env: params.context.env,
-    });
-  }
-  if (params.scope === "memory") {
-    // Memory CLI commands must use the same backend and embedding adapters as
-    // Gateway, without activating unrelated explicitly enabled plugins.
-    return resolveMemoryPluginIds(params.context);
-  }
-  if (params.scope === "sandbox-backends") {
-    return resolveSandboxBackendPluginIds(params.context, params.persistedSandboxBackendIds);
-  }
-  return resolveEffectivePluginIds({
-    config: params.context.rawConfig,
-    workspaceDir: params.context.workspaceDir,
-    env: params.context.env,
-  });
-}
-
 export async function ensurePluginRegistryLoaded(options?: {
   scope?: PluginRegistryScope;
   config?: OpenClawConfig;
@@ -124,11 +89,38 @@ export async function ensurePluginRegistryLoaded(options?: {
 }): Promise<void> {
   const scope = options?.scope ?? "all";
   const context = resolvePluginRuntimeLoadContext(options);
-  const pluginIds = resolveScopePluginIds({
-    scope,
-    context,
-    persistedSandboxBackendIds: options?.persistedSandboxBackendIds,
-  });
+  let pluginIds: string[];
+  switch (scope) {
+    case "configured-channels":
+      pluginIds = await resolveConfiguredChannelPluginIdsAsync({
+        config: context.config,
+        activationSourceConfig: context.activationSourceConfig,
+        workspaceDir: context.workspaceDir,
+        env: context.env,
+      });
+      break;
+    case "channels":
+      pluginIds = resolveChannelPluginIds({
+        config: context.config,
+        workspaceDir: context.workspaceDir,
+        env: context.env,
+      });
+      break;
+    case "memory":
+      // Memory CLI commands must use the same backend and embedding adapters as
+      // Gateway, without activating unrelated explicitly enabled plugins.
+      pluginIds = resolveMemoryPluginIds(context);
+      break;
+    case "sandbox-backends":
+      pluginIds = resolveSandboxBackendPluginIds(context, options?.persistedSandboxBackendIds);
+      break;
+    default:
+      pluginIds = await resolveEffectivePluginIdsAsync({
+        config: context.rawConfig,
+        workspaceDir: context.workspaceDir,
+        env: context.env,
+      });
+  }
   const activateConfigured = scope === "configured-channels" && pluginIds.length > 0;
   const config = activateConfigured
     ? (withActivatedPluginIds({ config: context.config, pluginIds }) ?? context.config)

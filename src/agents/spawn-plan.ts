@@ -17,7 +17,10 @@ import {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
+import type {
+  getSessionBindingService,
+  listSessionBindingsBySessionAsync,
+} from "../infra/outbound/session-binding-service.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { resolveChildAdmission, type ChildAdmissionCap } from "./child-admission.js";
 import { resolveSenderRestrictedSpawnError } from "./spawn-requester-policy.js";
@@ -37,7 +40,12 @@ export type PreparedSpawnThreadBinding = {
   parentConversationId?: string;
 };
 
-type SessionBindingService = ReturnType<typeof getSessionBindingService>;
+type SessionBindingService = Pick<
+  ReturnType<typeof getSessionBindingService>,
+  "getCapabilities"
+> & {
+  listBySession: typeof listSessionBindingsBySessionAsync;
+};
 
 export function resolveSpawnMode(params: {
   requestedMode?: SpawnMode;
@@ -74,25 +82,23 @@ export function resolveSpawnChannelAccountId(params: {
   return normalizeOptionalString(channels?.[channel]?.defaultAccount) ?? "default";
 }
 
-function resolveRequesterBoundConversationRef(params: {
+async function resolveRequesterBoundConversationRef(params: {
   bindingService: SessionBindingService;
   requesterSessionKey?: string;
   channel: string;
   accountId: string;
   fallback?: { conversationId: string; parentConversationId?: string } | null;
-}): { conversationId: string; parentConversationId?: string } | null | undefined {
+}): Promise<{ conversationId: string; parentConversationId?: string } | null | undefined> {
   const requesterSessionKey = normalizeOptionalString(params.requesterSessionKey);
   if (!requesterSessionKey) {
     return undefined;
   }
-  const activeBindings = params.bindingService
-    .listBySession(requesterSessionKey)
-    .filter(
-      (record) =>
-        record.status !== "ended" &&
-        record.conversation.channel === params.channel &&
-        (record.conversation.accountId ?? params.accountId) === params.accountId,
-    );
+  const activeBindings = (await params.bindingService.listBySession(requesterSessionKey)).filter(
+    (record) =>
+      record.status !== "ended" &&
+      record.conversation.channel === params.channel &&
+      (record.conversation.accountId ?? params.accountId) === params.accountId,
+  );
   if (activeBindings.length === 0) {
     return undefined;
   }
@@ -139,7 +145,7 @@ function buildThreadBindingUnavailableError(kind: SpawnBackendKind, mode: SpawnM
   );
 }
 
-export function prepareSpawnThreadBinding(params: {
+export async function prepareSpawnThreadBinding(params: {
   cfg: OpenClawConfig;
   kind: SpawnBackendKind;
   mode: SpawnMode;
@@ -150,7 +156,7 @@ export function prepareSpawnThreadBinding(params: {
   to?: string;
   threadId?: string | number;
   groupId?: string;
-}): { ok: true; binding: PreparedSpawnThreadBinding } | { ok: false; error: string } {
+}): Promise<{ ok: true; binding: PreparedSpawnThreadBinding } | { ok: false; error: string }> {
   const channel = normalizeOptionalLowercaseString(params.channel);
   if (!channel) {
     return { ok: false, error: buildThreadBindingUnavailableError(params.kind, params.mode) };
@@ -166,20 +172,13 @@ export function prepareSpawnThreadBinding(params: {
     accountId,
     kind: params.kind,
   });
-  if (!policy.enabled) {
+  if (!policy.enabled || !policy.spawnEnabled) {
+    const formatError = policy.enabled
+      ? formatThreadBindingSpawnDisabledError
+      : formatThreadBindingDisabledError;
     return {
       ok: false,
-      error: formatThreadBindingDisabledError({
-        channel: policy.channel,
-        accountId: policy.accountId,
-        kind: params.kind,
-      }),
-    };
-  }
-  if (!policy.spawnEnabled) {
-    return {
-      ok: false,
-      error: formatThreadBindingSpawnDisabledError({
+      error: formatError({
         channel: policy.channel,
         accountId: policy.accountId,
         kind: params.kind,
@@ -224,7 +223,7 @@ export function prepareSpawnThreadBinding(params: {
   });
   const requesterConversation =
     params.kind === "subagent"
-      ? resolveRequesterBoundConversationRef({
+      ? await resolveRequesterBoundConversationRef({
           bindingService: params.bindingService,
           requesterSessionKey: params.requesterSessionKey,
           channel: policy.channel,

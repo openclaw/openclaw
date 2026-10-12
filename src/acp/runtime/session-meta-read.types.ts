@@ -12,6 +12,29 @@ export type AcpSessionReadInput = {
   entry?: AcpSessionEntryBinding;
 };
 
+export type AcpResumeSessionRow = {
+  sessionKey: string;
+  session_id: string | null;
+  updated_at: number;
+  agent: string;
+};
+
+export type AcpSessionReadCommand =
+  | { type: "acpSessions.list" }
+  | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
+  | {
+      type: "acpSessions.resume";
+      agentId: string;
+      backendId?: string;
+      resumeSessionId: string;
+      sessionKey?: string;
+    };
+
+export type AcpSessionReadResult =
+  | { type: "acpSessions.list"; rows: AcpSessionRow[] }
+  | { type: "acpSessions.metadata"; rows: Array<AcpSessionRow | null> }
+  | { type: "acpSessions.resume"; rows: AcpResumeSessionRow[] };
+
 export type AcpSessionStoreEntry = {
   cfg: OpenClawConfig;
   agentId?: string;

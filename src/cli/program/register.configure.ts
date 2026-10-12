@@ -1,4 +1,3 @@
-// Configure command registration: lazy-loads the interactive configuration wizard.
 import type { Command } from "commander";
 import { CONFIGURE_WIZARD_SECTIONS } from "../../commands/configure.shared.js";
 import { runCommandWithRuntime } from "../cli-utils.js";

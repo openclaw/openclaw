@@ -1,4 +1,3 @@
-// Resolves native approval support for the initiating channel surface.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   getChannelPlugin,
@@ -15,7 +14,6 @@ import { canChannelEnforcePluginReviewerPolicy } from "./approval-channel-policy
 import type { ChannelApprovalKind } from "./approval-types.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
-/** Native approval availability for the channel/account that initiated an approval. */
 export type ExecApprovalInitiatingSurfaceState =
   | { kind: "enabled"; channel: string | undefined; channelLabel: string; accountId?: string }
   | { kind: "disabled"; channel: string; channelLabel: string; accountId?: string }
@@ -36,29 +34,31 @@ function labelForChannel(channel?: string): string {
 
 function hasNativeExecApprovalCapability(channel?: string): boolean {
   const capability = resolveChannelApprovalCapability(getChannelPlugin(channel ?? ""));
-  if (!capability?.native) {
+  if (!capability?.native && !capability?.nativeAsync) {
     return false;
   }
-  return Boolean(capability.getExecInitiatingSurfaceState || capability.getActionAvailabilityState);
+  return Boolean(
+    capability.getExecInitiatingSurfaceStateAsync ||
+    capability.getExecInitiatingSurfaceState ||
+    capability.getActionAvailabilityState,
+  );
 }
 
-/** Resolves whether exec approvals can be handled on the initiating surface. */
-export function resolveExecApprovalInitiatingSurfaceState(params: {
+export function resolveExecApprovalInitiatingSurfaceStateAsync(params: {
   channel?: string | null;
   accountId?: string | null;
   cfg?: OpenClawConfig;
-}): ExecApprovalInitiatingSurfaceState {
-  return resolveApprovalInitiatingSurfaceState({ ...params, approvalKind: "exec" });
+}): Promise<ExecApprovalInitiatingSurfaceState> {
+  return resolveApprovalInitiatingSurfaceStateAsync({ ...params, approvalKind: "exec" });
 }
 
-/** Resolves whether approvals of a given kind can be handled on the initiating surface. */
-export function resolveApprovalInitiatingSurfaceState(params: {
+export async function resolveApprovalInitiatingSurfaceStateAsync(params: {
   channel?: string | null;
   accountId?: string | null;
   cfg?: OpenClawConfig;
   approvalKind: ChannelApprovalKind;
   request?: PluginApprovalRequest;
-}): ExecApprovalInitiatingSurfaceState {
+}): Promise<ExecApprovalInitiatingSurfaceState> {
   const channel = normalizeMessageChannel(params.channel);
   const channelLabel = labelForChannel(channel);
   const accountId = normalizeOptionalString(params.accountId);
@@ -74,15 +74,12 @@ export function resolveApprovalInitiatingSurfaceState(params: {
   ) {
     return { kind: "disabled", channel, channelLabel, accountId };
   }
-  // Prefer the exec-specific hook, then the generic approval hook, before
-  // falling back to basic deliverability for channels without native state.
+  // Prefer worker-owned exec availability; config-only plugins can keep their sync hook.
+  const execHook =
+    capability?.getExecInitiatingSurfaceStateAsync ?? capability?.getExecInitiatingSurfaceState;
   const state =
     (params.approvalKind === "exec"
-      ? capability?.getExecInitiatingSurfaceState?.({
-          cfg,
-          accountId: params.accountId,
-          action: "approve",
-        })
+      ? await execHook?.({ cfg, accountId: params.accountId, action: "approve" })
       : undefined) ??
     capability?.getActionAvailabilityState?.({
       cfg,
@@ -100,7 +97,6 @@ export function resolveApprovalInitiatingSurfaceState(params: {
   return { kind: "unsupported", channel, channelLabel, accountId };
 }
 
-/** Returns whether a channel can present native exec approval UI. */
 export function supportsNativeExecApprovalClient(channel?: string | null): boolean {
   const normalized = normalizeMessageChannel(channel);
   if (!normalized || normalized === INTERNAL_MESSAGE_CHANNEL || normalized === "tui") {
@@ -109,7 +105,6 @@ export function supportsNativeExecApprovalClient(channel?: string | null): boole
   return hasNativeExecApprovalCapability(normalized);
 }
 
-/** Lists native exec approval client labels for reply guidance. */
 export function listNativeExecApprovalClientLabels(params?: {
   excludeChannel?: string | null;
 }): string[] {
@@ -145,14 +140,12 @@ function describeNativeApprovalClientSetup(
     : (capability?.describePluginApprovalSetup?.(setupParams) ?? null);
 }
 
-/** Returns channel-specific setup guidance for native exec approvals, when available. */
 export function describeNativeExecApprovalClientSetup(
   params: NativeApprovalClientSetupParams,
 ): string | null {
   return describeNativeApprovalClientSetup(params, "exec");
 }
 
-/** Returns channel-specific setup guidance for native plugin approvals, when available. */
 export function describeNativePluginApprovalClientSetup(
   params: NativeApprovalClientSetupParams,
 ): string | null {

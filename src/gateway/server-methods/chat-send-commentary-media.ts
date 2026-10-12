@@ -80,7 +80,7 @@ export function createAssistantCommentaryMediaCustody(
     get lastRewrite() {
       return lastRewrite;
     },
-    async run<T>(operation: () => Promise<T>): Promise<T> {
+    async run<T>(this: void, operation: () => Promise<T>): Promise<T> {
       lastRewrite = undefined;
       preparingTranscript = true;
       const observer = observeChatSendCommentaryMedia(params);
@@ -208,7 +208,7 @@ function observeChatSendCommentaryMedia(params: AssistantCommentaryMediaCustodyP
           const managedMedia = new Map<string, AssistantDisplayContentBlock[]>();
           let committed = false;
           try {
-            const mediaScope = captureWebchatReplyMediaScope({
+            const mediaScope = await captureWebchatReplyMediaScope({
               requesterContext: params.requesterContext,
               cfg: session.cfg,
               sessionKey: scope.sessionKey,
@@ -222,6 +222,7 @@ function observeChatSendCommentaryMedia(params: AssistantCommentaryMediaCustodyP
                 ...mediaScope,
                 payloads: mediaUrls.map((url) => ({ mediaUrls: [url] })),
               });
+              const localRoots = getWebchatReplyMediaLocalRoots(mediaScope);
               assertCurrent();
               for (const [index, payload] of payloads.entries()) {
                 // History ownership starts after the rewrite; GC can run during preparation.
@@ -229,7 +230,7 @@ function observeChatSendCommentaryMedia(params: AssistantCommentaryMediaCustodyP
                   sessionKey: scope.sessionKey,
                   agentId: scope.agentId,
                   items: prepareOutgoingMediaFromReplyPayload(payload),
-                  localRoots: getWebchatReplyMediaLocalRoots(mediaScope),
+                  localRoots,
                   continueOnPrepareError: true,
                   assertCurrent: mediaScope.assertCurrent,
                   abortSignal: params.abortSignal,

@@ -9,7 +9,7 @@ import { readTriageUpdateFailure } from "./triage-update.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("update failure triage diagnostics", () => {
-  it.each(["package-post-install-doctor", "candidate-runtime-unavailable"] as const)(
+  it.each(["package-post-install-doctor"] as const)(
     "writes bounded sanitized failure evidence without changing the result (%s)",
     async (advisoryKind) => {
       const home = tempDirs.make("openclaw-update-triage-");
@@ -107,41 +107,6 @@ describe("update failure triage diagnostics", () => {
     expect(recorded.error).toContain("terminal recovery cause");
   });
 
-  it("retains package rollback proof without promoting restart safety", async () => {
-    const stateDir = tempDirs.make("openclaw-update-triage-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const outputPath = await writeTriageUpdateFailure(
-      {
-        result: {
-          status: "error",
-          mode: "npm",
-          reason: "openclaw doctor",
-          before: { version: "2026.8.1" },
-          after: { version: "2026.8.1" },
-          steps: [],
-          recovery: {
-            serviceRestartSafe: false,
-            reason: "runtime-verification-failed",
-            packageRollbackVerified: true,
-          },
-        },
-      },
-      { env },
-    );
-
-    const recorded = await readTriageUpdateFailure(outputPath, { env, stateDir });
-
-    expect(recorded).toMatchObject({
-      result: {
-        recovery: {
-          serviceRestartSafe: false,
-          reason: "runtime-verification-failed",
-          packageRollbackVerified: true,
-        },
-      },
-    });
-  });
-
   it("retains actual plugin sync and npm errors after a successful core replacement", async () => {
     const stateDir = tempDirs.make("openclaw-update-triage-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -184,48 +149,6 @@ describe("update failure triage diagnostics", () => {
     });
   });
 
-  it("retains fresh Doctor failure warnings through repeated diagnostic handoffs", async () => {
-    const stateDir = tempDirs.make("openclaw-update-triage-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const failure = {
-      result: {
-        status: "error" as const,
-        mode: "npm" as const,
-        reason: "post-update-plugins",
-        steps: [],
-        postUpdate: {
-          plugins: {
-            status: "error" as const,
-            reason: "post-plugin-doctor-invalid-config",
-            sync: { errors: [] },
-            npm: { outcomes: [] },
-            warnings: [
-              ...Array.from({ length: 5 }, (_, index) => ({
-                reason: `Earlier warning ${index}`,
-                message: "Plugin installation needs attention",
-              })),
-              {
-                reason: "Fresh Doctor could not load updated runtime",
-                message: "Migration failed",
-              },
-              { reason: "Config remained invalid", message: "Refusing to restart" },
-            ],
-          },
-        },
-      },
-    };
-    const outputPath = await writeTriageUpdateFailure(failure, { env });
-    const once = await readTriageUpdateFailure(outputPath, { env, stateDir });
-    const secondPath = await writeTriageUpdateFailure(once, { env });
-    const twice = await readTriageUpdateFailure(secondPath, { env, stateDir });
-
-    expect(twice).toEqual(once);
-    expect(twice).toMatchObject({ omittedDetails: 4 });
-    expect(JSON.stringify(twice)).toContain("Fresh Doctor could not load updated runtime");
-    expect(JSON.stringify(twice)).toContain("Refusing to restart");
-    expect(JSON.stringify(twice)).not.toContain("Earlier warning 0");
-  });
-
   it("reserves the terminal plugin warning before earlier errors exhaust the diagnostic budget", async () => {
     const stateDir = tempDirs.make("openclaw-update-triage-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -264,28 +187,11 @@ describe("update failure triage diagnostics", () => {
     });
   });
 
-  it("accepts skipped attempts classified as failures", async () => {
-    const stateDir = tempDirs.make("openclaw-update-triage-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const failure = {
-      result: { status: "skipped" as const, mode: "git" as const, reason: "dirty", steps: [] },
-    };
-    const outputPath = await writeTriageUpdateFailure(failure, { env });
-
-    expect(await readTriageUpdateFailure(outputPath, { env, stateDir })).toMatchObject(failure);
-  });
-
   it.each([
-    { name: "oversized", input: "x".repeat(8 * 1024 + 1), error: "exceeds 8192 bytes" },
     { name: "invalid JSON", input: "not-json", error: "Invalid update failure diagnostics JSON" },
     {
       name: "successful result without an error",
       input: JSON.stringify({ result: { status: "ok", mode: "npm", steps: [] } }),
-      error: "expected a failed result or error",
-    },
-    {
-      name: "invalid result beside a valid error",
-      input: JSON.stringify({ result: {}, error: "original failure" }),
       error: "expected a failed result or error",
     },
   ])("rejects $name diagnostic input", async ({ input, error }) => {

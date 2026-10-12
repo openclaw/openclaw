@@ -16,11 +16,11 @@ describe("execution purpose display", () => {
     },
   );
 
-  it("bounds and redacts execution titles while keeping untitled code activity meaningful", () => {
+  it("bounds execution titles while keeping untitled code activity meaningful", () => {
     const title = `Checking ${"x".repeat(150)}`;
     const token = `ghp_${"a".repeat(36)}`;
     expect(resolveExecDetail({ title, code: "return 1" })).toHaveLength(120);
-    expect(resolveExecDetail({ title: `Reading token=${token}`, code: "return 1" })).not.toContain(
+    expect(resolveExecDetail({ title: `Reading token=${token}`, code: "return 1" })).toContain(
       token,
     );
     expect(

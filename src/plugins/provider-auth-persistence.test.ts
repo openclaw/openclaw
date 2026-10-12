@@ -351,7 +351,7 @@ describe("provider auth protected persistence", () => {
       if (credential?.type !== "token" || !credential.tokenRef) {
         throw new Error("Expected staged protected tokenRef");
       }
-      updateSecretStoreAllowedHosts({
+      await updateSecretStoreAllowedHosts({
         scope: { kind: "team" },
         name: credential.tokenRef.id,
         allowedHosts: ["api.example.test"],
@@ -414,7 +414,7 @@ describe("provider auth protected persistence", () => {
       if (credential?.type !== "token" || !credential.tokenRef) {
         throw new Error("Expected staged protected tokenRef");
       }
-      updateSecretStoreAllowedHosts({
+      await updateSecretStoreAllowedHosts({
         scope: { kind: "team" },
         name: credential.tokenRef.id,
         allowedHosts: ["api.example.test"],

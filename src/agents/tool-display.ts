@@ -1,14 +1,13 @@
 /**
  * User-facing tool display formatter.
  *
- * Builds redacted labels and compact details from tool metadata without affecting execution semantics.
+ * Builds labels and compact details from tool metadata without affecting execution semantics.
  */
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { redactToolDetail } from "../logging/redact.js";
 import { shortenHomeInString } from "../utils.js";
 import { unwrapToolCallForDisplay } from "./tool-display-call.js";
 import {
@@ -22,6 +21,7 @@ import type { ToolDetailMode } from "./tool-display-exec.js";
 
 type ToolDisplay = {
   name: string;
+  icon: string;
   title: string;
   label: string;
   verb?: string;
@@ -74,6 +74,7 @@ export function resolveToolDisplay(params: {
   });
   return {
     name,
+    icon: spec?.icon ?? FALLBACK.icon,
     title,
     label,
     verb,
@@ -81,9 +82,9 @@ export function resolveToolDisplay(params: {
   };
 }
 
-/** Formats and redacts detail text for display. */
+/** Formats detail text for display. */
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  return display.detail ? redactToolDetail(display.detail) : undefined;
+  return display.detail || undefined;
 }
 
 /** Infers compact display metadata for a tool invocation from its arguments. */

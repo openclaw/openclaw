@@ -55,34 +55,31 @@ function createHarness(params?: AgentEventTestHarnessOptions) {
 }
 
 describe("chat run registration lifecycle", () => {
-  it.each([true, false])(
-    "releases finalized hidden run registrations without message subscribers (messages=%s)",
-    (projectSessionMessages) => {
-      const h = createHarness();
-      for (let index = 0; index < 300; index += 1) {
-        const runId = `hidden-run-${index}`;
-        h.register(runId, "agent:main:hidden", runId);
-        registerAgentRunContext(runId, {
-          sessionKey: "agent:main:hidden",
-          isControlUiVisible: false,
-          projectSessionMessages,
-          projectSessionLifecycle: false,
-        });
-        h.emit(runId, "lifecycle", { phase: "end" });
-      }
-      expect(h.chat()).toHaveLength(0);
-      expect(h.chatRunState.runs.size).toBe(0);
-    },
-  );
+  it("releases finalized hidden run registrations without message subscribers", async () => {
+    const h = createHarness();
+    for (let index = 0; index < 300; index += 1) {
+      const runId = `hidden-run-${index}`;
+      h.register(runId, "agent:main:hidden", runId);
+      registerAgentRunContext(runId, {
+        sessionKey: "agent:main:hidden",
+        isControlUiVisible: false,
+        projectSessionMessages: true,
+        projectSessionLifecycle: false,
+      });
+      await h.emit(runId, "lifecycle", { phase: "end" });
+    }
+    expect(h.chat()).toHaveLength(0);
+    expect(h.chatRunState.runs.size).toBe(0);
+  });
 
-  it("cancels deferred lifecycle errors when the handler is disposed", () => {
+  it("cancels deferred lifecycle errors when the handler is disposed", async () => {
     vi.useFakeTimers();
     const h = createHarness({
       resolveSessionKeyForRun: () => "session-dispose",
       lifecycleErrorRetryGraceMs: 100,
     });
 
-    h.emit(
+    await h.emit(
       "run-dispose",
       "lifecycle",
       { phase: "error", error: "retryable provider failure" },
@@ -90,7 +87,7 @@ describe("chat run registration lifecycle", () => {
     );
     expect(vi.getTimerCount()).toBe(1);
 
-    h.handler.dispose();
+    await h.handler.dispose();
     expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(100);
 
@@ -99,7 +96,7 @@ describe("chat run registration lifecycle", () => {
     expect(h.chat().map(([, payload]) => payload.state)).not.toContain("error");
   });
 
-  it("ignores stale aborted markers from older same-key runs for fresh chat lifecycle events (same-millisecond older sequence)", () => {
+  it("ignores stale aborted markers from older same-key runs for fresh chat lifecycle events (same-millisecond older sequence)", async () => {
     const h = createHarness({ now: 2_000 });
     h.chatRunState.getOrCreate("client-stale-abort").abortMarker = {
       abortedAtMs: 2_000,
@@ -107,13 +104,13 @@ describe("chat run registration lifecycle", () => {
     };
     h.registerNamed("stale-abort");
 
-    h.emit(
+    await h.emit(
       "run-stale-abort",
       "assistant",
       { text: "Fresh output", delta: "Fresh output" },
       { ts: 2_100 },
     );
-    h.emit("run-stale-abort", "lifecycle", { phase: "end" }, { seq: 2, ts: 2_200 });
+    await h.emit("run-stale-abort", "lifecycle", { phase: "end" }, { seq: 2, ts: 2_200 });
 
     const chatCalls = h.chat();
     expect(chatCalls).toHaveLength(2);
@@ -126,18 +123,18 @@ describe("chat run registration lifecycle", () => {
     expect(h.chatRunState.registry.peek("run-stale-abort")).toBeUndefined();
   });
 
-  it("honors same-millisecond abort markers from the current same-key run", () => {
+  it("honors same-millisecond abort markers from the current same-key run", async () => {
     const h = createHarness({ now: 3_000 });
     h.registerNamed("current-abort");
     h.chatRunState.getOrCreate("client-current-abort").abortMarker = createChatAbortMarker();
 
-    h.emit(
+    await h.emit(
       "run-current-abort",
       "assistant",
       { text: "Suppressed output", delta: "Suppressed output" },
       { ts: 3_100 },
     );
-    h.emit(
+    await h.emit(
       "run-current-abort",
       "lifecycle",
       { phase: "end", aborted: true, stopReason: "rpc" },
@@ -150,7 +147,7 @@ describe("chat run registration lifecycle", () => {
     expect(h.chatRunState.registry.peek("run-current-abort")).toBeUndefined();
   });
 
-  it("keeps chat-linked run remapping alive across per-attempt lifecycle errors", () => {
+  it("keeps chat-linked run remapping alive across per-attempt lifecycle errors", async () => {
     vi.useFakeTimers();
     const h = createHarness({
       resolveSessionKeyForRun: () => "session-fallback",
@@ -158,7 +155,7 @@ describe("chat run registration lifecycle", () => {
     });
     h.register("run-fallback-retry", "session-fallback", "run-fallback-client");
 
-    h.emitMany("run-fallback-retry", [
+    await h.emitMany("run-fallback-retry", [
       ["assistant", { text: "draft" }],
       ["lifecycle", { phase: "error", error: "provider failed" }],
     ]);
@@ -170,7 +167,7 @@ describe("chat run registration lifecycle", () => {
     expect(h.clearAgentRunContext).not.toHaveBeenCalled();
     expect(h.agentRunSeq.get("run-fallback-retry")).toBe(2);
 
-    h.emit(
+    await h.emit(
       "run-fallback-retry",
       "lifecycle",
       {
@@ -204,7 +201,7 @@ describe("chat run registration lifecycle", () => {
     expect(h.clearAgentRunContext).not.toHaveBeenCalled();
     expect(h.agentRunSeq.get("run-fallback-retry")).toBe(3);
 
-    h.end("run-fallback-retry", 4);
+    await h.end("run-fallback-retry", 4);
 
     expect(h.chat().map(([, payload]) => payload.state)).not.toContain("error");
     const finalPayload = h.chat().at(-1)?.[1] as {
@@ -235,7 +232,7 @@ describe("chat run registration lifecycle", () => {
       registerAgentRunContext(runId, { sessionKey: "session-reply-dispatch" });
       chatRunState.getOrCreate(runId).buffer = "pending delivered reply";
 
-      emitAgentEvent(handler, runId, "lifecycle", {
+      await emitAgentEvent(handler, runId, "lifecycle", {
         phase: "error",
         error: "ACP turn failed",
         completionSource: "reply-dispatch",
@@ -248,6 +245,7 @@ describe("chat run registration lifecycle", () => {
       expect(agentRunSeq.get(runId)).toBe(1);
       if (settled) {
         broadcastChatError({
+          terminalEntry: undefined,
           context: harness,
           runId,
           sessionKey: "session-reply-dispatch",

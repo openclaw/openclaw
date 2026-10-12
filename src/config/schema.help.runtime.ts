@@ -214,6 +214,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Opt-in Control UI experiments. These capabilities may change between releases and remain disabled unless explicitly enabled.",
   "gateway.controlUi.experimental.customPlugins":
     "Allow user-installed plugins to execute native JavaScript in the Control UI (default: false). Bundled plugin views remain available. Custom UI shares the signed-in operator's Gateway permissions; enable only for trusted plugins. Changes apply without a Gateway restart. Reload open Control UI pages to clear previously loaded plugin code.",
+  "gateway.controlUi.experimental.chatBubbles":
+    "Enable experimental speech bubbles in the Control UI (default: false). Home defaults to bubbles while enabled; browser-local per-session choices take precedence. Changes apply without a Gateway restart.",
   "gateway.controlUi.environment":
     "Optional public environment identity shown in the Control UI stripe, agent avatar, label pills, browser title, and favicon. Omit it to preserve the default appearance.",
   "gateway.controlUi.environment.label":
@@ -534,7 +536,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "skills.load.watch":
     "Enable filesystem watching for skill-definition changes so updates can be applied without full process restart. Keep enabled in development workflows and disable in immutable production images.",
   "skills.workshop.autonomous.mode":
-    'Controls background learning: "off" keeps only the suggestion nudge, "propose" creates pending proposals, and "auto" applies captured proposals and runs weekly review of Workshop-owned skills using ordinary file edits. Default: "auto".',
+    'Controls background learning: "auto" lets agents save and update Workshop skills after substantial work or after using a learned skill, and archives learned skills unused for 30 days. Every change is recorded and undoable. "off" disables background learning. Default: "auto".',
   approvals:
     "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
   "approvals.exec":

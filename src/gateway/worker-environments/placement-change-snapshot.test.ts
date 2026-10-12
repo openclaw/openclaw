@@ -16,7 +16,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { flushPendingSessionsChangedEvents } from "../server-methods/session-change-event.js";
 import {
   createGatewayWorkerPlacementChangePublisher,
-  subscribeGatewayWorkerMachineShapeChanges,
+  subscribeGatewayWorkerPlacementMetadataChanges,
 } from "../server-worker-placement-change-events.js";
 import { readWorkerPlacementIdentity } from "./placement-projector.js";
 import type { WorkerSessionPlacementChangeSnapshot } from "./placement-record.js";
@@ -84,8 +84,7 @@ it("coalesces machine metadata bursts off thread and selects only correlated pro
     const environments = await createWorkerEnvironmentStore({ database });
     const expected = ["active", "pending", "terminal"];
     expect(
-      store
-        .list()
+      (await store.listAsync())
         .filter(
           (row) =>
             readWorkerPlacementIdentity(
@@ -119,8 +118,9 @@ it("coalesces machine metadata bursts off thread and selects only correlated pro
       getSessionEventSubscriberConnIds: () => new Set<string>(),
     };
     const warn = vi.fn();
-    const stop = subscribeGatewayWorkerMachineShapeChanges({
+    const changes = subscribeGatewayWorkerPlacementMetadataChanges({
       placements: store,
+      runnerAvailability: { read: () => undefined, version: () => 0 },
       environments: {
         subscribeMachineShapeChanged: (listener) => {
           changed = listener;
@@ -137,13 +137,13 @@ it("coalesces machine metadata bursts off thread and selects only correlated pro
         changed("development");
       }
       await published.promise;
-      await stop();
+      await changes.stop();
       changed("development");
       expect(received).toEqual(expected.map((id) => `agent:main:${id}`));
       calls.expectIdle();
       expect(warn).not.toHaveBeenCalled();
     } finally {
-      await stop();
+      await changes.stop();
       vi.restoreAllMocks();
       unlisten();
       await environments.close();
@@ -211,7 +211,9 @@ it.each(["cached", "fresh"] as const)(
       } finally {
         vi.restoreAllMocks();
       }
-      store.retireSessionPlacement({
+      const mutationStore =
+        mode === "fresh" ? createWorkerSessionPlacementStore({ database }) : store;
+      await mutationStore.retireSessionPlacementAsync({
         sessionId: "a",
         expectedState: "failed",
         expectedGeneration: failed.generation,
@@ -262,7 +264,7 @@ it("reports committed placement changes inside an inspection snapshot", async ()
       await withOpenClawStateDatabaseReadSnapshot(async () => {
         await expect(
           publishChanges(async () => {
-            store.retireSessionPlacement({
+            await store.retireSessionPlacementAsync({
               sessionId: "a",
               expectedState: "failed",
               expectedGeneration: failed.generation,
@@ -278,7 +280,7 @@ it("reports committed placement changes inside an inspection snapshot", async ()
           expect.any(Object),
         );
       });
-      expect(store.list()).toEqual([]);
+      expect(await store.listAsync()).toEqual([]);
       expect(warn).not.toHaveBeenCalled();
     } finally {
       await flushPendingSessionsChangedEvents(context);

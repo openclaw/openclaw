@@ -103,7 +103,7 @@ export class CodexToolProgressProjection {
   private readonly output = new NativeToolOutputAccumulator("Codex");
   private readonly metas = new Map<string, EmbeddedRunAttemptResult["toolMetas"][number]>();
   private readonly sideEffectingNativeIds = new Set<string>();
-  private readonly sideEffectingDynamicIds = new Set<string>();
+  private hasDynamicSideEffects = false;
   private readonly transcriptProgressCallIds = new Set<string>();
   readonly approvalTimeoutKinds = new Map<string, CodexApprovalKind>();
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
@@ -131,7 +131,7 @@ export class CodexToolProgressProjection {
   }
 
   get hasPotentialSideEffects(): boolean {
-    return this.sideEffectingNativeIds.size > 0 || this.sideEffectingDynamicIds.size > 0;
+    return this.sideEffectingNativeIds.size > 0 || this.hasDynamicSideEffects;
   }
 
   approvalTimeoutExplanation(itemId: string, status: NativeToolStatus): string | undefined {
@@ -201,9 +201,7 @@ export class CodexToolProgressProjection {
     } else if (this.lastNativeToolError?.mutatingAction !== true) {
       this.lastNativeToolError = undefined;
     }
-    if (params.sideEffectEvidence === true) {
-      this.sideEffectingDynamicIds.add(params.callId);
-    }
+    this.hasDynamicSideEffects ||= params.sideEffectEvidence === true;
   }
 
   handleOutputDelta(params: JsonObject, toolName: string): void {

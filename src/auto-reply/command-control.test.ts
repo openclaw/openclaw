@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { clearPluginCommands, registerPluginCommand } from "../plugins/commands.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { resolveCommandAuthorization } from "./command-auth.js";
+import { resolveCommandAuthorization, resolveCommandAuthorizationAsync } from "./command-auth.js";
 import {
   hasControlCommand,
   hasInlineCommandTokens,
@@ -81,9 +81,74 @@ describe("resolveCommandAuthorization", () => {
     };
   }
 
-  function registerAllowFromPlugins(...plugins: ReturnType<typeof createAllowFromPlugin>[]) {
+  function registerAllowFromPlugins(
+    ...plugins: Array<
+      ReturnType<typeof createAllowFromPlugin> & {
+        plugin: {
+          config: { resolveAllowFromAsync?: () => Promise<Array<string | number> | undefined> };
+        };
+      }
+    >
+  ) {
     setActivePluginRegistry(createTestRegistry(plugins));
   }
+
+  it.each(["explicit", "inferred"] as const)(
+    "uses asynchronous channel allowlists for %s command authorization",
+    async (providerSource) => {
+      const resolveLegacy = vi.fn(() => ["legacy-owner"]);
+      const entry = createOwnerEnforcingAllowFromPlugin("telegram", resolveLegacy);
+      registerAllowFromPlugins({
+        ...entry,
+        plugin: {
+          ...entry.plugin,
+          config: {
+            ...entry.plugin.config,
+            resolveAllowFromAsync: async () => ["async-owner"],
+          },
+        },
+      });
+      const authorization = await resolveCommandAuthorizationAsync({
+        ctx: {
+          Provider: providerSource === "explicit" ? "telegram" : undefined,
+          SenderId: "async-owner",
+        },
+        cfg: {},
+        commandAuthorized: true,
+      });
+      expect(authorization).toMatchObject({ providerId: "telegram", isAuthorizedSender: true });
+      expect(resolveLegacy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not recover a failed async allowlist through the synchronous hook", async () => {
+    const resolveLegacy = vi.fn(() => ["owner"]);
+    const entry = createOwnerEnforcingAllowFromPlugin("telegram", resolveLegacy);
+    registerAllowFromPlugins({
+      ...entry,
+      plugin: {
+        ...entry.plugin,
+        config: {
+          ...entry.plugin.config,
+          resolveAllowFromAsync: async () => {
+            throw new Error("unavailable");
+          },
+        },
+      },
+    });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const authorization = await resolveCommandAuthorizationAsync({
+        ctx: { SenderId: "owner" },
+        cfg: { commands: { allowFrom: { "*": ["owner"] } } },
+        commandAuthorized: true,
+      });
+      expect(authorization.isAuthorizedSender).toBe(false);
+      expect(resolveLegacy).not.toHaveBeenCalled();
+    } finally {
+      warning.mockRestore();
+    }
+  });
 
   function resolveTestChannelAuthorization(params: {
     from: string;
@@ -658,7 +723,7 @@ describe("resolveCommandAuthorization", () => {
       },
     ] as const)(
       "$name",
-      ({
+      async ({
         failingProvider,
         allowKey,
         channelMode,
@@ -685,7 +750,7 @@ describe("resolveCommandAuthorization", () => {
           commandAuthorized,
         };
         const auth = resolveCommandAuthorization(params);
-        const reset = resolveAuthorizedSessionResetCommand({
+        const reset = await resolveAuthorizedSessionResetCommand({
           ...params,
           agentId: "main",
           isGroup: false,

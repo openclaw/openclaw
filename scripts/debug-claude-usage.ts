@@ -333,8 +333,6 @@ const queryFirefoxCookieDb = (cookieDb: string): string | null => {
   }
 };
 
-const browserRootLabel = (root: string): string => path.basename(root) || "browser";
-
 const findClaudeSessionKey = (): { sessionKey: string; source: string } | null => {
   if (process.platform !== "darwin") {
     return null;
@@ -382,7 +380,10 @@ const findClaudeSessionKey = (): { sessionKey: string; source: string } | null =
       }
       const value = queryChromeCookieDb(db);
       if (value) {
-        return { sessionKey: value, source: `chromium:${browserRootLabel(root)}/${profile}` };
+        return {
+          sessionKey: value,
+          source: `chromium:${path.basename(root) || "browser"}/${profile}`,
+        };
       }
     }
   }
@@ -466,7 +467,7 @@ const main = async (argv = process.argv.slice(2)) => {
   const envSessionKey =
     process.env.CLAUDE_AI_SESSION_KEY?.trim() || process.env.CLAUDE_WEB_SESSION_KEY?.trim();
   const discoveredSession = opts.sessionKey || envSessionKey ? null : findClaudeSessionKey();
-  const sessionKey = opts.sessionKey?.trim() || envSessionKey || discoveredSession?.sessionKey;
+  const sessionKey = opts.sessionKey || envSessionKey || discoveredSession?.sessionKey;
   const source = opts.sessionKey
     ? "--session-key"
     : envSessionKey

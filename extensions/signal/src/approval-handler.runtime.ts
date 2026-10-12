@@ -211,7 +211,6 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
             ? { sessionKey: normalizeOptionalString(request.request.sessionKey) }
             : {}),
         },
-        routeAllowed: true,
         ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
       }))
         ? true

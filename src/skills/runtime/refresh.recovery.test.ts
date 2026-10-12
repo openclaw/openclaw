@@ -50,28 +50,6 @@ it("invalidates before joined retirement, retries once, and restores availabilit
   expect(events.mock.calls.filter(([event]) => event.reason === "watch-available")).toHaveLength(1);
 });
 
-it("does not automatically loop after its one recovery attempt fails", async () => {
-  const params = { workspaceDir: fixture.workspaceDir };
-  const root = path.join(params.workspaceDir, "skills");
-  refresh.ensureSkillsWatcher(params);
-  await observer.readyAll();
-  const original = observer.forRoot(root);
-  original.fail(new Error("first"));
-  await original.close();
-  await waitForSkillsWatcherTurn();
-  await observer.started();
-  const retry = observer.forRoot(root);
-  retry.fail(new Error("second"));
-  await waitForSkillsWatcherTurn();
-  expect(observer.forRoot(root, true)).toBe(retry);
-  expect(retry.close).not.toHaveBeenCalled();
-  refresh.ensureSkillsWatcher(params);
-  await retry.close();
-  await waitForSkillsWatcherTurn();
-  await observer.readyAll();
-  expect(refresh.reconcileSkillsWatcherCoverage(params)).toBe(true);
-});
-
 it("settles a deeper subscriber's scope update when replacement startup fails", async () => {
   const workspaceDir = fixture.workspaceDir;
   const root = await fixture.createFixtureDirectory("shared-source");

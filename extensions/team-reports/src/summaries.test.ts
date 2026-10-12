@@ -257,7 +257,7 @@ describe("team report summaries", () => {
     fresh.members.reverse();
     const next = await summarize(complete, { report: fresh, previous: first });
     expect(complete).toHaveBeenCalledOnce();
-    expect(next.reused).toBe(true);
+    expect(next.summary).toEqual(first.summary);
     expect(next.summary.fingerprint).toBe(first.summary.fingerprint);
     expect(next.report.generatedAtMs).toBe(12345);
     expect(next.report.members.find((entry) => entry.login === "alex")?.summary?.text).toBe(
@@ -274,7 +274,6 @@ describe("team report summaries", () => {
     expect(first.summary.source).toBe("fallback");
     expect(first.summary.warnings).toHaveLength(1);
     const next = await summarize(complete, { previous: first });
-    expect(next.reused).toBe(false);
     expect(next.summary.source).toBe("model");
     expect(next.summary.warnings).toBeUndefined();
     expect(complete).toHaveBeenCalledTimes(2);
@@ -284,7 +283,7 @@ describe("team report summaries", () => {
     const complete = vi.fn<Complete>().mockResolvedValue(completion(JSON.stringify(response())));
     const first = await summarize(complete);
     const next = await summarize(complete, { options: { enabled: false }, previous: first });
-    expect(next.reused).toBe(true);
+    expect(next.summary).toEqual(first.summary);
     expect(next.summary.source).toBe("model");
     expect(complete).toHaveBeenCalledOnce();
   });
@@ -295,7 +294,6 @@ describe("team report summaries", () => {
     const fresh = report();
     fresh.sources.github.warnings.push("One repository could not be read");
     const next = await summarize(complete, { report: fresh, previous: first });
-    expect(next.reused).toBe(false);
     expect(next.summary.fingerprint).not.toBe(first.summary.fingerprint);
     expect(complete).toHaveBeenCalledTimes(2);
   });

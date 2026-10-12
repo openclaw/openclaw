@@ -96,23 +96,15 @@ public enum DeviceSettingsAppearance: String, Encodable, Sendable {
     case system, light, dark
 }
 
-public enum DeviceSettingsLocationMode: String, CaseIterable, Encodable, Sendable {
-    case off, whileUsing, always
+public typealias DeviceSettingsLocationMode = OpenClawLocationMode
 
+extension OpenClawLocationMode {
     public init(_ mode: OpenClawLocationMode) {
-        switch mode {
-        case .off: self = .off
-        case .whileUsing: self = .whileUsing
-        case .always: self = .always
-        }
+        self = mode
     }
 
     public var nativeMode: OpenClawLocationMode {
-        switch self {
-        case .off: .off
-        case .whileUsing: .whileUsing
-        case .always: .always
-        }
+        self
     }
 }
 

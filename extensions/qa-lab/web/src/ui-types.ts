@@ -216,7 +216,6 @@ export type UiState = {
   captureDetailSplitPct: number;
   captureDetailSplitDragging: boolean;
   captureDetailView: "overview" | "flow" | "payload" | "headers";
-  capturePreferredDetailView: "overview" | "flow" | "payload" | "headers" | null;
   captureFlowDetailLayout: "nav-first" | "pair-first" | null;
   capturePayloadDetailLayout: "formatted" | "raw" | null;
   capturePayloadExtent: "preview" | "full";

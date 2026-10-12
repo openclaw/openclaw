@@ -204,8 +204,6 @@ export function resolvePdfModelConfigForTool(
     hasProviderAuthForTool({ ...params, provider: activeProvider })
       ? formatProviderModelRef(activeProvider, activeModel)
       : null;
-  let preferred: string | null = null;
-
   const providerOk = hasProviderAuthForTool({ ...params, provider: primary.provider });
   const providerVision = resolveProviderVisionModelFromConfig({
     cfg: params.cfg,
@@ -281,11 +279,10 @@ export function resolvePdfModelConfigForTool(
     ? [...nativePdfCandidates, ...textExtractionCandidates, ...genericImageCandidates]
     : [...nativePdfCandidates, ...genericImageCandidates, ...textExtractionCandidates];
 
-  if (providerOk && primarySupportsNativePdf && (providerVision || providerDefault)) {
-    preferred = providerVision ?? `${primary.provider}/${providerDefault}`;
-  } else {
-    preferred = fallbackCandidates[0] ?? null;
-  }
+  let preferred =
+    providerOk && primarySupportsNativePdf && (providerVision || providerDefault)
+      ? (providerVision ?? `${primary.provider}/${providerDefault}`)
+      : (fallbackCandidates[0] ?? null);
 
   // Preserve every existing native/auto candidate decision. The admitted session model
   // only fills the previous no-model gap when it can inspect images and has usable auth.

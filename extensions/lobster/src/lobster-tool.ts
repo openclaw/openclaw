@@ -6,13 +6,10 @@ import { Type } from "typebox";
 import {
   createEmbeddedLobsterRunner,
   resolveLobsterCwd,
-  type LobsterRunner,
   type LobsterRunnerParams,
 } from "./lobster-runner.js";
-type LobsterToolOptions = { runner?: LobsterRunner };
-
-export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolOptions) {
-  const runner = options?.runner ?? createEmbeddedLobsterRunner();
+export function createLobsterTool(api: OpenClawPluginApi) {
+  const runner = createEmbeddedLobsterRunner();
   return {
     name: "lobster",
     label: "Lobster Workflow",
@@ -72,9 +69,6 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       };
 
       const envelope = await runner.run(runnerParams);
-      if (!envelope.ok) {
-        throw new Error(envelope.error.message);
-      }
       return jsonResult(envelope);
     },
   };

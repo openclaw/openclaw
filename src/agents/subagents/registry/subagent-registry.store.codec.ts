@@ -3,11 +3,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionStateNotice } from "../../../sessions/session-state-events.kernel.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
+import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type {
   SubagentRegistryWrite,
   SubagentRegistryWriteReceipt,
-} from "./subagent-registry.store.kernel.js";
-import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
+} from "./subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type CanonicalSubagentRunRecord = SubagentRunRecord &
@@ -24,7 +24,7 @@ function hasStateStatus(
   return isRecord(value) && typeof value.status === "string" && statuses.has(value.status);
 }
 
-function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagentRunRecord {
+export function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagentRunRecord {
   return (
     isRecord(value) &&
     hasStateStatus(value.execution, EXECUTION_STATUSES) &&
@@ -74,7 +74,6 @@ export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRe
   if (!record.runId || !record.childSessionKey || !record.requesterSessionKey) {
     return null;
   }
-  rememberSubagentRunVersion(record, subagentRunRowVersion(row)!);
   return record;
 }
 

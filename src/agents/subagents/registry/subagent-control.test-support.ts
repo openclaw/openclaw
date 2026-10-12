@@ -2,14 +2,19 @@
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../config/config.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { callGateway } from "../../../gateway/call.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
@@ -143,4 +148,44 @@ export function useSubagentControlFixture() {
     wake,
     cleanup,
   };
+}
+
+export function useSubagentControlSessionStores() {
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterAll(async () => {
+      await closeOpenClawAgentDatabasesAsync(tempRoot);
+      cleanup();
+    }),
+  );
+  const tempRoot = tempDirs.make("openclaw-subagent-control-");
+  let tempStoreIndex = 0;
+
+  function nextSessionStorePath(label: string) {
+    tempStoreIndex += 1;
+    return path.join(tempRoot, `${tempStoreIndex}-${label}.json`);
+  }
+
+  function cfgWithSessionStore(storePath = nextSessionStorePath("sessions")): OpenClawConfig {
+    return {
+      session: { store: storePath },
+    } as OpenClawConfig;
+  }
+
+  async function writeSessionStoreFixture(label: string, store: Record<string, unknown>) {
+    const storePath = nextSessionStorePath(label);
+    for (const [sessionKey, entry] of Object.entries(store)) {
+      const record = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+      const sessionId =
+        typeof record.sessionId === "string" && record.sessionId.trim()
+          ? record.sessionId
+          : `sess-${sessionKey.replaceAll(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "")}`;
+      await replaceSessionEntry({ storePath, sessionKey }, {
+        ...record,
+        sessionId,
+      } as SessionEntry);
+    }
+    return storePath;
+  }
+
+  return { cfgWithSessionStore, writeSessionStoreFixture };
 }

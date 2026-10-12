@@ -47,9 +47,6 @@ struct OpenClawApp: App {
     @Environment(\.openSettings) private var openSettings
     @State private var state: AppState
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app")
-    private var tailscaleService: TailscaleService {
-        .shared
-    }
 
     init() {
         let launchPlan = AppLaunchRuntimePlan.current
@@ -97,7 +94,7 @@ struct OpenClawApp: App {
         // content-sized height per tab. Cmd-, still opens Dashboard settings via the replaced command.
         return Settings {
             ConnectionWindow(state: self.state)
-                .environment(self.tailscaleService)
+                .environment(TailscaleService.shared)
         }
         .commands {
             CommandGroup(replacing: .newItem) {
@@ -219,15 +216,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             fputs("OpenClaw profile is already running.\n", stderr)
             Darwin.exit(exitCode)
         }
-        var profileInstanceLock: AppInstanceLock?
-        var instanceOwnershipFailure: String?
-        switch ownership {
+        let (profileInstanceLock, instanceOwnershipFailure): (AppInstanceLock?, String?) = switch ownership {
         case let .acquired(lock):
-            profileInstanceLock = lock
+            (lock, nil)
         case .busy:
-            break
+            (nil, nil)
         case let .failed(message):
-            instanceOwnershipFailure = message
+            (nil, message)
         }
         self.profileInstanceLock = profileInstanceLock
         self.updaterController = instanceOwnershipFailure == nil
@@ -475,10 +470,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             OnboardingController.markComplete()
             return
         }
-        self.scheduleFirstRunOnboardingPresentation()
-    }
-
-    private func scheduleFirstRunOnboardingPresentation() {
         let seenVersion = AppDefaults.standard.integer(forKey: onboardingVersionKey)
         let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
         guard shouldShow else { return }

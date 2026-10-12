@@ -10,6 +10,7 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { pluginStatePublication } from "../../plugin-state/plugin-state-publication.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -35,7 +36,7 @@ import type {
 import type { SessionEntry } from "./types.js";
 
 type NativeDeletionCapture = NonNullable<ReturnType<typeof captureNativeSessionWorkerDeletion>>;
-// A may be unknown even without an S binding (ACP or initialization-only deletion).
+// A may be unknown even without an S binding (ACP's commit-only finalizer).
 // Keep the exact generation and its cleanup custody until the process owner closes.
 const unresolved = resolveGlobalSingleton(
   Symbol.for("openclaw.nativeSessionDeletionOutcomes"),
@@ -66,15 +67,6 @@ export function deleteSessionWithNativeBindingsInWorker(
     candidateKind: "session-native-binding-deletion",
     execute: (worker, participants) =>
       worker.execute({ type: "session.nativeBindings.delete", input: { ...participants, plan } }),
-    onAcknowledged(candidate) {
-      captured.committed(
-        new Set(
-          collectReclamationDeletionEntries(plan, candidate.result).map(
-            ({ sessionKey }) => sessionKey,
-          ),
-        ),
-      );
-    },
     onCommitted(candidate, published, identity) {
       try {
         onResult?.(candidate.result, identity);
@@ -209,6 +201,9 @@ export function runSessionNativeBindingWorkerOperation<
         }
         admitted = { admission, retained };
         assertHeld();
+        if (facts.kind === "native-binding-ready" || facts.phase === "delete") {
+          params.onTransactionFacts?.(facts);
+        }
         if (facts.kind === "native-binding-ready") {
           if (members.some(({ participant }) => participant.renewalPending())) {
             readinessRefused = true;
@@ -232,6 +227,22 @@ export function runSessionNativeBindingWorkerOperation<
       },
       async settle(outcome, acknowledged) {
         const settlement = await admitted?.retained.settled;
+        if (readinessAuthorized) {
+          pluginStatePublication.invalidateEntries(
+            { identity: sharedSource.key, incarnation: operationId },
+            members.flatMap(({ participant }) =>
+              participant.binding
+                ? [
+                    {
+                      plugin_id: participant.binding.pluginId,
+                      namespace: participant.binding.namespace,
+                      entry_key: participant.binding.key,
+                    },
+                  ]
+                : [],
+            ),
+          );
+        }
         const receipt = readReceipt(admitted?.admission.committed?.facts);
         const completed =
           settlement?.kind === "completed" && admitted?.admission.settlement?.kind === "completed";

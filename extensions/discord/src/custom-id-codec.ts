@@ -4,9 +4,7 @@
  * Decode falls back to the raw value: Discord redelivers old component ids
  * indefinitely and historical values may predate strict encoding.
  */
-export function encodeCustomIdComponent(value: string): string {
-  return encodeURIComponent(value);
-}
+export const encodeCustomIdComponent: (value: string) => string = encodeURIComponent;
 
 export function decodeCustomIdComponent(value: string): string {
   try {

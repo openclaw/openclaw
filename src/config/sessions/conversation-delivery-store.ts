@@ -1,5 +1,4 @@
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import type { AgentDatabaseOperations } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
   runOpenClawAgentWorkerWrite,
@@ -18,6 +17,8 @@ import {
   pinConversationDatabaseScope,
   type ConversationRegistryScope,
 } from "./conversation-registry.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 export { ConversationDeliveryInputError, ConversationDeliveryMissingError };
@@ -44,13 +45,28 @@ function readConversationDelivery(
   scope: ConversationDeliveryStoreScope,
   lookup: ConversationDeliveryLookup,
 ) {
+  const memory = getSessionActorStorageBinding({
+    agentId: scope.agentId,
+    storePath: scope.storePath,
+  });
+  if (memory) {
+    return deliveryResult(() =>
+      memory.actor.storage!.read(
+        { type: "session.conversation.delivery.read", input: lookup },
+        memory.authority,
+      ),
+    );
+  }
   const { options, scope: preparedScope } = pinConversationDatabaseScope(scope);
   const captured = structuredClone(lookup);
   // Reads share writer admission so they cannot overtake an accepted transition.
   return deliveryResult(() =>
     runOpenClawAgentWriteAdmission(options, () =>
-      withSessionHistoryWorkerDatabase(options, (reader) =>
-        reader.readConversationDelivery({ lookup: captured, env: preparedScope.env }),
+      withSessionHistoryWorkerDatabase(
+        options,
+        (reader) => reader.readConversationDelivery({ lookup: captured, env: preparedScope.env }),
+        // Conflict cleanup retains this FIFO turn and must not drain independent readers.
+        targetDiscoveryLane,
       ),
     ),
   );
@@ -71,14 +87,55 @@ export async function findConversationTurnDeliveryByReplyTarget(
   return readConversationDelivery(scope, params);
 }
 
-function writeConversationDelivery<
-  Key extends "conversation.delivery.begin" | "conversation.delivery.transition",
->(
+function writeConversationDelivery(
   scope: ConversationDeliveryStoreScope,
-  type: Key,
-  input: AgentDatabaseOperations[Key]["input"],
-  assertCurrent: () => void = () => {},
-): Promise<AgentDatabaseOperations[Key]["output"]> {
+  type: "conversation.delivery.begin",
+  input: ConversationDeliveryBegin,
+  assertCurrent?: () => void,
+): Promise<{ created: boolean; record: ConversationDeliveryRecord }>;
+function writeConversationDelivery(
+  scope: ConversationDeliveryStoreScope,
+  type: "conversation.delivery.transition",
+  input: ConversationDeliveryTransition,
+  assertCurrent?: () => void,
+): Promise<ConversationDeliveryRecord>;
+function writeConversationDelivery(
+  scope: ConversationDeliveryStoreScope,
+  ...[type, input, assertCurrent = () => {}]:
+    | ["conversation.delivery.begin", ConversationDeliveryBegin, (() => void)?]
+    | ["conversation.delivery.transition", ConversationDeliveryTransition, (() => void)?]
+): Promise<ConversationDeliveryRecord | { created: boolean; record: ConversationDeliveryRecord }> {
+  const memory = getSessionActorStorageBinding({
+    agentId: scope.agentId,
+    storePath: scope.storePath,
+  });
+  if (memory) {
+    return deliveryResult(async () => {
+      const authority = {
+        assertCurrent: () => memory.authority.assertCurrent(),
+        authorize: (...args: Parameters<typeof memory.authority.authorize>) => {
+          assertCurrent();
+          memory.authority.authorize(...args);
+        },
+      };
+      const outcome =
+        type === "conversation.delivery.begin"
+          ? await memory.actor.storage!.mutate(
+              { type: "session.conversation.delivery.begin", input },
+              authority,
+            )
+          : await memory.actor.storage!.mutate(
+              { type: "session.conversation.delivery.transition", input },
+              authority,
+            );
+      if (outcome.kind === "rolled-back") {
+        const error = new Error(outcome.error.message);
+        error.name = outcome.error.name;
+        throw error;
+      }
+      return outcome.value;
+    });
+  }
   const { options } = pinConversationDatabaseScope(scope);
   const execution = captureOpenClawAgentDatabaseExecution(options);
   const captured = structuredClone(input);
@@ -122,25 +179,12 @@ export async function beginConversationDeliveryOperation(
   return writeConversationDelivery(scope, "conversation.delivery.begin", params, assertCurrent);
 }
 
-function updateConversationDeliveryOperation(
-  scope: ConversationDeliveryStoreScope,
-  params: ConversationDeliveryTransition,
-  assertCurrent?: () => void,
-): Promise<ConversationDeliveryRecord> {
-  return writeConversationDelivery(
-    scope,
-    "conversation.delivery.transition",
-    params,
-    assertCurrent,
-  );
-}
-
 export async function markConversationDeliveryQueued(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
   queueId: string,
 ): Promise<ConversationDeliveryRecord> {
-  return updateConversationDeliveryOperation(scope, {
+  return writeConversationDelivery(scope, "conversation.delivery.transition", {
     operationId,
     status: "queued",
     queueId,
@@ -153,7 +197,7 @@ export async function markConversationDeliverySent(
   operationId: string,
   platformMessageId?: string,
 ): Promise<ConversationDeliveryRecord> {
-  return updateConversationDeliveryOperation(scope, {
+  return writeConversationDelivery(scope, "conversation.delivery.transition", {
     operationId,
     status: "sent",
     ...(platformMessageId ? { platformMessageId } : {}),
@@ -165,7 +209,7 @@ export async function markConversationDeliverySuppressed(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
 ): Promise<ConversationDeliveryRecord> {
-  return updateConversationDeliveryOperation(scope, {
+  return writeConversationDelivery(scope, "conversation.delivery.transition", {
     operationId,
     status: "suppressed",
     allowedFrom: ["created", "queued"],
@@ -181,7 +225,7 @@ export async function markConversationDeliveryRejected(
   if (!normalizedError) {
     throw new Error("Conversation delivery rejection error is required");
   }
-  return updateConversationDeliveryOperation(scope, {
+  return writeConversationDelivery(scope, "conversation.delivery.transition", {
     operationId,
     status: "rejected",
     rejectionError: normalizedError,
@@ -193,7 +237,7 @@ export async function markConversationDeliveryUnknown(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
 ): Promise<ConversationDeliveryRecord> {
-  return updateConversationDeliveryOperation(scope, {
+  return writeConversationDelivery(scope, "conversation.delivery.transition", {
     operationId,
     status: "unknown",
     allowedFrom: ["created", "queued"],
@@ -209,8 +253,9 @@ export async function markConversationDeliveryReplied(
   },
   assertCurrent?: () => void,
 ): Promise<ConversationDeliveryRecord> {
-  return updateConversationDeliveryOperation(
+  return writeConversationDelivery(
     scope,
+    "conversation.delivery.transition",
     {
       operationId: params.operationId,
       status: "replied",

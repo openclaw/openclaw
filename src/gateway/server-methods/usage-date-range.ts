@@ -66,7 +66,17 @@ const datePartsToStartMs = (
 ): number | undefined => {
   const { year, monthIndex, day } = parts;
   if (interpretation.mode === "gateway") {
-    return new Date(year, monthIndex, day).getTime();
+    // The host zone can skip a civil date. The constructor then lands on the
+    // next midnight, and the window ends before it starts.
+    const local = new Date(year, monthIndex, day);
+    if (
+      local.getFullYear() !== year ||
+      local.getMonth() !== monthIndex ||
+      local.getDate() !== day
+    ) {
+      return undefined;
+    }
+    return local.getTime();
   }
   if (interpretation.mode === "time-zone") {
     return resolveTimeZoneDayStartMs(
@@ -74,10 +84,10 @@ const datePartsToStartMs = (
       interpretation.timeZone,
     );
   }
-  if (interpretation.mode === "utc-offset") {
-    return Date.UTC(year, monthIndex, day) - interpretation.utcOffsetMinutes * 60 * 1000;
-  }
-  return Date.UTC(year, monthIndex, day);
+  const utcStart = Date.UTC(year, monthIndex, day);
+  return interpretation.mode === "utc-offset"
+    ? utcStart - interpretation.utcOffsetMinutes * 60 * 1000
+    : utcStart;
 };
 
 const datePartsToEndMs = (
@@ -85,7 +95,9 @@ const datePartsToEndMs = (
   interpretation: DateInterpretation,
 ): number | undefined => {
   const lookaheadDays =
-    interpretation.mode === "time-zone" ? 1 + MAX_CONSECUTIVE_SKIPPED_TIME_ZONE_DAYS : 1;
+    interpretation.mode === "time-zone" || interpretation.mode === "gateway"
+      ? 1 + MAX_CONSECUTIVE_SKIPPED_TIME_ZONE_DAYS
+      : 1;
   // A 24-hour date-line transition can remove one civil date entirely. Range
   // resolution separately verifies the requested day; this only finds its end.
   for (let daysAhead = 1; daysAhead <= lookaheadDays; daysAhead += 1) {
@@ -216,22 +228,13 @@ const parseDays = (raw: unknown): number | undefined => {
     : undefined;
 };
 
-const resolveRangeDays = (raw: unknown): number | "all" | undefined => {
-  switch (raw) {
-    case "all":
-      return "all";
-    case "7d":
-      return 7;
-    case "30d":
-      return 30;
-    case "90d":
-      return 90;
-    case "1y":
-      return 365;
-    default:
-      return undefined;
-  }
-};
+const RANGE_DAYS = new Map<unknown, number | "all">([
+  ["all", "all"],
+  ["7d", 7],
+  ["30d", 30],
+  ["90d", 90],
+  ["1y", 365],
+]);
 
 /**
  * Get date range from params (startDate/endDate or days).
@@ -301,7 +304,7 @@ export const resolveDateRange = (
     return { ok: true, value: { startMs, endMs } };
   }
 
-  const rangeDays = resolveRangeDays(params.range);
+  const rangeDays = RANGE_DAYS.get(params.range);
   if (rangeDays === "all") {
     return {
       ok: true,

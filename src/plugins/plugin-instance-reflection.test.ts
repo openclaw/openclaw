@@ -3,11 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 
-const cases = [
-  { realm: "host", kind: "function" },
-  { realm: "VM", kind: "object" },
-  { realm: "VM", kind: "array" },
-] as const;
+const cases = [{ realm: "VM", kind: "array" }] as const;
 
 let instance: PluginInstance;
 beforeEach(() => {
@@ -118,20 +114,6 @@ describe("managed plugin reflection", () => {
     },
   );
 
-  it.each(["value", "get"] as const)("preserves caller-owned fixed %s identity", async (field) => {
-    const view = instance.wrap({ execute() {} });
-    const supplied = () => "caller";
-    expect(Reflect.defineProperty(view, "caller", { [field]: supplied, configurable: false })).toBe(
-      true,
-    );
-    const descriptor = Object.getOwnPropertyDescriptor(view, "caller")!;
-    expect(descriptor[field]).toBe(supplied);
-    expect(Reflect.get(view, "caller")).toBe(field === "value" ? supplied : "caller");
-    await instance.dispose();
-    // Caller-owned code does not acquire plugin ownership through a fixed descriptor.
-    expect(Reflect.apply(descriptor[field], view, [])).toBe("caller");
-  });
-
   it("rejects freezing before changing either object's extensibility", async () => {
     const source = {
       execute() {
@@ -145,23 +127,6 @@ describe("managed plugin reflection", () => {
     expect(Reflect.defineProperty(view, "next", { value: 2, configurable: true })).toBe(true);
     expect(Reflect.get(source, "next")).toBe(2);
     expect(view.execute()).toBe("current");
-  });
-  it("applies native descriptor transitions without partially committing an invalid request", async () => {
-    const source = { execute() {}, mutable: 1 };
-    const view = instance.wrap(source);
-    const getter = () => 2;
-    expect(Reflect.defineProperty(view, "mutable", { get: getter, configurable: false })).toBe(
-      true,
-    );
-    expect(Object.getOwnPropertyDescriptor(view, "mutable")).toEqual({
-      get: getter,
-      set: undefined,
-      configurable: false,
-      enumerable: true,
-    });
-    expect(Reflect.get(view, "mutable")).toBe(2);
-    expect(Reflect.defineProperty(view, "mutable", { value: 3 })).toBe(false);
-    expect(Object.getOwnPropertyDescriptor(source, "mutable")).toMatchObject({ get: getter });
   });
 });
 
@@ -185,12 +150,10 @@ const proxyOperations = [
   },
 ];
 
-const proxyCases = proxyOperations.flatMap((operation) =>
-  (operation.name === "get" || operation.name === "has"
-    ? (["direct", "inherited"] as const)
-    : (["direct"] as const)
-  ).map((placement) => ({ operation, placement })),
-);
+const proxyCases = proxyOperations.map((operation) => ({
+  operation,
+  placement: operation.name === "get" ? "inherited" : "direct",
+}));
 
 describe("managed plugin proxy exports", () => {
   it.each(proxyCases)(

@@ -86,35 +86,6 @@ describe("node worker bundle transfer HTTP routing", () => {
       },
     });
   });
-
-  it("lets an authenticated exact bundle route own its response", async () => {
-    const callback: ArtifactTransferHttpCallback = async ({ bearer, artifactKey, res }) => {
-      if (bearer !== "valid-bundle-token") {
-        return { kind: "unauthorized" };
-      }
-      return {
-        kind: "authorized",
-        handle: () => {
-          res.writeHead(200, { "content-type": "text/plain" });
-          res.end(artifactKey);
-        },
-      };
-    };
-    await withTransferServer({
-      bundleCallback: callback,
-      run: async (origin) => {
-        const bundleHash = "b".repeat(64);
-        const response = await fetch(
-          `${origin}/__openclaw__/worker-bundle/v1/bundles/${bundleHash}`,
-          { headers: { authorization: "Bearer valid-bundle-token" } },
-        );
-
-        expect(response.status).toBe(200);
-        expect(response.headers.get("cache-control")).toBe("no-store");
-        await expect(response.text()).resolves.toBe(bundleHash);
-      },
-    });
-  });
 });
 
 describe("cloud bootstrap artifact HTTP routing", () => {

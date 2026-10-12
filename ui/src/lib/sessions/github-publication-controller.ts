@@ -51,6 +51,8 @@ export type GitHubPublicationView = {
   result: SessionGitHubPublicationResult | null;
   confirmation: SessionGitHubStatusResult["confirmation"];
   error: string | null;
+  /** Account discovery failed with nothing published or pending; `error` holds the reason. */
+  optionsUnavailable: boolean;
   personalReady: boolean;
   onSelect?: (source: "shared" | "personal") => void;
   onPublish?: () => void;
@@ -91,6 +93,7 @@ export class GitHubPublicationController {
   result: SessionGitHubPublicationResult | null = null;
   private confirmation: SessionGitHubStatusResult["confirmation"] = null;
   private error: string | null = null;
+  private errorActivity: GitHubPublicationActivity | null = null;
   private reviewedRequestId: string | null = null;
   private refreshPending = false;
 
@@ -114,6 +117,7 @@ export class GitHubPublicationController {
     this.result = null;
     this.confirmation = null;
     this.error = null;
+    this.errorActivity = null;
     this.reviewedRequestId = null;
     this.refreshPending = false;
   }
@@ -265,12 +269,14 @@ export class GitHubPublicationController {
     const current = () => this.version === version && this.owner.isCurrent();
     this.activity = activity;
     this.error = null;
+    this.errorActivity = null;
     this.changed();
     try {
       await action(this.owner, current);
     } catch (error) {
       if (current()) {
         this.error = formatUiError(error);
+        this.errorActivity = activity;
       }
     } finally {
       if (this.version === version) {
@@ -495,6 +501,8 @@ export class GitHubPublicationController {
       result: this.result,
       confirmation: this.confirmation,
       error: this.error,
+      optionsUnavailable:
+        this.errorActivity === "read" && !this.result && !this.locked && this.error !== null,
       personalReady: scope.personalReady,
       onSelect:
         scope.canPublishPersonal && !this.result && !this.locked

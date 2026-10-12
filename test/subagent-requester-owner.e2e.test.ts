@@ -2,13 +2,16 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatEvent } from "../packages/gateway-protocol/src/schema/logs-chat.js";
-import { saveSubagentRegistryToSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
+import { loadSessionEntry } from "../src/config/sessions/session-accessor.js";
 import { getSessionKysely } from "../src/config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
@@ -536,7 +539,11 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
             requesterSessionKey: RESTORED_REQUESTER_KEY,
             requesterDisplayKey: RESTORED_REQUESTER_KEY,
             requesterAgentId: REQUESTER_AGENT_ID,
-            agentId: REQUESTER_AGENT_ID,
+            childAgentId: REQUESTER_AGENT_ID,
+            sessionEntry: loadSessionEntry({
+              agentId: REQUESTER_AGENT_ID,
+              sessionKey: childSessionKey,
+            }),
             task: "REQUESTER-OWNER legacy restored completion",
             cleanup: "keep",
             expectsCompletionMessage: true,

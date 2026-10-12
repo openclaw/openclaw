@@ -9,8 +9,9 @@ import {
 } from "../delivery-queue-sqlite.js";
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { projectQueuedDeliveryOptions } from "./delivery-queue-projection.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
-import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
+import { preparedOutboundPayloads } from "./prepared-batch.js";
 
 export async function buildRecoveryDeliverParams(
   entry: QueuedDelivery,
@@ -62,30 +63,14 @@ export async function buildRecoveryDeliverParams(
   };
   return {
     cfg,
-    channel: entry.channel,
-    to: entry.to,
-    accountId: entry.accountId,
+    ...projectQueuedDeliveryOptions(entry),
     ...(entry.queuePolicy !== undefined ? { queuePolicy: entry.queuePolicy } : {}),
     ...(entry.requireUnknownSendReconciliation === true
       ? { requireUnknownSendReconciliation: true }
       : {}),
-    payloads: acceptedPreparedOutboundEntries(entry.preparedBatch).map(
-      (prepared) => prepared.payload,
-    ),
+    payloads: preparedOutboundPayloads(entry.preparedBatch),
     preparedBatch: entry.preparedBatch,
-    renderedBatchPlan: entry.renderedBatchPlan,
-    threadId: entry.threadId,
     reply: entry.reply,
-    formatting: entry.formatting,
-    identity: entry.identity,
-    bestEffort: entry.bestEffort,
-    gifPlayback: entry.gifPlayback,
-    forceDocument: entry.forceDocument,
-    silent: entry.silent,
-    mirror: entry.mirror,
-    session: entry.session,
-    gatewayClientScopes: entry.gatewayClientScopes,
-    preparedMessageId: entry.preparedMessageId,
     // Recovery owns terminal completion because nested delivery only reports
     // process-local evidence that cannot survive another restart.
     ...(conversationCompletion

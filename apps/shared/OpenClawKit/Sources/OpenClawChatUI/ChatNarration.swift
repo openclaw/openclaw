@@ -119,3 +119,12 @@ extension OpenClawChatViewModel {
         self.markTimelineChanged()
     }
 }
+
+extension OpenClawChatMessage {
+    /// Text blocks as sent, without Markdown parsing, for comparing transcript and streaming sources.
+    var rawText: String {
+        self.content.compactMap {
+            ChatMessageVisibleText.isVisibleContentType($0.type, role: self.role) ? $0.text : nil
+        }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}

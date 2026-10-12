@@ -97,9 +97,6 @@ export function resolveOpenRouterSsrfPolicy(
 
 export function isOpenRouterProxyReasoningUnsupportedModel(modelId: string | undefined): boolean {
   const normalized = (modelId ?? "").trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
   return (
     OPENROUTER_PROXY_REASONING_UNSUPPORTED_MODEL_IDS.has(normalized) ||
     normalized.startsWith("openrouter/hunter-alpha:")

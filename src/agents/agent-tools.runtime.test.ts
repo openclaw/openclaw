@@ -103,14 +103,11 @@ describe("wrapToolWithAbortSignal", () => {
     expect(runAbort.signal.aborted).toBe(false);
   });
 
-  it.each([
-    { name: "a disabled handoff flag", reason: { code: "sessions_yield", turnHandoff: false } },
-    { name: "a different handoff owner", reason: { code: "different", turnHandoff: true } },
-  ])("rejects sessions_yield when its run owner aborts with $name", async ({ reason }) => {
+  it("rejects sessions_yield when its run owner aborts with a disabled handoff flag", async () => {
     const runAbort = new AbortController();
     const wrapped = wrapToolWithAbortSignal(
       tool(async () => {
-        runAbort.abort(reason);
+        runAbort.abort({ code: "sessions_yield", turnHandoff: false });
         return emptyResult();
       }, "sessions_yield"),
       runAbort.signal,

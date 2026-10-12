@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Ensures ingress agent command callsites pass explicit owner context.
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";

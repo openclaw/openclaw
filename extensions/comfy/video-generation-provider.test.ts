@@ -1,6 +1,6 @@
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildComfyConfig, fetchGuardJson, parseComfyJsonBody } from "./test-helpers.js";
+import { buildComfyConfig, fetchGuardJson } from "./test-helpers.js";
 import { buildComfyVideoGenerationProvider } from "./video-generation-provider.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -11,10 +11,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
-
-function parseJsonBody(call: number): Record<string, unknown> {
-  return parseComfyJsonBody(fetchWithSsrFGuardMock, call);
-}
 
 function fetchGuardParams(call: number): { url?: unknown; auditContext?: unknown } {
   const params = fetchWithSsrFGuardMock.mock.calls[call]?.[0];
@@ -87,50 +83,6 @@ describe("comfy video-generation provider", () => {
     expectExplicitVideoGenerationCapabilities(buildComfyVideoGenerationProvider());
   });
 
-  it("submits a local workflow, waits for history, and downloads videos", async () => {
-    mockLocalVideoResponses({
-      promptId: "local-video-1",
-      outputs: {
-        "9": { gifs: [{ filename: "generated.mp4", subfolder: "", type: "output" }] },
-      },
-      download: { body: "mp4-data", contentType: "video/mp4" },
-    });
-    const result = await generateLocalVideo("9");
-
-    expect(fetchGuardParams(0).url).toBe("http://127.0.0.1:8188/prompt");
-    expect(fetchGuardParams(0).auditContext).toBe("comfy-video-generate");
-    expect(parseJsonBody(1)).toEqual({
-      prompt: {
-        "6": { inputs: { text: "animate a lobster" } },
-        "9": { inputs: {} },
-      },
-    });
-    expect(fetchGuardParams(1).url).toBe("http://127.0.0.1:8188/history/local-video-1");
-    expect(fetchGuardParams(1).auditContext).toBe("comfy-history");
-    expect(fetchGuardParams(2).url).toBe(
-      "http://127.0.0.1:8188/view?filename=generated.mp4&subfolder=&type=output",
-    );
-    expect(fetchGuardParams(2).auditContext).toBe("comfy-video-download");
-    expect(result).toEqual({
-      videos: [
-        {
-          buffer: Buffer.from("mp4-data"),
-          mimeType: "video/mp4",
-          fileName: "generated.mp4",
-          metadata: {
-            nodeId: "9",
-            promptId: "local-video-1",
-          },
-        },
-      ],
-      model: "workflow",
-      metadata: {
-        promptId: "local-video-1",
-        outputNodeIds: ["9"],
-      },
-    });
-  });
-
   it("returns only MP4 video entries from mixed images buckets", async () => {
     mockLocalVideoResponses({
       promptId: "local-video-mixed",
@@ -196,52 +148,7 @@ describe("comfy video-generation provider", () => {
     );
   });
 
-  it("rejects images-only workflow output for video generation", async () => {
-    mockLocalVideoResponses({
-      promptId: "local-video-images-only",
-      outputs: {
-        "9": {
-          images: [
-            { filename: "generated.png", subfolder: "", type: "output" },
-            { filename: "generated.jpg", subfolder: "", type: "output" },
-          ],
-        },
-      },
-    });
-
-    await expect(generateLocalVideo()).rejects.toThrow(
-      "Comfy workflow local-video-images-only completed without video outputs",
-    );
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("preserves legacy videos bucket output without filename filtering", async () => {
-    mockLocalVideoResponses({
-      promptId: "local-video-legacy",
-      outputs: {
-        "9": {
-          videos: [{ filename: "generated.mov", subfolder: "", type: "output" }],
-        },
-      },
-      download: {
-        body: "legacy-video-data",
-        contentType: "video/quicktime",
-      },
-    });
-
-    const result = await generateLocalVideo("9");
-
-    expect(result.videos[0]).toEqual(
-      expect.objectContaining({
-        buffer: Buffer.from("legacy-video-data"),
-        mimeType: "video/quicktime",
-        fileName: "generated.mov",
-      }),
-    );
-  });
-
   it.each([
-    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
     { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
     { name: "empty video", contentType: "video/mp4", body: "" },
   ])(

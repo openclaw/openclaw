@@ -1,5 +1,6 @@
 import type { SessionsCompanionStateResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { buildCompanionQuestionPrefill } from "../../lib/chat/companion-question.ts";
@@ -13,25 +14,35 @@ import {
   type ChatSessionCompanionTurn,
   requestSessionCompanionAnswer,
 } from "./chat-session-companion.ts";
+import type { SubagentRoster } from "./chat-spawned-subagent.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import { projectSubagentStatus } from "./chat-subagent-wait.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { formatChatSelectionAnnotation } from "./components/chat-selection-attachment.ts";
-import type { SidebarLayout } from "./sidebar-layout-types.ts";
+import type { SidebarLayout, SidebarSlotId } from "./sidebar-layout-types.ts";
 import {
   closeSlot,
   isSidebarSlotVisible,
   openSlot,
+  presentNarrowSidebarLayout,
   promoteSidebarPanel,
   setSidebarOpen,
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+  sidebarActivePanel,
   sidebarMainPanel,
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneSidePanels extends ChatPaneBase {
+  private subagentBatch: { session: string; sessionId?: string; active: boolean } | undefined;
   protected sessionCompanionHydrationKey = "";
   protected sessionCompanionFocusGeneration = 0;
   private sessionCompanionPresented = false;
   protected sessionCompanionFocusRequest?: () => boolean;
+  /** The subagent the Subagents panel was asked to show, or null for its list; taken once. */
+  protected subagentsShowRequest?: () => string | null | undefined;
+  /** The control a background panel was opened from in a narrow pane; the region takes it once. */
+  protected sideFocusOrigin?: () => HTMLElement | null;
   protected readonly sessionCompanionThreads = new ChatSessionCompanionThreads(() => {
     this.requestUpdate();
   });
@@ -77,31 +88,140 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     if (!state) {
       return;
     }
-    if (intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, "companion")) {
-      this.commitSidebarLayout(closeSlot(state.sidebarLayout, "companion"));
-      this.setSessionObserverVisibility(false);
-      return;
-    }
-    this.commitSidebarLayout(openSlot(state.sidebarLayout, "companion"));
-    this.setSessionObserverVisibility(true);
+    const closing = intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, "companion");
+    const changeSlot = closing ? closeSlot : openSlot;
+    this.commitSidebarLayout(changeSlot(state.sidebarLayout, "companion"));
+    this.setSessionObserverVisibility(!closing);
   }
 
   requestSubagentsPanel(intent: "open" | "toggle"): void {
     this.requestBackgroundPanel("subagents", intent);
   }
 
+  protected syncSubagentsPanelPresence(
+    session: GatewaySessionRow | undefined,
+    roster: SubagentRoster,
+  ): void {
+    const state = this.state;
+    if (this.compact || !state || !session || session.archived) {
+      return;
+    }
+    const identity = JSON.stringify([resolveChatAgentId(state), session.key]);
+    if (
+      this.subagentBatch?.session !== identity ||
+      (this.subagentBatch.sessionId &&
+        session.sessionId &&
+        this.subagentBatch.sessionId !== session.sessionId)
+    ) {
+      this.subagentBatch = { session: identity, sessionId: session.sessionId, active: false };
+    } else if (session.sessionId) {
+      this.subagentBatch.sessionId = session.sessionId;
+    }
+    const batch = this.subagentBatch;
+    const active = projectSubagentStatus(
+      { ...roster, selectedSession: session, messages: state.chatMessages },
+      false,
+    ).activity.some((child) => child.listed);
+    if (active && !batch.active) {
+      // Open once per batch. A later close remains the user's choice until all
+      // children settle; the automatic reveal is not a saved session preference.
+      batch.active = true;
+      const selected = sidebarActivePanel(state.sidebarLayout);
+      const keepSelection = selected && isSidebarSlotVisible(state.sidebarLayout, selected.slot);
+      this.commitSidebarLayout(
+        openSlot(state.sidebarLayout, "subagents", { activate: !keepSelection }),
+        { persist: false },
+      );
+    } else if (
+      !active &&
+      session.hasActiveSubagentRun !== true &&
+      roster.subagentSessionsHydrated &&
+      !roster.subagentSessionsPending
+    ) {
+      batch.active = false;
+    }
+  }
+
+  /** Opens the Subagents panel on one subagent, or on its list. */
+  protected showSubagents(subagentKey: string | null, focus = false): void {
+    const sessionKey = this.state?.sessionKey;
+    // The pane owns the intent across the panel's lazy mount; the panel takes
+    // it once, and only for the session that asked.
+    const take = () => {
+      if (this.subagentsShowRequest === take) {
+        this.subagentsShowRequest = undefined;
+        this.requestUpdate();
+      }
+      return this.state?.sessionKey === sessionKey ? subagentKey : undefined;
+    };
+    this.subagentsShowRequest = take;
+    this.requestUpdate();
+    this.requestBackgroundPanel("subagents", "open");
+    if (focus) {
+      void this.focusSubagentsPanel();
+    }
+  }
+
+  private async focusSubagentsPanel(): Promise<void> {
+    const state = this.state;
+    const sessionKey = state?.sessionKey;
+    await customElements.whenDefined("openclaw-chat-sidebar-region");
+    this.requestUpdate();
+    await this.updateComplete;
+    const region = this.renderRoot.querySelector("openclaw-chat-sidebar-region");
+    await region?.updateComplete;
+    const tab = region?.parentElement?.querySelector<HTMLElementTagNameMap["wa-tab"]>(
+      '[data-region-header="side"] wa-tab[active]',
+    );
+    await tab?.updateComplete;
+    if (
+      this.isConnected &&
+      state &&
+      this.state === state &&
+      state.sessionKey === sessionKey &&
+      this.isSlotShown(state.sidebarLayout, "subagents")
+    ) {
+      tab?.focus({ preventScroll: true });
+    }
+  }
+
+  /** The layout as this pane shows it, which a narrow pane decides for the background panels. */
+  protected presentSidebarLayout(layout: SidebarLayout): SidebarLayout {
+    return this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX
+      ? presentNarrowSidebarLayout(layout)
+      : layout;
+  }
+
+  protected isSlotShown(layout: SidebarLayout, slot: SidebarSlotId): boolean {
+    return isSidebarSlotVisible(this.presentSidebarLayout(layout), slot);
+  }
+
   protected requestBackgroundPanel(
     slot: "subagents" | "processes",
-    intent: "open" | "toggle",
+    intent: "open" | "close" | "toggle",
   ): void {
     const state = this.state;
     if (!state) {
       return;
     }
+    const closing =
+      intent === "close" ||
+      (intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, slot));
+    if (!closing && this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX) {
+      // The panel is about to replace the view this control is in; the region,
+      // which may not have loaded yet, carries focus across from it.
+      const active = this.ownerDocument.activeElement;
+      const origin = active instanceof HTMLElement && this.contains(active) ? active : null;
+      const take = () => {
+        if (this.sideFocusOrigin === take) {
+          this.sideFocusOrigin = undefined;
+        }
+        return origin;
+      };
+      this.sideFocusOrigin = take;
+    }
     this.commitSidebarLayout(
-      intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, slot)
-        ? closeSlot(state.sidebarLayout, slot)
-        : openSlot(state.sidebarLayout, slot),
+      closing ? closeSlot(state.sidebarLayout, slot) : openSlot(state.sidebarLayout, slot),
     );
   }
 

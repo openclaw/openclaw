@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as changedDependencies from "../../scripts/lib/changed-dependencies.mts";
 import { hasBuildArtifactAffectingChange } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
 import {
@@ -304,19 +303,12 @@ describe("CI changed Node test plan", () => {
       mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
       writeFileSync(path.join(cwd, file), source);
     }
-    const dependencies = vi
-      .spyOn(changedDependencies, "resolveChangedDependencies")
-      .mockReturnValue({ importers: [], pluginMetadataPaths: [manifest] });
-    try {
-      const shards = createChangedNodeTestShards([manifest], { cwd });
-      expect(shards).not.toBeNull();
-      expect(selectedFiles(shards).toSorted()).toEqual([...pluginTests, reader].toSorted());
-      expect(
-        selectedFiles(createChangedNodeTestShards([manifest, hostReader], { cwd })).toSorted(),
-      ).toEqual([...pluginTests, reader, hostReader].toSorted());
-    } finally {
-      dependencies.mockRestore();
-    }
+    const shards = createChangedNodeTestShards([manifest], { cwd });
+    expect(shards).not.toBeNull();
+    expect(selectedFiles(shards).toSorted()).toEqual([...pluginTests, reader].toSorted());
+    expect(
+      selectedFiles(createChangedNodeTestShards([manifest, hostReader], { cwd })).toSorted(),
+    ).toEqual([...pluginTests, reader, hostReader].toSorted());
   });
 
   it("keeps a focused source job beside its canonical source scanner", () => {

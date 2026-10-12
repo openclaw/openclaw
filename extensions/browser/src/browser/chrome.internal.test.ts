@@ -10,10 +10,15 @@ import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/proc-safe/identity")>();
+  return { ...actual, readProcessIdentity: vi.fn(actual.readProcessIdentity) };
+});
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -79,6 +84,7 @@ import {
   resolveOpenClawUserDataDir,
   stopOwnedOpenClawChrome,
 } from "./chrome.js";
+import { createChromeProcessIdentityFixture } from "./chrome.process-identity.test-support.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
@@ -1144,13 +1150,14 @@ describe("chrome.ts internal", () => {
           }
           return target;
         });
-        const signal = vi.spyOn(process, "kill").mockReturnValue(true);
+        const owner = createChromeProcessIdentityFixture(43213, "2026-01-01");
+        onTestFinished(owner.restore);
 
         await expect(stopOwnedOpenClawChrome(makeResolved(), profile)).resolves.toMatchObject({
           status: expected,
         });
-        expect(signal).not.toHaveBeenCalledWith(43213, "SIGTERM");
-        expect(signal).not.toHaveBeenCalledWith(43213, "SIGKILL");
+        expect(owner.killSpy).not.toHaveBeenCalledWith(43213, "SIGTERM");
+        expect(owner.killSpy).not.toHaveBeenCalledWith(43213, "SIGKILL");
       },
     );
 
@@ -1180,18 +1187,12 @@ describe("chrome.ts internal", () => {
         const executablePath = await stubExistingProfile();
 
         const managedPid = 43213;
-        let managedProcessAlive = true;
-        let processStartTime = "Fri Jul 17 12:00:00 2026";
+        const { processState, killSpy, restore } = createChromeProcessIdentityFixture(
+          managedPid,
+          "Fri Jul 17 12:00:00 2026",
+        );
         let rotateProcessIdentity = true;
         let userDataDir = "";
-        const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid, signal) => {
-          if (pid === managedPid && signal === 0 && !managedProcessAlive) {
-            const error = new Error("no such process") as NodeJS.ErrnoException;
-            error.code = "ESRCH";
-            throw error;
-          }
-          return true;
-        }) as typeof process.kill);
         const connectionSpy = vi.spyOn(Agent.prototype, "createConnection");
 
         Object.defineProperty(process, "platform", { value: "darwin" });
@@ -1201,13 +1202,13 @@ describe("chrome.ts internal", () => {
             onCommand: (method) => {
               if (method === "SystemInfo.getProcessInfo") {
                 if (rotateProcessIdentity) {
-                  processStartTime = "Fri Jul 17 12:01:00 2026";
+                  processState.startTime = "Fri Jul 17 12:01:00 2026";
                   rotateProcessIdentity = false;
                 }
                 return { processInfo: [{ type: "browser", id: managedPid }] };
               }
               expect(method).toBe("Browser.close");
-              managedProcessAlive = false;
+              processState.alive = false;
               if (replaceLock) {
                 fs.unlinkSync(path.join(userDataDir, "SingletonLock"));
                 fs.symlinkSync(
@@ -1230,9 +1231,6 @@ describe("chrome.ts internal", () => {
                 if (command === "ps" && args.includes("command=")) {
                   return `${executablePath} --remote-debugging-port=${port} --user-data-dir=${userDataDir}${suffix} --no-first-run\n`;
                 }
-                if (path.basename(command) === "ps" && args.includes("lstart=")) {
-                  return `${processStartTime}\n`;
-                }
                 if (command === "lsof") {
                   return `p${managedPid}\n`;
                 }
@@ -1251,7 +1249,7 @@ describe("chrome.ts internal", () => {
                 await expect(stopOwnedOpenClawChrome(resolved, profile)).resolves.toMatchObject({
                   status: "unverified",
                 });
-                expect(managedProcessAlive).toBe(true);
+                expect(processState.alive).toBe(true);
                 expect(killSpy).not.toHaveBeenCalledWith(managedPid, "SIGTERM");
                 await expect(
                   fsp.lstat(path.join(userDataDir, "SingletonLock")),
@@ -1269,7 +1267,7 @@ describe("chrome.ts internal", () => {
                 }
                 expect(killSpy).not.toHaveBeenCalledWith(managedPid, "SIGTERM");
                 expect(killSpy).not.toHaveBeenCalledWith(managedPid, "SIGKILL");
-                expect(managedProcessAlive).toBe(Boolean(suffix));
+                expect(processState.alive).toBe(Boolean(suffix));
                 if (suffix || replaceLock) {
                   await expect(fsp.readlink(path.join(userDataDir, "SingletonLock"))).resolves.toBe(
                     replaceLock
@@ -1287,6 +1285,7 @@ describe("chrome.ts internal", () => {
             },
           });
         } finally {
+          restore();
           Object.defineProperty(process, "platform", { value: originalPlatform });
         }
       },

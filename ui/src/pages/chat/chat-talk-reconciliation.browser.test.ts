@@ -3,6 +3,7 @@ import { afterEach, expect, it } from "vitest";
 import { page } from "vitest/browser";
 import "../../styles.css";
 import "../../styles/chat.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
@@ -59,15 +60,20 @@ class TalkReconciliationFixture extends LitElement {
 }
 customElements.define("test-talk-reconciliation", TalkReconciliationFixture);
 let fixture: TalkReconciliationFixture | undefined;
+let container: HTMLElement | undefined;
 afterEach(() => {
   fixture?.remove();
   fixture = undefined;
+  container?.remove();
+  container = undefined;
 });
 it("reconciles persisted voice while preserving the live tail", async () => {
   await page.viewport(1440, 900);
   fixture = new TalkReconciliationFixture();
   fixture.style.cssText = "display:block;height:900px;width:100%";
-  document.body.append(fixture);
+  container = createComposerContainer();
+  container.append(fixture);
+  document.body.append(container);
   await fixture.updateComplete;
   await expect.poll(() => fixture!.querySelectorAll(".agent-chat__voice-turn").length).toBe(3);
   fixture.saved = true;

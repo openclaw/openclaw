@@ -246,9 +246,8 @@ function swiftInitializerParam(params: {
   name: string;
   schema: JsonSchema;
   required: boolean;
-  allowStructuralNamed?: boolean;
 }): string {
-  const type = swiftType(params.schema, params.required, params.allowStructuralNamed ?? true);
+  const type = swiftType(params.schema, params.required, true);
   return params.required ? `${params.name}: ${type}` : `${params.name}: ${type} = nil`;
 }
 

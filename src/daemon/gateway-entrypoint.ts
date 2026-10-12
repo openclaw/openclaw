@@ -1,4 +1,3 @@
-/** Resolves gateway dist entrypoints used by installed daemon command lines. */
 import path from "node:path";
 import { pathExists } from "../utils.js";
 
@@ -9,7 +8,6 @@ const GATEWAY_DIST_ENTRYPOINT_BASENAMES = [
   "entry.mjs",
 ] as const;
 
-/** Detects built gateway dist entrypoints from service command arguments. */
 export function isGatewayDistEntrypointPath(inputPath: string): boolean {
   return /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(inputPath);
 }

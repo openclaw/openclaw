@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { getOwedHarnessCompletionTask } from "../../agents/agent-harness-completion-recovery.js";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import {
@@ -13,13 +14,21 @@ import type {
   ConversationRegistryScope,
   PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
-import { mergeRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import type { SessionActorAuthority } from "../../config/sessions/session-actor-contract.js";
+import {
+  runSessionActorCommand,
+  withSessionActor,
+} from "../../config/sessions/session-actor-scope.js";
+import {
+  projectPendingFinalDeliverySettlement,
+  type PendingFinalDeliverySettlementInput,
+} from "../../config/sessions/session-pending-final-settlement.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -27,12 +36,12 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
 import { isGatewayExternallySupervised } from "../gateway-supervision.js";
+import { SqliteWorkerError } from "../sqlite-worker-contract.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 
@@ -40,11 +49,8 @@ import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 export type ConversationDeliveryTarget = Pick<
   PreparedConversationRegistryScope,
   "agentId" | "databaseAgentId" | "storePath"
-> & {
-  stateDir: string;
-  workerContext: OpenClawStateWorkerContext;
-  supervisorMode?: "external";
-};
+> &
+  DeliveryQueueStateContext;
 
 export function captureConversationDeliveryTarget(
   scope: PreparedConversationRegistryScope,
@@ -140,157 +146,141 @@ export async function settlePendingFinalDelivery(
 ): Promise<DurableDeliveryCompletionResult> {
   let settled: DurableDeliveryCompletionResult["state"] = "stale";
   let wakeRecovery = false;
-  await patchSessionEntryCore(
-    {
-      agentId: completion.agentId,
-      sessionKey: completion.sessionKey,
-      storePath: completion.storePath,
-      env: resolveDeliveryQueueStateEnv(options.stateDir, options.stateContext),
-    },
-    (entry) => {
-      const internalEntry: InternalSessionEntry = entry;
-      if (
-        internalEntry.sessionId !== completion.sessionId ||
-        internalEntry.pendingFinalDelivery?.intentId !== completion.intentId
-      ) {
-        return null;
-      }
-      const deliveries = internalEntry.pendingFinalDelivery.deliveries;
-      const index = deliveries?.findIndex(({ id }) => id === completion.deliveryId) ?? -1;
-      if (!deliveries || index < 0) {
-        return null;
-      }
-      const authority = completion.sessionWriterDeliveryAuthority;
-      const claim = authority?.harnessCompletion;
-      if (
-        completion.agentId !== undefined &&
-        ((authority?.agentId !== undefined &&
-          normalizeAgentId(authority.agentId) !== normalizeAgentId(completion.agentId)) ||
-          (claim &&
-            normalizeAgentId(claim.requesterAgentId) !== normalizeAgentId(completion.agentId)))
-      ) {
-        return null;
-      }
-      if (
-        claim &&
-        (!authority ||
-          authority.sessionKey !== completion.sessionKey ||
-          (authority.storePath !== undefined && authority.storePath !== completion.storePath) ||
-          claim.requesterSessionKey !== completion.sessionKey ||
-          claim.sessionId !== completion.sessionId ||
-          authority.expectedSessionId !== completion.sessionId ||
-          (authority.agentId !== undefined && authority.agentId !== claim.requesterAgentId) ||
-          (authority.expectedLifecycleRevision !== undefined &&
-            authority.expectedLifecycleRevision !== internalEntry.lifecycleRevision) ||
-          (authority.expectedWriterRunId !== undefined &&
-            authority.expectedWriterRunId !== internalEntry.activeWriterRunId) ||
-          !getOwedHarnessCompletionTask(claim, internalEntry))
-      ) {
-        return null;
-      }
-      const current = deliveries[index]!.state;
-      if (expectedStates && !expectedStates.some((expected) => expected === current)) {
-        return null;
-      }
-      const terminal =
-        current === "delivered" ||
-        current === "suppressed" ||
-        (current === "unknown" && state === "unknown");
-      settled = terminal ? current : state;
-      const pending = internalEntry.pendingFinalDelivery;
-      const existingNotice = internalEntry.pendingDeliveryNotice;
-      const owedNotice =
-        settled === "unknown" &&
-        (current === "queued" || current === "unknown") &&
-        pending.context &&
-        pending.intentId &&
-        existingNotice?.intentId !== pending.intentId &&
-        (!existingNotice || existingNotice.createdAt <= pending.createdAt)
+  const scope = {
+    agentId: completion.agentId,
+    sessionKey: completion.sessionKey,
+    storePath: completion.storePath,
+    env: resolveDeliveryQueueStateEnv(options.stateDir, options.stateContext),
+  };
+  const settlement: PendingFinalDeliverySettlementInput = {
+    sessionId: completion.sessionId,
+    intentId: completion.intentId,
+    deliveryId: completion.deliveryId,
+    state,
+    expectedStates: expectedStates?.slice(),
+  };
+  const authority = completion.sessionWriterDeliveryAuthority;
+  const claim = authority?.harnessCompletion;
+  if (
+    completion.agentId !== undefined &&
+    authority?.agentId !== undefined &&
+    normalizeAgentId(authority.agentId) !== normalizeAgentId(completion.agentId)
+  ) {
+    return { state: "stale" };
+  }
+  let refused = false;
+  let preimage: SessionEntry | undefined;
+  const hasCurrentClaim = (entry: SessionEntry | undefined, previous = entry) =>
+    !claim ||
+    Boolean(
+      entry &&
+      previous &&
+      entry.sessionId === completion.sessionId &&
+      entry.pendingFinalDelivery?.intentId === completion.intentId &&
+      entry.pendingFinalDelivery.deliveries?.some(({ id }) => id === completion.deliveryId) &&
+      authority &&
+      authority.sessionKey === completion.sessionKey &&
+      (authority.storePath === undefined || authority.storePath === completion.storePath) &&
+      claim.requesterSessionKey === completion.sessionKey &&
+      claim.sessionId === completion.sessionId &&
+      authority.expectedSessionId === completion.sessionId &&
+      (authority.agentId === undefined || authority.agentId === claim.requesterAgentId) &&
+      (completion.agentId === undefined ||
+        normalizeAgentId(claim.requesterAgentId) === normalizeAgentId(completion.agentId)) &&
+      (authority.expectedLifecycleRevision === undefined ||
+        authority.expectedLifecycleRevision === entry.lifecycleRevision) &&
+      (authority.expectedWriterRunId === undefined ||
+        authority.expectedWriterRunId === entry.activeWriterRunId) &&
+      getOwedHarnessCompletionTask(claim, previous),
+    );
+  const evidence = claim
+    ? {
+        claim,
+        result: options.identifiedResult
           ? {
-              pendingDeliveryNotice: {
-                createdAt: pending.createdAt,
-                context: pending.context,
-                intentId: pending.intentId,
-                state: "owed" as const,
-              },
+              channel: options.identifiedResult.channel,
+              target: options.identifiedResult.target,
+              platformMessageId: readPlatformMessageId(options.identifiedResult),
             }
-          : undefined;
-      const updatedDeliveries = deliveries.with(index, {
-        id: completion.deliveryId,
-        state: settled,
-      });
-      const result = options.identifiedResult;
-      const platformMessageId = result ? readPlatformMessageId(result) : undefined;
-      const context = pending.context;
-      // Commit the receipt with pending-final completion before queue acknowledgement
-      // so recovery can recognize this exact claim without another announcement.
-      const terminalEvidence =
-        claim &&
-        result &&
-        platformMessageId &&
-        result.channel === context?.channel &&
-        context?.to &&
-        (!result.target || result.target.id === context.to) &&
-        settled === "delivered" &&
-        updatedDeliveries.every((delivery) => delivery.state === "delivered")
-          ? mergeRestartRecoveryTerminalDeliveryEvidence(
-              internalEntry.restartRecoveryTerminalDeliveryEvidence,
-              [
-                {
-                  runId: claim.sourceRunId,
-                  harnessCompletion: claim,
-                  deliveryContext: context,
-                  captured: true,
-                  payloads: [{ visible: true }],
-                  deliveryStatus: { status: "sent", resultCount: 1 },
-                  durableFinalReceipt: {
-                    intentId: completion.intentId,
-                    deliveryId: completion.deliveryId,
-                    platformMessageId,
-                  },
-                },
-              ],
-            )
-          : undefined;
-      const clearsNotice =
-        existingNotice?.state !== "acknowledged" &&
-        !updatedDeliveries.some((delivery) => delivery.state === "unknown") &&
-        settled !== "queued" &&
-        settled !== "unknown" &&
-        existingNotice?.intentId === pending.intentId;
-      // One resolved sibling cannot erase another's ambiguity. Acknowledgment
-      // remains an intent-level fact so delayed settlement cannot owe it again.
-      if (settled === current && !owedNotice && !clearsNotice && !terminalEvidence) {
-        return null;
+          : undefined,
       }
-      wakeRecovery =
-        settled !== "queued" &&
-        internalEntry.status === "running" &&
-        internalEntry.abortedLastRun === true;
-      return {
-        ...(internalEntry.mainRestartRecovery
-          ? {
-              mainRestartRecovery: {
-                ...internalEntry.mainRestartRecovery,
-                revision: internalEntry.mainRestartRecovery.revision + 1,
-              },
-            }
-          : {}),
-        pendingFinalDelivery: {
-          ...internalEntry.pendingFinalDelivery,
-          deliveries: updatedDeliveries,
-        },
-        ...(clearsNotice ? { pendingDeliveryNotice: undefined } : owedNotice),
-        ...(terminalEvidence ? { restartRecoveryTerminalDeliveryEvidence: terminalEvidence } : {}),
-      };
+    : undefined;
+  const live: SessionActorAuthority = {
+    assertCurrent() {},
+    authorize(stage, facts) {
+      if (stage === "transaction" || !preimage) {
+        preimage = facts.entry;
+      }
+      if (!hasCurrentClaim(facts.entry, preimage)) {
+        refused = true;
+        throw new Error("Pending final delivery authority was revoked");
+      }
     },
-    {
+  };
+  let actorOwned = false;
+  await withSessionActor(scope, { assertCurrent() {}, assertReadable() {} }, async (actor) => {
+    actorOwned = true;
+    let outcome;
+    try {
+      outcome = await runSessionActorCommand(actor, live, (snapshot) =>
+        actor.deliverySettled(
+          {
+            commandId: randomUUID(),
+            phaseId: randomUUID(),
+            expected: snapshot?.version,
+            settlement,
+            ...(evidence ? { evidence } : {}),
+          },
+          live,
+        ),
+      );
+    } catch (error) {
+      // No command was accepted if its read's live authorization refused.
+      if (refused) {
+        return;
+      }
+      throw error;
+    }
+    if (outcome.kind !== "committed") {
+      if (outcome.kind === "rolled-back" && (refused || outcome.reason === "stale-state")) {
+        return;
+      }
+      throw new SqliteWorkerError(
+        outcome.error.message,
+        outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
+      );
+    }
+    if (!("state" in outcome.value)) {
+      throw new Error("Pending final delivery returned another settlement");
+    }
+    settled = outcome.value.state;
+    wakeRecovery = outcome.value.wakeRecovery;
+    if (outcome.failure) {
+      throw new Error(outcome.failure.message);
+    }
+  });
+  if (!actorOwned) {
+    // Native incognito retains its existing patch owner until its actor cutover.
+    const patchOptions = {
       skipMaintenance: true,
       takeCacheOwnership: true,
       preserveActivity: options.preserveActivity,
       workerGuard: {},
-    },
-  );
+    };
+    await patchSessionEntryCore(
+      scope,
+      (entry) => {
+        if (!hasCurrentClaim(entry)) {
+          return null;
+        }
+        const projected = projectPendingFinalDeliverySettlement(entry, settlement, evidence);
+        settled = projected.state;
+        wakeRecovery = projected.wakeRecovery;
+        return projected.patch;
+      },
+      patchOptions,
+    );
+  }
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =
       await import("../../agents/main-session-recovery/main-session-recovery-owner-release.js");
@@ -345,91 +335,12 @@ export async function completeDurableDelivery(
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
-  return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "delivered", undefined, {
-        stateDir,
-        stateContext,
-        identifiedResult: result,
-      })
-    : conversationResult(
-        completion,
-        (scope) =>
-          markConversationDeliverySent(
-            scope,
-            completion.operationId,
-            readPlatformMessageId(result),
-          ),
-        stateDir,
-        stateContext,
-        target,
-      );
-}
-
-/** Finalizes a policy-suppressed send before its durable intent is acknowledged. */
-async function suppressDurableDelivery(
-  completion: DurableDeliveryCompletion,
-  stateDir?: string,
-  stateContext?: DeliveryQueueStateContext,
-  target?: ConversationDeliveryTarget,
-): Promise<DurableDeliveryCompletionResult> {
-  return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, {
-        stateDir,
-        stateContext,
-      })
-    : conversationResult(
-        completion,
-        (scope) => markConversationDeliverySuppressed(scope, completion.operationId),
-        stateDir,
-        stateContext,
-        target,
-      );
-}
-
-/** Finalizes a permanent provider rejection that provably preceded platform I/O. */
-export async function rejectDurableDelivery(
-  completion: DurableDeliveryCompletion,
-  error: string,
-  stateDir?: string,
-  stateContext?: DeliveryQueueStateContext,
-  target?: ConversationDeliveryTarget,
-): Promise<DurableDeliveryCompletionResult> {
-  // Proven no-send: terminal suppression, not the unknown state that owes an
-  // uncertainty notice for a send the provider asserts never began.
-  return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, {
-        stateDir,
-        stateContext,
-      })
-    : conversationResult(
-        completion,
-        (scope) => markConversationDeliveryRejected(scope, completion.operationId, error),
-        stateDir,
-        stateContext,
-        target,
-      );
-}
-
-/** Makes a dead-lettered durable send terminal without allowing a blind replay. */
-export async function failDurableDelivery(
-  completion: DurableDeliveryCompletion,
-  stateDir?: string,
-  stateContext?: DeliveryQueueStateContext,
-  target?: ConversationDeliveryTarget,
-): Promise<DurableDeliveryCompletionResult> {
-  return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "unknown", undefined, { stateDir, stateContext })
-    : conversationResult(
-        completion,
-        (scope) => markConversationDeliveryUnknown(scope, completion.operationId),
-        stateDir,
-        stateContext,
-        target,
-      );
+  return settleDurableDelivery(completion, { result }, stateDir, stateContext, target);
 }
 
 type DurableDeliveryTerminalEvidence =
   | { result: OutboundDeliveryResult }
+  | { rejectionError: string }
   | { platformSendStarted: boolean };
 
 /** Settles the completion owner from the final evidence held by its lifecycle owner. */
@@ -440,9 +351,43 @@ export async function settleDurableDelivery(
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
-  return "result" in evidence
-    ? completeDurableDelivery(completion, evidence.result, stateDir, stateContext, target)
-    : evidence.platformSendStarted
-      ? failDurableDelivery(completion, stateDir, stateContext, target)
-      : suppressDurableDelivery(completion, stateDir, stateContext, target);
+  // Proven no-send rejections suppress a pending final without owing an
+  // uncertainty notice; conversation delivery retains the explicit rejection.
+  const state =
+    "result" in evidence
+      ? "delivered"
+      : "platformSendStarted" in evidence && evidence.platformSendStarted
+        ? "unknown"
+        : "suppressed";
+  return completion.kind === "pending-final"
+    ? await settlePendingFinalDelivery(completion, state, undefined, {
+        stateDir,
+        stateContext,
+        ...("result" in evidence ? { identifiedResult: evidence.result } : {}),
+      })
+    : conversationResult(
+        completion,
+        (scope) => {
+          if ("result" in evidence) {
+            return markConversationDeliverySent(
+              scope,
+              completion.operationId,
+              readPlatformMessageId(evidence.result),
+            );
+          }
+          if ("rejectionError" in evidence) {
+            return markConversationDeliveryRejected(
+              scope,
+              completion.operationId,
+              evidence.rejectionError,
+            );
+          }
+          return evidence.platformSendStarted
+            ? markConversationDeliveryUnknown(scope, completion.operationId)
+            : markConversationDeliverySuppressed(scope, completion.operationId);
+        },
+        stateDir,
+        stateContext,
+        target,
+      );
 }

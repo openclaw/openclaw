@@ -137,15 +137,13 @@ export function readSessionTranscriptBoundedMessageTailPageFromProjection(
       : readSnapshotEventRows(
           projection,
           selected.map((row) => row.event_seq),
-        ).map((row) => [row.seq, row.event_json]),
+        ).map((row) => [row.seq, row]),
   );
   const events = selected
     .toSorted((left, right) => left.message_position - right.message_position)
     .flatMap((row) => {
-      const eventJson = payloads.get(row.event_seq);
-      return eventJson === undefined
-        ? []
-        : [parseActiveTranscriptMessageRow({ ...row, event_json: eventJson })];
+      const payload = payloads.get(row.event_seq);
+      return payload === undefined ? [] : [parseActiveTranscriptMessageRow({ ...row, ...payload })];
     });
   return {
     ...checked,

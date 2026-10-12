@@ -16,14 +16,14 @@ import {
   clearUserProfileAuthLink,
   setUserProfileAuthLink,
   listUserModelAccounts,
-  readUserModelAccountSummary,
   readSelectedUserModelAccount,
 } from "./user-model-accounts.js";
 import {
   selectProfileAccessEntries,
   selectStoredGitHubIdentities,
+  selectUserProfileRoleAuthority,
 } from "./user-profile-github-identity.js";
-import { listUserProfilesSync, readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
+import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import {
   createUserProfileWriteOperation,
   linkEmail,
@@ -149,6 +149,8 @@ export type UserProfileWriteOperations = WorkerOperations<typeof userProfileWrit
 
 export const userProfileOperations = {
   ...userProfileWriteOperations,
+  "userProfiles.roleAuthority.resolve": ({ profileId }: { profileId: string }, { open }) =>
+    selectUserProfileRoleAuthority(open().db, profileId),
   "userProfiles.modelAccount.connect": accountWrite(
     (
       input: Omit<
@@ -181,10 +183,6 @@ export const userProfileOperations = {
     input: Parameters<typeof listUserModelAccounts>[0],
     { stateOptions },
   ) => listUserModelAccounts(input, stateOptions()),
-  "userProfiles.modelAccount.summary": (
-    input: Parameters<typeof readUserModelAccountSummary>[0],
-    { stateOptions },
-  ) => readUserModelAccountSummary(input, stateOptions()),
   "userProfiles.modelAccount.selected": (
     input: { profileId: string; provider: string },
     { stateOptions },
@@ -194,9 +192,7 @@ export const userProfileOperations = {
     { open, stateOptions },
   ) => {
     const options = { ...stateOptions(), database: open() };
-    return input?.githubAccountIds === undefined
-      ? { profiles: listUserProfilesSync(options) }
-      : readUserProfileSnapshotSync(options, input.githubAccountIds);
+    return readUserProfileSnapshotSync(options, input?.githubAccountIds);
   },
   "userProfiles.directory": ({ limit }: { limit: number }, { open, stateOptions }) => {
     const database = open();
@@ -268,6 +264,7 @@ export const userProfileOperations = {
             .where("id", "=", profile.id),
         );
         const committed = selectProfileAccessEntries(db, [profile.id])[0]![1];
+        deferSqliteWorkerCommitReceipt(db, committed);
         return {
           profile: toUserProfile({ ...profile, avatar_mime: input.mime, updated_at: input.now }),
           committed,

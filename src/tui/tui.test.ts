@@ -2,12 +2,12 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withEnv } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { resolveFinalAssistantText } from "./tui-formatters.js";
@@ -30,10 +30,8 @@ import {
   isTuiBusyActivityStatus,
   resolveTuiCtrlCAction,
   resolveTuiLocalAuthCliInvocation,
-  resolveTuiShutdownHardExitMs,
   resolveTuiSessionKey,
   resolveTuiSessionSelection,
-  scheduleProcessExitAfterTuiReturn,
   stopTuiSafely,
 } from "./tui.js";
 
@@ -110,24 +108,6 @@ describe("resolveTuiToolsToggleActivityStatus", () => {
         toolsExpanded: false,
       }),
     ).toBe("tools collapsed");
-  });
-});
-
-describe("resolveTuiShutdownHardExitMs", () => {
-  it("keeps gateway shutdown bounded by the hard-exit timer", () => {
-    expect(resolveTuiShutdownHardExitMs({ localMode: false })).toBe(2000);
-  });
-
-  it("ignores partial local run shutdown grace values", () => {
-    withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "3456abc" }, () => {
-      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(122000);
-    });
-  });
-
-  it("clamps oversized local run shutdown grace values", () => {
-    withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: String(Number.MAX_SAFE_INTEGER) }, () => {
-      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(MAX_TIMER_TIMEOUT_MS + 2000);
-    });
   });
 });
 
@@ -469,7 +449,7 @@ describe("resolveTuiCtrlCAction", () => {
     });
   });
 
-  it("forces exit when shutdown is already in progress", () => {
+  it("keeps shutdown idempotent when another interrupt arrives", () => {
     expect(
       resolveTuiCtrlCAction({
         hasInput: true,
@@ -478,7 +458,7 @@ describe("resolveTuiCtrlCAction", () => {
         exitRequested: true,
       }),
     ).toEqual({
-      action: "force-exit",
+      action: "closing",
       nextLastCtrlCAt: 1000,
     });
   });
@@ -505,9 +485,6 @@ describe("TUI shutdown safety", () => {
       stopTui: vi.fn(),
       disposeStatus: vi.fn(),
       requestFinish: vi.fn(),
-      forceExit: vi.fn(),
-      hardExitMs: 2000,
-      keepHardExitArmed: true,
       onError: vi.fn(),
       ...overrides,
     });
@@ -532,13 +509,13 @@ describe("TUI shutdown safety", () => {
       loader.stop();
     });
 
-    beginTestShutdown({ disposeStatus, keepHardExitArmed: false });
+    const shutdown = beginTestShutdown({ disposeStatus });
 
     expect(disposeStatus).toHaveBeenCalledOnce();
     expect(loader.stop).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
 
-    await vi.advanceTimersByTimeAsync(0);
+    await shutdown;
 
     expect(disposeStatus).toHaveBeenCalledTimes(2);
     expect(loader.stop).toHaveBeenCalledTimes(2);
@@ -632,48 +609,13 @@ describe("TUI shutdown safety", () => {
     expect(finish).toHaveBeenCalledTimes(1);
   });
 
-  it("forces process exit when gateway teardown never settles", async () => {
-    vi.useFakeTimers();
-    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-    const requestFinish = vi.fn();
-    const timer = beginTestShutdown({
-      stopClient: () => new Promise<void>(() => {}),
-      requestFinish,
-      forceExit: () => process.exit(130),
-    });
-
-    expect((timer as NodeJS.Timeout).hasRef()).toBe(false);
-    await vi.advanceTimersByTimeAsync(1999);
-    expect(exit).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(exit).toHaveBeenCalledWith(130);
-    expect(requestFinish).not.toHaveBeenCalled();
-  });
-
-  it("keeps the force-exit deadline armed after already-drained teardown settles", async () => {
-    vi.useFakeTimers();
-    const forceExit = vi.fn();
-    const requestFinish = vi.fn();
-    beginTestShutdown({
-      requestFinish,
-      forceExit,
-    });
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(requestFinish).toHaveBeenCalledOnce();
-    expect(forceExit).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(forceExit).toHaveBeenCalledOnce();
-  });
-
-  it("completes healthy shutdown promptly without waiting for the force-exit deadline", async () => {
+  it("completes shutdown after resources and terminal settle", async () => {
     vi.useFakeTimers();
     const calls: string[] = [];
-    const forceExit = vi.fn();
     const recordPhase = (phase: string) => async () => {
       calls.push(phase);
     };
-    beginTestShutdown({
+    await beginTestShutdown({
       stopCommandScopes: recordPhase("scopes"),
       stopClient: recordPhase("client"),
       stopTui: recordPhase("tui"),
@@ -683,12 +625,9 @@ describe("TUI shutdown safety", () => {
       requestFinish: () => {
         calls.push("finish");
       },
-      forceExit,
     });
 
-    await vi.advanceTimersByTimeAsync(0);
     expect(calls).toEqual(["status", "scopes", "client", "tui", "status", "finish"]);
-    expect(forceExit).not.toHaveBeenCalled();
   });
 
   it("attempts terminal shutdown after transport teardown rejects", async () => {
@@ -709,7 +648,7 @@ describe("TUI shutdown safety", () => {
       expect(error).toBe(transportError);
     });
 
-    beginTestShutdown({
+    const shutdown = beginTestShutdown({
       stopClient: async () => {
         calls.push("client");
         throw transportError;
@@ -717,16 +656,15 @@ describe("TUI shutdown safety", () => {
       stopTui,
       requestFinish,
       onError,
-      keepHardExitArmed: false,
     });
 
     await vi.advanceTimersByTimeAsync(0);
     expect(calls).toEqual(["client", "tui"]);
-    expect(vi.getTimerCount()).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
     expect(requestFinish).not.toHaveBeenCalled();
 
     finishTuiStop?.();
-    await vi.advanceTimersByTimeAsync(0);
+    await shutdown;
     expect(calls).toEqual(["client", "tui", "error", "finish"]);
     expect(stopTui).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
@@ -742,7 +680,7 @@ describe("TUI shutdown safety", () => {
     const onError = vi.fn();
     const requestFinish = vi.fn();
 
-    beginTestShutdown({
+    await beginTestShutdown({
       stopCommandScopes: async () => {
         throw scopeError;
       },
@@ -756,7 +694,6 @@ describe("TUI shutdown safety", () => {
       requestFinish,
     });
 
-    await vi.advanceTimersByTimeAsync(0);
     expect(onError).toHaveBeenCalledOnce();
     const error = onError.mock.calls[0]?.[0];
     expect(error).toBeInstanceOf(AggregateError);
@@ -764,24 +701,25 @@ describe("TUI shutdown safety", () => {
     expect(requestFinish).toHaveBeenCalledOnce();
   });
 
-  it("forces standalone TUI exit on deadline while another handle lingers", () => {
-    vi.useFakeTimers();
-    const lingeringHandle = setInterval(() => {}, 60_000);
-    const exited = new Error("process exited");
-    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw exited;
+  it("does not finish or release the terminal before owned cleanup settles", async () => {
+    const scopes = createDeferredCore();
+    const client = createDeferredCore();
+    const stopTui = vi.fn();
+    const requestFinish = vi.fn();
+    const shutdown = beginTestShutdown({
+      stopCommandScopes: () => scopes.promise,
+      stopClient: () => client.promise,
+      stopTui,
+      requestFinish,
     });
-    const writeStderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-
-    const timer = scheduleProcessExitAfterTuiReturn();
-
-    expect(timer.hasRef()).toBe(false);
-    vi.advanceTimersByTime(1999);
-    expect(exit).not.toHaveBeenCalled();
-    expect(() => vi.advanceTimersByTime(1)).toThrow(exited);
-    expect(writeStderr).toHaveBeenCalledWith("openclaw tui forcing process exit after return\n");
-    expect(exit).toHaveBeenCalledWith(0);
-    clearInterval(lingeringHandle);
+    scopes.resolve();
+    await scopes.promise;
+    expect(stopTui).not.toHaveBeenCalled();
+    expect(requestFinish).not.toHaveBeenCalled();
+    client.resolve();
+    await shutdown;
+    expect(stopTui).toHaveBeenCalledOnce();
+    expect(requestFinish).toHaveBeenCalledOnce();
   });
 });
 

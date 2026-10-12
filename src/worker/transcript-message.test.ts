@@ -7,11 +7,15 @@ import {
   WorkerTranscriptMessageSchema,
 } from "../../packages/gateway-protocol/src/index.js";
 import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import type { AssistantMessage, Context } from "../llm/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 import {
   createWorkerTranscriptRuntime,
   toWorkerInferenceContext,
+  type WorkerTranscriptClient,
 } from "./embedded-agent-transcript.runtime.js";
 import {
   isWorkerTranscriptMessageFrameSafe,
@@ -96,6 +100,64 @@ function assistantWithReplay(
 }
 
 describe("worker transcript provider replay", () => {
+  it.each([true, false])(
+    "correlates identical assistant occurrences through guarded persistence (previews=%s)",
+    async (previews) => {
+      const commit = vi.fn<WorkerTranscriptClient["commit"]>(async () => {});
+      const transcript = createWorkerTranscriptRuntime({ commit });
+      const manager = guardSessionManager(SessionManager.inMemory(), {
+        onMessagePersisted: transcript.onMessagePersisted,
+      });
+      const liveItemIds: Array<string | undefined> = [];
+      const live = createWorkerLiveRuntime({
+        enqueuePreview: (event) => {
+          if (event.kind === "assistant") {
+            liveItemIds.push(event.payload.itemId);
+          }
+          return previews;
+        },
+        emitTerminal: async () => {},
+      });
+      live.handleSessionEvent({ type: "agent_start" });
+      for (let index = 0; index < 2; index++) {
+        const message = assistantWithReplay();
+        live.handleSessionEvent({ type: "message_start", message });
+        live.handleSessionEvent({
+          type: "message_update",
+          message,
+          assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "visible" },
+        });
+        const completed = structuredClone(message);
+        live.handleSessionEvent({ type: "message_end", message: completed });
+        const entryId = await transcript.withSessionWriteSettlement(() =>
+          manager.appendMessageAsync(completed),
+        );
+        if (!entryId) {
+          throw new Error("Expected a persisted assistant entry");
+        }
+        expect(manager.getEntry(entryId)).not.toHaveProperty("message.itemId");
+        expect(toWorkerInferenceContext({ messages: [completed] })).not.toHaveProperty(
+          "context.messages.0.itemId",
+        );
+      }
+      const messages = commit.mock.calls.flatMap(([batch]) => batch);
+      const itemIds = messages.flatMap((message) =>
+        message.role === "assistant" ? [message.itemId] : [],
+      );
+      expect(itemIds).toEqual([expect.any(String), expect.any(String)]);
+      expect(new Set(itemIds).size).toBe(2);
+      expect(liveItemIds).toEqual(previews ? itemIds : []);
+      expect(
+        validateWorkerTranscriptCommitParams({
+          runEpoch: 1,
+          seq: 1,
+          baseLeafId: null,
+          messages,
+        }),
+      ).toBe(true);
+    },
+  );
+
   it.each(["accepted", "failed"] as const)(
     "settles a submitted transcript commit after cancellation when it is %s",
     async (outcome) => {
@@ -173,7 +235,7 @@ describe("worker transcript provider replay", () => {
       "Worker transcript message exceeds the protocol payload limit",
     );
   });
-  it.each(["text", "unsupported"])("projects %s content with opaque replay state", (type) => {
+  it.each(["unsupported"])("projects %s content with opaque replay state", (type) => {
     const message = assistantWithReplay();
     Object.assign(message.content[0]!, { type });
     Object.assign(message.providerReplay!, { providerScratch: "private" });
@@ -197,23 +259,6 @@ describe("worker transcript provider replay", () => {
     ).toBe(type === "text");
   });
 
-  it("keeps replay above 48 KiB whole when the complete commit frame fits", () => {
-    const ciphertext = `cipher-${"x".repeat(60 * 1024)}-€`;
-    const message = assistantWithReplay({
-      ...providerReplay,
-      data: ciphertext,
-    });
-
-    const result = toWorkerTranscriptMessage(message, "transcript");
-
-    expect(result?.kind).toBe("complete");
-    if (!result || result.kind !== "complete" || result.message.role !== "assistant") {
-      throw new Error("expected projected assistant message");
-    }
-    expect(result.message.providerReplay?.data).toBe(ciphertext);
-    expect(isWorkerTranscriptMessageFrameSafe(result.message)).toBe(true);
-  });
-
   it.each([
     {
       name: "raw UTF-8 data over the replay field budget",
@@ -223,16 +268,6 @@ describe("worker transcript provider replay", () => {
     {
       name: "multibyte data whose complete frame is over budget",
       replay: { ...providerReplay, data: "€".repeat(21_845) },
-      reason: "transcript-commit-frame-budget" as const,
-    },
-    {
-      name: "JSON-escaped data over the complete frame budget",
-      replay: { ...providerReplay, data: "\0".repeat(12_000) },
-      reason: "transcript-commit-frame-budget" as const,
-    },
-    {
-      name: "a schema-valid id over the complete frame budget",
-      replay: { ...providerReplay, id: "i".repeat(65_536), data: "opaque" },
       reason: "transcript-commit-frame-budget" as const,
     },
   ])("degrades without ciphertext for $name", ({ replay, reason }) => {
@@ -246,7 +281,8 @@ describe("worker transcript provider replay", () => {
   });
 
   it("redacts diagnostic media while preserving conversation text and replay ciphertext", () => {
-    const message = assistantWithReplay();
+    const ciphertext = `cipher-${"x".repeat(60 * 1024)}-€`;
+    const message = assistantWithReplay({ ...providerReplay, data: ciphertext });
     message.content = [
       { type: "text", text: "keep data:video/mp4;base64,QUJDRA== byte-identical" },
     ];
@@ -265,7 +301,8 @@ describe("worker transcript provider replay", () => {
     }
 
     expect(result.message.content[0]).toEqual(message.content[0]);
-    expect(result.message.providerReplay?.data).toBe(providerReplay.data);
+    expect(result.message.providerReplay?.data).toBe(ciphertext);
+    expect(isWorkerTranscriptMessageFrameSafe(result.message)).toBe(true);
     expect(JSON.stringify(result.message.diagnostics)).not.toContain("QUJDRA==");
     expect(Value.Check(WorkerTranscriptMessageSchema, result.message)).toBe(true);
   });

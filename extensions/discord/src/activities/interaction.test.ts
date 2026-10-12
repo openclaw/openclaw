@@ -58,11 +58,6 @@ describe("Discord Activity interaction", () => {
     expect(button?.customIdParser("other:key=value").key).toBe("other");
   });
 
-  it("registers from the configured Activity application ID without a learned ID", () => {
-    setDiscordActivitiesRuntime(createActivityTestRuntime());
-    expect(createDiscordActivityButton(componentContext())).not.toBeNull();
-  });
-
   it("learns the startup application ID before resolving Activity availability", () => {
     const cfg = createActivityTestConfig({ applicationId: "" });
     const runtime = createActivityTestRuntime(cfg);

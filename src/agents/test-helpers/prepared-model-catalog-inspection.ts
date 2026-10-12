@@ -7,7 +7,7 @@ import type { planOpenClawModelsJsonSource } from "../models-config.js";
 import type {
   PreparedModelCatalogWorkerTask,
   PreparedModelWorkerResult,
-} from "../prepared-model-catalog-worker.js";
+} from "../prepared-model-catalog-worker.types.js";
 
 export type CatalogInspectionTask = PreparedModelCatalogWorkerTask & {
   inspection?: {

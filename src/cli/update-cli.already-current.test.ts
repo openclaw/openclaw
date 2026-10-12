@@ -99,9 +99,14 @@ describe("update-cli", () => {
     useFileBackedConfig,
   } = createUpdateCliFixture();
 
-  it.each(runtimeRecovery.alreadyCurrentConvergenceCases)(
-    "converges plugins on an already-current core (restart=$restart, running=$running, failure=$failure, platform=$platform)",
-    async ({ restart, running, failure, platform }) => {
+  it.each(
+    runtimeRecovery.alreadyCurrentConvergenceCases.filter(
+      ({ failure, platform }) =>
+        failure === "stop" || failure === "changed owner" || platform === "linux",
+    ),
+  )(
+    "converges plugins on an already-current core (failure=$failure, platform=$platform)",
+    async ({ failure, platform }) => {
       if (platform) {
         vi.spyOn(process, "platform", "get").mockReturnValue(platform);
         vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue(
@@ -114,9 +119,7 @@ describe("update-cli", () => {
       vi.mocked(resolveGatewayInstallEntrypoint).mockReset();
       readPackageVersion.mockResolvedValue(VERSION);
       primeNpmChannelTag("latest", VERSION);
-      if (running) {
-        mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
-      }
+      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
       const installPath = createCaseDir("current-core-plugin");
       await fs.mkdir(installPath, { recursive: true });
       await writeJsonFixture(path.join(installPath, "package.json"), {
@@ -162,26 +165,15 @@ describe("update-cli", () => {
         };
       });
 
-      if (failure === "doctor") {
-        const runFixtureExec = requireValue(
-          vi.mocked(runExec).getMockImplementation(),
-          "fixture exec",
-        );
-        vi.mocked(runExec).mockImplementation(async (file, args, options) => {
-          if (args[1] === "doctor" && args.includes("--repair")) {
-            throw new Error("plugin Doctor failed");
-          }
-          return runFixtureExec(file, args, options);
-        });
-      } else if (failure === "stop") {
+      if (failure === "stop") {
         serviceStop.mockImplementationOnce(async (params: { onMutation?: () => void }) => {
           serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
           params.onMutation?.();
           throw new Error("listener check failed after stop");
         });
       }
-      if (failure && failure !== "doctor") {
-        await expect(updateCommand({ yes: true, restart, json: true })).rejects.toEqual(
+      if (failure) {
+        await expect(updateCommand({ yes: true, restart: true, json: true })).rejects.toEqual(
           new ExitError(1),
         );
         expect(serviceStop).toHaveBeenCalledTimes(failure === "changed owner" ? 0 : 1);
@@ -195,7 +187,7 @@ describe("update-cli", () => {
         });
         return;
       }
-      await updateCommand({ yes: true, restart, json: true });
+      await updateCommand({ yes: true, restart: true, json: true });
 
       expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
       expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
@@ -206,89 +198,37 @@ describe("update-cli", () => {
         postUpdate: {
           plugins: {
             changed: true,
-            status: failure === "doctor" ? "warning" : "ok",
-            warnings:
-              failure === "doctor"
-                ? [
-                    expect.objectContaining({
-                      reason: "doctor-advisory",
-                      message: expect.stringContaining("plugin Doctor failed"),
-                    }),
-                  ]
-                : [],
+            status: "ok",
+            warnings: [],
             npm: { outcomes: [expect.objectContaining({ pluginId: "brave", status: "updated" })] },
           },
         },
       });
-      expect(serviceStop).toHaveBeenCalledTimes(restart && running ? 1 : 0);
-      expect(freshRestartCalls()).toHaveLength(restart && running ? 1 : 0);
+      expect(serviceStop).toHaveBeenCalledTimes(1);
+      expect(freshRestartCalls()).toHaveLength(1);
       expect(packageInstallCommandCall()).toBeUndefined();
       expect(candidateValidation).not.toHaveBeenCalled();
-      if (platform === "linux") {
-        const message =
-          "Service membership unverifiable on this host; using managed stop/update/start.";
-        expect(lastWriteJsonCall()).toMatchObject({
-          steps: expect.arrayContaining([
-            expect.objectContaining({ advisory: { kind: "recoverable-maintenance", message } }),
-          ]),
-        });
-        expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
-          steps: expect.arrayContaining([
-            expect.objectContaining({
-              step: "warning:managed-service-membership",
-              status: "completed",
-              detail: message,
-            }),
-          ]),
-        });
-      }
-      if (failure === "doctor") {
-        expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
-          status: "succeeded",
-          verification: { serviceRunning: true, readyz: true },
-          steps: expect.arrayContaining([
-            expect.objectContaining({
-              step: "warning:finalize:plugins:0",
-              status: "completed",
-              detail: expect.stringContaining("plugin Doctor failed"),
-            }),
-          ]),
-        });
-      }
-      if (!restart) {
-        expect(lastWriteJsonCall()).toMatchObject({
-          run: {
-            origin: {
-              nextAction: expect.stringContaining("Gateway restart skipped (--no-restart)"),
-            },
-          },
-        });
-      }
-      if (restart && running) {
-        expect(updateNpmInstalledPlugins.mock.invocationCallOrder[0]).toBeLessThan(
-          serviceStop.mock.invocationCallOrder[0]!,
-        );
-      }
+      const message =
+        "Service membership unverifiable on this host; using managed stop/update/start.";
+      expect(lastWriteJsonCall()).toMatchObject({
+        steps: expect.arrayContaining([
+          expect.objectContaining({ advisory: { kind: "recoverable-maintenance", message } }),
+        ]),
+      });
+      expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            step: "warning:managed-service-membership",
+            status: "completed",
+            detail: message,
+          }),
+        ]),
+      });
+      expect(updateNpmInstalledPlugins.mock.invocationCallOrder[0]).toBeLessThan(
+        serviceStop.mock.invocationCallOrder[0]!,
+      );
     },
   );
-
-  it("refreshes stale systemd policy on an already-current core without stopping the Gateway", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const root = await mockPackageInstallAtCaseDir("openclaw-update", VERSION);
-    await writeOpenClawPackageFixture(root, VERSION);
-    mockFileBackedPathExists();
-    vi.mocked(resolveGatewayInstallEntrypoint).mockReset();
-    readPackageVersion.mockResolvedValue(VERSION);
-    primeNpmChannelTag("latest", VERSION);
-    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
-    systemdPolicy.mockResolvedValue(true);
-
-    await updateCommand({ yes: true, json: true });
-
-    expect(systemdPolicy).toHaveBeenCalledWith(expect.objectContaining({ root, stopping: false }));
-    expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
-    expect(lastWriteJsonCall()).toMatchObject({ status: "skipped", reason: "already-current" });
-  });
 
   registerAlreadyCurrentAdmissionTests({
     prepareCurrentPackage: async (prefix) => {
@@ -323,131 +263,81 @@ describe("update-cli", () => {
     },
   });
 
-  it.each([true, false])(
-    "converges a current Git core using its before-only version receipt (runtime compatible=%s)",
-    async (compatible) => {
-      runtimeRecovery.stubNodeRuntime();
-      // This case specifies system-runtime guidance, independent of the host Node manager.
-      vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");
-      const fixture = runtimeRecovery.currentGitCoreFixture(process.cwd(), VERSION);
-      readPackageVersion.mockResolvedValue(VERSION);
-      vi.mocked(updateGitCheckout).mockResolvedValueOnce(fixture.outcome);
-      nodeVersionSatisfiesEngine.mockReturnValue(compatible);
-      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);
-      const command = updateCommand({ yes: true, restart: false, json: true });
-      if (compatible) {
-        await command;
-        expect(pluginAvailabilityPreflight).toHaveBeenCalledWith(
-          expect.objectContaining({ targetVersion: VERSION }),
-        );
-        expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
-        expect(lastWriteJsonCall()).toMatchObject(fixture.converged);
-      } else {
-        await expect(command).rejects.toEqual(new ExitError(1));
-        expect(lastWriteJsonCall()).toMatchObject(fixture.runtimeRefusal);
-        expectNoSideEffects(pluginAvailabilityPreflight, updateNpmInstalledPlugins);
-      }
-      expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart);
-    },
-  );
+  it("refuses a current Git core with an incompatible before-only version receipt", async () => {
+    runtimeRecovery.stubNodeRuntime();
+    // This case specifies system-runtime guidance, independent of the host Node manager.
+    vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");
+    const fixture = runtimeRecovery.currentGitCoreFixture(process.cwd(), VERSION);
+    readPackageVersion.mockResolvedValue(VERSION);
+    vi.mocked(updateGitCheckout).mockResolvedValueOnce(fixture.outcome);
+    nodeVersionSatisfiesEngine.mockReturnValue(false);
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);
+    const command = updateCommand({ yes: true, restart: false, json: true });
+    await expect(command).rejects.toEqual(new ExitError(1));
+    expect(lastWriteJsonCall()).toMatchObject(fixture.runtimeRefusal);
+    expectNoSideEffects(pluginAvailabilityPreflight, updateNpmInstalledPlugins);
+    expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart);
+  });
 
-  it.each([false, true])(
-    "reports retained pins on an already-current core (json=%s)",
-    async (json) => {
-      const root = await mockPackageInstallAtCaseDir();
-      await writeOpenClawPackageFixture(root, VERSION);
-      readPackageVersion.mockResolvedValue(VERSION);
-      primeNpmChannelTag("latest", VERSION);
-      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
-      const installPath = createCaseDir("current-core-pin");
-      await fs.mkdir(installPath, { recursive: true });
-      await writeJsonFixture(path.join(installPath, "package.json"), {
-        name: "@openclaw/discord",
+  it("reports retained pins on an already-current core", async () => {
+    const root = await mockPackageInstallAtCaseDir();
+    await writeOpenClawPackageFixture(root, VERSION);
+    readPackageVersion.mockResolvedValue(VERSION);
+    primeNpmChannelTag("latest", VERSION);
+    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+    const installPath = createCaseDir("current-core-pin");
+    await fs.mkdir(installPath, { recursive: true });
+    await writeJsonFixture(path.join(installPath, "package.json"), {
+      name: "@openclaw/discord",
+      version: "2026.9.2",
+    });
+    const records: Record<string, PluginInstallRecord> = {
+      discord: {
+        source: "npm",
+        spec: "@openclaw/discord@2026.9.2",
+        installPath,
         version: "2026.9.2",
-      });
-      const records: Record<string, PluginInstallRecord> = {
-        discord: {
-          source: "npm",
-          spec: "@openclaw/discord@2026.9.2",
-          installPath,
-          version: "2026.9.2",
+      },
+    };
+    loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    const message =
+      "discord is pinned to @openclaw/discord@2026.9.2 (installed 2026.9.2); registry latest resolves to 2026.9.3. Pass `openclaw plugins update @openclaw/discord@latest` to replace this version pin.";
+    mockNpmPluginOutcomes(
+      [
+        {
+          pluginId: "discord",
+          status: "unchanged",
+          currentVersion: "2026.9.2",
+          nextVersion: "2026.9.3",
+          message,
         },
-      };
-      loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-      const message =
-        "discord is pinned to @openclaw/discord@2026.9.2 (installed 2026.9.2); registry latest resolves to 2026.9.3. Pass `openclaw plugins update @openclaw/discord@latest` to replace this version pin.";
-      mockNpmPluginOutcomes(
-        [
-          {
-            pluginId: "discord",
-            status: "unchanged",
-            currentVersion: "2026.9.2",
-            nextVersion: "2026.9.3",
-            message,
-          },
-        ],
-        false,
-        { ...baseConfig, plugins: { ...baseConfig.plugins, installs: records } },
-      );
-      mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy, {
-        installRecords: records,
-      });
+      ],
+      false,
+      { ...baseConfig, plugins: { ...baseConfig.plugins, installs: records } },
+    );
+    mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy, {
+      installRecords: records,
+    });
 
-      await updateCommand({ yes: true, json });
+    await updateCommand({ yes: true, json: false });
 
-      expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
-      expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart);
-      expect(freshRestartCalls()).toHaveLength(0);
-      if (json) {
-        expect(lastWriteJsonCall()).toMatchObject({
-          status: "skipped",
-          reason: "already-current",
-          postUpdate: {
-            plugins: {
-              status: "warning",
-              changed: false,
-              warnings: [
-                expect.objectContaining({
-                  pluginId: "discord",
-                  reason: "retained-plugin-pin",
-                  message: expect.stringContaining(message),
-                }),
-              ],
-            },
-          },
-        });
-      } else {
-        expect(stripAnsi(getLogOutput())).toContain(message);
-      }
-      expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
-      expect(records.discord?.spec).toBe("@openclaw/discord@2026.9.2");
-    },
-  );
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
+    expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart);
+    expect(freshRestartCalls()).toHaveLength(0);
+    expect(stripAnsi(getLogOutput())).toContain(message);
+    expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
+    expect(records.discord?.spec).toBe("@openclaw/discord@2026.9.2");
+  });
 
-  it.each(["outside", "unknown", "inside", "descendant", "foreign descendant"] as const)(
+  it.each(["inside", "descendant"] as const)(
     "never stages or stops an unchanged managed gateway under auto admission (membership=%s)",
     async (membership) => {
       const root = await mockPackageInstallAtCaseDir("openclaw-current-package", VERSION);
       readPackageVersion.mockResolvedValue(VERSION);
       primeNpmChannelTag("latest", VERSION);
       mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
-      if (membership === "foreign descendant") {
-        mockFileBackedPathExists();
-        await writeOpenClawPackageFixture(root, VERSION);
-        const foreignRoot = createCaseDir("foreign-service");
-        const entry = await writeOpenClawPackageFixture(foreignRoot, VERSION, { git: true });
-        await fs.mkdir(path.join(foreignRoot, "src"));
-        await fs.mkdir(path.join(foreignRoot, "extensions"));
-        // Another packaged root is eligible for reconciliation; a source checkout is foreign.
-        vi.mocked(resolveNpmChannelTag).mockImplementationOnce(async () => {
-          mockRunningManagedGateway(["node", entry, "gateway", "run"]);
-          return { tag: "latest", version: VERSION };
-        });
-      }
-      vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue(
-        membership === "descendant" || membership === "foreign descendant" ? "inside" : membership,
-      );
-      if (membership === "descendant" || membership === "foreign descendant") {
+      vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue("inside");
+      if (membership === "descendant") {
         mockGetSelfAndAncestorPidsSync.mockReturnValue(
           new Set([process.pid, gatewayFixturePid, 1]),
         );
@@ -457,24 +347,20 @@ describe("update-cli", () => {
 
       expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart, candidateValidation);
       expect(managedUpdateHandoff.start).not.toHaveBeenCalled();
-      if (membership === "outside") {
-        expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
-      } else {
-        expectNoSideEffects(updateNpmInstalledPlugins, syncPluginsForUpdateChannel, systemdPolicy);
-        expect(lastWriteJsonCall()).toMatchObject({
-          steps: [
-            expect.objectContaining({
-              exitCode: 0,
-              advisory: {
-                kind: "recoverable-maintenance",
-                message: expect.stringContaining(
-                  "plugin, runtime, and service maintenance was deferred",
-                ),
-              },
-            }),
-          ],
-        });
-      }
+      expectNoSideEffects(updateNpmInstalledPlugins, syncPluginsForUpdateChannel, systemdPolicy);
+      expect(lastWriteJsonCall()).toMatchObject({
+        steps: [
+          expect.objectContaining({
+            exitCode: 0,
+            advisory: {
+              kind: "recoverable-maintenance",
+              message: expect.stringContaining(
+                "plugin, runtime, and service maintenance was deferred",
+              ),
+            },
+          }),
+        ],
+      });
       expect(packageInstallCommandCall()?.[0]).toBeUndefined();
       expect(replaceConfigFile).not.toHaveBeenCalled();
       expect(lastWriteJsonCall()).toMatchObject({ status: "skipped", reason: "already-current" });

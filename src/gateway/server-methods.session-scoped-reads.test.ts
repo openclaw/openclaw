@@ -4,6 +4,7 @@ import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepar
 import { registerAgentWorkspaceAccess } from "../agents/workspace-access.js";
 import * as sessions from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -426,6 +427,7 @@ describe("narrow session read owners", () => {
       const reader = roleClient("view", "scoped-reader");
       reader.connect.scopes = ["operator.sessions.read"];
       const owner = roleClient("view", "scoped-owner");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg = rolePolicyConfig();
       cfg.gateway!.roles!.definitions.view!.scopes.push("operator.admin");
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });

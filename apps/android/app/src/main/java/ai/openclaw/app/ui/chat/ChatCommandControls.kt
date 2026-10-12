@@ -15,7 +15,6 @@ internal fun shouldShowSlashCommandMenu(input: String): Boolean = slashCommandQu
 internal fun matchingSlashCommands(
   input: String,
   commands: List<ChatCommandEntry>,
-  limit: Int = 6,
 ): List<ChatCommandEntry> {
   val query = slashCommandQuery(input) ?: return emptyList()
   val uniqueCommands = commands.map { command -> command.withMatchedSlashAliasFirst(query) }.distinctBy { slashCommandText(it) }
@@ -27,7 +26,7 @@ internal fun matchingSlashCommands(
         slashCommandPrefixes(command).any { prefix -> prefix.startsWith(query) }
       }
     }
-  return matches.take(limit)
+  return matches.take(6)
 }
 
 internal fun slashCommandText(command: ChatCommandEntry): String {

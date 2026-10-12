@@ -68,12 +68,6 @@ export class LineWebhookTerminalDeliveryError extends Error {
   }
 }
 
-type LineWebhookSpool = {
-  accept: (body: webhook.CallbackRequest) => Promise<"durable" | "ignored">;
-  start: () => void;
-  stop: () => Promise<void>;
-};
-
 function parseStoredEvent(rawEvent: string): webhook.Event {
   let event: unknown;
   try {
@@ -93,7 +87,6 @@ function isLineAuthenticationFailure(error: unknown): boolean {
   return status === 401 || status === 403;
 }
 
-/** The imageSet a LINE inbound event belongs to, when it reported one. */
 // A set is one person's single send. In a group the lane is the whole room, so
 // the sender is what separates two members' sets - without it, a member the
 // group policy denies could have their image carried into an allowed member's
@@ -123,7 +116,7 @@ function resolveLineInboundImageSet(
     : undefined;
 }
 
-export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWebhookSpool {
+export function createLineWebhookSpool(options: LineWebhookSpoolOptions) {
   // Parts of one multi-image send arrive as separate claims; they are grouped
   // here so the whole set becomes one delivery with one fanned-in ownership.
   const imageSets = createLineImageSetIngressBuffer<
@@ -357,7 +350,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
   let stopTask: Promise<void> | undefined;
 
   return {
-    accept: async (body) => {
+    accept: async (body: webhook.CallbackRequest): Promise<"durable" | "ignored"> => {
       // Standby deliveries belong to the channel holding LINE chat control.
       const events = (body.events ?? []).filter((event) => event.mode !== "standby");
       if (events.length === 0) {

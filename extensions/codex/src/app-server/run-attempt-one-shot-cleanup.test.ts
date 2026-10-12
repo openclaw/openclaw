@@ -20,10 +20,10 @@ import {
 } from "./run-attempt-test-harness.js";
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import {
-  resetSharedCodexAppServerClientForTests,
   retainSharedCodexAppServerClientIfCurrent,
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import {
   createInferenceReadyClientHarness,
   createCodexInferenceReadResponses,

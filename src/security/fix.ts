@@ -1,4 +1,3 @@
-// Applies safe automatic fixes for supported security audit findings.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { modeBits } from "@openclaw/fs-safe/permissions";

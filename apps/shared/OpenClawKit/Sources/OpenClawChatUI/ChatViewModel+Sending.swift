@@ -183,12 +183,11 @@ extension OpenClawChatViewModel {
         _ command: OpenClawChatCommandChoice,
         matchesInvocationName name: String) -> Bool
     {
-        let normalizedName = name.lowercased()
-        if command.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedName {
+        if command.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == name {
             return true
         }
         return command.textAliases.contains { alias in
-            self.slashCommandName(from: alias) == normalizedName
+            self.slashCommandName(from: alias) == name
         }
     }
 
@@ -207,7 +206,12 @@ extension OpenClawChatViewModel {
         let effectiveFilter: OpenClawChatCommandFilter = targetsSkills && filter == .all ? .skills : filter
         return commands.enumerated()
             .compactMap { index, command -> (Int, Int, OpenClawChatCommandChoice)? in
-                guard self.command(command, isIncludedIn: effectiveFilter) else { return nil }
+                switch effectiveFilter {
+                case .commands where command.source == .skill, .skills where command.source != .skill:
+                    return nil
+                default:
+                    break
+                }
                 guard let rank = self.commandSearchRank(command, query: query) else { return nil }
                 return (rank, index, command)
             }
@@ -218,20 +222,6 @@ extension OpenClawChatViewModel {
                 return $0.1 < $1.1
             }
             .map(\.2)
-    }
-
-    private static func command(
-        _ command: OpenClawChatCommandChoice,
-        isIncludedIn filter: OpenClawChatCommandFilter) -> Bool
-    {
-        switch filter {
-        case .all:
-            true
-        case .commands:
-            command.source != .skill
-        case .skills:
-            command.source == .skill
-        }
     }
 
     private static func commandSearchRank(
@@ -255,7 +245,7 @@ extension OpenClawChatViewModel {
         if command.description.lowercased().contains(query) {
             return 2
         }
-        if command.source.rawValue.lowercased().contains(query) {
+        if command.source.rawValue.contains(query) {
             return 3
         }
         return nil
@@ -394,15 +384,7 @@ extension OpenClawChatViewModel {
             if !healthOK, outbox != nil {
                 logDiagnostic(
                     "chat.ui send queued offline sessionKey=\(sessionKey) inputLen=\(draft.trimmed.count)")
-                let accepted = await enqueueOutboxCommand(
-                    text: draft.outgoingMessageText,
-                    draftInput: draft.input,
-                    draftRevision: draft.composerRevision,
-                    draftAttachments: draft.attachments,
-                    session: draft.session)
-                if accepted {
-                    self.finishAcceptedComposerSend(draft)
-                }
+                await self.enqueueOutboxDraft(draft)
                 return false
             }
         }
@@ -437,18 +419,22 @@ extension OpenClawChatViewModel {
         {
             logDiagnostic(
                 "chat.ui send routed behind outbox sessionKey=\(sessionKey) inputLen=\(draft.trimmed.count)")
-            let accepted = await enqueueOutboxCommand(
-                text: draft.outgoingMessageText,
-                draftInput: draft.input,
-                draftRevision: draft.composerRevision,
-                draftAttachments: draft.attachments,
-                session: draft.session)
-            if accepted {
-                self.finishAcceptedComposerSend(draft)
-            }
+            await self.enqueueOutboxDraft(draft)
             return false
         }
         return true
+    }
+
+    private func enqueueOutboxDraft(_ draft: SendDraft) async {
+        let accepted = await self.enqueueOutboxCommand(
+            text: draft.outgoingMessageText,
+            draftInput: draft.input,
+            draftRevision: draft.composerRevision,
+            draftAttachments: draft.attachments,
+            session: draft.session)
+        if accepted {
+            self.finishAcceptedComposerSend(draft)
+        }
     }
 
     private func attachmentPersistenceDecision(
@@ -621,22 +607,16 @@ extension OpenClawChatViewModel {
             ? false
             : self.adoptRemoteRunID(response.runId, replacing: attempt.runId)
 
-        if response.status == "ok" {
-            let historyContext = beginHistoryRequest(for: attempt.draft.session)
-            await refreshHistoryAfterRun(historyRequest: historyContext)
-            guard isCurrentSession(attempt.draft.session) else { return }
-            finishPendingRunAfterTerminalOkSendAck(response)
-            return
-        }
-        guard !finishPendingRunIfTerminalSendAck(response),
-              !reusedRunAlreadyFinal
-        else {
-            return
-        }
+        let terminalOK = response.status == "ok"
+        guard terminalOK || (!finishPendingRunIfTerminalSendAck(response) && !reusedRunAlreadyFinal) else { return }
 
         let historyContext = beginHistoryRequest(for: attempt.draft.session)
         let refresh = await refreshHistoryAfterRun(historyRequest: historyContext)
         guard isCurrentSession(attempt.draft.session) else { return }
+        if terminalOK {
+            finishPendingRunAfterTerminalOkSendAck(response)
+            return
+        }
         if refresh.hasInFlightRun || (refresh.applied && !refresh.runSnapshotApplied) ||
             !clearPendingRunIfAssistantMessagePresent(
                 runId: response.runId,

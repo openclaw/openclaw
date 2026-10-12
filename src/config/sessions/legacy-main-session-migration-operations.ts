@@ -1,5 +1,5 @@
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
-import { readSqliteDataVersion } from "../../infra/sqlite-schema-facts.js";
+import { readSqliteDatabaseWriteRevision } from "../../infra/sqlite-database-admission.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
@@ -30,6 +30,7 @@ import type {
   LegacyMainSessionMigrationOutcome,
   PhysicalStore,
   SessionClaim,
+  SessionComparisonClaim,
 } from "./legacy-main-session-migration.contract.js";
 import {
   runSqliteSessionDeletionTransaction,
@@ -77,7 +78,7 @@ function freshestClaim(claims: readonly SessionClaim[]): SessionClaim {
 export function warningForDivergence(
   kind: "divergent-aliases" | "divergent-canonical",
   canonicalKey: string,
-  claims: readonly SessionClaim[],
+  claims: readonly SessionComparisonClaim[],
 ): string {
   const claimsText = claims.map((claim) => `${claim.store.path}#${claim.key}`).join(", ");
   return `session: ${kind} for ${canonicalKey}; preserved claims ${claimsText}. Run openclaw doctor --fix to quarantine the losing claims.`;
@@ -442,8 +443,8 @@ async function deleteCopiedClaims(params: {
     const assertCopied = () => {
       params.beforePersistentApply?.();
       assertCurrent();
-      const version = readSqliteDataVersion(destinationReader.db);
-      if (version === verifiedVersion) {
+      const version = readSqliteDatabaseWriteRevision(destinationReader.db);
+      if (version !== undefined && version === verifiedVersion) {
         return;
       }
       if (!hasOpenClawAgentReadOnlySchema(destinationReader)) {
@@ -459,10 +460,10 @@ async function deleteCopiedClaims(params: {
         throw changed();
       }
       assertCurrent();
-      if (readSqliteDataVersion(destinationReader.db) !== version) {
+      if (readSqliteDatabaseWriteRevision(destinationReader.db) !== version) {
         throw changed();
       }
-      // Only this dedicated reader can reuse its counter; no snapshot survives the assertion.
+      // Only settled in-process writes can certify reuse; no snapshot survives the assertion.
       verifiedVersion = version;
     };
     assertCopied();
@@ -532,23 +533,11 @@ export async function processIdenticalClaims(params: {
   env: NodeJS.ProcessEnv;
   mode: LegacyMainSessionMigrationMode;
 }): Promise<LegacyMainSessionMigrationOutcome> {
-  const winner = params.canonical ?? freshestClaim(params.aliases);
-  const crossStore = params.aliases.some(
-    (claim) => !samePhysicalStore(claim.store, params.destination),
-  );
-  const completedOutcome = (): LegacyMainSessionMigrationOutcome => ({
-    kind: params.canonical
-      ? "canonical-exists-identical"
-      : crossStore
-        ? "migrated-cross-store"
-        : "migrated-in-place",
-    canonicalKey: params.canonicalKey,
-    paths: [...new Set(params.aliases.map((claim) => claim.store.path))],
-    sourceKeys: params.aliases.map((claim) => claim.key),
-  });
+  const completedOutcome = () => describeIdenticalClaims(params);
   if (params.mode !== "doctor-fix") {
     return completedOutcome();
   }
+  const winner = params.canonical ?? freshestClaim(params.aliases);
 
   let canonical = params.canonical;
   const destinationAliases = params.aliases.filter((claim) =>
@@ -626,6 +615,24 @@ export async function processIdenticalClaims(params: {
     };
   }
   return completedOutcome();
+}
+
+export function describeIdenticalClaims(params: {
+  aliases: readonly SessionComparisonClaim[];
+  canonical?: SessionComparisonClaim;
+  canonicalKey: string;
+  destination: PhysicalStore;
+}): LegacyMainSessionMigrationOutcome {
+  return {
+    kind: params.canonical
+      ? "canonical-exists-identical"
+      : params.aliases.some((claim) => !samePhysicalStore(claim.store, params.destination))
+        ? "migrated-cross-store"
+        : "migrated-in-place",
+    canonicalKey: params.canonicalKey,
+    paths: [...new Set(params.aliases.map((claim) => claim.store.path))],
+    sourceKeys: params.aliases.map((claim) => claim.key),
+  };
 }
 
 export async function repairDivergentClaims(params: {

@@ -1,6 +1,6 @@
 import type { RuntimeLogger } from "openclaw/plugin-sdk/core";
 import type { z } from "zod";
-import type { TeamReportsConfig } from "./config.js";
+import type { resolveTeamReportsConfig, TeamReportsConfig } from "./config.js";
 import type { reportDocumentSchema, summaryDocumentSchema } from "./store-schema.js";
 
 export type { Period, PeriodDescriptor } from "./periods.js";
@@ -61,20 +61,12 @@ export type SourceRuntime = {
 };
 
 /** Resolved (secret already materialized) GitHub source configuration. */
-export type GithubSourceConfig = Omit<
-  TeamReportsConfig["github"],
-  "token" | "ignoreCommentPatterns"
-> & {
-  token: string;
-  /** Compiled from config `github.ignoreCommentPatterns`. */
-  ignoreCommentPatterns: RegExp[];
-};
+export type GithubSourceConfig = Awaited<ReturnType<typeof resolveTeamReportsConfig>>["github"];
 
 /** Resolved (secret already materialized) Discord source configuration. */
-export type DiscordSourceConfig = Omit<NonNullable<TeamReportsConfig["discord"]>, "token"> & {
-  token: string;
-  apiBaseUrl: string;
-};
+export type DiscordSourceConfig = NonNullable<
+  Awaited<ReturnType<typeof resolveTeamReportsConfig>>["discord"]
+>;
 
 export interface GithubSource {
   /** Roster from configured org teams (and direct collaborators when enabled). Returns people with `github: [login]`. */
@@ -93,7 +85,6 @@ export interface DiscordSource {
   collect(
     config: DiscordSourceConfig,
     window: ActivityWindow,
-    roster: Roster,
     emit: (entries: ActivityEntry<DiscordMessage>[]) => Promise<void>,
   ): Promise<SourceStatus>;
 }

@@ -144,6 +144,8 @@ suite.define(() => {
       retainedState: () => state.root,
       async run() {
         await state.writeConfig({
+          // Device identity proof must not wait on host installation discovery.
+          update: { channel: "stable" },
           gateway: {
             auth: { mode: "token", token },
             controlUi: { allowedOrigins: [new URL(suite.server.baseUrl).origin], enabled: false },

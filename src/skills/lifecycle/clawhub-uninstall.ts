@@ -6,6 +6,7 @@ import { sha256Hex } from "../../infra/crypto-digest.js";
 import { isErrno } from "../../infra/errors.js";
 import { resolveClawHubSkillStatusLinkSync } from "./clawhub-status.js";
 import {
+  describeClawHubSkillRefMismatch,
   formatClawHubSkillRef,
   parseRequestedClawHubSkillRef,
   untrackClawHubSkill,
@@ -75,23 +76,9 @@ async function planTrackedClawHubSkillState(params: {
         : link.reason,
     };
   }
-  if (requestedRef.ownerHandle && link.ownerHandle !== requestedRef.ownerHandle) {
-    const trackedRef = link.ownerHandle ? `@${link.ownerHandle}/${slug}` : slug;
-    return {
-      ok: false,
-      code: "ambiguous",
-      error: `Skill ${JSON.stringify(slug)} is tracked as ${trackedRef}, not @${requestedRef.ownerHandle}/${slug}.`,
-    };
-  }
-  if (
-    requestedRef.requestedReference &&
-    link.requestedReference !== requestedRef.requestedReference
-  ) {
-    return {
-      ok: false,
-      code: "ambiguous",
-      error: `Skill ${JSON.stringify(slug)} is not tracked from ${requestedRef.requestedReference}.`,
-    };
+  const mismatch = describeClawHubSkillRefMismatch(requestedRef, link);
+  if (mismatch) {
+    return { ok: false, code: "ambiguous", error: mismatch };
   }
   if (link.installedVersion !== params.expectedVersion) {
     return {

@@ -1,5 +1,4 @@
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-// Resolves and classifies config paths for reads, writes, and metadata.
 import { isPlainObject } from "../utils.js";
 import { normalizeConfigModelSelectionParent } from "./model-input-normalization.js";
 
@@ -38,7 +37,6 @@ export function parseConfigPath(
   return { ok: true, path: parts };
 }
 
-/** Sets a value at a validated config path, creating missing plain-object parents. */
 export function setConfigValueAtPath(root: PathNode, path: string[], value: unknown): void {
   const leafKey = path.at(-1);
   if (leafKey === undefined) {
@@ -104,7 +102,6 @@ export function unsetConfigValueAtPath(
   return true;
 }
 
-/** Reads a value from a config path, stopping at the first non-plain-object parent. */
 export function getConfigValueAtPath(root: PathNode, path: string[]): unknown {
   let cursor: unknown = root;
   for (const key of path) {

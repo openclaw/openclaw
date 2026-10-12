@@ -207,7 +207,7 @@ describe("proxy stream wrappers", () => {
             expect(payload.messages).toEqual([
               { role: "system", content: `${stable}\nVOLATILE` },
               ...(hasUser ? [{ role: "user", content: "Question" }] : []),
-              { role: "system", content: "OpenClaw runtime context:\nRuntime" },
+              { role: "developer", content: "OpenClaw runtime context:\nRuntime" },
             ]);
           }
           expect(wire.includes('"ttl":"1h"')).toBe(

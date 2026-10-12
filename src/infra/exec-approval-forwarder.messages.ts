@@ -39,12 +39,6 @@ import {
   type SystemAgentApprovalResolved,
 } from "./system-agent-approvals.js";
 
-function formatApprovalCommand(command: string): { inline: boolean; text: string } {
-  return !command.includes("\n") && !command.includes("`")
-    ? { inline: true, text: `\`${command}\`` }
-    : { inline: false, text: formatFencedCodeBlock(command) };
-}
-
 function buildForwardedExecApprovalRequest(request: ExecApprovalRequest, nowMs: number) {
   const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(request.request);
   const decisionText = allowedDecisions.join("|");
@@ -62,35 +56,29 @@ function buildForwardedExecApprovalRequest(request: ExecApprovalRequest, nowMs: 
       lines.push(`- ${line}`);
     }
   }
-  const command = formatApprovalCommand(
-    resolveExecApprovalCommandDisplay(request.request).commandText,
-  );
-  if (command.inline) {
-    lines.push(`Command: ${command.text}`);
+  const command = resolveExecApprovalCommandDisplay(request.request).commandText;
+  if (!command.includes("\n") && !command.includes("`")) {
+    lines.push(`Command: \`${command}\``);
   } else {
-    lines.push("Command:", command.text);
+    lines.push("Command:", formatFencedCodeBlock(command));
   }
-  if (request.request.cwd) {
-    lines.push(`CWD: ${request.request.cwd}`);
-  }
-  if (request.request.nodeId) {
-    lines.push(`Node: ${request.request.nodeId}`);
-  }
+  const appendField = (
+    field: "cwd" | "nodeId" | "host" | "agentId" | "security" | "ask",
+    label: string,
+  ) => {
+    if (request.request[field]) {
+      lines.push(`${label}: ${request.request[field]}`);
+    }
+  };
+  appendField("cwd", "CWD");
+  appendField("nodeId", "Node");
   if (Array.isArray(request.request.envKeys) && request.request.envKeys.length > 0) {
     lines.push(`Env overrides: ${request.request.envKeys.join(", ")}`);
   }
-  if (request.request.host) {
-    lines.push(`Host: ${request.request.host}`);
-  }
-  if (request.request.agentId) {
-    lines.push(`Agent: ${request.request.agentId}`);
-  }
-  if (request.request.security) {
-    lines.push(`Security: ${request.request.security}`);
-  }
-  if (request.request.ask) {
-    lines.push(`Ask: ${request.request.ask}`);
-  }
+  appendField("host", "Host");
+  appendField("agentId", "Agent");
+  appendField("security", "Security");
+  appendField("ask", "Ask");
   lines.push(`Expires in: ${formatExecApprovalExpiresIn(request.expiresAtMs, nowMs)}`);
   lines.push("Mode: foreground (interactive approvals available in this chat).");
   lines.push(
@@ -188,32 +176,26 @@ export function buildForwardedPluginResolvedPayload(params: {
   return render?.(params) ?? buildPluginApprovalResolvedReplyPayload({ resolved: params.resolved });
 }
 
-function buildForwardedSystemAgentApprovalRequest(
-  request: SystemAgentApprovalRequest,
-  nowMs: number,
-): string {
-  const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMs) / 1000));
-  return [
-    "🛠️ OpenClaw change requires approval",
-    `Change: ${request.request.description}`,
-    ...(request.request.agentId ? [`Agent: ${request.request.agentId}`] : []),
-    `ID: ${request.id}`,
-    `Expires in: ${expiresIn}s`,
-    `Reply with: /approve ${request.id} ${SYSTEM_AGENT_APPROVAL_DECISIONS.join("|")}`,
-  ].join("\n");
-}
-
 export function buildForwardedSystemAgentPendingPayload(params: {
   cfg: OpenClawConfig;
   request: SystemAgentApprovalRequest;
   target: ExecApprovalForwardTarget;
   nowMs: number;
 }): ReplyPayload {
+  const { request, nowMs } = params;
+  const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMs) / 1000));
   return buildTypedApprovalPendingReplyPayload({
     approvalKind: "system-agent",
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
-    text: buildForwardedSystemAgentApprovalRequest(params.request, params.nowMs),
+    text: [
+      "🛠️ OpenClaw change requires approval",
+      `Change: ${request.request.description}`,
+      ...(request.request.agentId ? [`Agent: ${request.request.agentId}`] : []),
+      `ID: ${request.id}`,
+      `Expires in: ${expiresIn}s`,
+      `Reply with: /approve ${request.id} ${SYSTEM_AGENT_APPROVAL_DECISIONS.join("|")}`,
+    ].join("\n"),
     agentId: params.request.request.agentId ?? null,
     allowedDecisions: SYSTEM_AGENT_APPROVAL_DECISIONS,
     sessionKey: params.request.request.sessionKey ?? null,

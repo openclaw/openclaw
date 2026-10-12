@@ -88,6 +88,10 @@ export function renderChatTypingIndicator(
           identity: { type: "profile" as const, id: actor.id },
         };
         const preview = actor.preview?.trim() ? actor.preview : undefined;
+        const cursor = Math.min(
+          preview?.length ?? 0,
+          Math.max(0, actor.cursor ?? preview?.length ?? 0),
+        );
         return html`<div
           class="agent-chat__typing-row"
           ?data-exiting=${actor.exitDurationMs !== undefined}
@@ -108,7 +112,11 @@ export function renderChatTypingIndicator(
                             class="chat-text agent-chat__typing-preview-text"
                             dir="auto"
                             ?data-paused=${actor.paused}
-                            >${preview}</span
+                            >${preview.slice(0, cursor)}<span
+                              class="agent-chat__typing-caret"
+                              aria-hidden="true"
+                            ></span
+                            >${preview.slice(cursor)}</span
                           >`
                         : html`<span class="agent-chat__typing-bubble" aria-hidden="true"
                             ><span></span><span></span><span></span

@@ -24,6 +24,7 @@ import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coe
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
 import { listWhatsAppDeliveredMessageIdentities } from "./inbound/send-result.js";
+import { buildWhatsAppReactionTargetKey } from "./reaction-target.js";
 import { getOptionalWhatsAppRuntime } from "./runtime.js";
 
 const PERSISTENT_NAMESPACE = "whatsapp.approval-reactions";
@@ -68,20 +69,6 @@ const whatsappApprovalReactionTargets =
     logPersistentError: reportPersistentApprovalReactionError,
     readPersistedTarget: readApprovalReactionTargetRecord,
   });
-
-function buildReactionTargetKey(params: {
-  accountId: string;
-  remoteJid: string;
-  messageId: string;
-}) {
-  const accountId = params.accountId.trim();
-  const remoteJid = params.remoteJid.trim();
-  const messageId = params.messageId.trim();
-  if (!accountId || !remoteJid || !messageId) {
-    return null;
-  }
-  return `${accountId}:${remoteJid}:${messageId}`;
-}
 
 function reportApprovalBindingCorrelationMismatch(binding: {
   approvalId: string;
@@ -196,7 +183,7 @@ export async function registerWhatsAppApprovalReactionTarget(params: {
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   ttlMs?: number;
 }): Promise<WhatsAppApprovalReactionTarget | null> {
-  const key = buildReactionTargetKey(params);
+  const key = buildWhatsAppReactionTargetKey(params);
   const approvalId = params.approvalId.trim();
   const allowedDecisions = listApprovalReactionBindings({
     allowedDecisions: params.allowedDecisions,
@@ -271,7 +258,7 @@ export async function unregisterWhatsAppApprovalReactionTarget(params: {
   remoteJid: string;
   messageId: string;
 }): Promise<void> {
-  const key = buildReactionTargetKey(params);
+  const key = buildWhatsAppReactionTargetKey(params);
   if (!key) {
     return;
   }
@@ -284,7 +271,7 @@ export async function resolveWhatsAppApprovalReactionTargetWithPersistence(param
   messageId: string;
   reactionKey: string;
 }): Promise<WhatsAppApprovalReactionResolution | null> {
-  const key = buildReactionTargetKey(params);
+  const key = buildWhatsAppReactionTargetKey(params);
   if (!key) {
     return null;
   }

@@ -4,6 +4,7 @@
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [
+      { "id": "matrix-crypto-unsafe-state" },
       { "id": "matrix-account-sqlite-schema" },
       { "id": "matrix-credentials-json-to-plugin-state" },
       { "id": "matrix-inbound-dedupe-to-claimable-dedupe" },

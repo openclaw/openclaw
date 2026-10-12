@@ -46,7 +46,18 @@ const uploadMocks = vi.hoisted(() => ({
   prepareBrowserProxyUploadRequest: vi.fn(),
 }));
 
-vi.mock("./browser-tool.runtime.js", () => runtimeMocks);
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
+  callGatewayTool: runtimeMocks.callGatewayTool,
+}));
+vi.mock("./browser/client-fetch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/client-fetch.js")>()),
+  fetchBrowserJson: runtimeMocks.fetchBrowserJson,
+}));
+vi.mock("./browser/proxy-files.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/proxy-files.js")>()),
+  persistBrowserProxyResultFiles: runtimeMocks.persistBrowserProxyResultFiles,
+}));
 vi.mock("./browser-proxy-upload.js", () => uploadMocks);
 
 import { createBrowserNodeProxyRequest } from "./browser-node-proxy.js";

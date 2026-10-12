@@ -7,27 +7,11 @@ import {
   assertSameCompactionPayload,
   assertSameReliabilityState,
   type CompactionPayloadProof,
-  type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
 import { startReliabilityCrashWorker } from "./sqlite-reliability-process.js";
 
 type RestoreCrashPoint = "after-publish" | "before-publish";
-type RestoreExit =
-  ReliabilityReport["maintenanceProof"]["restoreInterruption"]["beforePublish"]["exit"];
-type RestoreCrashResult = {
-  existingTargetPreserved: boolean;
-  exit: RestoreExit;
-  payloadAfterRecovery: CompactionPayloadProof;
-  recoveryVerified: true;
-  repositoryVerified: true;
-  retryRestored: boolean;
-  stagingEntries: number;
-  stateAfterRecovery: ReliabilityStateProof;
-  targetVerifiedAfterCrash: boolean;
-  targetVisibleAfterCrash: boolean;
-};
-
 const RESTORE_WORKER_PATH = fileURLToPath(
   new URL("./sqlite-reliability-restore-worker.ts", import.meta.url),
 );
@@ -94,7 +78,7 @@ async function runCrashPoint(
     crashPoint: RestoreCrashPoint;
     provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
   },
-): Promise<RestoreCrashResult> {
+) {
   const targetPath = path.join(params.scratchPath, `${params.crashPoint}.sqlite`);
   const worker = startReliabilityCrashWorker(
     RESTORE_WORKER_PATH,
@@ -216,7 +200,7 @@ export async function runRestoreInterruptionProof(params: {
   validationRootPath: string;
   verifyPayload: (databasePath: string) => CompactionPayloadProof;
   verifyState: (databasePath: string) => ReliabilityStateProof;
-}): Promise<ReliabilityReport["maintenanceProof"]["restoreInterruption"]> {
+}) {
   if (params.expectedSnapshotBytes < MIN_STAGED_RESTORE_BYTES * 2) {
     throw new Error(
       `SQLite restore interruption snapshot is too small: ${params.expectedSnapshotBytes} bytes`,
@@ -258,20 +242,8 @@ export async function runRestoreInterruptionProof(params: {
   }
 
   return {
-    afterPublish: {
-      ...afterPublish,
-      existingTargetPreserved: true,
-      retryRestored: false,
-      targetVerifiedAfterCrash: true,
-      targetVisibleAfterCrash: true,
-    },
-    beforePublish: {
-      ...beforePublish,
-      existingTargetPreserved: false,
-      retryRestored: true,
-      targetVerifiedAfterCrash: false,
-      targetVisibleAfterCrash: false,
-    },
+    afterPublish,
+    beforePublish,
     snapshotBytes: params.expectedSnapshotBytes,
   };
 }

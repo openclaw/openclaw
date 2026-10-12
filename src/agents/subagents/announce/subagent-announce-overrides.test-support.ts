@@ -17,12 +17,13 @@ type AnnounceTestDeps = Pick<typeof announceRuntime, "getRuntimeConfig"> & {
 
 type OutputTestDeps = Pick<
   typeof announceRuntime,
-  | "getRuntimeConfig"
-  | "readSubagentSessionEntry"
-  | "readSessionMessagesAsync"
-  | "resolveAgentIdFromSessionKey"
-  | "resolveSessionStorePathCore"
+  "getRuntimeConfig" | "readSessionMessagesAsync" | "resolveSessionStorePathCore"
 > & {
+  readSubagentSessionEntry: (
+    ...args: Parameters<typeof announceRuntime.readSubagentSessionEntry>
+  ) =>
+    | ReturnType<typeof announceRuntime.readSubagentSessionEntry>
+    | Awaited<ReturnType<typeof announceRuntime.readSubagentSessionEntry>>;
   callGateway: AnnounceTestDeps["callGateway"];
   findTranscriptEvent: typeof sessionAccessor.findTranscriptEvent;
   findSessionTranscriptArchiveEventReadOnly: typeof sessionHistory.findSessionTranscriptArchiveEventReadOnly;
@@ -34,7 +35,9 @@ export type SubagentAnnounceDeliveryTestDeps = AnnounceTestDeps & {
   resolveRequesterSessionAbandonment: typeof embeddedRuns.resolveEmbeddedRunAbandonment;
   loadSessionEntry: typeof sessionAccessor.loadSessionEntryReadOnly;
   loadSessionEntryByKey: typeof deliveryRuntime.loadSessionEntryByKey;
-  loadRequesterSessionEntry: typeof deliveryRuntime.loadRequesterSessionEntry;
+  loadRequesterSessionEntry: (
+    ...args: Parameters<typeof deliveryRuntime.loadRequesterSessionEntry>
+  ) => Awaited<ReturnType<typeof deliveryRuntime.loadRequesterSessionEntry>>;
   queueEmbeddedAgentMessageWithOutcome: (
     ...args: Parameters<typeof embeddedRuns.queueEmbeddedAgentMessageWithOutcomeAsync>
   ) =>
@@ -133,7 +136,7 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
     install(
       announceRuntime.readSubagentSessionEntry,
       () => vi.spyOn(announceRuntime, "readSubagentSessionEntry"),
-      current.readSubagentSessionEntry,
+      async (...args) => current.readSubagentSessionEntry!(...args),
     );
   }
   if (current.readSessionMessagesAsync) {
@@ -141,13 +144,6 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
       announceRuntime.readSessionMessagesAsync,
       () => vi.spyOn(announceRuntime, "readSessionMessagesAsync"),
       current.readSessionMessagesAsync,
-    );
-  }
-  if (current.resolveAgentIdFromSessionKey) {
-    install(
-      announceRuntime.resolveAgentIdFromSessionKey,
-      () => vi.spyOn(announceRuntime, "resolveAgentIdFromSessionKey"),
-      current.resolveAgentIdFromSessionKey,
     );
   }
   if (current.resolveSessionStorePathCore) {
@@ -182,7 +178,14 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
     install(
       deliveryRuntime.loadRequesterSessionEntry,
       () => vi.spyOn(deliveryRuntime, "loadRequesterSessionEntry"),
-      current.loadRequesterSessionEntry,
+      async (...args) => current.loadRequesterSessionEntry!(...args),
+    );
+    install(
+      deliveryRuntime.captureRequesterSessionEntryCurrent,
+      () => vi.spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent"),
+      (...args) =>
+        () =>
+          current.loadRequesterSessionEntry!(...args).entry,
     );
   }
   if (current.loadSessionEntryByKey) {

@@ -78,15 +78,15 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("status")
     .description(
-      opts?.statusDescription ?? "Show gateway service status + probe connectivity/capability",
+      opts?.statusDescription ?? "Show gateway service status + check connectivity/capability",
     )
     .option("--url <url>", "Gateway WebSocket URL (defaults to config/remote/local)")
     .option("--port <port>", "Local Gateway port")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
     .option("--timeout <ms>", "Timeout in ms", "10000")
-    .option("--no-probe", "Skip RPC probe")
-    .option("--require-rpc", "Exit non-zero when the RPC probe fails", false)
+    .option("--no-probe", "Skip RPC check")
+    .option("--require-rpc", "Exit non-zero when the RPC check fails", false)
     .option("--deep", "Scan system-level services", false)
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {

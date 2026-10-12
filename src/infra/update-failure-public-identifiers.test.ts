@@ -15,6 +15,11 @@ it.each(["update-ledger-busy", "source-artifact-ownership"])(
   },
 );
 
+it("preserves the named service runtime check in public refusal reports", async () => {
+  const fact = { check: "managed-service-runtime", code: "service-ownership-changed" };
+  await expect(projectPublicUpdateFailureIdentifiers(fact)).resolves.toEqual(fact);
+});
+
 it("keeps unknown check and reason identifiers private", async () => {
   await expect(
     projectPublicUpdateFailureIdentifiers({ check: "private-check", code: "private-reason" }),

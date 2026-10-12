@@ -44,8 +44,6 @@ function readSnapshot(db: DatabaseSync) {
     machineState: db.prepare("SELECT * FROM config_machine_state ORDER BY state_key").all(),
     schema: db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").all(),
     environments: db.prepare("SELECT rowid, * FROM worker_environments").all(),
-    workshopProposals: db.prepare("SELECT * FROM skill_workshop_proposals").all(),
-    workshopReviews: db.prepare("SELECT * FROM skill_workshop_collection_reviews").all(),
     obligations: readObligations(db),
   };
 }
@@ -70,31 +68,6 @@ function createLegacyWorkers(version = 16, publicationDeferred = false) {
         ('fixture', 'namespace', 'retained', '{"keep":true}', 10, NULL),
         ('fixture', 'namespace', 'expiring', '{"keep":true}', 10, 1000);
     `);
-    legacy.exec(`INSERT INTO skill_workshop_proposals (
-      proposal_id, record_json, owner_agent_id, kind, status, created_at, updated_at, draft_hash
-    ) VALUES ('retained-proposal', '{}', 'main', 'create', 'pending', '2026-08-01', '2026-08-01', 'hash');`);
-    if (version === 15) {
-      legacy.exec(`
-        ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
-        ALTER TABLE skill_workshop_proposals ADD COLUMN claim_released_time INTEGER;
-        UPDATE skill_workshop_proposals SET workspace_dir = '/workspace';
-        DROP TABLE skill_workshop_collection_reviews;
-        CREATE TABLE skill_workshop_collection_reviews (
-          review_id TEXT NOT NULL PRIMARY KEY,
-          workspace_dir TEXT NOT NULL,
-          backup_id TEXT NOT NULL,
-          create_time INTEGER NOT NULL,
-          kept_names_json TEXT NOT NULL,
-          written_names_json TEXT NOT NULL,
-          dropped_json TEXT NOT NULL
-        ) STRICT;
-        INSERT INTO skill_workshop_collection_reviews
-          VALUES ('retained-review', '/workspace', 'backup', 1, '[]', '[]', '[]');
-      `);
-    } else {
-      legacy.exec(`INSERT INTO skill_workshop_collection_reviews
-        VALUES ('retained-review', 'main', 'backup', 1, '[]', '[]', '[]');`);
-    }
     legacy.exec(`
       ALTER TABLE worker_environments ADD COLUMN future_note TEXT;
       PRAGMA user_version = ${version};
@@ -169,9 +142,6 @@ describe("prepared worker schema migration", () => {
           .all()
           .map((row) => row.name),
       ).toEqual(["plugin_id", "namespace", "created_at", "entry_key", "expires_at"]);
-      expect(db.prepare("SELECT * FROM skill_workshop_collection_reviews").all()).toEqual(
-        before.workshopReviews,
-      );
       const after = readSnapshot(db);
       closeOpenClawStateDatabaseForTest();
       expect(readSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
@@ -217,9 +187,6 @@ describe("prepared worker schema migration", () => {
       if (via === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
           changes: [
-            ...(version === 15
-              ? ["Moved Skill Workshop ownership to per-agent directories (v16)"]
-              : []),
             "Recorded prepared worker ownership and one-use lifecycle (v17)",
             "Rebuilt canonical shared-state SQLite indexes (1)",
           ],
@@ -244,22 +211,6 @@ describe("prepared worker schema migration", () => {
           .all()
           .map((row) => row.name),
       ).toEqual(["plugin_id", "namespace", "created_at", "entry_key", "expires_at"]);
-      expect(db.prepare("SELECT * FROM skill_workshop_proposals").all()).toEqual(
-        before.workshopProposals.map(
-          ({ workspace_dir: _workspace, claim_released_time: _released, ...proposal }) => proposal,
-        ),
-      );
-      expect(db.prepare("SELECT * FROM skill_workshop_collection_reviews").all()).toEqual([
-        {
-          review_id: "retained-review",
-          owner_agent_id: "main",
-          backup_id: "backup",
-          create_time: 1,
-          kept_names_json: "[]",
-          written_names_json: "[]",
-          dropped_json: "[]",
-        },
-      ]);
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(db.prepare("PRAGMA user_version").get()).toEqual({

@@ -37,6 +37,8 @@ type SessionAuthProfilePreservationParams = {
   currentProvider: string;
   provider: string;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+  /** Presence records completed preparation, including authoritative credential absence. */
+  recordedProvider?: { provider: string | undefined };
 };
 
 /** Checks whether a pinned session auth profile can authenticate the selected provider. */
@@ -63,11 +65,13 @@ export function shouldPreserveSessionAuthProfileOverride(
         resolveProviderIdForAuth(provider, lookupParams),
     );
   };
-  const recordedProvider = resolvePinnedAuthProfileProvider({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    profileId: profileOverride,
-  });
+  const recordedProvider = params.recordedProvider
+    ? (params.recordedProvider.provider ?? params.cfg.auth?.profiles?.[profileOverride]?.provider)
+    : resolvePinnedAuthProfileProvider({
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        profileId: profileOverride,
+      });
   if (recordedProvider) {
     return resolvesToTargetProvider(recordedProvider, true);
   }
@@ -118,6 +122,7 @@ export function applyModelOverrideWithAuthProfileCompatibility(
         entry: params.entry,
         currentProvider: params.currentProvider,
         provider: params.selection.provider,
+        recordedProvider: params.recordedProvider,
         ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
       }),
   });

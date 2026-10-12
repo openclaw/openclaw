@@ -197,6 +197,20 @@ it("preserves active run id ownership across omitted, liveness, and exact states
   });
 });
 
+it.each([true, false, undefined])(
+  "publishes sidebarRoot %s including explicit clearing",
+  (sidebarRoot) => {
+    const snapshot = buildGatewaySessionSnapshot({
+      sessionRow: { key: "agent:main:dashboard:child", kind: "direct", updatedAt: 1, sidebarRoot },
+      includeSession: true,
+    });
+    expect(snapshot).toMatchObject({
+      sidebarRoot: sidebarRoot === true,
+      session: { sidebarRoot: sidebarRoot === true },
+    });
+  },
+);
+
 it.each(["user", null] as const)(
   "carries model override source %s into session change events",
   (source) => {
@@ -213,58 +227,71 @@ it.each(["user", null] as const)(
   },
 );
 
-it("serializes lifecycle starts without model selection or prior terminal timing", () => {
-  // oxlint-disable-next-line unicorn/prefer-structured-clone -- exercise timing clears on the wire
-  const snapshot: unknown = JSON.parse(
-    JSON.stringify(
-      buildGatewaySessionSnapshot({
-        sessionRow: {
-          key: "agent:main:pinned",
-          sessionId: "pinned-session",
-          kind: "direct",
-          updatedAt: 200,
-          status: "done",
-          startedAt: 100,
-          endedAt: 200,
-          runtimeMs: 100,
-          model: "model-a",
-          modelProvider: "provider",
-          activeModel: "model-b",
-          activeModelProvider: "fallback-provider",
-          modelOverrideSource: "user",
-        },
-        lifecycle: true,
-        includeSession: true,
-        event: {
-          runId: "next-run",
-          sessionId: "pinned-session",
-          seq: 1,
-          ts: 300,
-          stream: "lifecycle",
-          data: { phase: "start", startedAt: 300 },
-        },
-      }),
-    ),
-  );
-  expect(snapshot).toMatchObject({
-    status: "running",
-    startedAt: 300,
-    endedAt: null,
-    runtimeMs: null,
-    session: { status: "running", startedAt: 300, endedAt: null, runtimeMs: null },
-  });
-  for (const field of [
-    "model",
-    "modelProvider",
-    "activeModel",
-    "activeModelProvider",
-    "modelOverrideSource",
-    "agentRuntime",
-  ]) {
-    expect(snapshot).not.toHaveProperty(field);
-    expect(snapshot).not.toHaveProperty(`session.${field}`);
-  }
-});
+it.each([false, true])(
+  "serializes lifecycle starts without prior timing, deriving liveness from the owner (active=%s)",
+  (active) => {
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- exercise timing clears on the wire
+    const snapshot: unknown = JSON.parse(
+      JSON.stringify(
+        buildGatewaySessionSnapshot({
+          sessionRow: {
+            key: "agent:main:pinned",
+            sessionId: "pinned-session",
+            kind: "direct",
+            updatedAt: 200,
+            status: "done",
+            startedAt: 100,
+            endedAt: 200,
+            runtimeMs: 100,
+            model: "model-a",
+            modelProvider: "provider",
+            activeModel: "model-b",
+            activeModelProvider: "fallback-provider",
+            modelOverrideSource: "user",
+          },
+          lifecycle: true,
+          includeSession: true,
+          activeRunState: active ? { active: true, runIds: ["next-run"] } : undefined,
+          event: {
+            runId: "next-run",
+            sessionId: "pinned-session",
+            seq: 1,
+            ts: 300,
+            stream: "lifecycle",
+            data: { phase: "start", startedAt: 300 },
+          },
+        }),
+      ),
+    );
+    expect(snapshot).toMatchObject({
+      ...(active ? { status: "running" } : {}),
+      startedAt: 300,
+      endedAt: null,
+      runtimeMs: null,
+      session: {
+        ...(active ? { status: "running" } : {}),
+        startedAt: 300,
+        endedAt: null,
+        runtimeMs: null,
+      },
+    });
+    if (!active) {
+      expect(snapshot).not.toHaveProperty("status");
+      expect(snapshot).not.toHaveProperty("session.status");
+    }
+    for (const field of [
+      "model",
+      "modelProvider",
+      "activeModel",
+      "activeModelProvider",
+      "modelOverrideSource",
+      "agentRuntime",
+    ]) {
+      expect(snapshot).not.toHaveProperty(field);
+      expect(snapshot).not.toHaveProperty(`session.${field}`);
+    }
+  },
+);
 
 it.each([
   { aborted: false, status: "done" },
@@ -281,7 +308,6 @@ it.each([
         lastActivityAt: 120,
         unread: false,
         updatedAt: 100,
-        status: "running",
         startedAt: 100,
       },
       includeSession: true,

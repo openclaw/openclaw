@@ -1,14 +1,69 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { nip19 } from "nostr-tools";
+import { generateSecretKey, nip19 } from "nostr-tools";
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { SecretInput, WizardPrompter } from "openclaw/plugin-sdk/setup";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  runSingleChannelSecretStep,
+  type SecretInput,
+  type WizardPrompter,
+} from "openclaw/plugin-sdk/setup";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
-import { createBuzzSetupWizard } from "./setup-surface.js";
+import { waitForBuzzRoomAccess } from "./room-access-wait.js";
+import { discoverBuzzRooms } from "./room-discovery.js";
+import { buzzSetupWizard } from "./setup-surface.js";
+import { verifyBuzzAfterSetup } from "./setup-verify.js";
+
+vi.mock("nostr-tools", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("nostr-tools")>()),
+  generateSecretKey: vi.fn(),
+}));
+vi.mock("openclaw/plugin-sdk/setup", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/setup")>()),
+  runSingleChannelSecretStep: vi.fn(),
+}));
+vi.mock("./room-access-wait.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./room-access-wait.js")>()),
+  waitForBuzzRoomAccess: vi.fn(),
+}));
+vi.mock("./room-discovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./room-discovery.js")>()),
+  discoverBuzzRooms: vi.fn(),
+}));
+vi.mock("./setup-verify.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup-verify.js")>()),
+  verifyBuzzAfterSetup: vi.fn(),
+}));
+
+function createBuzzSetupWizard(
+  dependencies: {
+    discoverRooms?: typeof discoverBuzzRooms;
+    generateSecretKey?: typeof generateSecretKey;
+    runSecretStep?: typeof runSingleChannelSecretStep;
+    waitForRoomAccess?: typeof waitForBuzzRoomAccess;
+    verifyAfterWrite?: typeof verifyBuzzAfterSetup;
+  } = {},
+) {
+  if (dependencies.discoverRooms) {
+    vi.mocked(discoverBuzzRooms).mockImplementation(dependencies.discoverRooms);
+  }
+  if (dependencies.generateSecretKey) {
+    vi.mocked(generateSecretKey).mockImplementation(dependencies.generateSecretKey);
+  }
+  if (dependencies.runSecretStep) {
+    vi.mocked(runSingleChannelSecretStep).mockImplementation(dependencies.runSecretStep);
+  }
+  if (dependencies.waitForRoomAccess) {
+    vi.mocked(waitForBuzzRoomAccess).mockImplementation(dependencies.waitForRoomAccess);
+  }
+  if (dependencies.verifyAfterWrite) {
+    vi.mocked(verifyBuzzAfterSetup).mockImplementation(dependencies.verifyAfterWrite);
+  }
+  return buzzSetupWizard;
+}
 
 const ROOM_A = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
 const ROOM_B = "940d0c32-4eb7-46d7-9d5b-d975aaef87f7";
@@ -123,6 +178,10 @@ function configure(
 }
 
 describe("Buzz guided setup", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(generateSecretKey).mockReturnValue(GENERATED_KEY);
+  });
   afterEach(async () => {
     vi.unstubAllEnvs();
     await Promise.all(secretFixtureRoots.splice(0).map((root) => fs.rm(root, { recursive: true })));

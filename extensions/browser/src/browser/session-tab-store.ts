@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { z } from "zod";
@@ -18,6 +19,11 @@ import {
   rememberDurableTabAliases,
   resetDurableTabAliases,
 } from "./session-tab-ephemeral-aliases.js";
+import {
+  browserSessionTabNativeIdentity,
+  browserSessionTabStorageKey,
+  resolveBrowserSessionKey,
+} from "./session-tab-identity.js";
 import {
   activeDurableStorageKeys,
   forgetColdNativeActivity,
@@ -79,7 +85,10 @@ const browserSessionTabRecordSchema = z
         canonical.includes(record.profile) ||
         !canonical.every((entry, index) => entry === record.profileAliases?.[index])
       ) {
-        context.addIssue({ code: "custom", message: "profile aliases must be canonical" });
+        context.addIssue({
+          code: "custom",
+          message: "profile aliases must be sorted, unique, and exclude the primary profile",
+        });
       }
     }
     const cleanupFieldCount = [
@@ -249,7 +258,9 @@ export async function drainBrowserSessionTabStore(runtime: BrowserStateRuntime):
   }
 }
 
-export function getBrowserSessionTabStore(authority: BrowserSessionTabAuthority = {}) {
+export function getBrowserSessionTabStore(
+  authority: BrowserSessionTabAuthority = {},
+): PluginStateKeyedStore<unknown, 2> {
   const runtime = authority.runtime ?? getBrowserStateRuntime();
   const withCurrent = runtime.sessionTabs.withCurrent;
   if (!withCurrent) {
@@ -261,7 +272,9 @@ export function getBrowserSessionTabStore(authority: BrowserSessionTabAuthority 
   });
 }
 
-export function getOptionalBrowserSessionTabStore(authority: BrowserSessionTabAuthority = {}) {
+export function getOptionalBrowserSessionTabStore(
+  authority: BrowserSessionTabAuthority = {},
+): PluginStateKeyedStore<unknown, 2> | undefined {
   return authority.runtime || getOptionalBrowserStateRuntime()
     ? getBrowserSessionTabStore(authority)
     : undefined;
@@ -458,37 +471,16 @@ export async function dispatchBrowserTabClose<T>(
   return await admitted?.result;
 }
 
-export function browserSessionTabStorageKey(record: {
-  sessionKey: string;
-  nativeTargetId: string;
-  profileFingerprint: string;
-  browserInstanceFingerprint: string;
-}): string {
-  return `sha256:${createHash("sha256")
-    .update(
-      JSON.stringify([
-        record.sessionKey,
-        record.nativeTargetId,
-        record.profileFingerprint,
-        record.browserInstanceFingerprint,
-      ]),
-    )
-    .digest("hex")}`;
-}
-
-export function browserSessionTabNativeIdentity(
-  record: Pick<BrowserSessionTabRecord, "sessionKey" | "profile" | "nativeTargetId">,
-): string {
-  return `${record.sessionKey}\u0000${record.profile}\u0000${record.nativeTargetId}`;
-}
-
 export function compareBrowserSessionTabProfileAliases(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
 export function parseBrowserSessionTabRecord(value: unknown): BrowserSessionTabRecord | undefined {
   const parsed = browserSessionTabRecordSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  return parsed.success &&
+    resolveBrowserSessionKey(parsed.data.sessionKey) === parsed.data.sessionKey
+    ? parsed.data
+    : undefined;
 }
 
 export function sameBrowserSessionTabRecord(
@@ -562,6 +554,9 @@ async function retireColdNativeActivityIfUnowned(
 }
 
 type BrowserSessionTabUpdate = (current: unknown) => BrowserSessionTabRecord | undefined;
+type BrowserSessionTabMutation =
+  | { operation: "update"; update: BrowserSessionTabUpdate }
+  | { operation: "delete"; predicate: (current: unknown) => boolean };
 type BrowserSessionTabWriteOptions = BrowserSessionTabAuthority & {
   onCommitted?: (record: BrowserSessionTabRecord) => void;
 };
@@ -581,18 +576,18 @@ export async function withBrowserSessionTabSelection<T>(
   select: (tab: BrowserSessionTabSelection) => Promise<T>,
 ): Promise<T> {
   const captured = { ...authority, runtime: authority.runtime ?? getBrowserStateRuntime() };
-  return await withBrowserSessionTabOperation(
-    key,
-    captured,
-    async (store) =>
-      await select({
-        lookup: () => store.lookup(key),
-        update: (update, onCommitted) =>
-          updateBrowserSessionTabInOperation(store, key, update, { ...captured, onCommitted }),
-        deleteIf: (predicate) =>
-          deleteBrowserSessionTabInOperation(store, key, predicate, captured),
-      }),
-  );
+  return await withBrowserSessionTabOperation(key, captured, async (store) => {
+    const mutate = (
+      mutation: BrowserSessionTabMutation,
+      options: BrowserSessionTabWriteOptions = captured,
+    ) => mutateBrowserSessionTabInOperation(store, key, mutation, options);
+    return await select({
+      lookup: () => store.lookup(key),
+      update: async (update, onCommitted) =>
+        (await mutate({ operation: "update", update }, { ...captured, onCommitted })).next,
+      deleteIf: async (predicate) => (await mutate({ operation: "delete", predicate })).deleted,
+    });
+  });
 }
 
 export async function updateBrowserSessionTab(
@@ -649,15 +644,19 @@ async function withBrowserSessionTabNativeIdentities<T>(
   return await run(0);
 }
 
-async function updateBrowserSessionTabInOperation(
+async function mutateBrowserSessionTabInOperation(
   store: ReturnType<typeof getBrowserSessionTabStore>,
   key: string,
-  update: BrowserSessionTabUpdate,
+  mutation: BrowserSessionTabMutation,
   authority: BrowserSessionTabWriteOptions,
-): Promise<BrowserSessionTabRecord | undefined> {
+): Promise<{ next: BrowserSessionTabRecord | undefined; deleted: boolean }> {
   let observed = await store.observe(key);
   while (true) {
-    const next = update(observed.value);
+    const next = mutation.operation === "update" ? mutation.update(observed.value) : undefined;
+    const deleted =
+      mutation.operation === "delete" &&
+      observed.value !== undefined &&
+      mutation.predicate(observed.value);
     const previous = parseBrowserSessionTabRecord(observed.value);
     const outcome = await withBrowserSessionTabNativeIdentities(
       [previous, next],
@@ -666,26 +665,36 @@ async function updateBrowserSessionTabInOperation(
         const result = await store.compareAndApply(
           key,
           observed.comparison,
-          next
-            ? { operation: "update", action: "set", value: next }
-            : { operation: "update", action: "keep" },
+          mutation.operation === "delete"
+            ? { operation: "delete", action: deleted ? "delete" : "keep" }
+            : next
+              ? { operation: "update", action: "set", value: next }
+              : { operation: "update", action: "keep" },
         );
         if (
           result.status === "conflict" ||
-          !next ||
+          (!next && !deleted) ||
           getOptionalBrowserStateRuntime() !== authority.runtime
         ) {
           return result;
         }
-        authority.onCommitted?.(next);
+        if (next) {
+          authority.onCommitted?.(next);
+        } else {
+          clearDurableTabAliases(key);
+          activeDurableStorageKeys().delete(key);
+        }
         if (
-          previous?.interactionTargetKind === "native" &&
-          (next.interactionTargetKind !== "native" ||
-            browserSessionTabNativeIdentity(previous) !== browserSessionTabNativeIdentity(next))
+          deleted ||
+          (previous?.interactionTargetKind === "native" &&
+            (next?.interactionTargetKind !== "native" ||
+              browserSessionTabNativeIdentity(previous) !== browserSessionTabNativeIdentity(next)))
         ) {
           await retireColdNativeActivityIfUnowned(
             store,
-            browserSessionTabNativeIdentity(previous),
+            previous?.interactionTargetKind === "native"
+              ? browserSessionTabNativeIdentity(previous)
+              : undefined,
             authority,
           );
         }
@@ -696,47 +705,6 @@ async function updateBrowserSessionTabInOperation(
       observed = outcome.current;
       continue;
     }
-    return next;
-  }
-}
-
-async function deleteBrowserSessionTabInOperation(
-  store: ReturnType<typeof getBrowserSessionTabStore>,
-  key: string,
-  predicate: (current: unknown) => boolean,
-  authority: BrowserSessionTabAuthority,
-): Promise<boolean> {
-  let observed = await store.observe(key);
-  while (true) {
-    const shouldDelete = observed.value !== undefined && predicate(observed.value);
-    const removed = parseBrowserSessionTabRecord(observed.value);
-    const outcome = await withBrowserSessionTabNativeIdentities([removed], authority, async () => {
-      const result = await store.compareAndApply(key, observed.comparison, {
-        operation: "delete",
-        action: shouldDelete ? "delete" : "keep",
-      });
-      if (
-        result.status === "conflict" ||
-        !shouldDelete ||
-        getOptionalBrowserStateRuntime() !== authority.runtime
-      ) {
-        return result;
-      }
-      clearDurableTabAliases(key);
-      activeDurableStorageKeys().delete(key);
-      await retireColdNativeActivityIfUnowned(
-        store,
-        removed?.interactionTargetKind === "native"
-          ? browserSessionTabNativeIdentity(removed)
-          : undefined,
-        authority,
-      );
-      return result;
-    });
-    if (outcome.status === "conflict") {
-      observed = outcome.current;
-      continue;
-    }
-    return shouldDelete;
+    return { next, deleted };
   }
 }

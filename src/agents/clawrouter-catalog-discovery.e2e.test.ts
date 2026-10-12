@@ -3,10 +3,7 @@ import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  buildModelsListResult,
-  createGatewayAgentModelCatalogProjector,
-} from "../gateway/server-methods/models-list-result.js";
+import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -20,11 +17,12 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "./auth-profiles/credential-fixtures.test-support.js";
-import {
-  createPreparedModelCatalogWorkerInput,
-  type PreparedModelCatalogWorkerTask,
-  type PreparedModelWorkerResult,
-} from "./prepared-model-catalog-worker.js";
+import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
+import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
+import type {
+  PreparedModelCatalogWorkerTask,
+  PreparedModelWorkerResult,
+} from "./prepared-model-catalog-worker.types.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 
 describe("ClawRouter cold prepared catalog", () => {
@@ -208,7 +206,7 @@ describe("ClawRouter cold prepared catalog", () => {
         baseUrl: `${baseUrl}/v1`,
       }),
     );
-    const projector = createGatewayAgentModelCatalogProjector({
+    const projector = createModelCatalogDecisions({
       cfg: config,
       agentId,
       snapshot: result.snapshot,

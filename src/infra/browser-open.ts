@@ -19,7 +19,7 @@ type BrowserOpenEnvironment = {
 };
 
 /** Resolve the platform command used to open an HTTP(S) URL in a browser. */
-export async function resolveBrowserOpenCommand(
+async function resolveBrowserOpenCommand(
   environment: BrowserOpenEnvironment = {},
 ): Promise<BrowserOpenCommand> {
   const platform = environment.platform ?? process.platform;
@@ -38,9 +38,8 @@ export async function resolveBrowserOpenCommand(
     };
   }
 
-  if (platform === "darwin") {
-    const hasOpen = await detectBinary("open");
-    return hasOpen ? { argv: ["open"] } : { argv: null, reason: "missing-open" };
+  if (platform !== "darwin" && platform !== "linux") {
+    return { argv: null, reason: "unsupported-platform" };
   }
 
   if (platform === "linux") {
@@ -57,11 +56,11 @@ export async function resolveBrowserOpenCommand(
         return { argv: null, reason: "wsl-no-wslview" };
       }
     }
-    const hasXdgOpen = await detectBinary("xdg-open");
-    return hasXdgOpen ? { argv: ["xdg-open"] } : { argv: null, reason: "missing-xdg-open" };
   }
-
-  return { argv: null, reason: "unsupported-platform" };
+  const command = platform === "darwin" ? "open" : "xdg-open";
+  return (await detectBinary(command))
+    ? { argv: [command] }
+    : { argv: null, reason: `missing-${command}` };
 }
 
 /** Report whether browser opening is currently available. */

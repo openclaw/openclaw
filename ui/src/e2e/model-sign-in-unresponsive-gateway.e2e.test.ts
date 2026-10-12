@@ -44,12 +44,13 @@ suite.define(() => {
         await page.clock.runFor(30_000);
         await closed;
         const dialog = page.locator("openclaw-modal-dialog");
-        await dialog.getByText("Details", { exact: true }).click();
-        await dialog
+        const alert = dialog.getByRole("alert");
+        await alert
           .getByText("The Gateway is not responding. Check that it is running, then try again.", {
             exact: true,
           })
           .waitFor();
+        expect(await dialog.locator("details").count()).toBe(0);
       },
     );
   });

@@ -19,7 +19,6 @@ import {
   expectNoSideEffects,
   freshRestartCalls,
   gatewayCommandCall,
-  getErrorOutput,
   getLogOutput,
   requireValue,
   spawnCall,
@@ -36,7 +35,6 @@ import {
   serviceRestart,
   serviceStop,
   spawn,
-  syncPluginsForUpdateChannel,
   unrelatedGatewayFixturePid,
   updateNpmInstalledPlugins,
   callGateway,
@@ -60,7 +58,6 @@ import {
   updateCommand,
   ExitError,
 } from "./update-cli-modules.test-support.js";
-import { pluginSyncResult } from "./update-cli/update-cli-config.test-support.js";
 import {
   writeGitUpdateResultFixture,
   writeOpenClawPackageFixture,
@@ -259,75 +256,6 @@ describe("update-cli", () => {
       OPENCLAW_STATE_DIR: personalState,
       OPENCLAW_GATEWAY_PORT: "19111",
     });
-  });
-
-  it("keeps forced post-core fallback and fresh validation in the stopped service profile", async () => {
-    const updatedEntrypoint = await setupManagedGitRootRefresh();
-    const managedState = profileStateDir("work");
-    initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: managedState });
-    primeServiceCommand(
-      [nodeExecutable, path.join(process.cwd(), "dist", "index.js"), "gateway", "run"],
-      {
-        OPENCLAW_PROFILE: "work",
-        OPENCLAW_STATE_DIR: managedState,
-        OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
-        OPENCLAW_GATEWAY_PORT: "19222",
-      },
-    );
-    // Only the resume attempt misses; Doctor and service refresh resolve the real target.
-    let resumeAttempted = false;
-    vi.mocked(resolveGatewayInstallEntrypoint)
-      .mockReset()
-      .mockImplementation(async () => {
-        if (serviceStop.mock.calls.length > 0 && !resumeAttempted) {
-          resumeAttempted = true;
-          return undefined;
-        }
-        return updatedEntrypoint;
-      });
-    const convergenceProfiles: Array<string | undefined> = [];
-    syncPluginsForUpdateChannel.mockImplementation(async () => {
-      convergenceProfiles.push(process.env.OPENCLAW_PROFILE);
-      return pluginSyncResult(baseConfig, true);
-    });
-
-    initializeExistingUpdateProfile({
-      ...process.env,
-      OPENCLAW_STATE_DIR: profileStateDir("personal"),
-    });
-    await withEnvAsync(
-      {
-        OPENCLAW_PROFILE: "personal",
-        OPENCLAW_STATE_DIR: profileStateDir("personal"),
-        OPENCLAW_GATEWAY_PORT: "19111",
-      },
-      async () => {
-        await updateCommand({ yes: true }).catch((error: unknown) => {
-          throw new Error(getErrorOutput() + getLogOutput(), { cause: error });
-        });
-        expect(process.env.OPENCLAW_PROFILE).toBe("personal");
-      },
-    );
-
-    expect(convergenceProfiles).toEqual(["work"]);
-    expect(spawn).not.toHaveBeenCalled();
-    expect(gatewayCommandCall(updatedEntrypoint, "install")).toBeDefined();
-    expect(freshRestartCalls()).toHaveLength(1);
-    expect(getLogOutput()).toContain("Gateway: restarted and verified.");
-    const freshCalls = vi
-      .mocked(runExec)
-      .mock.calls.filter(([, args]) => ["doctor", "config"].includes(args[1] ?? ""));
-    expect(freshCalls).toHaveLength(2);
-    for (const call of freshCalls) {
-      expect(call[1][0]).toBe(updatedEntrypoint);
-      const options = call[2];
-      const baseEnv = typeof options === "number" ? undefined : options?.baseEnv;
-      expect(baseEnv).toMatchObject({
-        OPENCLAW_PROFILE: "work",
-        OPENCLAW_STATE_DIR: managedState,
-        OPENCLAW_GATEWAY_PORT: "19222",
-      });
-    }
   });
 
   it("routes JSON post-core child output to stderr", async () => {

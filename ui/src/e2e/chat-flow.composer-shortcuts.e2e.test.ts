@@ -71,7 +71,9 @@ suite.define(() => {
       expect(await composer.inputValue()).toContain("\n");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-      await composer.fill("default enter send");
+      // Firefox fill() emits compositionend; type deliberate sends through keyboard events.
+      await composer.fill("");
+      await composer.pressSequentially("default enter send");
       await composer.press("Enter");
       const defaultRequest = await gateway.waitForRequest("chat.send");
       const defaultParams = requireRecord(defaultRequest.params);
@@ -107,7 +109,8 @@ suite.define(() => {
       await composer.dispatchEvent("compositionend");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-      await composer.fill("modifier send");
+      await composer.fill("");
+      await composer.pressSequentially("modifier send");
       await composer.press("Meta+Enter");
       const modifierRequest = await gateway.waitForRequest("chat.send");
       expect(requireRecord(modifierRequest.params).message).toBe("modifier send");
@@ -351,9 +354,10 @@ suite.define(() => {
 
       await page.keyboard.press("Escape");
       const abort = await gateway.waitForRequest("chat.abort");
-      const interrupted = pane.locator(".agent-chat__run-status--interrupted");
+      const interrupted = pane.locator(".chat-bubble [role=status]", { hasText: "Interrupted" });
       await interrupted.waitFor({ state: "visible" });
       expect(await interrupted.textContent()).toContain("Interrupted");
+      expect(await pane.getByLabel("Run status: Interrupted").count()).toBe(0);
       await expect
         .poll(() => pane.locator(".agent-chat__run-status-announcement").textContent())
         .toBe("Interrupted");

@@ -154,6 +154,10 @@ async function exerciseDoctor(
     DropInPaths: property("as", []),
     NeedDaemonReload: property("b", false),
     LoadState: property("s", "loaded"),
+    UnitFileState: property("s", "enabled"),
+    ActiveState: property("s", "active"),
+    CanStart: property("b", true),
+    RefuseManualStart: property("b", false),
     ExecStart: property("a(sasbttttuii)", [[args[0], args, false, 0, 0, 0, 0, 0, 0, 0]]),
     WorkingDirectory: property("s", home),
     Environment: property(

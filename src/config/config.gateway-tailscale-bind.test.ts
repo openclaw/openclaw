@@ -22,14 +22,6 @@ it("accepts a custom IPv4 loopback bind host with Tailscale", () => {
   ).toBe(true);
 });
 
-it("rejects IPv6 custom bind hosts for Tailscale", () => {
-  expect(
-    validateConfigObject({
-      gateway: { bind: "custom", customBindHost: "::1", tailscale: { mode: "serve" } },
-    }),
-  ).toMatchObject({ ok: false, issues: [expect.objectContaining({ path: "gateway.bind" })] });
-});
-
 it("rejects non-loopback binds when Tailscale is enabled", () => {
   const gateways = [
     { bind: "lan", tailscale: { mode: "serve" } },

@@ -9,6 +9,7 @@ import { captureChannelOperatorRunAuthority } from "../../gateway/operator-run-a
 import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { takeChannelParticipantInput } from "./admission-evidence.js";
+import { bindChildSessionPublication } from "./child-session-publication.js";
 import type { ChannelIngressHostOwner } from "./ingress-host-owner.js";
 import type {
   ChannelIngressContextBinding,
@@ -53,6 +54,21 @@ export function bindChannelParticipantInput(params: {
     if (input) {
       prepareSessionParticipantInput(params.context, input.identity, input.promptedAt);
     }
+  }
+  // Public intent is stricter than ordinary attribution: no mixed/batched context.
+  const publication = batch.length === 1 ? batch[0]?.childSessionPublication : undefined;
+  if (publication?.audience === "public" && params.binding.inboundEventKind === "user_request") {
+    const gateway = params.owner.resolveGatewayContext?.();
+    bindChildSessionPublication(params.context, params.binding.sessionKey, () => {
+      if (
+        !params.owner.isLive() ||
+        !gateway ||
+        params.owner.resolveGatewayContext?.() !== gateway
+      ) {
+        throw new Error("Public ingress owner is no longer current.");
+      }
+      publication.assertCurrent();
+    });
   }
   const principal = batch.at(-1)?.verifiedPrincipal;
   const principalKey = principal && JSON.stringify(principal);

@@ -25,7 +25,10 @@ async function readBoundedStdin(maxBytes: number): Promise<string> {
 }
 
 async function readBoundedFile(pathname: string, maxBytes: number): Promise<string> {
-  const file = await fs.open(pathname, "r");
+  // Open FIFOs without waiting for a writer so the descriptor check can reject them.
+  const flags =
+    process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
+  const file = await fs.open(pathname, flags);
   try {
     const stat = await file.stat();
     if (!stat.isFile()) {

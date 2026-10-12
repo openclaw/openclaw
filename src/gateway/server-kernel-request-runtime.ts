@@ -138,6 +138,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     getMethodRegistry: () => getAttachedGatewayMethodRegistry(),
     isDispatchAvailable: () => startupState.dispatchReady && !lifecycle.closePreludeStarted,
     logError: (message) => log.error(message),
+    prepareRestartRecovery: runtime.channelManager.recoverAutostartSuppression,
   });
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntime;
   gatewayRequestContext.resolveGatewayContext = () =>

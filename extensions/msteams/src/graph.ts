@@ -7,7 +7,8 @@ import {
   createProviderHttpError,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
+import { fetchWithSsrFGuard, type OpenClawConfig } from "../runtime-api.js";
+import { resolveMSTeamsRuntimeAccount } from "./accounts.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import {
@@ -17,7 +18,7 @@ import {
   withMSTeamsRequestDeadline,
 } from "./request-timeout.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
-import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.js";
+import { resolveDelegatedAccessToken } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
@@ -171,11 +172,7 @@ export async function fetchGraphJson<T>(params: {
  * Fetch JSON from an absolute Graph API URL (for example @odata.nextLink
  * pagination URLs) without prepending GRAPH_ROOT.
  */
-export async function fetchGraphAbsoluteUrl<T>(params: {
-  token: string;
-  url: string;
-  headers?: Record<string, string>;
-}): Promise<T> {
+export async function fetchGraphAbsoluteUrl<T>(params: { token: string; url: string }): Promise<T> {
   const assertReadAuthority = captureChannelReadAuthority();
   const assertRequestCurrent = captureGraphRequestCurrentness(assertReadAuthority);
   assertRequestCurrent?.();
@@ -185,7 +182,6 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
       headers: {
         "User-Agent": buildUserAgent(),
         Authorization: `Bearer ${params.token}`,
-        ...params.headers,
       },
     },
     auditContext: "msteams.graph.absolute",
@@ -213,10 +209,6 @@ export type PaginatedResult<T> = {
   found?: T;
 };
 
-/**
- * Fetch all pages of a Graph API collection, following @odata.nextLink.
- * Optionally stop early when `findOne` matches an item.
- */
 export async function fetchAllGraphPages<T>(params: {
   token: string;
   path: string;
@@ -265,12 +257,22 @@ export async function fetchAllGraphPages<T>(params: {
 
 export async function resolveGraphToken(
   cfg: unknown,
-  options?: { preferDelegated?: boolean },
+  options?: { accountId?: string | null; preferDelegated?: boolean },
 ): Promise<string> {
   const assertRequestCurrent = captureGraphRequestCurrentness(captureChannelReadAuthority());
   assertRequestCurrent?.();
-  const msteamsCfg = (cfg as { channels?: { msteams?: MSTeamsConfig } })?.channels?.msteams;
-  const creds = resolveMSTeamsCredentials(msteamsCfg);
+  const openClawCfg = cfg as OpenClawConfig;
+  const {
+    accountId,
+    config: msteamsCfg,
+    credentials: creds,
+  } = resolveMSTeamsRuntimeAccount({
+    cfg: openClawCfg,
+    accountId: options?.accountId,
+  });
+  if (openClawCfg.channels?.msteams?.enabled === false || msteamsCfg.enabled === false) {
+    throw new Error("MS Teams account disabled: " + accountId);
+  }
   if (!creds) {
     throw new Error("MS Teams credentials missing");
   }
@@ -280,18 +282,17 @@ export async function resolveGraphToken(
     );
   }
 
-  // Try delegated token if requested and configured
   if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled && creds.type === "secret") {
     const delegated = await resolveDelegatedAccessToken({
       tenantId: creds.tenantId,
       clientId: creds.appId,
       clientSecret: creds.appPassword,
+      accountId,
     });
     assertRequestCurrent?.();
     if (delegated) {
       return delegated;
     }
-    // Fall through to app-only token
   }
 
   const { app } = await loadMSTeamsSdkWithAuth(creds, resolveMSTeamsSdkCloudOptions(msteamsCfg));

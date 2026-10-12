@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -12,6 +13,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => {
   const onToolExecute = vi.fn(async () => ({ content: [], details: {} }));
+  const onToolPrepare = vi.fn(async (params: unknown) => params);
   const stubTool = (name: string) =>
     ({
       name,
@@ -19,6 +21,7 @@ const mocks = vi.hoisted(() => {
       displaySummary: name,
       description: name,
       parameters: { type: "object", properties: {} },
+      prepareBeforeToolCallParams: onToolPrepare,
       execute: onToolExecute,
     }) satisfies AnyAgentTool;
 
@@ -26,6 +29,7 @@ const mocks = vi.hoisted(() => {
     createOpenClawToolsOptions: vi.fn(),
     stubTool,
     onToolExecute,
+    onToolPrepare,
   };
 });
 
@@ -42,7 +46,7 @@ vi.mock("./openclaw-tools.js", async (importOriginal) => {
 
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import {
@@ -61,6 +65,49 @@ describe("createOpenClawCodingTools cron scope", () => {
     mocks.createOpenClawToolsOptions.mockClear();
   });
 
+  it.each(["settled", "failed", "aborted"] as const)(
+    "gates constructed tool effects on initial workspace attribution (%s)",
+    async (outcome) => {
+      const entered = createDeferred();
+      const baseline = createDeferred();
+      const controller = new AbortController();
+      mocks.onToolExecute.mockClear();
+      mocks.onToolPrepare.mockClear();
+      const tools = createOpenClawCodingToolsInternal({
+        awaitSessionDiffBaseline: async () => {
+          entered.resolve();
+          await baseline.promise;
+        },
+      });
+      const gateway = tools.find((tool) => tool.name === "gateway");
+      expect(gateway).toBeDefined();
+      const pending = gateway!.execute("attribution-call", {}, controller.signal);
+      try {
+        await awaitGateBeforeSettlement(entered.promise, pending, "Tool bypassed attribution");
+        expect(mocks.onToolExecute).not.toHaveBeenCalled();
+        expect(mocks.onToolPrepare).not.toHaveBeenCalled();
+        if (outcome === "failed") {
+          baseline.reject(new Error("attribution failed"));
+          await expect(pending).rejects.toThrow("attribution failed");
+        } else if (outcome === "aborted") {
+          controller.abort(new Error("tool generation expired"));
+          baseline.resolve();
+          await expect(pending).rejects.toThrow("tool generation expired");
+          expect(mocks.onToolPrepare).not.toHaveBeenCalled();
+          expect(mocks.onToolExecute).not.toHaveBeenCalled();
+        } else {
+          baseline.resolve();
+          await pending;
+          expect(mocks.onToolExecute).toHaveBeenCalledOnce();
+          expect(mocks.onToolPrepare).toHaveBeenCalledOnce();
+        }
+      } finally {
+        baseline.resolve();
+        await pending.catch(() => undefined);
+      }
+    },
+  );
+
   it("scopes cron-triggered jobs to self-removal", () => {
     const tools = createOpenClawCodingTools({
       trigger: "cron",
@@ -71,48 +118,45 @@ describe("createOpenClawCodingTools cron scope", () => {
     expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
   });
 
-  it.each([undefined, "channel-owner"] as const)(
-    "admits only the automation tool for management-only authority=%s",
-    async (source) => {
-      const runId = "remote-management-tools";
-      const { operationalRunInstance } = createTestAdmittedRunContext(runId);
-      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-      onTestFinished(() => {
-        releaseAgentRunDelegatedAuthority(authority);
-      });
-      const capability = createCronCreatorAuthorityCapability(
-        runId,
-        { kind: "unknown" },
-        source ? { source, isCurrent: () => true } : undefined,
-      )!;
-      const tools = await runWithCronCreatorAuthorityCapability(capability, () =>
-        withGatewayToolCallerIdentity(
-          {
-            agentId: "main",
-            sessionKey: "agent:main:control-ui",
-            operationalRunInstance,
-            approvalAuthority: authority,
-          },
-          () =>
-            createOpenClawCodingTools({
-              runId,
-              senderIsOwner: false,
-              wrapBeforeToolCallHook: false,
-              toolConstructionPlan: {
-                includeBaseCodingTools: false,
-                includeShellTools: false,
-                includeChannelTools: false,
-                includeOpenClawTools: true,
-                includePluginTools: false,
-              },
-            }),
-        ),
-      );
-      const names = tools.map((tool) => tool.name);
-      expect(names.includes(AUTOMATIONS_TOOL_NAME)).toBe(Boolean(source));
-      expect(names).not.toContain("gateway");
-    },
-  );
+  it("admits only the automation tool for channel-owner management authority", async () => {
+    const runId = "remote-management-tools";
+    const { operationalRunInstance } = createTestAdmittedRunContext(runId);
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    onTestFinished(() => {
+      releaseAgentRunDelegatedAuthority(authority);
+    });
+    const capability = createCronCreatorAuthorityCapability(
+      runId,
+      { kind: "unknown" },
+      { source: "channel-owner", isCurrent: () => true },
+    )!;
+    const tools = await runWithCronCreatorAuthorityCapability(capability, () =>
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:control-ui",
+          operationalRunInstance,
+          approvalAuthority: authority,
+        },
+        () =>
+          createOpenClawCodingTools({
+            runId,
+            senderIsOwner: false,
+            wrapBeforeToolCallHook: false,
+            toolConstructionPlan: {
+              includeBaseCodingTools: false,
+              includeShellTools: false,
+              includeChannelTools: false,
+              includeOpenClawTools: true,
+              includePluginTools: false,
+            },
+          }),
+      ),
+    );
+    const names = tools.map((tool) => tool.name);
+    expect(names).toContain(AUTOMATIONS_TOOL_NAME);
+    expect(names).not.toContain("gateway");
+  });
 });
 
 const createLazyExecToolMock = vi.hoisted(() => vi.fn());
@@ -210,15 +254,13 @@ describe("createOpenClawCodingTools sandbox filesystem ownership", () => {
     expect(mocks.createOpenClawToolsOptions).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { includeBaseCodingTools: true, includeShellTools: false },
-    { includeBaseCodingTools: false, includeShellTools: true },
-  ])("rejects sandbox filesystem families without their bridge: %o", (families) => {
+  it("rejects sandbox shell tools without their filesystem bridge", () => {
     expect(() =>
       createOpenClawCodingTools({
         sandbox,
         toolConstructionPlan: {
-          ...families,
+          includeBaseCodingTools: false,
+          includeShellTools: true,
           includeChannelTools: false,
           includeOpenClawTools: false,
           includePluginTools: false,

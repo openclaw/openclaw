@@ -44,8 +44,9 @@ vi.mock("../state/openclaw-state-db.js", () => ({
   openOpenClawStateDatabase: boundary.unexpectedNative,
   runOpenClawStateWriteTransaction: boundary.unexpectedNative,
 }));
+// mock-isolation: This fixture proves worker routing without opening native SQLite.
 vi.mock("../state/openclaw-state-db-readonly.js", () => ({
-  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly: boundary.unexpectedNative,
+  withExistingOpenClawStateDatabaseReadOnly: boundary.unexpectedNative,
 }));
 vi.mock("../state/openclaw-state-db-cache.js", () => ({
   captureOpenClawStateDatabaseReadAdmission: (databasePath: string) => ({

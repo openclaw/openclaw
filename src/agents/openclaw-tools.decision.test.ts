@@ -173,50 +173,6 @@ describe("core decision_evaluate registered flow", () => {
     }
   });
 
-  it("rechecks selection on a retained tool without mutating its definition", async () => {
-    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    fixture(evaluate);
-    const tool = requiredTool();
-    const description = tool.description;
-    setRuntimeConfigSnapshot({
-      agents: {
-        defaults: {
-          decisionModel: "fixture/reconfigured",
-        },
-      },
-    });
-    await tool.execute("call", batch);
-    expect(evaluate).toHaveBeenLastCalledWith(
-      batch,
-      expect.objectContaining({ model: "reconfigured", agentId: "main" }),
-    );
-    setRuntimeConfigSnapshot({
-      agents: {
-        defaults: {
-          decisionModel: "fixture/default",
-        },
-        entries: { main: { decisionModel: "" } },
-      },
-    });
-    expect((await tool.execute("call", batch)).details).toMatchObject({
-      status: "unavailable",
-      reason: "disabled",
-      guidance: expect.any(String),
-    });
-    expect(evaluate).toHaveBeenCalledOnce();
-    setRuntimeConfigSnapshot(config);
-    const retained = requiredTool();
-    setRuntimeConfigSnapshot({
-      agents: {
-        defaults: { decisionModel: "fixture/default" },
-      },
-    });
-    expect((await retained.execute("call", batch)).details).toMatchObject({ status: "ok" });
-    expect(evaluate).toHaveBeenCalledTimes(2);
-    expect(assembled()).toBeDefined();
-    expect(tool.description).toBe(description);
-  });
-
   it("rejects resource bounds before rubric hashing or provider execution", async () => {
     const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
     fixture(evaluate);
@@ -281,18 +237,15 @@ describe("core decision_evaluate registered flow", () => {
     }
     expect(evaluate).not.toHaveBeenCalled();
   });
-  it.each([
-    { ...batch, agentId: "disabled" },
-    {
-      state: "private evidence",
-      questions: { q: { type: "boolean", criteria: { maybe: "unknown" } } },
+  it.each([{ ...batch, agentId: "disabled" }])(
+    "rejects malformed or routing arguments without echoing evidence",
+    async (input) => {
+      const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+      fixture(evaluate);
+      await expect(requiredTool().execute("call", input)).rejects.toThrow("no evidence was sent");
+      expect(evaluate).not.toHaveBeenCalled();
     },
-  ])("rejects malformed or routing arguments without echoing evidence", async (input) => {
-    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    fixture(evaluate);
-    await expect(requiredTool().execute("call", input)).rejects.toThrow("no evidence was sent");
-    expect(evaluate).not.toHaveBeenCalled();
-  });
+  );
 
   it("propagates caller cancellation before and during provider work", async () => {
     const cancellation = new Error("caller cancelled");

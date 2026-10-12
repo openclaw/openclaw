@@ -5,12 +5,13 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { listRunsForControllerFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
+import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRunsForControllerFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
 import {
@@ -181,12 +182,36 @@ for (const { name, fault, replaceParent } of [
         expect(agentCommandMock).toHaveBeenCalledTimes(1);
 
         for (const runId of selected) {
-          await writeSubagentSessionEntry({
+          const childStorePath = await writeSubagentSessionEntry({
             stateDir,
             agentId: "main",
             sessionKey: sessionKey(runId),
             defaultSessionId: `${runId}-session`,
           });
+          if (running.includes(runId)) {
+            // Recovery must observe the live owner when the run is registered.
+            leases.push(
+              await beginSessionWorkAdmission({
+                scope: storePath,
+                identities: [sessionKey(runId), `${runId}-session`],
+                run: {
+                  runId,
+                  sessionKey: sessionKey(runId),
+                  sessionId: `${runId}-session`,
+                  agentId: "main",
+                },
+                assertAllowed: () => {},
+                onInterrupt: () => {
+                  interrupted.push(runId);
+                  firstInterrupted.resolve();
+                  slotReleaseResults.push(releaseSwarmRun(runId));
+                  if (runId === failedRunId) {
+                    throw new Error("synthetic sibling interruption failure");
+                  }
+                },
+              }),
+            );
+          }
           if (queued.includes(runId)) {
             expect(
               reserveSwarmRun({ groupId, runId, maxConcurrent: 8, activeRunIds: running }),
@@ -195,6 +220,11 @@ for (const { name, fault, replaceParent } of [
           await registerSubagentRun({
             runId,
             childSessionKey: sessionKey(runId),
+            childAgentId: "main",
+            sessionEntry: loadExactSessionEntryReadOnly({
+              storePath: childStorePath,
+              sessionKey: sessionKey(runId),
+            })?.entry,
             requesterSessionKey: parentKey,
             requesterAgentId: "main",
             requesterTurnRunId: parentRunId,
@@ -222,21 +252,6 @@ for (const { name, fault, replaceParent } of [
         }
         for (const runId of running) {
           expect(isSwarmRunActive(runId)).toBe(true);
-          leases.push(
-            await beginSessionWorkAdmission({
-              scope: storePath,
-              identities: [sessionKey(runId), `${runId}-session`],
-              assertAllowed: () => {},
-              onInterrupt: () => {
-                interrupted.push(runId);
-                firstInterrupted.resolve();
-                slotReleaseResults.push(releaseSwarmRun(runId));
-                if (runId === failedRunId) {
-                  throw new Error("synthetic sibling interruption failure");
-                }
-              },
-            }),
-          );
         }
         for (const runId of queued) {
           expect(
@@ -379,7 +394,10 @@ for (const { name, fault, replaceParent } of [
           });
         }
         const persistedRuns = new Map(
-          loadSubagentRunsForControllerFromSqlite(parentKey).map((run) => [run.runId, run]),
+          listRunsForControllerFromRuns(loadSubagentRegistryFromSqlite(), parentKey).map((run) => [
+            run.runId,
+            run,
+          ]),
         );
         expect([...persistedRuns.keys()].toSorted()).toEqual(selected.toSorted());
         for (const runId of selected) {

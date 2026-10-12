@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { CHAT_MESSAGE_MAX_CHARS } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -87,11 +88,13 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
   await expect
     .poll(() =>
       button.evaluate((element) => {
-        const tooltip = element
-          .closest("openclaw-tooltip")
-          ?.shadowRoot?.querySelector<
-            HTMLElement & { anchor?: Element | null; popup?: { active?: boolean } }
-          >("wa-tooltip");
+        const tooltip = [...document.querySelectorAll("openclaw-tooltip")]
+          .map((host) =>
+            host.shadowRoot?.querySelector<
+              HTMLElement & { anchor?: Element | null; popup?: { active?: boolean } }
+            >("wa-tooltip"),
+          )
+          .find((popup) => popup?.anchor === element);
         const body = tooltip?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
         const bounds = body?.getBoundingClientRect();
         // Apple modifier glyphs pair hidden text with an aria-hidden SVG whose
@@ -121,10 +124,12 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
       text,
     });
   const bounds = await button.evaluate((element) => {
-    const body = element
-      .closest("openclaw-tooltip")
-      ?.shadowRoot?.querySelector<HTMLElement>("wa-tooltip")
-      ?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
+    const tooltip = [...document.querySelectorAll("openclaw-tooltip")]
+      .map((host) =>
+        host.shadowRoot?.querySelector<HTMLElement & { anchor?: Element | null }>("wa-tooltip"),
+      )
+      .find((popup) => popup?.anchor === element);
+    const body = tooltip?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
     const slot = body?.querySelector<HTMLSlotElement>("slot");
     const textNode = slot?.assignedNodes().find((node) => node.textContent?.trim());
     const range = textNode ? document.createRange() : null;
@@ -749,7 +754,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const sidebarShortcut = applePlatform ? "⌘B" : "Ctrl+B";
       const newSessionShortcut = applePlatform ? "⌘⇧O" : "Ctrl+Shift+O";
       await expectHoverTooltip(
-        page.locator(".sidebar-brand").getByRole("link", { name: "New conversation" }),
+        page.locator(".sidebar-session-toolbar .sidebar-new-session"),
         `New conversation (${newSessionShortcut})`,
       );
       await expectHoverTooltip(
@@ -757,12 +762,8 @@ describeControlUiE2e("Control UI chat message actions", () => {
         `Open command palette (${commandPaletteShortcut})`,
       );
       await expectHoverTooltip(
-        page.getByRole("button", { name: "Collapse sidebar" }),
-        `Collapse sidebar (${sidebarShortcut})`,
-      );
-      await expectHoverTooltip(
-        page.getByRole("button", { name: "Open split view" }),
-        "Open split view",
+        page.locator('[data-navigation-view][aria-pressed="true"]'),
+        `Sessions · Collapse sidebar (${sidebarShortcut})`,
       );
       await page.evaluate(() => {
         const tooltip = document.createElement("openclaw-tooltip");
@@ -919,7 +920,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       expect(fullMessageRequest.params).toMatchObject({
         sessionKey: "agent:main:main",
         messageId: "assistant-full-message",
-        maxChars: 500_000,
+        maxChars: CHAT_MESSAGE_MAX_CHARS,
       });
       await expect
         .poll(() => fullTextBubble.locator(".chat-text").textContent())

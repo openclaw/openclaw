@@ -1,6 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
 import type { SessionPendingInputReceipt } from "../config/sessions/session-accessor.pending-inputs.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
 
 /** Adapt the released synchronous callback only when no async companion is provided. */
@@ -8,9 +9,18 @@ export async function completeUserTurnProcessing(
   recorder: UserTurnTranscriptRecorder | undefined,
   outcome: AgentRunTerminalOutcome,
 ): Promise<AgentRunTerminalOutcome | undefined> {
-  return recorder?.completeProcessingAsync
-    ? await recorder.completeProcessingAsync(outcome)
-    : recorder?.completeProcessing?.(outcome);
+  if (recorder?.completeProcessingAsync) {
+    return await recorder.completeProcessingAsync(outcome);
+  }
+  if (recorder?.completeProcessing) {
+    warnPluginSdkDeprecation({
+      family: "session-input-completion",
+      method: "UserTurnTranscriptRecorder.completeProcessing",
+      replacement: "completeProcessingAsync",
+    });
+    return recorder.completeProcessing(outcome);
+  }
+  return undefined;
 }
 
 /** The recorder owns one completion attempt, including its failure and native settlement. */
@@ -21,13 +31,41 @@ export function createUserTurnProcessingCompletion(
   let processingCompletion: Result<AgentRunTerminalOutcome, unknown> | undefined;
   let processingCompletionPromise: Promise<AgentRunTerminalOutcome | undefined> | undefined;
   return {
+    withPendingInputCurrent: async <T>(run: () => T): Promise<Awaited<T>> => {
+      const pendingInput = readPendingInput();
+      return await (pendingInput?.runAsync
+        ? pendingInput.runAsync(run)
+        : pendingInput
+          ? pendingInput.run(run)
+          : run());
+    },
+    assertPendingInputLifetimeCurrent: () => {
+      const pendingInput = readPendingInput();
+      if (pendingInput?.assertLifetimeCurrent) {
+        pendingInput.assertLifetimeCurrent();
+      } else {
+        pendingInput?.run(() => {});
+      }
+    },
     getProcessingCompletion: () =>
       processingCompletion?.ok ? processingCompletion.value : readPendingInput()?.completion,
     completeProcessing: (outcome: AgentRunTerminalOutcome) => {
+      warnPluginSdkDeprecation({
+        family: "session-input-completion",
+        method: "UserTurnTranscriptRecorder.completeProcessing",
+        replacement: "completeProcessingAsync",
+      });
       const pendingInput = readPendingInput();
       if (!pendingInput?.complete) {
         return undefined;
       }
+      warnPluginSdkDeprecation({
+        family: "session-input-completion",
+        method: "UserTurnTranscriptRecorder.completeProcessing",
+        replacement: "await UserTurnTranscriptRecorder.completeProcessingAsync(outcome)",
+        compatibility: "Synchronous completion remains supported until the next Plugin SDK major.",
+        code: "DEP_SESSION_INPUT_COMPLETION",
+      });
       if (!processingCompletion) {
         if (processingCompletionPromise) {
           throw new Error("Input completion is pending; await completeProcessingAsync");

@@ -1,9 +1,10 @@
+import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 // Whatsapp tests cover runtime-aware linked status projection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtimeMocks = vi.hoisted(() => ({
-  monitorWebChannel: vi.fn(),
+  monitorWebChannel: vi.fn<typeof import("./auto-reply/monitor.js").monitorWebChannel>(),
   readWebAuthSnapshot: vi.fn(),
   readWebAuthState: vi.fn(),
   readWebSelfId: vi.fn(),
@@ -22,6 +23,8 @@ const account = {
   authDir: "/tmp/whatsapp-auth",
   enabled: true,
   name: "Default",
+  sendReadReceipts: true,
+  isLegacyAuthDir: false,
 };
 
 describe("WhatsApp channel status", () => {
@@ -39,6 +42,44 @@ describe("WhatsApp channel status", () => {
     runtimeMocks.readWebAuthState.mockResolvedValue("linked");
     runtimeMocks.readWebSelfId.mockReturnValue({ e164: "+15555550100", jid: null, lid: null });
     runtimeMocks.monitorWebChannel.mockResolvedValue(undefined);
+  });
+
+  it("publishes identity with lifecycle updates and clears it after logout or stop", async () => {
+    const ctx = createStartAccountContext({ account });
+    runtimeMocks.monitorWebChannel.mockImplementation(async (...args) => {
+      const statusSink = args[6]?.statusSink;
+      statusSink?.({
+        running: true,
+        connected: true,
+        reconnectAttempts: 0,
+        healthState: "healthy",
+      });
+      expect(ctx.getStatus()).toMatchObject({
+        self: { e164: "+15555550100" },
+        authAgeMs: 10_000,
+      });
+      for (const authAgeMs of [60_000, 1000, null]) {
+        statusSink?.({ running: true, connected: true, reconnectAttempts: 0, authAgeMs });
+        expect(ctx.getStatus()).toMatchObject({ authAgeMs });
+      }
+      statusSink?.({
+        running: true,
+        connected: false,
+        reconnectAttempts: 0,
+        healthState: "logged-out",
+      });
+      expect(ctx.getStatus()).toMatchObject({ self: null, authAgeMs: null, linked: false });
+      statusSink?.({
+        running: false,
+        connected: false,
+        reconnectAttempts: 0,
+        healthState: "stopped",
+      });
+      expect(ctx.getStatus()).toMatchObject({ self: null, authAgeMs: null });
+    });
+    await whatsappPlugin.gateway?.startAccount?.(ctx);
+    expect(runtimeMocks.monitorWebChannel).toHaveBeenCalledOnce();
+    expect(runtimeMocks.readWebAuthSnapshot).toHaveBeenCalledOnce();
   });
 
   it.each([

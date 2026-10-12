@@ -48,16 +48,13 @@ function writeLine(message = ""): void {
   process.stdout.write(`${message}\n`);
 }
 
-async function resolveResolverScriptPath(
-  baseUrl = import.meta.url,
-  exists: (filePath: string) => Promise<boolean> = pathExists,
-): Promise<string> {
+async function resolveResolverScriptPath(): Promise<string> {
   const candidates = [
-    fileURLToPath(new URL("../vault-secret-ref-resolver.js", baseUrl)),
-    fileURLToPath(new URL("./extensions/vault/vault-secret-ref-resolver.js", baseUrl)),
+    fileURLToPath(new URL("../vault-secret-ref-resolver.js", import.meta.url)),
+    fileURLToPath(new URL("./extensions/vault/vault-secret-ref-resolver.js", import.meta.url)),
   ] as const;
   for (const candidate of candidates) {
-    if (await exists(candidate)) {
+    if (await pathExists(candidate)) {
       return candidate;
     }
   }

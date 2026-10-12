@@ -5,7 +5,7 @@ import {
   type RetainedAgentFileDrafts,
 } from "./files.ts";
 import { resetIdentityDraft } from "./identity-actions.ts";
-import type { AgentIdentityDraft } from "./panels-overview.ts";
+import type { AgentIdentityDraft } from "./panels-overview.tsx";
 
 type AgentSelectionDraftHost = AgentFilesState & {
   agentsSelectedId: string | null;
@@ -89,8 +89,7 @@ export class AgentSelectionDrafts {
     const files = selectedId ? this.files.get(selectedId) : undefined;
     if (files && selectedId) {
       this.files.delete(selectedId);
-      host.agentFileDrafts = files.drafts;
-      host.agentFileVersions = files.versions;
+      host.agentFileEditors = files.editors;
       host.agentFileActive = files.active;
       host.agentFileConflict = files.conflict;
       // Loaded bases stay empty: returning must read disk while retaining the draft's ancestry.

@@ -52,10 +52,15 @@ vi.mock("../../agents/embedded-agent-runner/cli-backend-dispatch.js", () => ({
   // This function is called inside run-orchestrator's admitted global-lane task.
   runEmbeddedAgentViaCliBackendIfEligible: dispatch,
 }));
+// mock-isolation: Isolate machine-wide audit persistence while proving nested model admission.
 vi.mock("../../system-agent/transcript-store.js", () => ({
-  appendTranscriptTurn: vi.fn(),
-  appendTranscriptReset: vi.fn(),
-  readTranscriptTail: vi.fn(() => []),
+  createSystemAgentTranscriptStore: () => ({
+    assertCurrent: () => undefined,
+    appendTurn: vi.fn(),
+    appendReset: vi.fn(),
+    readTail: vi.fn(async () => []),
+  }),
+  readTranscriptTailAsync: vi.fn(async () => []),
 }));
 vi.mock("../../plugins/providers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/providers.js")>()),

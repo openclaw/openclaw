@@ -243,6 +243,9 @@ describe.each([
     const { requested, compat, thinkingLevelMap, expected } = cell;
     const modelId = cell.modelId ?? "custom-reasoner";
     const expectedResponses = cell.expectedResponses ?? expected;
+    // Managed Completions sends official OpenAI reasoning tool turns through Responses.
+    const wireApi =
+      transport === "managed-completions" && cell.toolRoute === "native" ? "openai-responses" : api;
     const model = {
       id: modelId,
       name: "Custom Reasoner",
@@ -270,11 +273,11 @@ describe.each([
         const request = new Request(input, init);
         expect(request.method).toBe("POST");
         expect(new URL(request.url).pathname).toBe(
-          api === "openai-completions" ? "/v1/chat/completions" : "/v1/responses",
+          wireApi === "openai-completions" ? "/v1/chat/completions" : "/v1/responses",
         );
         requests.push(await request.json());
         const event =
-          api === "openai-completions"
+          wireApi === "openai-completions"
             ? {
                 id: "reply",
                 choices: [
@@ -340,18 +343,20 @@ describe.each([
     const result = await stream.result();
     expect(result.errorMessage).toBeUndefined();
     expect(result.stopReason).toBe(
-      cell.toolRoute && api === "openai-completions" ? "toolUse" : "stop",
+      cell.toolRoute && wireApi === "openai-completions" ? "toolUse" : "stop",
     );
     expect(requests).toHaveLength(1);
     expect(requests[0]?.model).toBe(modelId);
     if (cell.toolRoute) {
       expect(requests[0]?.tools).toHaveLength(1);
-      if (api === "openai-completions") {
+      if (wireApi === "openai-completions") {
         expect(requests[0]?.tool_choice).toBe("required");
       }
     }
     expect(
-      api === "openai-completions" ? requests[0]?.reasoning_effort : requests[0]?.reasoning?.effort,
-    ).toBe(api === "openai-responses" ? expectedResponses : expected);
+      wireApi === "openai-completions"
+        ? requests[0]?.reasoning_effort
+        : requests[0]?.reasoning?.effort,
+    ).toBe(wireApi === "openai-responses" ? expectedResponses : expected);
   });
 });

@@ -162,8 +162,6 @@ function createReadCache<Input, Output>(
   };
 }
 
-// Every read checks ref/index metadata. A five-minute fallback observes
-// unstaged working-tree edits, which do not advance that revision.
 function createReadCaches() {
   return {
     identities: createReadCache(
@@ -188,6 +186,7 @@ function createReadCaches() {
     branchFacts: createReadCache(
       (input: GitReadOperations["pull-request.branch-facts"]["input"], signal) =>
         runGitWorkerOperation({ type: "pull-request.branch-facts", input }, { signal }),
+      // Unstaged edits do not advance the ref/index revision.
       5 * 60_000,
       structuredClone,
       (input, signal) =>

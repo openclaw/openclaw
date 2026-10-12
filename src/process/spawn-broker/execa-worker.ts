@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { Socket } from "node:net";
 import type { Transform } from "node:stream";
 import { execa } from "execa";
+import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
 import { setProcessTimeout } from "../process-deadline.js";
 import { createExecaOutput } from "./execa-output.js";
 import {
@@ -24,6 +25,7 @@ export type BrokerExecaProcess = {
   child: ChildProcess;
   stdio: (Socket | null)[];
   result: Promise<BrokerExecaResult>;
+  groupStartedAt?: number | null;
   cancel: () => void;
   kill: (signal?: NodeJS.Signals | number) => boolean;
   outputDrained: (fd: number, error?: Error) => void;
@@ -70,6 +72,13 @@ export async function startBrokerExeca(
       throw await adoptAbandonedSpawnError(error);
     }
     const child = subprocess.nodeChildProcess;
+    // Capture before returning across an await: libuv may reap a short-lived leader.
+    const groupStartedAt =
+      child.pid &&
+      process.platform !== "win32" &&
+      (options.detached === true || options.killDescendants === true)
+        ? getProcessInstanceStartTime(child.pid)
+        : undefined;
     const stdio = [0, 1, 2].map((fd) => {
       if (fd === 0 && options.input !== undefined) {
         return null;
@@ -121,6 +130,7 @@ export async function startBrokerExeca(
       child,
       stdio,
       result,
+      groupStartedAt,
       cancel() {
         clearDeadline();
         controller.abort();
@@ -155,19 +165,6 @@ export async function startBrokerExeca(
   }
 }
 
-function isDescriptorSpawnError(error: unknown): error is NodeJS.ErrnoException {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const syscall = "syscall" in error ? error.syscall : undefined;
-  const code = "code" in error ? error.code : undefined;
-  return (
-    typeof syscall === "string" &&
-    syscall.startsWith("spawn") &&
-    (code === "EMFILE" || code === "ENFILE")
-  );
-}
-
 // Node returns a child without stdio when spawn hits EMFILE or ENFILE and emits that error on the
 // next tick. Execa reads the missing stdio first and throws, so the child it abandons has no error
 // listener and its spawn error would end this worker. Claim that error for the caller instead.
@@ -182,9 +179,17 @@ async function adoptAbandonedSpawnError(thrown: unknown): Promise<unknown> {
       resolve(error);
     };
     const onUncaught = (error: Error) => {
-      if (isDescriptorSpawnError(error)) {
-        settle(error);
-        return;
+      if (error instanceof Error) {
+        const syscall = "syscall" in error ? error.syscall : undefined;
+        const code = "code" in error ? error.code : undefined;
+        if (
+          typeof syscall === "string" &&
+          syscall.startsWith("spawn") &&
+          (code === "EMFILE" || code === "ENFILE")
+        ) {
+          settle(error);
+          return;
+        }
       }
       // Anything else keeps the default fatal handling once this listener is gone.
       settle(thrown);

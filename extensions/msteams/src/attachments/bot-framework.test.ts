@@ -1,12 +1,29 @@
 // Msteams tests cover bot framework plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setMSTeamsRuntime } from "../runtime.js";
 import {
-  downloadMSTeamsBotFrameworkAttachments,
+  downloadMSTeamsBotFrameworkAttachments as downloadAttachments,
   isBotFrameworkPersonalChatId,
 } from "./bot-framework.js";
 import type { MSTeamsAccessTokenProvider } from "./types.js";
+
+vi.mock("node:dns/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:dns/promises")>()),
+  lookup: async () => ({ address: "93.184.216.34" }),
+}));
+
+afterEach(() => vi.unstubAllGlobals());
+
+function downloadMSTeamsBotFrameworkAttachments({
+  fetchFn,
+  ...params
+}: Parameters<typeof downloadAttachments>[0] & { fetchFn?: typeof fetch }) {
+  if (fetchFn) {
+    vi.stubGlobal("fetch", vi.fn(fetchFn));
+  }
+  return downloadAttachments(params);
+}
 
 type SavedCall = {
   buffer: Buffer;
@@ -35,7 +52,6 @@ async function downloadMSTeamsBotFrameworkAttachment(
     serviceUrl: "https://smba.trafficmanager.net/amer",
     tokenProvider: buildTokenProvider(),
     maxBytes: 10_000_000,
-    resolveFn: resolvePublicHost,
     ...rest,
     attachmentIds: [attachmentId],
   });
@@ -138,10 +154,6 @@ function firstMockCall(mock: ReturnType<typeof vi.fn>, label: string): unknown[]
   return call;
 }
 
-async function resolvePublicHost(): Promise<{ address: string }> {
-  return { address: "93.184.216.34" };
-}
-
 describe("isBotFrameworkPersonalChatId", () => {
   it("detects a: prefix personal chat IDs", () => {
     expect(isBotFrameworkPersonalChatId("a:1dRsHCobZ1AxURzY05Dc")).toBe(true);
@@ -192,7 +204,6 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     const media = await downloadMSTeamsBotFrameworkAttachment({
       serviceUrl: "https://smba.trafficmanager.net/amer/",
       fetchFn,
-      fetchFnSupportsDispatcher: true,
     });
 
     expect(media?.path).toBe(runtime.savePath);
@@ -227,7 +238,6 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     const media = await downloadMSTeamsBotFrameworkAttachment({
       serviceUrl: "https://smba.trafficmanager.net/amer/",
       fetchFn,
-      fetchFnSupportsDispatcher: true,
       logger: { warn },
     });
 
@@ -249,7 +259,6 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     const media = await downloadMSTeamsBotFrameworkAttachment({
       serviceUrl: "https://attacker.trafficmanager.net",
       fetchFn,
-      fetchFnSupportsDispatcher: true,
     });
 
     expectUnavailableMedia(media, "att-1");
@@ -282,7 +291,6 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
 
     const media = await downloadMSTeamsBotFrameworkAttachment({
       fetchFn,
-      fetchFnSupportsDispatcher: true,
     });
 
     expect(media?.path).toBe(runtime.savePath);
@@ -339,7 +347,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
   });
 
   describe("guarded attachment fetches", () => {
-    it("drives dispatcher-aware caller fetchFn hooks through a pinned dispatcher", async () => {
+    it("pins DNS for attachment metadata and view requests", async () => {
       const fileBytes = Buffer.from("BFBYTES", "utf-8");
       const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
       const fetchFn: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -364,13 +372,10 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
 
       const media = await downloadMSTeamsBotFrameworkAttachment({
         fetchFn,
-        fetchFnSupportsDispatcher: true,
       });
 
       expect(media?.path).toBe(runtime.savePath);
       expect(media?.contentType).toBe(runtime.savedContentType);
-      // Both the attachment info call and the view call should be observed,
-      // confirming the guarded fetch path still preserves caller fetch hooks.
       expect(fetchCalls).toHaveLength(2);
       expect(expectDefined(fetchCalls[0], "attachment info fetch").url).toMatch(
         /\/v3\/attachments\/att-1$/,
@@ -394,7 +399,6 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
 
       const media = await downloadMSTeamsBotFrameworkAttachment({
         fetchFn,
-        fetchFnSupportsDispatcher: true,
         logger,
       });
 
@@ -427,7 +431,6 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
 
       const media = await downloadMSTeamsBotFrameworkAttachment({
         fetchFn,
-        fetchFnSupportsDispatcher: true,
         logger,
       });
 
@@ -495,7 +498,6 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         const media = await downloadMSTeamsBotFrameworkAttachment({
           maxBytes: 10,
           fetchFn,
-          fetchFnSupportsDispatcher: true,
           logger: { warn },
         });
 
@@ -547,7 +549,6 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         const warn = vi.fn();
         const media = await downloadMSTeamsBotFrameworkAttachment({
           fetchFn,
-          fetchFnSupportsDispatcher: true,
           logger: { warn },
         });
 
@@ -605,7 +606,6 @@ describe("downloadMSTeamsBotFrameworkAttachments", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000,
       fetchFn,
-      resolveFn: resolvePublicHost,
     });
 
     expect(result.media).toHaveLength(2);
@@ -653,7 +653,6 @@ describe("downloadMSTeamsBotFrameworkAttachments", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000,
       fetchFn,
-      resolveFn: resolvePublicHost,
     });
 
     expect(result.media).toEqual([

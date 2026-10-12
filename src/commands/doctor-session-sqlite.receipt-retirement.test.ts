@@ -103,7 +103,7 @@ describe("deferred plugin session receipt retirement", () => {
     },
   );
 
-  it("rebinds an archived receipt to a replaced database before retiring it and importing later history", async () => {
+  it("supersedes an archived receipt bound to a replaced database before importing later history", async () => {
     await withOpenClawTestState({ label: "deferred-archived-database-rebind" }, async (state) => {
       const { cfg, scope } = await seedDeferredPluginSessionSource(state, "default");
       const run = () =>
@@ -160,16 +160,16 @@ describe("deferred plugin session receipt retirement", () => {
         laterTranscript,
         `${laterEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
       );
-      const rebound = await run();
-      const issues = rebound.targets.flatMap((entry) => entry.issues);
+      const recovered = await run();
+      const issues = recovered.targets.flatMap((entry) => entry.issues);
       expect(issues).not.toContainEqual(
         expect.objectContaining({ code: "retained_plugin_source_conflict" }),
       );
       expect(issues).toContainEqual(
-        expect.objectContaining({ code: "retained_plugin_source_index_rebuilt" }),
+        expect.objectContaining({ code: "retained_plugin_receipt_superseded" }),
       );
-      expect(rebound.totals.importedEntries).toBe(1);
-      expect(rebound.totals.importedTranscriptEvents).toBe(2);
+      expect(recovered.totals.importedEntries).toBe(1);
+      expect(recovered.totals.importedTranscriptEvents).toBe(2);
       expect(readDeferredPluginSessionImport(receiptParams)).toBeUndefined();
       expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label).toBe(
         "current SQLite metadata",
@@ -267,7 +267,7 @@ describe("deferred plugin session receipt retirement", () => {
   });
 
   it.each(["completed", "disabled", "uninstalled", "globally-disabled"] as const)(
-    "retires a %s plugin's receipt and imports later history without replaying old sessions",
+    "requires migration completion before retiring a %s plugin's retained inputs",
     async (completion) => {
       await withOpenClawTestState({ label: "deferred-plugin-receipt-lifecycle" }, async (state) => {
         const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
@@ -327,23 +327,29 @@ describe("deferred plugin session receipt retirement", () => {
                 }
               : {}),
           };
+          await run();
+          expect(readDeferredPluginMigrations({ env: state.env })).toContainEqual(
+            expect.objectContaining({ pluginId: "fixture-plugin" }),
+          );
+          expect(receipt()).toBeDefined();
+          expect(fs.readFileSync(transcript, "utf8")).toBe(contents);
+          expectCanonicalSessions(scope, "current SQLite metadata");
+          return;
         }
         await run();
         expect(readDeferredPluginMigrations({ env: state.env })).toEqual([]);
         expect(receipt()).toBeUndefined();
         expect(fs.readFileSync(transcript, "utf8")).toBe(contents);
-        if (completion === "completed") {
-          // Published versions left archived receipts active indefinitely.
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              db.prepare(
-                "UPDATE migration_sources SET removed_source = 0 WHERE migration_kind = 'deferred-plugin-session-import'",
-              ).run();
-            },
-            { env: state.env },
-          );
-          expect(receipt()).toBeDefined();
-        }
+        // Published versions left archived receipts active indefinitely.
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            db.prepare(
+              "UPDATE migration_sources SET removed_source = 0 WHERE migration_kind = 'deferred-plugin-session-import'",
+            ).run();
+          },
+          { env: state.env },
+        );
+        expect(receipt()).toBeDefined();
         const later = await run();
         expect(later.totals.importedEntries).toBe(1);
         expect(later.totals.importedTranscriptEvents).toBe(2);

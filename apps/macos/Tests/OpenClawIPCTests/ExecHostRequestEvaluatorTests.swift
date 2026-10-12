@@ -504,7 +504,6 @@ struct ExecHostRequestEvaluatorTests {
             allowAlwaysPatterns: [],
             allowlistMatches: [entry],
             allowlistAuthorizationSatisfied: true,
-            allowlistSatisfied: false,
             allowlistMatch: nil,
             skillTrust: nil,
             policySnapshot: ExecApprovalPolicySnapshot(
@@ -545,7 +544,6 @@ struct ExecHostRequestEvaluatorTests {
             allowAlwaysPatterns: allowAlwaysPatterns,
             allowlistMatches: [],
             allowlistAuthorizationSatisfied: allowlistSatisfied,
-            allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: nil,
             skillTrust: nil,
             policySnapshot: ExecApprovalPolicySnapshot(

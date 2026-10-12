@@ -5,6 +5,7 @@ import { prepareDoctorContext } from "../../commands/doctor-config-flow.test-sup
 import { withDoctorConfigPreflightHome } from "../../commands/doctor-config-preflight.test-support.js";
 import { resetConfigRuntimeState } from "../../config/config.js";
 import { writeOpenClawConfig } from "../../config/test-helpers.js";
+import { readStartupMigrationWarning } from "../../infra/state-migrations.messages.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -12,7 +13,7 @@ import {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { ensureCliExecutionBootstrap } from "../command-execution-startup.js";
 import { resolveCliStartupPolicy } from "../command-startup-policy.js";
-import { testApi } from "./config-guard.js";
+import { ensureConfigReady, testApi } from "./config-guard.js";
 
 afterEach(() => {
   testApi.resetConfigGuardStateForTests();
@@ -46,16 +47,25 @@ it.each([
             throw new Error(`unexpected exit ${code}`);
           },
         };
-        const bootstrap = () =>
-          ensureCliExecutionBootstrap({
+        const bootstrap = async () => {
+          await ensureCliExecutionBootstrap({
             runtime,
             commandPath,
             startupPolicy: resolveCliStartupPolicy({ commandPath, jsonOutputMode: true }),
             loadPlugins: false,
           });
+          if (commandPath[0] === "message") {
+            // Message actions own local preparation after the outer bootstrap defers it.
+            await ensureConfigReady({ runtime, commandPath, suppressDoctorStdout: true });
+          }
+        };
         try {
           await bootstrap();
 
+          expect(readStartupMigrationWarning()).toContain(
+            "Retired runtime state was left unchanged for Doctor; no import was attempted.",
+          );
+          expect(readStartupMigrationWarning()).toContain(sourcePath);
           expect(await fs.readFile(sourcePath, "utf8")).toBe(original);
           expect(await fs.readFile(configPath, "utf8")).toBe(originalConfig);
           expect(db.prepare("SELECT count(*) AS count FROM migration_runs").get()).toEqual({

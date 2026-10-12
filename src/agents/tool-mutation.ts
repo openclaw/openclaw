@@ -79,9 +79,17 @@ const REPLAY_SAFE_TOOL_NAMES = new Set([
 ]);
 
 const BROWSER_READ_ONLY_ACTIONS = new Set(["console", "profiles", "snapshot", "status", "tabs"]);
-const MOBILE_UI_REPLAY_SAFE_ACTIONS = new Set(["observe"]);
-const GATEWAY_REPLAY_SAFE_ACTIONS = new Set(["config.get", "config.schema.lookup"]);
-const NODES_REPLAY_SAFE_ACTIONS = new Set(["status", "describe", "pending"]);
+// These tools use the same closed action set for mutation and replay decisions.
+// Missing and unknown actions remain mutating and cannot be replayed.
+const READ_ONLY_TOOL_ACTIONS = new Map<string, ReadonlySet<string>>([
+  ["message", MESSAGE_READ_ONLY_ACTIONS],
+  ["sessions", new Set(["group_list"])],
+  ["mobile_ui", new Set(["observe"])],
+  ["gateway", new Set(["config.get", "config.schema.lookup"])],
+  ["portal", new Set(["list"])],
+  ["theme", new Set(["list", "get"])],
+  ["nodes", new Set(["status", "describe", "pending"])],
+]);
 const PRESENCE_REPLAY_SAFE_ACTIONS = new Set(["list", "person", "device"]);
 
 const READ_ONLY_SHELL_COMMANDS = new Set([
@@ -318,6 +326,10 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(toolName);
   const record = asRecord(args);
   const action = normalizeActionName(record?.action);
+  const readOnlyActions = READ_ONLY_TOOL_ACTIONS.get(normalized);
+  if (readOnlyActions) {
+    return action == null || !readOnlyActions.has(action);
+  }
 
   switch (normalized) {
     case "write":
@@ -335,28 +347,12 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
       return !isPlainReadOnlyShellCommand(readShellCommand(record));
     case "process":
       return action != null && PROCESS_MUTATING_ACTIONS.has(action);
-    case "message":
-      // Message actions are an extensible plugin surface. Only known lookup
-      // actions are replay-safe; missing and future actions fail closed.
-      return action == null || !MESSAGE_READ_ONLY_ACTIONS.has(action);
-    case "sessions":
-      return action !== "group_list";
     case "computer":
       return !isComputerObservationAction(action, record?.dialogAction);
-    case "mobile_ui":
-      return action == null || !MOBILE_UI_REPLAY_SAFE_ACTIONS.has(action);
     case "subagents":
       return action === "cancel" || action === "kill" || action === "steer";
     case "session_status":
       return typeof record?.model === "string" && record.model.trim().length > 0;
-    case "gateway":
-      return action == null || !GATEWAY_REPLAY_SAFE_ACTIONS.has(action);
-    case "portal":
-      return action !== "list";
-    case "theme":
-      return action !== "list" && action !== "get";
-    case "nodes":
-      return action == null || !NODES_REPLAY_SAFE_ACTIONS.has(action);
     case "presence":
       return action != null && !PRESENCE_REPLAY_SAFE_ACTIONS.has(action);
     default: {
@@ -383,35 +379,25 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
   if (REPLAY_SAFE_TOOL_NAMES.has(normalized)) {
     return true;
   }
+  const readOnlyActions = READ_ONLY_TOOL_ACTIONS.get(normalized);
+  if (readOnlyActions) {
+    return action != null && readOnlyActions.has(action);
+  }
   switch (normalized) {
     case "process":
       return action != null && PROCESS_REPLAY_SAFE_ACTIONS.has(action);
-    case "message":
-      return action != null && MESSAGE_READ_ONLY_ACTIONS.has(action);
     case "subagents":
       return action == null || action === "list";
-    case "sessions":
-      return action === "group_list";
     case "session_status":
       return !isMutatingToolCall(normalized, args);
     case "browser":
       return action != null && BROWSER_READ_ONLY_ACTIONS.has(action);
     case "computer":
       return isComputerObservationAction(action, record?.dialogAction);
-    case "mobile_ui":
-      return action != null && MOBILE_UI_REPLAY_SAFE_ACTIONS.has(action);
     case "skill_workshop":
       return action === "list" || action === "inspect" || action === "read";
     case "transcripts":
       return action === "status";
-    case "gateway":
-      return action != null && GATEWAY_REPLAY_SAFE_ACTIONS.has(action);
-    case "portal":
-      return action === "list";
-    case "theme":
-      return action === "list" || action === "get";
-    case "nodes":
-      return action != null && NODES_REPLAY_SAFE_ACTIONS.has(action);
     case "presence":
       return action == null || PRESENCE_REPLAY_SAFE_ACTIONS.has(action);
     default: {

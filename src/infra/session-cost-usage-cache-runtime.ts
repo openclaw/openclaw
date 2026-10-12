@@ -1,12 +1,19 @@
+import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
+import type { UsageOverviewOptions, UsageOverviewSession } from "../shared/usage-types.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { formatErrorMessage } from "./errors.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import { isSessionCostUsageRefreshRunning } from "./session-cost-usage-cache.sqlite.js";
+import {
+  withUsageCostIncognitoScope,
+  type UsageCostIncognitoBinding,
+} from "./session-cost-usage-incognito.js";
+import { isSessionActorUsageRefreshRunning } from "./session-cost-usage-memory.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import {
   prepareUsageCostWorker,
@@ -14,6 +21,7 @@ import {
   runUsageCostWorker,
   type PreparedUsageCostWorker,
 } from "./session-cost-usage-worker-runtime.js";
+import type { UsageCostWorkerResult } from "./session-cost-usage-worker.types.js";
 import type {
   CostUsageSummary,
   SessionCostSummary,
@@ -22,6 +30,7 @@ import type {
 } from "./session-cost-usage.types.js";
 
 const USAGE_COST_REFRESH_RETRY_MIN_MS = 50;
+const USAGE_COST_REFRESH_BATCH_SIZE = 50;
 const USAGE_COST_REFRESH_RETRY_MAX_MS = 5_000;
 const logger = createSubsystemLogger("usage-cost-cache");
 
@@ -29,6 +38,10 @@ type UsageCostRefreshState = {
   agentId: string;
   config?: OpenClawConfig;
   databasePath: string;
+  queueKey: string;
+  env?: NodeJS.ProcessEnv;
+  incognito?: UsageCostIncognitoBinding;
+  sessionActor?: SessionActorStorageBinding;
   fullRefreshRequested: boolean;
   pendingSessionFiles: Set<string>;
   pendingRebuildRows: Map<string, SessionCostUsageRollupRow>;
@@ -36,6 +49,10 @@ type UsageCostRefreshState = {
 };
 
 type UsageCostRefreshRequest = Pick<UsageCostRefreshState, "agentId" | "config" | "storePath"> & {
+  databasePath?: string;
+  env?: NodeJS.ProcessEnv;
+  incognito?: UsageCostIncognitoBinding;
+  sessionActor?: SessionActorStorageBinding;
   sessionFiles?: string[];
   rebuildRows?: SessionCostUsageRollupRow[];
 };
@@ -45,30 +62,6 @@ const usageCostRefreshes = new Map<AbortSignal | undefined, Map<string, UsageCos
 
 function isUsageCostRefreshQueued(databasePath: string): boolean {
   return usageCostRefreshes.get(getAsyncWorkSignal())?.has(databasePath) === true;
-}
-
-async function readCostUsageSummaryFromWorker(
-  prepared: PreparedUsageCostWorker,
-  params: {
-    pricingFingerprint: string;
-    startMs: number;
-    endMs: number;
-    dayBucket?: UsageDailyBucket;
-  },
-) {
-  const result = await runUsageCostWorker(prepared, {
-    ...params,
-    kind: "summary",
-    dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
-  });
-  if (result.kind !== "summary" || !result.summary.cacheStatus) {
-    throw new Error("Usage worker returned an invalid aggregate summary");
-  }
-  return {
-    summary: result.summary,
-    cacheStatus: result.summary.cacheStatus,
-    invalidRows: result.invalidRows,
-  };
 }
 
 export async function loadCostUsageSummary(params: {
@@ -81,44 +74,14 @@ export async function loadCostUsageSummary(params: {
   const now = Date.now();
   const defaultStart = new Date(now);
   defaultStart.setDate(defaultStart.getDate() - 29);
-  const startMs = params.startMs ?? defaultStart.getTime();
-  const endMs = params.endMs ?? now;
-  const prepared = prepareUsageCostWorker(params);
-  const { databasePath, storePath } = prepared.location;
-  const result = await refreshCostUsageCacheForAgent({
-    config: params.config,
-    agentId: params.agentId,
-    agentDir: prepared.agentDir,
-    databasePath,
-    storePath,
-  });
-  const pricingFingerprint = await resolveUsageCostPricingFingerprint(
-    prepared.config,
-    prepared.agentDir,
+  return loadAggregateCostUsageSummary(
+    {
+      ...params,
+      startMs: params.startMs ?? defaultStart.getTime(),
+      endMs: params.endMs ?? now,
+    },
+    true,
   );
-  const { summary, cacheStatus, invalidRows } = await readCostUsageSummaryFromWorker(prepared, {
-    pricingFingerprint,
-    startMs,
-    endMs,
-    dayBucket: params.dayBucket,
-  });
-  if (invalidRows.length > 0) {
-    requestCostUsageCacheRefresh({
-      config: params.config,
-      agentId: params.agentId,
-      storePath,
-      rebuildRows: invalidRows,
-    });
-  }
-  if (
-    result === "busy" ||
-    isUsageCostRefreshQueued(databasePath) ||
-    (await isSessionCostUsageRefreshRunning(params.agentId, databasePath))
-  ) {
-    cacheStatus.status = "refreshing";
-  }
-  summary.updatedAt = Date.now();
-  return summary;
 }
 
 export async function loadCostUsageSummaryFromCache(params: {
@@ -129,50 +92,140 @@ export async function loadCostUsageSummaryFromCache(params: {
   agentId: string;
   requestRefresh?: boolean;
 }): Promise<CostUsageSummary> {
+  return loadAggregateCostUsageSummary(params, false);
+}
+
+async function loadAggregateCostUsageSummary(
+  params: Parameters<typeof loadCostUsageSummaryFromCache>[0],
+  refreshFirst: boolean,
+): Promise<CostUsageSummary> {
   const prepared = prepareUsageCostWorker(params);
   const { databasePath, storePath } = prepared.location;
+  const refresh = refreshFirst
+    ? await refreshCostUsageCacheForAgent({
+        config: params.config,
+        agentId: params.agentId,
+        agentDir: prepared.agentDir,
+        databasePath,
+        storePath,
+        sessionActor: prepared.sessionActor,
+      })
+    : undefined;
   const pricingFingerprint = await resolveUsageCostPricingFingerprint(
     prepared.config,
     prepared.agentDir,
   );
-  const snapshot = await readCostUsageSummaryFromWorker(prepared, {
+  const result = await runUsageCostWorker(prepared, {
     pricingFingerprint,
     startMs: params.startMs,
     endMs: params.endMs,
-    dayBucket: params.dayBucket,
+    dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
+    kind: "summary",
   });
-  if (params.requestRefresh !== false && snapshot.cacheStatus.staleFiles > 0) {
+  if (result.kind !== "summary" || !result.summary.cacheStatus) {
+    throw new Error("Usage worker returned an invalid aggregate summary");
+  }
+  const { summary, invalidRows } = result;
+  const cacheStatus = result.summary.cacheStatus;
+  if (
+    refreshFirst
+      ? invalidRows.length > 0
+      : params.requestRefresh !== false && cacheStatus.staleFiles > 0
+  ) {
     requestCostUsageCacheRefresh({
       config: params.config,
       agentId: params.agentId,
       storePath,
-      rebuildRows: snapshot.invalidRows,
+      rebuildRows: invalidRows,
+      sessionActor: prepared.sessionActor,
     });
   }
   if (
+    refresh === "busy" ||
     isUsageCostRefreshQueued(databasePath) ||
-    (await isSessionCostUsageRefreshRunning(params.agentId, databasePath))
+    (prepared.sessionActor
+      ? isSessionActorUsageRefreshRunning(prepared.sessionActor)
+      : await isSessionCostUsageRefreshRunning(params.agentId, databasePath))
   ) {
-    snapshot.cacheStatus.status = "refreshing";
+    cacheStatus.status = "refreshing";
   }
-  snapshot.summary.updatedAt = Date.now();
-  return snapshot.summary;
+  summary.updatedAt = Date.now();
+  return summary;
 }
 
-export async function loadSessionCostSummariesFromCache(params: {
+type SessionCostReadParams = {
   sessions: Array<{ sessionId?: string; sessionFile: string }>;
   config?: OpenClawConfig;
   agentId: string;
   startMs?: number;
   endMs?: number;
+  projection?: "overview";
   includeUntimestamped?: boolean;
   dayBucket?: UsageDailyBucket;
   requestRefresh?: boolean;
-}): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
+};
+
+export async function loadSessionCostSummariesFromCache(
+  params: SessionCostReadParams,
+): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
+  const result = await loadSessionCostResultFromCache(params);
+  if (result.kind !== "sessions") {
+    throw new Error("Usage worker returned an invalid session summary");
+  }
+  return { summaries: result.summaries, cacheStatus: result.cacheStatus };
+}
+
+export async function loadSessionCostOverviewFromCache(
+  params: Omit<SessionCostReadParams, "sessions" | "projection"> & {
+    sessions: UsageOverviewSession[];
+    options: UsageOverviewOptions;
+    projection?: "overview";
+  },
+) {
+  const result = await loadSessionCostResultFromCache({
+    ...params,
+    sessions: params.sessions.flatMap((session) => session.instances),
+    projection: params.projection,
+    overview: {
+      sessions: params.sessions,
+      options: params.options,
+      compact: params.projection === "overview",
+    },
+  });
+  if (result.kind !== "overview") {
+    throw new Error("Usage worker returned an invalid overview");
+  }
+  return { ...result.result, cacheStatus: result.cacheStatus };
+}
+
+function loadSessionCostResultFromCache(
+  params: SessionCostReadParams & {
+    overview?: {
+      sessions: UsageOverviewSession[];
+      options: UsageOverviewOptions;
+      compact?: boolean;
+    };
+  },
+) {
   const prepared = prepareUsageCostWorker({
     ...params,
     sessionFiles: params.sessions.map((session) => session.sessionFile),
   });
+  return withUsageCostIncognitoScope(prepared.incognito, (incognito) =>
+    loadCapturedSessionCostSummariesFromCache(params, { ...prepared, incognito }),
+  );
+}
+
+async function loadCapturedSessionCostSummariesFromCache(
+  params: SessionCostReadParams & {
+    overview?: {
+      sessions: UsageOverviewSession[];
+      options: UsageOverviewOptions;
+      compact?: boolean;
+    };
+  },
+  prepared: PreparedUsageCostWorker,
+): Promise<Extract<UsageCostWorkerResult, { kind: "sessions" | "overview" }>> {
   const { databasePath, storePath } = prepared.location;
   const pricingFingerprint = await resolveUsageCostPricingFingerprint(
     prepared.config,
@@ -180,6 +233,8 @@ export async function loadSessionCostSummariesFromCache(params: {
   );
   const result = await runUsageCostWorker(prepared, {
     kind: "sessions",
+    projection: params.projection,
+    overview: params.overview,
     pricingFingerprint,
     sessions: params.sessions,
     startMs: params.startMs,
@@ -187,10 +242,10 @@ export async function loadSessionCostSummariesFromCache(params: {
     includeUntimestamped: params.includeUntimestamped,
     dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
   });
-  if (result.kind !== "sessions") {
+  if (result.kind !== "sessions" && result.kind !== "overview") {
     throw new Error("Usage worker returned an invalid session summary");
   }
-  const { summaries, cacheStatus, staleSessionFiles } = result;
+  const { cacheStatus, staleSessionFiles } = result;
   const refreshRequested = params.requestRefresh !== false && staleSessionFiles.length > 0;
   if (refreshRequested) {
     requestCostUsageCacheRefresh({
@@ -199,30 +254,48 @@ export async function loadSessionCostSummariesFromCache(params: {
       storePath,
       sessionFiles: staleSessionFiles,
       rebuildRows: result.invalidRows,
+      databasePath,
+      env: prepared.location.env,
+      incognito: prepared.incognito,
+      sessionActor: prepared.sessionActor,
     });
   }
-  const refreshRunning = await isSessionCostUsageRefreshRunning(params.agentId, databasePath);
-  if (staleSessionFiles.length > 0 && (refreshRunning || refreshRequested)) {
+  if (
+    staleSessionFiles.length > 0 &&
+    (refreshRequested ||
+      (prepared.sessionActor
+        ? isSessionActorUsageRefreshRunning(prepared.sessionActor)
+        : await isSessionCostUsageRefreshRunning(params.agentId, databasePath)))
+  ) {
     cacheStatus.status = "refreshing";
-    for (const summary of summaries) {
+    for (const summary of result.kind === "sessions"
+      ? result.summaries
+      : result.result.sessions.map((session) => session.usage)) {
       if (summary?.staleSince !== undefined) {
         summary.refreshing = true;
       }
     }
   }
-  return { summaries, cacheStatus };
+  return result;
 }
 
-function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): void {
+export function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): void {
   const scopeSignal = getAsyncWorkSignal();
   if (scopeSignal?.aborted) {
     return;
   }
-  const databasePath = resolveOpenClawAgentSqlitePath({
-    agentId: normalizeAgentId(params.agentId),
-  });
+  const databasePath =
+    params.sessionActor?.path ??
+    resolveOpenClawAgentSqlitePath({
+      agentId: normalizeAgentId(params.agentId),
+      path: params.databasePath,
+      env: params.env,
+    });
+  const queueKey = params.incognito
+    ? `${databasePath}#${params.incognito.actor.identity.incarnation}`
+    : databasePath;
   const refreshes = usageCostRefreshes.get(scopeSignal) ?? new Map<string, UsageCostRefreshState>();
-  const existing = refreshes.get(databasePath);
+  const existing = refreshes.get(queueKey);
   if (existing) {
     mergeUsageCostRefreshRequest(existing, params);
     return;
@@ -232,6 +305,10 @@ function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): void {
     agentId: params.agentId,
     config: params.config,
     databasePath,
+    queueKey,
+    env: params.env,
+    incognito: params.incognito,
+    sessionActor: params.sessionActor,
     fullRefreshRequested: false,
     pendingSessionFiles: new Set(),
     pendingRebuildRows: new Map(),
@@ -240,8 +317,11 @@ function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): void {
   mergeUsageCostRefreshRequest(state, params);
   usageCostRefreshes.set(scopeSignal, refreshes);
   // Register the initial timer and every retry now, not after a timer fires.
-  refreshes.set(databasePath, state);
-  void trackAsyncWork(() => runQueuedUsageCostRefresh(state, refreshes, scopeSignal));
+  refreshes.set(queueKey, state);
+  void trackAsyncWork(() => {
+    const run = () => runQueuedUsageCostRefresh(state, refreshes, scopeSignal);
+    return state.incognito ? state.incognito.actor.sessions.withSharedState(run) : run();
+  });
 }
 
 function mergeUsageCostRefreshRequest(
@@ -253,6 +333,7 @@ function mergeUsageCostRefreshRequest(
   state.storePath = params.storePath;
   for (const row of params.rebuildRows ?? []) {
     state.pendingRebuildRows.set(row.key, row);
+    state.pendingSessionFiles.add(row.key);
   }
   if (!params.sessionFiles) {
     state.fullRefreshRequested = true;
@@ -287,6 +368,7 @@ async function runQueuedUsageCostRefresh(
 ): Promise<void> {
   let busyRetryDelayMs = USAGE_COST_REFRESH_RETRY_MIN_MS;
   let retryDelayMs = 0;
+  let recoveredPartialFailure = false;
   try {
     do {
       await waitForUsageCostRefresh(signal, retryDelayMs);
@@ -294,57 +376,87 @@ async function runQueuedUsageCostRefresh(
         return;
       }
       retryDelayMs = 0;
+      let partialBatch = false;
       try {
-        while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
+        if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
           const fullRefreshRequested = state.fullRefreshRequested;
-          const sessionFiles = fullRefreshRequested ? [] : [...state.pendingSessionFiles];
-          const rebuildRows = [...state.pendingRebuildRows.values()];
-          state.pendingRebuildRows.clear();
-          if (!fullRefreshRequested) {
+          partialBatch = !fullRefreshRequested;
+          const sessionFiles: string[] = [];
+          if (fullRefreshRequested) {
+            // Full discovery supersedes queued locators, including deleted instances.
             state.pendingSessionFiles.clear();
+          } else {
+            for (const file of state.pendingSessionFiles) {
+              sessionFiles.push(file);
+              state.pendingSessionFiles.delete(file);
+              if (sessionFiles.length === USAGE_COST_REFRESH_BATCH_SIZE) {
+                break;
+              }
+            }
           }
+          const rebuildRows = fullRefreshRequested
+            ? [...state.pendingRebuildRows.values()]
+            : sessionFiles.flatMap((file) => {
+                const row = state.pendingRebuildRows.get(file);
+                return row ? [row] : [];
+              });
           state.fullRefreshRequested = false;
+          const remainingRollupIds = new Set<string>();
           const result = await refreshCostUsageCacheForAgent({
             config: state.config,
             agentId: state.agentId,
             databasePath: state.databasePath,
             storePath: state.storePath,
             sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
+            maxFiles: USAGE_COST_REFRESH_BATCH_SIZE,
+            onRemaining: (files) => {
+              for (const { sessionFile, rollupId } of files) {
+                remainingRollupIds.add(rollupId);
+                state.pendingSessionFiles.add(
+                  state.pendingRebuildRows.has(rollupId) ? rollupId : sessionFile,
+                );
+              }
+            },
             rebuildRows,
+            env: state.env,
+            incognito: state.incognito,
+            sessionActor: state.sessionActor,
           });
           if (signal?.aborted) {
             return;
           }
           if (result === "busy") {
-            for (const row of rebuildRows) {
-              if (!state.pendingRebuildRows.has(row.key)) {
-                state.pendingRebuildRows.set(row.key, row);
-              }
-            }
             if (fullRefreshRequested) {
               state.fullRefreshRequested = true;
             } else {
-              for (const sessionFile of sessionFiles) {
-                state.pendingSessionFiles.add(sessionFile);
-              }
+              state.pendingSessionFiles = new Set([...sessionFiles, ...state.pendingSessionFiles]);
             }
             retryDelayMs = busyRetryDelayMs;
             // Contention among many per-agent refreshes must degrade to polling, not a 20Hz spin.
             busyRetryDelayMs = Math.min(busyRetryDelayMs * 2, USAGE_COST_REFRESH_RETRY_MAX_MS);
-            break;
+            continue;
+          }
+          for (const row of rebuildRows) {
+            if (!remainingRollupIds.has(row.key) && state.pendingRebuildRows.get(row.key) === row) {
+              state.pendingRebuildRows.delete(row.key);
+            }
           }
           busyRetryDelayMs = USAGE_COST_REFRESH_RETRY_MIN_MS;
         }
       } catch (error) {
         logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });
-        if (signal?.aborted) {
+        if (signal?.aborted || !partialBatch || recoveredPartialFailure) {
           return;
         }
+        // A queued identity can disappear on reset or deletion. Rediscover once;
+        // persistent failures wait for the next publication instead of spinning.
+        recoveredPartialFailure = true;
+        state.fullRefreshRequested = true;
       }
     } while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0);
   } finally {
     // Remove synchronously with completion; a late request must enqueue a new owner.
-    refreshes.delete(state.databasePath);
+    refreshes.delete(state.queueKey);
     if (refreshes.size === 0) {
       usageCostRefreshes.delete(signal);
     }

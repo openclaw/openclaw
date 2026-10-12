@@ -100,12 +100,11 @@ class OpenAiCompatibleEmbeddings {
     );
   }
 
-  async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
+  async embed(text: string, timeoutMs?: number): Promise<number[]> {
     const dimensions = this.dimensions;
-    const startedAtMs =
-      options?.timeoutMs && Number.isFinite(options.timeoutMs) ? Date.now() : null;
+    const startedAtMs = timeoutMs && Number.isFinite(timeoutMs) ? Date.now() : null;
     try {
-      const response = await this.postEmbedding(text, { includeDimensions: true, options });
+      const response = await this.postEmbedding(text, dimensions, timeoutMs);
       return normalizeEmbeddingVector(response.data?.[0]?.embedding);
     } catch (error) {
       if (typeof dimensions !== "number" || !isEmbeddingDimensionsRejectedError(error)) {
@@ -113,31 +112,24 @@ class OpenAiCompatibleEmbeddings {
       }
     }
 
-    const fallbackOptions =
-      startedAtMs === null || options?.timeoutMs === undefined
-        ? options
-        : { timeoutMs: Math.max(1, options.timeoutMs - (Date.now() - startedAtMs)) };
-    const response = await this.postEmbedding(text, {
-      includeDimensions: false,
-      options: fallbackOptions,
-    });
+    const fallbackTimeoutMs =
+      startedAtMs === null || timeoutMs === undefined
+        ? timeoutMs
+        : Math.max(1, timeoutMs - (Date.now() - startedAtMs));
+    const response = await this.postEmbedding(text, undefined, fallbackTimeoutMs);
     const embedding = normalizeEmbeddingVector(response.data?.[0]?.embedding);
     return truncateEmbeddingVector(embedding, dimensions, this.model);
   }
 
   private async postEmbedding(
     text: string,
-    request: {
-      includeDimensions: boolean;
-      options?: { timeoutMs?: number };
-    },
+    dimensions: number | undefined,
+    timeoutMs: number | undefined,
   ): Promise<EmbeddingCreateResponse> {
     const params: Record<string, unknown> = {
       model: this.model,
       input: text,
-      ...(request.includeDimensions && typeof this.dimensions === "number"
-        ? { dimensions: this.dimensions }
-        : {}),
+      ...(typeof dimensions === "number" ? { dimensions } : {}),
     };
 
     ensureGlobalUndiciEnvProxyDispatcher();
@@ -149,7 +141,7 @@ class OpenAiCompatibleEmbeddings {
       await this.clientPromise
     ).post<EmbeddingCreateResponse>("/embeddings", {
       body: params,
-      ...(request.options?.timeoutMs ? { timeout: request.options.timeoutMs, maxRetries: 0 } : {}),
+      ...(timeoutMs ? { timeout: timeoutMs, maxRetries: 0 } : {}),
     });
   }
 }
@@ -524,7 +516,7 @@ export function createEmbeddings(api: OpenClawPluginApi): Embeddings & { start()
                   embedding.dimensions,
                 ),
               };
-        return await direct.client.embed(text, timeoutMs ? { timeoutMs } : undefined);
+        return await direct.client.embed(text, timeoutMs);
       }
       direct = undefined;
       return await provider.embed(agentId, text, embedding, timeoutMs);

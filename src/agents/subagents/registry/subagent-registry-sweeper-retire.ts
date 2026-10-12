@@ -1,4 +1,9 @@
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAgentId,
+  resolveSubagentChildAuthority,
+} from "./subagent-child-owner-match.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import {
   safeRemoveAttachmentsDir,
@@ -18,10 +23,12 @@ export async function retireSupersededSubagentRun(params: {
   runs: Map<string, SubagentRunRecord>;
   clearPendingLifecycleError: (runId: string) => void;
   isCurrent?: (current: SubagentRunRecord) => boolean;
+  assertCurrent?: () => void;
 }): Promise<void> {
   const transcriptTarget = params.entry.execution.transcriptTarget;
   const canRetire = (current: SubagentRunRecord | undefined) =>
     current !== undefined &&
+    resolveSubagentChildAuthority(current).status !== "mismatch" &&
     isSameSubagentRunOwner(current, params.entry) &&
     current.attachmentId === params.entry.attachmentId &&
     current.cleanup === params.entry.cleanup &&
@@ -43,8 +50,11 @@ export async function retireSupersededSubagentRun(params: {
     (admitted.killReconciliation?.supersededAt !== undefined ||
       [...params.runs.values()].some(
         (candidate) =>
-          candidate.childSessionKey === admitted.childSessionKey &&
-          compareSubagentRunGeneration(candidate, admitted) > 0,
+          matchesSubagentChildSessionOwner(
+            candidate,
+            admitted.childSessionKey,
+            resolveSubagentChildAgentId(admitted),
+          ) && compareSubagentRunGeneration(candidate, admitted) > 0,
       ));
   const isCurrent = () => canRetire(params.runs.get(params.runId));
   if (!superseded || !isCurrent()) {
@@ -88,7 +98,7 @@ export async function retireSupersededSubagentRun(params: {
       }
       return { value: true, postimages: new Map([[params.runId, null]]) };
     },
-    { runs: params.runs },
+    { runs: params.runs, assertCurrent: params.assertCurrent },
   );
   if (deleted) {
     params.clearPendingLifecycleError(params.runId);

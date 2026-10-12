@@ -341,11 +341,7 @@ export class MediaAttachmentCache {
   }
 
   /** Returns a local path for providers that cannot accept buffers, creating a temp file if needed. */
-  async getPath(params: {
-    attachmentIndex: number;
-    maxBytes: number;
-    timeoutMs: number;
-  }): Promise<string> {
+  async getPath(params: Parameters<MediaAttachmentCache["getBuffer"]>[0]): Promise<string> {
     const entry = await this.ensureEntry(params.attachmentIndex);
     const local = await this.withLocalFile(entry, async () => {
       await (await this.prepareLocalFile(entry))?.handle.close().catch(() => {});

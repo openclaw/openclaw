@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
@@ -11,7 +10,35 @@ import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.gene
 
 type AgentProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "agent_provenance">;
 
-function fromRow(row: AgentProvenanceDatabase["agent_provenance"]): AgentProvenance {
+export function recordAgentProvenanceInDatabase(
+  database: DatabaseSync,
+  provenance: AgentProvenance,
+): void {
+  const db = getNodeSqliteKysely<AgentProvenanceDatabase>(database);
+  const values = {
+    agent_id: provenance.agentId,
+    created_via: provenance.createdVia,
+    creator_agent_id: provenance.creatorAgentId,
+    created_at_ms: provenance.createdAtMs,
+  };
+  executeSqliteQuerySync(
+    database,
+    db
+      .insertInto("agent_provenance")
+      .values(values)
+      .onConflict((conflict) =>
+        conflict.column("agent_id").doUpdateSet({
+          created_via: values.created_via,
+          creator_agent_id: values.creator_agent_id,
+          created_at_ms: values.created_at_ms,
+        }),
+      ),
+  );
+}
+
+export function agentProvenanceFromRow(
+  row: AgentProvenanceDatabase["agent_provenance"],
+): AgentProvenance {
   if (row.created_via !== "operator" && row.created_via !== "agent" && row.created_via !== "claw") {
     throw new Error(`Invalid agent provenance created_via: ${row.created_via}`);
   }
@@ -23,24 +50,12 @@ function fromRow(row: AgentProvenanceDatabase["agent_provenance"]): AgentProvena
   };
 }
 
-export function readAgentProvenanceInDatabase(
-  database: DatabaseSync,
-  agentId: string,
-): AgentProvenance | undefined {
-  const db = getNodeSqliteKysely<AgentProvenanceDatabase>(database);
-  const row = executeSqliteQueryTakeFirstSync(
-    database,
-    db.selectFrom("agent_provenance").selectAll().where("agent_id", "=", normalizeAgentId(agentId)),
-  );
-  return row ? fromRow(row) : undefined;
-}
-
 export function listAgentProvenanceInDatabase(database: DatabaseSync): AgentProvenance[] {
   const db = getNodeSqliteKysely<AgentProvenanceDatabase>(database);
   return executeSqliteQuerySync(
     database,
     db.selectFrom("agent_provenance").selectAll().orderBy("agent_id", "asc"),
-  ).rows.map(fromRow);
+  ).rows.map(agentProvenanceFromRow);
 }
 
 /** Decode only requested provenance, in the caller's order, including its first error. */
@@ -64,7 +79,7 @@ export function readAgentProvenanceBatchInDatabase(
   // Eager native row decoding could throw on a later unsafe integer before an
   // earlier row's invalid created_via reaches the owning codec.
   for (const row of iterateSqliteQuerySync(database, query)) {
-    records.push(fromRow(row));
+    records.push(agentProvenanceFromRow(row));
   }
   return records;
 }

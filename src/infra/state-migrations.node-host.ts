@@ -93,8 +93,8 @@ function parseLegacyGateway(value: unknown): NodeHostGatewayConfig | undefined {
   }
   const gateway: NodeHostGatewayConfig = {
     host: optionalLegacyString(value.host, "legacy node-host gateway host"),
-    port: port as number | undefined,
-    tls: value.tls as boolean | undefined,
+    port,
+    tls: value.tls,
     tlsFingerprint: optionalLegacyString(
       value.tlsFingerprint,
       "legacy node-host gateway tlsFingerprint",
@@ -181,8 +181,8 @@ function rowToCanonicalState(row: {
   const cloudflareAccess = normalizeNodeHostCloudflareAccessConfig(storedGateway?.cloudflareAccess);
   const gateway: NodeHostGatewayConfig = {
     host: nullableNonEmptyString(storedGateway?.host, "gateway_host"),
-    port: typeof gatewayPort === "number" ? gatewayPort : undefined,
-    tls: typeof gatewayTls === "boolean" ? gatewayTls : undefined,
+    port: gatewayPort,
+    tls: gatewayTls,
     tlsFingerprint: nullableNonEmptyString(
       storedGateway?.tlsFingerprint,
       "gateway_tls_fingerprint",
@@ -225,13 +225,15 @@ function migrateIntoDatabase(params: { env: NodeJS.ProcessEnv; legacy: Canonical
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const stateDb = getNodeSqliteKysely<NodeHostConfigDatabase>(db);
-      const row = executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb
-          .selectFrom("config_machine_state")
-          .selectAll()
-          .where("state_key", "=", NODE_HOST_CONFIG_KEY),
-      );
+      const readConfig = () =>
+        executeSqliteQueryTakeFirstSync(
+          db,
+          stateDb
+            .selectFrom("config_machine_state")
+            .selectAll()
+            .where("state_key", "=", NODE_HOST_CONFIG_KEY),
+        );
+      const row = readConfig();
       const existing = row ? rowToCanonicalState(row) : null;
       if (existing && existing.config.nodeId !== params.legacy.config.nodeId) {
         throw new Error("legacy node-host nodeId conflicts with canonical SQLite identity");
@@ -278,13 +280,7 @@ function migrateIntoDatabase(params: { env: NodeJS.ProcessEnv; legacy: Canonical
         imported = expected.updatedAtMs === params.legacy.updatedAtMs;
       }
 
-      const verifiedRow = executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb
-          .selectFrom("config_machine_state")
-          .selectAll()
-          .where("state_key", "=", NODE_HOST_CONFIG_KEY),
-      );
+      const verifiedRow = readConfig();
       if (!verifiedRow) {
         throw new Error("SQLite verification failed for node-host config");
       }
@@ -347,22 +343,15 @@ export async function migrateLegacyNodeHostConfig(params: {
           }),
       });
 
-      let snapshot: LegacySourceSnapshot;
-      let legacy: CanonicalNodeHostState;
-      try {
-        await source.recover("interrupted node-host Doctor claim conflicts with its source");
-        if (!(await source.exists())) {
-          return { changes, warnings };
-        }
-        snapshot = await source.read();
-        legacy = parseLegacyNodeHostConfig(snapshot);
-        params.beforeVerify?.();
-        if (!sourceSnapshotsMatch(await source.read(), snapshot)) {
-          throw new Error("legacy node-host source changed after Doctor loaded it");
-        }
-      } catch (error) {
-        warnings.push(`Failed reading legacy node-host state: ${String(error)}`);
+      await source.recover("interrupted node-host Doctor claim conflicts with its source");
+      if (!(await source.exists())) {
         return { changes, warnings };
+      }
+      const snapshot = await source.read();
+      const legacy = parseLegacyNodeHostConfig(snapshot);
+      params.beforeVerify?.();
+      if (!sourceSnapshotsMatch(await source.read(), snapshot)) {
+        throw new Error("legacy node-host source changed after Doctor loaded it");
       }
 
       let result: ReturnType<typeof migrateIntoDatabase>;

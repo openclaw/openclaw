@@ -13,14 +13,13 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 }));
 
 type FetchModule = typeof import("./fetch.js");
-export type ReadRemoteMediaBuffer = FetchModule["readRemoteMediaBuffer"];
+type ReadRemoteMediaBuffer = FetchModule["readRemoteMediaBuffer"];
 type SaveRemoteMedia = FetchModule["saveRemoteMedia"];
 type SaveResponseMedia = FetchModule["saveResponseMedia"];
 type LookupFn = NonNullable<Parameters<ReadRemoteMediaBuffer>[0]["lookupFn"]>;
 let readRemoteMediaBuffer: ReadRemoteMediaBuffer;
 let saveRemoteMedia: SaveRemoteMedia;
 let saveResponseMedia: SaveResponseMedia;
-let defaultFetchMediaMaxBytes: number;
 let tempHome: TempHomeEnv;
 
 function makeStream(chunks: Uint8Array[]) {
@@ -66,9 +65,7 @@ export {
   readRemoteMediaBuffer,
   saveRemoteMedia,
   saveResponseMedia,
-  defaultFetchMediaMaxBytes,
   tempHome,
-  makeStream,
   makeStreamResponse,
   makeResponseFetch,
   makeCancelableStream,
@@ -83,8 +80,6 @@ export function installMediaFetchTestHooks(): void {
     readRemoteMediaBuffer = fetchModule.readRemoteMediaBuffer;
     saveRemoteMedia = fetchModule.saveRemoteMedia;
     saveResponseMedia = fetchModule.saveResponseMedia;
-    // Default cap mirrors the module-private DEFAULT_FETCH_MEDIA_MAX_BYTES.
-    defaultFetchMediaMaxBytes = (await import("@openclaw/media-core/constants")).MAX_DOCUMENT_BYTES;
   });
 
   beforeEach(() => {

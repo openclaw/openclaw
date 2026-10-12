@@ -45,32 +45,20 @@ function compileGlobRegex(pattern: string): RegExp {
     return cached;
   }
 
-  let regex = "^";
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern.charAt(i);
-    if (ch === "*") {
-      const next = pattern[i + 1];
-      if (next === "*") {
-        regex += ".*";
-        i += 2;
-        continue;
-      }
-      regex += "[^/]*";
-      i += 1;
-      continue;
+  const regex = pattern.replace(/\*\*|[*?]|[^*?]+/g, (token) => {
+    switch (token) {
+      case "**":
+        return ".*";
+      case "*":
+        return "[^/]*";
+      case "?":
+        return "[^/]";
+      default:
+        return escapeRegExpLiteral(token);
     }
-    if (ch === "?") {
-      regex += "[^/]";
-      i += 1;
-      continue;
-    }
-    regex += escapeRegExpLiteral(ch);
-    i += 1;
-  }
-  regex += "$";
+  });
 
-  const compiled = new RegExp(regex, process.platform === "win32" ? "i" : "");
+  const compiled = new RegExp(`^${regex}$`, process.platform === "win32" ? "i" : "");
   if (globRegexCache.size >= GLOB_REGEX_CACHE_LIMIT) {
     globRegexCache.clear();
   }

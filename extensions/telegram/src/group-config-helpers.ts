@@ -17,29 +17,18 @@ export function resolveTelegramScopedGroupConfig(
   chatId: string | number,
   messageThreadId?: number,
 ) {
-  const resolveTopicConfig = <T extends object>(
-    scopedConfig: { topics?: Record<string, T | undefined> } | undefined,
-  ): T | undefined => {
-    if (!scopedConfig || messageThreadId == null) {
-      return undefined;
-    }
-    const defaultConfig = scopedConfig.topics?.["*"];
-    const exactConfig = scopedConfig.topics?.[String(messageThreadId)];
-    if (defaultConfig && exactConfig) {
-      return { ...defaultConfig, ...exactConfig };
-    }
-    return exactConfig ?? defaultConfig;
-  };
   const chatIdStr = String(chatId);
   const scopedConfigs = chatIdStr.startsWith("-") ? telegramCfg.groups : telegramCfg.direct;
   // Whole-entry selection: an exact chat hides every wildcard field.
-  const groupKey = Object.hasOwn(scopedConfigs ?? {}, chatIdStr)
-    ? chatIdStr
-    : Object.hasOwn(scopedConfigs ?? {}, "*")
-      ? "*"
-      : undefined;
+  const groupKey = [chatIdStr, "*"].find((key) => Object.hasOwn(scopedConfigs ?? {}, key));
   const groupConfig = groupKey ? scopedConfigs?.[groupKey] : undefined;
-  const topicConfig = resolveTopicConfig(groupConfig);
+  const topics = messageThreadId == null ? undefined : groupConfig?.topics;
+  const defaultConfig = topics?.["*"];
+  const exactConfig = topics?.[String(messageThreadId)];
+  const topicConfig =
+    defaultConfig && exactConfig
+      ? { ...defaultConfig, ...exactConfig }
+      : (exactConfig ?? defaultConfig);
   return { groupConfig, topicConfig };
 }
 
@@ -70,9 +59,7 @@ export function resolveTelegramGroupPromptSettings(params: {
     params.groupConfig?.systemPrompt?.trim() || null,
     params.topicConfig?.systemPrompt?.trim() || null,
   ].filter((entry): entry is string => Boolean(entry));
-  const groupSystemPrompt =
-    systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
-  return { skillFilter, groupSystemPrompt };
+  return { skillFilter, groupSystemPrompt: systemPromptParts.join("\n\n") || undefined };
 }
 
 export function resolveTelegramDirectToolPolicy(params: {

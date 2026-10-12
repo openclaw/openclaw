@@ -28,7 +28,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 
 /** Synthetic and chat turns must share messageToolPolicyHash to reuse CLI sessions (#121485). */
-export function resolveSessionStableReplyMode(params: {
+export async function resolveSessionStableReplyMode(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
   sessionEntry?: SessionEntry;
@@ -36,7 +36,7 @@ export function resolveSessionStableReplyMode(params: {
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
   turnModelOverride?: string;
-}): SourceReplyDeliveryMode {
+}): Promise<SourceReplyDeliveryMode> {
   const { cfg, ctx, sessionEntry } = params;
   const chatType =
     normalizeChatType(ctx.ChatType) ?? normalizeChatType(sessionEntry?.chatType) ?? undefined;
@@ -52,7 +52,7 @@ export function resolveSessionStableReplyMode(params: {
     Surface: normalizeOptionalString(ctx.Surface) ?? sessionDeliveryChannel(sessionEntry),
     ExplicitDeliverRoute: ctx.ExplicitDeliverRoute,
   };
-  const { harnessDefaultVisibleReplies } = resolveVisibleRepliesPolicy({
+  const { harnessDefaultVisibleReplies } = await resolveVisibleRepliesPolicy({
     cfg,
     chatType,
     ctx,
@@ -89,11 +89,10 @@ export function resolveStableMessageToolAvailability(params: {
     config: cfg,
     sessionKey: params.sessionKey,
     messageProvider: resolveOriginMessageProvider({
-      originatingChannel:
-        ctx.OriginatingChannel ?? (sessionEntry ? sessionDeliveryChannel(sessionEntry) : undefined),
+      originatingChannel: ctx.OriginatingChannel ?? sessionDeliveryChannel(sessionEntry),
       provider:
         normalizeOptionalString(ctx.Provider ?? ctx.Surface) ??
-        (sessionEntry ? sessionDeliveryOrigin(sessionEntry)?.provider : undefined),
+        sessionDeliveryOrigin(sessionEntry)?.provider,
     }),
     groupId: resolveGroupSessionKey(ctx)?.id ?? sessionEntry?.groupId,
     groupChannel:
@@ -102,9 +101,7 @@ export function resolveStableMessageToolAvailability(params: {
       normalizeOptionalString(sessionEntry?.groupChannel) ??
       normalizeOptionalString(sessionEntry?.subject),
     groupSpace: normalizeOptionalString(ctx.GroupSpace),
-    accountId:
-      ctx.AccountId ??
-      (sessionEntry ? deliveryContextFromSession(sessionEntry)?.accountId : undefined),
+    accountId: ctx.AccountId ?? deliveryContextFromSession(sessionEntry)?.accountId,
   });
   return resolveReplyMessageToolAvailability({
     ...params,
@@ -137,14 +134,13 @@ export function resolveReplyMessageToolAvailability(params: {
     agentId: params.sessionAgentId,
   });
   const profileAlsoAllowed = params.prefersMessageToolDelivery ? ["message"] : [];
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
-    ...(profileAlsoAllow ?? []),
-    ...profileAlsoAllowed,
-  ]);
-  const providerProfilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(providerProfile), [
-    ...(providerProfileAlsoAllow ?? []),
-    ...profileAlsoAllowed,
-  ]);
+  const resolveProfile = (profileId: string | undefined, alsoAllow?: string[]) =>
+    mergeAlsoAllowPolicy(resolveToolProfilePolicy(profileId), [
+      ...(alsoAllow ?? []),
+      ...profileAlsoAllowed,
+    ]);
+  const profilePolicy = resolveProfile(profile, profileAlsoAllow);
+  const providerProfilePolicy = resolveProfile(providerProfile, providerProfileAlsoAllow);
   const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, { cfg });
   const subagentPolicy =
     params.sessionKey && isSubagentEnvelopeSession(params.sessionKey, { cfg, store: subagentStore })

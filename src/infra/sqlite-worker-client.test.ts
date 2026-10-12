@@ -1,3 +1,4 @@
+import { serialize } from "node:v8";
 import { expect, it, vi } from "vitest";
 import type { Actor } from "./sqlite-worker-broker.types.js";
 import {
@@ -65,3 +66,47 @@ it.each(["missing", "sealed"] as const)(
     await store.close();
   },
 );
+
+it("attributes queued commands without changing wire bytes or exposing private command suffixes", async () => {
+  type DiagnosticOperations = Record<string, { input: { value: string }; output: string }>;
+  const dispatch = vi
+    .fn<Parameters<typeof createSqliteWorkerClient<DiagnosticOperations>>[0]["dispatch"]>()
+    .mockResolvedValue("committed");
+  const { store } = createSqliteWorkerClient<DiagnosticOperations>({
+    actor: createActor(),
+    isDraining: () => false,
+    isAvailable: () => true,
+    dispatch,
+    release: async () => {},
+  });
+  const cases = [
+    ["audit.writer.process", "audit.writer.process"],
+    ["audit.writer.prune", "audit.writer.prune"],
+    ["database.inspectIdle", "database.inspectIdle"],
+    ["stateLease.renew", "stateLease.renew"],
+    ["capture.recordEventWithPayload", "capture"],
+    ["workerInference.complete", "workerInference"],
+    ["session.entry.read", "sessions"],
+    ["pluginState.get", "plugin_state"],
+    ["audit.private-customer-123", "audit"],
+    ["private-customer-123.execute", "execute"],
+    ["unrecognized", "execute"],
+  ] as const;
+  try {
+    for (const [type, requestClass] of cases) {
+      const command = { type, input: { value: "synthetic-private-payload" } };
+      await expect(store.execute(command)).resolves.toBe("committed");
+      expect(dispatch).toHaveBeenLastCalledWith(
+        serialize(command),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        requestClass,
+      );
+    }
+    expect(dispatch).toHaveBeenCalledTimes(cases.length);
+  } finally {
+    await store.close();
+  }
+});

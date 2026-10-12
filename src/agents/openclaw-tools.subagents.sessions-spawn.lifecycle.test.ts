@@ -21,7 +21,10 @@ import {
   setSessionsSpawnConfigOverride,
   waitForSessionsSpawnEvent,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
-import { getLatestSubagentRunByChildSessionKey } from "./subagents/registry/subagent-registry-read.js";
+import {
+  getLatestLiveSubagentRunByChildSessionKey,
+  getLatestSubagentRunByChildSessionKey,
+} from "./subagents/registry/subagent-registry-read.js";
 import { observeRootWork } from "./subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import { resetSubagentRegistryForTests } from "./subagents/registry/subagent-registry.test-helpers.js";
 
@@ -45,7 +48,7 @@ async function spawn(context = discordContext, args: Record<string, unknown> = {
 async function waitForCleanup(childSessionKey: string) {
   await waitForSessionsSpawnEvent(
     "run cleanup bookkeeping",
-    () => getLatestSubagentRunByChildSessionKey(childSessionKey)?.cleanupCompletedAt != null,
+    () => getLatestLiveSubagentRunByChildSessionKey(childSessionKey)?.cleanupCompletedAt != null,
   );
 }
 
@@ -90,29 +93,6 @@ describe("sessions_spawn lifecycle", () => {
     }
   });
 
-  it("gives native child startup enough gateway request time", async () => {
-    const ctx = setupSessionsSpawnGatewayMock({
-      includeChatHistory: true,
-      agentWaitResult: { status: "ok", startedAt: 1000, endedAt: 2000 },
-    });
-    setSessionsSpawnConfigOverride({
-      session: { mainKey: "main", scope: "per-sender" },
-      messages: { queue: {} },
-      agents: { defaults: { subagents: { runTimeoutSeconds: 120 } } },
-    });
-    await spawn(mainContext);
-    const child = ctx.getChild();
-    assert(child.sessionKey);
-    try {
-      expect(ctx.calls.find((call) => call.method === "agent")).toMatchObject({
-        timeoutMs: 125_000,
-        params: { lane: "subagent" },
-      });
-    } finally {
-      await waitForCleanup(child.sessionKey);
-    }
-  });
-
   it("retires the child's bundle MCP runtime after run-mode cleanup", async () => {
     const settleRootWork = observeRootWork();
     const started = createDeferred();
@@ -125,20 +105,22 @@ describe("sessions_spawn lifecycle", () => {
       includeChatHistory: true,
       agentWaitResult: { status: "ok", startedAt: 3000, endedAt: 4000 },
     });
+    let childSessionId: string | undefined;
     try {
       await spawn(mainContext, { cleanup: "keep" });
       const child = ctx.getChild();
       assert(child.sessionKey);
       await started.promise;
+      childSessionId = getLatestLiveSubagentRunByChildSessionKey(child.sessionKey)
+        ?.childSessionIdentity?.sessionId;
+      assert(childSessionId);
       await getOrCreateSessionMcpRuntime({
-        sessionId: "session:subagent:mcp-retire",
+        sessionId: childSessionId,
         sessionKey: child.sessionKey,
         workspaceDir: "/tmp/openclaw-subagent-mcp-retire",
         cfg: unopenedMcpConfig,
       });
-      expect(bundleMcpRuntimeTesting.getCachedSessionIds()).toContain(
-        "session:subagent:mcp-retire",
-      );
+      expect(bundleMcpRuntimeTesting.getCachedSessionIds()).toContain(childSessionId);
     } finally {
       gate.resolve("delivered");
       const key = ctx.getChild().sessionKey;
@@ -150,9 +132,10 @@ describe("sessions_spawn lifecycle", () => {
         await settleRootWork();
       }
     }
+    assert(childSessionId);
     await waitForSessionsSpawnEvent(
       "bundle MCP runtime retirement",
-      () => !bundleMcpRuntimeTesting.getCachedSessionIds().includes("session:subagent:mcp-retire"),
+      () => !bundleMcpRuntimeTesting.getCachedSessionIds().includes(childSessionId),
     );
   });
 
@@ -200,9 +183,9 @@ describe("sessions_spawn lifecycle", () => {
     assert(child.sessionKey);
     await waitForCleanup(child.sessionKey);
     expect(ctx.waitCalls.find((call) => call.runId === child.runId)?.timeoutMs).toBe(1000);
-    expect(getLatestSubagentRunByChildSessionKey(child.sessionKey)?.execution.outcome?.status).toBe(
-      "timeout",
-    );
+    expect(
+      (await getLatestSubagentRunByChildSessionKey(child.sessionKey))?.execution.outcome?.status,
+    ).toBe("timeout");
   });
 
   it("uses the target agent's bound account for a Matrix room", async () => {

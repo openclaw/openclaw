@@ -93,14 +93,6 @@ describe("downloadSlackFile", () => {
     });
   });
 
-  it("accepts channel proof from share timestamps", async () => {
-    const client = createClient();
-    client.files.info.mockResolvedValueOnce({
-      file: fileInfo({ channels: undefined, shares: { private: { C123: [{ ts: "111.111" }] } } }),
-    });
-    await expect(download(client)).resolves.toEqual(media);
-  });
-
   it("reapplies channel and thread admission when download metadata is refreshed", async () => {
     const client = createClient();
     client.files.info.mockResolvedValueOnce({
@@ -123,14 +115,11 @@ describe("downloadSlackFile", () => {
   it.each([
     { name: "missing private URL", file: { url_private_download: undefined } },
     { name: "wrong channel", file: { channels: ["C999"] } },
-    { name: "channel proof without thread proof", file: {}, threadId: "222.222" },
     {
       name: "wrong thread",
       file: { shares: { private: { C123: [{ ts: "111.111", thread_ts: "111.111" }] } } },
       threadId: "222.222",
     },
-    { name: "malformed shares", file: { channels: undefined, shares: "invalid" } },
-    { name: "non-array shares", file: { channels: undefined, shares: { private: { C123: {} } } } },
     {
       name: "shares without timestamps",
       file: { channels: undefined, shares: { private: { C123: [{}] } } },

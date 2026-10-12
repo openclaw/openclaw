@@ -1,7 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptMessage,
   bindSessionPendingInputSources,
@@ -26,7 +29,6 @@ import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
-import type { GatewayRequestContext } from "./types.js";
 
 describe("pending input read boundary", () => {
   it("prepares automation names once per pending page from the Gateway's selected partition", async () => {
@@ -352,6 +354,7 @@ describe("pending input read boundary", () => {
         expect(JSON.stringify(page)).not.toContain("credential=");
         expect(await loadTranscriptEvents(scope)).toEqual([]);
         const respond = vi.fn();
+        const context = await createHistoryReadContext();
         const lookup = () =>
           expectDefined(
             chatMessageGetHandlers["chat.message.get"],
@@ -359,12 +362,18 @@ describe("pending input read boundary", () => {
           )({
             params: { sessionKey: scope.sessionKey, messageId: displayId },
             respond,
-            context: { getRuntimeConfig: () => ({}) } as unknown as GatewayRequestContext,
+            context,
             req: {} as never,
             client: null,
             isWebchatConnect: () => false,
           });
-        await lookup();
+        const sql = observeHostDataSql();
+        try {
+          await lookup();
+          expect(sql.queries).toEqual([]);
+        } finally {
+          sql.restore();
+        }
         expect(respond).toHaveBeenLastCalledWith(
           true,
           expect.objectContaining({
@@ -418,7 +427,7 @@ describe("pending input read boundary", () => {
         )({
           params: { sessionKey: scope.sessionKey, messageId: `pending:${receipt.inputId}` },
           respond,
-          context: { getRuntimeConfig: () => ({}) } as unknown as GatewayRequestContext,
+          context: await createHistoryReadContext(),
           req: {} as never,
           client: null,
           isWebchatConnect: () => false,

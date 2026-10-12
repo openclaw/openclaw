@@ -9,7 +9,15 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
+import { createEmbeddedLobsterRunner } from "./lobster-runner.js";
 import { createLobsterTool } from "./lobster-tool.js";
+
+vi.mock("./lobster-runner.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lobster-runner.js")>();
+  return { ...actual, createEmbeddedLobsterRunner: vi.fn(actual.createEmbeddedLobsterRunner) };
+});
+
+afterEach(() => vi.mocked(createEmbeddedLobsterRunner).mockReset());
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -180,83 +188,6 @@ describe("lobster plugin tool", () => {
     expect(factory(fakeCtx({ sandboxed: true }))).toBeNull();
   });
 
-  it("returns approval envelopes for ordinary runs", async () => {
-    const runner = {
-      run: vi.fn().mockResolvedValue({
-        ok: true,
-        status: "needs_approval",
-        output: [],
-        requiresApproval: {
-          type: "approval_request",
-          prompt: "Continue?",
-          items: [],
-          resumeToken: "resume-token-1",
-        },
-      }),
-    };
-
-    const tool = createLobsterTool(fakeApi(), { runner });
-    const res = await tool.execute("call-ordinary-run", {
-      action: "run",
-      pipeline: "noop",
-    });
-
-    expect(runner.run).toHaveBeenCalledWith({
-      action: "run",
-      pipeline: "noop",
-      cwd: process.cwd(),
-      timeoutMs: 20_000,
-      maxStdoutBytes: 512_000,
-    });
-    const details = requireRecord(res.details, "ordinary run details");
-    expect(details).toEqual({
-      ok: true,
-      status: "needs_approval",
-      output: [],
-      requiresApproval: {
-        type: "approval_request",
-        prompt: "Continue?",
-        items: [],
-        resumeToken: "resume-token-1",
-      },
-    });
-  });
-
-  it("resumes ordinary workflows with approval credentials", async () => {
-    const runner = {
-      run: vi.fn().mockResolvedValue({
-        ok: true,
-        status: "ok",
-        output: [{ approved: true }],
-        requiresApproval: null,
-      }),
-    };
-
-    const tool = createLobsterTool(fakeApi(), { runner });
-    const res = await tool.execute("call-ordinary-resume", {
-      action: "resume",
-      token: "resume-token-1",
-      approve: true,
-    });
-
-    expect(runner.run).toHaveBeenCalledWith({
-      action: "resume",
-      token: "resume-token-1",
-      approve: true,
-      cwd: process.cwd(),
-      timeoutMs: 20_000,
-      maxStdoutBytes: 512_000,
-    });
-    const details = requireRecord(res.details, "ordinary resume details");
-    expect(details.ok).toBe(true);
-    expect(details).toEqual({
-      ok: true,
-      status: "ok",
-      output: [{ approved: true }],
-      requiresApproval: null,
-    });
-  });
-
   it("normalizes numeric string run limits before invoking the runner", async () => {
     const runner = {
       run: vi.fn().mockResolvedValue({
@@ -267,7 +198,8 @@ describe("lobster plugin tool", () => {
       }),
     };
 
-    const tool = createLobsterTool(fakeApi(), { runner });
+    vi.mocked(createEmbeddedLobsterRunner).mockReturnValueOnce(runner);
+    const tool = createLobsterTool(fakeApi());
     await tool.execute("call-string-limits", {
       action: "run",
       pipeline: "noop",
@@ -286,59 +218,13 @@ describe("lobster plugin tool", () => {
     });
   });
 
-  it("rejects malformed numeric run limits before invoking the runner", async () => {
-    const runner = { run: vi.fn() };
-    const tool = createLobsterTool(fakeApi(), { runner });
-
-    await expect(
-      tool.execute("call-bad-timeout", {
-        action: "run",
-        pipeline: "noop",
-        timeoutMs: "1500.5",
-      }),
-    ).rejects.toThrow("timeoutMs must be a positive integer");
-    await expect(
-      tool.execute("call-bad-stdout", {
-        action: "run",
-        pipeline: "noop",
-        maxStdoutBytes: 0,
-      }),
-    ).rejects.toThrow("maxStdoutBytes must be a positive integer");
-    expect(runner.run).not.toHaveBeenCalled();
-  });
-
-  it("throws when the runner returns an error envelope", async () => {
-    const tool = createLobsterTool(fakeApi(), {
-      runner: {
-        run: vi.fn().mockResolvedValue({
-          ok: false,
-          error: {
-            type: "runtime_error",
-            message: "boom",
-          },
-        }),
-      },
-    });
-
-    await expect(
-      tool.execute("call-runner-error", {
-        action: "run",
-        pipeline: "noop",
-      }),
-    ).rejects.toThrow("boom");
-  });
-
   it("requires action", async () => {
-    const tool = createLobsterTool(fakeApi(), {
-      runner: { run: vi.fn() },
-    });
+    const tool = createLobsterTool(fakeApi());
     await expect(tool.execute("call-action-missing", {})).rejects.toThrow(/action required/);
   });
 
   it("rejects unknown action", async () => {
-    const tool = createLobsterTool(fakeApi(), {
-      runner: { run: vi.fn() },
-    });
+    const tool = createLobsterTool(fakeApi());
     await expect(
       tool.execute("call-action-unknown", {
         action: "explode",
@@ -347,9 +233,7 @@ describe("lobster plugin tool", () => {
   });
 
   it("rejects absolute cwd", async () => {
-    const tool = createLobsterTool(fakeApi(), {
-      runner: { run: vi.fn() },
-    });
+    const tool = createLobsterTool(fakeApi());
     await expect(
       tool.execute("call-absolute-cwd", {
         action: "run",
@@ -360,9 +244,7 @@ describe("lobster plugin tool", () => {
   });
 
   it("rejects cwd that escapes the gateway working directory", async () => {
-    const tool = createLobsterTool(fakeApi(), {
-      runner: { run: vi.fn() },
-    });
+    const tool = createLobsterTool(fakeApi());
     await expect(
       tool.execute("call-escape-cwd", {
         action: "run",

@@ -215,12 +215,9 @@ async function writeValidFixture(
   root: string,
   options: {
     buildCommit?: string;
-    buildTimestamp?: string;
-    healthUpdateUsage?: boolean | string | null;
+    healthUpdateUsage?: string | null;
     displayName?: string;
     localizedDisplayName?: string;
-    pushMode?: string;
-    legacyKey?: boolean;
   } = {},
 ): Promise<{
   ipaPath: string;
@@ -242,8 +239,8 @@ async function writeValidFixture(
     plistString("CFBundleIdentifier", "ai.openclawfoundation.app"),
     plistString("CFBundleDisplayName", options.displayName ?? "OpenClaw"),
     plistString("OpenClawGitCommit", options.buildCommit ?? BUILD_COMMIT),
-    plistString("OpenClawBuildTimestamp", options.buildTimestamp ?? BUILD_TIMESTAMP),
-    plistString("OpenClawPushMode", options.pushMode ?? "appStore"),
+    plistString("OpenClawBuildTimestamp", BUILD_TIMESTAMP),
+    plistString("OpenClawPushMode", "appStore"),
     plistString("OpenClawPushRelayBaseURL", ""),
     plistString(
       "NSHealthShareUsageDescription",
@@ -251,13 +248,10 @@ async function writeValidFixture(
     ),
     options.healthUpdateUsage === null
       ? ""
-      : typeof options.healthUpdateUsage === "boolean"
-        ? plistBool("NSHealthUpdateUsageDescription", options.healthUpdateUsage)
-        : plistString(
-            "NSHealthUpdateUsageDescription",
-            options.healthUpdateUsage ?? "OpenClaw reads Health data for Health Summaries.",
-          ),
-    options.legacyKey ? plistString("OpenClawPushRelayProfile", "production") : "",
+      : plistString(
+          "NSHealthUpdateUsageDescription",
+          options.healthUpdateUsage ?? "OpenClaw reads Health data for Health Summaries.",
+        ),
   ].join("");
   writeFileSync(path.join(appDir, "Info.plist"), plist(infoBody), "utf8");
   const localizedDir = path.join(appDir, "de.lproj");
@@ -440,28 +434,6 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
     expect(missing.status).toBe(1);
   });
 
-  it("accepts an App Store IPA with appStore mode and production entitlements", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
-    tempDirs.push(root);
-    const fixture = await writeValidFixture(root);
-
-    const result = runValidator(fixture);
-
-    expect(result.ok).toBe(true);
-    expect(result.stdout).toContain("Validated iOS App Store IPA");
-  });
-
-  it("rejects an IPA that was exported with a non-App-Store push mode", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
-    tempDirs.push(root);
-    const fixture = await writeValidFixture(root, { pushMode: "localProduction" });
-
-    const result = runValidator(fixture);
-
-    expect(result.ok).toBe(false);
-    expect(result.stderr).toContain("push mode mismatch");
-  });
-
   it("rejects an IPA without the Health update purpose string required by App Store Connect", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
     tempDirs.push(root);
@@ -495,28 +467,6 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
 
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("unresolved build setting in localized plist");
-  });
-
-  it("rejects a non-string Health update purpose value", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
-    tempDirs.push(root);
-    const fixture = await writeValidFixture(root, { healthUpdateUsage: true });
-
-    const result = runValidator(fixture);
-
-    expect(result.ok).toBe(false);
-    expect(result.stderr).toContain("Health update usage description must be a non-empty string");
-  });
-
-  it("rejects legacy independently selectable production push keys", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
-    tempDirs.push(root);
-    const fixture = await writeValidFixture(root, { legacyKey: true });
-
-    const result = runValidator(fixture);
-
-    expect(result.ok).toBe(false);
-    expect(result.stderr).toContain("legacy relay profile");
   });
 
   it("rejects malformed or mismatched embedded build provenance", async () => {

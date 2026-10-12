@@ -3,9 +3,10 @@ import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "openclaw/plugin-sdk/model-session-runtime";
-import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import { composeSessionEntryCommitGuards } from "openclaw/plugin-sdk/session-binding-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeCodexStartupClientBestEffort } from "./app-server/attempt-client-cleanup.js";
 import { normalizeCodexAppServerBindingModelProvider } from "./app-server/auth-profile.js";
 import {
@@ -35,7 +36,7 @@ import {
   withCodexConversationThreadActivity,
   withExclusiveCodexAppServerThread,
 } from "./app-server/thread-ownership.js";
-import { assertCodexHostOwnerCurrent } from "./command-authorization.js";
+import { assertCodexHostOwnerCurrent, type CodexCommandContext } from "./command-authorization.js";
 import { formatCodexDisplayText, formatThreads } from "./command-formatters.js";
 import {
   parseBindArgs,
@@ -49,6 +50,7 @@ import {
   resolveCodexConversationControlScope,
   resolveCommandAppServerScope,
 } from "./command-handler-scope.js";
+import type { CodexControlRequestOptions } from "./command-rpc.js";
 import {
   createCodexCliNodeConversationBindingData,
   createCodexConversationBindingData,
@@ -57,7 +59,9 @@ import {
 import { formatPermissionsMode } from "./conversation-control.js";
 import { formatCodexCliSessions } from "./node-cli-sessions.js";
 
-export function isCurrentSessionModelSelectionLocked(ctx: PluginCommandContext): boolean {
+export async function isCurrentSessionModelSelectionLocked(
+  ctx: CodexCommandContext,
+): Promise<boolean> {
   const sessionKey = ctx.sessionKey?.trim();
   if (!sessionKey) {
     return false;
@@ -68,7 +72,7 @@ export function isCurrentSessionModelSelectionLocked(ctx: PluginCommandContext):
   const storePath =
     ctx.sessionTarget?.storePath ?? resolveStorePath(ctx.config.session?.store, { agentId });
   return isModelSelectionLocked(
-    getSessionEntry({
+    await getSessionEntryAsync({
       storePath,
       sessionKey,
       hydrateSkillPromptRefs: false,
@@ -79,7 +83,7 @@ export function isCurrentSessionModelSelectionLocked(ctx: PluginCommandContext):
 
 export async function bindConversation(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  ctx: CodexCommandContext,
   pluginConfig: unknown,
   args: string[],
 ): Promise<PluginCommandResult> {
@@ -89,7 +93,7 @@ export async function bindConversation(
       text: "Usage: /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
     };
   }
-  if (isCurrentSessionModelSelectionLocked(ctx)) {
+  if (await isCurrentSessionModelSelectionLocked(ctx)) {
     return { text: MODEL_SELECTION_LOCKED_MESSAGE };
   }
   const scope = resolveCodexConversationControlScope(ctx);
@@ -114,7 +118,9 @@ export async function bindConversation(
     currentConversationData?.kind === "codex-app-server-session"
       ? conversationBindingIdentity(currentConversationData.bindingId)
       : sessionOwner;
-  const existingBinding = currentOwner ? deps.bindingStore.read(currentOwner) : undefined;
+  const existingBinding = currentOwner
+    ? await deps.bindingStore.readAsync(currentOwner)
+    : undefined;
   assertCodexBindingMayBeReplaced(existingBinding, "binding this conversation to another thread");
   const sessionSource =
     sessionOwner && existingBinding
@@ -122,6 +128,9 @@ export async function bindConversation(
           agentId: sessionOwner.agentId,
           sessionId: sessionOwner.sessionId,
           threadId: existingBinding.threadId,
+          storePath:
+            ctx.sessionTarget?.storePath ??
+            resolveStorePath(ctx.config.session?.store, { agentId: sessionOwner.agentId }),
           ...(sessionOwner.sessionKey ? { sessionKey: sessionOwner.sessionKey } : {}),
         }
       : undefined;
@@ -146,6 +155,7 @@ export async function bindConversation(
     },
   });
   const threadLabel = parsed.threadId ?? "a new thread";
+  await ctx.assertNativePolicyCurrent?.();
   assertCodexHostOwnerCurrent(ctx);
   const request = await ctx.requestConversationBinding({
     summary: `Codex app-server thread ${formatCodexDisplayText(threadLabel)} in ${formatCodexDisplayText(workspaceDir)}`,
@@ -167,9 +177,9 @@ export async function bindConversation(
 
 export async function detachConversation(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  ctx: CodexCommandContext,
 ): Promise<string> {
-  if (isCurrentSessionModelSelectionLocked(ctx)) {
+  if (await isCurrentSessionModelSelectionLocked(ctx)) {
     return MODEL_SELECTION_LOCKED_MESSAGE;
   }
   const current = await ctx.getCurrentConversationBinding();
@@ -183,7 +193,7 @@ export async function detachConversation(
   let expectedThreadId: string | undefined;
   let expectedStartId: string | undefined;
   if (data?.kind === "codex-app-server-session") {
-    const binding = deps.bindingStore.read(identity!);
+    const binding = await deps.bindingStore.readAsync(identity!);
     assertCodexBindingMayBeReplaced(binding, "detaching its conversation binding");
     if (deps.readCodexConversationActiveTurn(identity!)) {
       return "This Codex conversation has an active run; use /codex stop before detaching it.";
@@ -221,13 +231,14 @@ export async function detachConversation(
       return detachedPublicConversation!;
     });
   }
+  await ctx.assertNativePolicyCurrent?.();
   assertCodexHostOwnerCurrent(ctx);
   return await detachPublicConversation();
 }
 
 export async function describeConversationBinding(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  ctx: CodexCommandContext,
 ): Promise<string> {
   const current = await ctx.getCurrentConversationBinding();
   const data = readCodexConversationBindingData(current);
@@ -245,12 +256,12 @@ export async function describeConversationBinding(
     ].join("\n");
   }
   const identity = conversationBindingIdentity(data.bindingId);
-  const threadBinding = deps.bindingStore.read(identity);
+  const threadBinding = await deps.bindingStore.readAsync(identity);
   const active = deps.readCodexConversationActiveTurn(identity);
   const sessionKey = ctx.sessionKey?.trim();
   const { agentId } = resolveCodexConversationControlScope(ctx);
   const sessionEntry = sessionKey
-    ? getSessionEntry({
+    ? await getSessionEntryAsync({
         agentId,
         storePath:
           ctx.sessionTarget?.storePath ?? resolveStorePath(ctx.config.session?.store, { agentId }),
@@ -277,7 +288,7 @@ export async function describeConversationBinding(
 
 export async function buildThreads(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  ctx: CodexCommandContext,
   pluginConfig: unknown,
   filter: string,
 ): Promise<string> {
@@ -313,7 +324,7 @@ export async function buildCodexCliSessions(
 
 export async function resumeThread(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  ctx: CodexCommandContext,
   pluginConfig: unknown,
   args: string[],
 ): Promise<string> {
@@ -330,7 +341,7 @@ export async function resumeThread(
   if (!normalizedThreadId || args.length !== 1) {
     return "Usage: /codex resume <thread-id>";
   }
-  if (isCurrentSessionModelSelectionLocked(ctx)) {
+  if (await isCurrentSessionModelSelectionLocked(ctx)) {
     return MODEL_SELECTION_LOCKED_MESSAGE;
   }
   if (!ctx.sessionId) {
@@ -364,13 +375,18 @@ export async function resumeThread(
         if (generation.kind !== "resolved" || !generation.result) {
           throw createCodexSessionGenerationSupersededError(identity.sessionId);
         }
-        const currentBinding = deps.bindingStore.read(identity);
+        const currentBinding = await deps.bindingStore.readAsync(identity);
         assertCodexBindingMayBeReplaced(currentBinding, "attaching a different resumed thread");
         let pendingResumeConfiguration = false;
         const commitResumedThread = async (
           value: unknown,
           client: CodexAppServerClient,
-          { authProfileId, assertCurrent }: { authProfileId?: string; assertCurrent: () => void },
+          {
+            authProfileId,
+            assertCurrent,
+            assertCurrentAsync,
+            source,
+          }: Parameters<NonNullable<CodexControlRequestOptions["onResponse"]>>[2],
         ) => {
           const response = assertCodexThreadResumeResponse(value);
           const effectiveThreadId = response.thread.id;
@@ -383,7 +399,7 @@ export async function resumeThread(
           if (typeof resumedCwd !== "string") {
             throw new Error(`Codex thread/resume returned no cwd for ${normalizedThreadId}`);
           }
-          const modelProvider = normalizeCodexAppServerBindingModelProvider({
+          const modelProvider = await normalizeCodexAppServerBindingModelProvider({
             authProfileId,
             modelProvider: response.modelProvider ?? undefined,
             agentDir: scope.agentDir,
@@ -410,6 +426,7 @@ export async function resumeThread(
               (!sameThreadBinding?.dynamicToolsFingerprint ||
                 !sameThreadBinding.webSearchThreadConfigFingerprint ||
                 sameThreadBinding.pendingResumeConfiguration === true);
+            await assertCurrentAsync?.();
             assertCurrent();
             assertCodexThreadAcceptsDirectInput(response.thread);
             knownOwnership = sameOwner
@@ -430,6 +447,11 @@ export async function resumeThread(
               // is gone; otherwise another session can claim and lose it.
               await releaseCodexAppServerBindingSubscription(bindingBeforeCommit, {
                 assertCurrent,
+                withCurrent: async (write) => {
+                  await assertCurrentAsync?.();
+                  assertCurrent();
+                  write();
+                },
                 retainedClientId: clientId,
               });
             }
@@ -451,7 +473,7 @@ export async function resumeThread(
                   historyCoveredThrough: new Date().toISOString(),
                 },
               },
-              assertCurrent,
+              composeSessionEntryCommitGuards([assertCurrent, source, ctx.nativePolicySource]),
             );
             if (!committed) {
               throw new Error("Codex thread binding changed while attaching the resumed thread.");
@@ -493,6 +515,7 @@ export async function resumeThread(
             sessionId: ctx.sessionId,
             storePath: ctx.sessionTarget?.storePath,
             assertCurrent: assertHostGeneration,
+            assertCurrentAsync: ctx.assertNativePolicyCurrent,
             assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
             beforeRequest: async (request) => {
               const { thread } = await request<{ thread: CodexThread }>({
@@ -513,18 +536,18 @@ export async function resumeThread(
 
 async function bindCodexCliNodeSession(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  ctx: CodexCommandContext,
   parsed: ParsedResumeArgs,
 ): Promise<string> {
   if (!parsed.threadId || !parsed.host || parsed.bindHere !== true) {
     return "Usage: /codex resume <session-id> --host <node> --bind here";
   }
-  if (isCurrentSessionModelSelectionLocked(ctx)) {
+  if (await isCurrentSessionModelSelectionLocked(ctx)) {
     return MODEL_SELECTION_LOCKED_MESSAGE;
   }
   if (ctx.sessionId) {
     const scope = resolveCodexConversationControlScope(ctx);
-    const binding = deps.bindingStore.read(
+    const binding = await deps.bindingStore.readAsync(
       sessionBindingIdentity({
         sessionId: ctx.sessionId,
         sessionKey: ctx.sessionKey,
@@ -553,6 +576,7 @@ async function bindCodexCliNodeSession(
     cwd: resolved.session?.cwd,
   });
   const summary = `Codex CLI session ${formatCodexDisplayText(parsed.threadId)} on ${formatCodexDisplayText(nodeId)}`;
+  await ctx.assertNativePolicyCurrent?.();
   assertCodexHostOwnerCurrent(ctx);
   const request = await ctx.requestConversationBinding({
     summary,

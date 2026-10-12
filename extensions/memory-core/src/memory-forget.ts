@@ -2,7 +2,6 @@ import path from "node:path";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   resolveAgentWorkspaceDir,
-  resolveStateDir,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -17,9 +16,8 @@ import {
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import {
-  borrowOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
-  withOpenClawAgentDatabaseWrite,
+  captureOpenClawAgentDatabaseExecution,
+  type OpenClawAgentDatabaseExecution,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { readMemoryPreimages } from "./dreaming-consolidation-artifacts.js";
 import { DREAMS_FILENAMES } from "./dreaming-dreams-file.js";
@@ -33,6 +31,7 @@ import {
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
+import { captureMemoryAgentDatabaseOptions } from "./memory-agent-database.js";
 import {
   selectedMemoryLineageIdentity,
   type MemoryForgetLineageResult,
@@ -59,13 +58,6 @@ import { commitMemoryContent, hashMemoryContent } from "./short-term-promotion-m
 import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
 import type { ShortTermRecallEntry } from "./short-term-promotion-types.js";
 
-type MemoryRewrite = {
-  absolutePath: string;
-  relativePath: string;
-  content: string;
-  remove: boolean;
-  expectedContent: string;
-};
 type MemoryForgetParams = {
   cfg: OpenClawConfig;
   agentId: string;
@@ -78,8 +70,8 @@ type MemoryForgetParams = {
 
 type MemoryForgetContext = {
   targets: Awaited<ReturnType<typeof resolveMemorySessionTargetsAsync>>;
-  databaseOptions: Parameters<typeof withOpenClawAgentDatabaseWrite>[0];
-  database?: ReturnType<typeof borrowOpenClawAgentDatabase>;
+  databaseOptions: ReturnType<typeof captureMemoryAgentDatabaseOptions>;
+  database?: OpenClawAgentDatabaseExecution;
   origins?: MemoryEntryOrigin[];
   selectedEntryKeys: Set<string>;
   tombstoned: boolean;
@@ -93,12 +85,7 @@ export async function forgetMemoryEntries(params: MemoryForgetParams): Promise<M
   }
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const run = async (): Promise<MemoryForgetReport> => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir(process.env) };
-    const databaseOptions = {
-      agentId: params.agentId,
-      env,
-      path: resolveOpenClawAgentSqlitePath({ agentId: params.agentId, env }),
-    };
+    const databaseOptions = captureMemoryAgentDatabaseOptions(params.agentId);
     const context: MemoryForgetContext = {
       targets: await resolveMemorySessionTargetsAsync({
         agentId: params.agentId,
@@ -120,7 +107,7 @@ export async function forgetMemoryEntries(params: MemoryForgetParams): Promise<M
         }
       }
     } finally {
-      context.database?.release();
+      await context.database?.release();
     }
   };
   // Replanning retains this workspace owner and, once acquired, its exact database borrow.
@@ -161,6 +148,17 @@ async function forgetWorkspaceMemory(
       throw error;
     },
   );
+  const prepareRewrite = (
+    absolutePath: string,
+    expectedContent: string,
+    content: string | null,
+  ) => ({
+    absolutePath,
+    relativePath: path.relative(workspaceDir, absolutePath).replaceAll("\\", "/"),
+    content,
+    expectedContent,
+  });
+  type MemoryRewrite = ReturnType<typeof prepareRewrite>;
   const corpusRewrites: MemoryRewrite[] = [];
   const corpusSnippets = new Set<string>();
   let removedCorpusLines = 0;
@@ -186,13 +184,9 @@ async function forgetWorkspaceMemory(
     if (retained.length !== lines.length) {
       removedCorpusLines += lines.length - retained.length;
       const rewritten = retained.join("\n");
-      corpusRewrites.push({
-        absolutePath,
-        relativePath: path.relative(workspaceDir, absolutePath).replaceAll("\\", "/"),
-        content: rewritten,
-        remove: rewritten.trim().length === 0,
-        expectedContent: content,
-      });
+      corpusRewrites.push(
+        prepareRewrite(absolutePath, content, rewritten.trim().length === 0 ? null : rewritten),
+      );
     }
   }
 
@@ -224,13 +218,7 @@ async function forgetWorkspaceMemory(
       );
     }
     if (scrubbed.content !== content) {
-      memoryRewrites.push({
-        absolutePath,
-        relativePath: path.relative(workspaceDir, absolutePath).replaceAll("\\", "/"),
-        content: scrubbed.content,
-        remove: false,
-        expectedContent: content,
-      });
+      memoryRewrites.push(prepareRewrite(absolutePath, content, scrubbed.content));
       removedMemoryEntries += scrubbed.removedEntries;
       removedMemoryLines += scrubbed.removedLines;
     }
@@ -356,10 +344,11 @@ async function forgetWorkspaceMemory(
   );
   const indexPlan = await planMemoryIndex(
     {
-      agentId: params.agentId,
       changedPaths,
       removedPaths: new Set(
-        corpusRewrites.filter((rewrite) => rewrite.remove).map((rewrite) => rewrite.relativePath),
+        corpusRewrites
+          .filter((rewrite) => rewrite.content === null)
+          .map((rewrite) => rewrite.relativePath),
       ),
       sessionIds,
       excludedSessionIds,
@@ -408,21 +397,14 @@ async function forgetWorkspaceMemory(
     return { kind: "complete", report };
   }
 
-  context.database ??= await withOpenClawAgentDatabaseWrite(context.databaseOptions, () =>
-    borrowOpenClawAgentDatabase(context.databaseOptions),
-  );
-  const { db } = context.database;
+  context.database ??= captureOpenClawAgentDatabaseExecution(context.databaseOptions);
+  const execution = context.database;
   const acceptLineage = (lineage: MemoryForgetLineageResult): boolean => {
     if (lineage.current) {
       return true;
     }
     // Keep observed selected keys even if another workspace later removes their rows.
     context.origins = lineage.origins;
-    for (const origin of lineage.origins) {
-      if (sessionIds.has(origin.sessionId)) {
-        context.selectedEntryKeys.add(origin.entryKey);
-      }
-    }
     return false;
   };
   const chunkIds = indexPlan.chunks.map((chunk) => chunk.id);
@@ -438,7 +420,7 @@ async function forgetWorkspaceMemory(
   };
   const purged = await withMemoryForgetWorker(
     context.databaseOptions,
-    db,
+    execution,
     { kind: "forget", prepareTombstones: !context.tombstoned, extensionPath },
     async (scope) => {
       if (!context.tombstoned) {
@@ -507,12 +489,12 @@ async function forgetWorkspaceMemory(
       expectedContent: rewrite.expectedContent,
       allowInPlaceFallback: true,
       conflictMessage: `${path.basename(rewrite.absolutePath)} changed before the memory forget rewrite could commit`,
-      content: rewrite.remove ? null : rewrite.content,
+      content: rewrite.content,
     });
   }
   await withMemoryForgetWorker(
     context.databaseOptions,
-    db,
+    execution,
     { kind: "forget", prepareTombstones: false },
     (scope) =>
       scope.execute({

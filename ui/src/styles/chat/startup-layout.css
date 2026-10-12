@@ -15,7 +15,7 @@
     --chat-mobile-pane-header-height: 0px;
   }
 
-  .sidebar-region__header > .chat-pane__header {
+  .sidebar-region__header .chat-pane__header {
     position: relative;
     z-index: 3;
     isolation: isolate;
@@ -59,7 +59,6 @@
   }
 }
 
-/* Chat thread - scrollable middle section, transparent */
 .chat-thread-viewport,
 .chat-thread {
   --chat-thread-padding-top: clamp(20px, 3vh, 28px);
@@ -101,6 +100,15 @@
   /* Allow shrinking for flex scroll behavior */
   border-radius: var(--radius-md);
   background: transparent;
+}
+
+/* Embedded transcripts size against their pane, not the desktop viewport.
+   Avatar-free threads need only a small reading inset at narrow widths. */
+@container chat-conversation (max-width: 560px) {
+  .chat-thread--direct {
+    --chat-thread-gutter: 12px;
+    --chat-thread-side-inset: 0px;
+  }
 }
 
 /* Keep short-pane insets with their defaults: shared CSS chunks can load the
@@ -153,6 +161,19 @@
   min-width: 0;
   min-height: 0;
   max-height: var(--chat-footer-max-height);
+}
+
+.creation-composer {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  max-height: var(--chat-footer-max-height, 60%);
+}
+
+.creation-composer > .callout {
+  margin-inline: var(--chat-composer-side-inset, 16px);
 }
 
 /* The fade stays inside the transcript viewport; footer controls never cover it. */
@@ -229,7 +250,6 @@
   padding-inline-end: var(--chat-avatar-gutter);
 }
 
-/* User messages on right */
 .chat-group.user {
   --chat-user-content-align: end;
   flex-direction: row-reverse;
@@ -272,7 +292,6 @@
   border: 1px solid var(--border);
 }
 
-/* Minimal Bubble Design - dynamic width based on content */
 .chat-bubble {
   position: relative;
   display: block;
@@ -354,26 +373,20 @@
 }
 
 .chat-pane__header-leading,
-.chat-pane__header-center,
 .chat-pane__header-trailing {
   display: flex;
   min-width: 0;
   align-items: center;
-}
-
-.chat-pane__header-leading,
-.chat-pane__header-trailing {
   gap: 8px;
 }
 
-.chat-pane__header-center {
-  position: relative;
-  justify-self: center;
-}
-
 .chat-pane__header-trailing {
+  flex-wrap: wrap;
   flex-shrink: 0;
+  justify-content: flex-end;
+  max-width: 100%;
   margin-left: auto;
+  row-gap: 0;
   justify-self: end;
 }
 
@@ -403,7 +416,7 @@
 }
 
 /* The title hugs its text so the segments after it stay adjacent (the trail's
-   shared 8px gap provides the spacing); it may shrink with ellipsis
+   shared gap provides the spacing); it may shrink with ellipsis
    when space runs out, and the action row pushes itself to the right edge. */
 .chat-pane__session-title {
   display: inline-flex;
@@ -452,7 +465,7 @@
   text-overflow: ellipsis;
 }
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .sidebar-region__header > .chat-pane__header .chat-pane__crumbs {
+  .sidebar-region__header .chat-pane__header .chat-pane__crumbs {
     flex: 1 1 auto;
     flex-direction: column;
     align-self: center;
@@ -462,55 +475,55 @@
     transform: none;
   }
 
-  .sidebar-region__header > .chat-pane__header .chat-pane__project-row,
-  .sidebar-region__header > .chat-pane__header .chat-pane__session-trail {
+  .sidebar-region__header .chat-pane__header .chat-pane__project-row,
+  .sidebar-region__header .chat-pane__header .chat-pane__session-trail {
     display: flex;
     min-width: 0;
     max-width: 100%;
     align-items: center;
   }
 
-  .sidebar-region__header > .chat-pane__header .chat-pane__session-trail {
+  .sidebar-region__header .chat-pane__header .chat-pane__session-trail {
     gap: 6px;
   }
 
-  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip,
-  .sidebar-region__header > .chat-pane__header .chat-pane__session-title,
-  .sidebar-region__header > .chat-pane__header .chat-pane__parent-session {
+  .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip,
+  .sidebar-region__header .chat-pane__header .chat-pane__session-title,
+  .sidebar-region__header .chat-pane__header .chat-pane__parent-session {
     line-height: 18px;
   }
 
-  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip > svg {
+  .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip > svg {
     transform: translateY(1px);
   }
 
-  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip--fallback-icon > svg,
-  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip .workspace-icon-fallback {
+  .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip--fallback-icon > svg,
+  .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip .workspace-icon-fallback {
     display: none;
   }
 
-  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip,
-  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip:hover,
-  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip:focus-visible {
+  .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip,
+  .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip:hover,
+  .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip:focus-visible {
     color: var(--muted);
   }
 
-  .sidebar-region__header > .chat-pane__header .chat-pane__session-title {
+  .sidebar-region__header .chat-pane__header .chat-pane__session-title {
     font-size: 13px;
     font-weight: 500;
   }
 
-  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip,
-  .sidebar-region__header > .chat-pane__header .chat-pane__session-title-button,
-  .sidebar-region__header > .chat-pane__header .chat-pane__parent-session {
+  .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip,
+  .sidebar-region__header .chat-pane__header .chat-pane__session-title-button,
+  .sidebar-region__header .chat-pane__header .chat-pane__parent-session {
     padding-block: 0;
   }
 
-  .sidebar-region__header > .chat-pane__header .chat-pane__crumb-sep {
+  .sidebar-region__header .chat-pane__header .chat-pane__crumb-sep {
     display: none;
   }
 
-  .sidebar-region__header > .chat-pane__header .chat-pane__workspace-chip span {
+  .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip span {
     display: block;
   }
 }
@@ -520,12 +533,9 @@
     max-width: none;
   }
 
-  .chat-pane__workspace-chip span {
-    display: none;
-  }
-
   /* The project name is gone at this width, so the separator would trail an
      icon-only pill and read as punctuation with nothing on its left. */
+  .chat-pane__workspace-chip span,
   .chat-pane__project-row + .chat-pane__session-trail > .chat-pane__crumb-sep:first-child {
     display: none;
   }
@@ -539,22 +549,21 @@ openclaw-chat-pane {
   min-height: 0;
 }
 
-.chat-split-view__drop-container {
-  position: relative;
-  display: flex;
-  flex: 1 1 0;
-  width: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
+.chat-split-view__drop-container,
 .chat-split-view {
   display: flex;
   flex: 1 1 0;
   width: 100%;
   min-width: 0;
   min-height: 0;
+}
+
+.chat-split-view__drop-container {
+  position: relative;
+  overflow: hidden;
+}
+
+.chat-split-view {
   overflow: auto;
 }
 
@@ -617,36 +626,9 @@ openclaw-chat-sidebar-region,
   min-width: 0;
 }
 
-.chat-session-accessories {
-  display: flow-root;
-  /* An inset separator takes no space when plugins render nothing or hide their content. */
-  box-shadow: inset 0 -1px 0 var(--border);
-}
-
-.plugin-session-header-link {
-  display: inline-flex;
-  align-items: center;
-  white-space: nowrap;
-  gap: 0.35rem;
-  margin: 0 12px 8px;
-  padding: 0.3rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 0.45rem;
-  color: var(--text);
-  background: var(--bg);
-  font: 500 12px/1.4 var(--font-body, system-ui);
-  text-decoration: none;
-}
-.plugin-session-header-link:hover {
-  background: var(--bg-hover);
-  border-color: var(--accent);
-}
-.plugin-session-header-link:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.sidebar-region__primary {
+.sidebar-region__primary,
+.chat-pane-primary-column,
+.side-panel__panel {
   display: flex;
   flex: 1 1 0;
   min-width: 0;
@@ -694,14 +676,14 @@ openclaw-chat-sidebar-region,
 
 .sidebar-region__primary[hidden],
 .sidebar-region:not(.sidebar-region--open) [data-region-header="side"],
-.sidebar-region--expanded:not(.sidebar-region--expanded-side) [data-region-header="side"],
-.sidebar-region--expanded-side .sidebar-region__header {
+.sidebar-region--expanded:not(.sidebar-region--expanded-side) [data-region-header="side"] {
   display: none;
 }
 
-/* Focus the side in place; its header (including restore/close) stays reachable. */
+/* Keep the Layout menu and panel tabs reachable while focusing the side in place. */
 .sidebar-region--expanded-side {
-  grid-template-areas: "side-header" "side";
+  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-areas: "main-header" "side-header" "side";
 }
 
 .sidebar-region--bottom .sidebar-column__divider {
@@ -720,12 +702,7 @@ openclaw-chat-sidebar-region,
 }
 
 .chat-pane-primary-column {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 0;
   flex-direction: column;
-  overflow: hidden;
 }
 
 /* Keep live panel roots in one DOM owner. Grid placement changes their role
@@ -736,11 +713,6 @@ openclaw-chat-sidebar-region,
 }
 
 .side-panel__panel {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 0;
-  overflow: hidden;
   background: var(--bg);
 }
 
@@ -751,10 +723,7 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-region:not(.sidebar-region--open) .side-panel__empty-body,
-.sidebar-region--expanded .side-panel__empty-body {
-  display: none;
-}
-
+.sidebar-region--expanded .side-panel__empty-body,
 .side-panel__panel[hidden] {
   display: none;
 }
@@ -796,7 +765,7 @@ html.openclaw-native-web-chrome .shell--nav-collapsed:not(.shell--mobile-nav) {
       )
   )
   > .sidebar-region__header
-  > .chat-pane__header,
+  .chat-pane__header,
 .shell:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
@@ -832,7 +801,7 @@ html.openclaw-native-desktop
         ):not(.sidebar-region--narrow)
     )
     > .sidebar-region__header
-    > .chat-pane__header,
+    .chat-pane__header,
   &:is(
       .sidebar-region--expanded-side,
       .sidebar-region--open:not(.sidebar-region--expanded):not(.sidebar-region--left):not(

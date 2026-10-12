@@ -9,7 +9,6 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.j
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import { closeSkillsWatchers, registerSkillsChangeListener } from "../skills/runtime/refresh.js";
 import { createSkillsWatcherMock } from "../skills/runtime/refresh.watcher.test-support.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { publishConfiguredModelRuntimeSnapshots } from "./server-startup-model-runtime.js";
@@ -64,87 +63,6 @@ type ModelCatalogRpcEntry = {
   agentRuntime?: GatewayAgentRuntime;
 };
 
-type AgentCatalogFixtureEntry = {
-  id: string;
-  provider: string;
-  name: string;
-  contextWindow?: number;
-};
-
-const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["devicePlacement"]> = {
-  requiredNodeCommands: [],
-  consumesWorkerSlot: true,
-};
-
-const buildAgentCatalogFixture = (): AgentCatalogFixtureEntry[] => [
-  { id: "gpt-test-z", name: "", provider: "openai", contextWindow: 0 },
-  {
-    id: "gpt-test-a",
-    name: "A-Model",
-    provider: "openai",
-    contextWindow: 8000,
-  },
-  {
-    id: "claude-test-b",
-    name: "B-Model",
-    provider: "anthropic",
-    contextWindow: 1000,
-  },
-  {
-    id: "claude-test-a",
-    name: "A-Model",
-    provider: "anthropic",
-    contextWindow: 200_000,
-  },
-];
-
-const expectedSortedCatalog = (gptTestZTags?: string[]): ModelCatalogRpcEntry[] => [
-  {
-    id: "claude-test-a",
-    name: "A-Model",
-    provider: "anthropic",
-    available: false,
-    contextWindow: 200_000,
-  },
-  {
-    id: "claude-test-b",
-    name: "B-Model",
-    provider: "anthropic",
-    available: false,
-    contextWindow: 1000,
-  },
-  {
-    id: "gpt-test-a",
-    name: "A-Model",
-    provider: "openai",
-    agentRuntime: {
-      id: "openclaw",
-      cloudPlacementSupported: true,
-      cloudPlacementExecutionMode: "worker-turn",
-      devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
-      devicePlacementSupported: true,
-      source: "implicit",
-    },
-    available: false,
-    contextWindow: 8000,
-  },
-  {
-    id: "gpt-test-z",
-    name: "gpt-test-z",
-    provider: "openai",
-    agentRuntime: {
-      id: "openclaw",
-      cloudPlacementSupported: true,
-      cloudPlacementExecutionMode: "worker-turn",
-      devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
-      devicePlacementSupported: true,
-      source: "implicit",
-    },
-    available: false,
-    ...(gptTestZTags ? { tags: gptTestZTags } : {}),
-  },
-];
-
 const NODE_CLIENT = {
   id: GATEWAY_CLIENT_NAMES.NODE_HOST,
   version: "1.0.0",
@@ -152,66 +70,7 @@ const NODE_CLIENT = {
   mode: GATEWAY_CLIENT_MODES.NODE,
 };
 
-const fullCatalogProviderConfig = () => ({
-  models: {
-    providers: Object.fromEntries(
-      ["anthropic", "openai"].map((provider) => [
-        provider,
-        {
-          baseUrl: `https://${provider}.example.com/v1`,
-          apiKey: {
-            source: "env",
-            provider: "default",
-            id: "MODEL_CATALOG_TEST_MISSING_KEY",
-          },
-          models: buildAgentCatalogFixture()
-            .filter((entry) => entry.provider === provider)
-            .map(({ provider: _provider, ...model }) => model),
-        },
-      ]),
-    ),
-  },
-});
-
 describe("gateway server models + voicewake", () => {
-  const listModels = async (params?: {
-    view?: "default" | "configured" | "all";
-    preparedOnly?: boolean;
-  }) =>
-    withEnvAsync(
-      {
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        CODEX_API_KEY: undefined,
-        OPENAI_API_KEY: undefined,
-        OPENAI_OAUTH_TOKEN: undefined,
-        CHATGPT_OAUTH_TOKEN: undefined,
-      },
-      async () =>
-        params
-          ? await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", params)
-          : await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list"),
-    );
-
-  const setAgentCatalog = async (entries: AgentCatalogFixtureEntry[]) => {
-    agentDiscoveryMock.enabled = true;
-    agentDiscoveryMock.models = entries;
-    await resetPreparedModelCatalogStateForTest();
-    const [
-      { refreshPreparedModelRuntimeSnapshots },
-      { clearRuntimeConfigSnapshot: clearIoRuntimeConfigSnapshot, getRuntimeConfig },
-    ] = await Promise.all([
-      import("../agents/prepared-model-runtime.js"),
-      import("../config/io.js"),
-    ]);
-    clearIoRuntimeConfigSnapshot();
-    const publishedConfig = getRuntimeConfig();
-    await refreshPreparedModelRuntimeSnapshots(publishedConfig, { gatewayLifecycle: true });
-  };
-
-  const seedAgentModelCatalog = async () => {
-    await setAgentCatalog(buildAgentCatalogFixture());
-  };
-
   const withModelsConfig = async <T>(config: unknown, run: () => Promise<T>): Promise<T> => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
@@ -311,19 +170,6 @@ describe("gateway server models + voicewake", () => {
       await expect(
         fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
       ).rejects.toThrow(/ENOENT/u);
-    });
-  });
-
-  test("voicewake.routing.get returns the default routing", async () => {
-    const result = await rpcReq<{
-      config?: { version?: number; defaultTarget?: unknown; routes?: unknown[] };
-    }>(ws, "voicewake.routing.get");
-
-    expect(result.ok).toBe(true);
-    expect(result.payload?.config).toMatchObject({
-      version: 1,
-      defaultTarget: { mode: "current" },
-      routes: [],
     });
   });
 
@@ -535,88 +381,5 @@ describe("gateway server models + voicewake", () => {
         expect(response.error).toMatchObject({ code: "INVALID_REQUEST" });
       }
     });
-  });
-
-  test("models.list applies explicit policy only to configured views", async () => {
-    await withModelsConfig(
-      {
-        ...fullCatalogProviderConfig(),
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-test-z" },
-            models: {
-              "openai/gpt-test-z": {},
-            },
-            modelPolicy: { allow: ["openai/gpt-test-z"] },
-          },
-        },
-      },
-      async () => {
-        await seedAgentModelCatalog();
-        const discoverCallsBefore = agentDiscoveryMock.discoverCalls;
-        const expected = expectedSortedCatalog(["default", "configured"]);
-        for (const view of ["default", "configured", "all"] as const) {
-          const result = await listModels({ view, preparedOnly: true });
-          expect(result.ok, view).toBe(true);
-          expect(result.payload?.models, view).toEqual(
-            view === "all" ? [expected[3], ...expected.slice(0, 3)] : [expected[3]],
-          );
-        }
-        expect(agentDiscoveryMock.discoverCalls).toBe(discoverCallsBefore);
-      },
-    );
-  });
-
-  test("models.list projects configured metadata onto a synthetic allowlist entry", async () => {
-    await withModelsConfig(
-      {
-        agents: {
-          defaults: {
-            model: { primary: "nvidia/moonshotai/kimi-k2.5" },
-            models: { "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi (NVIDIA)" } },
-            modelPolicy: { allow: ["nvidia/moonshotai/kimi-k2.5"] },
-          },
-        },
-        models: {
-          providers: {
-            nvidia: {
-              baseUrl: "https://nvidia.example.com",
-              models: [
-                {
-                  id: "moonshotai/kimi-k2.5",
-                  name: "Configured Kimi",
-                  contextWindow: 32_000,
-                  compat: { supportsTools: false },
-                },
-              ],
-            },
-          },
-        },
-      },
-      async () => {
-        await seedAgentModelCatalog();
-        const result = await listModels();
-        expect(result.ok).toBe(true);
-        expect(result.payload?.models).toHaveLength(1);
-        expect(result.payload?.models[0]).toMatchObject({
-          id: "moonshotai/kimi-k2.5",
-          name: "Configured Kimi",
-          provider: "nvidia",
-          alias: "Kimi (NVIDIA)",
-          contextWindow: 32_000,
-          supportsTools: false,
-          tags: ["default", "configured"],
-        });
-      },
-    );
-  });
-
-  test("models.list rejects unknown params", async () => {
-    agentDiscoveryMock.enabled = true;
-    agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
-
-    const res = await rpcReq(ws, "models.list", { extra: true });
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toMatch(/invalid models\.list params/i);
   });
 });

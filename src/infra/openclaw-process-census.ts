@@ -64,10 +64,22 @@ function classifyProcessArtifactCustody(
     if (identity.kind === "unclassified" && identity.cause !== "runtime-syntax") {
       throw new Error(identity.reason);
     }
+    const { position, operands } = resolveRuntimeScriptPosition(argv);
     if (!cwd || !path.isAbsolute(cwd)) {
+      const inspectorUid = process.getuid?.();
+      if (
+        cwd === undefined &&
+        identity.kind === "other" &&
+        typeof position !== "number" &&
+        position.kind === "not-runtime" &&
+        command.uid !== undefined &&
+        inspectorUid !== undefined &&
+        command.uid !== inspectorUid
+      ) {
+        return { kind: "non-holder" };
+      }
       throw new Error("working directory is unavailable");
     }
-    const { position, operands } = resolveRuntimeScriptPosition(argv);
     if (typeof position !== "number" && position.kind === "not-runtime") {
       return { kind: "non-holder" };
     }

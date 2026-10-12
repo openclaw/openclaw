@@ -104,12 +104,7 @@ async function resolveChannelPluginForMode(
   opts: ChannelAuthOptions,
   mode: ChannelAuthMode,
   runtime: RuntimeEnv,
-): Promise<{
-  cfg: OpenClawConfig;
-  channelInput: string;
-  channelId: string;
-  plugin: ChannelPlugin;
-} | null> {
+) {
   parseAccountSelector(opts.account);
   parseChannelSelector(opts.channel);
   const writeSnapshot = await requireValidConfigForWrite(runtime);

@@ -3,25 +3,51 @@ import {
   asOptionalObjectRecord,
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertValidCronAnnounceDelivery,
   assertValidCronFailureAlert,
 } from "../../cron/delivery-channel-validation.js";
+import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
+import {
+  requiresExternalCronDelivery,
+  resolveDeliveryTarget,
+} from "../../cron/isolated-agent/delivery-target.js";
+import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
-import { resolveCronSessionTargetSessionKey } from "../../cron/session-target.js";
-import type { CronJob, CronJobPatch } from "../../cron/types.js";
+import {
+  resolveCronDeliverySessionKey,
+  resolveCronSessionTargetSessionKey,
+} from "../../cron/session-target.js";
+import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../../cron/types.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { CronCallerScope } from "./cron-caller-scope.js";
+import type { GatewayClient } from "./types.js";
+
+export function requiresExplicitAgentRuntimeToolsAllow(params: {
+  job: Pick<CronJob, "payload" | "trigger">;
+  callerScope: CronCallerScope | undefined;
+}): boolean {
+  return (
+    params.callerScope !== undefined &&
+    !params.callerScope.manageAll &&
+    cronJobUsesToolRuntime(params.job) &&
+    params.job.payload.toolsAllow === undefined
+  );
+}
 
 // Published clients send "deliver"; translate only the already-snapshotted request.
 function normalizeCronRequestDeliveryMode(input: CronJobPatch | null): void {
@@ -191,23 +217,111 @@ export function assertCronDoesNotTargetAgentHarness(input: {
   throw new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
 }
 
-export function createCronCreatorSessionGuard(
+export function captureCronCreatorSession(
+  job: CronJobCreate,
   callerScope: CronCallerScope | undefined,
-  creatorSession: ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"],
-): () => void {
+  client: GatewayClient | null,
+) {
+  const hasConversationResult =
+    job.sessionTarget !== "main" &&
+    (job.payload.kind === "agentTurn" ||
+      job.payload.kind === "script" ||
+      job.payload.kind === "command");
+  const sessionKey =
+    callerScope?.sessionKey ?? (hasConversationResult ? job.sessionKey : undefined);
+  const agentId = callerScope?.agentId ?? job.agentId;
+  const loaded = sessionKey ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId }) : undefined;
+  const creatorSession = loaded?.entry;
+  const sourceConversation =
+    hasConversationResult && loaded && creatorSession?.sessionId
+      ? {
+          sessionKey: loaded.canonicalKey,
+          sessionId: creatorSession.sessionId,
+          lifecycleRevision: creatorSession.lifecycleRevision,
+        }
+      : undefined;
+  // Operator-supplied sessions bind delivery only; agent callers inherit creator facts.
+  const actor = callerScope
+    ? creatorSession?.createdActor
+    : resolveOperatorSessionCreation(client).actor;
+  const actorId = normalizeOptionalString(actor?.id);
+  const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
   const selectionIdentity = JSON.stringify(creatorSession?.skillLibrarySelections);
-  return () => {
-    if (creatorSession && callerScope?.sessionKey) {
-      const latest = loadGatewaySessionEntryReadOnly(callerScope.sessionKey, {
-        agentId: callerScope.agentId,
-      }).entry;
-      if (
-        latest?.sessionId !== creatorSession.sessionId ||
-        latest.lifecycleRevision !== creatorSession.lifecycleRevision ||
-        JSON.stringify(latest.skillLibrarySelections) !== selectionIdentity
-      ) {
-        throw new Error("Creator session changed before scheduling; retry from the current turn.");
+  return {
+    ...(sourceConversation ? { sourceConversation } : {}),
+    ...(createdActor ? { createdActor } : {}),
+    ...(callerScope && creatorSession?.skillLibrarySelections
+      ? { skillLibrarySelections: creatorSession.skillLibrarySelections }
+      : {}),
+    assertCurrent: () => {
+      if (creatorSession && sessionKey) {
+        const latest = loadGatewaySessionEntryReadOnly(sessionKey, { agentId }).entry;
+        if (
+          latest?.sessionId !== creatorSession.sessionId ||
+          latest.lifecycleRevision !== creatorSession.lifecycleRevision ||
+          JSON.stringify(latest.skillLibrarySelections) !== selectionIdentity
+        ) {
+          throw new Error(
+            "Creator session changed before scheduling; retry from the current turn.",
+          );
+        }
       }
-    }
+    },
   };
+}
+
+/** Waiting cannot finish while the caller owns the execution or result conversation lane. */
+export async function cronRunQueuesBehindCaller(params: {
+  job: CronStoredJob;
+  cfg: OpenClawConfig;
+  callerSessionKey?: string;
+  resolveDefaultAgentId: () => string | undefined;
+}): Promise<boolean> {
+  const { job, cfg, callerSessionKey } = params;
+  if (!callerSessionKey) {
+    return false;
+  }
+  if (job.sessionTarget === "main") {
+    return true;
+  }
+  const agentId = normalizeAgentId(job.agentId ?? params.resolveDefaultAgentId());
+  const isCallerSession = (sessionKey: string | undefined) =>
+    sessionKey !== undefined &&
+    resolveCronAgentSessionKey({
+      sessionKey,
+      agentId,
+      mainKey: cfg.session?.mainKey,
+      cfg,
+    }) === callerSessionKey;
+  if (
+    job.payload.kind === "agentTurn" &&
+    isCallerSession(resolveCronSessionTargetSessionKey(job.sessionTarget))
+  ) {
+    return true;
+  }
+  const delivery = resolveCronDeliveryPlan(job);
+  if (!delivery.requested) {
+    return false;
+  }
+  const sourceSessionKey = resolveCronDeliverySessionKey(job);
+  try {
+    const resolved = await resolveDeliveryTarget(
+      cfg,
+      agentId,
+      {
+        ...delivery,
+        sessionTarget: job.sessionTarget,
+        sourceConversation: job.sourceConversation,
+        sessionKey: sourceSessionKey,
+      },
+      { dryRun: true },
+    );
+    if (resolved.ok) {
+      return isCallerSession(resolved.sessionRoute?.sessionKey);
+    }
+    return !requiresExternalCronDelivery(delivery, resolved) && isCallerSession(sourceSessionKey);
+  } catch {
+    // The run is already enqueued; uncertain routing must not hold its caller's lane.
+    return true;
+  }
 }

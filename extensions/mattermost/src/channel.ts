@@ -205,13 +205,7 @@ function extractMattermostToolSend(args: Record<string, unknown>): ChannelToolSe
 function resolveMattermostAutoThreadId(params: {
   to: string;
   replyToId?: string | null;
-  toolContext?: {
-    currentChannelId?: string;
-    currentThreadTs?: string;
-    currentMessageId?: string | number;
-    replyToMode?: "off" | "first" | "all" | "batched";
-    hasRepliedRef?: { value: boolean };
-  };
+  toolContext?: ChannelThreadingToolContext;
 }): string | undefined {
   const replyToId = normalizeOptionalString(params.replyToId);
   const context = params.toolContext;
@@ -447,11 +441,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   },
 };
 
-function parseMattermostReactActionParams(params: Record<string, unknown>): {
-  postId: string;
-  emojiName: string;
-  remove: boolean;
-} {
+function parseMattermostReactActionParams(params: Record<string, unknown>) {
   const postId =
     normalizeOptionalString(params.messageId) ?? normalizeOptionalString(params.postId);
   if (!postId) {

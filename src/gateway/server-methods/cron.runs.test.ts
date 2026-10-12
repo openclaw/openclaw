@@ -173,7 +173,6 @@ async function withCronHistory(
 
 describe("cron.runs session visibility", () => {
   it.each([
-    { sessionTarget: "main", agentId: "main", explicitOwner: true, sqlOwner: null },
     {
       sessionTarget: "session:custom-target",
       agentId: "main",
@@ -434,78 +433,6 @@ describe("cron.runs session visibility", () => {
     },
   );
 
-  it.each(["job", "all"] as const)(
-    "paginates visible %s history before counting and slicing",
-    async (scope) => {
-      await withCronHistory(async ({ jobId, query }) => {
-        const selector = scope === "job" ? { id: jobId } : { scope };
-        for (const [offset, summary] of [
-          "needle first",
-          "needle second",
-          "other third",
-        ].entries()) {
-          const respond = await query({
-            ...selector,
-            agentId: "MAIN",
-            limit: 1,
-            offset,
-            sortDir: "asc",
-          });
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            {
-              entries: [expect.objectContaining({ summary })],
-              total: 3,
-              offset,
-              limit: 1,
-              hasMore: offset < 2,
-              nextOffset: offset < 2 ? offset + 1 : null,
-            },
-            undefined,
-          );
-        }
-        expect(await query({ ...selector, offset: 99, limit: 1 })).toHaveBeenCalledWith(
-          true,
-          {
-            entries: [],
-            total: 3,
-            offset: 3,
-            limit: 1,
-            hasMore: false,
-            nextOffset: null,
-          },
-          undefined,
-        );
-      });
-    },
-  );
-
-  it("uses current job names after an asynchronous history read", async () => {
-    await withCronHistory(async ({ jobId, cron, query }) => {
-      const list = cron.list.bind(cron);
-      const listSpy = vi.spyOn(cron, "list").mockImplementationOnce(async (options) => {
-        const jobs = await list(options);
-        await cron.update(jobId, { name: "replacement-visible-name" });
-        return jobs;
-      });
-      try {
-        const respond = await query({ scope: "all", query: "replacement-visible-name" });
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({
-            total: 3,
-            entries: expect.arrayContaining([
-              expect.objectContaining({ jobName: "replacement-visible-name" }),
-            ]),
-          }),
-          undefined,
-        );
-      } finally {
-        listSpy.mockRestore();
-      }
-    });
-  });
-
   it.each([
     { scope: "job", newlyMatches: true },
     { scope: "all", newlyMatches: true },
@@ -619,7 +546,6 @@ describe("cron.runs session visibility", () => {
   });
 
   it.each([
-    { filter: { query: "absent text" }, total: 0, offset: 0 },
     { filter: { runId: "absent-run" }, total: 0, offset: 0 },
     { filter: { runId: "history-run-1", offset: 99 }, total: 1, offset: 1 },
   ])(

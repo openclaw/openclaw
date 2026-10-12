@@ -284,12 +284,8 @@ suite.define(() => {
         .filter({ hasText: scenario.groupLabel })
         .locator(".agent-tools-group__summary")
         .click();
-      const toggle = page.locator(`#agent-tool-${scenario.toolId} wa-switch`);
-      await expect
-        .poll(() =>
-          toggle.evaluate((element) => (element as HTMLElement & { checked: boolean }).checked),
-        )
-        .toBe(true);
+      const toggle = page.locator(`#agent-tool-${scenario.toolId}`).getByRole("switch");
+      await expect.poll(() => toggle.isChecked()).toBe(true);
       await gateway.deferNext("config.set");
       await toggle.click();
 
@@ -387,7 +383,7 @@ suite.define(() => {
       await gateway.deferNext("config.set");
       await page
         .locator(".agent-skill-row", { hasText: "github skill" })
-        .locator("wa-switch")
+        .getByRole("switch")
         .click();
 
       const request = await gateway.waitForRequest("config.set");

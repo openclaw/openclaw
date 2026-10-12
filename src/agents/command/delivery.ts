@@ -14,12 +14,12 @@ import {
   type NormalizeReplySkipReason,
 } from "../../auto-reply/reply/normalize-reply.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
-import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
+import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.js";
 import {
   filterMessagingToolMediaDuplicates,
   hasEnabledDeliveryOperation,
   resolveMessagingToolPayloadDedupe,
-} from "../../auto-reply/reply/reply-payloads-dedupe.runtime.js";
+} from "../../auto-reply/reply/reply-payloads-dedupe.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
@@ -30,6 +30,7 @@ import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
 import {
@@ -95,7 +96,7 @@ type DeliverAgentCommandResultParams = {
   payloads: ReplyPayload[] | undefined;
   /** Channel plugin already selected and bootstrapped by the caller. */
   preparedPlugin?: ChannelPlugin;
-  assertDeliveryCurrent?: () => void;
+  assertDeliveryCurrent?: SessionSourceAssertion;
   onDeliveryResult?: (result: AgentCommandDeliveryResult) => void;
 } & FreshSessionDeliveryRefreshParams;
 
@@ -109,22 +110,17 @@ function isFreshDeliverySessionMatch(
 
 function formatNestedLogPrefix(opts: AgentCommandOpts, sessionKey?: string): string {
   const parts = [NESTED_LOG_PREFIX];
-  const session = sessionKey ?? opts.sessionKey ?? opts.sessionId;
-  if (session) {
-    parts.push(`session=${session}`);
-  }
-  if (opts.runId) {
-    parts.push(`run=${opts.runId}`);
-  }
-  const channel = opts.messageChannel ?? opts.channel;
-  if (channel) {
-    parts.push(`channel=${channel}`);
-  }
-  if (opts.to) {
-    parts.push(`to=${opts.to}`);
-  }
-  if (opts.accountId) {
-    parts.push(`account=${opts.accountId}`);
+  const fields = {
+    session: sessionKey ?? opts.sessionKey ?? opts.sessionId,
+    run: opts.runId,
+    channel: opts.messageChannel ?? opts.channel,
+    to: opts.to,
+    account: opts.accountId,
+  };
+  for (const [name, value] of Object.entries(fields)) {
+    if (value) {
+      parts.push(`${name}=${value}`);
+    }
   }
   return parts.join(" ");
 }
@@ -238,32 +234,26 @@ async function filterAlreadyDeliveredReplyPayloads(params: {
     sentMediaUrls: normalizedSentMediaUrls,
   });
 
-  const filteredPayloads: ReplyPayload[] = [];
-  for (const candidate of mediaFiltered) {
+  return mediaFiltered.flatMap((candidate) => {
     if (hasEnabledDeliveryOperation(candidate)) {
-      filteredPayloads.push(candidate);
-      continue;
+      return [candidate];
     }
     const effectiveCandidateText =
       formatBtwTextForExternalDelivery(candidate) ?? candidate.text ?? "";
     if (!effectiveCandidateText.trim() || !exactRouteSentTexts.has(effectiveCandidateText)) {
-      filteredPayloads.push(candidate);
-      continue;
+      return [candidate];
     }
     const withoutDuplicateText = copyReplyPayloadMetadata(candidate, {
       ...candidate,
       text: undefined,
     });
-    if (
-      hasReplyPayloadContent(withoutDuplicateText, {
-        trimText: true,
-        extraContent: withoutDuplicateText.location != null,
-      })
-    ) {
-      filteredPayloads.push(withoutDuplicateText);
-    }
-  }
-  return filteredPayloads;
+    return hasReplyPayloadContent(withoutDuplicateText, {
+      trimText: true,
+      extraContent: withoutDuplicateText.location != null,
+    })
+      ? [withoutDuplicateText]
+      : [];
+  });
 }
 
 function normalizeAgentCommandReplyPayloads(params: {
@@ -434,7 +424,7 @@ export async function deliverAgentCommandResult(
     const resolvedAccountId = deliveryPlan.resolvedAccountId ?? defaultAccountId;
     const resolved =
       deliver && isDeliveryChannelKnown && deliveryChannel
-        ? resolveAgentOutboundTarget({
+        ? await resolveAgentOutboundTarget({
             cfg,
             plan: {
               ...deliveryPlan,
@@ -533,10 +523,7 @@ export async function deliverAgentCommandResult(
   const logDeliveryError = (err: unknown) => {
     deliveryLoggedError = true;
     const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
-    runtime.error?.(message);
-    if (!runtime.error) {
-      runtime.log(message);
-    }
+    runtime.error(message);
   };
   let strictPreDeliveryError: unknown;
   let deliveryStatus: AgentCommandDeliveryStatus | undefined;
@@ -655,6 +642,9 @@ export async function deliverAgentCommandResult(
     status?: AgentCommandDeliveryStatus,
     deliverySucceeded?: boolean,
   ): AgentCommandDeliveryResult => {
+    if (!opts.json && result.meta.requestShaping?.thinkingClamp) {
+      runtime.log(result.meta.requestShaping.thinkingClamp);
+    }
     if (opts.json) {
       const meta = result.meta;
       writeRuntimeJson(runtime, {
@@ -714,12 +704,8 @@ export async function deliverAgentCommandResult(
     return deliveryRequested && suppressAutomaticDelivery
       ? completeDelivery(
           {
-            requested: true,
-            attempted: false,
-            status: "suppressed",
-            succeeded: true,
+            ...noVisiblePayloadStatus(),
             reason: "message_tool_only",
-            resultCount: 0,
           },
           true,
         )
@@ -767,7 +753,7 @@ export async function deliverAgentCommandResult(
           durability: bestEffortDeliver ? "best_effort" : "required",
           signal: restartAbort.signal,
           onDeliveryIntent: restartAbort.dispose,
-          onPlatformSendDispatch: async () => assertPlatformSendCurrent(),
+          onPlatformSendDispatch: assertPlatformSendCurrent.prepare,
           assertDirectAdapterHandoff: assertPlatformSendCurrent,
           onError: logDeliveryError,
           onPayload: logPayload,
@@ -775,6 +761,7 @@ export async function deliverAgentCommandResult(
         });
       } finally {
         restartAbort.dispose();
+        await assertPlatformSendCurrent.release();
       }
       if (restartAbort.signal?.aborted && send.status === "failed") {
         throw restartAbort.signal.reason;
@@ -796,10 +783,7 @@ export async function deliverAgentCommandResult(
       `(reason=${deliveryStatus?.reason ?? "none"} session=${effectiveSessionKey ?? "unknown"} ` +
       `channel=${deliveryChannel ?? "none"} target=${deliveryTarget ?? "none"} ` +
       `payloads=${deliveryPayloads.length})`;
-    runtime.error?.(message);
-    if (!runtime.error) {
-      runtime.log(message);
-    }
+    runtime.error(message);
   }
 
   return completeDelivery(deliveryStatus, deliverySucceeded);

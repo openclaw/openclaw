@@ -8,7 +8,6 @@ import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
-import { redactSensitiveText } from "../logging/redact.js";
 import * as mediaStore from "../media/store.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
@@ -183,19 +182,6 @@ describe("gateway server agent", () => {
     testState.allowFrom = undefined;
   });
 
-  test("agent forwards sourceReplyDeliveryMode to agentCommand", async () => {
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      sourceReplyDeliveryMode: "message_tool_only",
-      idempotencyKey: "idem-agent-source-reply-mode",
-    });
-    expect(res.ok).toBe(true);
-
-    const call = await waitForAgentCommandCall("idem-agent-source-reply-mode");
-    expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
-  });
-
   test("agent resolves a bare key through configured fixed-store ownership", async () => {
     testState.agentsConfig = {
       ownership: "explicit",
@@ -224,6 +210,7 @@ describe("gateway server agent", () => {
     const res = await rpcReq(gatewaySuite.ws, "agent", {
       message: "hi",
       sessionKey: "global",
+      sourceReplyDeliveryMode: "message_tool_only",
       idempotencyKey: "idem-agent-owned-global",
     });
     expect(res.ok, JSON.stringify(res)).toBe(true);
@@ -233,6 +220,7 @@ describe("gateway server agent", () => {
     expect(call.agentId).toBe("ops");
     expect(call.sessionKey).toBe("global");
     expect(call.sessionId).toBe("sess-ops-global");
+    expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
   test("agent rejects an ownerless bare key before session preparation", async () => {
@@ -283,86 +271,73 @@ describe("gateway server agent", () => {
     await expectNoNewInboundMedia(inboundBefore);
   });
 
-  test("prompt-persistence suppression discards offloaded media without a transcript row", async () => {
-    vi.mocked(agentCommandMock).mockImplementationOnce(async () => {});
-    testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
-    await setGatewayModelCatalogForTest([VISION_AGENT_MODEL]);
-    await setTestSessionStore({
-      entries: { main: { sessionId: "suppressed-media-session", updatedAt: Date.now() } },
-    });
-    const inboundBefore = await listInboundMedia();
-    const runId = "suppressed-media";
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "inspect media privately",
-      sessionKey: "main",
-      suppressPromptPersistence: true,
-      attachments: [offloadedImageAttachment()],
-      idempotencyKey: runId,
-    });
-    expect(res.ok, JSON.stringify(res)).toBe(true);
-    const call = await waitForAgentCommandCall(runId);
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    await expect(
-      readSessionMessagesAsync(
-        {
-          agentId: "main",
-          sessionId: "suppressed-media-session",
-          sessionKey: String(call.sessionKey),
-          storePath: gatewaySuite.sessionStorePath,
-        },
-        { mode: "full", reason: "prompt-suppressed media leak reproduction" },
-      ),
-    ).resolves.toEqual([]);
-    await expectNoNewInboundMedia(inboundBefore);
-  });
-
-  test("prompt-suppressed abort discards each managed offload once after early run cleanup", async () => {
-    testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
-    await setGatewayModelCatalogForTest([VISION_AGENT_MODEL]);
-    await setTestSessionStore({
-      entries: { main: { sessionId: "aborted-media-session", updatedAt: Date.now() } },
-    });
-    vi.mocked(agentCommandMock).mockImplementationOnce(
-      async (rawOpts) =>
-        await new Promise<void>((_resolve, reject) => {
-          (rawOpts as { abortSignal?: AbortSignal }).abortSignal?.addEventListener(
-            "abort",
-            () => reject(createAbortError("forced provider abort")),
-            { once: true },
-          );
-        }),
-    );
-    const deleteSpy = vi.spyOn(mediaStore, "deleteMediaBuffer");
-    const inboundBefore = await listInboundMedia();
-    const runId = "prompt-suppressed-media-abort";
-    try {
-      const res = await rpcReq(gatewaySuite.ws, "agent", {
-        message: "abort after admission",
-        sessionKey: "main",
-        suppressPromptPersistence: true,
-        attachments: [offloadedImageAttachment()],
-        idempotencyKey: runId,
+  test.each(["completion", "abort"] as const)(
+    "prompt-suppressed %s discards each managed offload once without a transcript row",
+    async (outcome) => {
+      testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
+      await setGatewayModelCatalogForTest([VISION_AGENT_MODEL]);
+      await setTestSessionStore({
+        entries: { main: { sessionId: "aborted-media-session", updatedAt: Date.now() } },
       });
-      expect(res.ok, JSON.stringify(res)).toBe(true);
-      const call = await waitForAgentCommandCall(runId);
-      const abortRes = await rpcReq(gatewaySuite.ws, "chat.abort", {
-        sessionKey: call.sessionKey,
-        runId,
-      });
-      expect(abortRes.ok, JSON.stringify(abortRes)).toBe(true);
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      await expectNoNewInboundMedia(inboundBefore);
+      if (outcome === "abort") {
+        vi.mocked(agentCommandMock).mockImplementationOnce(
+          async (rawOpts) =>
+            await new Promise<void>((_resolve, reject) => {
+              (rawOpts as { abortSignal?: AbortSignal }).abortSignal?.addEventListener(
+                "abort",
+                () => reject(createAbortError("forced provider abort")),
+                { once: true },
+              );
+            }),
+        );
+      } else {
+        vi.mocked(agentCommandMock).mockImplementationOnce(async () => {});
+      }
+      const deleteSpy = vi.spyOn(mediaStore, "deleteMediaBuffer");
+      const inboundBefore = await listInboundMedia();
+      const runId = `prompt-suppressed-media-${outcome}`;
+      try {
+        const res = await rpcReq(gatewaySuite.ws, "agent", {
+          message: `${outcome} after admission`,
+          sessionKey: "main",
+          suppressPromptPersistence: true,
+          attachments: [offloadedImageAttachment()],
+          idempotencyKey: runId,
+        });
+        expect(res.ok, JSON.stringify(res)).toBe(true);
+        const call = await waitForAgentCommandCall(runId);
+        if (outcome === "abort") {
+          const abortRes = await rpcReq(gatewaySuite.ws, "chat.abort", {
+            sessionKey: call.sessionKey,
+            runId,
+          });
+          expect(abortRes.ok, JSON.stringify(abortRes)).toBe(true);
+        }
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        await expectNoNewInboundMedia(inboundBefore);
+        await expect(
+          readSessionMessagesAsync(
+            {
+              agentId: "main",
+              sessionId: "aborted-media-session",
+              sessionKey: String(call.sessionKey),
+              storePath: gatewaySuite.sessionStorePath,
+            },
+            { mode: "full", reason: "prompt-suppressed media leak reproduction" },
+          ),
+        ).resolves.toEqual([]);
 
-      const mediaRef = (call.media as Array<{ url: string }>)[0]?.url;
-      const mediaId = mediaRef?.split("/").at(-1);
-      expect(mediaId).toBeTruthy();
-      expect(
-        deleteSpy.mock.calls.filter(([id, subdir]) => id === mediaId && subdir === "inbound"),
-      ).toHaveLength(1);
-    } finally {
-      deleteSpy.mockRestore();
-    }
-  });
+        const mediaRef = (call.media as Array<{ url: string }>)[0]?.url;
+        const mediaId = mediaRef?.split("/").at(-1);
+        expect(mediaId).toBeTruthy();
+        expect(
+          deleteSpy.mock.calls.filter(([id, subdir]) => id === mediaId && subdir === "inbound"),
+        ).toHaveLength(1);
+      } finally {
+        deleteSpy.mockRestore();
+      }
+    },
+  );
 
   test("agent rejects unknown reply channel", async () => {
     const inboundBefore = await listInboundMedia();
@@ -410,11 +385,8 @@ describe("gateway server agent", () => {
       storePath: gatewaySuite.sessionStorePath,
     });
     expect(pending.items).toHaveLength(1);
-    // Inbound ids are random; compare the durable fact against its public
-    // redaction contract because an id can resemble sensitive text.
-    const transcriptMediaUrl = media?.[0]?.url ? redactSensitiveText(media[0].url) : undefined;
     expect(pending.items[0]?.message["__openclaw"]?.media).toEqual(
-      expect.arrayContaining([expect.objectContaining({ url: transcriptMediaUrl })]),
+      expect.arrayContaining([expect.objectContaining({ url: media?.[0]?.url })]),
     );
     const inboundAfter = await listInboundMedia();
     expect([...inboundAfter].filter((entry) => !inboundBefore.has(entry))).toHaveLength(1);

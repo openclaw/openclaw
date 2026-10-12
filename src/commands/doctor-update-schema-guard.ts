@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstatSync, realpathSync, statSync, type Stats } from "node:fs";
+import { lstatSync, realpathSync, statSync, type BigIntStats } from "node:fs";
 import path from "node:path";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { formatCliJsonFailure } from "../cli/failure-output.js";
@@ -44,23 +44,17 @@ import {
 } from "./doctor-update-refusal.js";
 import { isUpdatePackageSwapInProgress } from "./doctor/shared/update-phase.js";
 
-type DrivingUpdater = {
-  runId: string;
-  version: string;
-  canDeferStateSchema: boolean;
-  earlyDoctorRunning: boolean;
-  postCoreStarted: boolean;
-  requiresReadableSharedContent?: true;
-};
+type DrivingUpdater = NonNullable<Awaited<ReturnType<typeof readDrivingUpdater>>>;
 
 // Unknown file IDs cannot prove that a recovery image covers the pending live mutation.
-function sameSnapshotFile(left: Pick<Stats, "dev" | "ino">, right: Pick<Stats, "dev" | "ino">) {
-  return left.dev !== 0 && left.ino !== 0 && left.dev === right.dev && left.ino === right.ino;
+function sameSnapshotFile(
+  left: Pick<BigIntStats, "dev" | "ino">,
+  right: Pick<BigIntStats, "dev" | "ino">,
+) {
+  return left.dev !== 0n && left.ino !== 0n && left.dev === right.dev && left.ino === right.ino;
 }
 
-async function readDrivingUpdater(
-  sharedContentUpgrade = false,
-): Promise<DrivingUpdater | undefined> {
+async function readDrivingUpdater(sharedContentUpgrade = false) {
   // The runtime ledger reader consults quarantine state. This diagnostic must
   // not open any live database, including a quarantine store needing recovery.
   const snapshot = await prepareSqliteReadOnlyLocation(resolveOpenClawStateSqlitePath(), {
@@ -117,7 +111,7 @@ async function readDrivingUpdater(
             canDeferStateSchema: false,
             earlyDoctorRunning: false,
             postCoreStarted: false,
-            requiresReadableSharedContent: true,
+            requiresReadableSharedContent: true as const,
           };
         }
       }
@@ -194,7 +188,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     ...schemas.pendingMigrations
       .filter((database) => database.kind === "agent")
       .map((database) => database.path),
-    ...(schemas.agentDatabaseMigrationDiscovery?.discovery.targets.map(
+    ...(schemas.agentDatabaseMigrationDiscovery?.discovery.schemaTargets.map(
       (database) => database.path,
     ) ?? []),
   ]);
@@ -240,12 +234,12 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     const capturePending = () =>
       blockedMigrations.map((database) => ({
         database,
-        identity: statSync(database.path),
+        identity: statSync(database.path, { bigint: true }),
       }));
     const coverageRefusal = (uncovered: typeof blockedMigrations, detail: string) =>
       new UpdateSchemaRefusalError(uncovered, updater.version, {
         targetVersion: VERSION,
-        cause: new Error(`Missing recoverable canonical backup coverage: ${detail}`),
+        cause: new Error(`Missing recoverable database backup coverage: ${detail}`),
         recovery,
       });
     const authority = options.postCoreSchemaRepair;
@@ -262,7 +256,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
         authority.assertCurrent();
         maintenance.assertAdmission();
         const changed = pending.filter(({ database, identity }) => {
-          const current = statSync(database.path, { throwIfNoEntry: false });
+          const current = statSync(database.path, { bigint: true, throwIfNoEntry: false });
           return !current?.isFile() || !sameSnapshotFile(identity, current);
         });
         if (changed.length) {
@@ -310,7 +304,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
       if (uncovered.length) {
         throw coverageRefusal(
           uncovered.map(({ database }) => database),
-          `the retained archive at ${backup.archivePath} has no captured canonical image for these agent databases.`,
+          `the retained archive at ${backup.archivePath} has no captured database image for these agent databases.`,
         );
       }
       // A mixed fleet's archive also captures disposable agents. Bind every
@@ -333,7 +327,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
       // versioned-write/commit owner, without fencing ordinary cleanup or rebuilds.
       maintenance.addAgentSchemaMigrationCheck((migration) => {
         authority.assertCurrent();
-        const identity = statSync(migration.path, { throwIfNoEntry: false });
+        const identity = statSync(migration.path, { bigint: true, throwIfNoEntry: false });
         if (
           !identity?.isFile() ||
           !migrationSnapshots.some(
@@ -379,14 +373,14 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
             if (entry.agentId !== database.agentId) {
               return false;
             }
-            const current = statSync(entry.path, { throwIfNoEntry: false });
+            const current = statSync(entry.path, { bigint: true, throwIfNoEntry: false });
             return current?.isFile() && sameSnapshotFile(identity, current);
           }),
       );
       if (uncovered.length) {
         throw coverageRefusal(
           uncovered.map(({ database }) => database),
-          "these pending agent databases have no registered canonical snapshot owner.",
+          "these pending agent databases have no registered snapshot owner.",
         );
       }
       return {
@@ -537,7 +531,7 @@ async function rehearseDeferredUpdateDoctorSchemaForParent(
   // Capture all producer-owned roots before an awaited inventory can retarget them.
   const cleanupRoots = new Map(
     rehearsal.cleanupDirectories.map((directory) => {
-      const identity = lstatSync(directory);
+      const identity = lstatSync(directory, { bigint: true });
       if (
         !identity.isDirectory() ||
         identity.isSymbolicLink() ||
@@ -550,7 +544,7 @@ async function rehearseDeferredUpdateDoctorSchemaForParent(
   );
   const assertCleanupDirectory = (directory: string) => {
     const original = cleanupRoots.get(directory);
-    const current = lstatSync(directory);
+    const current = lstatSync(directory, { bigint: true });
     if (
       !original ||
       !sameSnapshotFile(original, current) ||

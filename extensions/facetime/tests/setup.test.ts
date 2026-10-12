@@ -1,8 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { readFile } from "node:fs/promises";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFaceTimeConfig } from "../src/config.js";
 import type { FaceTimePreflightResult } from "../src/preflight.js";
 import type { FaceTimeRuntimeStatus } from "../src/runtime.js";
 import { runFaceTimeSetup } from "../src/setup.js";
+
+vi.mock("node:fs/promises", () => ({ readFile: vi.fn() }));
 
 const readyPreflight: FaceTimePreflightResult = {
   ok: true,
@@ -90,12 +93,16 @@ function runSetup(overrides: Partial<Parameters<typeof runFaceTimeSetup>[0]> = {
     runCommandWithTimeout: readyCommandRunner() as never,
     runtimeStatus: readyRuntime,
     preflight: readyPreflight,
-    readAssertionsFile: async () => JSON.stringify({ data: [{ storeInvalidationRecords: [{}] }] }),
     ...overrides,
   });
 }
 
 describe("FaceTime guided setup", () => {
+  beforeEach(() => {
+    vi.mocked(readFile)
+      .mockReset()
+      .mockResolvedValue(JSON.stringify({ data: [{ storeInvalidationRecords: [{}] }] }));
+  });
   it.each([
     ["failed", "System Integrity Protection status: disabled.\n", 1, "verify-sip-status"],
     [
@@ -154,13 +161,14 @@ describe("FaceTime guided setup", () => {
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     });
 
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ data: [{ storeAssertionRecords: [{ assertionUUID: "active" }] }] }),
+    );
     const report = await runSetup({
       runCommandWithTimeout: runCommandWithTimeout as never,
       runtimeStatus: undefined,
       preflight: undefined,
       runtimeError: "listen EADDRINUSE: address already in use 127.0.0.1:45670",
-      readAssertionsFile: async () =>
-        JSON.stringify({ data: [{ storeAssertionRecords: [{ assertionUUID: "active" }] }] }),
     });
 
     expect(report.ok).toBe(false);
@@ -229,11 +237,8 @@ describe("FaceTime guided setup", () => {
   });
 
   it("allows manual Focus verification when macOS state cannot be read", async () => {
-    const report = await runSetup({
-      readAssertionsFile: async () => {
-        throw new Error("operation not permitted");
-      },
-    });
+    vi.mocked(readFile).mockRejectedValue(new Error("operation not permitted"));
+    const report = await runSetup();
 
     expect(report.ok).toBe(true);
     expect(report.readyForTest).toBe(true);

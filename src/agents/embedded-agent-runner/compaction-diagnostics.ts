@@ -33,8 +33,7 @@ export function summarizeCompactionMessages(messages: AgentMessage[]) {
   let historyTextChars = 0;
   let toolResultChars = 0;
   const contributors: Array<{ role: string; chars: number; tool?: string }> = [];
-  let estTokens = 0;
-  let tokenEstimationFailed = false;
+  let estTokens: number | undefined = 0;
 
   for (const msg of messages) {
     const role = typeof msg.role === "string" ? msg.role : "unknown";
@@ -44,11 +43,11 @@ export function summarizeCompactionMessages(messages: AgentMessage[]) {
       toolResultChars += chars;
     }
     contributors.push({ role, chars, tool: resolveMessageToolLabel(msg) });
-    if (!tokenEstimationFailed) {
+    if (estTokens !== undefined) {
       try {
         estTokens += estimateTokens(msg);
       } catch {
-        tokenEstimationFailed = true;
+        estTokens = undefined;
       }
     }
   }
@@ -57,7 +56,7 @@ export function summarizeCompactionMessages(messages: AgentMessage[]) {
     messages: messages.length,
     historyTextChars,
     toolResultChars,
-    estTokens: tokenEstimationFailed ? undefined : estTokens,
+    estTokens,
     contributors: contributors.toSorted((left, right) => right.chars - left.chars).slice(0, 3),
   };
 }

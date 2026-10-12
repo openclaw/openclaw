@@ -141,7 +141,7 @@ describe("security CLI", () => {
         {
           checkId: "gateway.probe_failed",
           severity: "warn",
-          title: "Gateway probe failed (deep)",
+          title: "Gateway check failed (deep)",
           detail: "connect failed: connect ECONNREFUSED 127.0.0.1:18789",
         },
       ],

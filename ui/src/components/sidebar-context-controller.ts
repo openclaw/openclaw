@@ -57,7 +57,9 @@ export class SidebarContextController implements ReactiveController {
   }
 
   private get key(): string {
-    return this.host.contextualSidebar?.key ?? "sessions";
+    return this.host.navigationView === "sessions"
+      ? (this.host.contextualSidebar?.key ?? "sessions")
+      : this.host.navigationView;
   }
   private get scroller(): HTMLElement | null {
     return this.host.querySelector<HTMLElement>(".sidebar-shell__body");

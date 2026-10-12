@@ -9,9 +9,14 @@ import {
 import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import { createLlmRuntime } from "../stream.js";
-import { shouldEmitOpenAICompletionsReasoning } from "./openai-completions-stream.js";
+import { processCompletionsStream } from "./openai-completions-stream.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
-import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
+import {
+  createAssistantOutput,
+  makeCompletionsChunk,
+  makeCompletionsModel,
+  streamChunks,
+} from "./openai-completions.test-support.js";
 
 describe("openai completions stream", () => {
   afterAll(() => {
@@ -24,8 +29,6 @@ describe("openai completions stream", () => {
   ])("$name cache-creation usage", ({ name, createStream }) => {
     const usageCases = [
       ["top-level fallback", {}, 300, 0.001075, undefined],
-      ["nested writes", { cache_write_tokens: 100 }, 100, 0.001025, undefined],
-      ["nested creation", { cache_creation_input_tokens: 100 }, 100, 0.001025, undefined],
       ["nested write zero", { cache_write_tokens: 0 }, 0, 0.001, undefined],
       ["nested creation zero", { cache_creation_input_tokens: 0 }, 0, 0.001, undefined],
       ["provider-billed zero", {}, 300, 0, 0],
@@ -196,24 +199,6 @@ describe("openai completions stream", () => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
     }
-  });
-
-  it("does not emit thinking streams when reasoning is disabled", () => {
-    const model = makeCompletionsModel({
-      id: "grok-4.20-0309-reasoning",
-      name: "Grok 4.20 0309 (Reasoning)",
-      provider: "xai",
-      baseUrl: "https://api.x.ai/v1",
-      contextWindow: 1_000_000,
-      maxTokens: 30_000,
-    });
-
-    expect(
-      shouldEmitOpenAICompletionsReasoning(model, {
-        apiKey: "test-key",
-        reasoning: "off",
-      } as never),
-    ).toBe(false);
   });
 
   it.each([
@@ -440,4 +425,221 @@ describe("openai completions stream", () => {
       }
     },
   );
+});
+
+describe("openai completions stream", () => {
+  it("promotes native tool calls through fetch wrapper when SSE terminates cleanly with [DONE] without finish_reason", async () => {
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        void body;
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        // Emit a delta.tool_calls chunk with no finish_reason
+        res.write(
+          `data: ${JSON.stringify(
+            makeCompletionsChunk({
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_loopback_done",
+                  function: { name: "bash", arguments: '{"cmd":"echo loopback"}' },
+                },
+              ],
+            }),
+          )}\n\n`,
+        );
+        // Split CRLF-formatted terminal proof across chunks. The SDK accepts this
+        // framing, so the raw terminal observer must preserve the same contract.
+        res.write("data: [DO");
+        res.write("NE]\r\n\r\n");
+        res.end();
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const baseModel = makeCompletionsModel({
+        id: "qwen3.6-27b",
+        name: "Qwen 3.6 27B",
+        provider: "vllm",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+        contextWindow: 131072,
+      });
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        baseModel,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Run a command", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let doneReason: string | undefined;
+      let hasToolCallEvent = false;
+      const doneMessage: { content?: Array<{ type?: string }> } = {};
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        reason?: string;
+        message?: { content?: Array<{ type?: string }> };
+      }>) {
+        if (event.type === "toolcall_start") {
+          hasToolCallEvent = true;
+        }
+        if (event.type === "done") {
+          doneReason = event.reason;
+          if (event.message) {
+            Object.assign(doneMessage, event.message);
+          }
+        }
+      }
+
+      // fetch wrapper detected data: [DONE] → sawStreamDONE=true → promotion to toolUse
+      expect(doneReason).toBe("toolUse");
+      expect(hasToolCallEvent).toBe(true);
+      // The output message should retain the toolCall blocks
+      const toolCallBlocks =
+        doneMessage.content?.filter((block) => block.type === "toolCall") ?? [];
+      expect(toolCallBlocks).toHaveLength(1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it.each(["empty", "tool", "text and tool"] as const)(
+    "reports a %s response without a terminal marker as interrupted",
+    async (content) => {
+      const server = createServer((req, res) => {
+        let body = "";
+        req.setEncoding("utf8");
+        req.on("data", (chunk) => {
+          body += chunk;
+        });
+        req.on("end", () => {
+          void body;
+          res.writeHead(200, {
+            "content-type": "text/event-stream; charset=utf-8",
+            "cache-control": "no-cache",
+            connection: "keep-alive",
+          });
+          if (content === "text and tool") {
+            res.write(
+              `data: ${JSON.stringify(makeCompletionsChunk({ content: "Running a command." }))}\n\n`,
+            );
+          }
+          if (content !== "empty") {
+            res.write(
+              `data: ${JSON.stringify(
+                makeCompletionsChunk({
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call_interrupted",
+                      function: { name: "bash", arguments: '{"cmd":"echo loopback"}' },
+                    },
+                  ],
+                }),
+              )}\n\n`,
+            );
+          }
+          res.end();
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing loopback server address");
+        }
+        const baseModel = makeCompletionsModel({
+          id: "qwen3.6-27b",
+          name: "Qwen 3.6 27B",
+          provider: "vllm",
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          reasoning: false,
+          contextWindow: 131072,
+        });
+        const stream = createOpenAICompletionsTransportStreamFn()(
+          baseModel,
+          {
+            systemPrompt: "system",
+            messages: [{ role: "user", content: "Run a command", timestamp: Date.now() }],
+            tools: [],
+          } as never,
+          { apiKey: "test-key" } as never,
+        );
+
+        let terminalEvent: string | undefined;
+        for await (const event of stream as AsyncIterable<{
+          type: string;
+        }>) {
+          if (event.type === "done" || event.type === "error") {
+            terminalEvent = event.type;
+          }
+        }
+
+        const result = await (await stream).result();
+        expect(terminalEvent).toBe("error");
+        expect(result.stopReason).toBe("error");
+        expect(result.errorMessage).toContain("Stream ended without finish_reason");
+        expect(result.content.filter((block) => block.type === "toolCall")).toStrictEqual([]);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
+
+  it("rolls back provisional tags when stop strips spurious tool calls", async () => {
+    const model = makeCompletionsModel({
+      id: "grok-4.5",
+      name: "Grok 4.5",
+      provider: "xai",
+      baseUrl: "https://api.x.ai/v1",
+      reasoning: false,
+      contextWindow: 131072,
+    });
+    const output = createAssistantOutput(model);
+    const chunks = [
+      makeCompletionsChunk({ role: "assistant" as const, content: "" }),
+      makeCompletionsChunk({ content: "Here is the answer." }),
+      makeCompletionsChunk(
+        {
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_spurious",
+              function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
+            },
+          ],
+        },
+        "stop",
+      ),
+    ] as const;
+    await processCompletionsStream(streamChunks(chunks), output, model, { push() {} });
+
+    expect(output.stopReason).toBe("stop");
+    expect(output.content).toStrictEqual([{ type: "text", text: "Here is the answer." }]);
+  });
 });

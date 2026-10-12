@@ -1,5 +1,4 @@
-// sessions.create parent-disposition coverage. Kept separate because the main
-// reset-hook suite is already at its max-lines budget.
+// Session creation disposition and deferred runtime cleanup.
 import { expect, test, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
@@ -91,25 +90,6 @@ test("sessions.create keeps the parent active for an explicit parallel child", a
   expect(result.payload?.key).toMatch(/^agent:main:dashboard:/);
   expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
   expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
-  expect(firstHookEvent(sessionLifecycleHookMocks.runSessionStart).sessionKey).toBe(
-    result.payload?.key,
-  );
-});
-
-test("sessions.create accepts an explicit successor with a minted dashboard key", async () => {
-  await seedParent("sess-successor");
-
-  const result = await directSessionReq<{ key: string }>("sessions.create", {
-    parentSessionKey: "main",
-    emitCommandHooks: true,
-    succeedsParent: true,
-  });
-
-  expect(result.ok).toBe(true);
-  expect(result.payload?.key).toMatch(/^agent:main:dashboard:/);
-  const endEvent = firstHookEvent(sessionLifecycleHookMocks.runSessionEnd);
-  expect(endEvent.sessionKey).toBe("agent:main:main");
-  expect(endEvent.nextSessionKey).toBe(result.payload?.key);
   expect(firstHookEvent(sessionLifecycleHookMocks.runSessionStart).sessionKey).toBe(
     result.payload?.key,
   );

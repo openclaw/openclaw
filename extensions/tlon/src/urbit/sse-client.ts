@@ -12,6 +12,7 @@ import {
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
 import { UrbitHttpError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
+import { redactUrbitErrorText } from "./redact.js";
 
 type UrbitSseLogger = {
   log?: (message: string) => void;
@@ -64,11 +65,7 @@ export class UrbitSSEClient {
   }> = [];
   eventHandlers = new Map<
     number,
-    {
-      event?: (data: unknown) => Promise<void> | void;
-      err?: (error: unknown) => void;
-      quit?: () => void;
-    }
+    Omit<Parameters<UrbitSSEClient["subscribe"]>[0], "app" | "path">
   >();
   aborted = false;
   streamController: AbortController | null = null;
@@ -167,9 +164,9 @@ export class UrbitSSEClient {
     try {
       if (!response.ok && response.status !== 204) {
         const errorText = await readResponseTextLimited(response, 16 * 1024).catch(() => "");
-        throw new Error(
-          `Subscribe failed: ${response.status}${errorText ? ` - ${errorText}` : ""}`,
-        );
+        // Ship/proxy error bodies can reflect the session cookie; mask before throwing.
+        const detail = errorText ? redactUrbitErrorText(errorText) : "";
+        throw new Error(`Subscribe failed: ${response.status}${detail ? ` - ${detail}` : ""}`);
       }
     } finally {
       await release();

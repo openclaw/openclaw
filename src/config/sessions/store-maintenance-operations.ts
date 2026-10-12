@@ -99,7 +99,7 @@ export async function applyFileBackedSessionStoreMaintenance(
   const maintenance = params.maintenanceConfig
     ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
     : resolveMaintenanceConfig();
-  const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
+  const preserveSessionKeys = await collectSessionMaintenancePreserveKeysForStore({
     storePath: params.storePath,
     store: params.store,
   });

@@ -28,6 +28,7 @@ import {
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { startWorktreeMaintenance } from "../worktree-maintenance.js";
+import * as localStateOwner from "./local-state-owner.js";
 import { createWorktreesHandlers } from "./worktrees.js";
 
 const execFileAsync = promisify(execFile);
@@ -80,7 +81,11 @@ const emptyConfigContext = { getRuntimeConfig: () => ({}) };
 
 describe("worktrees gateway methods", () => {
   it("routes checkout operations through the managed worktree service", async () => {
-    const deferred = { ...record, gcProtection: "branch-moved" };
+    const deferred: ManagedWorktreeRecord = {
+      ...record,
+      gcProtection: "branch-moved",
+      gcRetry: { stage: "snapshot", elapsedMs: 120_000, attempts: 1, retryAt: 7_200_000 },
+    };
     const service = {
       list: vi.fn(async () => [deferred]),
       create: vi.fn(async () => deferred),
@@ -114,7 +119,34 @@ describe("worktrees gateway methods", () => {
     );
     expect(expectDefined(restoreResult[0], "worktree restore success flag")).toBe(true);
     expect(Value.Check(WorktreeRecordSchema, restoreResult[1])).toBe(true);
+    expect(restoreResult[1]).toEqual({ ...record, snapshotRef: "refs/snapshot" });
     expect(Value.Check(WorktreesListResultSchema, listed?.[1])).toBe(true);
+    // mock-isolation: Response projection consumes an already accepted local owner.
+    const ownerGuard = vi
+      .spyOn(localStateOwner, "captureLocalStateMutationGuard")
+      .mockReturnValue(() => {});
+    try {
+      for (const [method, params] of [
+        ["worktrees.create", { repoRoot: "/repo" }],
+        ["worktrees.restore", { id: record.id }],
+      ] as const) {
+        const qualified = expectDefined(
+          await call(
+            handlers,
+            method,
+            { ...params, expectedOwnerId: "gateway-owner" },
+            { client: adminClient, context: emptyConfigContext },
+          ),
+          "qualified worktree response",
+        );
+        expect(qualified[0]).toBe(true);
+        expect(Value.Check(WorktreeRecordSchema, qualified[1])).toBe(true);
+        expect(qualified[1]).toMatchObject({ gcProtection: "branch-moved" });
+        expect(qualified[1]).not.toHaveProperty("gcRetry");
+      }
+    } finally {
+      ownerGuard.mockRestore();
+    }
     expect(service.create).toHaveBeenCalledWith({
       repoRoot: "/repo",
       name: "task-one",
@@ -177,38 +209,6 @@ describe("worktrees gateway methods", () => {
         requiredScopes: ["operator.admin"],
       },
     });
-  });
-
-  it("allows write-scoped branch listing for a subdirectory inside an agent workspace", async () => {
-    const os = await import("node:os");
-    const workspace = await fs.mkdtemp(
-      path.join(await fs.realpath(os.tmpdir()), "openclaw-branches-scope-"),
-    );
-    const repoRoot = path.join(workspace, "packages", "app");
-    await fs.mkdir(repoRoot, { recursive: true });
-    try {
-      const service = {
-        listRepositoryBranches: vi.fn(async () => ({ branches: [] })),
-      };
-      const handlers = createWorktreesHandlers(service as never);
-      const response = await call(
-        handlers,
-        "worktrees.branches",
-        { repoRoot },
-        {
-          client: writeClient,
-          context: {
-            getRuntimeConfig: () => ({
-              agents: { entries: { main: { workspace } } },
-            }),
-          },
-        },
-      );
-      expect(response?.[0]).toBe(true);
-      expect(service.listRepositoryBranches).toHaveBeenCalledWith(repoRoot);
-    } finally {
-      await fs.rm(workspace, { recursive: true, force: true });
-    }
   });
 
   it("allows a write-scoped registered project root but still rejects other outside paths", async () => {
@@ -292,6 +292,8 @@ describe("worktrees gateway methods", () => {
       outcome: "partial",
       limitsSatisfied: false,
       issueCount: 1,
+      eligibleCount: 2,
+      failedCount: 1,
       issues: [
         { id: "retained", stage: "idle", outcome: "failed", reason: "repository unavailable" },
       ],
@@ -303,7 +305,13 @@ describe("worktrees gateway methods", () => {
       expect(runGc).not.toHaveBeenCalled();
       await request;
       const receipt = respond.mock.calls[0]![1];
-      expect(receipt).toMatchObject({ state: "queued", jobId: expect.any(String) });
+      expect(receipt).toMatchObject({
+        state: "queued",
+        jobId: expect.any(String),
+        eligibleCount: 0,
+        deferredCount: 0,
+        failedCount: 0,
+      });
       expect(Value.Check(WorktreesGcResultSchema, receipt)).toBe(true);
 
       running = clock.advanceBy(0);
@@ -342,12 +350,7 @@ describe("worktrees gateway methods", () => {
 
   it.each([
     ["worktrees.create", { repoRoot: "" }],
-    ["worktrees.gc", { retryDeferred: "yes" }],
     ["worktrees.remove", { id: record.id, force: true, ifLossless: true }],
-    ["worktrees.remove", { id: record.id, exactState: { head: "incomplete" } }],
-    ["worktrees.restore", { id: record.id, recoverExactState: { head: "incomplete" } }],
-    ["worktrees.recoverRemoval", { id: record.id, snapshot: "a".repeat(40) }],
-    ["worktrees.retireSnapshot", { id: record.id }],
   ])("refuses invalid %s parameters before admitting a mutation", async (method, params) => {
     const handlers = createWorktreesHandlers({} as never);
     const response = await call(handlers, method, params);

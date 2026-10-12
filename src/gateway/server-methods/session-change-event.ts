@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -17,7 +18,6 @@ import {
 } from "../session-request-agent.js";
 import type { SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import type { SessionRowProjection } from "../session-row-projection.js";
 import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
@@ -44,11 +44,8 @@ type SessionChangeContext = Pick<
 >;
 
 type SessionChange = {
-  key: string;
   payload: SessionChangedPayload;
   scope: SessionEventAgentScope | null;
-  captured?: ReturnType<SessionRowProjection["capture"]>;
-  captureFailed?: true;
 };
 
 type SessionChangeOwner = {
@@ -61,10 +58,7 @@ type PendingSessionChange = {
   context: SessionChangeContext;
   owner: SessionChangeOwner;
   key: string;
-  scope: SessionEventAgentScope | null;
-  oldestTombstone?: SessionChange;
   latest?: SessionChange;
-  refresh: boolean;
   catalogChanged: boolean;
   due: boolean;
   firstDeferredAt?: number;
@@ -97,9 +91,6 @@ export function attachSessionChangeEventLifetime(
   registerStop: () => () => void,
 ): void {
   const owner = ownerFor(context);
-  if (owner.registerStop && owner.registerStop !== registerStop) {
-    throw new Error("Session changes already belong to a Gateway lifetime");
-  }
   owner.registerStop = registerStop;
   if (owner.pending.size > 0) {
     registerPendingLifetime(owner);
@@ -262,25 +253,8 @@ function releasePendingSessionChange(pending: PendingSessionChange): void {
   }
 }
 
-function captureSessionChange(
-  context: SessionChangeContext,
-  payload: SessionChangedPayload,
-  scope: SessionEventAgentScope | null,
-  key: string,
-): SessionChange {
-  const change: SessionChange = { key, payload, scope };
-  const query = snapshotTarget(payload, scope);
-  try {
-    change.captured = query ? getSessionRowProjection(context)?.capture(query) : undefined;
-  } catch (error) {
-    change.captureFailed = true;
-    log.warn("Session change capture failed", { error });
-  }
-  return change;
-}
-
 async function publishSessionChange(context: SessionChangeContext, change: SessionChange) {
-  const { payload, scope, captured } = change;
+  const { payload, scope } = change;
   const projection = getSessionRowProjection(context);
   const query = snapshotTarget(payload, scope);
   let publicationStarted = false;
@@ -289,13 +263,11 @@ async function publishSessionChange(context: SessionChangeContext, change: Sessi
     broadcastSessionsChanged(context, payload, scope, includeSnapshot, read);
   };
   try {
-    if (change.captureFailed) {
-      broadcast(false);
-    } else if (query && projection) {
+    if (query && projection) {
       const prepared = await sessionEventPublicationRows(projection).withPreparedExactRows(
         () => [query],
         (read) => {
-          broadcast(!captured || projection.isCurrent(captured), read);
+          broadcast(true, read);
         },
         { includeAncestors: true },
       );
@@ -309,7 +281,7 @@ async function publishSessionChange(context: SessionChangeContext, change: Sessi
     if (publicationStarted) {
       throw error;
     }
-    log.warn("Session change preparation failed", { error });
+    log.warn("Session change preparation failed", { error: formatErrorMessageWithCode(error) });
     broadcast(false);
   }
 }
@@ -324,39 +296,21 @@ function startPendingSessionChange(pending: PendingSessionChange, leading?: Sess
         await publishSessionChange(pending.context, leading);
       }
       while (pending.due) {
-        const next = pending.oldestTombstone ?? pending.latest;
+        const next = pending.latest;
         if (next) {
-          if (pending.oldestTombstone === next) {
-            pending.oldestTombstone = undefined;
-          }
-          if (pending.latest === next) {
-            pending.latest = undefined;
-          }
+          pending.latest = undefined;
           await publishSessionChange(pending.context, next);
-        } else if (pending.refresh) {
-          pending.refresh = false;
-          // Condensed generations need an authoritative roster read; the latest keyed
-          // notice above also reaches plugin subscribers that ignore broad invalidations.
-          broadcastSessionsChanged(
-            pending.context,
-            {
-              reason: "update",
-              ...(pending.catalogChanged ? { catalogChanged: true } : {}),
-            },
-            pending.scope,
-            false,
-          );
         } else {
           break;
         }
       }
     })
     .catch((error: unknown) => {
-      log.warn("Session change publication failed", { error });
+      log.warn("Session change publication failed", { error: formatErrorMessageWithCode(error) });
     })
     .then(() => {
       pending.work = undefined;
-      if (pending.due && (pending.oldestTombstone || pending.latest || pending.refresh)) {
+      if (pending.due && pending.latest) {
         startPendingSessionChange(pending);
       } else if (!pending.timer) {
         releasePendingSessionChange(pending);
@@ -370,7 +324,7 @@ function finishPendingSessionChange(pending: PendingSessionChange): void {
     pending.timer = null;
   }
   pending.due = true;
-  if (pending.oldestTombstone || pending.latest || pending.refresh) {
+  if (pending.latest) {
     startPendingSessionChange(pending);
   } else if (!pending.work) {
     releasePendingSessionChange(pending);
@@ -400,6 +354,8 @@ export function emitSessionsChanged(
   payload: SessionChangedPayload,
   options: {
     accessChanged?: boolean;
+    /** The producer changed liveness only; durable owners publish their own row facts. */
+    rowScope?: "runtime";
     preparedPublication?: boolean;
     sessionRows?: SessionRowReadView;
     catalogOnly?: boolean;
@@ -414,6 +370,9 @@ export function emitSessionsChanged(
         ? {
             sessionKey: payload.sessionKey,
             ...(payload.agentId ? { agentId: payload.agentId } : {}),
+            ...(options.rowScope
+              ? { scope: options.rowScope, facts: { kind: "unchanged" as const } }
+              : {}),
           }
         : { all: true, scope: "sessions" },
     );
@@ -439,39 +398,16 @@ export function emitSessionsChanged(
     return broadcastSessionsChanged(context, payload, scope, true, options.sessionRows);
   }
   const publicationKey = sessionChangeKey(cfg, payload, scope);
-  const key = JSON.stringify([
-    scope,
-    payload.reason === "delete",
-    payload.sessionId,
-    payload.compacted,
-  ]);
   const owner = ownerFor(context);
   const pending = owner.pending.get(publicationKey);
   if (pending) {
-    pending.scope = scope;
     pending.catalogChanged ||= payload.catalogChanged === true;
     const latestPayload = {
       ...payload,
       ...(pending.catalogChanged ? { catalogChanged: true as const } : {}),
     };
-    if (pending.latest?.key === key) {
-      const next = captureSessionChange(context, latestPayload, scope, key);
-      pending.latest.payload = latestPayload;
-      pending.latest.scope = scope;
-      pending.latest.captured = next.captured;
-      pending.latest.captureFailed = next.captureFailed;
-    } else {
-      const next = captureSessionChange(context, latestPayload, scope, key);
-      // Retain the first deletion and newest notice. Intermediate unpublished
-      // generations collapse to a broad refresh instead of an unbounded FIFO.
-      if (pending.latest && pending.latest !== pending.oldestTombstone) {
-        pending.refresh = true;
-      }
-      if (payload.reason === "delete") {
-        pending.oldestTombstone ??= next;
-      }
-      pending.latest = next;
-    }
+    // Notifications are best effort: rapid delete/recreate cycles coalesce to the latest row.
+    pending.latest = { payload: latestPayload, scope };
     if (pending.due) {
       startPendingSessionChange(pending);
       return;
@@ -491,15 +427,13 @@ export function emitSessionsChanged(
   try {
     registerPendingLifetime(owner);
   } catch (error) {
-    log.warn("Session change was not admitted", { error });
+    log.warn("Session change was not admitted", { error: formatErrorMessageWithCode(error) });
     return;
   }
   const next: PendingSessionChange = {
     context,
     owner,
     key: publicationKey,
-    scope,
-    refresh: false,
     catalogChanged: payload.catalogChanged === true,
     due: false,
     timer: null,
@@ -508,20 +442,5 @@ export function emitSessionsChanged(
   pendingSessionChanges.add(next);
   next.timer = setTimeout(() => finishPendingSessionChange(next), SESSIONS_CHANGED_DEBOUNCE_MS);
   next.timer.unref?.();
-  startPendingSessionChange(next, captureSessionChange(context, payload, scope, key));
-}
-
-export function emitSessionArchived(
-  context: SessionChangeContext,
-  sessionKey: string | undefined,
-  agentId?: string,
-): void {
-  if (!sessionKey) {
-    return;
-  }
-  emitSessionsChanged(context, {
-    sessionKey,
-    ...(agentId ? { agentId } : {}),
-    reason: "archive",
-  });
+  startPendingSessionChange(next, { payload, scope });
 }

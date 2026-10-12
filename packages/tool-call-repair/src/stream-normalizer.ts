@@ -33,7 +33,6 @@ export type PlainTextToolCallMessageNormalization =
   | (PlainTextToolCallMessageProjection & { kind: "promoted" | "scrubbed" })
   | undefined;
 
-/** Stream-level hooks used to promote leaked text tool calls into provider events. */
 export type PlainTextToolCallStreamNormalizerOptions = {
   /** Expands a promoted final message into provider-native tool-call stream events. */
   createPromotedToolCallEvents(message: Record<string, unknown>): Iterable<unknown>;

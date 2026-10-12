@@ -6,10 +6,23 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { prepareSessionEntryMutationDatabases } from "../config/sessions/session-accessor.entry-mutation.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  composeSessionSourceAssertion,
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
+import {
+  loadWorkerPlacementSessionRuntimeModule,
+  resolveWorkerPlacementSessionTarget,
+} from "./server-worker-placement-session-target.js";
 import type {
   CreateGatewaySessionParams,
   PreparedGatewaySessionLifecycle,
@@ -19,6 +32,7 @@ import {
   prepareSessionMutationFacts,
 } from "./session-sharing-preparation.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
+import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 
 /** Retain the canonical targets across asynchronous authority preparation and mutation. */
 export function prepareGatewaySessionLifecycleTargets(params: {
@@ -39,13 +53,13 @@ export function prepareGatewaySessionLifecycleTargets(params: {
   const creationSelection = params.creation?.selectTargetInLifecycle
     ? createDeferredCore()
     : undefined;
-  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
   let preparedDatabase: { assertCurrent(): void } | undefined;
   const scopes = params.targets.map(({ target }) => ({
     agentId: target.agentId,
     sessionKey: target.canonicalKey,
     storePath: target.storePath,
   }));
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, scopes);
   const creationScope = scopes[0];
   if (params.creation && !creationScope) {
     throw new Error("Session creation preparation requires its original target");
@@ -67,6 +81,20 @@ export function prepareGatewaySessionLifecycleTargets(params: {
     preparedDatabase = prepared;
   });
   const preparations = params.targets.map(async ({ target, entry, storageReady }, index) => {
+    const memory = isIncognitoSessionKey(target.canonicalKey)
+      ? getSessionActorStorageBinding({})
+      : undefined;
+    if (memory) {
+      return {
+        matchesCurrent() {
+          memory.actor.assertCurrent();
+          memory.authority.assertCurrent();
+          return true;
+        },
+        bindCreation() {},
+        release() {},
+      };
+    }
     let preparedStorage: { assertCurrent(): void } | undefined;
     const targetStorageReady = storageReady?.then((prepared) => {
       preparedStorage = prepared;
@@ -344,4 +372,136 @@ export async function rollbackGatewaySessionPreparation(params: {
   } catch (error) {
     params.onError?.(error);
   }
+}
+
+/** Publish accepted workspace ownership before releasing preparation; roll back only unbound work. */
+export async function commitPreparedSessionWorkspace(params: {
+  prepared: PreparedGatewaySessionLifecycle;
+  target: { agentId: string; sessionKey: string; storePath: string };
+  assertCurrent: SessionSourceAssertion;
+  assertEntry: (entry: SessionEntry) => void;
+  projectId?: string;
+  clearPendingIntent?: boolean;
+  onCommitted?: () => void;
+  missingSessionMessage: string;
+}): Promise<SessionEntry> {
+  const { prepared } = params;
+  const bind = async (assertSourceCurrent: SessionSourceAssertion) => {
+    const assertCurrent = composeSessionSourceAssertion([
+      params.assertCurrent,
+      assertSourceCurrent,
+    ]);
+    return await patchSessionEntryCore(
+      params.target,
+      (entry) => {
+        assertCurrent();
+        params.assertEntry(entry);
+        return {
+          ...(params.projectId ? { projectId: params.projectId } : {}),
+          sessionRoot: prepared.sessionRoot,
+          spawnedCwd: prepared.spawnedCwd,
+          ...(prepared.worktree ? { worktree: prepared.worktree } : {}),
+          ...(params.clearPendingIntent
+            ? { pendingProjectGitUrl: undefined, pendingWorktree: undefined }
+            : {}),
+        };
+      },
+      {
+        ...sessionEntryCommitGuardOptions(assertCurrent),
+        requireWriteSuccess: true,
+        skipMaintenance: true,
+        onCommitted: params.onCommitted,
+      },
+    );
+  };
+  try {
+    const entry = prepared.withCommit ? await prepared.withCommit(bind) : await bind(() => {});
+    if (!entry) {
+      throw new Error(params.missingSessionMessage);
+    }
+    return entry;
+  } catch (error) {
+    await prepared.rollback?.();
+    throw error;
+  }
+}
+
+/** Adopt only a session-owned workspace; never replace an accepted external source. */
+export async function ensureSessionWorkspaceForPlacement(params: {
+  cfg: OpenClawConfig;
+  target: { agentId: string; canonicalKey: string; storePath: string; storeKeys: string[] };
+  entry: SessionEntry;
+  assertCurrent: SessionSourceAssertion;
+  signal?: AbortSignal;
+  onCommitted?: () => void;
+  canPrepare: () => boolean;
+}): Promise<void> {
+  const { target, entry } = params;
+  await runExclusiveSessionLifecycleMutation("placement-dispatch", {
+    scope: target.storePath,
+    identities: [target.canonicalKey, entry.sessionId, ...target.storeKeys],
+    signal: params.signal,
+    run: async () => {
+      params.assertCurrent();
+      if (!params.canPrepare()) {
+        return;
+      }
+      if (entry.worktree || entry.repositoryWorkspaceId) {
+        await resolveWorkerPlacementSessionTarget({
+          sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
+          config: params.cfg,
+          sessionId: entry.sessionId,
+          sessionKey: target.canonicalKey,
+          agentId: target.agentId,
+          readTarget: () => {
+            params.assertCurrent();
+            return { ...target, store: { [target.canonicalKey]: entry } };
+          },
+          errorMessage: "The session workspace owner is unavailable; repair it before retrying.",
+        });
+        params.assertCurrent();
+        return;
+      }
+      if (entry.pendingWorktree || entry.pendingProjectGitUrl) {
+        throw new Error("The session workspace must finish preparation before worker setup.");
+      }
+      if (entry.spawnedCwd || entry.projectId || entry.sessionRoot) {
+        throw new Error(
+          "Worker execution needs a session-owned workspace; create a managed-workspace session rather than dropping the current workspace.",
+        );
+      }
+      const prepared = await prepareSessionWorktree({
+        cfg: params.cfg,
+        target: { ...target, key: target.canonicalKey, entry },
+        workspace: { kind: "empty" },
+        runSetupScript: false,
+        signal: params.signal,
+        commitGuard: params.assertCurrent,
+      });
+      if (!prepared.ok) {
+        throw new Error(prepared.error.message);
+      }
+      const bound = await commitPreparedSessionWorkspace({
+        prepared: prepared.value,
+        onCommitted: params.onCommitted,
+        target: { ...target, sessionKey: target.canonicalKey },
+        assertCurrent: params.assertCurrent,
+        assertEntry: (saved) => {
+          if (
+            saved.sessionId !== entry.sessionId ||
+            saved.worktree ||
+            saved.repositoryWorkspaceId ||
+            saved.sessionRoot ||
+            saved.spawnedCwd ||
+            saved.pendingWorktree ||
+            saved.pendingProjectGitUrl
+          ) {
+            throw new Error("Session workspace changed during worker setup.");
+          }
+        },
+        missingSessionMessage: "Session disappeared during worker setup.",
+      });
+      Object.assign(entry, bound);
+    },
+  });
 }

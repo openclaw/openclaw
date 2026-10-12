@@ -1,7 +1,6 @@
 import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import { redactToolPayloadText } from "../../logging/redact.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -31,6 +30,7 @@ import {
 import {
   createSessionVisibilityRowChecker,
   formatSessionToolAccessDenial,
+  isSessionToolMainAlias,
   resolveDisplaySessionKey,
   resolveSessionReference,
   resolveSessionToolAccess,
@@ -120,11 +120,10 @@ function sanitizeHit(params: {
   ) {
     return undefined;
   }
-  const sanitized = redactToolPayloadText(hit.snippet);
   const snippet =
-    sanitized.length > SESSIONS_SEARCH_SNIPPET_MAX_CHARS
-      ? `${truncateUtf16Safe(sanitized, SESSIONS_SEARCH_SNIPPET_MAX_CHARS)}…`
-      : sanitized;
+    hit.snippet.length > SESSIONS_SEARCH_SNIPPET_MAX_CHARS
+      ? `${truncateUtf16Safe(hit.snippet, SESSIONS_SEARCH_SNIPPET_MAX_CHARS)}…`
+      : hit.snippet;
   return {
     sessionKey: resolveDisplaySessionKey({
       key: hit.sessionKey,
@@ -360,10 +359,7 @@ export function createSessionsSearchTool(opts?: {
         const semanticTargetAgentId =
           normalizedRequestedKey === "current"
             ? requesterAgentId
-            : normalizedRequestedKey === "main" ||
-                normalizedRequestedKey === "global" ||
-                normalizedRequestedKey === mainKey ||
-                normalizedRequestedKey === alias ||
+            : isSessionToolMainAlias(normalizedRequestedKey, { mainKey, alias }) ||
                 Boolean(parseAgentSessionKey(normalizedRequestedKey))
               ? resolveSessionToolTargetAgentId({
                   cfg,
@@ -556,6 +552,12 @@ export function createSessionsSearchTool(opts?: {
       visibleHits.sort(compareSearchHits);
       const limited = visibleHits.slice(0, limit);
       const capped = capSearchHits(limited);
+      const warnings = [
+        indexing ? SESSIONS_SEARCH_INDEXING_WARNING : undefined,
+        archivedTranscriptsExcluded > 0
+          ? `Search excludes ${archivedTranscriptsExcluded} archived transcripts. Restore a transcript to include it in search.`
+          : undefined,
+      ].filter(Boolean);
       return jsonResult({
         results: capped.items,
         ...(opts?.sessionLinkBase
@@ -563,18 +565,7 @@ export function createSessionsSearchTool(opts?: {
           : {}),
         ...(indexing ? { indexing: true } : {}),
         ...(archivedTranscriptsExcluded > 0 ? { archivedTranscriptsExcluded } : {}),
-        ...(indexing || archivedTranscriptsExcluded > 0
-          ? {
-              warning: [
-                ...(indexing ? [SESSIONS_SEARCH_INDEXING_WARNING] : []),
-                ...(archivedTranscriptsExcluded > 0
-                  ? [
-                      `Search excludes ${archivedTranscriptsExcluded} archived transcripts. Restore a transcript to include it in search.`,
-                    ]
-                  : []),
-              ].join(" "),
-            }
-          : {}),
+        ...(warnings.length ? { warning: warnings.join(" ") } : {}),
         ...(backendTruncated || visibleHits.length > limit || capped.truncated
           ? { truncated: true }
           : {}),

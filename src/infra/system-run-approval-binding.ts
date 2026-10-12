@@ -119,39 +119,6 @@ function requestMismatch(details?: Record<string, unknown>): SystemRunApprovalMa
   };
 }
 
-function matchSystemRunApprovalEnvHash(params: {
-  expectedEnvHash: string | null;
-  actualEnvHash: string | null;
-  actualEnvKeys: string[];
-}): SystemRunApprovalMatchResult {
-  // Fail closed if callers provide inconsistent hash/key state. This guards against
-  // normalization drift between approval and execution paths.
-  if (!params.expectedEnvHash) {
-    if (params.actualEnvHash || params.actualEnvKeys.length > 0) {
-      return {
-        ok: false,
-        code: "APPROVAL_ENV_BINDING_MISSING",
-        message: "approval id missing env binding for requested env overrides",
-        details: { envKeys: params.actualEnvKeys },
-      };
-    }
-    return { ok: true };
-  }
-  if (params.expectedEnvHash !== params.actualEnvHash) {
-    return {
-      ok: false,
-      code: "APPROVAL_ENV_MISMATCH",
-      message: "approval id env binding mismatch",
-      details: {
-        envKeys: params.actualEnvKeys,
-        expectedEnvHash: params.expectedEnvHash,
-        actualEnvHash: params.actualEnvHash,
-      },
-    };
-  }
-  return { ok: true };
-}
-
 export function matchSystemRunApprovalBinding(params: {
   expected: SystemRunApprovalBinding;
   actual: SystemRunApprovalBinding;
@@ -165,11 +132,32 @@ export function matchSystemRunApprovalBinding(params: {
   ) {
     return requestMismatch();
   }
-  return matchSystemRunApprovalEnvHash({
-    expectedEnvHash: params.expected.envHash,
-    actualEnvHash: params.actual.envHash,
-    actualEnvKeys: params.actualEnvKeys,
-  });
+  // Fail closed if callers provide inconsistent hash/key state. This guards against
+  // normalization drift between approval and execution paths.
+  if (!params.expected.envHash) {
+    if (params.actual.envHash || params.actualEnvKeys.length > 0) {
+      return {
+        ok: false,
+        code: "APPROVAL_ENV_BINDING_MISSING",
+        message: "approval id missing env binding for requested env overrides",
+        details: { envKeys: params.actualEnvKeys },
+      };
+    }
+    return { ok: true };
+  }
+  if (params.expected.envHash !== params.actual.envHash) {
+    return {
+      ok: false,
+      code: "APPROVAL_ENV_MISMATCH",
+      message: "approval id env binding mismatch",
+      details: {
+        envKeys: params.actualEnvKeys,
+        expectedEnvHash: params.expected.envHash,
+        actualEnvHash: params.actual.envHash,
+      },
+    };
+  }
+  return { ok: true };
 }
 
 export function missingSystemRunApprovalBinding(params: {
@@ -253,6 +241,8 @@ const SHELL_BUILTIN_DISPATCHERS = new Set(["builtin", "command"]);
 function prepareMutableFileBindingsForArgv(params: {
   commands: readonly string[][];
   cwd?: string;
+  shellCommand?: string | null;
+  allowCommandTextBinding?: boolean;
 }): SystemRunMutableFileBindingResult {
   const operands: SystemRunMutableFileBinding["operands"] = [];
   const commands: string[][] = [];
@@ -267,10 +257,11 @@ function prepareMutableFileBindingsForArgv(params: {
     const prepared = resolveMutableFileOperandSnapshotSync({
       argv,
       cwd: params.cwd,
-      shellCommand: extractShellCommandFromArgv(argv),
+      shellCommand: params.shellCommand ?? extractShellCommandFromArgv(argv),
     });
     if (!prepared.ok) {
       if (
+        params.allowCommandTextBinding !== false &&
         prepared.reason === "unsupported-command-shape" &&
         isSystemRunCommandTextBoundInterpreterInvocation(argv)
       ) {
@@ -466,23 +457,12 @@ export async function prepareSystemRunMutableFileBinding(params: {
   platform?: NodeJS.Platform;
 }): Promise<SystemRunMutableFileBindingResult> {
   if (params.command.kind === "argv") {
-    const prepared = resolveMutableFileOperandSnapshotSync({
-      argv: params.command.argv,
+    return prepareMutableFileBindingsForArgv({
+      commands: [params.command.argv],
       cwd: params.cwd,
-      shellCommand: params.command.shellCommand ?? extractShellCommandFromArgv(params.command.argv),
+      shellCommand: params.command.shellCommand,
+      allowCommandTextBinding: false,
     });
-    if (!prepared.ok) {
-      return prepared;
-    }
-    return {
-      ok: true,
-      binding: {
-        commands: [[...params.command.argv]],
-        operands: prepared.snapshot
-          ? [{ kind: "mutable", argv: [...params.command.argv], snapshot: prepared.snapshot }]
-          : [],
-      },
-    };
   }
   if (params.command.kind === "segments") {
     return prepareMutableFileBindingsForSegments({

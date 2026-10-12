@@ -22,14 +22,7 @@ public enum GatewayDeviceIdentityProfile: String, Sendable {
     }
 
     var authFileName: String {
-        switch self {
-        case .primary:
-            "device-auth.json"
-        case .node:
-            "node-device-auth.json"
-        case .shareExtension:
-            "share-device-auth.json"
-        }
+        self.identityFileName.replacingOccurrences(of: ".json", with: "-auth.json")
     }
 }
 

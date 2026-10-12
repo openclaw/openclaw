@@ -167,40 +167,6 @@ describe("exec approval followup", () => {
     },
   );
 
-  it("resumes deliverable followups in the originating session", async () => {
-    await send({ ...route, turnSourceAccountId: "default", turnSourceThreadId: "thread-1" });
-    const params = agentArgs({
-      sessionKey,
-      deliver: true,
-      bestEffortDeliver: true,
-      channel: "telegram",
-      to: "123",
-      accountId: "default",
-      threadId: "thread-1",
-    });
-    expectHandoff(params);
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
-
-  it("preserves the originating routing target for plugin channels", async () => {
-    await send({
-      turnSourceChannel: "lansenger",
-      turnSourceTo: "dm:U1",
-      turnSourceAccountId: "acct-1",
-      turnSourceThreadId: 42,
-    });
-    const params = agentArgs({
-      sessionKey,
-      deliver: false,
-      channel: "lansenger",
-      to: "dm:U1",
-      accountId: "acct-1",
-      threadId: "42",
-    });
-    expectHandoff(params);
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
-
   it("keeps observing past the old ambiguity cap until terminal fallback", async () => {
     const gateway = acceptRun();
     for (let i = 0; i < 4; i++) {
@@ -303,7 +269,7 @@ describe("exec approval followup", () => {
     },
   );
 
-  it("redacts credentials before direct delivery", async () => {
+  it("preserves command output during direct delivery", async () => {
     const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
     await direct({
       turnSourceAccountId: "default",
@@ -317,26 +283,8 @@ describe("exec approval followup", () => {
       threadId: "456",
     }).content;
     expect(content).toContain("Authorization: Bearer ");
-    expect(content).toContain("API_KEY=***");
-    expect(content).not.toContain(secret);
-  });
-
-  it("can force direct delivery even when a session exists", async () => {
-    await send({
-      ...route,
-      direct: true,
-      agentId: "research",
-      sessionKey: "global",
-      resultText: "Exec finished (gateway id=req-1, code 0)\npasteable diagnostics report",
-    });
-    directArgs({ agentId: "research", content: "pasteable diagnostics report" });
-    expect(callGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("omits the alarming fallback prefix after successful execution", async () => {
-    vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
-    await send(route);
-    directArgs({ content: "ok" });
+    expect(content).toContain(`API_KEY=${secret}`);
+    expect(content).toContain(`Authorization: Bearer ${secret}`);
   });
 
   it("provides a summary when a no-session completion has no output", async () => {
@@ -344,14 +292,7 @@ describe("exec approval followup", () => {
     directArgs({ content: "Background command finished." });
   });
 
-  it("uses safe denied copy for nested-parentheses metadata after resume failure", async () => {
-    vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
-    await send({ ...route, resultText: denied });
-    directArgs({ content: "Command did not run: approval timed out." });
-    expect(callGatewayTool).toHaveBeenCalledOnce();
-  });
-
-  it.each(["agent:main:subagent:test", undefined])(
+  it.each(["agent:main:subagent:test"])(
     "suppresses denied delivery for session %s",
     async (targetSessionKey) => {
       await expect(

@@ -17,6 +17,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
+import { readRecentSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import {
   buildGatewaySessionRow,
@@ -57,11 +58,6 @@ const GOLDEN_HASHES: Record<string, string | readonly [string, string, string]> 
     "49b9ccdccb43c6ca33e717bf753a26a081acc97dd7774f62e4bcf2929119762f",
     "9bfc840cd113478d41ca63695f4b8132fd99b681ab94b24d9bf999ee1f19e3df",
     "f581d45d04e9301490cafffe57817dd9e13425b1ef7e0f1bee829a6d580d7591",
-  ],
-  "live status and persisted running lifecycle": [
-    "0524604bb6cbe3e494c5496e2268ef8ba93ab6561aa8babcdf3d7084d0193b6b",
-    "9f3171d5359d2db405063eeb027118e8596975e5a0c71a6c5efedafecd4d7746",
-    "9f3171d5359d2db405063eeb027118e8596975e5a0c71a6c5efedafecd4d7746",
   ],
   "live subagent accumulated runtime and inherited model":
     "4a833af6b758b95675873d624f26df008768eee039fd1afeac34779426e826c4",
@@ -161,7 +157,6 @@ function fixtures(): RowFixture[] {
       ...BASE_ENTRY,
       sessionId: "live-session",
       parentSessionKey: PARENT,
-      status: "running",
     },
     [ended]: { ...BASE_ENTRY, parentSessionKey: PARENT, status: "done", endedAt: START },
     [unknown]: { ...BASE_ENTRY, parentSessionKey: PARENT },
@@ -223,16 +218,6 @@ function fixtures(): RowFixture[] {
       entry: { ...BASE_ENTRY, createdSurface: "plugin-dock" },
       omitRowContext: true,
       expectedIsDock: true,
-    },
-    {
-      name: "live status and persisted running lifecycle",
-      key: "agent:main:dashboard:running",
-      entry: {
-        ...BASE_ENTRY,
-        status: "running",
-        startedAt: START,
-        agentStatus: { note: "Need a key", attention: "key", expiresAt: START + 30_000 },
-      },
     },
     {
       name: "expired status and incognito draft",
@@ -508,6 +493,18 @@ test("preserves complete base rows across time and caller presentation fixtures"
         rowContext: fixture.omitRowContext ? undefined : rowContext,
         includeSwarmChildren: true,
         skipTranscriptUsageFallback: !fixture.transcript,
+        transcriptUsage:
+          fixture.transcript && fixture.entry
+            ? await readRecentSessionUsageFromTranscriptAsync(
+                {
+                  agentId: "main",
+                  sessionId: fixture.entry.sessionId,
+                  sessionKey: fixture.key,
+                  storePath,
+                },
+                256 * 1024,
+              )
+            : undefined,
         lightweightListRow: !fixture.transcript,
         includeDerivedTitles: fixture.transcript,
         includeLastMessage: fixture.transcript,
@@ -556,11 +553,19 @@ test("preserves complete base rows across time and caller presentation fixtures"
         expect(structuredClone(row).snapshotAt).toBe(TIMES[index]);
         expect(row.createdSurface).toBe(fixture.entry?.createdSurface);
         expect(row.isDock).toBe(fixture.expectedIsDock ?? false);
+        expect(row.sessionModelRevision).toEqual(expect.any(String));
+        expect(row.sidebarRoot).toBe(fixture.entry?.sidebarRoot === true);
         // Assert additive fields separately while preserving the frozen wire-byte coverage.
+        expect(row.communication).toBeUndefined();
+        expect(row.effectiveCommunication).toEqual({ send: "always", receive: "always" });
         const {
           snapshotAt: _snapshotAt,
           createdSurface: _createdSurface,
           isDock: _isDock,
+          sessionModelRevision: _sessionModelRevision,
+          communication: _communication,
+          effectiveCommunication: _effectiveCommunication,
+          sidebarRoot: _sidebarRoot,
           ...previousWireFields
         } = row;
         const json = JSON.stringify(previousWireFields);

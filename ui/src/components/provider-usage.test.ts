@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderUsageCostDaily } from "../../../src/infra/provider-usage.types.js";
-import { renderProviderUsageDetails } from "./provider-usage.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { renderProviderUsageDetails } from "./solid/provider-usage.tsx";
 
 function dailyUsage(
   date: string,
@@ -33,42 +33,43 @@ describe("renderProviderUsageDetails", () => {
       const container = document.createElement("div");
       const today = new Date().toISOString().slice(0, 10);
 
-      render(
-        renderProviderUsageDetails({
-          windows: [],
-          costHistory: {
-            unit,
-            periodDays: 30,
-            daily: [
-              dailyUsage(today, 12.5, {
-                requests: 42,
-                inputTokens: 1_000,
-                cacheReadTokens: 400,
-                outputTokens: 250,
-                totalTokens: 1_250,
-              }),
-              dailyUsage("2026-01-01", 0, {
-                requests: 1,
-                inputTokens: 50,
-                outputTokens: 10,
-                totalTokens: 60,
-              }),
-            ],
-            models: [
-              {
-                name: "gpt-5.5",
-                requests: 42,
-                inputTokens: 1_000,
-                cacheReadTokens: 400,
-                cacheWriteTokens: 0,
-                outputTokens: 250,
-                totalTokens: 1_250,
-              },
-            ],
-            categories: [{ name: "Responses", amount: 12.5 }],
-          },
-        }),
-        container,
+      mountSolid(
+        () =>
+          renderProviderUsageDetails({
+            windows: [],
+            costHistory: {
+              unit,
+              periodDays: 30,
+              daily: [
+                dailyUsage(today, 12.5, {
+                  requests: 42,
+                  inputTokens: 1_000,
+                  cacheReadTokens: 400,
+                  outputTokens: 250,
+                  totalTokens: 1_250,
+                }),
+                dailyUsage("2026-01-01", 0, {
+                  requests: 1,
+                  inputTokens: 50,
+                  outputTokens: 10,
+                  totalTokens: 60,
+                }),
+              ],
+              models: [
+                {
+                  name: "gpt-5.5",
+                  requests: 42,
+                  inputTokens: 1_000,
+                  cacheReadTokens: 400,
+                  cacheWriteTokens: 0,
+                  outputTokens: 250,
+                  totalTokens: 1_250,
+                },
+              ],
+              categories: [{ name: "Responses", amount: 12.5 }],
+            },
+          }),
+        { container },
       );
 
       expect(container.textContent).toContain(amount);
@@ -117,7 +118,7 @@ describe("renderProviderUsageDetails", () => {
         },
       };
       const before = structuredClone(provider);
-      render(renderProviderUsageDetails(provider), container);
+      mountSolid(() => renderProviderUsageDetails(provider), { container });
 
       expect(
         Array.from(container.querySelectorAll<HTMLElement>(".provider-cost-chart span"), (bar) => [

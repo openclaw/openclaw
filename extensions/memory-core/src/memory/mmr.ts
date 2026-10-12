@@ -25,15 +25,11 @@ type PreparedMMRItem<T extends MMRItem> = {
   maxSimilarity: number;
 };
 
-export function applyMMRToHybridResults<T extends MMRItem & { path: string; startLine: number }>(
-  items: T[],
-  config: Partial<MMRConfig> = {},
-): T[] {
+export function applyMMRToHybridResults<T extends MMRItem>(items: T[], lambda: number): T[] {
   if (items.length === 0) {
     return items;
   }
-  const { enabled = DEFAULT_MMR_CONFIG.enabled, lambda = DEFAULT_MMR_CONFIG.lambda } = config;
-  if (!enabled || items.length <= 1) {
+  if (items.length === 1) {
     return [...items];
   }
   const clampedLambda = Math.max(0, Math.min(1, lambda));

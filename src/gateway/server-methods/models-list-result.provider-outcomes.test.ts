@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { createCatalogAttemptReporter } from "../../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -7,11 +8,7 @@ import {
   type PreparedGatewayModelCatalogSnapshot,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
-import {
-  buildModelsListResult,
-  createGatewayAgentModelCatalogProjector,
-  prepareModelsListResult,
-} from "./models-list-result.js";
+import { buildModelsListResult, prepareModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture();
@@ -115,7 +112,7 @@ describe("models.list provider catalog outcomes", () => {
         },
       ],
     });
-    const projector = createGatewayAgentModelCatalogProjector({
+    const projector = createModelCatalogDecisions({
       cfg: config,
       agentId: "main",
       snapshot,
@@ -165,7 +162,7 @@ describe("models.list provider catalog outcomes", () => {
     });
   });
 
-  it("does not apply one profile rejection to a different selected profile", async () => {
+  it("does not apply one profile rejection to a different selected profile", () => {
     const config = {
       agents: {
         defaults: {
@@ -192,7 +189,7 @@ describe("models.list provider catalog outcomes", () => {
         },
       ],
     };
-    const projector = createGatewayAgentModelCatalogProjector({
+    const projector = createModelCatalogDecisions({
       cfg: config,
       agentId: "main",
       snapshot,
@@ -219,7 +216,7 @@ describe("models.list provider catalog outcomes", () => {
       },
     });
 
-    await expect(projector.evaluateEntry(model, [model])).resolves.toMatchObject({
+    expect(projector.evaluateEntry(model, [model])).toMatchObject({
       availability: true,
       selectedProfileId: "openai:accepted",
     });
@@ -254,14 +251,14 @@ describe("models.list provider catalog outcomes", () => {
     } as OpenClawConfig;
     const model = { id: "test-model", name: "Test Model", provider: "custom" };
     const snapshot = markPreparedModelCatalogFull({ entries: [model], routeVariants: [model] });
-    const projector = createGatewayAgentModelCatalogProjector({
+    const projector = createModelCatalogDecisions({
       cfg: config,
       agentId: "main",
       snapshot,
       metadataSnapshot,
       preparedAuthStore: emptyAuthStore,
     });
-    const evaluateEntry = vi.spyOn(projector, "evaluateEntry").mockResolvedValue({
+    const evaluateEntry = vi.spyOn(projector, "evaluateEntry").mockReturnValue({
       ...evaluation,
       routeResolution: null,
     });

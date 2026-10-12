@@ -20,7 +20,7 @@ import {
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
-import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.test-support.js";
 import * as threadOwnership from "./app-server/thread-ownership.js";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import { codexDiagnosticsFeedbackState } from "./command-diagnostics-state.js";
@@ -293,5 +293,16 @@ export function holdCodexThreadQueue(threadId: string) {
       blocked.resolve();
       await queue;
     },
+  };
+}
+
+export function oauthProfile(email: string, now: number) {
+  return {
+    type: "oauth" as const,
+    provider: "openai",
+    access: "access-token",
+    refresh: "refresh-token",
+    expires: now + 60 * 60 * 1000,
+    email,
   };
 }

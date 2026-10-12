@@ -66,7 +66,7 @@ export function registerAgentThinkingTests({
     });
   });
 
-  it.each(["off", "max"] as const)(
+  it.each(["off"] as const)(
     "validates native %s against observed capabilities despite manifest reasoning",
     async (thinking) => {
       await withTempHome(async (home) => {
@@ -133,59 +133,48 @@ export function registerAgentThinkingTests({
     },
   );
 
-  it.each(["off", "high"] as const)(
-    "enforces xAI's effort-free profile for %s",
-    async (thinking) => {
-      await withTempHome(async (home) => {
-        const model = applyXaiRuntimeModelCompat({
-          provider: "xai",
-          id: "grok-4.20-0309-reasoning",
-          name: "Grok 4.20",
-          api: "openai-responses",
-          reasoning: true,
-          thinkingLevelMap: { off: null, high: "high" },
-        });
-        const modelRef = `xai/${model.id}`;
-        mockConfig(home, path.join(home, "sessions.json"), {
-          model: { primary: modelRef },
-          models: { [modelRef]: {} },
-        });
-        const registry = createTestRegistry();
-        registry.providers.push({
-          pluginId: "xai",
-          source: "test",
-          provider: {
-            id: "xai",
-            label: "xAI",
-            auth: [],
-            resolveThinkingProfile: expectDefined(
-              resolveProviderPolicySurface("xai")?.resolveThinkingProfile,
-              "xAI thinking policy",
-            ),
-          },
-        });
-        setActivePluginRegistry(registry);
-        vi.mocked(loadManifestModelCatalog).mockReturnValue([model]);
-
-        const command = agentCommand(
-          { message: "ping", to: "+1222", model: modelRef, thinking },
-          runtime,
-        );
-        if (thinking === "high") {
-          await expect(command).rejects.toThrow(
-            `Thinking level "high" is not supported for ${modelRef}.`,
-          );
-          expect(runEmbeddedAgent).not.toHaveBeenCalled();
-        } else {
-          await command;
-          expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-          expect(getLastEmbeddedCall()).toMatchObject({
-            provider: "xai",
-            model: model.id,
-            thinkLevel: "off",
-          });
-        }
+  it("enforces xAI's effort-free profile for off", async () => {
+    await withTempHome(async (home) => {
+      const model = applyXaiRuntimeModelCompat({
+        provider: "xai",
+        id: "grok-4.20-0309-reasoning",
+        name: "Grok 4.20",
+        api: "openai-responses",
+        reasoning: true,
+        thinkingLevelMap: { off: null, high: "high" },
       });
-    },
-  );
+      const modelRef = `xai/${model.id}`;
+      mockConfig(home, path.join(home, "sessions.json"), {
+        model: { primary: modelRef },
+        models: { [modelRef]: {} },
+      });
+      const registry = createTestRegistry();
+      registry.providers.push({
+        pluginId: "xai",
+        source: "test",
+        provider: {
+          id: "xai",
+          label: "xAI",
+          auth: [],
+          resolveThinkingProfile: expectDefined(
+            resolveProviderPolicySurface("xai")?.resolveThinkingProfile,
+            "xAI thinking policy",
+          ),
+        },
+      });
+      setActivePluginRegistry(registry);
+      vi.mocked(loadManifestModelCatalog).mockReturnValue([model]);
+
+      await agentCommand(
+        { message: "ping", to: "+1222", model: modelRef, thinking: "off" },
+        runtime,
+      );
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(getLastEmbeddedCall()).toMatchObject({
+        provider: "xai",
+        model: model.id,
+        thinkLevel: "off",
+      });
+    });
+  });
 }

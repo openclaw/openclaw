@@ -43,60 +43,7 @@ type ProfileConfig = {
   queryRuns: number;
 };
 
-type TimedQuery = {
-  database: "agent" | "state";
-  id: string;
-  p50Ms: number;
-  p95Ms: number;
-  plan: SqliteQueryPlanEvidence;
-  runs: number;
-  rows: number;
-  sql: string;
-};
-
-type BenchmarkReport = {
-  integrity: {
-    agent: string[];
-    state: string;
-  };
-  node: string;
-  schemaVersion: 2;
-  versions: {
-    agentSchema: number;
-    sqlite: string;
-    stateSchema: number;
-  };
-  paths: {
-    agentDatabases: string[];
-    artifact: string | null;
-    stateDatabase: string;
-    stateDir: string;
-  };
-  profile: ProfileId;
-  queries: TimedQuery[];
-  rows: {
-    agentCacheEntries: number;
-    agentDatabases: number;
-    channelIngressEvents: number;
-    cronJobs: number;
-    cronTaskRuns: number;
-    deliveryQueueEntries: number;
-    pluginStateEntries: number;
-    stateRows: number;
-    transcriptEvents: number;
-  };
-  timingsMs: {
-    checkpoint: number;
-    seed: number;
-    total: number;
-  };
-  walBytes: {
-    agentAfter: number[];
-    agentBefore: number[];
-    stateAfter: number;
-    stateBefore: number;
-  };
-};
+type TimedQuery = ReturnType<typeof runTimedQuery>;
 
 const PROFILES: Record<ProfileId, ProfileConfig> = {
   smoke: {
@@ -571,7 +518,7 @@ function runTimedQuery(params: {
   queryParams: SQLInputValue[];
   requestedRuns: number;
   sql: string;
-}): TimedQuery {
+}) {
   const runs = params.fullLoad
     ? Math.min(params.requestedRuns, SQLITE_PERF_FULL_LOAD_RUNS)
     : params.requestedRuns;
@@ -758,24 +705,6 @@ function runHotQueries(params: {
   );
 }
 
-function printProofLines(report: BenchmarkReport): void {
-  const p95 = Math.max(...report.queries.map((query) => query.p95Ms));
-  console.log(`SQLITE_PERF_PROFILE=${report.profile}`);
-  console.log(`SQLITE_PERF_STATE_ROWS=${report.rows.stateRows}`);
-  console.log(`SQLITE_PERF_AGENT_ROWS=${report.rows.agentCacheEntries}`);
-  console.log(`SQLITE_PERF_TRANSCRIPT_ROWS=${report.rows.transcriptEvents}`);
-  console.log(`SQLITE_PERF_INTEGRITY=${report.integrity.state}`);
-  console.log(`SQLITE_PERF_WAL_BYTES_BEFORE=${report.walBytes.stateBefore}`);
-  console.log(`SQLITE_PERF_WAL_BYTES_AFTER=${report.walBytes.stateAfter}`);
-  console.log(`SQLITE_PERF_QUERY_P95_MS=${p95.toFixed(3)}`);
-  for (const query of report.queries) {
-    console.log(`SQLITE_PERF_SCENARIO ${JSON.stringify(query)}`);
-  }
-  if (report.paths.artifact) {
-    console.log(`SQLITE_PERF_ARTIFACT=${report.paths.artifact}`);
-  }
-}
-
 function main(): void {
   const argv = process.argv.slice(2);
   const cli = parseSqliteStateBenchmarkCli(argv);
@@ -818,7 +747,7 @@ function main(): void {
     agentDatabases.forEach((database) => checkpoint(database.db));
     const checkpointMs = nowMs() - checkpointStarted;
 
-    const report: BenchmarkReport = {
+    const report = {
       integrity: {
         agent: agentIntegrity,
         state: stateIntegrity,
@@ -866,7 +795,21 @@ function main(): void {
       fs.mkdirSync(path.dirname(options.output), { recursive: true });
       fs.writeFileSync(options.output, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     }
-    printProofLines(report);
+    const p95 = Math.max(...report.queries.map((query) => query.p95Ms));
+    console.log(`SQLITE_PERF_PROFILE=${report.profile}`);
+    console.log(`SQLITE_PERF_STATE_ROWS=${report.rows.stateRows}`);
+    console.log(`SQLITE_PERF_AGENT_ROWS=${report.rows.agentCacheEntries}`);
+    console.log(`SQLITE_PERF_TRANSCRIPT_ROWS=${report.rows.transcriptEvents}`);
+    console.log(`SQLITE_PERF_INTEGRITY=${report.integrity.state}`);
+    console.log(`SQLITE_PERF_WAL_BYTES_BEFORE=${report.walBytes.stateBefore}`);
+    console.log(`SQLITE_PERF_WAL_BYTES_AFTER=${report.walBytes.stateAfter}`);
+    console.log(`SQLITE_PERF_QUERY_P95_MS=${p95.toFixed(3)}`);
+    for (const query of report.queries) {
+      console.log(`SQLITE_PERF_SCENARIO ${JSON.stringify(query)}`);
+    }
+    if (report.paths.artifact) {
+      console.log(`SQLITE_PERF_ARTIFACT=${report.paths.artifact}`);
+    }
   } finally {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();

@@ -50,6 +50,10 @@ For an existing native desktop, the provider uses the Gateway process's desktop 
 
 The built-in tool uses the Gateway desktop from an agent run hosted by that Gateway. Remote Gateway URL/token overrides remain supported for paired node targets.
 
+Tool discovery reads declared capabilities and recorded runtime health without starting a desktop or waiting for its helper. The first computer action probes the selected Gateway and binds to the resulting live provider generation. A declared action list alone does not mean the desktop is ready.
+
+For RPC clients, `computer.status` with `probe: false` performs this passive read. `probe: true` prepares the computer and waits for readiness; omitting `probe` preserves that behavior for existing clients. Concurrent probes share preparation, and helper startup remains bounded by its one-minute timeout. Passive reads never extend the desktop's idle lifetime or retry a failed startup.
+
 ### Linux Gateway live proof
 
 From a built source checkout on Linux, install the managed desktop prerequisites plus `mousepad`, then run:
@@ -67,7 +71,9 @@ Add `--runtime <executable>` to start the built Gateway on another runtime, such
 
 The built-in `computer` tool takes one action per call. Choose `target: "gateway"` for the Gateway desktop or `target: "node"` for a paired node. Supplying `node` also selects the node route. With neither selector, the first call uses the configured Gateway computer, otherwise the sole connected computer-capable node. A configured but unavailable Gateway computer reports its error; it never silently redirects input to a node. Later calls retain the selected host unless explicitly changed. Cloud sessions retain their fixed desktop and reject host overrides.
 
-Coordinates are non-negative integer pixels in the most recent screenshot; the provider maps them to display points. Coordinate actions must echo the screenshot result's `frameId`, and an explicit `screenIndex` must match that frame. OpenClaw also carries a provider-issued display identity from the screenshot into the action, so a display reconnect or geometry change fails closed instead of silently retargeting the same index. These checks reject guessed tokens and tokens from another delivered frame or display. A token is not a freshness guarantee: apps can change pixels on the same display after capture, so take a new screenshot whenever the scene may have changed.
+On the MCP tool path, computer control belongs to the admitted agent run and is released when that run ends. A later run can then use the same computer. Recording and file-transfer actions remain unavailable on this path.
+
+Coordinates are non-negative integer pixels in the most recent screenshot; the provider maps them to display points. Coordinate actions must echo the screenshot result's `frameId`, and an explicit `screenIndex` must match that frame. OpenClaw also carries a provider-issued display identity from the screenshot into the action, so a display reconnect or geometry change blocks the action instead of silently retargeting the same index. These checks reject guessed tokens and tokens from another delivered frame or display. A token is not a freshness guarantee: apps can change pixels on the same display after capture, so take a new screenshot whenever the scene may have changed.
 
 - Reads: `screenshot` captures a desktop screen and returns `frameId`. It does not accept window, browser, element, or observation references.
 - Pointer: `left_click`, `right_click`, `middle_click`, `double_click`, `triple_click`, `mouse_move`, `left_click_drag` (with `startCoordinate`), `left_mouse_down`, `left_mouse_up`.
@@ -197,7 +203,7 @@ After either proof, stop only the Gateway, app/node, and fixture processes you l
 
 ### Windows and Linux (experimental, direct SDK)
 
-The bundled `cua-computer` plugin loads its Gateway policy by default on every platform. Local computer control remains opt-in on Windows and Linux; loading the policy alone does not start a native driver, register local computer commands, or probe local driver artifacts. macOS keeps its default CUA integration with the app-owned daemon. Explicitly disabling the plugin also disables its cloud computer policy.
+The bundled `cua-computer` plugin loads its Gateway policy by default on every platform. Local computer control remains opt-in on Windows and Linux; loading the policy alone does not start a native driver, register local computer commands, or check local driver artifacts. macOS keeps its default CUA integration with the app-owned daemon. Explicitly disabling the plugin also disables its cloud computer policy.
 
 To enable the experimental Windows or Linux node fulfiller, which uses the pinned CUA Driver SDK contract directly:
 
@@ -291,7 +297,7 @@ On macOS, default-on means a paired gateway can drive pointer and keyboard input
 
 ### Gateway computer unavailable
 
-Enable `cua-computer` on the Gateway host, verify the focused artifact check, and check the Gateway logs for the provider's startup error. For managed Linux desktops, install the required TigerVNC, XFCE, and D-Bus binaries and confirm that an external VNC listener has not selected attach mode. For an existing desktop, ensure the Gateway starts in the intended graphical session with its display environment and permissions. Enabling the Desktop panel alone does not enable CUA.
+Enable `cua-computer` on the Gateway host, verify the focused artifact check, and check the Gateway logs for the provider's startup error. For managed Linux desktops, install the required TigerVNC, XFCE, and D-Bus binaries and confirm that an external VNC listener has not selected attach mode. For an existing desktop, check that the Gateway starts in the intended graphical session with its display environment and permissions. Enabling the Desktop panel alone does not enable CUA.
 
 If you intended to control a paired desktop, select `target: "node"` and its `node` explicitly. An unavailable Gateway target never redirects a possibly completed action to a different computer.
 

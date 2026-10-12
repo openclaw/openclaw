@@ -71,10 +71,8 @@ enum ExecApprovalsReadError: Error, Equatable, Sendable {
 }
 
 struct ExecApprovalsResolved: Sendable {
-    let url: URL
     let socketPath: String
     let token: String
-    let defaults: ExecApprovalsResolvedDefaults
     let agent: ExecApprovalsResolvedDefaults
     let allowlist: [ExecAllowlistEntry]
     var file: ExecApprovalsFile
@@ -94,13 +92,7 @@ enum ExecApprovalHelpers {
         allowlistMatch: ExecAllowlistEntry?,
         skillAllow: Bool) -> Bool
     {
-        if ask == .always {
-            return true
-        }
-        if ask == .onMiss, security == .allowlist, allowlistMatch == nil, !skillAllow {
-            return true
-        }
-        return false
+        ask == .always || (ask == .onMiss && security == .allowlist && allowlistMatch == nil && !skillAllow)
     }
 
     static func allowlistPattern(command: [String], resolution: ExecCommandResolution?) -> String? {

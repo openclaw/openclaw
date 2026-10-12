@@ -39,7 +39,11 @@ vi.mock("../../../logging/subsystem.js", async (importOriginal) => {
 
 async function register(runId: string) {
   await registerSubagentRun(
-    createSubagentRunParams({ runId, childSessionKey: `agent:main:subagent:${runId}` }),
+    createSubagentRunParams({
+      runId,
+      childSessionKey: `agent:main:subagent:${runId}`,
+      sessionEntry: { sessionId: `sess-${runId}`, lifecycleRevision: `revision-${runId}` },
+    }),
   );
 }
 
@@ -95,6 +99,7 @@ describe("registered subagent sweeper lifecycle", () => {
       await register("retained");
       await activateGatewayRuntime();
       await vi.dynamicImportSettled();
+      recoverRow.mockClear();
       if (suspended) {
         expect(tryBeginGatewaySuspendAdmission(() => {})).not.toBeNull();
       } else {

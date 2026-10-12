@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   applyChatFontSmoothing,
   applyTypefaceOverrides,
@@ -15,13 +15,17 @@ const fontLinks = () => [
 const hrefs = () => fontLinks().map((link) => link.getAttribute("href"));
 
 describe("typeface presentation", () => {
-  afterEach(() => {
+  function resetTypefacePresentation() {
     for (const link of fontLinks()) {
       link.remove();
     }
     applyTypefaceOverrides();
     applyChatFontSmoothing("system");
-  });
+  }
+
+  // Shared UI workers preserve document.head between files.
+  beforeEach(resetTypefacePresentation);
+  afterEach(resetTypefacePresentation);
 
   it.each([
     ["claw", ["instrument-sans", "instrument-sans"]],

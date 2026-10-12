@@ -431,7 +431,6 @@ while IFS= read -r -d '' runtime_kind && IFS= read -r -d '' runtime_file; do
   codesign --verify --strict "$runtime_file"
 done < "$NATIVE_INVENTORY"
 
-# Sign Sparkle deeply if present
 SPARKLE="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
 if [ -d "$SPARKLE" ]; then
   echo "Signing Sparkle framework and helpers"
@@ -454,7 +453,6 @@ if [ -d "$SPARKLE" ]; then
   sign_plain_item "$SPARKLE"
 fi
 
-# Sign any other embedded frameworks/dylibs
 if [ -d "$APP_BUNDLE/Contents/Frameworks" ]; then
   find "$APP_BUNDLE/Contents/Frameworks" -depth \( -name "*.framework" -o -name "*.dylib" \) ! -path "*Sparkle.framework*" -print0 > "$ENT_TMP_DIR/frameworks"
   while IFS= read -r -d '' f; do

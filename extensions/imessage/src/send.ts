@@ -161,22 +161,6 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
   return raw ? raw.trim() : null;
 }
 
-// Tapbacks identify their target by GUID, never the numeric ROWID some sends return.
-function resolveOutboundMessageGuid(
-  result: Record<string, unknown> | null | undefined,
-): string | null {
-  if (!result) {
-    return null;
-  }
-  for (const key of ["messageGuid", "guid", "messageId", "message_id", "id"]) {
-    const guid = normalizeResolvedMessageGuid(result[key]);
-    if (guid) {
-      return guid;
-    }
-  }
-  return null;
-}
-
 function isNumericMessageRowId(value: string | null | undefined): value is string {
   return typeof value === "string" && /^\d+$/.test(value.trim());
 }
@@ -188,22 +172,6 @@ function normalizeResolvedMessageGuid(value: unknown): string | null {
   const trimmed = value.trim();
   // Status placeholders and numeric ROWIDs cannot match inbound tapback GUIDs.
   return normalizeIMessageMessageId(trimmed) && !isNumericMessageRowId(trimmed) ? trimmed : null;
-}
-
-async function resolveMessageGuidFromChatDb(params: {
-  dbPath?: string;
-  messageId: string;
-}): Promise<string | null> {
-  const dbPath = params.dbPath?.trim();
-  const messageId = params.messageId.trim();
-  if (!dbPath || !isNumericMessageRowId(messageId)) {
-    return null;
-  }
-  return normalizeResolvedMessageGuid(
-    await withIMessageReceiptGuidReader(dbPath, (read) =>
-      read({ type: "messageGuid", input: { messageId } }),
-    ),
-  );
 }
 
 function canResolveLatestSentMessageGuidFromChatDb(dbPath?: string): boolean {
@@ -225,21 +193,30 @@ async function resolveApprovalBindingMessageGuid(params: {
   result: Record<string, unknown> | null | undefined;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
 }): Promise<string | null> {
-  const immediateGuid = resolveOutboundMessageGuid(params.result);
-  if (immediateGuid) {
-    return immediateGuid;
+  // Tapbacks identify their target by GUID, never the numeric ROWID some sends return.
+  for (const key of ["messageGuid", "guid", "messageId", "message_id", "id"]) {
+    const guid = normalizeResolvedMessageGuid(params.result?.[key]);
+    if (guid) {
+      return guid;
+    }
   }
   const messageId = params.messageId?.trim();
   if (!messageId || !isNumericMessageRowId(messageId)) {
     return null;
   }
-  const resolver = params.resolveMessageGuidImpl ?? resolveMessageGuidFromChatDb;
-  return normalizeResolvedMessageGuid(
-    await resolver({
-      dbPath: params.dbPath,
-      messageId,
-    }),
-  );
+  if (params.resolveMessageGuidImpl) {
+    return normalizeResolvedMessageGuid(
+      await params.resolveMessageGuidImpl({ dbPath: params.dbPath, messageId }),
+    );
+  }
+  const dbPath = params.dbPath?.trim();
+  return dbPath
+    ? normalizeResolvedMessageGuid(
+        await withIMessageReceiptGuidReader(dbPath, (read) =>
+          read({ type: "messageGuid", input: { messageId } }),
+        ),
+      )
+    : null;
 }
 
 async function resolveFallbackSentMessageGuid(params: {
@@ -556,37 +533,27 @@ export async function sendMessageIMessage(
       return null;
     }
     let attachmentChatTarget: string | null = null;
-    if (remoteHost) {
-      if (target.kind === "chat_guid") {
-        attachmentChatTarget = target.chatGuid;
-      } else if (target.kind === "chat_identifier") {
-        attachmentChatTarget = target.chatIdentifier;
-      } else if (target.kind === "handle") {
+    if (target.kind === "chat_guid") {
+      attachmentChatTarget = target.chatGuid;
+    } else if (target.kind === "handle") {
+      const rawHandle = target.to.trim();
+      // Local imsg only accepts canonical handles; remote resolution accepts aliases.
+      if (remoteHost || rawHandle.includes("@") || rawHandle.startsWith("+")) {
         const normalizedHandle = normalizeIMessageHandle(target.to);
         if (normalizedHandle) {
           const attachmentService = target.service !== "auto" ? target.service : service;
           attachmentChatTarget = `${attachmentService === "sms" ? "SMS" : attachmentService === "imessage" ? "iMessage" : "any"};-;${normalizedHandle}`;
         }
-      } else {
-        attachmentChatTarget = formatIMessageChatTarget(target.chatId);
       }
-    } else {
+    } else if (remoteHost) {
+      attachmentChatTarget =
+        target.kind === "chat_identifier"
+          ? target.chatIdentifier
+          : formatIMessageChatTarget(target.chatId);
+    } else if (target.kind === "chat_id") {
       try {
-        if (target.kind === "chat_guid") {
-          attachmentChatTarget = target.chatGuid;
-        } else if (target.kind === "handle") {
-          const rawHandle = target.to.trim();
-          if (rawHandle.includes("@") || rawHandle.startsWith("+")) {
-            const normalizedHandle = normalizeIMessageHandle(target.to);
-            if (normalizedHandle) {
-              const attachmentService = target.service !== "auto" ? target.service : service;
-              attachmentChatTarget = `${attachmentService === "sms" ? "SMS" : attachmentService === "imessage" ? "iMessage" : "any"};-;${normalizedHandle}`;
-            }
-          }
-        } else if (target.kind === "chat_id") {
-          const result = await runCliJson(["group", "--chat-id", String(target.chatId)]);
-          attachmentChatTarget = stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
-        }
+        const result = await runCliJson(["group", "--chat-id", String(target.chatId)]);
+        attachmentChatTarget = stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
       } catch (error) {
         if (!audioAsVoice && isAttachmentCommandFallbackError(error)) {
           return null;

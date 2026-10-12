@@ -392,22 +392,21 @@ function renderInspector(state: UiState, scenario: SeedScenario): string {
           }
         </div>
 
-        ${
-          scenario.docsRefs?.length
-            ? `<div class="inspector-section">
-                <div class="inspector-section-title">Docs</div>
-                <div class="ref-list">${scenario.docsRefs.map((r) => `<span class="ref-tag">${esc(r)}</span>`).join("")}</div>
+        ${(
+          [
+            ["Docs", scenario.docsRefs],
+            ["Code", scenario.codeRefs],
+          ] as const
+        )
+          .map(([title, refs]) =>
+            refs?.length
+              ? `<div class="inspector-section">
+                <div class="inspector-section-title">${title}</div>
+                <div class="ref-list">${refs.map((ref) => `<span class="ref-tag">${esc(ref)}</span>`).join("")}</div>
               </div>`
-            : ""
-        }
-        ${
-          scenario.codeRefs?.length
-            ? `<div class="inspector-section">
-                <div class="inspector-section-title">Code</div>
-                <div class="ref-list">${scenario.codeRefs.map((r) => `<span class="ref-tag">${esc(r)}</span>`).join("")}</div>
-              </div>`
-            : ""
-        }
+              : "",
+          )
+          .join("\n        ")}
       </div>
       ${renderInspectorLiveTranscript(state)}
     </div>`;

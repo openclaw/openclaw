@@ -2,6 +2,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
@@ -15,20 +17,13 @@ import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
 import {
   resolveApprovalRequestKind,
   type ApprovalRequestChannelRouteClass,
+  type ApprovalRequestInput,
 } from "./approval-types.js";
-import type { ExecApprovalRequest } from "./exec-approvals.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
-import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
 
-export type ApprovalRequestLike = {
-  id: string;
-  request:
-    | ExecApprovalRequest["request"]
-    | PluginApprovalRequest["request"]
-    | SystemAgentApprovalRequest["request"];
-  createdAtMs: number;
-  expiresAtMs: number;
-};
+export type ApprovalRequestLike = Pick<
+  ApprovalRequestInput,
+  "id" | "request" | "createdAtMs" | "expiresAtMs"
+>;
 
 function resolveApprovalForwardTargets(params: {
   cfg: OpenClawConfig;
@@ -89,28 +84,31 @@ export function classifyApprovalRequestChannelRoute(params: {
   return "unbound";
 }
 
-type ApprovalRequestSessionBinding = {
-  channel?: string;
-  accountId?: string;
-};
-
-type PersistedApprovalRequestSessionEntry = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
-
-/** Loads the persisted session entry referenced by an approval request, if still present. */
-export function resolvePersistedApprovalRequestSessionEntry(params: {
+/** Reads only the current session facts consumed by synchronous approval routing. */
+export function resolveApprovalRequestSessionDelivery(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
-}): PersistedApprovalRequestSessionEntry | null {
+}): Pick<SessionEntry, "sessionId" | "updatedAt" | "delivery"> | null {
   const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
   if (!sessionKey) {
     return null;
   }
   const parsed = parseAgentSessionKey(sessionKey);
   const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
+  const memory = getSessionActorStorageBinding({ sessionKey, agentId });
+  if (memory) {
+    const entry = memory.actor.snapshot(memory.authority)?.entry;
+    return entry
+      ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
+      : null;
+  }
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
+  const binding = captureIncognitoSessionBinding({ storePath, sessionKey });
+  if (binding) {
+    binding.admissionSignal?.throwIfAborted();
+    binding.actor.assertReadable();
+    return binding.actor.sessions.readDelivery(sessionKey) ?? null;
+  }
   const entry = loadSessionEntryReadOnly({
     storePath,
     sessionKey,
@@ -119,18 +117,17 @@ export function resolvePersistedApprovalRequestSessionEntry(params: {
   if (!entry) {
     return null;
   }
-  return { sessionKey, entry };
+  return { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery };
 }
 
 function resolvePersistedApprovalRequestSessionBinding(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
-}): ApprovalRequestSessionBinding | null {
-  const persisted = resolvePersistedApprovalRequestSessionEntry(params);
-  if (!persisted) {
+}) {
+  const entry = resolveApprovalRequestSessionDelivery(params);
+  if (!entry) {
     return null;
   }
-  const { entry } = persisted;
   const origin = sessionDeliveryOrigin(entry);
   const context = deliveryContextFromSession(entry);
   const channel = normalizeMessageChannel(context?.channel ?? origin?.provider);
@@ -138,12 +135,12 @@ function resolvePersistedApprovalRequestSessionBinding(params: {
   return channel || accountId ? { channel, accountId } : null;
 }
 
-/** Resolves the account id an approval request belongs to for an optional channel filter. */
-export function resolveApprovalRequestAccountId(params: {
+// A missing binding can match any account; a conflicting channel cannot.
+function resolveApprovalRequestAccountBinding(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
   channel?: string | null;
-}): string | null {
+}): { accountId: string | null } | null {
   const expectedChannel = normalizeMessageChannel(params.channel);
   const turnSourceChannel = normalizeMessageChannel(params.request.request.turnSourceChannel);
   if (expectedChannel && turnSourceChannel && turnSourceChannel !== expectedChannel) {
@@ -154,7 +151,7 @@ export function resolveApprovalRequestAccountId(params: {
     params.request.request.turnSourceAccountId,
   );
   if (turnSourceAccountId) {
-    return turnSourceAccountId;
+    return { accountId: turnSourceAccountId };
   }
 
   const sessionBinding = resolvePersistedApprovalRequestSessionBinding(params);
@@ -163,7 +160,16 @@ export function resolveApprovalRequestAccountId(params: {
     return null;
   }
 
-  return sessionBinding?.accountId ?? null;
+  return { accountId: sessionBinding?.accountId ?? null };
+}
+
+/** Resolves the account id an approval request belongs to for an optional channel filter. */
+export function resolveApprovalRequestAccountId(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+  channel?: string | null;
+}): string | null {
+  return resolveApprovalRequestAccountBinding(params)?.accountId ?? null;
 }
 
 /** Resolves an approval request account only when the request can be routed to a channel. */
@@ -199,27 +205,12 @@ export function doesApprovalRequestMatchChannelAccount(params: {
     return false;
   }
 
-  const turnSourceChannel = normalizeMessageChannel(params.request.request.turnSourceChannel);
-  if (turnSourceChannel && turnSourceChannel !== expectedChannel) {
+  const binding = resolveApprovalRequestAccountBinding(params);
+  if (!binding) {
     return false;
   }
-
-  const turnSourceAccountId = normalizeOptionalAccountId(
-    params.request.request.turnSourceAccountId,
-  );
   const expectedAccountId = normalizeOptionalAccountId(params.accountId);
-  if (turnSourceAccountId) {
-    return !expectedAccountId || expectedAccountId === turnSourceAccountId;
-  }
-
-  const sessionBinding = resolvePersistedApprovalRequestSessionBinding(params);
-  const sessionChannel = sessionBinding?.channel;
-  if (sessionChannel && sessionChannel !== expectedChannel) {
-    return false;
-  }
-
-  const boundAccountId = sessionBinding?.accountId;
-  return !expectedAccountId || !boundAccountId || expectedAccountId === boundAccountId;
+  return !expectedAccountId || !binding.accountId || expectedAccountId === binding.accountId;
 }
 
 /** Selects the one channel account that owns a native approval request. */

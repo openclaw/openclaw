@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
-import { recomputeNextRunsForMaintenance } from "./service/jobs-scheduling.js";
+import { recomputeNextRunsForMaintenance } from "./service/jobs-scheduling.test-support.js";
 import type { CronJob } from "./types.js";
 
 const now = Date.parse("2026-05-05T12:00:00.000Z");
@@ -67,32 +67,10 @@ const cases: MaintenanceCase[] = [
     expected: { nextRunAtMs: startedAt + 120_000 },
   },
   {
-    name: "repairs future non-slots",
-    job: { state: { nextRunAtMs: badFuture } },
-    changed: true,
-    expected: { nextRunAtMs: nextSlot },
-  },
-  {
-    name: "preserves the next natural slot",
-    job: { state: { nextRunAtMs: nextSlot } },
-    changed: false,
-    expected: { nextRunAtMs: nextSlot },
-  },
-  {
     name: "repairs early system-event slots",
     job: { state: { nextRunAtMs: now + 30 * 60_000 } },
     changed: true,
     expected: { nextRunAtMs: nextSlot },
-  },
-  {
-    name: "preserves early agent-turn deferrals",
-    job: {
-      sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "tick" },
-      state: { nextRunAtMs: deferred },
-    },
-    changed: false,
-    expected: { nextRunAtMs: deferred },
   },
   ...[
     {

@@ -46,6 +46,18 @@ const inventorySchema = z.array(
   z.object({ path: z.string(), sizeBytes: z.string().regex(/^\d+$/).optional() }),
 );
 
+export async function updateStateDatabaseExists(file: string): Promise<boolean> {
+  try {
+    await fs.access(file);
+    return true;
+  } catch (error) {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 /** Maintenance custody permits metadata reads without an isolated inventory process. */
 export async function readUpdateStateDatabaseSizesInProcess(
   files: readonly string[],
@@ -123,10 +135,9 @@ export async function readUpdateStateDatabaseSizes(
       options.signal,
     );
   } catch (error) {
-    if (hasCommandProcessCleanupError(error)) {
-      throw inspection.failure(error);
+    if (!hasCommandProcessCleanupError(error)) {
+      options.signal?.throwIfAborted();
     }
-    options.signal?.throwIfAborted();
     throw inspection.failure(error);
   }
   options.signal?.throwIfAborted();

@@ -400,4 +400,45 @@ describe("Gateway node worker bundle installer", () => {
       }
     },
   );
+  it.each([
+    ["same", undefined, "resolves"],
+    ["different", "generation-2", "rejects"],
+  ] as const)(
+    "%s pairing authority on a replacement connection",
+    async (_mode, pairingGeneration, outcome) => {
+      const transfer = createNodeWorkerBundleTransferService();
+      const replacement = {
+        ...node,
+        connId: "conn-2",
+        ...(pairingGeneration ? { pairingGeneration } : {}),
+      };
+      let current = node;
+      const transport: NodeWorkerSupervisorTransport = {
+        hasCurrentRunner: () => false,
+        getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? current : undefined),
+        listCurrentNodes: async () => [current],
+        isCurrent: (candidate) => candidate === current,
+        invoke: async () => {
+          current = replacement;
+          return { ok: true, payloadJSON: JSON.stringify(receipt) };
+        },
+      };
+      const ensure = createGatewayNodeWorkerBundleInstaller({
+        gatewayNamespace: "gateway-test",
+        getTransport: () => transport,
+        transfer,
+        log: { info: vi.fn(), warn: vi.fn() },
+      });
+      try {
+        const pending = ensure(installRequest(node));
+        if (outcome === "resolves") {
+          await expect(pending).resolves.toEqual(receipt);
+        } else {
+          await expect(pending).rejects.toThrow("connection is no longer current");
+        }
+      } finally {
+        transfer.closeAll();
+      }
+    },
+  );
 });

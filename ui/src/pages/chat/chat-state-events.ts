@@ -51,7 +51,6 @@ import {
 } from "./components/chat-session-workspace.ts";
 import {
   getChatSessionProjection,
-  observeChatRunModel,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   retireChatSubmissionDisplay,
@@ -75,6 +74,17 @@ const PENDING_INPUT_REASONS = new Set(["send", "agent.run.started", "agent.input
 const MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS = [100, 400, 1_500, 3_000] as const;
 const MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS = 64;
 type ChatPanePresentation = () => boolean;
+
+function refreshChatEventHistory(
+  state: ChatPageHost,
+  presented: boolean,
+  supersedeInFlight?: true,
+): void {
+  void loadChatHistory(state, {
+    deferBranches: !presented,
+    ...(supersedeInFlight ? { supersedeInFlight } : {}),
+  }).finally(() => state.requestUpdate?.());
+}
 
 function selectedGlobalEventAgentId(state: ChatPageHost, agentId: string | null): string {
   return agentId ? normalizeAgentId(agentId) : resolveUiDefaultAgentId(state);
@@ -149,10 +159,7 @@ function handleSessionMessageEvent(
     // A pre-commit snapshot can erase even an admitted live reply when its leaf advances.
     // Fence it before run settlement, while retaining the loader's single queued refresh.
     if (getChatHistoryLoadState(state).phase === "in-flight") {
-      void loadChatHistory(state, {
-        deferBranches: !presentation(),
-        supersedeInFlight: true,
-      }).finally(() => state.requestUpdate?.());
+      refreshChatEventHistory(state, presentation(), true);
     }
     // A previous run can persist its final after the next local run starts.
     // Admit that sequenced row now so the later unsequenced chat.final replay
@@ -176,10 +183,7 @@ function handleSessionMessageEvent(
     if (event.hasActiveRun === true) {
       if (isUserMessage) {
         // Promotion changes pending custody even while the next turn is active.
-        void loadChatHistory(state, {
-          deferBranches: !presentation(),
-          supersedeInFlight: true,
-        }).finally(() => state.requestUpdate?.());
+        refreshChatEventHistory(state, presentation(), true);
       }
       return true;
     }
@@ -207,9 +211,7 @@ function handleSessionMessageEvent(
   }
   if (matchesChat) {
     state.pendingSessionMessageReloadSessionKey = null;
-    void loadChatHistory(state, {
-      deferBranches: !presentation(),
-    }).finally(() => state.requestUpdate?.());
+    refreshChatEventHistory(state, presentation());
   }
   return matchesChat;
 }
@@ -218,7 +220,6 @@ function replayPendingSessionMessageReload(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
   presentation: ChatPanePresentation,
-  supersedeInFlight = false,
 ): boolean {
   const pendingSessionKey = state.pendingSessionMessageReloadSessionKey;
   const payloadSessionKey = payload?.sessionKey?.trim();
@@ -232,10 +233,7 @@ function replayPendingSessionMessageReload(
     return false;
   }
   state.pendingSessionMessageReloadSessionKey = null;
-  void loadChatHistory(state, {
-    deferBranches: !presentation(),
-    supersedeInFlight,
-  }).finally(() => state.requestUpdate?.());
+  refreshChatEventHistory(state, presentation());
   return true;
 }
 
@@ -250,26 +248,6 @@ type TerminalRecoveryOwnership = {
 };
 
 const terminalRecoveryClaimsByPane = new WeakMap<object, Map<string, ChatPageHost["client"]>>();
-
-function createTerminalRecoveryOwnership(
-  state: ChatPageHost,
-  payload: ChatEventPayload,
-): TerminalRecoveryOwnership | null {
-  const runId = payload.runId;
-  if (!runId) {
-    return null;
-  }
-  return {
-    sessionKey: payload.sessionKey,
-    agentId: resolveChatAgentId(state),
-    runId,
-    client: state.client,
-    connectionEpoch: state.connectionEpoch,
-    runLifecycleGeneration: state.chatRunLifecycleGeneration ?? 0,
-    initialTerminalReplySignatures: readTerminalReplyRecoveryState(state, runId)
-      .terminalReplySignatures,
-  };
-}
 
 function claimTerminalRecovery(state: ChatPageHost, ownership: TerminalRecoveryOwnership): boolean {
   let claims = terminalRecoveryClaimsByPane.get(state);
@@ -403,28 +381,8 @@ function handleSessionsChangedEvent(
   if (result.applied) {
     reconcileChatRunAfterSessionStatePublication(state);
   }
-  const modelRunId = event?.clientRunId ?? event?.runId;
-  if (
-    matchesChat &&
-    source?.phase === "model" &&
-    modelRunId &&
-    result.admittedRow &&
-    (state.chatSending
-      ? state.chatQueue.some(
-          (item) =>
-            item.sendState === "sending" &&
-            (item.queueMode === "steer" && state.chatRunId
-              ? state.chatRunId === modelRunId
-              : item.sendRunId === modelRunId),
-        )
-      : !state.chatRunId || state.chatRunId === modelRunId)
-  ) {
-    observeChatRunModel(state, modelRunId, result.admittedRow);
-  }
   if (resetsSelectedSession || (matchesChat && source?.reason === "compact")) {
-    void loadChatHistory(state, { deferBranches: !presented }).finally(() =>
-      state.requestUpdate?.(),
-    );
+    refreshChatEventHistory(state, presented);
     return true;
   }
   if (
@@ -437,10 +395,7 @@ function handleSessionsChangedEvent(
     invalidateChatBranches(state);
     // Legacy multi-message writes cannot prove individual message cursors.
     // A snapshot begun before this invalidation cannot recover the committed rows.
-    void loadChatHistory(state, {
-      deferBranches: !presented,
-      supersedeInFlight: true,
-    }).finally(() => state.requestUpdate?.());
+    refreshChatEventHistory(state, presented, true);
     return true;
   }
   if (
@@ -450,10 +405,7 @@ function handleSessionsChangedEvent(
   ) {
     // Custody can change without a transcript append. A read begun before this
     // event must not hide accepted input until the active run ends.
-    void loadChatHistory(state, {
-      deferBranches: !presented,
-      supersedeInFlight: true,
-    }).finally(() => state.requestUpdate?.());
+    refreshChatEventHistory(state, presented, true);
   }
   // The session capability owns roster invalidation, including unapplied events.
   // A pane refresh here bypasses its debounce and multiplies reads across split panes.
@@ -568,7 +520,10 @@ export function handlePageGatewayEvent(
         refreshPullRequestsForStreamedLinks(state, payload.runId, payload.deltaText);
       }
       const shouldRefreshPullRequests = finalAssistantReplyHasPullRequestLink(state, payload);
-      handleChatGatewayEvent(state, payload);
+      if (handleChatGatewayEvent(state, payload) === "injected") {
+        requestChatPageUpdate(state);
+        return;
+      }
       if (terminalPayload && sessionMatches) {
         clearPendingQueueItemsForRun(state, terminalPayload.runId);
       }
@@ -580,14 +535,20 @@ export function handlePageGatewayEvent(
         recoveryScope &&
         getChatSessionProjection(state, recoveryScope).runs[recoveryRunId]?.status === "completed",
       );
-      const recoveryOwnership =
-        shouldRecoverMissingTerminal && payload
-          ? createTerminalRecoveryOwnership(state, payload)
+      const recoveryOwnership: TerminalRecoveryOwnership | null =
+        shouldRecoverMissingTerminal && payload?.runId
+          ? {
+              sessionKey: payload.sessionKey,
+              agentId: resolveChatAgentId(state),
+              runId: payload.runId,
+              client: state.client,
+              connectionEpoch: state.connectionEpoch,
+              runLifecycleGeneration: state.chatRunLifecycleGeneration ?? 0,
+              initialTerminalReplySignatures: readTerminalReplyRecoveryState(state, payload.runId)
+                .terminalReplySignatures,
+            }
           : null;
-      const recoveryClaimed = recoveryOwnership
-        ? claimTerminalRecovery(state, recoveryOwnership)
-        : false;
-      if (recoveryOwnership && recoveryClaimed) {
+      if (recoveryOwnership && claimTerminalRecovery(state, recoveryOwnership)) {
         state.pendingSessionMessageReloadSessionKey = null;
         // The first owned message-less terminal recovers history even when an
         // earlier snapshot already marked the run complete. Replays, yielded, or

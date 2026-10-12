@@ -5,7 +5,7 @@ import {
   prepareUserProfileSelectionAuthority,
 } from "../../state/user-channel-identity-operations.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
-import { isUserModelAuthProfileOwner } from "../../state/user-model-accounts.js";
+import { prepareUserModelAccountAuthority } from "../../state/user-model-account-operations.js";
 import { ensureProfileIdForEmail } from "../../state/user-profile-email.js";
 import { UserProfileNotFoundError } from "../../state/user-profiles-schema.js";
 import type {
@@ -124,9 +124,13 @@ export async function preparePersonalModelAccountSelection(
   requiredScope: PersonalModelSelectionScope = "operator.write",
 ): Promise<UserModelAccountSelection> {
   const action = await prepareUserModelAccountAction(options, undefined, requiredScope);
+  const account = await prepareUserModelAccountAuthority({
+    profileId: action.owner,
+    authProfileId,
+  });
   const assertCurrent = () => {
     action.assertCurrent();
-    if (!isUserModelAuthProfileOwner({ profileId: action.owner, authProfileId })) {
+    if (!account?.isCurrent()) {
       throw new ModelAccountConnectAuthorityError();
     }
   };

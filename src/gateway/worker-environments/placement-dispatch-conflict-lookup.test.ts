@@ -31,11 +31,11 @@ describe("worker placement dispatch conflict lookup", () => {
   let root: string;
   let database: OpenClawStateDatabase;
   let placementStore: PlacementStore;
-  const createTestHarness = (
+  const createTestHarness = async (
     options: Parameters<typeof createPlacementHarness>[2] = {},
     store: PlacementStore = placementStore,
   ) =>
-    createPlacementHarness(database, store, {
+    await createPlacementHarness(database, store, {
       workspacePath: path.join(root, "workspace"),
       ...options,
     });
@@ -48,7 +48,7 @@ describe("worker placement dispatch conflict lookup", () => {
   });
 
   it("reclaims an unchanged worker with unknown conflict state without silently clearing its report", async () => {
-    const harness = createTestHarness({
+    const harness = await createTestHarness({
       priorWorkspaceResultConflictLookup: { kind: "unknown", reason: "malformed-report" },
       reconcileChanged: false,
       reconcileCommitsManifest: false,
@@ -75,7 +75,7 @@ describe("worker placement dispatch conflict lookup", () => {
   ])(
     "reclaims a previous-instance pending result with $kind conflict state without clearing unseen reports",
     async (lookup) => {
-      const originalHarness = createTestHarness();
+      const originalHarness = await createTestHarness();
       const active = await originalHarness.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
@@ -93,7 +93,7 @@ describe("worker placement dispatch conflict lookup", () => {
       await placementStore.markWorkspaceResultPending(claim);
 
       const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-      const restartedHarness = createTestHarness(
+      const restartedHarness = await createTestHarness(
         { priorWorkspaceResultConflictLookup: lookup },
         restartedStore,
       );

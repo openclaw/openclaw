@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
@@ -8,6 +9,7 @@ import {
   isRecord,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CallBriefSchema, type CallBrief } from "./call-brief.js";
 import { registerVoiceCallLogs } from "./cli-call-log.js";
 import { parseCliInteger, writeCliJson, writeCliLine } from "./cli-command-io.js";
 import {
@@ -37,6 +39,28 @@ import {
   setupTailscaleExposureRoutes,
 } from "./webhook/tailscale.js";
 
+async function readCliBrief(options: {
+  brief?: string;
+  briefFile?: string;
+}): Promise<CallBrief | undefined> {
+  if (options.brief && options.briefFile) {
+    throw new Error("Use either --brief or --brief-file");
+  }
+  const raw = options.briefFile
+    ? await readFile(resolveUserPath(options.briefFile), "utf8")
+    : options.brief;
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw.length > 16000) {
+    throw new Error("Brief input is too large");
+  }
+  const value =
+    options.briefFile || raw.trimStart().startsWith("{") || raw.trimStart().startsWith("[")
+      ? JSON.parse(raw)
+      : { task: raw };
+  return CallBriefSchema.parse(value);
+}
 function resolveMode(input: string): "off" | "serve" | "funnel" {
   const raw = normalizeOptionalLowercaseString(input) ?? "";
   if (raw === "serve" || raw === "off") {
@@ -267,12 +291,19 @@ export function registerVoiceCallCli(params: {
 
   const callAction =
     (method: "voicecall.initiate" | "voicecall.start") =>
-    async (options: { to?: string; message?: string; mode?: string }) =>
+    async (options: {
+      to?: string;
+      message?: string;
+      mode?: string;
+      brief?: string;
+      briefFile?: string;
+    }) =>
       runWithStandaloneRuntime(createRuntime, async (ensureRuntime) => {
         const callId = await initiateVoiceCall({
           ensureRuntime,
           config,
           method,
+          brief: await readCliBrief(options),
           to: options.to,
           message: options.message,
           mode: options.mode,
@@ -293,6 +324,8 @@ export function registerVoiceCallCli(params: {
       "Call mode: notify (hangup after message) or conversation (stay open)",
       "conversation",
     )
+    .option("--brief <text-or-json>", "Per-call task or structured JSON brief")
+    .option("--brief-file <path>", "Read a structured JSON brief from a file")
     .action(callAction("voicecall.initiate"));
 
   root
@@ -305,6 +338,8 @@ export function registerVoiceCallCli(params: {
       "Call mode: notify (hangup after message) or conversation (stay open)",
       "conversation",
     )
+    .option("--brief <text-or-json>", "Per-call task or structured JSON brief")
+    .option("--brief-file <path>", "Read a structured JSON brief from a file")
     .action(callAction("voicecall.start"));
 
   root
@@ -352,6 +387,27 @@ export function registerVoiceCallCli(params: {
         failureLabel: "speak",
       }),
     );
+
+  root
+    .command("steer")
+    .description("Steer an active realtime call through its owning Gateway")
+    .requiredOption("--call-id <id>", "Call ID")
+    .requiredOption("--message <text>", "Owner instruction")
+    .option("--mode <mode>", "guidance or say", "guidance")
+    .action(async (options: { callId: string; message: string; mode: string }) => {
+      if (options.mode !== "say" && options.mode !== "guidance") {
+        throw new Error("mode must be say or guidance");
+      }
+      const gateway = await callVoiceCallGateway("voicecall.steer", {
+        callId: options.callId,
+        message: options.message,
+        mode: options.mode,
+      });
+      if (!gateway.ok) {
+        throw new Error("Steering requires the running Gateway that owns the active call");
+      }
+      writeCliJson(gateway.payload);
+    });
 
   root
     .command("dtmf")

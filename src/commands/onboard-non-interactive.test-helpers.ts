@@ -43,10 +43,6 @@ export type OnboardGatewayHealthCall = {
   token?: string;
 };
 
-export type OnboardHealthCommandCall = OnboardGatewayHealthCall & {
-  config?: OpenClawConfig;
-};
-
 export function createThrowingRuntime(): NonInteractiveRuntime {
   return {
     log: () => {},

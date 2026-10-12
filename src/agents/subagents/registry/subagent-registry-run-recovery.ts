@@ -13,7 +13,11 @@ import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { replaceRequesterCronAuthorityEntry } from "../requester-cron-authority.js";
-import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAuthority,
+  warnLegacySubagentAuthority,
+} from "./subagent-child-owner-match.js";
 import {
   clearDeliveryState,
   normalizeSubagentRunState,
@@ -31,6 +35,7 @@ import {
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import { SubagentWaitManager } from "./subagent-registry-run-wait.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasRequesterCompletionCohort } from "./subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
   getSubagentRunRuntimeKey,
@@ -335,9 +340,11 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           // The frozen batch is addressed by runId. Adoption retires the previous id,
           // so an unmapped membership list would drop this row from its own batch and
           // let the wave complete without ever waking the requester.
-          const sourceRequesterSettleWake = replaceParams.preserveRequesterSettleWake
-            ? source.requesterSettleWake
-            : undefined;
+          // A child-only pause notice ends with adoption; it never owns the result.
+          const sourceRequesterSettleWake =
+            replaceParams.preserveRequesterSettleWake && hasRequesterCompletionCohort(source)
+              ? source.requesterSettleWake
+              : undefined;
           const remapRequesterSettleWake = (
             wake: RequesterSettleWakeState,
           ): RequesterSettleWakeState => ({
@@ -382,11 +389,16 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             requesterSettleWake: sourceRequesterSettleWake
               ? remapRequesterSettleWake(sourceRequesterSettleWake)
               : undefined,
-            execution: absorbed?.execution ?? {
-              status: "running",
-              startedAt: now,
-              lifecycleGeneration,
-              transcriptTarget: replaceParams.transcriptTarget,
+            execution: {
+              ...(absorbed?.execution ?? {
+                status: "running",
+                startedAt: now,
+                lifecycleGeneration,
+                transcriptTarget: replaceParams.transcriptTarget,
+              }),
+              ...(resolveSubagentChildAuthority(absorbed ?? source).status === "legacy-unverified"
+                ? { suppressSessionEffects: true }
+                : {}),
             },
             swarmLaunchPending: false,
             completion: {
@@ -493,6 +505,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     }
     const source = replacement.source;
     const next = publishedNext ?? replacement.next;
+    warnLegacySubagentAuthority(source, log.warn);
     if (!isSameSubagentRunOwner(this.options.runs.get(nextRunId), next)) {
       return true;
     }
@@ -513,6 +526,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
         void safeRemoveAttachmentsDir(source);
       }
       if (
+        resolveSubagentChildAuthority(source).status === "verified" &&
         source.execution.transcriptTarget &&
         source.execution.transcriptTarget !== next.execution.transcriptTarget
       ) {
@@ -534,14 +548,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     this.options.ensureListener();
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
     this.options.startSweeper();
-    void this.waitForSubagentCompletion(
-      nextRunId,
-      this.options.resolveSubagentWaitTimeoutMs(
-        this.options.getRuntimeConfig(),
-        next.runTimeoutSeconds,
-      ),
-      next,
-    );
+    void this.waitForSubagentCompletion(nextRunId, next);
     return true;
   };
 }

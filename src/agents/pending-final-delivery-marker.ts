@@ -12,6 +12,7 @@ import {
   normalizePendingFinalDeliveryPayloads,
   normalizePendingFinalRecoveryPayloads,
 } from "../auto-reply/reply/pending-final-delivery.js";
+import { captureSessionWriterDeliveryRead } from "../auto-reply/reply/session-writer-delivery-authority.js";
 import {
   getRestartRecoveryTerminalDeliveryEvidence,
   mergeRestartRecoveryTerminalDeliveryEvidence,
@@ -55,11 +56,15 @@ export async function persistPendingFinalDeliveryMarker(
   const recoverableText = buildRecoverablePendingFinalDeliveryText(
     normalizePendingFinalRecoveryPayloads(params.payloads),
   );
+  const entry =
+    (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined) ??
+    params.sessionEntry;
 
   if (
     !params.deliver ||
     !params.sessionStore ||
     !params.sessionKey ||
+    !entry ||
     params.suppressVisibleSessionEffects ||
     params.sessionReboundDuringRun ||
     isSubagentSessionKey(params.sessionKey) ||
@@ -75,15 +80,11 @@ export async function persistPendingFinalDeliveryMarker(
     };
   }
 
-  const entry = params.sessionStore[params.sessionKey] ?? params.sessionEntry;
-  if (!entry) {
-    return {
-      sessionEntry: params.sessionEntry,
-      pendingFinalDeliveryMarkerPersisted: false,
-      hasSendableFinalPayload,
-    };
-  }
-
+  const readCurrentSession = captureSessionWriterDeliveryRead({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
   params.assertCurrent?.();
   const sessionKey = resolveSqliteSessionKey(params.sessionKey, params.agentId);
   const now = Date.now();
@@ -168,6 +169,7 @@ export async function persistPendingFinalDeliveryMarker(
                 sessionKey: params.sessionKey,
                 storePath: params.storePath,
                 harnessCompletion,
+                ...(readCurrentSession ? { readCurrentSession } : {}),
               },
             }
           : {}),

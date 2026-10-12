@@ -17,12 +17,12 @@ import type { resolveUtilityModelRefForAgent } from "../agents/utility-model.js"
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
+  patchSessionEntryTarget,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
@@ -39,7 +39,11 @@ const MAX_SUPERSEDED_RUNS = 256;
 const MAX_DORMANT_RUNS = 256;
 const MAX_DISABLED_RUNS = 512;
 
-export const SESSION_OBSERVER_MODEL_MAX_TOKENS = 300;
+export type SessionObserverRead = {
+  assertCurrent: () => void;
+  withRead: <T>(consume: (session: SessionEntry | undefined) => T) => Promise<T>;
+  persist: NonNullable<SessionObserverDeps["persistDigest"]>;
+};
 
 export function sessionObserverScopeKey(sessionKey: string, agentId: string): string {
   return parseAgentSessionKey(sessionKey)
@@ -86,6 +90,7 @@ export function resolveSessionObserverDigestForLifecycle(
 }
 
 export type SessionObserverState = SessionActivityNoteState & {
+  reader?: SessionObserverRead;
   sessionKey: string;
   sessionId?: string;
   lifecycleRevision?: string;
@@ -113,6 +118,7 @@ export type SessionObserverState = SessionActivityNoteState & {
 
 export type DormantSessionObserverRun = Pick<
   SessionObserverState,
+  | "reader"
   | "sessionKey"
   | "sessionId"
   | "lifecycleRevision"
@@ -131,16 +137,17 @@ export type DormantSessionObserverRun = Pick<
 
 export type SessionObserverRevisionFloor = Pick<
   DormantSessionObserverRun,
-  "sessionId" | "lifecycleRevision" | "revision" | "previousDigest"
+  "reader" | "sessionId" | "lifecycleRevision" | "revision" | "previousDigest"
 >;
 
 export function snapshotSessionObserverRevisionFloor({
+  reader,
   sessionId,
   lifecycleRevision,
   revision,
   previousDigest,
 }: SessionObserverRevisionFloor): SessionObserverRevisionFloor {
-  return { sessionId, lifecycleRevision, revision, previousDigest };
+  return { ...(reader ? { reader } : {}), sessionId, lifecycleRevision, revision, previousDigest };
 }
 
 export function rememberSessionObserverRevisionFloor(
@@ -209,6 +216,7 @@ export function createDormantSessionObserverRun(
   state: SessionObserverState,
 ): DormantSessionObserverRun {
   return {
+    reader: state.reader,
     sessionKey: state.sessionKey,
     sessionId: state.sessionId,
     lifecycleRevision: state.lifecycleRevision,
@@ -243,6 +251,7 @@ export type SessionObserverDeps = {
   completeModel?: CompleteModel;
   readSession?: (sessionKey: string, agentId: string) => SessionEntry | undefined;
   persistDigest?: (params: {
+    reader?: SessionObserverRead;
     sessionKey: string;
     sessionId?: string;
     agentId: string;
@@ -289,7 +298,7 @@ const ModelDigestSchema = z.strictObject({
 });
 
 export function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
-  const normalized = redactToolPayloadText(value).replace(/\s+/gu, " ").trim();
+  const normalized = value.replace(/\s+/gu, " ").trim();
   return truncateUtf16Safe(normalized, maxChars);
 }
 
@@ -304,6 +313,7 @@ export function defaultReadSession(
 }
 
 export async function defaultPersistDigest(params: {
+  target?: Parameters<typeof patchSessionEntryTarget>[0];
   sessionKey: string;
   sessionId?: string;
   agentId: string;
@@ -315,12 +325,14 @@ export async function defaultPersistDigest(params: {
   // row is gone (→ null) and a truthy clone on rejection — track acceptance
   // separately since the result alone can't distinguish the three states.
   let applied = false;
-  const result = await patchSessionEntryCore(
-    {
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      ...(params.storePath ? { storePath: params.storePath } : {}),
-    },
+  const patchEntry = params.target
+    ? patchSessionEntryTarget.bind(undefined, params.target)
+    : patchSessionEntryCore.bind(undefined, {
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        ...(params.storePath ? { storePath: params.storePath } : {}),
+      });
+  const result = await patchEntry(
     (entry) => {
       if (params.stillCurrent?.() === false) {
         return null;
@@ -346,11 +358,20 @@ export async function defaultPersistDigest(params: {
     },
     {
       preserveActivity: true,
+      workerGuard: {
+        assertCurrent: () => {
+          // An already-stale updater keeps its false result; planned writes retain live authority.
+          if (applied && params.stillCurrent?.() === false) {
+            throw new Error("Session observer authority changed before digest commit");
+          }
+        },
+      },
       onCommitted: () =>
         sessionChanges.emit({
           sessionKey: params.sessionKey,
           agentId: params.agentId,
           storePath: params.storePath,
+          scope: "runtime",
           facts: { kind: "unchanged" },
         }),
     },
@@ -361,7 +382,10 @@ export async function defaultPersistDigest(params: {
 export async function synthesizeSessionObserverTerminalDigest(params: {
   source: { event?: AgentEventPayload; state?: SessionObserverState };
   dormant?: DormantSessionObserverRun;
-  readSession: NonNullable<SessionObserverDeps["readSession"]>;
+  readSession: (
+    sessionKey: string,
+    agentId: string,
+  ) => SessionEntry | undefined | Promise<SessionEntry | undefined>;
   persistDigest: NonNullable<SessionObserverDeps["persistDigest"]>;
   now: () => number;
   /** Rechecked at persist time: rollover can admit a newer run between the
@@ -384,7 +408,10 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
   if (!sessionKey || !agentId || !health) {
     return undefined;
   }
-  const session = params.readSession(sessionKey, agentId);
+  const session = await params.readSession(sessionKey, agentId);
+  if (params.stillCurrent?.() === false) {
+    return undefined;
+  }
   const lifecycle = params.source.state ?? params.dormant ?? session;
   if (
     !isSameSessionObserverLifecycle(lifecycle, session) ||
@@ -412,27 +439,18 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
       ? sanitizeSessionObserverModelText(terminalReply.text, HEADLINE_MAX_CHARS)
       : undefined;
   const persistBounded = async (candidate: SessionObserverDigest): Promise<boolean> => {
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      if (params.stillCurrent?.() === false) {
-        return false;
-      }
-      try {
-        // null means the store entry is gone (unpersistable session) — treat as
-        // a terminal false rather than a retryable failure.
-        const persisted = await params.persistDigest({
-          sessionKey,
-          sessionId,
-          agentId,
-          digest: candidate,
-          stillCurrent: params.stillCurrent,
-        });
-        return persisted === true;
-      } catch (error) {
-        lastError = error;
-      }
+    if (params.stillCurrent?.() === false) {
+      return false;
     }
-    throw lastError;
+    return (
+      (await params.persistDigest({
+        sessionKey,
+        sessionId,
+        agentId,
+        digest: candidate,
+        stillCurrent: params.stillCurrent,
+      })) === true
+    );
   };
   if (previous.health === health) {
     // The live broadcast already matched the terminal health; only the durable

@@ -39,14 +39,6 @@ type ChatModelSelectOption = {
   unavailableReason?: ModelCatalogEntry["unavailableReason"];
 };
 
-type ChatModelSelectState = {
-  currentOverride: string;
-  defaultModel: string;
-  defaultLabel: string;
-  modelOverrideSource: GatewaySessionRow["modelOverrideSource"];
-  options: ChatModelSelectOption[];
-};
-
 export type ChatFastModeSelectValue = "" | "on" | "off" | "auto" | "ultrafast";
 
 export type ChatFastModeSelectState = {
@@ -56,6 +48,7 @@ export type ChatFastModeSelectState = {
   disabled: boolean;
   /** Resolved speed label, separate from the saved preference. */
   label: string;
+  hint?: string;
   /** Value the toggle commits when clicked. */
   nextValue: ChatFastModeSelectValue;
   supported: boolean;
@@ -240,7 +233,11 @@ export function hasChatModelCatalogSelection(
 
 export function chatModelUnavailableMessage(
   reason: ModelRuntimeEntry["unavailableReason"],
+  inference?: "worker",
 ): string | undefined {
+  if (inference === "worker" && (reason === "missing-auth" || reason === "auth-failed")) {
+    return undefined;
+  }
   if (reason === "missing-auth") {
     return t("modelSetup.missingAuth");
   }
@@ -252,9 +249,7 @@ export function chatModelUnavailableMessage(
     : undefined;
 }
 
-export function resolveChatModelSelectState(
-  state: ChatModelSelectStateInput,
-): ChatModelSelectState {
+export function resolveChatModelSelectState(state: ChatModelSelectStateInput) {
   const catalog = state.chatModelCatalog ?? [];
   const availableKeys = new Set(
     catalog.filter((entry) => entry.available !== false).map(catalogModelAvailabilityKey),
@@ -426,27 +421,25 @@ export function resolveChatFastModeSelectState(
   );
   const selectedSupport = applicability.size === 1 ? [...applicability][0] : undefined;
   const requestSupported = selectedSupport ?? isChatFastModeProviderSupported(effectiveProvider);
+  const everySelected = (
+    predicate: (selected: (typeof selectedEntries)[number]) => boolean | undefined,
+  ) => selectedEntries.length > 0 && selectedEntries.every(predicate);
   const ultrafastOffered =
     requestSupported &&
-    selectedEntries.length > 0 &&
-    selectedEntries.every(
+    everySelected(
       ({ runtime }) => runtime?.available === true && runtime.serviceTiers?.includes("ultrafast"),
     );
   // The transport owns recovery support; provider and runtime names do not identify the endpoint.
-  const canRecoverRejectedTier =
-    selectedEntries.length > 0 &&
-    selectedEntries.every(({ runtime }) => runtime?.supportsServiceTierRecovery === true);
-  const standardOnly =
-    selectedEntries.length > 0 &&
-    selectedEntries.every(({ runtime }) =>
-      isChatStandardOnlySpeed(runtime, canRecoverRejectedTier),
-    );
-  const ultrafastUnavailable =
-    selectedEntries.length > 0 &&
-    selectedEntries.every(
-      ({ runtime }) =>
-        runtime?.serviceTiers !== undefined && !runtime.serviceTiers.includes("ultrafast"),
-    );
+  const canRecoverRejectedTier = everySelected(
+    ({ runtime }) => runtime?.supportsServiceTierRecovery === true,
+  );
+  const standardOnly = everySelected(({ runtime }) =>
+    isChatStandardOnlySpeed(runtime, canRecoverRejectedTier),
+  );
+  const ultrafastUnavailable = everySelected(
+    ({ runtime }) =>
+      runtime?.serviceTiers !== undefined && !runtime.serviceTiers.includes("ultrafast"),
+  );
   const effectiveMode = standardOnly
     ? false
     : savedMode === "ultrafast" &&
@@ -491,6 +484,11 @@ export function resolveChatFastModeSelectState(
       : active
         ? "off"
         : "on";
+  const requestedTier =
+    effectiveMode === "ultrafast" ? "ultrafast" : active ? "priority" : undefined;
+  const observation = selectedEntries
+    .map(({ runtime }) => runtime?.serviceTierObservation)
+    .find((value) => value && value.requestedTier === requestedTier);
   return {
     active,
     currentOverride,
@@ -504,6 +502,14 @@ export function resolveChatFastModeSelectState(
       input.stream !== null ||
       !input.gatewayAvailable,
     label,
+    hint: observation
+      ? observation.responseTier
+        ? t("chat.modelControls.tierDowngrade", {
+            requested: label,
+            served: observation.responseTier,
+          })
+        : t("chat.modelControls.tierRejected", { requested: label })
+      : undefined,
     nextValue,
     supported,
     ultrafastSupported: ultrafastUnavailable ? false : ultrafastOffered || undefined,

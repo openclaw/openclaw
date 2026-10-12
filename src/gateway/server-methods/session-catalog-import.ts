@@ -136,7 +136,6 @@ export async function importAuthorizedSessionCatalog(params: {
       : {}),
     creation: resolveOperatorSessionCreation(client),
     commandSource: "gateway:sessions.catalog.import",
-    loadGatewayModelCatalogSnapshot: () => context.loadGatewayModelCatalogSnapshot({ agentId }),
     commitGuard,
     onCreatedSessionCommitted: (target) => {
       authorization?.recordCreatedSession?.({

@@ -15,9 +15,7 @@ const MAX_LIVE_SESSIONS = 16;
 
 type CliLiveSessionOwner = {
   backendId: string;
-  agentAccountId?: string;
   agentId?: string;
-  authProfileId?: string;
   sessionId?: string;
   sessionKey?: string;
 };
@@ -43,13 +41,11 @@ function buildCliLiveRegistryKey(owner: CliLiveSessionOwner): string {
   return `${owner.backendId}:${buildCliLiveOwnerKey(owner)}`;
 }
 
-/** Hashes the account/agent/auth/session tuple shared by queue and registry ownership. */
+/** One conversation owns the queue and process slot, regardless of its inbound route. */
 export function buildCliLiveOwnerKey(input: Omit<CliLiveSessionOwner, "backendId">): string {
   return sha256Hex(
     JSON.stringify({
-      agentAccountId: input.agentAccountId,
       agentId: input.agentId,
-      authProfileId: input.authProfileId,
       sessionId: input.sessionId,
       sessionKey: input.sessionKey,
     }),
@@ -59,9 +55,7 @@ export function buildCliLiveOwnerKey(input: Omit<CliLiveSessionOwner, "backendId
 function buildCliLiveSessionKey(context: PreparedCliRunContext): string {
   return buildCliLiveRegistryKey({
     backendId: context.backendResolved.id,
-    agentAccountId: context.params.agentAccountId,
     agentId: context.params.agentId,
-    authProfileId: context.effectiveAuthProfileId,
     sessionId: context.params.sessionId,
     sessionKey: context.params.sessionKey,
   });
@@ -81,7 +75,8 @@ export function getCliLiveSessionGeneration(owner: CliLiveSessionOwner): string 
 export function getCliLiveSessionApprovalGrants(
   context: PreparedCliRunContext,
 ): Set<string> | undefined {
-  return liveSessions.get(buildCliLiveSessionKey(context))?.approvalGrants;
+  const record = liveSessions.get(buildCliLiveSessionKey(context));
+  return record?.owner === context.preparedBackend ? record.approvalGrants : undefined;
 }
 
 /** Closes the live execution session associated with a prepared run context, if one exists. */

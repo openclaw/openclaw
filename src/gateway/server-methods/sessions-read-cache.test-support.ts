@@ -8,11 +8,7 @@ import {
 import { mergeSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
-import {
-  getUserProfileRole,
-  readUserProfileAliases,
-  resolveUserProfileId,
-} from "../../state/user-profiles.js";
+import { readUserProfileIdentity } from "../../state/user-profile-list.js";
 import {
   disposeSessionReadContexts,
   trackSessionReadProfileSubscription,
@@ -23,8 +19,8 @@ import {
   getSessionRowProjection,
 } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
-import type { GatewaySessionRow } from "../session-utils.types.js";
-import type { WorkerPlacementMoveIntent } from "../worker-environments/placement-move-intent.js";
+import type { SessionsListResult } from "../session-utils.types.js";
+import type { WorkerPlacementMoveIntent } from "../worker-environments/placement-move-intent.types.js";
 import type { WorkerSessionPlacementReader } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
@@ -70,7 +66,9 @@ export function createSessionPlacementFactsReader(
 ): Pick<WorkerSessionPlacementStore, "readProjection"> {
   return {
     async readProjection(sessionIds) {
-      const records = placements.getMany(sessionIds);
+      const records = placements.getManyAsync
+        ? await placements.getManyAsync(sessionIds)
+        : placements.getMany(sessionIds);
       const environments = new Map();
       for (const placement of records.values()) {
         const environmentId = placement.environmentId;
@@ -116,12 +114,11 @@ export function identifiedClient(profileId: string): GatewayClient {
   };
   const refresh = () => {
     const identity = client.authenticatedUserProfile?.profileId ?? profileId;
-    const resolved = resolveUserProfileId(identity);
-    const canonical = resolved ?? identity;
+    const resolved = readUserProfileIdentity(identity);
     client.preparedSessionProfile = {
-      profileId: canonical,
-      aliases: readUserProfileAliases(canonical),
-      role: resolved ? getUserProfileRole(canonical) : null,
+      profileId: resolved?.profileId ?? identity,
+      aliases: resolved?.aliases ?? new Set([identity]),
+      role: resolved?.role ?? null,
     };
   };
   refresh();
@@ -144,24 +141,21 @@ export async function listSessions(params: {
   client: GatewayClient;
   context: GatewayRequestContext;
   request: SessionsListParams;
+  acceptsSerializedJson?: boolean;
 }) {
   await initializeSessionReadContext(params.context);
   const responses: Parameters<RespondFn>[] = [];
   await sessionReadHandlers["sessions.list"]?.({
     req: { type: "req", id: "session-list-test", method: "sessions.list" },
     params: params.request,
+    acceptsSerializedJson: params.acceptsSerializedJson,
     client: params.client,
     context: params.context,
     respond: (...response: Parameters<RespondFn>) => responses.push(response),
   } as never);
   expect(responses).toHaveLength(1);
   expect(responses[0]?.[0]).toBe(true);
-  return responses[0]?.[1] as {
-    count: number;
-    nextOffset: number | null;
-    sessions: GatewaySessionRow[];
-    totalCount: number;
-  };
+  return responses[0]?.[1] as SessionsListResult;
 }
 
 export async function seedSessions(): Promise<OpenClawConfig> {

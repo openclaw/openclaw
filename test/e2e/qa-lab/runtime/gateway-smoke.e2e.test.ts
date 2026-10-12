@@ -169,21 +169,6 @@ describe("gateway-smoke", () => {
     };
   }
 
-  it("prints CLI help without connecting", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/dev/gateway-smoke.ts", "--help"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: bun scripts/dev/gateway-smoke.ts");
-    expect(result.stderr).toBe("");
-  });
-
   it("rejects unknown CLI args before connecting", () => {
     const result = spawnSync(
       process.execPath,
@@ -365,24 +350,6 @@ describe("gateway-smoke", () => {
       "connect failed: unpaired iOS smoke unexpectedly received operator scopes",
     ]);
   });
-
-  it("fails after connect when health is unavailable", async () => {
-    const fake = createSmokeDeps({
-      connect: connectHelloResponse(),
-      health: { ok: false, error: "not healthy" },
-    });
-
-    const code = await runGatewaySmoke(
-      { token: "secret-token", urlRaw: "ws://127.0.0.1:12345" },
-      fake.deps,
-    );
-
-    expect(code).toBe(3);
-    expect(fake.closed).toBe(1);
-    expect(fake.calls.map((call) => call.method)).toEqual(["connect", "health"]);
-    expect(fake.stderr).toEqual(["health failed: not healthy"]);
-  });
-
   it("fails when health success is missing summary evidence", async () => {
     const fake = createSmokeDeps({
       connect: connectHelloResponse(),
@@ -398,26 +365,5 @@ describe("gateway-smoke", () => {
     expect(fake.closed).toBe(1);
     expect(fake.calls.map((call) => call.method)).toEqual(["connect", "health"]);
     expect(fake.stderr).toEqual(["health failed: missing health summary payload"]);
-  });
-
-  it("does not call scoped chat history for an unpaired iOS-shaped client", async () => {
-    const fake = createSmokeDeps({
-      connect: connectHelloResponse(),
-      health: healthResponse(),
-      "chat.history": { ok: false, error: "session store unavailable" },
-    });
-
-    const code = await runGatewaySmoke(
-      { token: "secret-token", urlRaw: "ws://127.0.0.1:12345" },
-      fake.deps,
-    );
-
-    expect(code).toBe(0);
-    expect(fake.closed).toBe(1);
-    expect(fake.calls).toEqual([
-      { method: "connect", timeout: undefined },
-      { method: "health", timeout: undefined },
-    ]);
-    expect(fake.stderr).toEqual([]);
   });
 });

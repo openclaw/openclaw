@@ -408,10 +408,10 @@ Right-click the OpenClaw Dock icon for **Open Dashboard** and **Settings…**.
 When more than one Gateway is configured, this menu also lists every Gateway;
 the checkmark follows the selected experience's frontmost Gateway window.
 
-The menu probes health only while open, retaining cached facts between openings.
-Before the first result a card shows **checking…**; failed probes show
+The menu checks health only while open, retaining cached facts between openings.
+Before the first result a card shows **checking…**; failed checks show
 **unreachable** and the last successful contact time when known. Closing the menu
-cancels in-flight probes and closes idle probe connections for saved Gateways with
+cancels in-flight checks and closes idle check connections for saved Gateways with
 no open Web or Native windows. It never disconnects the primary Gateway.
 
 The app also reopens your selected Gateway in the chosen experience after an app

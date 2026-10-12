@@ -8,11 +8,11 @@ const inferenceFallbackMocks = vi.hoisted(() => ({
   verifySystemAgentInferenceWithFallback: vi.fn(),
 }));
 const transcriptStoreMocks = vi.hoisted(() => ({
-  appendTranscriptReset: vi.fn(),
-  appendTranscriptTurn: vi.fn(),
-  readTranscriptTail: vi.fn(
-    (): Array<{ role: "user" | "assistant"; text: string; at: number }> => [],
-  ),
+  appendReset: vi.fn(),
+  appendTurn: vi.fn(),
+  readTranscriptTailAsync: vi
+    .fn<typeof import("../../system-agent/transcript-store.js").readTranscriptTailAsync>()
+    .mockResolvedValue([]),
 }));
 const greetingMocks = vi.hoisted(() => ({
   acknowledgeSystemAgentGreetingDelivery: vi.fn(),
@@ -26,12 +26,22 @@ vi.mock("../../system-agent/inference-fallback.js", () => ({
   verifySystemAgentInferenceWithFallback:
     inferenceFallbackMocks.verifySystemAgentInferenceWithFallback,
 }));
+// mock-isolation: Keep transcript effects local while checking welcome delivery and acknowledgement ordering.
 vi.mock("../../system-agent/transcript-store.js", () => ({
-  appendTranscriptReset: transcriptStoreMocks.appendTranscriptReset,
-  appendTranscriptTurn: transcriptStoreMocks.appendTranscriptTurn,
-  readTranscriptTail: transcriptStoreMocks.readTranscriptTail,
+  createSystemAgentTranscriptStore: () => ({
+    assertCurrent: () => undefined,
+    appendTurn: transcriptStoreMocks.appendTurn,
+    appendReset: transcriptStoreMocks.appendReset,
+    readTail: (limit: number, afterLastReset = false) =>
+      afterLastReset
+        ? transcriptStoreMocks.readTranscriptTailAsync(limit, { afterLastReset })
+        : transcriptStoreMocks.readTranscriptTailAsync(limit),
+  }),
+  readTranscriptTailAsync: transcriptStoreMocks.readTranscriptTailAsync,
 }));
+// mock-isolation: Use deterministic caretaker facts and avoid provider inference in welcome-policy tests.
 vi.mock("../../system-agent/greeting.js", () => ({
+  createSystemAgentGreetingCache: () => ({ assertCurrent: () => undefined }),
   acknowledgeSystemAgentGreetingDelivery: greetingMocks.acknowledgeSystemAgentGreetingDelivery,
   buildSystemAgentGreetingQuestion: greetingMocks.buildSystemAgentGreetingQuestion,
   loadSystemAgentGreetingFacts: greetingMocks.loadSystemAgentGreetingFacts,
@@ -114,8 +124,8 @@ const quickActions = {
 
 beforeEach(() => {
   createdEngines.length = 0;
-  transcriptStoreMocks.appendTranscriptTurn.mockReset();
-  transcriptStoreMocks.readTranscriptTail.mockReset().mockReturnValue([]);
+  transcriptStoreMocks.appendTurn.mockReset();
+  transcriptStoreMocks.readTranscriptTailAsync.mockReset().mockResolvedValue([]);
   inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockResolvedValue({
     ok: true,
     binding: {},
@@ -142,7 +152,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
-  transcriptStoreMocks.readTranscriptTail.mockReturnValue([]);
+  transcriptStoreMocks.readTranscriptTailAsync.mockResolvedValue([]);
   resetCommandQueueStateForTest();
 });
 
@@ -150,7 +160,7 @@ describe("openclaw.chat caretaker welcome", () => {
   it.each([undefined, "new-agent"] as const)(
     "opens creation choices on the retained %s session without duplicating passive history",
     async (welcomeVariant) => {
-      transcriptStoreMocks.readTranscriptTail.mockReturnValue([
+      transcriptStoreMocks.readTranscriptTailAsync.mockResolvedValue([
         { role: "user", text: "Earlier conversation", at: 1 },
       ]);
       const sessions = new Map<string, SystemAgentChatSession>();
@@ -190,8 +200,8 @@ describe("openclaw.chat caretaker welcome", () => {
       expect(sessions.get("retained")).toBe(session);
       expect(createdEngines).toHaveLength(1);
       expect(session.engine.dispose).not.toHaveBeenCalled();
-      expect(transcriptStoreMocks.appendTranscriptReset).not.toHaveBeenCalled();
-      expect(transcriptStoreMocks.appendTranscriptTurn).not.toHaveBeenCalled();
+      expect(transcriptStoreMocks.appendReset).not.toHaveBeenCalled();
+      expect(transcriptStoreMocks.appendTurn).not.toHaveBeenCalled();
     },
   );
 
@@ -269,12 +279,14 @@ describe("openclaw.chat caretaker welcome", () => {
     "does not replay an earlier passive $label welcome on reconnect",
     async ({ welcomeVariant }) => {
       const transcript: Array<{ role: "user" | "assistant"; text: string; at: number }> = [];
-      transcriptStoreMocks.appendTranscriptTurn.mockImplementation(
+      transcriptStoreMocks.appendTurn.mockImplementation(
         (turn: { role: "user" | "assistant"; text: string; at: number }) => {
           transcript.push(turn);
         },
       );
-      transcriptStoreMocks.readTranscriptTail.mockImplementation(() => transcript.slice());
+      transcriptStoreMocks.readTranscriptTailAsync.mockImplementation(async () =>
+        transcript.slice(),
+      );
       const context = makeContext(new Map());
       const variant = welcomeVariant ? { welcomeVariant } : {};
 
@@ -320,9 +332,9 @@ describe("openclaw.chat caretaker welcome", () => {
     expect(welcome.payload).toMatchObject({
       reply: "Hi, I'm OpenClaw — caretaker of this gateway, config, channels, and agents.",
     });
-    expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).toHaveBeenCalledWith({
-      auditSequence: 0,
-    });
+    expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ auditSequence: 0 }),
+    );
     expect(sessions.get("fresh-with-message")?.welcomeAuditSequence).toBeUndefined();
   });
 
@@ -353,7 +365,7 @@ describe("openclaw.chat caretaker welcome", () => {
             client: defaultClient,
           } as never),
         ).rejects.toThrow("socket closed");
-        expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenCalled();
+        expect(transcriptStoreMocks.appendTurn).toHaveBeenCalled();
         expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).not.toHaveBeenCalled();
         expect(sessions.get("audit-welcome")?.welcomeAuditSequence).toBe(42);
         const creation = await callChat(context, {
@@ -375,13 +387,13 @@ describe("openclaw.chat caretaker welcome", () => {
       expect(greetingMocks.resolveSystemAgentGreeting).toHaveBeenCalledWith(
         expect.objectContaining({ allowInference: true }),
       );
-      expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenCalledWith(
+      expect(transcriptStoreMocks.appendTurn).toHaveBeenCalledWith(
         expect.objectContaining({ role: "assistant", text }),
       );
-      expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).toHaveBeenCalledWith({
-        auditSequence: 42,
-      });
-      expect(transcriptStoreMocks.appendTranscriptTurn.mock.invocationCallOrder[0]).toBeLessThan(
+      expect(greetingMocks.acknowledgeSystemAgentGreetingDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({ auditSequence: 42 }),
+      );
+      expect(transcriptStoreMocks.appendTurn.mock.invocationCallOrder[0]).toBeLessThan(
         greetingMocks.acknowledgeSystemAgentGreetingDelivery.mock.invocationCallOrder[0] ?? 0,
       );
       expect(sessions.get("audit-welcome")?.welcomeAuditSequence).toBeUndefined();

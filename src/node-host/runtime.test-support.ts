@@ -79,7 +79,7 @@ vi.mock("./skills.js", () => ({
 
 // Retain local bindings after mock registration for Vitest's export transform.
 const { prepareNodeHostRuntime } = await import("./runtime.js");
-export { mocks, prepareNodeHostRuntime };
+export { mocks };
 
 export const frame = {
   id: "invoke-1",

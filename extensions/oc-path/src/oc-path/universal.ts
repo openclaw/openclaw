@@ -35,9 +35,6 @@ import type { YamlAst } from "./yaml/ast.js";
 import { insertYamlOcPath, setYamlOcPath } from "./yaml/edit.js";
 import { resolveYamlOcPath } from "./yaml/resolve.js";
 
-// ---------- Public types ---------------------------------------------------
-
-/** Tagged-union of every AST kind the substrate supports. */
 export type OcAst = MdAst | JsoncAst | JsonlAst | YamlAst;
 
 /**
@@ -70,12 +67,12 @@ type NodeDescriptor =
   | "yaml-seq";
 
 type ContainerKind =
-  | "md-section" // append item to a section
-  | "md-file" // append a section to the file
-  | "md-frontmatter" // add a frontmatter key
+  | "md-section"
+  | "md-file"
+  | "md-frontmatter"
   | "jsonc-object"
   | "jsonc-array"
-  | "jsonl-file" // append a line
+  | "jsonl-file"
   | "yaml-map"
   | "yaml-seq";
 
@@ -133,7 +130,6 @@ function detectInsertion(path: OcPath): InsertionInfo | null {
   return { parentPath, marker };
 }
 
-/** Resolve an `OcPath` against any AST. Throws on wildcard patterns. */
 export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
   // Single-match verb: wildcards belong to findOcPaths. Throw with a
   // structured code so consumers can route to the right verb.
@@ -238,11 +234,9 @@ function resolveYamlToUniversal(ast: YamlAst, path: OcPath): OcMatch | null {
 }
 
 function yamlScalarToMatch(value: unknown, line: number): OcMatch {
-  if (typeof value === "number") {
-    return { kind: "leaf", valueText: String(value), leafType: "number", line };
-  }
-  if (typeof value === "boolean") {
-    return { kind: "leaf", valueText: String(value), leafType: "boolean", line };
+  const leafType = typeof value;
+  if (leafType === "number" || leafType === "boolean") {
+    return { kind: "leaf", valueText: String(value), leafType, line };
   }
   if (value === null) {
     return { kind: "leaf", valueText: "null", leafType: "null", line };
@@ -342,11 +336,8 @@ function resolveJsoncInsertion(ast: JsoncAst, info: InsertionInfo): InsertionMat
     containerNode = m.node;
   }
   const line = containerNode.line ?? 1;
-  if (containerNode.kind === "object") {
-    return { kind: "insertion-point", container: "jsonc-object", line };
-  }
-  if (containerNode.kind === "array") {
-    return { kind: "insertion-point", container: "jsonc-array", line };
+  if (containerNode.kind === "object" || containerNode.kind === "array") {
+    return { kind: "insertion-point", container: `jsonc-${containerNode.kind}`, line };
   }
   return null;
 }
@@ -500,7 +491,6 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResu
     return { ok: true, ast: rebuildMdRaw(newAst) };
   }
 
-  // [frontmatter] — keyed insertion only
   if (p.section === "[frontmatter]") {
     if (typeof info.marker !== "object" || info.marker.kind !== "keyed") {
       return {

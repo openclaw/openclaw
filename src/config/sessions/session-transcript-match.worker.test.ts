@@ -13,7 +13,7 @@ import { createSessionEntryWithTranscript } from "./session-accessor.js";
 import { findSessionTranscriptArchiveEventReadOnly } from "./session-accessor.sqlite-history.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionTranscriptEventMatch } from "./session-history-read.types.js";
 import { findTranscriptEvent } from "./session-transcript-match.js";
 
@@ -139,9 +139,6 @@ it("recovers the exact complete child answer without preventing host event progr
           getRuntimeConfig: () => ({}),
           readSubagentSessionEntry: () => {
             throw new Error("Unexpected session fallback");
-          },
-          resolveAgentIdFromSessionKey: () => {
-            throw new Error("Unexpected agent fallback");
           },
           resolveSessionStorePathCore: () => {
             throw new Error("Unexpected store fallback");

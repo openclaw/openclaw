@@ -6,6 +6,7 @@ import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-prov
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import { assignProviderModelOrder } from "./model-catalog-order.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
@@ -16,7 +17,7 @@ import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.ty
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type ConfiguredCatalogAgentFacts = {
-  input: { config: OpenClawConfig };
+  input: { config: OpenClawConfig; env?: NodeJS.ProcessEnv };
   configuredModelRefs: readonly ModelCatalogRef[];
 };
 
@@ -105,10 +106,20 @@ export function prepareCapturedRuntimeFacts(
   if (params.agentFacts.input.config.models?.mode === "replace") {
     return facts;
   }
+  const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+    params.workspaceFacts.pluginMetadataSnapshot,
+    params.agentFacts.input.config,
+    params.agentFacts.input.env,
+  );
   const entries = dedupeByKey(
     [
       ...facts.modelCatalog.entries,
-      ...params.templateModelRegistry.getAll().map(modelCatalogRowToEntry),
+      // Static hooks also answer runtime provider aliases; publish canonical rows once.
+      ...params.templateModelRegistry.getAll().map((model) => {
+        const entry = modelCatalogRowToEntry(model);
+        entry.provider = normalizeProvider(entry.provider);
+        return entry;
+      }),
     ],
     createModelCatalogIdentityKeyResolver(),
   );

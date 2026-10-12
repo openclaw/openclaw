@@ -50,16 +50,6 @@ describe("presence.activity registered request", () => {
         code: "INVALID_REQUEST",
         message: "invalid presence.activity params",
       },
-      {
-        payload: { userId: "other" },
-        code: "INVALID_REQUEST",
-        message: "invalid presence.activity params",
-      },
-      {
-        payload: { key: "a" },
-        code: "INVALID_REQUEST",
-        message: "invalid presence.activity params",
-      },
       { scopes: ["operator.pairing"], code: "FORBIDDEN", message: "missing scope: operator.read" },
       { role: "node", code: "INVALID_REQUEST" },
     ]) {

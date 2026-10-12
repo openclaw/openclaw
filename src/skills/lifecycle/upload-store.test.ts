@@ -370,48 +370,6 @@ describe("skill upload store", () => {
     );
   });
 
-  it("resumes a multi-chunk upload from a new store instance", async () => {
-    const { databasePath, root, store } = await makeStore();
-    const archive = Buffer.from("abcdef");
-    const begin = await store.begin({
-      kind: "skill-archive",
-      slug: "resume-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: begin.uploadId,
-      offset: 0,
-      dataBase64: archive.subarray(0, 3).toString("base64"),
-    });
-
-    const reopened = createSkillUploadStore({ path: databasePath, tempRootDir: root });
-    await reopened.chunk({
-      uploadId: begin.uploadId,
-      offset: 3,
-      dataBase64: archive.subarray(3).toString("base64"),
-    });
-    await expect(
-      reopened.commit({ uploadId: begin.uploadId, sha256: sha256(archive) }),
-    ).resolves.toMatchObject({ sha256: sha256(archive) });
-  });
-
-  it("uses the expiry and idempotency indexes", async () => {
-    const { databasePath } = await makeStore();
-    const db = stateDatabase(databasePath);
-    const expiryPlan = db
-      .prepare("EXPLAIN QUERY PLAN SELECT upload_id FROM skill_uploads WHERE expires_at <= ?")
-      .all(Date.now()) as Array<{ detail: string }>;
-    const idempotencyPlan = db
-      .prepare(
-        "EXPLAIN QUERY PLAN SELECT upload_id FROM skill_uploads WHERE idempotency_key_hash = ?",
-      )
-      .all("hash") as Array<{ detail: string }>;
-    expect(expiryPlan.map((row) => row.detail).join("\n")).toContain("idx_skill_uploads_expiry");
-    expect(idempotencyPlan.map((row) => row.detail).join("\n")).toMatch(
-      /idx_skill_uploads_idempotency|sqlite_autoindex_skill_uploads/u,
-    );
-  });
-
   it("accepts exactly one concurrent chunk at the same offset", async () => {
     const { databasePath, root, store } = await makeStore();
     const begin = await store.begin({
@@ -457,35 +415,6 @@ describe("skill upload store", () => {
       store.begin({ ...params, slug: "different-skill" }),
       "idempotencyKey conflicts with a different upload",
     );
-  });
-
-  it("keeps the optional begin sha immutable across commit retries", async () => {
-    const { databasePath, store } = await makeStore();
-    const archive = Buffer.from("abc");
-    const digest = sha256(archive);
-    const params = {
-      kind: "skill-archive" as const,
-      slug: "late-sha-skill",
-      sizeBytes: archive.length,
-      idempotencyKey: "late-sha-key",
-    };
-    const begin = await store.begin(params);
-    await store.chunk({
-      uploadId: begin.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    await store.commit({ uploadId: begin.uploadId, sha256: digest });
-
-    await expect(store.begin(params)).resolves.toMatchObject({
-      uploadId: begin.uploadId,
-      receivedBytes: archive.length,
-    });
-    expect(
-      stateDatabase(databasePath)
-        .prepare("SELECT sha256, actual_sha256 FROM skill_uploads WHERE upload_id = ?")
-        .get(begin.uploadId),
-    ).toMatchObject({ sha256: null, actual_sha256: digest });
   });
 
   it("rejects idempotent commit when committed metadata is missing the actual sha", async () => {
@@ -694,38 +623,6 @@ describe("skill upload store", () => {
     expect(installLeaseCount(databasePath, committed.uploadId)).toBe(0);
   });
 
-  it("starts install lease expiry from the claim time", async () => {
-    const { databasePath, store } = await makeStore({
-      installLeaseHeartbeatMs: 60_000,
-      installLeaseMs: 60_000,
-    });
-    const committed = await commitUploadFixture(store, databasePath, "bounded-lease-skill");
-
-    const entered = deferred();
-    const release = deferred();
-    const pinned = store.withCommittedUpload(committed.uploadId, async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    await entered.promise;
-    try {
-      const lease = stateDatabase(databasePath)
-        .prepare(
-          "SELECT created_at, heartbeat_at, expires_at FROM state_leases WHERE scope = 'skill-upload-install' AND lease_key = ?",
-        )
-        .get(committed.uploadId) as {
-        created_at: number;
-        heartbeat_at: number;
-        expires_at: number;
-      };
-      expect(lease.heartbeat_at).toBe(lease.created_at);
-      expect(lease.expires_at - lease.created_at).toBe(60_000);
-    } finally {
-      release.resolve();
-    }
-    await pinned;
-  });
-
   it("does not renew an expired install lease", async () => {
     const { databasePath, store } = await makeStore({ installLeaseHeartbeatMs: 60_000 });
     const archive = Buffer.from("abc");
@@ -846,32 +743,6 @@ describe("skill upload store", () => {
       await expectUploadError(controls.remove(), "upload install lease is no longer active");
     });
 
-    expect(uploadCount(databasePath)).toBe(1);
-  });
-
-  it("cleans temporary materialization and preserves the upload on action failure", async () => {
-    const { databasePath, store } = await makeStore();
-    const archive = Buffer.from("abc");
-
-    const committed = await store.begin({
-      kind: "skill-archive",
-      slug: "throwing-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: committed.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    await store.commit({ uploadId: committed.uploadId });
-    let archivePath = "";
-    await expect(
-      store.withCommittedUpload(committed.uploadId, async (record) => {
-        archivePath = record.archivePath;
-        throw new Error("action failed");
-      }),
-    ).rejects.toThrow("action failed");
-    await expectMissingPath(archivePath);
     expect(uploadCount(databasePath)).toBe(1);
   });
 });

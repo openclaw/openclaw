@@ -171,7 +171,15 @@ function parseYamlFrontmatterOnce(
       const lineEnd = block.indexOf("\n", start);
       const line = block.slice(start, lineEnd === -1 ? block.length : lineEnd);
       const match = line.match(/^([\w-]+):\s*(.*)$/);
-      if (match?.[1] && match[2]?.includes(":")) {
+      const valueEnd = isNode(pair.value) ? pair.value.range?.[1] : undefined;
+      // The raw line is the authored value only when that line holds all of it.
+      // A flow that continues past the line was being replaced by its first line.
+      if (
+        match?.[1] &&
+        match[2]?.includes(":") &&
+        valueEnd !== undefined &&
+        (lineEnd === -1 || valueEnd <= lineEnd)
+      ) {
         inlineColonKeys.add(match[1]);
       }
     }

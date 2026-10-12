@@ -81,10 +81,7 @@ extension OnboardingView {
 
     func onboardingDidDisappear() {
         onboardingVisible = false
-        configuredGatewayProbe.invalidate()
-        // Queued detection can otherwise proceed into a mutating activation
-        // after the window or its selected route has gone away.
-        aiSetup.resetForGatewayChange(clearPendingHandoff: false)
+        self.resetGatewayBoundAIState()
         stopDiscovery()
     }
 
@@ -109,12 +106,8 @@ extension OnboardingView {
         self.reconcilePageForModeChange(previousActivePageIndex: oldActive)
         Task { await self.refreshCLIStatus() }
         self.returnToInferenceSetupIfNeeded()
-        if let updatePageMonitoring {
-            updatePageMonitoring(self.activePageIndex)
-        } else {
-            // A mode swap can keep the same page cursor, so its onChange hook may not restart AI setup.
-            updateMonitoring(for: self.activePageIndex)
-        }
+        // A mode swap can keep the same page cursor, so its onChange hook may not restart AI setup.
+        (updatePageMonitoring ?? self.updateMonitoring(for:))(self.activePageIndex)
         self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent)
     }
 
@@ -313,12 +306,8 @@ extension OnboardingView {
         pageOrder: [Int],
         aiPageIndex: Int) -> Int
     {
-        guard let aiPageCursor = pageOrder.firstIndex(of: aiPageIndex),
-              currentPage >= aiPageCursor
-        else {
-            return currentPage
-        }
-        return aiPageCursor
+        let aiPageCursor = pageOrder.firstIndex(of: aiPageIndex) ?? currentPage
+        return min(currentPage, aiPageCursor)
     }
 
     var navigationBar: some View {
@@ -360,9 +349,8 @@ extension OnboardingView {
                 ForEach(0..<self.pageCount, id: \.self) { index in
                     let isInstallLocked = (self.installingCLI || self.updatingGatewayHosting || self.aiSetup.isBusy) &&
                         index != self.currentPage
-                    let isConnectionLocked = self.isConnectionSelectionBlocking &&
-                        index > (connectionLockIndex ?? 0)
-                    let isRemoteGatewayLocked = !remoteGatewayDecision.canAdvance &&
+                    let isConnectionLocked = (self.isConnectionSelectionBlocking || !remoteGatewayDecision
+                        .canAdvance) &&
                         index > (connectionLockIndex ?? 0)
                     let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
                     // Dots must honor the same setup gate as Next: no jumping
@@ -371,8 +359,7 @@ extension OnboardingView {
                         self.state.connectionMode != .unconfigured &&
                         !self.aiSetup.connected &&
                         index > (aiLockIndex ?? 0)
-                    let isLocked = isInstallLocked || isConnectionLocked || isRemoteGatewayLocked || isCLILocked ||
-                        isAILocked
+                    let isLocked = isInstallLocked || isConnectionLocked || isCLILocked || isAILocked
                     Button {
                         withAnimation { self.currentPage = index }
                     } label: {

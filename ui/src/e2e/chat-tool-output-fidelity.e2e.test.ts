@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -44,7 +45,7 @@ const history = prepareChatHistoryFixture([
   },
   {
     ...result,
-    content: [{ type: "text", text: fullOutput.slice(0, 8_000) }],
+    content: [{ type: "text", text: fullOutput.slice(0, 2_000) }],
     __openclaw: { ...result["__openclaw"], truncated: true, reason: "display-cap" },
   },
   { role: "assistant", content: "Output is ready for inspection.", timestamp: timestamp + 3 },
@@ -179,16 +180,26 @@ suite.define(() => {
         };
         await page.goto(suite.server.baseUrl + "chat");
         await expandOutput();
-        // This capture precedes the new control assertion, so the same test also
-        // retains an honest pre-fix screenshot when run against the baseline.
         await page.screenshot({
           path: path.join(artifacts, "01-output-preview.png"),
           animations: "disabled",
         });
+        const historyRequests = (await gateway.getRequests()).filter(
+          (request) => request.method === "chat.history" || request.method === "chat.startup",
+        );
+        expect(historyRequests.length).toBeGreaterThan(0);
+        expect(
+          historyRequests.every(
+            (request) => asOptionalRecord(request.params)?.toolResultMaxChars === 2_000,
+          ),
+        ).toBe(true);
         expect(await page.locator(".chat-tool-msg-body").textContent()).not.toContain("TAIL:");
         await page.getByRole("button", { name: "Show full output", exact: true }).click();
         const request = await gateway.waitForRequest("chat.message.get");
-        expect(request.params).toMatchObject({ messageId: "output-result", maxChars: 2_000_000 });
+        expect(request.params).toMatchObject({ messageId: "output-result" });
+        expect(asOptionalRecord(request.params)?.maxChars).toBeGreaterThanOrEqual(
+          fullOutput.length,
+        );
         const output = page.locator(".chat-tool-output__text");
         await expect.poll(() => output.textContent()).toBe(fullOutput);
         expect(await page.locator("openclaw-chat-tool-output").textContent()).not.toContain(

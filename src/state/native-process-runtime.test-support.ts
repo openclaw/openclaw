@@ -1,5 +1,15 @@
 // Native state probes share the invocation's compiled graph before starting child deadlines.
 export const stateNativeProcessEntrypoints = {
+  agentDatabaseCrash: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "openclaw-agent-db-crash.test-support",
+    distWorkerPath: "state/openclaw-agent-db-crash.test-support.js",
+  },
+  canonicalReceipt: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "openclaw-agent-canonical-validation-receipt.test-support",
+    distWorkerPath: "state/openclaw-agent-canonical-validation-receipt.test-support.js",
+  },
   agentDatabase: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "openclaw-agent-db",

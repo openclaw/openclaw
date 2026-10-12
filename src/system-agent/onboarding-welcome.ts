@@ -54,11 +54,6 @@ function setupWelcomeQuestion(translate: SetupTranslator): SystemAgentChatQuesti
   };
 }
 
-type OnboardingWelcome = {
-  text: string;
-  question: SystemAgentChatQuestion;
-};
-
 /**
  * The basic bootstrap is conversational: the welcome message carries the plan
  * and the engine holds it as the pending proposal, so a bare "yes" applies it.
@@ -70,13 +65,7 @@ type OnboardingWelcome = {
  * auth), not just a model: a model-only config would otherwise get the
  * ready-guide welcome while the gate stays locked, stranding the page.
  */
-async function loadAuthoredSetupConfig(params: {
-  configExists: boolean;
-  configValid: boolean;
-}): Promise<{
-  authoredConfig?: OpenClawConfig;
-  hasAuthoredSetup: boolean;
-}> {
+async function loadAuthoredSetupConfig(params: { configExists: boolean; configValid: boolean }) {
   let authoredConfig: OpenClawConfig | undefined;
   if (params.configExists && params.configValid) {
     try {
@@ -107,7 +96,7 @@ export async function buildOnboardingWelcome(params: {
   locale?: string;
   /** Only the local terminal can finish the machine-owned Gateway installation. */
   localRecovery?: true;
-}): Promise<OnboardingWelcome> {
+}) {
   const translate = createSetupTranslator({
     keyPrefix: "wizard.onboardingWelcome",
     locale: params.locale === undefined ? undefined : resolveWizardLocale(params.locale),

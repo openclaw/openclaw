@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
@@ -34,7 +34,10 @@ describe("msteams conversation store (plugin state)", () => {
     setMSTeamsRuntime(msteamsRuntimeStub);
     stateDir = tempDirs.make("openclaw-msteams-store-");
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   });
+
+  afterEach(() => vi.unstubAllEnvs());
 
   function openStoredConversations() {
     return createPluginStateKeyedStoreForTests<StoredConversationReference>("msteams", {
@@ -56,14 +59,14 @@ describe("msteams conversation store (plugin state)", () => {
     await sqliteStore.register(conversationStateKey("19:old@thread.tacv2"), {
       ...ref,
       conversation: { id: "19:old@thread.tacv2" },
-      lastSeenAt: new Date(Date.now() - 60_000).toISOString(),
+      lastSeenAt: new Date(Date.now() - 366 * 24 * 60 * 60 * 1000).toISOString(),
     });
     await sqliteStore.register(conversationStateKey("19:legacy@thread.tacv2"), {
       ...ref,
       conversation: { id: "19:legacy@thread.tacv2" },
     });
 
-    const store = createMSTeamsConversationStoreState({ env, ttlMs: 1_000 });
+    const store = createMSTeamsConversationStoreState();
     const ids = (await store.list()).map((entry) => entry.conversationId).toSorted();
     expect(ids).toEqual(["19:active@thread.tacv2", "19:legacy@thread.tacv2"]);
 
@@ -111,14 +114,14 @@ describe("msteams conversation store (plugin state)", () => {
     const sqliteStore = openStoredConversations();
     await sqliteStore.register(conversationStateKey("conv-current"), ref);
 
-    const store = createMSTeamsConversationStoreState({ env });
+    const store = createMSTeamsConversationStoreState();
     await expect(store.get("conv-current")).resolves.toEqual(ref);
     await fs.promises.access(filePath);
   });
 
   it("hashes external conversation ids before using plugin-state keys", async () => {
     const longConversationId = `a:${"x".repeat(900)}`;
-    const store = createMSTeamsConversationStoreState({ stateDir });
+    const store = createMSTeamsConversationStoreState();
 
     await store.upsert(longConversationId, {
       conversation: { conversationType: "personal" },
@@ -132,8 +135,38 @@ describe("msteams conversation store (plugin state)", () => {
     });
   });
 
+  it("isolates account lookups and removal while preserving the default namespace", async () => {
+    const reference: StoredConversationReference = {
+      conversation: { id: "19:shared", conversationType: "personal" },
+      serviceUrl: "https://service.example.com/default",
+      user: { id: "shared-user", aadObjectId: "shared-aad" },
+    };
+    await openStoredConversations().register(conversationStateKey("19:shared"), reference);
+    const defaultStore = createMSTeamsConversationStoreState({ accountId: "default" });
+    const namedStore = createMSTeamsConversationStoreState({ accountId: "19" });
+    expect(await defaultStore.get("19:shared")).toEqual(reference);
+    expect(await namedStore.get("19:shared")).toBeNull();
+    await namedStore.upsert("19:shared", {
+      ...reference,
+      serviceUrl: "https://service.example.com/named",
+    });
+    expect(await namedStore.findPreferredDmByUserId("shared-aad")).toMatchObject({
+      conversationId: "19:shared",
+      reference: { serviceUrl: "https://service.example.com/named" },
+    });
+    expect(await defaultStore.findPreferredDmByUserId("shared-aad")).toMatchObject({
+      reference: { serviceUrl: "https://service.example.com/default" },
+    });
+    await defaultStore.remove("19:shared");
+    expect(await namedStore.list()).toHaveLength(1);
+    expect(
+      await createMSTeamsConversationStoreState({ accountId: "19" }).get("19:shared"),
+    ).not.toBeNull();
+    expect(await createMSTeamsConversationStoreState().list()).toEqual([]);
+  });
+
   it("serializes concurrent upserts so sparse activities preserve independent fields", async () => {
-    const store = createMSTeamsConversationStoreState({ stateDir });
+    const store = createMSTeamsConversationStoreState();
 
     await store.upsert("conv-race", {
       conversation: { id: "conv-race", conversationType: "personal" },
@@ -191,7 +224,7 @@ describe("msteams conversation store (plugin state)", () => {
         });
       }
 
-      const store = createMSTeamsConversationStoreState({ env });
+      const store = createMSTeamsConversationStoreState();
       await store.upsert("conv-new", { ...reference, conversation: { id: "conv-new" } });
       const ids = (await store.list()).map((entry) => entry.conversationId);
 

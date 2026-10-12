@@ -1,7 +1,6 @@
 import { validateCronListParams } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
-import { cronJobReadView } from "../../cron/job-read-view.js";
 import { resolveCronJobBoundSessionKeys } from "../../cron/job-session-bindings.js";
 import type { CronListPageResult } from "../../cron/service/list-page-types.js";
 import type { CronJob } from "../../cron/types.js";
@@ -14,7 +13,7 @@ import {
 } from "./cron-caller-scope.js";
 import { assertCronReadCurrent, respondInvalidCronParams } from "./cron-job-access.js";
 import { startCronListDiagnostics } from "./cron-list-diagnostics.js";
-import { compactCronListJob } from "./cron-list-projection.js";
+import { projectCronListJobs } from "./cron-list-projection.js";
 import {
   createCronSessionVisibility,
   cronJobIsVisible,
@@ -112,7 +111,6 @@ export const cronListHandler = createPreparedReadHandler((options) => {
         }
         assertCronReadCurrent(options);
         const cronVisibility = visibilityRead.resolve();
-        const defaultAgentId = context.cron.getDefaultAgentId();
         diagnostics?.mark("listing");
         const selectedJobIds = new Set<string>();
         const matchesCurrentJob = (job: CronJob) =>
@@ -161,10 +159,7 @@ export const cronListHandler = createPreparedReadHandler((options) => {
         assertPageCurrent();
         diagnostics?.setReturnedCount(page.jobs.length);
         diagnostics?.mark("projection");
-        const jobs = page.jobs.map((job) => ({
-          ...(p.compact === true ? compactCronListJob(job) : cronJobReadView(job)),
-          effectiveAgentId: tryResolveCronJobEffectiveAgentId(job, defaultAgentId) ?? null,
-        }));
+        const jobs = projectCronListJobs(context.cron, page, p.compact === true);
         if (p.compact === true || p.includeDeliveryPreviews === false) {
           // Full job rows are the default because editors need their payloads. Delivery
           // previews are independently suppressible so list-only callers avoid per-job I/O

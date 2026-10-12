@@ -337,7 +337,7 @@ describe("DraftPlaceState repository selection", () => {
       const { state, browser } = createRepositoryFixture();
       onTestFinished(() => browser.disconnect());
       state.selectRemoteProject(REMOTE_PROJECT);
-      browser.onPopoverShow("where");
+      browser.popoverCallbacks("where").onPopoverShow();
       browser.changeEnvironmentQuery("runner");
 
       state.selectDevice("", true);
@@ -345,7 +345,7 @@ describe("DraftPlaceState repository selection", () => {
       expect(browser.popoverOpen("where")).toBe(false);
       expect(browser.environmentQuery).toBe("runner");
 
-      browser.onPopoverShow("where");
+      browser.popoverCallbacks("where").onPopoverShow();
       expect(browser.environmentQuery).toBe("");
       if (destination === "cloud") {
         state.selectCloudProfile("aws");

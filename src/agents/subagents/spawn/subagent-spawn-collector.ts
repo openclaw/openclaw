@@ -1,3 +1,4 @@
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { hasRetainedPluginRuntimeCloseError } from "../../../plugins/runtime-close-error.js";
 import { getCanonicalGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -20,7 +21,6 @@ import type { holdQueuedSwarmRun, activateSwarmRun } from "../swarm/swarm-schedu
 import {
   type bindSubagentSpawnCleanup,
   type cleanupFailedSpawnBeforeAgentStart,
-  retrySubagentCleanup,
   terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
 import type { PreparedContextEngineSubagentSpawn } from "./subagent-spawn-context.js";
@@ -149,12 +149,15 @@ export function createCollectorLaunchCallbacks(params: {
       ) {
         await claim;
       }
-      const assertLaunchCurrent = () => {
-        params.operatorAuthority?.assertCurrent();
-        if (canLaunchQueuedRegistration?.() === false) {
-          throw new Error("Collector registration no longer owns this launch");
-        }
-      };
+      const assertLaunchCurrent = composeSessionSourceAssertion(
+        [params.operatorAuthority?.assertCurrent],
+        (assertSource) => {
+          assertSource();
+          if (canLaunchQueuedRegistration?.() === false) {
+            throw new Error("Collector registration no longer owns this launch");
+          }
+        },
+      );
       assertLaunchCurrent();
       dispatchAttempted = true;
       const launch = await params.launchChildRun(assertLaunchCurrent);
@@ -198,8 +201,6 @@ export function createCollectorLaunchCallbacks(params: {
     await disposeFailedPreparation();
     releaseAuthority();
   };
-  // Scheduler retries repeat settlement, never the launch or admitted cleanup.
-  let startAttempt: Promise<void> | undefined;
   const cleanupOnce = async () =>
     await Promise.allSettled([
       Promise.resolve().then(() => preparation?.rollback()),
@@ -284,38 +285,33 @@ export function createCollectorLaunchCallbacks(params: {
           await registrationScope.settleFailedLaunch(launchError);
           return;
         }
-        await retrySubagentCleanup(async () => {
-          await settleFailedQueuedSubagentLaunch(childRunId, launchError);
-          return true;
-        });
+        await settleFailedQueuedSubagentLaunch(childRunId, launchError);
       };
       if (!dispatchAttempted && registrationScope) {
         await settleFailure();
       }
-      if (canCleanupCreatedSession?.() === false) {
+      const ownsSessionCleanup = canCleanupCreatedSession?.() !== false;
+      if (!ownsSessionCleanup) {
         await disposeFailedPreparation();
-        if (dispatchAttempted || !registrationScope) {
-          await settleFailure();
-        }
-        if (cleanupAttempt) {
-          await publishCleanupCompletion(await cleanupAttempt);
-        }
-        releaseAuthority();
-        return true;
       }
-      const cleanup = await (cleanupAttempt ??= cleanupOnce());
+      const cleanup = ownsSessionCleanup ? await (cleanupAttempt ??= cleanupOnce()) : undefined;
       if (dispatchAttempted || !registrationScope) {
         await settleFailure();
       }
-      await publishCleanupCompletion(cleanup);
-      await disposeFailedPreparation();
+      const completedCleanup = cleanup ?? (cleanupAttempt && (await cleanupAttempt));
+      if (completedCleanup) {
+        await publishCleanupCompletion(completedCleanup);
+      }
+      if (ownsSessionCleanup) {
+        await disposeFailedPreparation();
+      }
       releaseAuthority();
       return true;
     }, "subagents:spawn-cleanup");
   };
   return {
     signal: params.operatorAuthority?.signal,
-    start: () => (startAttempt ??= startOnce()),
+    start: startOnce,
     onStartFailure: settleLaunchFailure,
     onRemoved: async (reason) => {
       try {

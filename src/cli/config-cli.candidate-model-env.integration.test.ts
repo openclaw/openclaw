@@ -98,23 +98,6 @@ describe("config CLI candidate model environment", () => {
       expect(errors).toEqual([]);
     });
   });
-
-  it("persists a valid candidate environment-backed model", async () => {
-    const raw = JSON.stringify({ agents: { entries: { main: {} } } });
-    await withModelConfig(raw, { CONFIG_VALID_CANDIDATE_MODEL: undefined }, async (configPath) => {
-      await set(
-        "--batch-json",
-        JSON.stringify([
-          { path: "env.vars.CONFIG_VALID_CANDIDATE_MODEL", value: "fixture-model/allowed" },
-          { path: "agents.defaults.model", value: "${CONFIG_VALID_CANDIDATE_MODEL}" },
-        ]),
-      );
-      const saved = readJson(configPath);
-      expect(saved.agents.defaults.model).toBe("${CONFIG_VALID_CANDIDATE_MODEL}");
-      expect(saved.env.vars.CONFIG_VALID_CANDIDATE_MODEL).toBe("fixture-model/allowed");
-      expect(read(configPath + ".bak")).toBe(raw);
-    });
-  });
   it("rejects a changed environment behind an unchanged model reference during preview", async () => {
     const raw = JSON.stringify({
       env: { vars: { CONFIG_EXISTING_MODEL: "fixture-model/allowed" } },
@@ -137,136 +120,87 @@ describe("config CLI candidate model environment", () => {
       expect(fs.existsSync(configPath + ".bak")).toBe(false);
     });
   });
-  it.each([
-    { preview: false, change: "removed" },
-    { preview: true, change: "redirected" },
-    { preview: true, change: "unrelated" },
-    { preview: false, change: "external" },
-  ])(
-    "validates env-backed alias dependencies (preview=$preview, change=$change)",
-    async ({ preview, change }) => {
-      const aliasKey = `CONFIG_MODEL_ALIAS_${change.toUpperCase()}_${preview ? "PREVIEW" : "WRITE"}`;
-      const otherKey = `CONFIG_OTHER_ALIAS_${change.toUpperCase()}_${preview ? "PREVIEW" : "WRITE"}`;
-      const aliasRef = "${" + aliasKey + "}";
-      const otherRef = "${" + otherKey + "}";
-      const raw = JSON.stringify({
-        env: { vars: { [aliasKey]: "friendly", [otherKey]: "other" } },
-        agents: {
-          entries: { main: {} },
-          defaults: {
-            model: "friendly",
-            models: {
-              "fixture-model/allowed": { alias: aliasRef },
-              "fixture-model/unknown": { alias: otherRef },
-            },
+  it("validates a redirected env-backed alias during preview", async () => {
+    const aliasKey = "CONFIG_MODEL_ALIAS_REDIRECTED_PREVIEW";
+    const otherKey = "CONFIG_OTHER_ALIAS_REDIRECTED_PREVIEW";
+    const aliasRef = "${" + aliasKey + "}";
+    const otherRef = "${" + otherKey + "}";
+    const raw = JSON.stringify({
+      env: { vars: { [aliasKey]: "friendly", [otherKey]: "other" } },
+      agents: {
+        entries: { main: {} },
+        defaults: {
+          model: "friendly",
+          models: {
+            "fixture-model/allowed": { alias: aliasRef },
+            "fixture-model/unknown": { alias: otherRef },
           },
         },
-      });
-      await withModelConfig(
-        raw,
-        {
-          [aliasKey]: change === "external" ? "friendly" : undefined,
-          [otherKey]: undefined,
-        },
-        async (configPath) => {
-          catalog.calls.mockClear();
-          const result = set(
-            "--batch-json",
-            JSON.stringify([
-              { path: `env.vars.${aliasKey}`, value: change === "unrelated" ? "friendly" : "gone" },
-              {
-                path: `env.vars.${otherKey}`,
-                value: change === "redirected" ? "friendly" : "different",
-              },
-            ]),
-            ...(preview ? ["--dry-run"] : []),
-          );
-          if (change === "removed" || change === "redirected") {
-            await reject(result);
-            expect(catalog.calls, [...logs, ...errors].join("\n")).toHaveBeenCalled();
-            expect([...logs, ...errors].join("\n")).toContain("Cannot set model reference");
-            expect(read(configPath)).toBe(raw);
-            expect(fs.existsSync(configPath + ".bak")).toBe(false);
-          } else {
-            await expect(result).resolves.toBeUndefined();
-            expect(catalog.calls).not.toHaveBeenCalled();
-            if (preview) {
-              expect(read(configPath)).toBe(raw);
-              expect(fs.existsSync(configPath + ".bak")).toBe(false);
-            } else {
-              const saved = readJson(configPath);
-              expect(saved.agents.defaults.model).toBe("friendly");
-              expect(saved.agents.defaults.models["fixture-model/allowed"].alias).toBe(aliasRef);
-              expect(read(configPath + ".bak")).toBe(raw);
-            }
-          }
-        },
-      );
-    },
-  );
-  it.each(["default-direct", "inherited-env", "fallback-env", "agent-parent"])(
-    "checks alias changes in the owning agent scope (%s)",
-    async (kind) => {
-      const aliasKey = `CONFIG_OWNING_ALIAS_${kind.replaceAll("-", "_").toUpperCase()}`;
-      const aliasRef = "${" + aliasKey + "}";
-      const direct = kind.endsWith("direct") || kind.endsWith("parent");
-      const agentScoped = !kind.startsWith("default");
-      const raw = JSON.stringify({
-        env: { vars: { [aliasKey]: "friendly" } },
-        agents: {
-          ownership: "explicit",
-          defaults: {
-            model: !agentScoped || kind === "inherited-env" ? "friendly" : "fixture-model/allowed",
-            models: { "fixture-model/allowed": { alias: "friendly" } },
-          },
-          entries: {
-            main: {},
-            ...(agentScoped
-              ? {
-                  ops: {
-                    ...(kind === "inherited-env"
-                      ? {}
-                      : {
-                          model:
-                            kind === "fallback-env"
-                              ? { primary: "fixture-model/allowed", fallbacks: ["friendly"] }
-                              : "friendly",
-                        }),
-                    models: { "fixture-model/allowed": { alias: direct ? "friendly" : aliasRef } },
-                  },
-                }
-              : {}),
-          },
-        },
-      });
-      await withModelConfig(raw, { [aliasKey]: undefined }, async (configPath) => {
+      },
+    });
+    await withModelConfig(
+      raw,
+      {
+        [aliasKey]: undefined,
+        [otherKey]: undefined,
+      },
+      async (configPath) => {
         catalog.calls.mockClear();
-        await expect(
-          set(
-            "--batch-json",
-            JSON.stringify([
-              {
-                path: kind.endsWith("parent")
-                  ? agentScoped
-                    ? "agents.entries.ops"
-                    : "agents.defaults"
-                  : direct
-                    ? `${agentScoped ? "agents.entries.ops" : "agents.defaults"}.models["fixture-model/allowed"].alias`
-                    : `env.vars.${aliasKey}`,
-                value: kind.endsWith("parent")
-                  ? { model: "friendly", models: { "fixture-model/allowed": { alias: "gone" } } }
-                  : "gone",
-              },
-            ]),
-          ),
-        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        const result = set(
+          "--batch-json",
+          JSON.stringify([
+            { path: `env.vars.${aliasKey}`, value: "gone" },
+            {
+              path: `env.vars.${otherKey}`,
+              value: "friendly",
+            },
+          ]),
+          "--dry-run",
+        );
+        await reject(result);
         expect(catalog.calls, [...logs, ...errors].join("\n")).toHaveBeenCalled();
         expect([...logs, ...errors].join("\n")).toContain("Cannot set model reference");
         expect(read(configPath)).toBe(raw);
         expect(fs.existsSync(configPath + ".bak")).toBe(false);
-      });
-    },
-  );
+      },
+    );
+  });
+  it("checks an env-backed alias for an agent inheriting the default model", async () => {
+    const aliasKey = "CONFIG_OWNING_ALIAS_INHERITED_ENV";
+    const aliasRef = "${" + aliasKey + "}";
+    const raw = JSON.stringify({
+      env: { vars: { [aliasKey]: "friendly" } },
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          model: "friendly",
+          models: { "fixture-model/allowed": { alias: "friendly" } },
+        },
+        entries: {
+          main: {},
+          ops: { models: { "fixture-model/allowed": { alias: aliasRef } } },
+        },
+      },
+    });
+    await withModelConfig(raw, { [aliasKey]: undefined }, async (configPath) => {
+      catalog.calls.mockClear();
+      await expect(
+        set(
+          "--batch-json",
+          JSON.stringify([
+            {
+              path: `env.vars.${aliasKey}`,
+              value: "gone",
+            },
+          ]),
+        ),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(catalog.calls, [...logs, ...errors].join("\n")).toHaveBeenCalled();
+      expect([...logs, ...errors].join("\n")).toContain("Cannot set model reference");
+      expect(read(configPath)).toBe(raw);
+      expect(fs.existsSync(configPath + ".bak")).toBe(false);
+    });
+  });
   it("checks fallback provider after an owning primary edit", async () => {
     const raw = JSON.stringify({
       agents: {

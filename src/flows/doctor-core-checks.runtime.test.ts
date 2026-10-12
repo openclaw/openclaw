@@ -818,14 +818,6 @@ describe("doctor gateway runtime checks", () => {
     ]);
   });
 
-  it("skips daemon findings for remote gateway mode", async () => {
-    await expect(
-      collectGatewayDaemonFindings({ cfg: { gateway: { mode: "remote" } } }),
-    ).resolves.toEqual([]);
-
-    expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();
-  });
-
   it.each([
     { version: "26.8.1", text: false, status: "unsupported" as const, severity: "warning" },
     { version: "24.15.0", text: true, status: "supported" as const, severity: "info" },
@@ -833,7 +825,7 @@ describe("doctor gateway runtime checks", () => {
     "reports recorded Node $version capabilities as $severity",
     async ({ version, text, status, severity }) => {
       const message = text
-        ? `Node ${version}: unsupported version, capability probe passed.`
+        ? `Node ${version}: unsupported version, capability check passed.`
         : `Node ${version}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)`;
       mocks.readGatewayServiceState.mockResolvedValueOnce({
         installed: true,

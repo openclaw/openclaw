@@ -17,7 +17,6 @@ type ControlUiLinkParams = {
 
 type ControlUiLinks = { httpUrl: string; wsUrl: string };
 
-/** Resolve the advertised HTTP and websocket URLs for the Control UI. */
 export function resolveControlUiLinks(
   params: ControlUiLinkParams & { advertisedLanHost?: string | null },
 ): ControlUiLinks {
@@ -49,7 +48,6 @@ export function resolveControlUiLinks(
   };
 }
 
-/** Resolve Control UI URLs meant for display to nearby devices. */
 export async function resolveAdvertisedControlUiLinks(
   params: ControlUiLinkParams,
 ): Promise<ControlUiLinks> {

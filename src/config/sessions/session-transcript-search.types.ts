@@ -15,6 +15,10 @@ export type SessionTranscriptSearchResult = {
   archivedTranscriptsExcluded?: number;
 };
 
+export type SessionTranscriptSearchReadResult = Omit<SessionTranscriptSearchResult, "indexing"> & {
+  found: boolean;
+};
+
 export type SessionTranscriptSearchParams = {
   agentId: string;
   env?: NodeJS.ProcessEnv;

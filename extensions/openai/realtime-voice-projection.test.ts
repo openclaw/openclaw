@@ -18,6 +18,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
   isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
+  isProviderAuthProfileConfiguredAsync: mocks.isProviderAuthProfileConfiguredMock,
   resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
 }));
 const { isProviderAuthProfileConfiguredMock } = mocks;
@@ -63,6 +64,8 @@ describe("OpenAI realtime public projection", () => {
       for (const [azureConfig, supportsRelay] of [
         [{ azureEndpoint: " https://example.openai.azure.com " }, false],
         [{ azureDeployment: " live-deployment " }, false],
+        [{ baseUrl: " wss://voice.example.test/realtime " }, false],
+        [{ baseUrl: " " }, true],
         [{ azureEndpoint: "", azureDeployment: " \t " }, true],
         [{ azureEndpoint: " \t ", azureDeployment: "" }, true],
       ] as const) {

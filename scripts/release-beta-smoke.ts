@@ -12,15 +12,7 @@ import {
 } from "./lib/arg-utils.mts";
 import { sleep as delay } from "./lib/sleep.mjs";
 
-type Options = {
-  beta: string;
-  model: string;
-  providerMode: string;
-  ref: string;
-  repo: string;
-  skipParallels: boolean;
-  skipTelegram: boolean;
-};
+type Options = ReturnType<typeof parseArgs>;
 
 export type RunOptions = {
   capture?: boolean;
@@ -57,11 +49,11 @@ Options:
 `;
 }
 
-export function parseArgs(argv: string[]): Options {
+export function parseArgs(argv: string[]) {
   const args = stripLeadingPackageManagerSeparator(argv);
   const terminatorIndex = args.indexOf("--");
   const cliArgs = terminatorIndex === -1 ? args : args.slice(0, terminatorIndex);
-  const options: Options = {
+  const options = {
     beta: "beta",
     model: "openai/gpt-5.4",
     providerMode: "mock-openai",

@@ -77,11 +77,15 @@ const AgentsWaitOutputSchema = Type.Object(
 
 type WaitError = NonNullable<Static<typeof AgentsWaitOutputSchema>["errors"]>[number];
 
+type CollectorOwnerScope = {
+  currentSessionKeys: ReadonlySet<string>;
+  currentAgentId?: string;
+  config?: OpenClawConfig;
+};
+
 function ownsRun(
   entry: SubagentRunRecord,
-  currentSessionKeys: ReadonlySet<string>,
-  currentAgentId?: string,
-  config?: OpenClawConfig,
+  { currentSessionKeys, currentAgentId, config }: CollectorOwnerScope,
 ): boolean {
   const owner = entry.swarmRequesterSessionKey?.trim();
   if (!owner) {
@@ -140,13 +144,9 @@ function completionResult(
 export type CollectorCompletionResult = NonNullable<ReturnType<typeof completionResult>>;
 
 /** Park one host bridge until its collector completes; registry writes wake it without polling. */
-export async function waitForCollectorCompletion(params: {
-  runId: string;
-  currentSessionKeys: ReadonlySet<string>;
-  currentAgentId?: string;
-  config?: OpenClawConfig;
-  signal?: AbortSignal;
-}): Promise<CollectorCompletionResult> {
+export async function waitForCollectorCompletion(
+  params: CollectorOwnerScope & { runId: string; signal?: AbortSignal },
+): Promise<CollectorCompletionResult> {
   const state = await waitForCollector({
     ...params,
     ids: [params.runId],
@@ -162,9 +162,7 @@ export async function waitForCollectorCompletion(params: {
 function readWaitState(
   entries: ReadonlyMap<string, SubagentRunRecord>,
   ids: readonly string[],
-  currentSessionKeys: ReadonlySet<string>,
-  currentAgentId?: string,
-  config?: OpenClawConfig,
+  owner: CollectorOwnerScope,
 ) {
   const errors: WaitError[] = [];
   const completed: Array<{
@@ -179,7 +177,7 @@ function readWaitState(
       errors.push({ runId, error: "not_found" });
       continue;
     }
-    if (!ownsRun(entry, currentSessionKeys, currentAgentId, config)) {
+    if (!ownsRun(entry, owner)) {
       errors.push({ runId, error: "not_owner" });
       continue;
     }
@@ -205,16 +203,15 @@ function readWaitState(
   };
 }
 
-async function waitForCollector(params: {
-  ids: readonly string[];
-  currentSessionKeys: ReadonlySet<string>;
-  currentAgentId?: string;
-  config?: OpenClawConfig;
-  timeoutMs?: number;
-  waitForAll?: boolean;
-  signal?: AbortSignal;
-  abortError: () => Error;
-}) {
+async function waitForCollector(
+  params: CollectorOwnerScope & {
+    ids: readonly string[];
+    timeoutMs?: number;
+    waitForAll?: boolean;
+    signal?: AbortSignal;
+    abortError: () => Error;
+  },
+) {
   const deadline =
     params.timeoutMs === undefined ? undefined : performance.now() + params.timeoutMs;
   let changed: boolean;
@@ -245,13 +242,7 @@ async function waitForCollector(params: {
             callbackAbort = params.abortError();
             throw callbackAbort;
           }
-          return readWaitState(
-            entries,
-            params.ids,
-            params.currentSessionKeys,
-            params.currentAgentId,
-            params.config,
-          );
+          return readWaitState(entries, params.ids, params);
         });
       } catch (error) {
         if (params.signal?.aborted && error !== callbackAbort) {

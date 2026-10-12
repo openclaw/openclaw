@@ -31,11 +31,9 @@ export function resolveRoutedDeliveryThreadId(params: {
   ctx: MsgContext;
   sessionKey?: string;
 }): string | number | undefined {
-  if (params.ctx.MessageThreadId != null) {
-    return params.ctx.MessageThreadId;
-  }
-  if (params.ctx.TransportThreadId != null) {
-    return params.ctx.TransportThreadId;
-  }
-  return resolveLoadedSessionThreadInfo(params.sessionKey).threadId;
+  return (
+    params.ctx.MessageThreadId ??
+    params.ctx.TransportThreadId ??
+    resolveLoadedSessionThreadInfo(params.sessionKey).threadId
+  );
 }

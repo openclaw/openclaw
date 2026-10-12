@@ -23,69 +23,115 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 
-export async function resolveApprovedWorkerModel(params: {
+type ResolveApprovedWorkerModelParams = {
   target: BoundAgentRunSessionTarget & { sessionEntry?: SessionEntry };
   modelRef: WorkerInferenceModelRef;
   signal?: AbortSignal;
   runtimeSnapshot: PreparedModelRuntimeSnapshot;
   assertCurrent: () => void;
-}) {
-  const { target, modelRef, signal, runtimeSnapshot } = params;
+};
+
+async function resolveApprovedWorkerModelSelection(params: ResolveApprovedWorkerModelParams) {
+  const { target, modelRef, runtimeSnapshot } = params;
+  const sessionEntry =
+    target.sessionEntry ?? (await readSessionEntryInWorker(target, params.assertCurrent));
+  if (sessionEntry?.sessionId !== target.sessionId) {
+    return undefined;
+  }
+  params.assertCurrent();
+  const lifecycleConfig = runtimeSnapshot.config;
+  const agentDir = runtimeSnapshot.agentDir;
+  const workspaceDir =
+    runtimeSnapshot.workspaceDir ?? resolveAgentWorkspaceDir(lifecycleConfig, target.agentId);
+  const selection = {
+    cfg: lifecycleConfig,
+    agentId: target.agentId,
+    manifestPlugins: runtimeSnapshot.metadataSnapshot,
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+  };
+  const defaultModel = resolveDefaultModelForAgent(selection);
+  const policy = createModelVisibilityPolicy({
+    ...selection,
+    catalog: runtimeSnapshot.modelCatalog.entries,
+    defaultProvider: defaultModel.provider,
+    defaultModel,
+  });
+  const resolved = resolveModelRefFromString({
+    ...selection,
+    raw: `${modelRef.provider}/${modelRef.model}`,
+    defaultProvider: defaultModel.provider,
+    aliasIndex: policy.selectionAliasIndex,
+  });
+  if (
+    !resolved ||
+    normalizeProviderId(resolved.ref.provider) !== normalizeProviderId(modelRef.provider)
+  ) {
+    return undefined;
+  }
+  const resolvedKey = resolveModelCatalogIdentityKey({
+    provider: resolved.ref.provider,
+    id: resolved.ref.model,
+  });
+  const known =
+    policy.allowedCatalog.some((entry) => resolvedKey === resolveModelCatalogIdentityKey(entry)) ||
+    policy.retainedKeys.has(resolvedKey);
+  if (!known || !policy.allows(resolved.ref)) {
+    return undefined;
+  }
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    provider: resolved.ref.provider,
+    modelId: resolved.ref.model,
+    config: lifecycleConfig,
+    agentId: target.agentId,
+    sessionKey: target.sessionKey,
+  });
+  return { sessionEntry, lifecycleConfig, agentDir, workspaceDir, resolved, harnessPolicy };
+}
+
+export async function resolveApprovedWorkerLocalModel(params: ResolveApprovedWorkerModelParams) {
+  const { runtimeSnapshot } = params;
   return await withPluginRuntimeGenerationScope(runtimeSnapshot, async () => {
-    const sessionEntry =
-      target.sessionEntry ?? (await readSessionEntryInWorker(target, params.assertCurrent));
-    if (sessionEntry?.sessionId !== target.sessionId) {
+    const approved = await resolveApprovedWorkerModelSelection(params);
+    if (!approved) {
       return undefined;
     }
-    params.assertCurrent();
-    const lifecycleConfig = runtimeSnapshot.config;
-    const agentDir = runtimeSnapshot.agentDir;
-    const workspaceDir =
-      runtimeSnapshot.workspaceDir ?? resolveAgentWorkspaceDir(lifecycleConfig, target.agentId);
-    const selection = {
-      cfg: lifecycleConfig,
-      agentId: target.agentId,
-      manifestPlugins: runtimeSnapshot.metadataSnapshot,
-      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    const { lifecycleConfig, workspaceDir, resolved } = approved;
+    const model = runtimeSnapshot.findConfiguredRuntimeModel(
+      resolved.ref.provider,
+      resolved.ref.model,
+    );
+    if (!model) {
+      return {
+        error:
+          `Worker-local inference model ${resolved.ref.provider}/${resolved.ref.model} is missing ` +
+          "from the Gateway model catalog. Add its metadata under models.providers in the " +
+          "Gateway openclaw.json; keep its endpoint and credentials only on the node.",
+      };
+    }
+    return {
+      transcriptPolicy: resolveTranscriptPolicy({
+        provider: resolved.ref.provider,
+        modelId: resolved.ref.model,
+        modelApi: model.api,
+        model,
+        config: lifecycleConfig,
+        workspaceDir,
+        directApiKey: false,
+      }),
+      model,
     };
-    const defaultModel = resolveDefaultModelForAgent(selection);
-    const policy = createModelVisibilityPolicy({
-      ...selection,
-      catalog: runtimeSnapshot.modelCatalog.entries,
-      defaultProvider: defaultModel.provider,
-      defaultModel,
-    });
-    const resolved = resolveModelRefFromString({
-      ...selection,
-      raw: `${modelRef.provider}/${modelRef.model}`,
-      defaultProvider: defaultModel.provider,
-      aliasIndex: policy.selectionAliasIndex,
-    });
-    if (
-      !resolved ||
-      normalizeProviderId(resolved.ref.provider) !== normalizeProviderId(modelRef.provider)
-    ) {
+  });
+}
+
+export async function resolveApprovedWorkerModel(params: ResolveApprovedWorkerModelParams) {
+  const { target, signal, runtimeSnapshot, modelRef } = params;
+  return await withPluginRuntimeGenerationScope(runtimeSnapshot, async () => {
+    const approved = await resolveApprovedWorkerModelSelection(params);
+    if (!approved) {
       return undefined;
     }
-    const resolvedKey = resolveModelCatalogIdentityKey({
-      provider: resolved.ref.provider,
-      id: resolved.ref.model,
-    });
-    // Retained refs stay approved during cold discovery.
-    const known =
-      policy.allowedCatalog.some(
-        (entry) => resolvedKey === resolveModelCatalogIdentityKey(entry),
-      ) || policy.retainedKeys.has(resolvedKey);
-    if (!known || !policy.allows(resolved.ref)) {
-      return undefined;
-    }
-    const harnessPolicy = resolveAgentHarnessPolicy({
-      provider: resolved.ref.provider,
-      modelId: resolved.ref.model,
-      config: lifecycleConfig,
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-    });
+    const { sessionEntry, lifecycleConfig, agentDir, workspaceDir, resolved, harnessPolicy } =
+      approved;
     const agentRuntimeId =
       harnessPolicy.runtimeSource !== "implicit" ||
       lifecycleConfig.plugins?.entries?.codex?.enabled === true
@@ -133,6 +179,8 @@ export async function resolveApprovedWorkerModel(params: {
     // Route projection and credential selection are one decision. Pin even an
     // automatic profile so generic auth fallback cannot cross to another route.
     const prepared = await prepareSimpleCompletionModel({
+      // This session-bound worker owner revalidates the exact live turn after awaited work.
+      workerInferenceAuthority: { assertCurrent: params.assertCurrent },
       cfg: modelConfig,
       transport: "provider-stream",
       agentId: target.agentId,
@@ -167,10 +215,16 @@ export async function resolveApprovedWorkerModel(params: {
       }),
       provider: resolved.ref.provider,
       model: resolved.ref.model,
-      config: lifecycleConfig,
-      agentDir,
       workspaceDir,
+      modelRef,
+      runtimeSnapshot,
+      sessionEntry,
       prepared,
     };
   });
 }
+
+export type PreparedWorkerInference = Extract<
+  Awaited<ReturnType<typeof resolveApprovedWorkerModel>>,
+  { prepared: unknown }
+>;

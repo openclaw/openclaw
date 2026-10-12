@@ -97,13 +97,13 @@ function createCompanion(cfg: OpenClawConfig = {}) {
     scheduler: createTestGatewayScheduler(),
     getConfig: () => cfg,
     contextReader: {
-      currentSessionId: () => "session-1",
+      currentSessionId: async () => "session-1",
       read: async () => ({
         kind: "ready",
         context: { empty: true, messages: [], sessionId: "session-1" },
       }),
     },
-    sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
+    sessionObserver: { getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }) },
     resolveUtilityModelRef: () => "test/model-a",
   });
 }

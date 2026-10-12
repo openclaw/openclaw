@@ -18,10 +18,8 @@ import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/t
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
-  AgentDatabaseRegistryChangedError,
   listOpenClawRegisteredAgentDatabases,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
-  readOpenClawAgentDatabaseRegistryToken,
 } from "../state/openclaw-agent-db-registry-listing.js";
 import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
 import { resolveGatewaySessionStoreLookupCandidates } from "./session-utils-store-candidates.js";
@@ -31,7 +29,6 @@ import type {
 } from "./session-utils-store.types.js";
 
 type SessionStoreRouting = GatewaySessionStoreSourceRequest["routing"];
-type SourceRegistration = GatewaySessionStoreSourceRequest["registeredDatabases"][number];
 
 function captureSessionStoreRouting(cfg: OpenClawConfig): SessionStoreRouting {
   return withAgentRosterFactsBatch(cfg, () => ({
@@ -50,23 +47,6 @@ function sessionStoreRoutingConfig(routing: SessionStoreRouting): OpenClawConfig
     },
     session: { store: routing.store },
   };
-}
-
-function sameRegistrations(
-  left: readonly SourceRegistration[],
-  right: readonly SourceRegistration[],
-) {
-  return (
-    left.length === right.length &&
-    left.every((entry, index) => {
-      const previous = right[index]!;
-      return (
-        entry.agentId === previous.agentId &&
-        entry.path === previous.path &&
-        entry.schemaVersion === previous.schemaVersion
-      );
-    })
-  );
 }
 
 function storeChanged(): Error {
@@ -173,28 +153,7 @@ export function prepareGatewaySessionStoreReadSources(params: {
     path: params.registryPath,
     includeIncompatibleSchemaVersions: true,
   };
-  const currentSource = params.currentSource;
-  const currentSourceAgentId = currentSource.agentId;
-  const currentSourcePath = currentSource.path;
-  let discoveryIsCurrent: (() => boolean) | undefined;
-  let registryToken = readOpenClawAgentDatabaseRegistryToken(registryOptions);
-  const assertCurrent = () => {
-    const currentToken = readOpenClawAgentDatabaseRegistryToken(registryOptions);
-    if (currentToken === registryToken) {
-      return;
-    }
-    // Registration admission and metadata refreshes also rotate the memo. Keep
-    // the prepared addresses only when their original discovery facts still hold.
-    try {
-      if (discoveryIsCurrent?.()) {
-        registryToken = currentToken;
-        return;
-      }
-    } catch {
-      // An unavailable registry or locator cannot establish the captured topology.
-    }
-    throw new Error("Session store changed while preparing its metadata. Retry the request.");
-  };
+  let discoveryIsCurrent = () => true;
   const sources = withAgentRosterFactsBatch(params.cfg, () => {
     let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
     try {
@@ -202,34 +161,31 @@ export function prepareGatewaySessionStoreReadSources(params: {
     } catch {
       return {};
     }
-    const registryFacts = registered;
     const resolved = resolveGatewaySessionStoreReadSources({
       routing: captureSessionStoreRouting(params.cfg),
-      currentSource,
+      currentSource: params.currentSource,
       env: params.env,
       registeredDatabases: registered,
     });
-    discoveryIsCurrent = () => {
-      const current = listOpenClawRegisteredAgentDatabases(registryOptions);
-      return (
-        currentSource.agentId === currentSourceAgentId &&
-        currentSource.path === currentSourcePath &&
-        sameRegistrations(current, registryFacts) &&
-        resolved.isCurrent()
-      );
-    };
+    discoveryIsCurrent = resolved.isCurrent;
     return resolved.sources;
   });
-  return { sources, assertCurrent };
+  return {
+    sources,
+    assertCurrent() {
+      if (!discoveryIsCurrent()) {
+        throw storeChanged();
+      }
+    },
+  };
 }
 
 /** Capture source routing for the existing history worker; no native discovery runs here. */
-export async function prepareGatewaySessionStoreReadSourcesAsync(params: {
-  cfg: OpenClawConfig;
-  currentSource: SessionEntryReadSource;
-  env: NodeJS.ProcessEnv;
-  registryPath: string;
-}) {
+export async function prepareGatewaySessionStoreReadSourcesAsync(
+  params: Parameters<typeof prepareGatewaySessionStoreReadSources>[0],
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
   const routing = captureSessionStoreRouting(params.cfg);
   const env = captureSessionTranscriptStorageEnvironment(params.env);
   const inventory = prepareSessionStoreTargetInventory(
@@ -241,19 +197,13 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(params: {
   const paths = createOpenClawAgentDatabasePathMatcher();
   paths(currentSource.path, currentSource.path);
   const candidates = new Map<string, SessionStoreReadCandidate>();
-  const unavailablePaths = new Set<string>();
   const capture = (candidate: SessionStoreReadCandidate) => {
-    if (unavailablePaths.has(candidate.path)) {
-      return;
-    }
     try {
       paths(candidate.path, candidate.path);
     } catch (error) {
       if (!shouldSkipDiscoveryError(error)) {
         throw error;
       }
-      // A failed auxiliary locator cannot gain fresh custody after registry preparation yields.
-      unavailablePaths.add(candidate.path);
       return;
     }
     candidates.set(JSON.stringify(candidate), candidate);
@@ -265,47 +215,13 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(params: {
     path: params.registryPath,
     includeIncompatibleSchemaVersions: true,
   });
-  const assertSourceCurrent = () => {
-    if (
-      params.currentSource.agentId !== currentSource.agentId ||
-      params.currentSource.path !== currentSource.path ||
-      !paths.isCurrent()
-    ) {
+  const assertCurrent = () => {
+    if (!paths.isCurrent()) {
       throw storeChanged();
     }
   };
-  const readRegistry = async (assertCallerCurrent?: () => void) => {
-    for (let attempt = 0; ; attempt++) {
-      assertCallerCurrent?.();
-      assertSourceCurrent();
-      try {
-        const current = await registryRead.read();
-        assertCallerCurrent?.();
-        assertSourceCurrent();
-        current.assertCurrent();
-        return current;
-      } catch (error) {
-        // One registration can invalidate at both admission and settlement.
-        // Refresh only metadata, retaining the original source and state custody.
-        if (!(error instanceof AgentDatabaseRegistryChangedError) || attempt >= 2) {
-          throw error;
-        }
-      }
-    }
-  };
-  let registry = await readRegistry();
+  const registry = await registryRead.read(signal);
   const original = registry.result;
-  const assertCurrent = () => {
-    assertSourceCurrent();
-    try {
-      registry.assertCurrent();
-    } catch (error) {
-      if (error instanceof AgentDatabaseRegistryChangedError) {
-        throw storeChanged();
-      }
-      throw error;
-    }
-  };
   assertCurrent();
   const registeredDatabases =
     original.status === "available"
@@ -331,32 +247,6 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(params: {
     : undefined;
   return {
     request,
-    assertSourceCurrent,
     assertCurrent,
-    async revalidate(assertCallerCurrent: () => void) {
-      assertCallerCurrent();
-      assertSourceCurrent();
-      try {
-        registry.assertCurrent();
-        return;
-      } catch (error) {
-        if (!(error instanceof AgentDatabaseRegistryChangedError)) {
-          throw error;
-        }
-      }
-      const current = await readRegistry(assertCallerCurrent);
-      assertCallerCurrent();
-      assertSourceCurrent();
-      current.assertCurrent();
-      if (
-        current.result.status !== original.status ||
-        (current.result.status === "available" &&
-          original.status === "available" &&
-          !sameRegistrations(current.result.entries, original.entries))
-      ) {
-        throw storeChanged();
-      }
-      registry = current;
-    },
   };
 }

@@ -4,7 +4,6 @@ import type { PluginRecord } from "../plugins/registry.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
-/** Options accepted by the plugin list command. */
 export type PluginsListOptions = {
   json?: boolean;
   enabled?: boolean;
@@ -18,7 +17,6 @@ function toPluginListJsonRecord(plugin: PluginRecord): Omit<PluginRecord, "agent
   return record;
 }
 
-/** Render installed plugin discovery state as JSON, compact table, or verbose text. */
 export async function runPluginsListCommand(
   opts: PluginsListOptions,
   runtime: RuntimeEnv = defaultRuntime,

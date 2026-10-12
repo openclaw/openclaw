@@ -77,7 +77,7 @@ stored recommendations; use `openclaw agents list` to find configured IDs.
 Fresh workspaces defer the recommendation choice to the bootstrap conversation.
 After that conversation handles the user's choices,
 `openclaw onboard recommendations acknowledge` marks the stored offer answered.
-The acknowledgement is idempotent. If a chosen install fails, pass each failed
+Repeating the acknowledgement has no additional effect. If a chosen install fails, pass each failed
 opaque ID with `--retry <id...>`; successful and declined matches are consumed,
 while failed matches remain pending for a later onboarding run. Unknown IDs
 fail without changing the stored offer. After an interrupted ClawHub skill
@@ -232,7 +232,7 @@ state:
   `/openclaw` inside the TUI or `openclaw setup`.
 
 Remote setup reuses device pairing for the selected Gateway, including a
-configured remote connection forwarded through loopback. Its readiness probes
+configured remote connection forwarded through loopback. Its readiness checks
 do not create new device pairings. Setup chat keeps a stable authenticated
 caller across replies, including on loopback connections.
 
@@ -267,7 +267,7 @@ acknowledgement, so invoking `--reset` can move state to Trash before you can
 decline that prompt. After reset, the command runs guided, classic, or
 non-interactive onboarding according to the other flags.
 
-Session reset permanently removes canonical SQLite history and its owned archive
+Session reset permanently removes stored SQLite history and its owned archive
 files through the same cleanup as [`openclaw reset`](/cli/reset). It preserves
 auth profiles and unrelated database state. Stop any running Gateway first;
 onboarding refuses session cleanup while another process owns the state directory.
@@ -394,9 +394,9 @@ Existing [trusted-proxy authentication](/gateway/trusted-proxy-auth) and its pro
 - `--gateway-token` and `--gateway-token-ref-env` are mutually exclusive.
 - Remote onboarding uses `--remote-token <token>` or `--remote-password <password>` for `gateway.remote` credentials. `--gateway-token`, `--gateway-token-ref-env`, and `--gateway-password` configure local Gateway auth and are not valid in remote mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use `--remote-token` with `--secret-input-mode ref`.
 - With `--secret-input-mode ref`, non-interactive `--gateway-password` and `--remote-password` require a matching `OPENCLAW_GATEWAY_PASSWORD`, and `--remote-token` requires a matching `OPENCLAW_GATEWAY_TOKEN`; onboarding stores an env SecretRef and rejects missing or mismatched values before changing state. Interactive setup can also select configured file, exec, or store refs.
-- With `--install-daemon`: a SecretRef-managed `gateway.auth.token` is validated but not persisted as resolved plaintext in supervisor service environment metadata; if the ref is unresolved, install fails closed with remediation guidance. If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install blocks until mode is set explicitly.
+- With `--install-daemon`: a SecretRef-managed `gateway.auth.token` is validated but not persisted as resolved plaintext in supervisor service environment metadata; if the ref is unresolved, install stops with remediation guidance. If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install blocks until mode is set explicitly.
 - Local onboarding writes `gateway.mode="local"` into the config. A later config file missing `gateway.mode` indicates config damage or an incomplete manual edit, not a valid local-mode shortcut.
-- Local onboarding ensures the chosen setup path's required plugins are available (for example the Codex or Copilot runtime). Non-interactive setup cannot approve new capabilities; [review and preinstall required external plugins](#required-external-plugins), then rerun onboarding. Remote onboarding only writes connection info for the remote Gateway - it never installs local plugin packages.
+- Local onboarding checks that the chosen setup path's required plugins are available (for example the Codex or Copilot runtime). Non-interactive setup cannot approve new capabilities; [review and preinstall required external plugins](#required-external-plugins), then rerun onboarding. Remote onboarding only writes connection info for the remote Gateway - it never installs local plugin packages.
 - `--allow-unconfigured` is a separate `openclaw gateway run` escape hatch; it does not let onboarding skip `gateway.mode`.
 
 ```bash
@@ -414,7 +414,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 
 - Unless you pass `--skip-health`, onboarding waits for a reachable local gateway before exiting successfully.
 - `--install-daemon` starts the managed gateway install path first. With no daemon flag, a local gateway must already be running (for example `openclaw gateway run`).
-- Explicit `--skip-daemon` or `--no-install-daemon` performs one reachability probe without waiting for Gateway startup. If none is listening, setup reports that the gateway was not started and exits successfully; a reachable but unhealthy gateway still fails the health check.
+- Explicit `--skip-daemon` or `--no-install-daemon` performs one reachability check without waiting for Gateway startup. If none is listening, setup reports that the gateway was not started and exits successfully; a reachable but unhealthy gateway still fails the health check.
 - `--skip-health` skips the wait if you only want config/workspace/bootstrap writes in automation.
 - `--skip-bootstrap` sets `agents.defaults.skipBootstrap: true` and skips creating `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`.
 - On native Windows, `--install-daemon` tries Scheduled Tasks first and falls back to a per-user Startup-folder login item if task creation is denied.
@@ -510,7 +510,7 @@ Some web-search providers trigger provider-specific follow-up prompts during onb
 
 - Local onboarding DM scope behavior: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals).
 - Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
-- Custom provider: connect any OpenAI- or Anthropic-compatible endpoint, including hosted providers not listed. Use **Unknown** compatibility to auto-detect via a live probe.
+- Custom provider: connect any OpenAI- or Anthropic-compatible endpoint, including hosted providers not listed. Use **Unknown** compatibility to auto-detect via a live check.
 - If Hermes state is detected, onboarding offers a migration flow (see `--flow import` above).
 
 ## Common follow-up commands

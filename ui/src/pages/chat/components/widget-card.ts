@@ -24,8 +24,9 @@ import {
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../../lib/widget-theme.ts";
+import { canvasWidgetMount } from "./canvas-widget-mount.ts";
 import { exportWidget } from "./widget-export.ts";
-import "./browser-tab-card.ts";
+import "./browser-tab-card.tsx";
 
 registerMcpAppEnglish();
 
@@ -37,6 +38,7 @@ type WidgetCardOptions = {
   sessionKey?: string;
   messageTimestamp?: number;
   boardProvider?: BoardProvider;
+  widgetLayout?: import("../session-message-cache.ts").ChatWidgetLayout;
   browserTabRevision?: string;
   browserTabLatest?: boolean;
 };
@@ -120,31 +122,10 @@ const WIDGET_FRAME_MAX_HEIGHT = 8000;
 // Preview frames render inside lit shadow roots, so a document query cannot
 // find them; frames register themselves on load and are dropped once detached.
 const widgetFrameRegistry = new Set<HTMLIFrameElement>();
-// Reported heights keyed by the frame's stable identity, NOT its src: lit
-// re-renders re-apply the style binding, so the template must read the reported
-// height back or it resets. A capability rotation changes the src while the
-// frame stays mounted, and the in-frame reporter only posts on height change —
-// keying by src would strand the frame at its default height until its content
-// happened to resize.
-const widgetFrameHeightsByKey = new Map<string, number>();
-const WIDGET_FRAME_HEIGHT_KEY_ATTRIBUTE = "data-frame-key";
-const WIDGET_FRAME_HEIGHTS_MAX_ENTRIES = 100;
+const widgetFrameResize = new WeakMap<HTMLIFrameElement, (height: number) => void>();
 // Keyed by window, not a module boolean: non-isolated test workers swap the
 // global window between files while module state persists.
 const widgetSizeListenerWindows = new WeakSet<Window>();
-
-function rememberWidgetFrameHeight(key: string, height: number) {
-  if (
-    !widgetFrameHeightsByKey.has(key) &&
-    widgetFrameHeightsByKey.size >= WIDGET_FRAME_HEIGHTS_MAX_ENTRIES
-  ) {
-    const oldest = widgetFrameHeightsByKey.keys().next().value;
-    if (oldest !== undefined) {
-      widgetFrameHeightsByKey.delete(oldest);
-    }
-  }
-  widgetFrameHeightsByKey.set(key, height);
-}
 
 function handleWidgetPromptMessage(frame: HTMLIFrameElement, data: unknown) {
   const payload = data as { type?: unknown; prompt?: unknown } | null;
@@ -234,7 +215,12 @@ function installWidgetSizeListener() {
   widgetSizeListenerWindows.add(window);
   window.addEventListener("message", (event: MessageEvent) => {
     const data = event.data as { type?: unknown; height?: unknown } | null;
-    if (!data || data.type !== WIDGET_SIZE_MESSAGE_TYPE || typeof data.height !== "number") {
+    if (
+      !data ||
+      data.type !== WIDGET_SIZE_MESSAGE_TYPE ||
+      typeof data.height !== "number" ||
+      !Number.isFinite(data.height)
+    ) {
       return;
     }
     for (const frame of widgetFrameRegistry) {
@@ -251,11 +237,7 @@ function installWidgetSizeListener() {
         // must override both properties to fit short widgets.
         frame.style.height = `${height}px`;
         frame.style.minHeight = `${height}px`;
-        const key =
-          frame.getAttribute(WIDGET_FRAME_HEIGHT_KEY_ATTRIBUTE) ?? frame.getAttribute("src");
-        if (key) {
-          rememberWidgetFrameHeight(key, height);
-        }
+        widgetFrameResize.get(frame)?.(height);
         return;
       }
     }
@@ -268,12 +250,14 @@ type PreviewFrameParams = {
   frameKey?: string;
   connectionGeneration?: number;
   height?: number;
+  onHeightChange?: (height: number) => void;
   sandbox?: string;
   promptCapable?: boolean;
 };
 
 class WidgetFrameDirective extends Directive {
   private frame?: HTMLIFrameElement;
+  private reportedHeight?: number;
 
   render(params: PreviewFrameParams) {
     installWidgetSizeListener();
@@ -285,9 +269,7 @@ class WidgetFrameDirective extends Directive {
       this.frame && adoptedWidgetPromptFrames.has(this.frame)
         ? this.frame.getAttribute("src")!
         : (params.src ?? "");
-    const heightKey = params.frameKey || src;
-    const reportedHeight = heightKey ? widgetFrameHeightsByKey.get(heightKey) : undefined;
-    const height = reportedHeight ?? params.height;
+    const height = this.reportedHeight ?? params.height;
     if (params.promptCapable) {
       installWidgetPromptOfferListener();
     }
@@ -317,9 +299,12 @@ class WidgetFrameDirective extends Directive {
               widgetFrameRegistry.delete(this.frame);
             }
             this.frame = element;
+            widgetFrameResize.set(element, (reportedHeight) => {
+              this.reportedHeight = reportedHeight;
+              params.onHeightChange?.(reportedHeight);
+            });
           })}
           src=${src || nothing}
-          data-frame-key=${heightKey || nothing}
           class="chat-tool-card__preview-frame"
           title=${params.title}
           sandbox=${sandbox}
@@ -335,18 +320,17 @@ const renderWidgetFrame = directive(WidgetFrameDirective);
 
 function renderPreviewFrame(params: PreviewFrameParams) {
   return keyed(
-    `${params.sandbox ?? ""}\u0000${params.frameKey ?? ""}\u0000${params.src ? 1 : 0}\u0000${params.connectionGeneration ?? 0}\u0000${params.height ?? ""}`,
+    `${params.sandbox ?? ""}\u0000${params.frameKey ?? ""}\u0000${params.src ? 1 : 0}\u0000${params.connectionGeneration ?? 0}`,
     renderWidgetFrame(params),
   );
 }
 
 const loadMcpAppView = async () => {
-  const registration = await import("../../../components/mcp-app-view-registration.ts");
-  registration.registerMcpAppView();
+  await import("../../../components/mcp-app-view-registration.ts");
 };
 
 const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.ts");
-const loadYouTubeVideo = () => import("./youtube-video-card.ts");
+const loadYouTubeVideo = () => import("./youtube-video-card.tsx");
 
 function renderWidgetContent(
   preview: CanvasToolPreview,
@@ -354,6 +338,8 @@ function renderWidgetContent(
   options?: WidgetCardOptions,
 ) {
   if (preview.mcpApp) {
+    const key = `mcp:${preview.mcpApp.viewId}`;
+    const height = options?.widgetLayout?.read(key) ?? preview.preferredHeight ?? 600;
     // Insert the tag before its chunk arrives. Native custom-element upgrade
     // preserves these bound fields, so the first preview initializes after registration.
     void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch((error: unknown) => {
@@ -362,32 +348,33 @@ function renderWidgetContent(
     return html`<mcp-app-view
       .sessionKey=${options?.sessionKey ?? ""}
       .viewId=${preview.mcpApp.viewId}
-      .height=${preview.preferredHeight ?? 600}
+      .height=${height}
+      .onHeightChange=${(reportedHeight: number) =>
+        options?.widgetLayout?.write(key, reportedHeight)}
+      style=${`display:block;min-height:${height}px`}
       .title=${preview.title?.trim() || t("mcpApp.title")}
     ></mcp-app-view>`;
   }
   // The authenticated view RPC serves scripted widget documents;
   // explicit strict document previews keep their hosted artifact path.
   if (preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(preview)) {
+    const key = `canvas:${preview.viewId!.trim()}`;
     void ensureCustomElementDefined("openclaw-canvas-widget-view", loadCanvasWidgetView).catch(
       (error: unknown) => console.error("[openclaw] failed to load widget view", error),
     );
-    return keyed(
-      `${preview.viewId}\0${options?.sessionKey ?? ""}`,
-      html`
-        <openclaw-canvas-widget-view
-          .docId=${preview.viewId!.trim()}
-          .sessionKey=${options?.sessionKey ?? ""}
-          .messageTimestamp=${options?.messageTimestamp}
-          .title=${preview.title?.trim() || t("chat.toolCards.canvas")}
-          .preferredHeight=${preview.preferredHeight}
-          .allowScripts=${sandbox.includes("allow-scripts")}
-          .connectionGeneration=${getCanvasWidgetFrameConnectionGeneration()}
-        ></openclaw-canvas-widget-view>
-      `,
-    );
+    return canvasWidgetMount({
+      docId: preview.viewId!.trim(),
+      sessionKey: options?.sessionKey ?? "",
+      messageTimestamp: options?.messageTimestamp,
+      title: preview.title?.trim() || t("chat.toolCards.canvas"),
+      preferredHeight: options?.widgetLayout?.read(key) ?? preview.preferredHeight,
+      onHeightChange: (height) => options?.widgetLayout?.write(key, height),
+      allowScripts: sandbox.includes("allow-scripts"),
+      connectionGeneration: getCanvasWidgetFrameConnectionGeneration(),
+    });
   }
   const promptCapable = isInternalCanvasEntryUrl(preview.url);
+  const key = `frame:${preview.url?.trim() || preview.viewId?.trim()}`;
   return renderPreviewFrame({
     title: preview.title?.trim() || t("chat.toolCards.canvas"),
     src: resolveCanvasIframeUrl(
@@ -397,7 +384,8 @@ function renderWidgetContent(
     ),
     frameKey: preview.url?.trim() || preview.viewId?.trim(),
     connectionGeneration: promptCapable ? getCanvasWidgetFrameConnectionGeneration() : undefined,
-    height: preview.preferredHeight,
+    height: options?.widgetLayout?.read(key) ?? preview.preferredHeight,
+    onHeightChange: (height) => options?.widgetLayout?.write(key, height),
     sandbox,
     // Only hosted Canvas documents may drive the chat; externally
     // allowed embed URLs render but never get prompt authority.
@@ -410,16 +398,14 @@ function handleWidgetExportAction(
   title: string | undefined,
 ) {
   const value = event.detail.item.value;
+  const dropdown = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
   if (value === "raw-details") {
-    const dropdown = event.currentTarget;
-    const host =
-      dropdown instanceof HTMLElement ? dropdown.closest(".chat-tool-card__widget-host") : null;
+    const host = dropdown?.closest(".chat-tool-card__widget-host");
     const toggle = host?.querySelector<HTMLButtonElement>(
       ".chat-tool-card__widget-raw .chat-tool-card__raw-toggle",
     );
     toggle?.click();
-    const label =
-      dropdown instanceof HTMLElement ? dropdown.querySelector("[data-raw-label]") : null;
+    const label = dropdown?.querySelector("[data-raw-label]");
     label?.replaceChildren(
       t(
         toggle && toggle.getAttribute("aria-expanded") === "true"
@@ -432,13 +418,9 @@ function handleWidgetExportAction(
   if (value !== "copy" && value !== "download") {
     return;
   }
-  const dropdown = event.currentTarget;
-  const frame =
-    dropdown instanceof HTMLElement
-      ? dropdown
-          .closest(".chat-tool-card__preview")
-          ?.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame")
-      : null;
+  const frame = dropdown
+    ?.closest(".chat-tool-card__preview")
+    ?.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame");
   if (!frame) {
     showToast({ message: t("chat.toolCards.widgetExportFailed") });
     return;
@@ -492,6 +474,24 @@ function widgetActionsPlacementRef() {
   };
 }
 
+function renderWidgetAction(value: "copy" | "download" | "raw-details") {
+  const { icon, labelKey } = {
+    copy: { icon: icons.copyImage, labelKey: "chat.toolCards.copyAsImage" },
+    download: { icon: icons.download, labelKey: "chat.toolCards.downloadAsImage" },
+    "raw-details": { icon: icons.fileText, labelKey: "chat.toolCards.showRawDetails" },
+  }[value];
+  const label = t(labelKey);
+  // Menu actions replace this text, so it must not contain Lit child markers.
+  return html`<wa-dropdown-item class="session-menu__item" value=${value}>
+    <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
+    <span
+      class="session-menu__text"
+      ?data-raw-label=${value === "raw-details"}
+      .textContent=${label}
+    ></span>
+  </wa-dropdown-item>`;
+}
+
 function renderWidgetActions(preview: CanvasToolPreview, hasRawDetails: boolean) {
   const canExportImage = !preview.mcpApp && isInternalCanvasEntryUrl(preview.url);
   if (!canExportImage && !hasRawDetails) {
@@ -514,35 +514,8 @@ function renderWidgetActions(preview: CanvasToolPreview, hasRawDetails: boolean)
       >
         ${icons.moreHorizontal}
       </button>
-      ${
-        canExportImage
-          ? (
-              [
-                ["copy", icons.copyImage, "chat.toolCards.copyAsImage"],
-                ["download", icons.download, "chat.toolCards.downloadAsImage"],
-              ] as const
-            ).map(
-              ([value, icon, label]) => html`
-                <wa-dropdown-item class="session-menu__item" value=${value}>
-                  <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
-                  <span class="session-menu__text">${t(label)}</span>
-                </wa-dropdown-item>
-              `,
-            )
-          : nothing
-      }
-      ${
-        hasRawDetails
-          ? html`<wa-dropdown-item class="session-menu__item" value="raw-details">
-              <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                >${icons.fileText}</span
-              >
-              <span class="session-menu__text" data-raw-label
-                >${t("chat.toolCards.showRawDetails")}</span
-              >
-            </wa-dropdown-item>`
-          : nothing
-      }
+      ${canExportImage ? (["copy", "download"] as const).map(renderWidgetAction) : nothing}
+      ${hasRawDetails ? renderWidgetAction("raw-details") : nothing}
     </wa-dropdown>
   `;
 }

@@ -1,4 +1,3 @@
-/** Live launchd diagnostics and narrowly scoped Doctor repair for auxiliary jobs. */
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

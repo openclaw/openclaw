@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
+import type { ChannelProgressDraftCompositorSnapshot } from "../channels/progress-draft-compositor.types.js";
 import {
   DiscordConfigSchema,
   MSTeamsConfigSchema,
@@ -13,19 +14,41 @@ import type {
   resolveInboundSessionEnvelopeContext,
   resolveInboundSessionEnvelopeContextAsync,
 } from "./channel-inbound.js";
+import type { inspectConversationBinding } from "./conversation-binding-inspection-runtime.js";
 import type {
   createInboundEnvelopeBuilder,
   resolveInboundRouteEnvelopeBuilder,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
 } from "./inbound-envelope.js";
+import type { ReplyDispatchRuntimeInfo } from "./reply-runtime.js";
 import type { PluginRuntime } from "./runtime-store.js";
+import type { SessionBindingRecord, SessionBindingService } from "./session-binding-runtime.js";
 import type { readSessionUpdatedAt, readSessionUpdatedAtAsync } from "./session-store-runtime.js";
 import {
   createLegacyCompatChannelDmPolicy,
   promptLegacyChannelAllowFromForAccount,
 } from "./setup-runtime.js";
+import type {
+  AccountScopedConversationBindingManager,
+  AccountScopedConversationBindingRecord,
+} from "./thread-bindings-runtime.js";
 
 describe("shipped external channel compatibility", () => {
+  it("retains the synchronous binding selectors shipped in 2026.9.8", () => {
+    expectTypeOf<SessionBindingService["listBySession"]>().toEqualTypeOf<
+      (targetSessionKey: string) => SessionBindingRecord[]
+    >();
+    expectTypeOf<
+      SessionBindingService["resolveByConversation"]
+    >().returns.toEqualTypeOf<SessionBindingRecord | null>();
+    expectTypeOf<AccountScopedConversationBindingManager["getByConversationId"]>().toEqualTypeOf<
+      (conversationId: string) => AccountScopedConversationBindingRecord | undefined
+    >();
+    expectTypeOf<typeof inspectConversationBinding>().returns.toEqualTypeOf<
+      { status: "available"; binding: SessionBindingRecord | null } | { status: "unavailable" }
+    >();
+  });
+
   it("retains synchronous envelope results and timestamp callbacks shipped in 2026.9.8", () => {
     type RuntimeSession = PluginRuntime["channel"]["session"];
     type TimestampCallback = (params: {
@@ -109,5 +132,20 @@ describe("shipped external channel compatibility", () => {
   it("retains setup helpers used by published Slack and Discord packages", () => {
     expect(createLegacyCompatChannelDmPolicy).toBeTypeOf("function");
     expect(promptLegacyChannelAllowFromForAccount).toBeTypeOf("function");
+  });
+
+  it("keeps the 2026.9.8 receipt progress handoff source-compatible", () => {
+    type ReleasedReceipt = {
+      channel: string;
+      accountId?: string;
+      to: string;
+      threadId?: string | number;
+      messageId: string;
+      text: string;
+      snapshot: ChannelProgressDraftCompositorSnapshot;
+    };
+    expectTypeOf<ReplyDispatchRuntimeInfo["adoptProgressContinuation"]>().toEqualTypeOf<
+      ((this: void, receipt: ReleasedReceipt) => Promise<boolean>) | undefined
+    >();
   });
 });

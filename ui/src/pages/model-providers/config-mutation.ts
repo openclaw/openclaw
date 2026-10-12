@@ -226,13 +226,11 @@ export async function runModelProviderConfigMutation(
     if (!owner.isCurrentClient()) {
       return;
     }
-    if (!patched) {
-      if (owner.isCurrentAgent()) {
-        owner.setMessage({
-          kind: "error",
-          text: runtimeConfig.state.lastError ?? t("modelProviders.configUnavailable"),
-        });
-      }
+    if (!patched && owner.isCurrentAgent()) {
+      owner.setMessage({
+        kind: "error",
+        text: runtimeConfig.state.lastError ?? t("modelProviders.configUnavailable"),
+      });
     }
   } catch (error) {
     if (owner.isCurrentClient() && owner.isCurrentAgent()) {
@@ -301,19 +299,4 @@ export async function runModelProviderApiKeyMutation(
       owner.setBusy(false);
     }
   }
-}
-
-export function modelProviderApiKeySuccess(
-  action: "edit" | "add",
-  apiKey: string | null,
-  provider: string,
-): string {
-  return t(
-    action === "add"
-      ? "modelProviders.add.saved"
-      : apiKey === null
-        ? "modelProviders.apiKey.removed"
-        : "modelProviders.apiKey.saved",
-    { provider },
-  );
 }

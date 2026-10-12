@@ -1,7 +1,7 @@
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
-  listMemoryWikiImportRunRecords,
+  getMemoryWikiImportRunStateStore,
   type ChatGptImportRunRecord,
 } from "./import-runs-state.js";
 
@@ -12,13 +12,6 @@ type MemoryWikiImportRunSummary = Omit<
   status: "applied" | "rolling_back" | "rolled_back";
   pagePaths: string[];
   samplePaths: string[];
-};
-
-type MemoryWikiImportRunsStatus = {
-  runs: MemoryWikiImportRunSummary[];
-  totalRuns: number;
-  activeRuns: number;
-  rolledBackRuns: number;
 };
 
 function toImportRunSummary(record: ChatGptImportRunRecord): MemoryWikiImportRunSummary {
@@ -37,9 +30,9 @@ function toImportRunSummary(record: ChatGptImportRunRecord): MemoryWikiImportRun
 export async function listMemoryWikiImportRuns(
   config: ResolvedMemoryWikiConfig,
   options?: { limit?: number },
-): Promise<MemoryWikiImportRunsStatus> {
+) {
   const limit = Math.max(1, Math.floor(options?.limit ?? 10));
-  const runs = (await listMemoryWikiImportRunRecords(config.vault.path))
+  const runs = (await getMemoryWikiImportRunStateStore().list(config.vault.path))
     .map(toImportRunSummary)
     .toSorted((left, right) => right.appliedAt.localeCompare(left.appliedAt));
 

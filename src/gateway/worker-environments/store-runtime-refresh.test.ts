@@ -149,7 +149,7 @@ describe("worker environment runtime refresh", () => {
       expect(store.get(environment.environmentId)?.bootstrapReceipt).toEqual(replacement);
       if (placement) {
         expect(
-          createWorkerSessionPlacementStore({ database }).get(placement.sessionId),
+          await createWorkerSessionPlacementStore({ database }).getAsync(placement.sessionId),
         ).toMatchObject({
           workerBundleHash: replacement.bundleHash,
           activeOwnerEpoch: placement.activeOwnerEpoch,
@@ -219,7 +219,7 @@ describe("worker environment runtime refresh", () => {
       if (operation === "destroying") {
         await store.requestDestroy({ environmentId: environment.environmentId, state: "attached" });
       } else if (operation === "moving") {
-        placements.beginPlacementMove({
+        await placements.beginPlacementMove({
           sessionId: placement!.sessionId,
           source: {
             generation: placement!.generation,
@@ -267,7 +267,7 @@ describe("worker environment runtime refresh", () => {
     const liveGate = createWorkerSessionPlacementGate(placements);
     await expect(liveGate.prepareWorkerRuntimeRefresh(binding)).rejects.toThrow("current turn");
     const recoveryGate = createWorkerSessionPlacementGate(placements, {
-      rejectExistingWorkerClaims: true,
+      recoveryPlacements: await placements.listAsync(),
     });
     const refresh = await recoveryGate.prepareWorkerRuntimeRefresh(binding);
     try {

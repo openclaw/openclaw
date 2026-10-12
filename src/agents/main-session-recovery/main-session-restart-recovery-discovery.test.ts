@@ -1,11 +1,10 @@
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionStoreTarget } from "../../config/sessions/targets-collision.js";
 import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
 
 const mocks = vi.hoisted(() => ({
-  hasStatus: vi.fn<(scope: { agentId?: string }) => Promise<boolean>>(),
   readInventory: vi.fn<() => Promise<SessionStoreTarget[]>>(),
   readRefusal: vi.fn(),
   resolveDirs: vi.fn<() => Promise<string[]>>(),
@@ -15,9 +14,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../config/sessions.js", () => ({
   listConfiguredSessionStoreAgentIds: () => ["main"],
   resolveSessionStorePathCore: mocks.resolveStorePath,
-}));
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  hasSessionEntriesByStatusReadOnly: mocks.hasStatus,
 }));
 vi.mock("../../config/sessions/session-store-target-inventory.js", () => ({
   prepareSessionStoreTargetInventory: vi.fn(),
@@ -42,7 +38,6 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.resolveDirs.mockResolvedValue(targets.map((target) => path.dirname(target.storePath)));
   mocks.resolveStorePath.mockReturnValue(targets[0]!.storePath);
-  mocks.hasStatus.mockResolvedValue(true);
 });
 
 it("does not inspect sessions when recovery stops during store discovery", async () => {
@@ -52,48 +47,20 @@ it("does not inspect sessions when recovery stops during store discovery", async
   const discovery = discoverRestartRecoveryStoreTargets({
     cfg: {},
     stateDir,
-    statuses: ["running"],
     shouldContinue: () => active,
   });
   active = false;
   inventory.resolve(targets);
 
   await expect(discovery).resolves.toEqual([]);
-  expect(mocks.hasStatus).not.toHaveBeenCalled();
 });
 
-it("discards a delayed status result and skips later stores after recovery stops", async () => {
-  const entered = createDeferred();
-  const status = createDeferred<boolean>();
-  mocks.hasStatus.mockImplementationOnce(() => {
-    entered.resolve();
-    return status.promise;
-  });
-  let active = true;
-  const discovery = discoverRestartRecoveryStoreTargets({
-    stateDir,
-    statuses: ["running"],
-    shouldContinue: () => active,
-  });
-  await awaitGateBeforeSettlement(entered.promise, discovery, "status read did not start");
-  active = false;
-  status.resolve(true);
-
-  await expect(discovery).resolves.toEqual([]);
-  expect(mocks.hasStatus).toHaveBeenCalledTimes(1);
-});
-
-it("drops earlier eligible stores whose admission is refused during a later read", async () => {
-  const entered = createDeferred();
-  const status = createDeferred<boolean>();
-  mocks.hasStatus.mockResolvedValueOnce(true).mockImplementationOnce(() => {
-    entered.resolve();
-    return status.promise;
-  });
-  const discovery = discoverRestartRecoveryStoreTargets({ stateDir, statuses: ["running"] });
-  await awaitGateBeforeSettlement(entered.promise, discovery, "second status read did not start");
+it("honors admission refusal after asynchronous store inventory completes", async () => {
+  const directories = createDeferred<string[]>();
+  mocks.resolveDirs.mockReturnValue(directories.promise);
+  const discovery = discoverRestartRecoveryStoreTargets({ stateDir });
   mocks.readRefusal.mockImplementation((agentId) => agentId === "main");
-  status.resolve(true);
+  directories.resolve(targets.map((target) => path.dirname(target.storePath)));
 
   await expect(discovery).resolves.toEqual([targets[1]]);
 });

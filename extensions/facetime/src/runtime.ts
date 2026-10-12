@@ -76,12 +76,16 @@ export async function createFaceTimeRuntime(params: {
   }
 
   const calls = new FaceTimeCallRegistry<ActiveFaceTimeCall>();
+  const storeOptions = {
+    namespace: "pending-dial",
+    maxEntries: 1,
+    overflowPolicy: "reject-new" as const,
+  };
+  // package.json supports 2026.9.4 hosts; choose their API before any store work.
   const pendingDialStore = new PendingFaceTimeDialStore(
-    params.runtime.state.openKeyedStore({
-      namespace: "pending-dial",
-      maxEntries: 1,
-      overflowPolicy: "reject-new",
-    }),
+    typeof params.runtime.state.openKeyedStoreV2 === "function"
+      ? params.runtime.state.openKeyedStoreV2(storeOptions)
+      : params.runtime.state.openKeyedStore(storeOptions),
   );
   let outboundDialInFlight: Promise<FaceTimeDialResult> | undefined;
   let outboundDialDispatchPending = false;
@@ -373,7 +377,6 @@ export async function createFaceTimeRuntime(params: {
       config,
       fullConfig: params.fullConfig,
       runtime: params.runtime,
-      logger: params.logger,
       helperConnected: helper.connectedSockets > 0,
       captureBinary,
     });
@@ -594,7 +597,6 @@ export async function createFaceTimeRuntime(params: {
       driverInstallTask = installFaceTimeDriver({
         pluginRoot: params.pluginRoot,
         runCommandWithTimeout: params.runtime.system.runCommandWithTimeout,
-        callActive: false,
         signal: installAbortController.signal,
       })
         .then((result) => {

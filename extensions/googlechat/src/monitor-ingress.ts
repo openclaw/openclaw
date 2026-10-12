@@ -1,7 +1,6 @@
 import { createStandardRawEventIngressMonitor } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createChannelIngressError,
-  type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -128,14 +127,11 @@ function resolveGoogleChatIngressNonRetryableFailure(error: unknown) {
 
 export function createGoogleChatIngressMonitor(options: {
   accountId: string;
-  queue?: ChannelIngressQueue<GoogleChatIngressPayload>;
   dispatch: GoogleChatIngressDispatch;
   runtime: {
     error?: (message: string) => void;
     log?: (message: string) => void;
   };
-  pollIntervalMs?: number;
-  adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
 }) {
   const serializeForIngress = (rawEvent: unknown): string => {
@@ -159,12 +155,10 @@ export function createGoogleChatIngressMonitor(options: {
   };
 
   return createStandardRawEventIngressMonitor({
-    queue:
-      options.queue ??
-      (() =>
-        getGoogleChatRuntime().state.openChannelIngressQueue<GoogleChatIngressPayload>({
-          accountId: options.accountId,
-        })),
+    queue: () =>
+      getGoogleChatRuntime().state.openChannelIngressQueue<GoogleChatIngressPayload>({
+        accountId: options.accountId,
+      }),
     inspect: inspectGoogleChatIngressEvent,
     payload: {
       serialize: serializeForIngress,
@@ -179,13 +173,9 @@ export function createGoogleChatIngressMonitor(options: {
     },
     deliver: (rawEvent, lifecycle, claim) =>
       options.dispatch(normalizeClaimedGoogleChatEvent(rawEvent, claim.id), lifecycle),
-    pollIntervalMs: options.pollIntervalMs,
     // The webhook retry horizon must fit beneath the standard 30-day / 20k cap.
     drain: {
       resolveNonRetryableFailure: resolveGoogleChatIngressNonRetryableFailure,
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
       onLog: (message) => options.runtime.error?.(`googlechat: ${message}`),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),

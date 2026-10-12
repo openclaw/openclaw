@@ -1,6 +1,5 @@
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { readClampedInt } from "../shared/params.js";
 import {
@@ -8,9 +7,8 @@ import {
   DIR_LIST_HARD_MAX_ENTRIES,
   DIR_LIST_TOOL_DESCRIPTOR,
 } from "./descriptors.js";
+import { renderDirectoryText } from "./directory-text.js";
 import { invokeNodeToolPayload, readRequiredNodePath } from "./node-tool-invoke.js";
-
-const DIRECTORY_TEXT_MAX_BYTES = 8192;
 
 function directoryListingText(
   canonicalPath: string,
@@ -24,48 +22,30 @@ function directoryListingText(
     0,
     -1,
   );
-  const visible: string[] = [];
-  const render = () => {
-    const limited = visible.length < entries.length;
-    const continuation = limited
-      ? visible.length > 0
-        ? String(offset + visible.length)
-        : undefined
-      : nextPageToken;
-    const tail = JSON.stringify({ truncated: limited || truncated, nextPageToken: continuation });
-    const listing = `${header},"displayedCount":${visible.length},"entries":[${visible.join(",")}],${tail.slice(1)}`;
-    const note =
-      limited && visible.length === 0
-        ? "No entries displayed: the next complete entry or directory metadata exceeds the text budget or contains reserved markers. Pagination cannot advance; use available node-local directory capabilities."
-        : (limited || truncated) && !continuation
-          ? "More entries available; the node supplied no continuation token."
-          : "If present, pass nextPageToken as pageToken; keep node and path.";
-    const wrapped = wrapExternalContent(`${listing}\n${note}`, { source: "unknown" });
-    // Sanitization may rewrite marker-like filenames. Never offer those rewritten
-    // paths, and count the complete wrapper before accepting a whole-record prefix.
-    return wrapped.includes(listing) &&
-      Buffer.byteLength(wrapped, "utf8") <= DIRECTORY_TEXT_MAX_BYTES
-      ? wrapped
-      : undefined;
-  };
-  let text = render();
-  // Keep normal continuation guidance the same size on the last page so a
-  // longer intermediate footer cannot prevent a complete page from fitting.
-  for (const { name, isDir, size } of entries) {
-    visible.push(JSON.stringify({ name, isDir, size }));
-    const candidate = render();
-    if (!candidate) {
-      break;
-    }
-    text = candidate;
-  }
-  return (
-    text ??
-    wrapExternalContent(
+  return renderDirectoryText({
+    entries,
+    project: ({ name, isDir, size }) => ({ name, isDir, size }),
+    render: (visible) => {
+      const limited = visible.length < entries.length;
+      const continuation = limited
+        ? visible.length > 0
+          ? String(offset + visible.length)
+          : undefined
+        : nextPageToken;
+      const tail = JSON.stringify({ truncated: limited || truncated, nextPageToken: continuation });
+      const listing = `${header},"displayedCount":${visible.length},"entries":[${visible.join(",")}],${tail.slice(1)}`;
+      // Keep normal continuation guidance the same size on the last page.
+      const note =
+        limited && visible.length === 0
+          ? "No entries displayed: the next complete entry or directory metadata exceeds the text budget or contains reserved markers. Pagination cannot advance; use available node-local directory capabilities."
+          : (limited || truncated) && !continuation
+            ? "More entries available; the node supplied no continuation token."
+            : "If present, pass nextPageToken as pageToken; keep node and path.";
+      return { manifest: listing, text: `${listing}\n${note}` };
+    },
+    fallback:
       "Directory listing omitted: the canonical path or continuation metadata cannot be represented safely within the 8192-byte text limit. No usable paths or continuation token are shown; use available node-local directory capabilities.",
-      { source: "unknown" },
-    )
-  );
+  });
 }
 
 export function createDirListTool(): AnyAgentTool {
@@ -79,7 +59,6 @@ export function createDirListTool(): AnyAgentTool {
         input: params,
         key: "maxEntries",
         defaultValue: DIR_LIST_DEFAULT_MAX_ENTRIES,
-        hardMin: 1,
         hardMax: DIR_LIST_HARD_MAX_ENTRIES,
       });
 

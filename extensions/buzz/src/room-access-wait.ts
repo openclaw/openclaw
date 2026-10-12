@@ -11,10 +11,6 @@ const DEFAULT_WAIT_TIMEOUT_MS = 90_000;
 const DISCOVERY_RETRY_DELAYS_MS = [0, 500, 1_500] as const;
 const DISCOVERY_POLL_INTERVAL_MS = 2_000;
 
-function hasTag(event: Event, name: string, value: string): boolean {
-  return event.tags.some((tag) => tag[0] === name && tag[1] === value);
-}
-
 function hasValidRoomTag(event: Event): boolean {
   return event.tags.some(
     (tag) => tag[0] === "h" && Boolean(tag[1]?.toLowerCase().match(BUZZ_CHANNEL_ID_PATTERN)),
@@ -142,7 +138,7 @@ export async function waitForBuzzRoomAccess(params: {
             if (
               event.kind !== BUZZ_MEMBER_ADDED_NOTIFICATION_KIND ||
               seenEvents.has(event.id) ||
-              !hasTag(event, "p", publicKey) ||
+              !event.tags.some((tag) => tag[0] === "p" && tag[1] === publicKey) ||
               !hasValidRoomTag(event)
             ) {
               return;

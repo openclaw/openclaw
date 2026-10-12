@@ -3,7 +3,6 @@ import { once } from "node:events";
 import { MessageChannel } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it } from "vitest";
-import { encodeNativeWorkerFailure } from "./worker-native-error.js";
 import { NativeWorker } from "./worker-native-handle.js";
 import type {
   NativeWorkerReply,
@@ -126,36 +125,6 @@ describe("retained worker direct task transport", () => {
     expect(events).toEqual(["native failure", "execution-exit", "exit"]);
     expect(worker.stop().read()).toEqual({ status: "fulfilled", value: undefined });
     expect(handles.size).toBe(0);
-  });
-
-  it("keeps pending native control order when a data callback reenters synchronous servicing", () => {
-    const { worker, peer, context, controls } = fixture();
-    const events: unknown[] = [];
-    controls.push({ type: "created", id: 1, threadId: 102 });
-    worker.service();
-    worker.on("message", (value) => {
-      events.push([value, context.getStore()]);
-      worker.service();
-      expect(worker.stop().read().status).toBe("fulfilled");
-    });
-    worker.on("error", (error) => events.push([error.message, context.getStore()]));
-    worker.on("execution-exit", () => events.push(["execution-exit", context.getStore()]));
-    worker.on("exit", () => events.push(["exit", context.getStore()]));
-    peer.postMessage("first", []);
-    peer.postMessage("second", []);
-    controls.push(
-      { type: "error", id: 1, error: encodeNativeWorkerFailure(new Error("native failure")) },
-      { type: "execution-exit", id: 1, code: 1 },
-      { type: "stopped", id: 1, code: 1 },
-    );
-    context.run("servicing", () => worker.service());
-    expect(events).toEqual([
-      ["first", "constructor"],
-      ["second", "constructor"],
-      ["native failure", "constructor"],
-      ["execution-exit", "constructor"],
-      ["exit", "constructor"],
-    ]);
   });
 
   it("reports task-port loss without stopping native work or inventing its exit receipt", async () => {

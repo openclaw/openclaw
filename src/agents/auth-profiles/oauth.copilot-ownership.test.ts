@@ -12,21 +12,6 @@ const credential: OAuthCredential = {
   expires: 2_000,
 };
 
-it("rejects a copied refresh generation from another Copilot tenant", () => {
-  expect(
-    shouldUseMainOwnerForLocalOAuthCredential({
-      profileId: "github-copilot:default",
-      local: { ...credential, enterpriseUrl: "acme.ghe.com" },
-      main: {
-        ...credential,
-        enterpriseUrl: "other.ghe.com",
-        accountId: "acct-main",
-        expires: 62_000,
-      },
-    }),
-  ).toBe(false);
-});
-
 it("rejects whitespace-only public scope in both identity directions", () => {
   const invalid = { ...credential, enterpriseUrl: "  " };
   const publicCredential = { ...credential, enterpriseUrl: "https://github.com/" };

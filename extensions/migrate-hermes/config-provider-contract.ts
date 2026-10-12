@@ -23,12 +23,7 @@ type OpenClawModelApi =
   | "openai-responses"
   | "openai-chatgpt-responses";
 
-type HermesModelConfig = {
-  id: string;
-  contextWindow?: number;
-  maxTokens?: number;
-  supportsVision?: boolean;
-};
+type HermesModelConfig = ReturnType<typeof readModelMetadata> & { id: string };
 
 export type HermesProviderConfig = {
   id: string;
@@ -265,7 +260,7 @@ export function resolveHermesEndpointApiKeyEnv(baseUrl: string): string | undefi
     : undefined;
 }
 
-function readModelMetadata(raw: Record<string, unknown>): Omit<HermesModelConfig, "id"> {
+function readModelMetadata(raw: Record<string, unknown>) {
   const contextWindow =
     readPositiveNumber(raw.context_length) ??
     readPositiveNumber(raw.contextLength) ??

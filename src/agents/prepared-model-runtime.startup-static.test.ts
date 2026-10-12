@@ -238,7 +238,8 @@ vi.mock("./agent-model-discovery.js", () => ({
   discoverModelsFromCapturedSources: mocks.discoverModels,
 }));
 
-vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
+vi.mock("../plugins/synthetic-auth.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/synthetic-auth.runtime.js")>()),
   resolveRuntimeSyntheticAuthProviderRefs: () => [],
 }));
 
@@ -358,12 +359,26 @@ describe("prepared model runtime Gateway catalog mode", () => {
     const policy = { resolveThinkingProfile: () => profile };
     mocks.resolveProviderPolicySurface.mockReturnValue(policy);
     await refresh(config);
+    const ambientOptions = mocks.resolveAmbientCredentials.mock.calls[0]?.[0] as
+      | { resolveSyntheticAuth?: (provider: string) => Promise<{ apiKey?: string } | undefined> }
+      | undefined;
+    expect(await ambientOptions?.resolveSyntheticAuth?.("openai")).toMatchObject({
+      apiKey: "synthetic-openai-key",
+    });
     const snapshot = snapshotFor(config);
     expect(snapshot).toBeDefined();
     const turnAliases = snapshot!.configuredModelAliases;
     expect(turnAliases).toEqual([{ alias: "Current", provider: "openai", model: "gpt-5.5" }]);
     expect(snapshot!.pluginRegistry?.providers).toEqual([]);
     const configuredCatalog = snapshot!.modelCatalog;
+    expect(
+      getPreparedModelCatalogSnapshot({
+        agentId: "default",
+        config,
+        agentDir: "/tmp/prepared-static-agent",
+        workspaceDir: "/tmp/prepared-static-workspace",
+      })?.entries,
+    ).toEqual(configuredCatalog.entries);
     expect(configuredCatalog.entries).toHaveLength(1);
     const project = (
       catalog: ModelCatalogSnapshot,
@@ -579,38 +594,6 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
     expect(mocks.loadStaticCatalog).not.toHaveBeenCalled();
     expect(mocks.planOpenClawModelsJsonSource).not.toHaveBeenCalled();
-    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-  });
-
-  it("publishes configured turn facts without eagerly building a full catalog", async () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.5",
-          models: { "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } } },
-        },
-      },
-    };
-    await refresh(config);
-    const ambientOptions = mocks.resolveAmbientCredentials.mock.calls[0]?.[0] as
-      | { resolveSyntheticAuth?: (provider: string) => Promise<{ apiKey?: string } | undefined> }
-      | undefined;
-    expect(await ambientOptions?.resolveSyntheticAuth?.("openai")).toMatchObject({
-      apiKey: "synthetic-openai-key",
-    });
-    const snapshot = snapshotFor(config);
-    expect(
-      getPreparedModelCatalogSnapshot({
-        agentId: "default",
-        config,
-        agentDir: "/tmp/prepared-static-agent",
-        workspaceDir: "/tmp/prepared-static-workspace",
-      })?.entries,
-    ).toEqual(snapshot?.modelCatalog.entries);
-    expect(snapshot?.configuredRuntimeModels).toHaveLength(1);
-    expect(snapshot?.mediaCapabilityProviders).toBeDefined();
-    expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
-    expect(mocks.loadStaticCatalog).not.toHaveBeenCalled();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
 });

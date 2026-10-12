@@ -288,44 +288,71 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
       }),
     );
     backends.add(first).add(second);
-    await first[SQLITE_WORKER_PREPARE_COMMAND]?.("plugins.metadata.read");
+    await first[SQLITE_WORKER_PREPARE_COMMAND]?.("claws.install-schema-versions");
     await second[SQLITE_WORKER_PREPARE_COMMAND]?.(operation);
     expect(
       runWithSqliteWorkerStateContext(context, () =>
         first.execute({
-          type: "plugins.metadata.read",
-          input: { selector: "bundled-discovery", artifactPreservingReadOnly: false },
+          type: "claws.install-schema-versions",
+          input: { artifactPreservingReadOnly: false },
         }),
       ),
-    ).toBeUndefined();
+    ).toEqual([]);
     expect(readFileSync(databasePath)).toEqual(initialBytes);
 
     const scope = "tests/health-native-borrow";
-    const write = (backend: typeof first, key: string) =>
-      runWithSqliteWorkerStateContext(context, () =>
-        operation === "config.health.patch"
-          ? backend.execute({
-              type: operation,
-              input: {
-                configPath: `/${key}.json`,
-                patch: { last_observed_suspicious_signature: key },
-                expected: null,
-                updatedAtMs: 100,
-              },
-            })
-          : backend.execute({
-              type: operation,
-              input: {
-                scope,
-                maxEntries: 10,
-                record: prepareSqliteAuditRecord(scope, {
-                  key,
-                  value: { marker: key },
-                  createdAt: 100,
-                }),
-              },
-            }),
-      );
+    const write = (backend: typeof first, key: string) => {
+      const execute = () =>
+        runWithSqliteWorkerStateContext(context, () =>
+          operation === "config.health.patch"
+            ? backend.execute({
+                type: operation,
+                input: {
+                  configPath: `/${key}.json`,
+                  patch: { last_observed_suspicious_signature: key },
+                  expected: null,
+                  updatedAtMs: 100,
+                },
+              })
+            : backend.execute({
+                type: operation,
+                input: {
+                  scope,
+                  maxEntries: 10,
+                  record: prepareSqliteAuditRecord(scope, {
+                    key,
+                    value: { marker: key },
+                    createdAt: 100,
+                  }),
+                },
+              }),
+        );
+      if (operation === "config.health.patch") {
+        return execute();
+      }
+      const stages: string[] = [];
+      const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+        stages.push(request.stage);
+        context.admission.assertCurrent();
+        grant();
+      });
+      const nativePost = admission.port.postMessage.bind(admission.port);
+      // Service the actual grant before this same-thread backend waits for its response.
+      const dispatch = vi
+        .spyOn(admission.port, "postMessage")
+        .mockImplementation((message, transferList) => {
+          nativePost(message, transferList);
+          admission.service();
+        });
+      try {
+        const result = withSqliteWorkerOperationAdmission({ port: admission.port }, execute);
+        expect(stages).toEqual(["transaction", "commit"]);
+        return result;
+      } finally {
+        dispatch.mockRestore();
+        admission.finish();
+      }
+    };
     const expectedResult = operation === "config.health.patch" ? true : undefined;
     expect(write(first, "first")).toBe(expectedResult);
     expect(write(second, "second")).toBe(expectedResult);
@@ -343,7 +370,7 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
       }),
     );
     backends.add(reopened);
-    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("plugins.metadata.read");
+    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("claws.install-schema-versions");
     const reopenedDatabase = openOpenClawStateDatabase();
     if (operation === "config.health.patch") {
       expect(readConfigHealthStateInDatabase(reopenedDatabase.db)).toMatchObject({

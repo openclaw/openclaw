@@ -1,13 +1,17 @@
+import { performance } from "node:perf_hooks";
+import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
+import type { ChatRunTiming } from "../server-chat-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
-type ChatSendAckServerTiming = {
-  receivedToAckMs: number;
-  loadSessionMs: number;
-  prepareAttachmentsMs?: number;
+type ChatSendTimingContext = {
+  client?: GatewayClient | null;
+  request: { chatSendReceivedAtMs: number; clientInfo?: GatewayClientInfo };
+  session: { clientRunId: string; sessionKey: string; agentId: string; sessionLoadMs: number };
 };
 
-export type ChatSendServerTimingPhase =
+type ChatSendServerTimingPhase =
   | "dispatch-started"
   | "model-selected"
   | "agent-run-started"
@@ -19,18 +23,54 @@ export function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
 }
 
-export function chatSendAckServerTimingAttributes(
-  timing: ChatSendAckServerTiming | undefined,
-): Record<string, number> {
-  if (!timing) {
-    return {};
-  }
+export function prepareChatSendAckTiming({
+  client,
+  request: { clientInfo, chatSendReceivedAtMs },
+  session: { sessionLoadMs },
+  prepareAttachmentsMs,
+  chatSendTraceAttributes,
+}: ChatSendTimingContext & {
+  prepareAttachmentsMs?: number;
+  chatSendTraceAttributes: NonNullable<
+    Parameters<typeof emitDiagnosticsTimelineEvent>[0]["attributes"]
+  >;
+}) {
+  const serverTiming = isOperatorUiClient(clientInfo)
+    ? {
+        receivedToAckMs: roundedChatSendTimingMs(performance.now() - chatSendReceivedAtMs),
+        loadSessionMs: sessionLoadMs,
+        ...(prepareAttachmentsMs !== undefined ? { prepareAttachmentsMs } : {}),
+      }
+    : undefined;
+  const chatSendTiming: ChatRunTiming | undefined =
+    serverTiming && typeof client?.connId === "string" && client.connId.trim()
+      ? {
+          ackedAtMs: performance.now(),
+          connId: client.connId.trim(),
+          receivedAtMs: chatSendReceivedAtMs,
+        }
+      : undefined;
   return {
-    serverReceivedToAckMs: timing.receivedToAckMs,
-    serverLoadSessionMs: timing.loadSessionMs,
-    ...(timing.prepareAttachmentsMs !== undefined
-      ? { serverPrepareAttachmentsMs: timing.prepareAttachmentsMs }
-      : {}),
+    serverTiming,
+    chatSendTiming,
+    ackReadyEvent: (ackStatus: string): Parameters<typeof emitDiagnosticsTimelineEvent>[0] => ({
+      type: "mark",
+      name: "gateway.chat_send.ack_ready",
+      phase: "agent-turn",
+      attributes: {
+        ...chatSendTraceAttributes,
+        ackStatus,
+        ...(serverTiming
+          ? {
+              serverReceivedToAckMs: serverTiming.receivedToAckMs,
+              serverLoadSessionMs: serverTiming.loadSessionMs,
+              ...(serverTiming.prepareAttachmentsMs !== undefined
+                ? { serverPrepareAttachmentsMs: serverTiming.prepareAttachmentsMs }
+                : {}),
+            }
+          : {}),
+      },
+    }),
   };
 }
 
@@ -54,40 +94,60 @@ export function resolveControlUiReconnectResumeParams(
   return { params: validatedParams, resumeRequested: true };
 }
 
-export function emitOperatorChatSendServerTiming(params: {
+export function createOperatorChatSendServerTiming({
+  context,
+  client,
+  request: { chatSendReceivedAtMs: receivedAtMs },
+  session: { clientRunId: runId, sessionKey, agentId },
+  timing: { chatSendAckedAtMs: ackedAtMs, chatSendTiming },
+}: ChatSendTimingContext & {
   context: Pick<GatewayRequestContext, "broadcastToConnIds">;
-  client?: GatewayClient | null;
-  phase: ChatSendServerTimingPhase;
-  runId: string;
-  sessionKey: string;
-  agentId?: string;
-  receivedAtMs: number;
-  ackedAtMs: number;
-  dispatchStartedAtMs?: number;
-  extra?: Record<string, string | number>;
+  timing: { chatSendAckedAtMs: number; chatSendTiming?: ChatRunTiming };
 }) {
-  const connId = params.client?.connId?.trim();
-  if (!connId || !isOperatorUiClient(params.client?.connect?.client)) {
-    return;
+  const startedAtMs = performance.now();
+  if (chatSendTiming) {
+    chatSendTiming.dispatchStartedAtMs = startedAtMs;
   }
-  const nowMs = performance.now();
-  params.context.broadcastToConnIds(
-    "chat.send_timing",
-    {
-      phase: params.phase,
-      runId: params.runId,
-      sessionKey: params.sessionKey,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      ackToPhaseMs: roundedChatSendTimingMs(nowMs - params.ackedAtMs),
-      receivedToPhaseMs: roundedChatSendTimingMs(nowMs - params.receivedAtMs),
-      ...(params.dispatchStartedAtMs !== undefined
-        ? {
-            dispatchStartedToPhaseMs: roundedChatSendTimingMs(nowMs - params.dispatchStartedAtMs),
-          }
-        : {}),
-      ...params.extra,
+  const connId = client?.connId?.trim();
+  const recipients =
+    connId && isOperatorUiClient(client?.connect?.client) ? new Set([connId]) : undefined;
+  const assistantTiming = chatSendTiming ?? { firstAssistantEventSent: false };
+  const emit = (
+    phase: ChatSendServerTimingPhase,
+    extra?: Record<string, string | number>,
+    dispatchStartedAtMs?: number,
+  ) => {
+    if (!recipients) {
+      return;
+    }
+    const nowMs = performance.now();
+    context.broadcastToConnIds(
+      "chat.send_timing",
+      {
+        phase,
+        runId,
+        sessionKey,
+        ...(agentId ? { agentId } : {}),
+        ackToPhaseMs: roundedChatSendTimingMs(nowMs - ackedAtMs),
+        receivedToPhaseMs: roundedChatSendTimingMs(nowMs - receivedAtMs),
+        ...(dispatchStartedAtMs !== undefined
+          ? { dispatchStartedToPhaseMs: roundedChatSendTimingMs(nowMs - dispatchStartedAtMs) }
+          : {}),
+        ...extra,
+      },
+      recipients,
+      { dropIfSlow: true },
+    );
+  };
+  return {
+    emit,
+    dispatchStartedAtMs: startedAtMs,
+    emitFirstAssistant: () => {
+      if (assistantTiming.firstAssistantEventSent) {
+        return;
+      }
+      assistantTiming.firstAssistantEventSent = true;
+      emit("first-assistant-event", undefined, startedAtMs);
     },
-    new Set([connId]),
-    { dropIfSlow: true },
-  );
+  };
 }

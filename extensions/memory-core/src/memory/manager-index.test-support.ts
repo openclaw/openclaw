@@ -1,22 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import type {
   EmbeddingInput,
   EmbeddingProviderCallOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
@@ -98,7 +101,7 @@ export type ManagerIndexFixture = {
   createConfig: (params: ManagerIndexFixtureConfig) => ManagerConfig;
   requireManager: (result: ManagerResult, missingMessage?: string) => MemoryIndexManager;
   trackManager: (manager: MemoryIndexManager) => void;
-  resetManager: (manager: MemoryIndexManager) => void;
+  resetManager: (manager: MemoryIndexManager) => Promise<void>;
   getPersistentManager: (cfg: ManagerConfig) => Promise<MemoryIndexManager>;
   getFreshManager: (
     cfg: ManagerConfig,
@@ -395,15 +398,8 @@ export function createManagerIndexFixture(deps: {
   let workerState: OpenClawTestState | undefined;
   const managers = new Set<MemoryIndexManager>();
 
-  const resetManager = (manager: MemoryIndexManager): void => {
-    const db = (
-      manager as unknown as {
-        db: {
-          exec: (sql: string) => void;
-          prepare: (sql: string) => { get: (name: string) => { name?: string } | undefined };
-        };
-      }
-    ).db;
+  const resetManager = async (manager: MemoryIndexManager): Promise<void> => {
+    const db = memoryIndexFixtureWriter(manager);
     for (const table of [
       "memory_index_sources",
       "memory_index_chunks",
@@ -415,6 +411,12 @@ export function createManagerIndexFixture(deps: {
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
         .get(table);
       if (existingTable?.name === table) {
+        if (table === "memory_index_chunks_vec") {
+          const loaded = await loadSqliteVecExtension({ db });
+          if (!loaded.ok) {
+            throw new Error(loaded.error);
+          }
+        }
         db.exec(`DELETE FROM ${table}`);
       }
     }
@@ -437,7 +439,7 @@ export function createManagerIndexFixture(deps: {
           },
           remote: params.batchEnabled ? { batch: { enabled: true } } : undefined,
           query: { minScore: params.minScore ?? 0 },
-          cache: params.cacheEnabled ? { enabled: true } : undefined,
+          cache: params.cacheEnabled !== undefined ? { enabled: params.cacheEnabled } : undefined,
           extraPaths: params.extraPaths,
           multimodal: params.multimodal,
           sources: params.sources,
@@ -457,7 +459,7 @@ export function createManagerIndexFixture(deps: {
     missingMessage = "manager missing",
   ): MemoryIndexManager => {
     if (!result.manager) {
-      throw new Error(missingMessage);
+      throw new Error(result.error ?? missingMessage);
     }
     return result.manager as unknown as MemoryIndexManager;
   };
@@ -467,9 +469,15 @@ export function createManagerIndexFixture(deps: {
   };
 
   const getPersistentManager = async (cfg: ManagerConfig): Promise<MemoryIndexManager> => {
-    const manager = requireManager(await deps.getMemorySearchManager({ cfg, agentId: "main" }));
+    const manager = requireManager(
+      await deps.getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(manager);
-    resetManager(manager);
+    await resetManager(manager);
     return manager;
   };
 
@@ -479,7 +487,13 @@ export function createManagerIndexFixture(deps: {
     inspectSources?: boolean,
   ): Promise<MemoryIndexManager> => {
     const manager = requireManager(
-      await deps.getMemorySearchManager({ cfg, agentId: "main", purpose, inspectSources }),
+      await deps.getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+        purpose,
+        inspectSources,
+      }),
     );
     trackManager(manager);
     return manager;
@@ -521,9 +535,15 @@ export function createManagerIndexFixture(deps: {
       sessionMemory: true,
       minScore: 0,
     });
-    const manager = requireManager(await deps.getMemorySearchManager({ cfg, agentId: "main" }));
+    const manager = requireManager(
+      await deps.getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(manager);
-    resetManager(manager);
+    await resetManager(manager);
     return manager.status().fts?.available ? manager : null;
   };
 
@@ -624,6 +644,30 @@ export function createManagerIndexFixture(deps: {
     getFtsSessionManager,
     seedSessionTranscript,
   };
+}
+
+/** Fixture writes use the native test owner; the manager retains only its reader. */
+export function memoryIndexFixtureWriter(manager: MemoryIndexManager): DatabaseSync {
+  const databasePath = manager.status().dbPath;
+  if (!databasePath) {
+    throw new Error("Memory index fixture has no database path");
+  }
+  return openOpenClawAgentDatabase({ agentId: "main", path: databasePath }).db;
+}
+
+export function countMemoryIndexFtsMatches(databasePath: string, marker: string): number {
+  const observer = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    return (
+      observer
+        .prepare(
+          "SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
+        )
+        .get(`"${marker}"`) as { count: number }
+    ).count;
+  } finally {
+    observer.close();
+  }
 }
 
 export function readPublishedSessionIndex(

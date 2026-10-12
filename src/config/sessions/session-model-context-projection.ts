@@ -5,6 +5,11 @@ import {
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { supportsNodeSqliteJsonb } from "../../infra/node-sqlite.js";
 import { MODEL_CONTEXT_PRIVATE_METADATA_KEYS } from "../../shared/model-context-message.js";
+import {
+  MODEL_CONTEXT_NAVIGATION_KEYS,
+  MODEL_MESSAGE_NAVIGATION_KEYS,
+  TRANSCRIPT_NAVIGATION_KEYS,
+} from "./session-model-context-navigation.js";
 
 /** Exclude storage-only fields in SQLite, before a row's JSON crosses into JavaScript. */
 export function projectModelContextEventSql(
@@ -46,33 +51,6 @@ function contentPropertySql(
     THEN json_extract(${event}, fullkey || ${`.${property}`})
     ELSE json_extract(value, ${`$.${property}`}) END`;
 }
-
-const TRANSCRIPT_NAVIGATION_KEYS = [
-  "type",
-  "id",
-  "parentId",
-  "targetId",
-  "appendParentId",
-  "appendMode",
-] as const;
-
-const MODEL_CONTEXT_NAVIGATION_KEYS = [
-  ...TRANSCRIPT_NAVIGATION_KEYS,
-  "timestamp",
-  "version",
-  "cwd",
-  "firstKeptEntryId",
-  "reason",
-  "tokensBefore",
-  "thinkingLevel",
-  "provider",
-  "modelId",
-  "fromId",
-  "customType",
-  "display",
-  "label",
-  "name",
-] as const;
 
 type JsonMemberAlias = "root_member" | "message_member";
 
@@ -148,30 +126,14 @@ function systemUpdateKindSql(event: Expression<unknown>): RawBuilder<string | nu
 /** Lightweight tree/state records; these never serve as persisted transcript evidence. */
 export function projectModelContextNavigationSql(
   event: Expression<string | Uint8Array>,
+  entryType: Expression<unknown> = sql`json_extract(${event}, '$.type')`,
 ): RawBuilder<string> {
   const entry = pickJsonObject(event, MODEL_CONTEXT_NAVIGATION_KEYS);
   // Binary intermediates avoid serializing and reparsing the entire message.
   const message = supportsNodeSqliteJsonb()
     ? /* kysely-allow-raw: JSONB remains inside SQLite; durable transcript bytes stay text. */ sql`jsonb_extract(${event}, '$.message')`
     : /* kysely-allow-raw: supported SQLite 3.44 libraries retain text JSON extraction. */ sql`json_extract(${event}, '$.message')`;
-  const messageFacts = pickJsonObject(message, [
-    "role",
-    "provider",
-    "model",
-    "timestamp",
-    "excludeFromContext",
-    "toolCallId",
-    "toolUseId",
-    "tool_call_id",
-    "tool_use_id",
-    "callId",
-    "call_id",
-    "toolName",
-    "isError",
-    "stopReason",
-    "customType",
-    "display",
-  ]);
+  const messageFacts = pickJsonObject(message, MODEL_MESSAGE_NAVIGATION_KEYS);
   const messageOperatorKind = systemUpdateKindSql(message);
   const entryOperatorKind = systemUpdateKindSql(event);
   const customMessage = /* kysely-allow-raw: custom-message navigation omits payload text. */ sql<string>`json_set(${entry}, '$.content', json('[]'))`;
@@ -183,7 +145,7 @@ export function projectModelContextNavigationSql(
   const synthetic = /* kysely-allow-raw: pairing prefers real results over synthetic missing-result placeholders. */ sql<number>`COALESCE(json_extract(${event}, ${`$.message.details.${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}`}), 0) = 1 OR EXISTS (
     SELECT 1 FROM json_each(${event}, '$.message.content') WHERE type = 'object'
     AND ${contentPropertySql(event, "type")} = 'text' AND ${contentPropertySql(event, "text")} = ${LEGACY_MISSING_TOOL_RESULT_TEXT})`;
-  return /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE json_extract(${event}, '$.type')
+  return /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE ${entryType}
     WHEN 'message' THEN json_set(${entry}, '$.message', json_set(${messageFacts},
       '$.content', json(${calls}), '$.command', '', '$.output', '',
       '$.providerReplay', json_object('type', json_extract(${event}, '$.message.providerReplay.type')),

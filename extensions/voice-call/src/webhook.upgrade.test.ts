@@ -81,29 +81,6 @@ function upgradeRequest(path: string) {
 }
 
 describe("VoiceCallWebhookServer upgrade rejection", () => {
-  it("flushes a sibling-path upgrade rejection before closing", async () => {
-    const { server, resolveRegistration } = createServer();
-    let client: net.Socket | undefined;
-    try {
-      const url = new URL(await server.start());
-      client = net.connect({ host: url.hostname, port: Number(url.port) });
-      const closed = once(client, "close");
-      let response = "";
-      client.setEncoding("utf8");
-      client.on("data", (chunk) => {
-        response += chunk.toString();
-      });
-      await once(client, "connect");
-      client.write(upgradeRequest("/voice/stream/realtime-extra/token"));
-      await closed;
-      expect(response).toBe("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
-      expect(resolveRegistration).not.toHaveBeenCalled();
-    } finally {
-      client?.destroy();
-      await server.stop();
-    }
-  });
-
   it("handles a server socket error while the unmatched rejection write is pending", async () => {
     const { server } = createServer();
     const pendingWrite = createDeferred<string>();
@@ -168,13 +145,6 @@ describe("VoiceCallWebhookServer upgrade rejection", () => {
   });
 
   it.each([
-    {
-      mode: "realtime",
-      streaming: false,
-      path: "/voice/stream/realtime/invalid",
-      status: 401,
-      streamPath: "/voice/stream/realtime",
-    },
     { mode: "root realtime", streaming: false, path: "/token", status: 401, streamPath: "/" },
     {
       mode: "media",

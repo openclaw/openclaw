@@ -99,18 +99,6 @@ export function resolveDaemonRuntimeBinDir(runtimePath?: string): string[] | und
   return [path.dirname(trimmed)];
 }
 
-function isOpenClawCommandBasename(basename: string, platform: NodeJS.Platform): boolean {
-  if (basename === "openclaw") {
-    return true;
-  }
-  if (platform === "win32") {
-    return (
-      basename === "openclaw.cmd" || basename === "openclaw.ps1" || basename === "openclaw.exe"
-    );
-  }
-  return false;
-}
-
 function safeRealpathSync(inputPath: string): string | undefined {
   try {
     return fs.realpathSync.native(inputPath);
@@ -119,14 +107,6 @@ function safeRealpathSync(inputPath: string): string | undefined {
   }
 }
 
-function addUniquePathDir(dirs: string[], dir: string | undefined): void {
-  if (!dir || !path.isAbsolute(dir) || dirs.includes(dir)) {
-    return;
-  }
-  dirs.push(dir);
-}
-
-/** Merge runtime and active OpenClaw binary directories for the daemon service PATH. */
 export function resolveDaemonServicePathDirs(params: {
   runtimePath?: string;
   argv?: string[];
@@ -137,14 +117,17 @@ export function resolveDaemonServicePathDirs(params: {
   const argv = params.argv ?? process.argv;
   const env = params.env ?? process.env;
   const argv1 = argv[1]?.trim();
-  const dirs = resolveDaemonRuntimeBinDir(params.runtimePath) ?? [];
+  const dirs = new Set(resolveDaemonRuntimeBinDir(params.runtimePath));
+  const commandName = path.basename(argv1 ?? "");
 
   if (
     argv1 &&
     path.isAbsolute(argv1) &&
-    isOpenClawCommandBasename(path.basename(argv1), platform)
+    (commandName === "openclaw" ||
+      (platform === "win32" &&
+        ["openclaw.cmd", "openclaw.ps1", "openclaw.exe"].includes(commandName)))
   ) {
-    addUniquePathDir(dirs, path.dirname(argv1));
+    dirs.add(path.dirname(argv1));
   }
 
   const argvRealpath = argv1 && path.isAbsolute(argv1) ? safeRealpathSync(argv1) : undefined;
@@ -168,8 +151,8 @@ export function resolveDaemonServicePathDirs(params: {
         continue;
       }
     }
-    addUniquePathDir(dirs, segment);
+    dirs.add(segment);
   }
 
-  return dirs.length > 0 ? dirs : undefined;
+  return dirs.size > 0 ? [...dirs] : undefined;
 }

@@ -7,11 +7,6 @@ export function parseDebugCommand(raw: string): DebugCommand | null {
     raw,
     slash: "/debug",
     usageMessage: "Usage: /debug show|set|unset|reset",
-    onKnownAction: (action) => {
-      if (action === "show" || action === "reset") {
-        return { action };
-      }
-      return undefined;
-    },
+    onKnownAction: (action) => (action === "show" || action === "reset" ? { action } : undefined),
   });
 }

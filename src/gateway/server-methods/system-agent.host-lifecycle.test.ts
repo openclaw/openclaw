@@ -186,9 +186,7 @@ describe("openclaw.chat hosted lifecycle", () => {
       const requestResponses = makeRespond();
       const rootsAtResponse: number[] = [];
       const persistedHistoryAtResponse: unknown[][] = [];
-      const appendHistory = fullPermission
-        ? transcriptStoreMocks.appendTranscriptTurn
-        : transcriptStoreMocks.appendTranscriptTurnAsync;
+      const appendHistory = transcriptStoreMocks.appendTurn;
       const pendingChat = withGatewayToolCallerIdentity(identity, () =>
         handleGatewayRequest({
           req: {

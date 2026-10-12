@@ -6,8 +6,8 @@ import {
   appendTranscriptMessage,
   appendTranscriptMessages,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";

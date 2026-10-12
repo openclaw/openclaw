@@ -6,8 +6,8 @@ import {
 } from "../state/user-profile-list.js";
 import { resolveUserPath } from "../utils.js";
 import {
+  createLoadedWorkspaceBootstrapFile,
   readWorkspaceFileWithGuards,
-  setWorkspaceFileSourceIdentity,
 } from "./workspace-file-read.js";
 import { DEFAULT_USER_FILENAME, type WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -41,13 +41,5 @@ export async function loadPersonalUserBootstrapFile(
   ) {
     return undefined;
   }
-  const file: WorkspaceBootstrapFile = {
-    name: DEFAULT_USER_FILENAME,
-    path: filePath,
-    content: loaded.content,
-    missing: false,
-    personalUser: true,
-  };
-  setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
-  return file;
+  return createLoadedWorkspaceBootstrapFile(DEFAULT_USER_FILENAME, filePath, loaded, true);
 }

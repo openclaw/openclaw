@@ -26,6 +26,7 @@ export function startSlowRequestDiagnostics<Phase extends string>(
   message: string,
   operation: string,
   initialPhase: Phase,
+  details?: () => Record<string, unknown>,
 ) {
   if (!areDiagnosticsEnabledForProcess() || !log.isEnabled("warn")) {
     return undefined;
@@ -54,7 +55,12 @@ export function startSlowRequestDiagnostics<Phase extends string>(
           phaseDurationsMs[stage.name] = (phaseDurationsMs[stage.name] ?? 0) + stage.durationMs;
         }
         runWithDiagnosticTraceContext(trace, () =>
-          log.warn(message, { operation, elapsedMs: Math.round(elapsedMs), phaseDurationsMs }),
+          log.warn(message, {
+            operation,
+            elapsedMs: Math.round(elapsedMs),
+            phaseDurationsMs,
+            ...details?.(),
+          }),
         );
       } catch {
         // Diagnostic sinks cannot replace the response or original error.

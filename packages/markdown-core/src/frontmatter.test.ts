@@ -35,6 +35,17 @@ metadata: {"openclaw": {"events": ["test"]}}
     expect(result.metadata).toBe('{"openclaw": {"events": ["test"]}}');
   });
 
+  it("keeps a flow value that continues on the next line", () => {
+    const content = `---
+name: wrapped-flow
+metadata: {a: 1,
+  b: 2}
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(JSON.parse(result.metadata ?? "")).toEqual({ a: 1, b: 2 });
+  });
+
   it("stringifies YAML objects and arrays", () => {
     const content = `---
 name: yaml-objects

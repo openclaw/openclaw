@@ -5,6 +5,7 @@ import type {
   PluginPackageChannel,
   PluginPackageChannelCliOption,
 } from "../../plugins/manifest.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { listRawChannelPluginCatalogEntries } from "./catalog.js";
 
 export type ChannelSetupCliOptionValueMetadata = {
@@ -61,15 +62,9 @@ export function resolveChannelSetupCliOptionMetadata(
   const channels = params.includeAll ? orderedChannels : selectedChannel ? [selectedChannel] : [];
   // Keep pre-dedupe candidates available to detect cross-channel flag-arity conflicts.
   const optionCandidates = channels.flatMap(channelSetupOptions);
-  const seenSwitches = new Set<string>();
-  const options = optionCandidates.filter((option) => {
-    const key = channelCliOptionSwitchKey(option.flags);
-    if (seenSwitches.has(key)) {
-      return false;
-    }
-    seenSwitches.add(key);
-    return true;
-  });
+  const options = dedupeByKey(optionCandidates, (option) =>
+    channelCliOptionSwitchKey(option.flags),
+  );
   const valueMetadataByAttributeName = new Map<string, ChannelSetupCliOptionValueMetadata>();
   // Value coercion metadata is a legacy-options mechanism; modern contracts
   // type their fields, and their cliAddOptions never register above.

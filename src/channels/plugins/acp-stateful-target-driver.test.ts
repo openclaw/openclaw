@@ -6,7 +6,7 @@ const resetMocks = vi.hoisted(() => ({
   performGatewaySessionReset: vi.fn(async () => ({
     ok: true as const,
     key: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
-    entry: { sessionId: "next-session", updatedAt: 1 },
+    entry: { sessionId: "next-session", lifecycleRevision: "next-lifecycle", updatedAt: 1 },
     agentId: "claude",
     storePath: "/tmp/claude-sessions.json",
   })),
@@ -63,6 +63,7 @@ describe("ACP binding targets", () => {
       ok: true,
       sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
       sessionId: "next-session",
+      lifecycleRevision: "next-lifecycle",
       storePath: "/tmp/claude-sessions.json",
     });
 

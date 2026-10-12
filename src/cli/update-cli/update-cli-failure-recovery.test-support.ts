@@ -98,6 +98,7 @@ export function registerForegroundFailureRecoveryTests({
           settled: true,
         },
         steps: [
+          expect.objectContaining({ name: "updater-runtime-retention", exitCode: 0 }),
           recoveryVerificationStep(undefined, root),
           {
             name: "update",
