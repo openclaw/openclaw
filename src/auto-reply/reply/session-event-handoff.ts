@@ -62,6 +62,9 @@ export type {
 
 const log = createSubsystemLogger("session-events");
 
+/** Policy publications an accepted occurrence may outlive before it waits for an ordinary turn. */
+const MAX_CONFIG_READMISSION_ATTEMPTS = 2;
+
 /** Producer-owned occurrence; passive notices continue to use enqueueSystemEvent. */
 export function enqueueSessionEventForHost(
   text: string,
@@ -86,6 +89,8 @@ export function enqueueSessionEventForHost(
     occurrences?: readonly SystemEvent[];
     /** Failed promotion retains an existing passive occurrence until ordinary adoption begins. */
     preserveOccurrenceOnRejection?: true;
+    /** Internal: policy-change re-admission depth, bounded to stop publication storms. */
+    readmissionAttempt?: number;
     /** An explicitly silent source records its result without transport delivery. */
     deliver?: boolean;
     /** Host producer remains live through admission, execution and delivery. */
@@ -96,11 +101,11 @@ export function enqueueSessionEventForHost(
   acceptanceAssertion?.();
   options.assertCurrent?.();
   options.expectedTarget?.assertCurrent?.();
-  // The policy snapshot this occurrence was admitted under. An accepted occurrence that has
-  // not started is re-admitted under the current policy instead of being destroyed; see
-  // assertOwnerCurrent.
-  let cfg = getSessionEventRuntimeConfig();
-  let configPublication = getRuntimeConfigSnapshotMetadata();
+  // The policy snapshot this occurrence was admitted under. A policy publication rejects
+  // admission; an accepted occurrence that never started is re-admitted under the current
+  // policy at settlement instead of being destroyed (see finish).
+  const cfg = getSessionEventRuntimeConfig();
+  const configPublication = getRuntimeConfigSnapshotMetadata();
   const agentId = normalizeAgentId(options.agentId);
   resolveConfiguredAgentId(cfg, agentId);
   const sessionKey = resolveSessionEventKey(agentId, options.sessionKey);
@@ -195,6 +200,12 @@ export function enqueueSessionEventForHost(
   let admissionStarted = false;
   let deferred = false;
   let adopted = false;
+  // Set when admission observed a policy publication. finish() uses it to re-admit an
+  // accepted, unstarted occurrence under the current policy instead of destroying it.
+  let configPublicationChanged = false;
+  // Set when the queue owner abandons this occurrence (Stop, lifecycle cleanup).
+  // Abandonment is terminal even when a policy publication also fired.
+  let abandoned = false;
   let operation: ReplyOperation | undefined;
   let replyRunRegistry: (typeof import("./reply-run-registry.js"))["replyRunRegistry"];
   let delivered = false;
@@ -218,19 +229,13 @@ export function enqueueSessionEventForHost(
     options.assertCurrent?.();
     options.expectedTarget?.assertCurrent?.();
     assertAgentRunLifecycleGenerationCurrent(generation);
-    let currentConfig = getSessionEventRuntimeConfig();
+    const currentConfig = getSessionEventRuntimeConfig();
     if (currentConfig !== cfg || getRuntimeConfigSnapshotMetadata() !== configPublication) {
-      // A policy publication change only re-decides the policy facts for an occurrence that was
-      // already accepted and has neither started nor attempted delivery. Keep it under this
-      // owner's custody under the current policy; the destination identity checks below still
-      // run against the refreshed config, so a real move, replacement, or deletion still fails.
-      const acceptedNotStarted = (accepted || deferred) && !started && !deliveryAttempted;
-      if (!acceptedNotStarted) {
-        throw new Error("Session event configuration changed; retry under the current policy");
-      }
-      cfg = currentConfig;
-      configPublication = getRuntimeConfigSnapshotMetadata();
-      currentConfig = cfg;
+      // Admission never proceeds under a policy published after acceptance; a queued run
+      // still holds the earlier config, so readmission here would execute stale authority.
+      // finish() re-admits an accepted, unstarted occurrence under the current policy.
+      configPublicationChanged = true;
+      throw new Error("Session event configuration changed; retry under the current policy");
     }
     resolveConfiguredAgentId(currentConfig, agentId);
     if (resolveSessionStorePathCore(currentConfig.session?.store, { agentId, env }) !== storePath) {
@@ -296,8 +301,18 @@ export function enqueueSessionEventForHost(
     const complete = () => {
       settlement = "finished";
       acceptanceAssertion = undefined;
+      // Only a policy publication retains an accepted, unstarted occurrence: it is
+      // re-admitted under the current policy instead of being destroyed. Stop, abort,
+      // abandonment, and failure settle terminally and consume the occurrence.
+      const configChangeRetention =
+        configPublicationChanged &&
+        (accepted || deferred) &&
+        !started &&
+        !deliveryAttempted &&
+        !signal.aborted &&
+        !abandoned;
       const status = signal.aborted ? "cancelled" : failure ? "failed" : "completed";
-      if (status === "failed") {
+      if (status === "failed" && !configChangeRetention) {
         log.error("session event execution failed", {
           source: options.source,
           agentId,
@@ -314,16 +329,47 @@ export function enqueueSessionEventForHost(
       }
       signal.removeEventListener("abort", onAbort);
       generationLease?.release();
-      // An occurrence that was accepted but never started and never attempted delivery returns
-      // to passive custody. No settlement path may destroy an event the user still owes a reply
-      // to; a later turn readmits it under the current policy.
       const retainCustody =
-        (options.preserveOccurrenceOnRejection && !adopted && !started) ||
-        ((accepted || deferred) && !started && !deliveryAttempted);
+        (options.preserveOccurrenceOnRejection && !adopted && !started) || configChangeRetention;
       if (retainCustody) {
         ownership.release();
       } else {
         ownership.cancel();
+      }
+      if (configChangeRetention) {
+        const attempt = options.readmissionAttempt ?? 0;
+        if (attempt < MAX_CONFIG_READMISSION_ATTEMPTS) {
+          try {
+            // Re-dispatch from scratch so admission, execution, and delivery all bind
+            // the current policy; the destination is re-captured and re-validated.
+            const readmitted = enqueueSessionEventForHost(eventText, {
+              agentId,
+              sessionKey,
+              source: options.source,
+              ...(options.contextKey ? { contextKey: options.contextKey } : {}),
+              ...(options.deliveryContext
+                ? { deliveryContext: structuredClone(options.deliveryContext) }
+                : {}),
+              occurrences,
+              preserveOccurrenceOnRejection: true,
+              readmissionAttempt: attempt + 1,
+              // A durable producer still commits its attempt only once the re-admitted
+              // turn is adopted; producer liveness and request signals stay behind.
+              ...(options.onAdopted ? { onAdopted: options.onAdopted } : {}),
+              ...(options.deliver !== undefined ? { deliver: options.deliver } : {}),
+              ...(options.createIfMissing ? { createIfMissing: options.createIfMissing } : {}),
+            });
+            resolve(readmitted.settled);
+            return;
+          } catch (error) {
+            // Re-admission itself rejected; the released occurrence stays in passive
+            // custody for the next ordinary turn.
+            log.warn("session event policy readmission failed; occurrence retained", {
+              eventId: occurrence.id,
+              error: String(error),
+            });
+          }
+        }
       }
       resolve({
         status,
@@ -584,6 +630,7 @@ export function enqueueSessionEventForHost(
               accept();
             },
             onAbandoned: () => {
+              abandoned = true;
               failure ??= "Session event was abandoned before execution";
             },
             onSettled: () => {
