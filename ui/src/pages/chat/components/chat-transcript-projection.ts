@@ -44,7 +44,6 @@ import {
   resolveTranscriptParticipants,
 } from "./chat-transcript-identity.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
-import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 import {
   expandReplyTargetWork,
   projectTranscriptChain,
@@ -64,11 +63,10 @@ import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 import "./chat-subagent-activity-live.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
-const persistedMessageIds = createTranscriptMemo<Set<string | null>>();
 
 export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTranscriptSession) {
   const state = getTranscriptState(props.paneId);
-  const { asyncQuestions, selectedSession: activeSession, latestBrowserTabs } = props;
+  const { asyncQuestions, selectedSession: activeSession } = props;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const { showOwnSenderName, sessionPeople } = resolveTranscriptParticipants(props);
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
@@ -528,21 +526,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       );
     }
   }
-  // Voice captions reconcile against unfiltered immutable history, not the
-  // current search or streaming projection.
-  const realtimeConversation = renderRealtimeTalkConversation({
-    ...props,
-    realtimeTalkConversation: props.realtimeTalkConversation?.filter((entry) => {
-      if (!entry.transcriptId) {
-        return true;
-      }
-      return !persistedMessageIds(
-        props.messages,
-        [],
-        () => new Set(props.messages.map(persistedMessageEntryId)),
-      ).has(entry.transcriptId);
-    }),
-  });
+  const realtimeConversation = renderRealtimeTalkConversation(props);
   if (realtimeConversation !== nothing) {
     appendContent("realtime-talk", realtimeConversation);
   }

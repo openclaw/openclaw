@@ -160,9 +160,10 @@ struct MacNodeRuntimeTests {
     final class MainActorServicesProbe: MacNodeRuntimeMainActorServices, @unchecked Sendable {
         typealias SnapshotInspection = (Int?, Int?, Double?, OpenClawScreenSnapshotFormat?) -> Void
 
+        private let desktopDefaultsSuiteName = "MacNodeRuntimeTests.\(UUID().uuidString)"
         let desktopPlatform = DesktopPlatformProbe()
         lazy var desktopAvailability: MacDesktopAvailabilityCoordinator = {
-            let defaults = UserDefaults(suiteName: "MacNodeRuntimeTests.\(UUID().uuidString)")!
+            let defaults = UserDefaults(suiteName: self.desktopDefaultsSuiteName)!
             let owner = MacDesktopAvailabilityCoordinator(defaults: defaults, platform: self.desktopPlatform)
             owner.setRoute(generation: 1, connected: true, hostingEnabled: false)
             return owner
@@ -217,6 +218,10 @@ struct MacNodeRuntimeTests {
             self.locationStatus = locationAuthorizationStatus
             self.performEnteredGate = performEnteredGate
             self.allowPerformGate = allowPerformGate
+        }
+
+        deinit {
+            UserDefaults.standard.removePersistentDomain(forName: self.desktopDefaultsSuiteName)
         }
 
         func snapshotScreen(
@@ -505,7 +510,10 @@ struct MacNodeRuntimeTests {
 
     @Test func `handle invoke camera list requires enabled camera`() async {
         await TestIsolation.withUserDefaultsValues([cameraEnabledKey: false]) {
-            let runtime = MacNodeRuntime()
+            let services = await MainActor.run { MainActorServicesProbe() }
+            let runtime = await MacNodeRuntime(
+                desktopAvailability: services.desktopAvailability,
+                makeMainActorServices: { services })
             let response = await self.invoke(runtime, "req-4", OpenClawCameraCommand.list.rawValue)
             #expect(response.ok == false)
             #expect(response.error?.details == .init(capabilities: ["camera"], state: .disabledInOpenClaw))
