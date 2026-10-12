@@ -21,7 +21,7 @@ import {
   type McpAppContextState,
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
-import type { McpAppViewElement } from "./mcp-app-view-controller.ts";
+import { mountView } from "./mcp-app-view.test-support.ts";
 import { McpAppPanel, type McpAppPanelElement } from "./solid/mcp-app-panel.tsx";
 
 const bridgeMocks = vi.hoisted(() => ({
@@ -93,23 +93,6 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
 
   return { ...actual, AppBridge, PostMessageTransport };
 });
-
-const { McpAppView } = await import("./mcp-app-view.tsx");
-function mountView(props: Parameters<typeof McpAppView>[0], context: object = {}) {
-  const supplied = context as Partial<ApplicationContext>;
-  const provider = createSolidApplicationContextProvider({
-    ...supplied,
-    gateway: {
-      subscribe: () => () => {},
-      snapshot: { client: null, phase: "stopped" },
-      ...supplied.gateway,
-    },
-  } as ApplicationContext);
-  const mounted = mountSolid(() => createComponent(McpAppView, props), {
-    wrapper: provider.wrapper,
-  });
-  return { ...mounted, view: mounted.container.querySelector<McpAppViewElement>("mcp-app-view")! };
-}
 
 describe("mcp-app-view localization", () => {
   afterEach(async () => {
@@ -907,8 +890,15 @@ describe("mcp-app-view localization", () => {
       expect.objectContaining({ containerDimensions: { width: 720, height: 480 } }),
     );
 
+    const onHeightChange = vi.fn();
+    view.onHeightChange = onHeightChange;
     bridge.onsizechange?.({ height: 900 });
     expect(frame.style.height).toBe("900px");
+    expect(view.querySelector<HTMLElement>(".mount")?.style.minHeight).toBe("900px");
+    expect(onHeightChange).toHaveBeenLastCalledWith(900);
+    bridge.onsizechange?.({ height: Number.NaN });
+    expect(frame.style.height).toBe("900px");
+    expect(onHeightChange).toHaveBeenCalledTimes(1);
     for (const change of [
       { title: "Updated library" },
       { surface: "board" },
@@ -925,6 +915,7 @@ describe("mcp-app-view localization", () => {
     expect(view.querySelector("iframe")?.style.height).toBe("100%");
     bridge.onsizechange?.({ height: 900 });
     expect(view.querySelector("iframe")?.style.height).toBe("100%");
+    expect(onHeightChange).toHaveBeenCalledTimes(1);
     expect(bridge.setHostContext).toHaveBeenLastCalledWith(
       expect.objectContaining({ containerDimensions: { width: 720, height: 480 } }),
     );

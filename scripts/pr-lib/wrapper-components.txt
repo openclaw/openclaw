@@ -2251,6 +2251,7 @@ src/config/sessions/transcript-replay.ts
 src/config/sessions/transcript-visible-events.ts
 src/config/sessions/work-start-error.ts
 src/gateway/control-reply-text.ts
+src/gateway/payload-limits.ts
 src/gateway/server-constants.ts
 src/gateway/session-display-projection.ts
 src/gateway/session-transcript-entry-message.ts
