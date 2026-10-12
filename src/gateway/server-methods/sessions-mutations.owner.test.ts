@@ -448,7 +448,7 @@ describe("sessions.patch", () => {
             updatedAt: 1,
             permissionMode: "guarded",
             ...(restore ? { archivedAt: 1 } : {}),
-            ...(index === 1 ? { thinkingLevel: "off" } : {}),
+            ...(index === 1 ? { contextWindow: "extended" } : {}),
           });
         }
         const cfg: OpenClawConfig = {};

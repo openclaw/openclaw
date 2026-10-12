@@ -684,7 +684,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it.each(["explicit", "stored"] as const)(
-    "rejects unsupported %s thinking or applies a turn-local fallback without changing storage",
+    "validates %s thinking while preserving the stored preference",
     async (source) => {
       const sessionEntry: SessionEntry = {
         sessionId: "session-thinking",
@@ -712,7 +712,7 @@ describe("runPreparedReply media-only handling", () => {
         );
         expect(runReplyAgent).not.toHaveBeenCalled();
       } else {
-        expect(requireRunReplyAgentCall().followupRun.run.thinkLevel).toBe("off");
+        expect(requireRunReplyAgentCall().followupRun.run.thinkLevel).toBe("high");
         expect(sessionEntry.thinkingLevel).toBe("high");
         expect(sessionStore["session-key"]?.thinkingLevel).toBe("high");
       }
