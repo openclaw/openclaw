@@ -114,15 +114,6 @@ declare module "@solidjs/web" {
             "src" | "sourceIdentity" | "label" | "mimeType" | "sizeBytes"
           >
         >;
-      "openclaw-mcp-app-catalog": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-mcp-app-catalog"]
-      > &
-        ElementProperties<
-          Pick<
-            HTMLElementTagNameMap["openclaw-mcp-app-catalog"],
-            "sessionKey" | "agentId" | "filePath"
-          >
-        > & { surface?: HTMLElementTagNameMap["openclaw-mcp-app-catalog"]["surface"] };
       "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
         "prop:agentId"?: string;
       };
