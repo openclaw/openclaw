@@ -138,64 +138,79 @@ describe("AppSidebar automatic list scope replacement", () => {
     }
   });
 
-  it("loads the selected filtered roster after an earlier automatic scope read settles", async () => {
-    vi.useFakeTimers();
-    const previous = deferred<ReturnType<typeof sessionsResult>>();
-    const targets: unknown[] = [];
-    let mainReads = 0;
-    const archived = (agentId: string, label: string) =>
-      sessionsResult(
-        [{ key: `agent:${agentId}:archived`, kind: "direct", archived: true, label }],
-        1,
+  it.each([false, true])(
+    "loads selected filtered rosters before chat readiness (automatic first: %s)",
+    async (automaticFirst) => {
+      vi.useFakeTimers();
+      const previous = deferred<ReturnType<typeof sessionsResult>>();
+      const targets: unknown[] = [];
+      let mainReads = 0;
+      const archived = (agentId: string, label: string) =>
+        sessionsResult(
+          [{ key: `agent:${agentId}:archived`, kind: "direct", archived: true, label }],
+          1,
+        );
+      const { sidebar, context, provider, sessions } = await mountSessionRoster(
+        async (method, raw) => {
+          const params = asOptionalRecord(raw);
+          if (method === "sessions.subscribe") {
+            return { subscribed: true };
+          }
+          if (method !== "sessions.list") {
+            return {};
+          }
+          if (params?.archived !== true) {
+            return sessionsResult([], 0);
+          }
+          targets.push(params.agentId);
+          if (params.agentId === "research") {
+            return previous.promise;
+          }
+          return archived("main", `Main archived ${++mainReads}`);
+        },
       );
-    const { sidebar, context, provider, sessions } = await mountSessionRoster(
-      async (method, raw) => {
-        const params = asOptionalRecord(raw);
-        if (method === "sessions.subscribe") {
-          return { subscribed: true };
-        }
-        if (method !== "sessions.list") {
-          return {};
-        }
-        if (params?.archived !== true) {
-          return sessionsResult([], 0);
-        }
-        targets.push(params.agentId);
-        if (params.agentId === "research") {
-          return previous.promise;
-        }
-        return archived("main", `Main archived ${++mainReads}`);
-      },
-    );
-    try {
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
-      expect(sidebar.textContent).toContain("Main archived 1");
+      try {
+        sidebar.connected = true;
+        await sidebar.updateComplete;
+        sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
+        expect(sidebar.textContent).toContain("Main archived 1");
 
-      context.agentSelection.set("research");
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(50);
-      expect(targets).toEqual(["main", "research"]);
-      context.agentSelection.set("main");
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(50);
-      previous.resolve(archived("research", "Stale Research archived"));
-      await vi.advanceTimersByTimeAsync(50);
-      await sidebar.updateComplete;
+        context.connectionBootstrap.setForegroundRoute("agent:research:pending");
+        if (automaticFirst) {
+          context.agentSelection.set("main");
+        }
+        context.agentSelection.set("research", { background: automaticFirst });
+        await sidebar.updateComplete;
+        await vi.advanceTimersByTimeAsync(50);
+        if (automaticFirst) {
+          expect(targets).toEqual(["main"]);
+          expect(sidebar.textContent).not.toContain("Main archived 1");
+          context.connectionBootstrap.setForegroundRoute(null);
+          await vi.advanceTimersByTimeAsync(50);
+        }
+        expect(targets).toEqual(["main", "research"]);
+        context.connectionBootstrap.setForegroundRoute("agent:main:pending");
+        context.agentSelection.set("main");
+        await sidebar.updateComplete;
+        await vi.advanceTimersByTimeAsync(50);
+        previous.resolve(archived("research", "Stale Research archived"));
+        await vi.advanceTimersByTimeAsync(50);
+        await sidebar.updateComplete;
 
-      expect(sidebar.textContent).not.toContain("Stale Research archived");
-      expect(targets).toEqual(["main", "research", "main"]);
-      expect(sidebar.textContent).toContain("Main archived 2");
-    } finally {
-      previous.resolve(sessionsResult([], 0));
-      provider.remove();
-      sessions.dispose();
-      vi.useRealTimers();
-    }
-  });
+        expect(sidebar.textContent).not.toContain("Stale Research archived");
+        expect(targets).toEqual(["main", "research", "main"]);
+        expect(sidebar.textContent).toContain("Main archived 2");
+      } finally {
+        previous.resolve(sessionsResult([], 0));
+        provider.remove();
+        context.connectionBootstrap.reset();
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each(["research", "main"])(
     "loads the next active parent's children when its agent is %s",

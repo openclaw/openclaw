@@ -15,6 +15,10 @@ import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/sessio
 import { hasClawDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
 import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
 import { readAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.kernel.js";
+import {
+  getAgentDeletionJournalStatus,
+  loadAgentDeletionJournalStatus,
+} from "./agent-deletion-journal-status.js";
 import type {
   AgentDatabaseDeletionSnapshot,
   AgentDatabaseDeletionWorkerSnapshot,
@@ -73,6 +77,10 @@ export function readAgentDeletionJournalStatusInDatabase(
   database: DatabaseSync,
   agentId: string,
 ): AgentDeletionJournalStatus {
+  const cached = getAgentDeletionJournalStatus(database, agentId);
+  if (cached) {
+    return cached;
+  }
   if (!tableExists(database, "agent_deletion_journal")) {
     return "absent";
   }
@@ -91,15 +99,18 @@ export async function readAgentDeletionJournalStatusInWorker(
   options: OpenClawStateDatabaseOptions = {},
   signal?: AbortSignal,
 ): Promise<AgentDeletionJournalStatus> {
-  const reply = await executeExistingOpenClawStateRead(
-    options,
-    { type: "agentDeletionJournal.status", agentId: normalizeAgentId(agentId) },
-    { current: true, signal },
-  );
-  if (reply && (!reply.ok || reply.type !== "agentDeletionJournal.status")) {
-    throw new Error("Unexpected agent deletion journal read result");
-  }
-  return reply?.status ?? "absent";
+  signal?.throwIfAborted();
+  return loadAgentDeletionJournalStatus(resolveDatabasePath(options), agentId, async () => {
+    const reply = await executeExistingOpenClawStateRead(
+      options,
+      { type: "agentDeletionJournal.status", agentId: normalizeAgentId(agentId) },
+      { current: true, signal },
+    );
+    if (reply && (!reply.ok || reply.type !== "agentDeletionJournal.status")) {
+      throw new Error("Unexpected agent deletion journal read result");
+    }
+    return reply?.status ?? "absent";
+  });
 }
 
 export function parseAgentDeletionDatabasePaths(value: string): string[] {

@@ -268,7 +268,7 @@ async function runDoctorHealthFlowWithResult(
       }
       const { guardUpdateDoctorSchemaUpgrade } =
         await import("../commands/doctor-update-schema-guard.js");
-      let verifiedSnapshots: readonly BackupSqliteSnapshotFact[] = [];
+      let verifiedSnapshots: readonly BackupSqliteSnapshotFact[] = schemas.verifiedSnapshots ?? [];
       await guardUpdateDoctorSchemaUpgrade({
         schemas,
         runtime: doctorRuntime,

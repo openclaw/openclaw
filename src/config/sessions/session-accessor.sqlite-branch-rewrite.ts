@@ -1,9 +1,7 @@
-import { isDeepStrictEqual } from "node:util";
 import type {
   SessionEntry,
   SessionLeafControl,
 } from "../../agents/sessions/session-manager-types.js";
-import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
@@ -16,29 +14,25 @@ import type {
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { withSessionPendingInputRelocation } from "./session-accessor.sqlite-pending-inputs.js";
 import {
-  getSessionKysely,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
-import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
 
-/** Capture a constant-size snapshot; the session owner prepares payloads outside the write lock. */
+/** The session owner prepares payloads; the transaction checks their source version once. */
 export function prepareTranscriptRewriteSync(
   scope: SessionTranscriptWriteScope,
-  appendParentId: string | null,
   assertActive: () => void,
   loadedVersion: SessionTranscriptContextVersion | undefined,
   admit?: (stage: "transaction" | "commit") => void,
@@ -63,14 +57,8 @@ export function prepareTranscriptRewriteSync(
   }
   assertActive();
   assertOwnedTranscriptWriteCommit(fencedScope);
-  const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
   const conflict = () => new Error("Session transcript changed before rewrite publication");
-  if (
-    !loadedVersion ||
-    version.generation !== loadedVersion.generation ||
-    version.rawSeq !== loadedVersion.rawSeq ||
-    resolveTranscriptMessageAppendParent(database, resolved.sessionId, {}) !== appendParentId
-  ) {
+  if (!loadedVersion) {
     throw conflict();
   }
   return (entries, sources, adopt) => {
@@ -109,30 +97,11 @@ export function prepareTranscriptRewriteSync(
           resolved.sessionId,
         );
         if (
-          currentVersion.generation !== version.generation ||
-          currentVersion.rawSeq !== version.rawSeq
+          currentVersion.generation !== loadedVersion.generation ||
+          currentVersion.rawSeq !== loadedVersion.rawSeq ||
+          currentVersion.updatedAt !== loadedVersion.updatedAt
         ) {
           throw conflict();
-        }
-        // A loaded manager may predate an in-place repair even when its entry ids match.
-        // Compare only the copied suffix, never hydrate the complete archive under the lock.
-        for (const source of sources.values()) {
-          const row = executeSqliteQueryTakeFirstSync(
-            current.db,
-            getSessionKysely(current.db)
-              .selectFrom("transcript_event_identities as identity")
-              .innerJoin("transcript_events as event", (join) =>
-                join
-                  .onRef("event.session_id", "=", "identity.session_id")
-                  .onRef("event.seq", "=", "identity.seq"),
-              )
-              .select(transcriptEventJsonSql(current.db, "event").as("event_json"))
-              .where("identity.session_id", "=", resolved.sessionId)
-              .where("identity.event_id", "=", source.id),
-          );
-          if (!row || !isDeepStrictEqual(JSON.parse(row.event_json), source)) {
-            throw conflict();
-          }
         }
         // The existing append/relocation owners participate in the same transaction.
         // Interruption rolls back entries, key ownership, and receipt publications together.

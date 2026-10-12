@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { githubRepositoryUrl } from "../agents/github-host.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
 import { readLocalGitHubPublicationWorktreeOwner } from "./github-publication-availability.js";
@@ -252,6 +253,9 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
           assertCurrent: assertAuthority,
         });
       } catch (error) {
+        if (isAbortError(error)) {
+          throw error;
+        }
         // Failed observation is not proof of drift; leave the original request reconfirmable.
         throw new GitHubPublicationRecoveryPendingError(
           "My GitHub workspace snapshot could not be verified; retry confirmation after local Git operations finish.",
@@ -655,6 +659,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     return completePublished(pullRequestUrl, headCommit);
   } catch (error) {
     if (
+      isAbortError(error) ||
       error instanceof GitHubPublicationRequesterUnavailableError ||
       error instanceof GatewayOperatorAccessUnavailableError
     ) {

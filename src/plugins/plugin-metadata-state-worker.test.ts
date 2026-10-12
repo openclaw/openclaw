@@ -268,6 +268,35 @@ it("preserves database-family bytes during ambient artifact-preserving async ins
   expect(familyHashes(databasePath)).toEqual(before);
 });
 
+it("reads retained metadata snapshots off-thread and sees committed writes after the scope", async () => {
+  const env = environment();
+  await seed(env, index("captured ledger"));
+  await withArtifactPreservingStateReads(() =>
+    withOpenClawStateDatabaseReadSnapshot(
+      async () => {
+        writeConfigMachineState(
+          "plugins.installedIndex",
+          { revision: 2, index: index("new ledger") },
+          { env },
+        );
+        await withoutMainThreadSql(async () => {
+          const row = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
+          expect(JSON.parse(row!.value_json).index.diagnostics).toEqual([
+            { level: "warn", message: "captured ledger" },
+          ]);
+        });
+      },
+      { env },
+    ),
+  );
+  await withoutMainThreadSql(async () => {
+    const row = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
+    expect(JSON.parse(row!.value_json).index.diagnostics).toEqual([
+      { level: "warn", message: "new ledger" },
+    ]);
+  });
+});
+
 it("prepares cold metadata once and preserves the merged workspace inventory without main SQL", async () => {
   const env = environment();
   await seed(env, index());

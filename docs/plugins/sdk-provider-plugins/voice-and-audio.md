@@ -292,6 +292,12 @@ Register each capability inside `register(api)` alongside your existing
     modules retain their input queues, readiness policy, authentication, and
     reconnect behavior; module caching stays with the lazy-runtime helpers.
 
+    WebSocket voice bridges can use `RealtimeVoiceWebSocketTransport` from
+    that same private-local surface. It shares socket startup, capture, sends,
+    reconnect scheduling, and terminal cleanup over a supplied
+    `RealtimeVoiceSessionLifecycle`. Providers retain credentials, socket
+    construction, session initialization, event handling, and replay policy.
+
     That private-local surface also exports the host's internal browser-session
     request, capability, and provider API types. Official plugins should import
     those types instead of redeclaring the process-private hook contract. These

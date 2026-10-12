@@ -4,23 +4,7 @@ import type {
   BoardWidgetMaterializedPutParams,
   BoardWidgetPutResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import type {
-  BoardSnapshotWithHtmlViewMetadata,
-  BoardWidgetDocument,
-  BoardWidgetNameIdentityMarker,
-} from "./board-store.js";
-
-export type SessionActorMemoryBoard = {
-  snapshot: BoardSnapshot;
-  content: Map<
-    string,
-    {
-      content: BoardWidgetMaterializedPutParams["content"];
-      nameIdentity: BoardWidgetNameIdentityMarker;
-      sha256?: string;
-    }
-  >;
-};
+import type { BoardSnapshotWithHtmlViewMetadata, BoardWidgetDocument } from "./board-store.js";
 
 export type SessionActorBoardReads = {
   "boards.snapshot": {
@@ -52,12 +36,3 @@ export type SessionActorBoardWrites = {
     output: BoardSnapshot;
   };
 };
-export type SessionActorBoardQuery = {
-  [Key in keyof SessionActorBoardReads]: { type: Key; input: SessionActorBoardReads[Key]["input"] };
-}[keyof SessionActorBoardReads];
-export type SessionActorBoardCommand = {
-  [Key in keyof SessionActorBoardWrites]: {
-    type: Key;
-    input: SessionActorBoardWrites[Key]["input"];
-  };
-}[keyof SessionActorBoardWrites];

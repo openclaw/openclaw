@@ -387,7 +387,7 @@ describe("admitted SQLite schema facts", () => {
       observation.restore();
     }
   });
-  it.each(["data_version", "schema_version", "user_version"])(
+  it.each(["data_version", "schema_version", "user_version", "encoding"])(
     "uses native freshness without consulting a table shadowing %s",
     (name) => {
       const database = openDatabase(
@@ -398,6 +398,8 @@ describe("admitted SQLite schema facts", () => {
         true,
       );
       expect(readSqliteDataVersion(database)).not.toBe(999);
+      expect(getAdmittedSqliteSchemaFacts(database)?.userVersion).toBe(1);
+      expect(getAdmittedSqliteSchemaFacts(database)?.textEncoding).toBe("UTF-8");
     },
   );
 

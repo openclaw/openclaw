@@ -7,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type {
@@ -323,6 +324,11 @@ export function readDebugProxyCaptureBlob(db: NodeSqliteDatabase, blobId: string
 export function createDebugProxyCaptureReader(params: {
   env: NodeJS.ProcessEnv;
 }): DebugProxyCaptureReader {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-reader",
+    method: "createDebugProxyCaptureReader",
+    replacement: "createDebugProxyCaptureReaderAsync()",
+  });
   return {
     getSessionEvents(sessionId, limit) {
       return (

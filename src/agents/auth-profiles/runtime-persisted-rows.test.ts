@@ -53,12 +53,14 @@ it("shares immutable persisted rows across cache hits", async () => {
   expect(await resolve()).toEqual(rows);
 });
 
-it("invalidates credential rows on writer-worker receipts without runtime freshness SQL", async () => {
+it("retains rows across session writes and invalidates them on auth writer-worker receipts", async () => {
   const databasePath = path.join(tempDirs.make("auth-row-receipts-"), "auth.sqlite");
   using database = openNodeSqliteDatabase(databasePath);
   database.exec(`
     CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT);
     CREATE TABLE auth_profile_state (state_key TEXT PRIMARY KEY, state_json TEXT);
+    CREATE TABLE session_fixture (value INTEGER);
+    INSERT INTO session_fixture VALUES (0);
     INSERT INTO auth_profile_store VALUES ('primary', '{"version":1,"profiles":{}}');
     INSERT INTO auth_profile_state VALUES ('primary', '{"lastGood":{}}');
   `);
@@ -83,6 +85,15 @@ it("invalidates credential rows on writer-worker receipts without runtime freshn
     expect(
       observation.queries.filter((sql) => /auth_profile_(store|state)/u.test(sql)),
     ).toHaveLength(1);
+    await store!.execute({
+      type: "writeRows",
+      input: {
+        sql: "UPDATE session_fixture SET value=value+1",
+        sessionKeys: ["agent:fixture"],
+      },
+    });
+    expect(await resolve()).toBe(first);
+    expect(read).toHaveBeenCalledTimes(1);
     const write = () =>
       store!.execute({
         type: "writeRows",

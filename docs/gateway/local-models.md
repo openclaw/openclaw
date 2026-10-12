@@ -260,6 +260,10 @@ Compat overrides for stricter OpenAI-compatible backends:
 
 ## Smaller or stricter backends
 
+For one shared vLLM server handling interactive and background work, see
+[per-model priority scheduling](/providers/vllm#prioritize-interactive-requests).
+It uses vLLM's native scheduler and is disabled by default.
+
 If the model loads cleanly but full agent turns misbehave, check transport first, then inspect tool use and the context budget.
 
 1. **Check the local model responds** - no tools, no agent context:

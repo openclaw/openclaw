@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { sql, type ExpressionBuilder, type RawBuilder } from "kysely";
 import {
@@ -13,10 +12,7 @@ import {
   projectSubagentRunForMaintenance,
   projectSubagentRunForSessionList,
 } from "./subagent-delivery-state.js";
-import type {
-  SubagentRunReadRecord,
-  SubagentRunsDurableBasis,
-} from "./subagent-registry-read.types.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { hasParentStoreColumns } from "./subagent-registry.store.kernel.js";
 import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
@@ -373,7 +369,6 @@ export function loadSubagentRunsForSessionsInDatabase(
   sessionKeys: readonly string[],
   inMemoryRuns: Iterable<Pick<SubagentRunReadRecord, "childSessionKey" | "requesterSessionKey">>,
 ) {
-  const hash = createHash("sha256");
   const { db } = database;
   const result = runSqliteDeferredTransactionSync(db, () => {
     const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
@@ -403,12 +398,6 @@ export function loadSubagentRunsForSessionsInDatabase(
       .map((row) => row.run_id);
     const runs = new Map<string, SubagentRunRecord>();
     const complete = runIds.length === identities.length;
-    // Topology includes malformed payloads and newly attached descendant branches.
-    for (const row of identities) {
-      if (selected.has(row.child_session_key.trim()) || selectedRunIds.has(row.run_id.trim())) {
-        hash.update(JSON.stringify(["topology", row]));
-      }
-    }
     if (runIds.length) {
       const query = stateDb.selectFrom("subagent_runs").selectAll();
       const rows = executeSqliteQuerySync(
@@ -418,7 +407,6 @@ export function loadSubagentRunsForSessionsInDatabase(
           .orderBy("run_id", "asc"),
       ).rows;
       for (const row of rows) {
-        hash.update(JSON.stringify(["row", row]));
         const entry = rowToSubagentRunRecord(row);
         if (entry) {
           runs.set(entry.runId, entry);
@@ -427,15 +415,5 @@ export function loadSubagentRunsForSessionsInDatabase(
     }
     return { sessionKeys: selected, runIds, runs, complete };
   });
-  return { ...result, digest: hash.digest("hex") };
-}
-
-export function subagentRunsDurableBasisMatches(
-  database: Pick<OpenClawStateDatabase, "db">,
-  basis: SubagentRunsDurableBasis,
-): boolean {
-  return (
-    loadSubagentRunsForSessionsInDatabase(database, basis.sessionKeys, basis.liveTopology)
-      .digest === basis.digest
-  );
+  return result;
 }

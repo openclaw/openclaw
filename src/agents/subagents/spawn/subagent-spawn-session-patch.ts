@@ -3,7 +3,6 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
@@ -254,35 +253,7 @@ export async function createInitialSubagentSession(input: {
                 actor: await parentMemory.actor.storage!.acquire(params.childSessionKey),
               };
             } else {
-              const selected = captureSessionActorStorageOwner({
-                agentId: params.targetAgentId,
-                sessionKey: params.childSessionKey,
-                sessionActor: parentMemory,
-              });
-              if (!selected?.owner) {
-                throw new Error("Incognito child actor is unavailable");
-              }
-              const actor = await selected.owner.acquire(
-                { database: selected.owner.identity, sessionKey: params.childSessionKey },
-                {
-                  assertCurrent() {
-                    parentMemory.actor.assertCurrent();
-                    parentMemory.authority.assertCurrent();
-                    params.assertActive?.();
-                  },
-                  assertReadable() {
-                    parentMemory.actor.assertReadable();
-                    parentMemory.authority.assertCurrent();
-                    params.assertActive?.();
-                  },
-                },
-              );
-              childMemory = {
-                actor,
-                authority: selected.authority,
-                agentId: selected.agentId,
-                path: selected.path,
-              };
+              throw new Error("Incognito child actor is unavailable");
             }
           }
           const childBinding =
