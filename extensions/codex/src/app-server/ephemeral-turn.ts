@@ -10,14 +10,6 @@ import { getCodexAppServerTurnRouter, type CodexThreadRouteReservation } from ".
 
 type RouteHandlers = Parameters<CodexThreadRouteReservation["activate"]>[0];
 
-export type CodexEphemeralTurnResult = {
-  turn: CodexTurn | undefined;
-  error: JsonObject | undefined;
-  items: CodexThreadItem[];
-  text: string;
-  usage: CodexUsageProjection["usage"];
-};
-
 /** One ephemeral turn; the client router owns correlation, buffering and request lifetime. */
 export class CodexEphemeralTurn {
   readonly route: CodexThreadRouteReservation;
@@ -96,7 +88,7 @@ export class CodexEphemeralTurn {
       abortError: () => Error;
       timeout?: { ms: number; error: Error };
     },
-  ): Promise<CodexEphemeralTurnResult> {
+  ) {
     if (isTerminalTurnStatus(turn.status)) {
       this.turn = turn;
       this.completion.resolve();

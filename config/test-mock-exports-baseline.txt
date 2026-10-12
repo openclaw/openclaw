@@ -347,6 +347,7 @@
 ["extensions/codex/src/app-server/inference-proxy.native.test.ts","openclaw/plugin-sdk/ssrf-runtime","b742166a5a4c9b722846549b06fcd1b12d7ac82b0f43150c42cae284e2230fc7",1]
 ["extensions/codex/src/app-server/inference-proxy.test.ts","openclaw/plugin-sdk/fetch-runtime","c1c3e7b97ea114dfcdb9e7837054b7bd465d6d8afab6a2640cedf9d1d3544e09",1]
 ["extensions/codex/src/app-server/inference-proxy.test.ts","openclaw/plugin-sdk/ssrf-runtime","0fc9850c9b436ed0226a6bb623313127ce0d04efffd971c0cdd67fcb7ef0d8a1",1]
+["extensions/codex/src/app-server/isolated-completion.boundary.test.ts","./auth-bridge.js","ecaf86eaf7c9f53b29386bc634f857624e21d6efcf1bcddfb746b48b34a3dfe7",1]
 ["extensions/codex/src/app-server/isolated-completion.test.ts","./auth-bridge.js","fce3622eaba2cb6a9f855d9e39b209ef5b67053f420704030dc8a70c0dccb69e",1]
 ["extensions/codex/src/app-server/isolated-completion.test.ts","./bounded-turn.js","e423a08c915378d9d3290a842bd68dae00cef6d65c8695b785d5b42be9a8ac11",1]
 ["extensions/codex/src/app-server/mcp-app-session-preparation.test.ts","./auth-profile.js","c7d50dd16c26797330b05d2b123ed3515632c235ba39c8351a5a20f51ebd4a85",1]

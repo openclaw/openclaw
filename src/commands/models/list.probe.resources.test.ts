@@ -5,7 +5,11 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as persist from "../../agents/auth-profiles.js";
 import { isPendingOAuthRefreshFence } from "../../agents/auth-profiles/oauth-refresh-marker.js";
-import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
+import { noteCommittedSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
+import {
+  loadPersistedAuthProfileStore,
+  loadPersistedSharedAuthProfileStore,
+} from "../../agents/auth-profiles/persisted.js";
 import * as authProfileSqlite from "../../agents/auth-profiles/sqlite.js";
 import type { OAuthCredential } from "../../agents/auth-profiles/types.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
@@ -18,6 +22,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runAuthProbes, withAuthProbeStateOwnership } from "./list.probe.js";
 
@@ -68,7 +73,7 @@ it.each([
     let refreshPeerFenced = false;
     const refreshServer = createServer((_req, res) => {
       refreshCount++;
-      const owner = loadPersistedAuthProfileStore(state.agentDir())?.profiles[profileId];
+      const owner = loadPersistedSharedAuthProfileStore()?.profiles[profileId];
       const peer = loadPersistedAuthProfileStore(state.agentDir("historical"))?.profiles[profileId];
       refreshOwnerFenced = owner?.type === "oauth" && isPendingOAuthRefreshFence(owner);
       refreshPeerFenced = peer?.type === "oauth" && isPendingOAuthRefreshFence(peer);
@@ -155,12 +160,24 @@ it.each([
           }),
     });
     if (oauth) {
-      await state.writeAuthProfiles(
+      writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
+      noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, state.env);
+      authProfileSqlite.writePersistedAuthProfileStoreRaw({
+        version: 1,
+        profiles: { [profileId]: originalOAuth },
+      });
+      authProfileSqlite.writePersistedAuthProfileStoreRaw(
+        { version: 1, profiles: {} },
+        state.agentDir(),
+      );
+      authProfileSqlite.writePersistedAuthProfileStoreRaw(
         { version: 1, profiles: { [profileId]: originalOAuth } },
-        "historical",
+        state.agentDir("historical"),
       );
     }
-    const authBefore = loadPersistedAuthProfileStore(state.agentDir());
+    const authBefore = oauth
+      ? loadPersistedSharedAuthProfileStore()
+      : loadPersistedAuthProfileStore(state.agentDir());
     await state.writeConfig(cfg);
     const builder = createPluginRegistry({
       runtime: createPluginRuntime(),
@@ -258,13 +275,18 @@ it.each([
         expect(result.results[0]?.error).toContain("401 Invalid API key");
         expect(result.results[0]?.error).not.toContain("sk-synthetic-private");
       }
-      const authAfter = loadPersistedAuthProfileStore(state.agentDir());
+      const authAfter = oauth
+        ? loadPersistedSharedAuthProfileStore()
+        : loadPersistedAuthProfileStore(state.agentDir());
       if (oauth === "expired") {
         expect(refreshCount).toBe(1);
         expect(refreshOwnerFenced).toBe(true);
         expect(refreshPeerFenced).toBe(true);
         expect(authAfter?.profiles[profileId]).toEqual(rotatedOAuth);
         expect(authAfter?.usageStats).toEqual(authBefore?.usageStats);
+        expect(
+          loadPersistedAuthProfileStore(state.agentDir("historical"))?.profiles[profileId],
+        ).toBeUndefined();
       } else {
         expect(authAfter).toEqual(authBefore);
         if (oauth) {

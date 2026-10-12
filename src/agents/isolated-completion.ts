@@ -225,7 +225,6 @@ async function runCliIsolatedCompletion(
           isolatedCompletion: true,
           isolatedCompletionPurpose: request.purpose ?? "isolated-completion",
           outputTextPolicy: request.outputTextPolicy,
-          onRequestComplete: request.onRequestComplete,
         });
         if (hasCliSideEffectEvidence(result)) {
           throw new IsolatedCompletionError(

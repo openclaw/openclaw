@@ -933,31 +933,17 @@ describe("runCliAgent reliability", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
-  it("reports request time before surfacing prepared backend cleanup failures", async () => {
-    let clock = 0;
-    const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
-    const onRequestComplete = vi.fn();
-    supervisorSpawnMock.mockImplementationOnce(async () => {
-      clock += 13;
-      return makeManagedRun({ stdout: "ok" });
-    });
+  it("surfaces prepared backend cleanup failures when nothing was delivered", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "ok" }));
     const context = buildPreparedContext({
       sessionKey: "agent:main:cleanup-failure",
       runId: "run-cleanup-failure",
     });
-    context.params.onRequestComplete = onRequestComplete;
     context.preparedBackend.cleanup = async () => {
-      clock += 1_000;
       throw new Error("cleanup failed");
     };
 
-    try {
-      await expect(runPreparedCliAgent(context)).rejects.toThrow("cleanup failed");
-      expect(onRequestComplete).toHaveBeenCalledExactlyOnceWith(13);
-      expect(clock).toBe(1_013);
-    } finally {
-      now.mockRestore();
-    }
+    await expect(runPreparedCliAgent(context)).rejects.toThrow("cleanup failed");
   });
 
   it("fails normally after an unresolved prepared dry-run send", async () => {

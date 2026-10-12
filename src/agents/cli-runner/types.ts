@@ -102,8 +102,6 @@ export type RunCliAgentParams = {
   /** Diagnostic attribution only; must not change execution policy or timeout selection. */
   isolatedCompletionPurpose?: IsolatedCompletionPurpose;
   outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
-  /** One backend request, excluding credential preparation and post-request cleanup. */
-  onRequestComplete?: (durationMs: number) => void;
   /** Internal backend control command: reuse the native session without recording a conversation turn. */
   controlOperation?: "compact";
   /** Persist the successful CLI assistant reply into the OpenClaw session transcript. */

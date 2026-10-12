@@ -548,46 +548,39 @@ export async function executePreparedCliRun(
         useResume,
         trigger: params.trigger,
       });
-      const requestStartedAt = params.onRequestComplete ? performance.now() : undefined;
-      try {
-        runOutput = await executeCliProcess({
-          context,
-          assertCurrent,
-          backend,
-          deps: executeDeps,
-          events,
-          toolTracking,
-          diagnostics,
-          nodePlacement,
-          nodeSystemPrompt,
-          nodeEnv: nodeEnv && Object.keys(nodeEnv).length > 0 ? nodeEnv : undefined,
-          nodeClearEnv: nodeClearEnv.length > 0 ? nodeClearEnv : undefined,
-          useManagedClaudeLiveSession,
-          initialGatewayCaptureKey,
-          useResume,
-          cliSessionIdToUse,
-          resolvedSessionId,
-          executionCommand,
-          executionArgv0,
-          executionLeadingArgv,
-          resolveExecutionArgs,
-          env,
-          prompt,
-          ...(promptContext ? { promptContext } : {}),
-          argsPrompt,
-          stdin,
-          noOutputTimeoutMs,
-          outputMode,
-          logOutputText,
-          cliTurnStartedAt,
-          observeForkSuccessor,
-          options,
-        });
-      } finally {
-        if (requestStartedAt !== undefined) {
-          params.onRequestComplete?.(performance.now() - requestStartedAt);
-        }
-      }
+      runOutput = await executeCliProcess({
+        context,
+        assertCurrent,
+        backend,
+        deps: executeDeps,
+        events,
+        toolTracking,
+        diagnostics,
+        nodePlacement,
+        nodeSystemPrompt,
+        nodeEnv: nodeEnv && Object.keys(nodeEnv).length > 0 ? nodeEnv : undefined,
+        nodeClearEnv: nodeClearEnv.length > 0 ? nodeClearEnv : undefined,
+        useManagedClaudeLiveSession,
+        initialGatewayCaptureKey,
+        useResume,
+        cliSessionIdToUse,
+        resolvedSessionId,
+        executionCommand,
+        executionArgv0,
+        executionLeadingArgv,
+        resolveExecutionArgs,
+        env,
+        prompt,
+        ...(promptContext ? { promptContext } : {}),
+        argsPrompt,
+        stdin,
+        noOutputTimeoutMs,
+        outputMode,
+        logOutputText,
+        cliTurnStartedAt,
+        observeForkSuccessor,
+        options,
+      });
     } catch (error) {
       recordRunError(error);
     } finally {

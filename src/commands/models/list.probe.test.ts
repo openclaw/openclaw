@@ -224,7 +224,7 @@ describe("runAuthProbes", () => {
     });
   });
 
-  it("checks the selected credential through its configured runtime", async () => {
+  it("keeps the existing raw OpenClaw transport for stored credentials", async () => {
     await withProbeRuntime("profile", async ({ probe, runner }) => {
       const input = probeInput({
         cfg: {
@@ -247,9 +247,9 @@ describe("runAuthProbes", () => {
           outputTextPolicy: "strict-visible",
         }),
       );
-      expect(runner.mock.calls[0]?.[0].agentHarnessRuntimeOverride).toBeUndefined();
+      expect(runner.mock.calls[0]?.[0].agentHarnessRuntimeOverride).toBe("openclaw");
       expect(runner.mock.calls[0]?.[0].preparedModelRuntimeMode).toBeUndefined();
-      expect(runner.mock.calls[0]?.[0].thinkLevel).toBeUndefined();
+      expect(runner.mock.calls[0]?.[0].thinkLevel).toBe("off");
       runner.mockRejectedValueOnce(new Error("LLM request timed out."));
       expect((await probe.runAuthProbes(input)).results[0]).toMatchObject({ status: "timeout" });
     });

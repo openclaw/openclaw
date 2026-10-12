@@ -26,8 +26,7 @@ import {
   reopenState,
   requireExecutorHarness,
 } from "./agentsapi-harness.persistence.test-helpers.js";
-import { runAgentsApiIsolatedCompletion } from "./agentsapi-isolated-completion.js";
-import { createHostedSession, createModel, createTurn } from "./agentsapi.test-support.js";
+import { createTurn } from "./agentsapi.test-support.js";
 
 const { createSession, fetchWithSsrFGuardMock, resolveProviderAuth } = vi.hoisted(() => ({
   createSession: vi.fn<typeof import("./agentsapi-session.js").createAgentsApiSession>(),
@@ -98,113 +97,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
-
-it.each(["success", "run failure", "dispatch failure", "preparation failure"] as const)(
-  "reports only isolated inference time for %s",
-  async (outcome) => {
-    vi.setSystemTime(1_000);
-    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-    const failure = new Error(outcome);
-    const onRequestComplete = vi.fn();
-    const assertCurrent = vi.fn().mockImplementationOnce(() => {
-      vi.setSystemTime(2_000);
-    });
-    const createIsolated = vi
-      .spyOn(AgentsApiClient.prototype, "createIsolated")
-      .mockImplementation(async () => {
-        vi.setSystemTime(2_020);
-        if (outcome === "dispatch failure") {
-          throw failure;
-        }
-        return { ...createHostedSession(), environment: { type: "none" } };
-      });
-    const createNative = createSession.getMockImplementation()!;
-    createSession.mockImplementation((options) => {
-      const native = createNative(options);
-      vi.spyOn(native, "run").mockImplementation(async () => {
-        vi.setSystemTime(2_090);
-        if (outcome === "run failure") {
-          throw failure;
-        }
-        return { turn: createTurn(), cancelled: false, terminatedByTool: false };
-      });
-      vi.spyOn(native, "close").mockImplementation(async () => {
-        expect(onRequestComplete).toHaveBeenCalledExactlyOnceWith(90);
-        vi.setSystemTime(4_000);
-      });
-      return native;
-    });
-    vi.spyOn(AgentsApiClient.prototype, "items").mockImplementation(async () => {
-      expect(onRequestComplete).toHaveBeenCalledExactlyOnceWith(90);
-      vi.setSystemTime(3_000);
-      return [
-        {
-          id: "input-fixture",
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Fixture prompt" }],
-        },
-        {
-          id: "output-fixture",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "Fixture reply" }],
-        },
-      ];
-    });
-    const deleteSession = vi
-      .spyOn(AgentsApiClient.prototype, "deleteSession")
-      .mockImplementation(async () => {
-        vi.setSystemTime(5_000);
-      });
-    const completion = runAgentsApiIsolatedCompletion(
-      {
-        provider: "openai",
-        modelId: "fixture-model",
-        authorization: {
-          owner: "host",
-          model: createModel(),
-          auth: {
-            apiKey: "fixture-not-a-real-api-key",
-            mode: "api-key",
-            source: "fixture",
-          },
-        },
-        config: {},
-        agentId: "main",
-        agentDir: "/fixture/agent",
-        workspaceDir: "/fixture/workspace",
-        systemPrompt: "Fixture instructions",
-        prompt: "Fixture prompt",
-        timeoutMs: 30_000,
-        ...(outcome === "preparation failure" ? { thinkLevel: "ultra" as const } : {}),
-        onRequestComplete,
-      },
-      assertCurrent,
-    );
-    if (outcome === "success") {
-      await expect(completion).resolves.toMatchObject({
-        assistant: { content: [{ type: "text", text: "Fixture reply" }] },
-      });
-    } else if (outcome === "preparation failure") {
-      await expect(completion).rejects.toThrow("does not support the ultra delegation mode");
-    } else {
-      await expect(completion).rejects.toBe(failure);
-    }
-    if (outcome === "preparation failure") {
-      expect(createIsolated).not.toHaveBeenCalled();
-      expect(onRequestComplete).not.toHaveBeenCalled();
-    } else {
-      expect(onRequestComplete).toHaveBeenCalledExactlyOnceWith(
-        outcome === "dispatch failure" ? 20 : 90,
-      );
-    }
-    if (outcome === "success" || outcome === "run failure") {
-      expect(deleteSession).toHaveBeenCalledOnce();
-    }
-  },
-);
 
 it("reopens an existing hosted binding and requires reset before persisting a fresh self-hosted session", async () => {
   await withOpenClawTestState({ label: "agentsapi-binding-persistence" }, async (state) => {
