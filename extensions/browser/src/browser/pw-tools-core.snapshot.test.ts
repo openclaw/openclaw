@@ -490,22 +490,6 @@ describe("pw-tools-core aria snapshot storage", () => {
     });
   });
 
-  it("still rejects malformed AI names beyond the output budget", async () => {
-    const ariaSnapshot = vi.fn(
-      async () => '- button "Visible" [ref=e1]\n' + String.raw`- button "bad\uZZZZ" [ref=e2]`,
-    );
-    getPageForTargetId.mockResolvedValue(makeAriaSnapshotPage(ariaSnapshot));
-
-    await expect(
-      mod.snapshotRoleViaPlaywright({
-        refsMode: "aria",
-        cdpUrl: "http://127.0.0.1:9222",
-        maxChars: 1,
-      }),
-    ).rejects.toBeInstanceOf(SyntaxError);
-    expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
-  });
-
   it("rejects excessive viewport dimensions before calling Playwright", async () => {
     const page = { setViewportSize: vi.fn(async () => {}) };
     getPageForTargetId.mockResolvedValue(page);

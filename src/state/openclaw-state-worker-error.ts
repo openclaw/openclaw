@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isSqliteLockError,
   isSqliteNativeOpenFailure,
@@ -15,7 +14,7 @@ import {
 import {
   createError,
   identifyError,
-  parseIdentity,
+  type ErrorIdentity,
 } from "./openclaw-state-worker-error-identity.js";
 
 type ErrorValue =
@@ -23,7 +22,17 @@ type ErrorValue =
   | { value: string | number | boolean | null }
   | { undefined: true };
 
-type ErrorNode = NonNullable<ReturnType<typeof parseNode>>;
+type ErrorNode = ErrorIdentity & {
+  name: string;
+  message: string;
+  code?: string | number;
+  errcode?: number;
+  errno?: number;
+  nativeOpen?: true;
+  stateDatabasePath?: string;
+  cause?: ErrorValue;
+  errors?: ErrorValue[];
+};
 
 /** A closed error graph; references preserve shared causes and cyclic aggregates. */
 export type OpenClawStateWorkerErrorPayload = {
@@ -75,7 +84,26 @@ export function encodeOpenClawStateWorkerError(
   try {
     encodeValue(error);
     for (const current of errors) {
+      const { name, message } = current;
+      if (typeof name !== "string" || typeof message !== "string") {
+        return undefined;
+      }
       const identity = identifyError(current);
+      // Only the typed identity's known nested fields may carry objects. Keep
+      // hostile diagnostic values and JSON hooks out of the transport at its source.
+      if (
+        Object.entries(identity).some(([key, value]) => {
+          const fields =
+            key === "owner" || key === "blockedByRun" || key === "refusal"
+              ? Object.values(value)
+              : key === "missingTables" && Array.isArray(value)
+                ? value
+                : [value];
+          return fields.some((field) => field !== undefined && !isScalar(field));
+        })
+      ) {
+        return undefined;
+      }
       const nativeOpen = isSqliteNativeOpenFailure(current);
       const stateDatabasePath = readOpenClawStateDatabaseFailurePath(current);
       const errcode = "errcode" in current ? current.errcode : undefined;
@@ -90,8 +118,8 @@ export function encodeOpenClawStateWorkerError(
       const errno = "errno" in current ? current.errno : undefined;
       nodes.push({
         ...identity,
-        name: current.name,
-        message: current.message,
+        name,
+        message,
         ...(typeof code === "string" || (typeof code === "number" && Number.isFinite(code))
           ? { code }
           : {}),
@@ -114,109 +142,28 @@ export function encodeOpenClawStateWorkerError(
   }
 }
 
-function isErrorValue(value: unknown, count: number): value is ErrorValue {
-  if (!isRecord(value)) {
-    return false;
-  }
-  if ("ref" in value) {
-    return (
-      typeof value.ref === "number" &&
-      Number.isSafeInteger(value.ref) &&
-      value.ref >= 0 &&
-      value.ref < count
-    );
-  }
-  return "value" in value ? isScalar(value.value) : value.undefined === true;
-}
-
-function parseNode(value: unknown, count: number) {
-  if (!isRecord(value) || typeof value.name !== "string" || typeof value.message !== "string") {
-    return undefined;
-  }
-  const identity = parseIdentity(value);
-  if (!identity) {
-    return undefined;
-  }
-  const errors: ErrorValue[] = [];
-  if (identity.type === "aggregate") {
-    if (!Array.isArray(value.errors)) {
-      return undefined;
-    }
-    for (const entry of value.errors) {
-      if (!isErrorValue(entry, count)) {
-        return undefined;
-      }
-      errors.push(entry);
-    }
-  }
-  if (
-    (identity.type === "session-transcript-writer-claim-rebound" &&
-      identity.refusal !== undefined &&
-      "cause" in value) ||
-    ("code" in value &&
-      typeof value.code !== "string" &&
-      !(typeof value.code === "number" && Number.isFinite(value.code))) ||
-    ("errcode" in value && !isNativeErrorCode(value.errcode)) ||
-    ("errno" in value && (typeof value.errno !== "number" || !Number.isInteger(value.errno))) ||
-    ("nativeOpen" in value && value.nativeOpen !== true) ||
-    ("stateDatabasePath" in value && typeof value.stateDatabasePath !== "string") ||
-    ("cause" in value && !isErrorValue(value.cause, count))
-  ) {
-    return undefined;
-  }
-  return {
-    ...identity,
-    name: value.name,
-    message: value.message,
-    ...(typeof value.code === "string" || typeof value.code === "number"
-      ? { code: value.code }
-      : {}),
-    ...(isNativeErrorCode(value.errcode) ? { errcode: value.errcode } : {}),
-    ...(typeof value.errno === "number" ? { errno: value.errno } : {}),
-    ...(value.nativeOpen === true ? { nativeOpen: true as const } : {}),
-    ...(typeof value.stateDatabasePath === "string"
-      ? { stateDatabasePath: value.stateDatabasePath }
-      : {}),
-    ...(isErrorValue(value.cause, count) ? { cause: value.cause } : {}),
-    ...(identity.type === "aggregate" ? { errors } : {}),
-  };
-}
-
 function decodeErrorGraph(
-  value: unknown,
+  value: OpenClawStateWorkerErrorPayload,
   options: ErrorGraphOptions,
 ): { errors: Error[]; root: number } | undefined {
   try {
-    if (
-      !isRecord(value) ||
-      value.version !== 1 ||
-      !Array.isArray(value.nodes) ||
-      typeof value.root !== "number" ||
-      !Number.isSafeInteger(value.root) ||
-      value.root < 0 ||
-      value.root >= value.nodes.length
-    ) {
+    if (value.version !== 1) {
       return undefined;
     }
-    const nodes: ErrorNode[] = [];
-    for (const valueNode of value.nodes) {
-      const node = parseNode(valueNode, value.nodes.length);
-      if (!node) {
-        return undefined;
-      }
-      nodes.push(node);
-    }
-    // The encoder selects fields and only emits nodes reachable from its root.
-    const canonical = nodes.some(
-      (node) =>
-        node.stateDatabasePath !== undefined ||
-        node.nativeOpen === true ||
-        isNativeErrorCode(node.errcode) ||
-        isSqliteLockError(node) ||
-        (node.type === "aggregate" && node.name === DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME) ||
-        (node.type !== "error" && node.type !== "aggregate"),
-    );
-    if (!canonical && options.includeOrdinary !== true) {
+    const nodes = value.nodes;
+    if (
+      options.includeOrdinary !== true &&
+      !nodes.some(
+        (node) =>
+          node.stateDatabasePath !== undefined ||
+          node.nativeOpen === true ||
+          isNativeErrorCode(node.errcode) ||
+          isSqliteLockError(node) ||
+          (node.type === "aggregate" &&
+            node.name === DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME) ||
+          (node.type !== "error" && node.type !== "aggregate"),
+      )
+    ) {
       return undefined;
     }
     const errors = nodes.map(createError);
@@ -257,7 +204,10 @@ function decodeErrorGraph(
 const retainedPayloadKey = Symbol.for("openclaw.sharedStateWorkerErrorPayload");
 
 /** Keep the closed wire graph until the receiving caller hydrates it. */
-export function retainOpenClawStateWorkerErrorPayload(error: Error, payload: unknown): void {
+export function retainOpenClawStateWorkerErrorPayload(
+  error: Error,
+  payload: OpenClawStateWorkerErrorPayload | undefined,
+): void {
   Object.defineProperty(error, retainedPayloadKey, { value: payload });
 }
 
@@ -287,7 +237,10 @@ export function hydrateOpenClawStateWorkerError(
       }
       // A circular local cause stays on its original object; wire graphs keep their aliases.
       replacements.set(error, error);
-      const payload: unknown = Object.getOwnPropertyDescriptor(error, retainedPayloadKey)?.value;
+      const payload: OpenClawStateWorkerErrorPayload | undefined = Object.getOwnPropertyDescriptor(
+        error,
+        retainedPayloadKey,
+      )?.value;
       const graph = payload === undefined ? undefined : decodeErrorGraph(payload, options);
       if (graph) {
         replacements.set(error, graph.errors[graph.root]!);

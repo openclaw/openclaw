@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, it, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
@@ -34,6 +35,7 @@ export function registerMetadataCallerCases(
       await withOpenClawTestState({ layout: "state-only" }, async () => {
         const { owner, client, authProfileId, readChatMetadata, request } =
           createPersonalMetadataFixture();
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         client.connect.scopes = ["operator.admin"];
         let requestedProfile = authProfileId;
         if (caller === "foreign admin") {
@@ -77,6 +79,7 @@ export function registerMetadataRevocationCases(
       await withOpenClawTestState({ layout: "state-only" }, async () => {
         const { client, clients, authProfileId, config, metadata, readChatMetadata, request } =
           createPersonalMetadataFixture();
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const entered = createDeferred();
         const release = createDeferred();
         const abort = new AbortController();

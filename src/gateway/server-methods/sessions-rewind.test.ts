@@ -26,6 +26,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -395,6 +396,7 @@ describe("session message-cut methods", () => {
       "restricted-fork-creator@example.com",
       "guest-only",
     );
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
 
     const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
     expect(fork).toHaveBeenCalledWith(
@@ -417,6 +419,7 @@ describe("session message-cut methods", () => {
       "main",
       "required",
     );
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
 
     const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;

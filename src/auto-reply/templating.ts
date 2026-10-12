@@ -394,7 +394,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
-  /** Channel-owned local conversation image reference; never rendered into prompt text. */
+  /** Channel-owned local image reference; empty clears a prior avatar. Never rendered into prompts. */
   ConversationAvatar?: string;
   /** Channel-owned metadata exposed to plugin hook context, not prompt text. */
   ChannelContext?: PluginHookChannelContext;

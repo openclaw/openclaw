@@ -53,3 +53,9 @@ export type SessionActorMemoryHistoryReads = ProjectionReads &
       output: SessionTranscriptVisibleMessageDeltaResult;
     };
   };
+export type SessionActorMemoryHistoryQuery = {
+  [Key in keyof SessionActorMemoryHistoryReads]: {
+    type: Key;
+    input: SessionActorMemoryHistoryReads[Key]["input"];
+  };
+}[keyof SessionActorMemoryHistoryReads];

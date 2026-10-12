@@ -3166,6 +3166,7 @@ describe("server-channels auto restart", () => {
       expect(monitor.drain()).toEqual({
         stalls: [{ elapsedMs: 1_928, task: "unattributed", taskMs: 1_928 }],
         dropped: 0,
+        delayMaxMs: 1_928,
       });
     } finally {
       monitor.stop();

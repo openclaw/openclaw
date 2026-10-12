@@ -1,10 +1,9 @@
 // Tests reply session persistence, route updates, and label behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import {
@@ -50,16 +49,17 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -125,18 +125,8 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
   ]),
 }));
 
-let suiteRoot = "";
+const suiteRoot = useSessionStoreTempDirs(afterAll, "openclaw-session-suite-").make();
 let suiteCase = 0;
-
-beforeAll(async () => {
-  suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-suite-"));
-});
-
-afterAll(async () => {
-  await fs.rm(suiteRoot, { recursive: true, force: true });
-  suiteRoot = "";
-  suiteCase = 0;
-});
 
 async function makeCaseDir(prefix: string): Promise<string> {
   const dir = path.join(suiteRoot, `${prefix}${++suiteCase}`);
@@ -295,10 +285,9 @@ beforeEach(() => {
       return { sessionId, sessionFile: sessionKey };
     });
 });
-afterEach(async () => {
+afterEach(() => {
   resetSystemEventsForTest();
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
-  await closeOpenClawStateDatabaseAsync();
 });
 describe("initSessionState guarded initialization", () => {
   registerSessionInitializationAdmissionTests({ makeStorePath });
@@ -339,7 +328,8 @@ describe("initSessionState guarded initialization", () => {
           storePath,
         });
       } finally {
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(stateDir);
+        closeOpenClawAgentDatabasesForTest(stateDir);
       }
     });
   });

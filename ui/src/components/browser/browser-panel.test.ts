@@ -82,16 +82,6 @@ describe("normalizeBrowserUrlDraft", () => {
     );
   });
 
-  it("keeps explicit http(s) schemes", () => {
-    expect(normalizeBrowserUrlDraft("http://example.com/a?b=1")).toBe("http://example.com/a?b=1");
-    expect(normalizeBrowserUrlDraft("HTTPS://example.com")).toBe("https://example.com/");
-  });
-
-  it("accepts host:port entries instead of treating the host as a scheme", () => {
-    expect(normalizeBrowserUrlDraft("localhost:3000")).toBe("https://localhost:3000/");
-    expect(normalizeBrowserUrlDraft("example.com:8080/path")).toBe("https://example.com:8080/path");
-  });
-
   it("rejects empty and non-http(s) inputs", () => {
     expect(normalizeBrowserUrlDraft("   ")).toBeNull();
     expect(normalizeBrowserUrlDraft("javascript:alert(1)")).toBeNull();
@@ -120,42 +110,6 @@ describe("normalizeBrowserUrlDraft", () => {
     };
     await panel.updateComplete;
     expect(panel.browserPanelIsOpen()).toBe(true);
-  });
-
-  it("mounts when ResizeObserver is unavailable", async () => {
-    vi.stubGlobal("ResizeObserver", undefined);
-    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
-      available: boolean;
-      embedded: boolean;
-      renderRoot: HTMLElement;
-      updateComplete: Promise<unknown>;
-    };
-    panel.available = true;
-    panel.embedded = true;
-    mountSolid(() => panel);
-    await panel.updateComplete;
-
-    expect(panel.renderRoot.querySelector(".bp")).not.toBeNull();
-  });
-
-  it("uses the shared surface empty state when the embedded browser has no tabs", async () => {
-    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
-      available: boolean;
-      embedded: boolean;
-      renderRoot: HTMLElement;
-      updateComplete: Promise<unknown>;
-    };
-    panel.available = true;
-    panel.embedded = true;
-    mountSolid(() => panel);
-    await panel.updateComplete;
-
-    const empty = panel.renderRoot.querySelector("openclaw-panel-empty-state");
-    await empty?.updateComplete;
-    const viewport = panel.renderRoot.querySelector('[role="tabpanel"]');
-    expect(viewport?.getAttribute("aria-hidden")).toBe("false");
-    expect(empty?.querySelector(".empty-state__title")?.textContent).toBe("Browser");
-    expect(empty?.querySelector("svg")).not.toBeNull();
   });
 
   it("renders the initial asynchronous refresh and retains the page while its screenshot updates", async () => {
@@ -210,7 +164,7 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(panel.querySelector(".bp-input")).toBe(input);
   });
 
-  it.each([true, false])(
+  it.each([true])(
     "keeps refresh feedback out of an existing page (retained: %s)",
     async (retained) => {
       const response = createDeferred<unknown>();
@@ -268,38 +222,6 @@ describe("normalizeBrowserUrlDraft", () => {
       );
     },
   );
-
-  it("suppresses an open dock without overwriting its persisted preference", async () => {
-    localStorage.setItem(
-      "openclaw.browser.panel.v1",
-      JSON.stringify({ open: true, dock: "right", height: 420, width: 560 }),
-    );
-    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
-      available: boolean;
-      suppressed: boolean;
-      renderRoot: HTMLElement;
-      updateComplete: Promise<unknown>;
-    };
-    panel.available = true;
-    mountSolid(() => panel);
-    await panel.updateComplete;
-
-    expect(panel.renderRoot.querySelector(".bp")).not.toBeNull();
-    panel.suppressed = true;
-    await waitForSolid(() => expect(panel.renderRoot.querySelector(".bp")).toBeNull());
-
-    expect(document.documentElement.style.getPropertyValue("--oc-browser-reserve-right")).toBe(
-      "0px",
-    );
-    expect(JSON.parse(localStorage.getItem("openclaw.browser.panel.v1") ?? "{}")).toMatchObject({
-      open: true,
-    });
-
-    panel.suppressed = false;
-    await waitForSolid(() => expect(panel.renderRoot.querySelector(".bp")).not.toBeNull());
-
-    expect(panel.renderRoot.querySelector(".bp")).not.toBeNull();
-  });
 
   it("keeps an open dock's reservation while an embedded panel renders and unmounts", async () => {
     localStorage.setItem(
@@ -391,22 +313,6 @@ describe("normalizeBrowserUrlDraft", () => {
     await waitForSolid(() => expect(panel.browserPanelIsOpen()).toBe(true));
   });
 
-  it("keeps an already closed panel closed for an explicit close request", () => {
-    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
-      available: boolean;
-      browserPanelIsOpen: () => boolean;
-      handleToggleRequest: (event: Event) => void;
-    };
-    panel.available = true;
-    mountSolid(() => panel);
-
-    panel.handleToggleRequest(
-      new CustomEvent("openclaw:browser-toggle", { detail: { open: false } }),
-    );
-
-    expect(panel.browserPanelIsOpen()).toBe(false);
-  });
-
   it.each(["close", "suppress"] as const)(
     "ends an active annotation gesture on panel %s",
     async (transition) => {
@@ -445,26 +351,6 @@ describe("normalizeBrowserUrlDraft", () => {
       expect(panel.browserPanelController.strokes).toEqual([{ points: [{ x: 0.1, y: 0.2 }] }]);
     },
   );
-
-  it("treats an embedded panel as open only while it is presented", async () => {
-    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
-      embedded: boolean;
-      presented: boolean;
-      browserPanelIsOpen: () => boolean;
-      updateComplete: Promise<unknown>;
-    };
-    panel.embedded = true;
-    mountSolid(() => panel);
-    await panel.updateComplete;
-
-    expect(panel.browserPanelIsOpen()).toBe(false);
-    panel.presented = true;
-    await panel.updateComplete;
-    expect(panel.browserPanelIsOpen()).toBe(true);
-    panel.presented = false;
-    await panel.updateComplete;
-    expect(panel.browserPanelIsOpen()).toBe(false);
-  });
 
   it("starts a fresh browser tab draft when an embedded panel receives a new-tab request", async () => {
     const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {

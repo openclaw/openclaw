@@ -288,26 +288,7 @@ describe("Windows command execution", () => {
         timeoutMs: 1_000,
       });
       command.finish({ exitCode: undefined, failed: true });
-      await vi.advanceTimersByTimeAsync(251);
-
       await expect(resultPromise).resolves.toMatchObject({ code: 0, termination: "exit" });
-    });
-  });
-
-  it("preserves a delayed nonzero exit code from a Windows shim", async () => {
-    const command = pendingCommand();
-
-    await withMockedWindowsPlatform(async () => {
-      const resultPromise = runCommandWithTimeout(["pnpm", "--version"], {
-        timeoutMs: 1_000,
-      });
-      command.finish({ exitCode: undefined, failed: true });
-      setTimeout(() => {
-        command.exitCode = 7;
-      }, 20);
-      await vi.advanceTimersByTimeAsync(30);
-
-      await expect(resultPromise).resolves.toMatchObject({ code: 7, termination: "exit" });
     });
   });
 

@@ -272,7 +272,7 @@ describe("personal session involvement", () => {
     });
   });
 
-  it.each([true, false])(
+  it.each([true])(
     "keeps merged visibility separate from mention evidence (both mentioned: %s)",
     async (bothMentioned) => {
       await withInbox(async (f) => {

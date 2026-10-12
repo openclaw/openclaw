@@ -146,6 +146,7 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
           },
           undefined,
           signal,
+          "background",
         );
       } finally {
         if (cleanup) {

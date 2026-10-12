@@ -10,9 +10,9 @@ import type { ProcessExtinctionResult } from "./types.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), delay: vi.fn() }));
 vi.mock("node:child_process", () => ({ spawn: mocks.spawn }));
-vi.mock("node:timers/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:timers/promises")>()),
-  setTimeout: mocks.delay,
+vi.mock("../../utils/sleep.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/sleep.js")>()),
+  sleep: mocks.delay,
 }));
 afterEach(() => vi.restoreAllMocks());
 

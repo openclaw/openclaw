@@ -8,7 +8,7 @@ import {
   prepareUserProfileCatalog,
 } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail, getUserProfileRole } from "../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveOperatorRolePolicyForProfile } from "../operator-role-policy.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -104,10 +104,10 @@ it.each(["failed delivery", "self downgrade"] as const)(
       const target = ensureProfileForEmail("reader@example.test");
       setUserProfileRole(target.id, "administrator");
       const changed = scenario === "self downgrade" ? requester : target;
+      release = (await prepareUserProfileCatalog()).release;
       expect(resolveOperatorRolePolicyForProfile(changed.id, roleConfig())?.scopes).toEqual([
         "operator.admin",
       ]);
-      release = (await prepareUserProfileCatalog()).release;
       const clientClose = vi.fn();
       const targetClose = vi.fn();
       const client = profileClient(requester.id, "role-requester", clientClose);
@@ -144,7 +144,6 @@ it.each(["failed delivery", "self downgrade"] as const)(
         },
         client,
       );
-      expect(getUserProfileRole(changed.id)).toBe("reader");
       expect(readUserProfileIdentity(changed.id)?.role).toBe("reader");
       expect(resolveOperatorRolePolicyForProfile(changed.id, roleConfig())?.scopes).toEqual([
         "operator.read",

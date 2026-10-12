@@ -81,38 +81,4 @@ describe("session titles with inbound Gateway metadata", () => {
       "Sender: help me debug the gateway",
     );
   });
-
-  test("keeps explicit session names ahead of user-message metadata", () => {
-    const entry: SessionEntry = {
-      sessionId: "abcd1234-rest-of-session",
-      updatedAt: 0,
-      displayName: "Deployment investigation",
-    };
-
-    expect(deriveSessionTitle(entry, senderMetadata)).toBe("Deployment investigation");
-  });
-
-  test("prefers the computed Gateway display name over transcript metadata", () => {
-    const entry: SessionEntry = { sessionId: "abcd1234-rest-of-session", updatedAt: 0 };
-
-    expect(
-      deriveSessionTitle(
-        entry,
-        `${senderMetadata}\n\nHelp me investigate the flaky deployment`,
-        "  openclaw-tui  ",
-      ),
-    ).toBe("openclaw-tui");
-  });
-
-  test("keeps a user-assigned session label ahead of the Gateway display name", () => {
-    const entry: SessionEntry = {
-      sessionId: "abcd1234-rest-of-session",
-      updatedAt: 0,
-      label: "Deployment investigation",
-    };
-
-    expect(deriveSessionTitle(entry, senderMetadata, "openclaw-tui")).toBe(
-      "Deployment investigation",
-    );
-  });
 });

@@ -162,11 +162,14 @@ but now fails at invocation; use `await deferOrphanedRequestsAsync()` to defer
 orphaned requests. Other deprecated publication methods likewise retain their
 signatures only for migration discovery and fail with replacement guidance.
 
-GitHub publication's opaque requester and synchronous lifecycle methods, plus
-personal OAuth `cancelAuthorization` and `disconnect`, share the
-`github-publication` runtime warning budget. The personal OAuth methods retain
-their synchronous results until the same removal gate; migrate to
-`cancelAuthorizationAsync` and `disconnectAsync`. Follow the
+GitHub publication's opaque requester, `personalStatus`, and synchronous lifecycle methods, plus
+managed OAuth `cancelAuthorization` and `retireProfile`, and personal OAuth
+`cancelAuthorization` and `disconnect`, share the
+`github-publication` runtime warning budget. The OAuth methods retain
+their synchronous results until the same removal gate; migrate managed OAuth to
+`cancelAuthorizationAsync` and `retireProfileAsync`, and personal OAuth to
+`cancelAuthorizationAsync` and `disconnectAsync`. Publication status readers use
+`await personalStatusAsync(...)` with the same arguments. Follow the
 [V2 request and lifecycle migration](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations)
 for required host capabilities and callback ordering. This does not change the
 warning policy of the placement reader family.

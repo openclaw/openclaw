@@ -96,6 +96,7 @@ import { prepareSessionPortalToolAccess } from "./tools/session-portal-target.js
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 
 type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  awaitSessionDiffBaseline?: () => Promise<void>;
   /** The host owns continuation policy when this factory builds only part of its tool surface. */
   sessionEventSourcePolicy?: SessionEventSourcePolicy;
 };
@@ -602,6 +603,7 @@ function* assembleOpenClawCodingTools(
   } satisfies PluginHookToolRequesterContext;
   const hasRequester = Object.keys(requester).length > 0;
   const hookContext = {
+    awaitSessionDiffBaseline: options?.awaitSessionDiffBaseline,
     agentId: executionAgentId,
     ...(options?.config ? { config: options.config } : {}),
     cwd: codingRoot,

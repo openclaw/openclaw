@@ -39,6 +39,19 @@ Missing outcomes and already committed claims for the same run return without
 another write. New claims keep their atomic conditional update and live commit
 authority check; retries retain the original claim timestamp.
 
+Ordinary admitted session-entry and prepared transcript reads use the existing
+read workers and WAL snapshots without reserving the writer FIFO. Writer receipts
+invalidate retained entry facts, and reads retain their admitted physical database
+and lifecycle. An explicit transcript lock lends its writer connection and
+settlement queue for read-your-writes. Synchronous authority acceptance, mutation
+preparation, cold initialization, retirement comparisons, and accepted-write
+barriers retain their ordered reservations.
+
+Session actor mutations borrow the connection opened by their transaction owner;
+they do not request a second handle admission before that transaction. Current
+transaction authority and final commit admission remain unchanged. These changes
+require no schema, stored-format, retention, or update migration.
+
 Runtime database access belongs in workers. The Gateway main thread owns live
 projections, caches, and caller authority; it awaits prepared facts and installs
 committed results. Synchronous boot admission, migrations, Doctor/CLI one-shots,
@@ -401,7 +414,9 @@ synchronous prompt adapter remains deprecated with a runtime warning.
 
 Plugin metadata reads, including retained artifact snapshots, use the shared read
 worker. Opening a database no longer reloads Claw provenance: explicit config
-preparation publishes those facts. Plugin-state consume deletes and returns its
+preparation publishes those facts. Setup credential activation and compensation
+use the auth worker, changing only the selected credential so neighboring profile
+and usage updates survive rollback. Plugin-state consume deletes and returns its
 live row in one statement, with decoding inside the transaction.
 
 Subagent descendant selection runs in the registry worker. Deletion consumes the
@@ -427,10 +442,16 @@ semantics are unchanged.
 
 ## SDK session writer migration
 
-Current-input read fences consume the committed admission receipt's sequence and
-message position. They validate the requested store, session key, and user role
-without rereading that receipt's identity from SQLite. Source/account authority
-still belongs to the context and writer owners at their effect boundaries.
+Current-input read fences derive sequence and message bounds from the committed
+admission receipt. Constructing a fence checks the requested store, session key,
+and user role without querying SQLite for the receipt's identity. Durable
+asynchronous model-context, full-context, and projection readers accept results
+only after comparing that receipt with the canonical active anchor returned by
+the retained worker. Owned removal or rewrite refuses acceptance; later appends
+remain valid. Bounded admitted reads use the same final acceptance check, without
+repeating it when selecting the input prefix. Source/account authority still
+belongs to the context and writer owners at their effect boundaries.
+Released synchronous SDK and native incognito readers retain their existing owners.
 Direct SQLite edits without owner publication are unsupported.
 
 Transcript search returns its read snapshot and obtains indexing readiness from
@@ -780,9 +801,13 @@ even if the old connection is restored. Profile-retirement notifications carry
 only the affected profile IDs. OAuth and refresh semantics and the existing stored
 representation remain unchanged.
 
-Cancellation without a matching pending request returns after a read in the same
-worker FIFO, without a write transaction or publication. Matching requests are
-still reread inside the mutation transaction. GitHub role checks prepare only the
+Cancellation checks the pending request once inside its mutation transaction;
+a stale request cannot cancel its successor. Personal credential and publication
+guards prepare their connection through the shared-state worker, then consume
+SQL-free authority revoked by the connection owner's write receipts. Restoring
+the same connection does not revive an earlier guard. Publication status RPCs
+use `personalStatusAsync`; the synchronous SDK method remains deprecated.
+GitHub role checks prepare only the
 canonical profile ID, role, and verified GitHub login through the existing profile
 authority fence. The Gateway reuses its retained profile catalog without another
 worker request. Standalone authority preparation without a retained catalog uses
@@ -936,20 +961,30 @@ completion contract.
 
 The shared session actor contract separates phase batching and caller lifetime
 from storage. The durable backend lives inside the canonical agent execution
-worker and shares its physical writer queue. Backend selection happens once at
-acquisition; commands never fall back to another store.
+worker and shares its physical writer queue. The memory backend owns incognito
+entries, transcript bytes, pending inputs, and completion outcomes in process
+memory. It opens no SQLite database and allocates no database worker. Backend
+selection happens once at acquisition; commands never fall back to another store.
+
+Memory actors serialize commands for the same session and publish complete
+postimages before acknowledgement. Releasing a caller drains its accepted work
+without deleting the session. Session closure invalidates its old handles and
+discards its state; database closure discards all of that owner's sessions. A
+later acquisition creates empty state without reviving an old handle. A process
+exit loses this memory by design. Existing transport teardown still guards
+external effects; work already handed to a transport may finish during closure.
+Talk's voice-session metadata retains its separately selected durable owner;
+incognito transcript storage does not change its reservation or confirmation contract.
 
 Native incognito acquisition returns `not-actor-owned`; those sessions keep
-their existing owner. The actor has no native incognito adapter. Worker-backed
-incognito acquisition selects the captured ephemeral execution owner. Closing
-that owner invalidates captured targets; acquisition cannot revive its old run
-authority or create a replacement memory database. Follow-on input, turn, and
-delivery cutovers must honor the native decline until all entry, transcript,
-history, and side-data consumers move together. There is no separate standalone
-in-memory actor backend or process-wide registry for it. Generic storage
-operations remain available to explicitly supplied actors within their own
-namespace; another memory namespace stays unavailable instead of selecting a
-native store. Native incognito expiry retains its existing owner.
+their existing owner and get no actor savings until Phase E / P12. The actor
+has no native incognito adapter. Worker-backed incognito acquisition selects
+the captured memory execution owner. Closing that owner invalidates captured
+targets; acquisition cannot revive its old run authority or create a replacement
+memory database. Follow-on input, turn, and delivery cutovers must honor the
+native decline until all entry, transcript, history, and side-data consumers move
+to the memory backend together. Explicit memory acquisition is available for that
+cutover; it never mirrors an existing native or worker-backed incognito database.
 
 Agent attempts retain this actor for SessionManager transcript and tool-result
 appends. Each append captures its exact committed snapshot before fallible
@@ -3579,6 +3614,10 @@ admission can refuse dispatch or close can clean up the original handle. Host
 admission and physical-identity checks remain on the host.
 Checkpoint-only PASSIVE ticks preserve the connection's busy timeout without
 reading or changing it: SQLite does not invoke the busy handler for PASSIVE.
+After a complete tick, the WAL owner skips subsequent checkpoint-only work until
+an in-process write receipt changes. Sibling handles and workers share that receipt;
+blocked or failed checkpoints keep retrying when a reader may have released.
+Connections without a known write receipt continue checkpointing on every tick.
 Page reclamation and blocking checkpoint modes keep their zero-timeout scope.
 Existing worker-local maintenance and synchronous offline/close checkpoints retain
 their owners; durability, schemas, retention, and update behavior are unchanged.
@@ -5369,6 +5408,25 @@ retained continuations; benign aliases added to the target profile do not revoke
 it. Callers revalidate after preparation, and assertions reread profile facts
 after source callbacks. External plugin authority callbacks retain their existing
 synchronous contract and may have their own storage dependencies.
+
+Gateway role policy, theme requests, preference notifications, and session
+pull-request subscriptions use the profile catalog retained by the session
+projection. Startup prepares that catalog before request dispatch and scheduled
+cron work. Committed profile changes update the same owner, including removal of
+deleted rows; role policy has no separate assignment cache. Theme writes and PR
+disclosure still check current identity at their effect boundary. Accepted
+operator work retains its independent profile authority after the originating
+transport completes.
+
+This does not make every shared profile query worker-only. Synchronous SDK
+catalog projectors (`createSessionCatalogSourceActorProjector` and
+`createSessionCatalogGitHubLinker`) still read verified GitHub identity rows.
+Cold display, alias, and personal-bootstrap readers also serve standalone SDK
+callers and native participant recording. The channel identity resolver retains
+native CLI/update authorization reads, while profile schema admission and Doctor
+repairs keep their one-shot transactions. These shared kernels retain their
+documented inventory tiers; the Gateway's resident request paths do not require
+those cold reads. Schemas, stored bytes, and update behavior are unchanged.
 
 Session metadata and membership facts are prepared through the existing session
 worker. Their canonical writers publish committed changes before observers, and

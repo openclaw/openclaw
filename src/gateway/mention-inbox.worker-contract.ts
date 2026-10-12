@@ -20,7 +20,3 @@ export type MentionReadOperations = {
     output: { type: "mentions.snapshot"; snapshot: MentionStoreSnapshot | undefined };
   };
 };
-
-export type MentionWorkerOperations = {
-  "mentions.mutate": { input: MentionMutation; output: MentionMutationResult };
-};
