@@ -5708,6 +5708,10 @@ td.data-table-key-col {
   color: var(--brand-claude);
 }
 
+.provider-brand-icon[data-provider-icon="coreweave"] {
+  color: var(--brand-coreweave);
+}
+
 .provider-brand-icon[data-provider-icon="gemini"] {
   color: var(--brand-google);
 }

@@ -24,6 +24,7 @@ export type OfficialExternalProviderAuthChoice = {
   deprecatedChoiceIds?: readonly string[];
   choiceLabel?: string;
   choiceHint?: string;
+  appGuidedSecret?: boolean;
   assistantPriority?: number;
   assistantVisibility?: "visible" | "manual-only" | "detected-only";
   groupId?: string;

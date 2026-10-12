@@ -233,6 +233,7 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
           choiceId,
           choiceLabel,
           ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+          ...(choice.appGuidedSecret === true ? { appGuidedSecret: true } : {}),
           ...(choice.modelTarget ? { modelTarget: choice.modelTarget } : {}),
           ...(choice.assistantPriority !== undefined
             ? { assistantPriority: choice.assistantPriority }
