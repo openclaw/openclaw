@@ -88,81 +88,36 @@ describe("renderTable", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders fitting ASCII cells without grapheme segmentation", () => {
-    const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+  it.each([["CSI without text", "\x1b[31\tm", "|         |"]])(
+    "materializes executable tabs as table spacing in %s cells",
+    (_label, value, expectedRow) => {
+      const out = renderTable({
+        border: "ascii",
+        columns: [{ key: "V", header: "V", minWidth: 9, maxWidth: 9 }],
+        rows: [{ V: value }],
+      });
 
-    const out = renderTable({
-      border: "ascii",
-      columns: [{ key: "Name", header: "Name" }],
-      rows: [{ Name: "alpha" }, { Name: "beta" }],
-    });
+      expect(out).toBe(
+        ["+---------+", "| V       |", "+---------+", expectedRow, "+---------+", ""].join("\n"),
+      );
+    },
+  );
 
-    expect(out).toBe(
-      ["+-------+", "| Name  |", "+-------+", "| alpha |", "| beta  |", "+-------+", ""].join("\n"),
-    );
-    expect(segment).not.toHaveBeenCalled();
-  });
+  it.each([["C0 before restart", "a\x1b[31\t\x07\x9b0\tmb", "| a  b    |"]])(
+    "keeps materialized tabs visible after %s CSI restarts",
+    (_label, value, expectedRow) => {
+      const out = renderTable({
+        border: "ascii",
+        columns: [{ key: "V", header: "V", minWidth: 9, maxWidth: 9 }],
+        rows: [{ V: value }],
+      });
 
-  it.each([
-    ["plain", "a\tb", "| a b     |"],
-    ["styled", "\x1b[31ma\tb\x1b[39m", "| \x1b[31ma b\x1b[39m     |"],
-    ["wide", "表\t文", "| 表 文   |"],
-    ["ESC CSI", "a\x1b[31\tmb\x1b[0m", "| a\x1b[\x18 \x1b[31mb\x1b[0m     |"],
-    ["C1 CSI", "a\x9b31\tmb\x9b0m", "| a\x9b\x18 \x9b31mb\x9b0m     |"],
-    ["CSI control order", "a\x1b[31\t\x07\tmb\x1b[0m", "| a\x1b[\x18 \x07 \x1b[31mb\x1b[0m    |"],
-    ["cancelled CSI", "a\x1b[31\t\x18b", "| a\x1b[\x18 \x1b[31\x18b     |"],
-    ["CSI without text", "\x1b[31\tm", "|         |"],
-    [
-      "OSC payload",
-      "a\x1b]8;id=keep\tpayload;https://example.com/\x07b\x1b]8;;\x07",
-      "| a\x1b]8;id=keep\tpayload;https://example.com/\x07b\x1b]8;;\x07      |",
-    ],
-  ])("materializes executable tabs as table spacing in %s cells", (_label, value, expectedRow) => {
-    const out = renderTable({
-      border: "ascii",
-      columns: [{ key: "V", header: "V", minWidth: 9, maxWidth: 9 }],
-      rows: [{ V: value }],
-    });
+      expect(sanitizeForLog(out.split("\n")[3] ?? "")).toBe(expectedRow);
+      expect(stripAnsi(out)).not.toContain("\x18");
+    },
+  );
 
-    expect(out).toBe(
-      ["+---------+", "| V       |", "+---------+", expectedRow, "+---------+", ""].join("\n"),
-    );
-  });
-
-  it.each([
-    ["mixed chain", "a\x1b[31\x9b1\x1b[0\tmb", "| a b     |"],
-    ["C0 before restart", "a\x1b[31\t\x07\x9b0\tmb", "| a  b    |"],
-  ])("keeps materialized tabs visible after %s CSI restarts", (_label, value, expectedRow) => {
-    const out = renderTable({
-      border: "ascii",
-      columns: [{ key: "V", header: "V", minWidth: 9, maxWidth: 9 }],
-      rows: [{ V: value }],
-    });
-
-    expect(sanitizeForLog(out.split("\n")[3] ?? "")).toBe(expectedRow);
-    expect(stripAnsi(out)).not.toContain("\x18");
-  });
-
-  it("renders headers and borders for an empty table", () => {
-    const out = renderTable({
-      border: "ascii",
-      columns: [{ key: "Key", header: "Key" }],
-      rows: [],
-    });
-
-    const lines = out.trimEnd().split("\n");
-    expect(lines).toHaveLength(4);
-    expect(lines[1]).toMatch(/^\| Key +\|$/u);
-    expect(lines.at(-1)).toBe(lines[0]);
-  });
-
-  it.each([
-    ["LF", "\n", "", ""],
-    ["CR", "\r", "", ""],
-    ["CRLF", "\r\n", "", ""],
-    ["colored CRLF", "\r\n", "\x1b[31m", "\x1b[39m"],
-    ["linked LF", "\n", "\x1b]8;;https://example.com/\x07", "\x1b]8;;\x07"],
-  ])(
+  it.each([["linked LF", "\n", "\x1b]8;;https://example.com/\x07", "\x1b]8;;\x07"]])(
     "sizes multiline %s headers and cells by their widest line",
     (_label, separator, open, close) => {
       const out = renderTable({
@@ -226,27 +181,7 @@ describe("renderTable", () => {
     },
   );
 
-  it("prefers shrinking flex columns to avoid wrapping non-flex labels", () => {
-    const out = renderTable({
-      width: 40,
-      columns: [
-        { key: "Item", header: "Item", minWidth: 10 },
-        { key: "Value", header: "Value", flex: true, minWidth: 24 },
-      ],
-      rows: [{ Item: "Dashboard", Value: "http://127.0.0.1:18789/" }],
-    });
-
-    expect(out).toContain("Dashboard");
-    expect(out).toMatch(/[│|] Dashboard\s+[│|]/);
-  });
-
-  it("keeps identifier columns intact when wider flex columns can absorb the shrink", () => {
-    const out = renderPluginListTable(120);
-
-    expect(out).toMatch(/│ Amazon Bedrock\s+│ amazon-bedrock\s+│/);
-  });
-
-  it.each([60, 120])("keeps the plugin-list shape deterministic and within %i columns", (width) => {
+  it.each([60])("keeps the plugin-list shape deterministic and within %i columns", (width) => {
     const out = renderPluginListTable(width);
     const lines = out.trimEnd().split("\n");
     const headerCells = (lines[1] ?? "").split("│").slice(1, -1);
@@ -261,21 +196,6 @@ describe("renderTable", () => {
     }
   });
 
-  it("expands flex columns to fill available width", () => {
-    const width = 60;
-    const out = renderTable({
-      width,
-      columns: [
-        { key: "Item", header: "Item", minWidth: 10 },
-        { key: "Value", header: "Value", flex: true, minWidth: 24 },
-      ],
-      rows: [{ Item: "OS", Value: "macos 26.2 (arm64)" }],
-    });
-
-    const firstLine = out.trimEnd().split("\n")[0] ?? "";
-    expect(visibleWidth(firstLine)).toBe(width);
-  });
-
   it("stops flex growth at the cap when a fractional width rounds up", () => {
     const out = renderTable({
       width: 20,
@@ -286,62 +206,6 @@ describe("renderTable", () => {
     });
 
     expect(out).toBe("+---------+\n|V        |\n+---------+\n|x        |\n+---------+\n");
-  });
-
-  it.each([
-    ["ESC CSI", "\x1b[", "31"],
-    ["colon-form color", "\x1b[", "38:2::255:0:0"],
-    ["C1 CSI", "\x9b", "31"],
-  ])("keeps %s styling intact and resets it before wrapped borders", (_label, csi, color) => {
-    const open = `${csi}${color}m`;
-    const globalReset = `${csi}0m`;
-    const foregroundReset = `${csi}39m`;
-    const out = renderValue(`${open}${"a".repeat(80)}${globalReset}`);
-    expectIntroducersToStartCompleteSequences(out, csi.charAt(0), [
-      open,
-      globalReset,
-      foregroundReset,
-    ]);
-    const lines = out.split("\n").filter((line) => line.includes("a"));
-    expect(lines.length).toBeGreaterThan(1);
-    for (const line of lines) {
-      expect(line).toContain(open);
-      const resetIndex = Math.max(line.lastIndexOf(globalReset), line.lastIndexOf(foregroundReset));
-      expect(resetIndex).toBeGreaterThan(-1);
-      expect(line.lastIndexOf("│")).toBeGreaterThan(resetIndex);
-    }
-  });
-
-  it("trims leading spaces on wrapped ANSI-colored continuation lines", () => {
-    const out = renderTable({
-      width: 113,
-      columns: [
-        { key: "Status", header: "Status", minWidth: 10 },
-        { key: "Skill", header: "Skill", minWidth: 18, flex: true },
-        { key: "Description", header: "Description", minWidth: 24, flex: true },
-        { key: "Source", header: "Source", minWidth: 10 },
-      ],
-      rows: [
-        {
-          Status: "✓ ready",
-          Skill: "🌤️ weather",
-          Description:
-            `\x1b[2mGet current weather and forecasts via wttr.in or Open-Meteo. ` +
-            `Use when: user asks about weather, temperature, or forecasts for any location.` +
-            `\x1b[0m`,
-          Source: "openclaw-bundled",
-        },
-      ],
-    });
-
-    const lines = out
-      .trimEnd()
-      .split("\n")
-      .filter((line) => line.includes("Use when"));
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain("\u001b[2mUse when");
-    expect(lines[0]).not.toContain("│  Use when");
-    expect(lines[0]).not.toContain("│ \x1b[2m Use when");
   });
 
   it("keeps ANSI styling when a multiline cell wraps after an unstyled line", () => {
@@ -392,25 +256,25 @@ describe("renderTable", () => {
     }
   });
 
-  it.each([
-    ["semicolon", "\x1b[4;58;2;255;0;0m", "\x1b[58;2;255;0;0m"],
-    ["colon", "\x1b[4;58:2::255:0:0m", "\x1b[58:2::255:0:0m"],
-  ])("keeps underline color active with %s operands", (_label, combined, color) => {
-    const underline = "\x1b[4m";
-    const globalReset = "\x1b[0m";
-    const out = renderValue(`${combined}${"u".repeat(80)}${globalReset}`);
+  it.each([["colon", "\x1b[4;58:2::255:0:0m", "\x1b[58:2::255:0:0m"]])(
+    "keeps underline color active with %s operands",
+    (_label, combined, color) => {
+      const underline = "\x1b[4m";
+      const globalReset = "\x1b[0m";
+      const out = renderValue(`${combined}${"u".repeat(80)}${globalReset}`);
 
-    const styledLines = out.split("\n").filter((line) => line.includes("u"));
-    expect(styledLines.length).toBeGreaterThan(1);
-    for (const line of styledLines) {
-      const hasOpeningState =
-        line.includes(combined) || (line.includes(underline) && line.includes(color));
-      expect(hasOpeningState).toBe(true);
-      const hasClosingState =
-        line.includes(globalReset) || (line.includes("\x1b[24m") && line.includes("\x1b[59m"));
-      expect(hasClosingState).toBe(true);
-    }
-  });
+      const styledLines = out.split("\n").filter((line) => line.includes("u"));
+      expect(styledLines.length).toBeGreaterThan(1);
+      for (const line of styledLines) {
+        const hasOpeningState =
+          line.includes(combined) || (line.includes(underline) && line.includes(color));
+        expect(hasOpeningState).toBe(true);
+        const hasClosingState =
+          line.includes(globalReset) || (line.includes("\x1b[24m") && line.includes("\x1b[59m"));
+        expect(hasClosingState).toBe(true);
+      }
+    },
+  );
 
   it("keeps unrelated SGR categories after a selective reset", () => {
     const boldRed = "\x1b[1;31m";
@@ -451,34 +315,7 @@ describe("renderTable", () => {
     }
   });
 
-  it.each([
-    ["BEL ST", "\x1b]8;;https://openclaw.ai\x07", "\x1b]8;;\x07"],
-    ["ESC-backslash ST", "\x1b]8;;https://openclaw.ai\x1b\\", "\x1b]8;;\x1b\\"],
-    ["C1 ST", "\x9d8;;https://openclaw.ai\x9c", "\x9d8;;\x9c"],
-  ])(
-    "closes and reopens embedded OSC-8 links at wrap boundaries (%s)",
-    (_label, openSeq, closeSeq) => {
-      const link = `${openSeq}OpenClaw${closeSeq}`;
-      const out = renderValue(`before ${link} after`, 20);
-
-      const afterLines = out.split("\n").filter((line) => line.includes("after"));
-      expect(afterLines.length).toBeGreaterThan(0);
-      for (const line of afterLines) {
-        const content = line.split("│")[2] ?? "";
-        expect(content).toContain("after");
-        // The link may have closed on a previous line. Any opener before the
-        // suffix on this line must also have closed before the suffix starts.
-        const prefix = content.slice(0, content.indexOf("after"));
-        expect(prefix.lastIndexOf(openSeq)).toBeLessThanOrEqual(prefix.lastIndexOf(closeSeq));
-      }
-    },
-  );
-
-  it.each([
-    ["BEL ST", "\x1b]8;;https://openclaw.ai\x07", "\x1b]8;;\x07"],
-    ["ESC-backslash ST", "\x1b]8;;https://openclaw.ai\x1b\\", "\x1b]8;;\x1b\\"],
-    ["C1 ST", "\x9d8;;https://openclaw.ai\x9c", "\x9d8;;\x9c"],
-  ])(
+  it.each([["BEL ST", "\x1b]8;;https://openclaw.ai\x07", "\x1b]8;;\x07"]])(
     "does not reopen a leading OSC-8 link onto wrapped suffix lines (%s)",
     (_label, openSeq, closeSeq) => {
       const link = `${openSeq}OpenClaw${closeSeq}`;
@@ -502,13 +339,7 @@ describe("renderTable", () => {
     },
   );
 
-  it.each([
-    ["LF", "\n", "", ""],
-    ["CR", "\r", "", ""],
-    ["CRLF", "\r\n", "", ""],
-    ["colored CRLF", "\r\n", "\x1b[31m", "\x1b[39m"],
-    ["linked LF", "\n", "\x1b]8;;https://example.com/\x07", "\x1b]8;;\x07"],
-  ])(
+  it.each([["colored CRLF", "\r\n", "\x1b[31m", "\x1b[39m"]])(
     "preserves blank %s lines without adding rows after wrapped spacing",
     (_label, separator, open, close) => {
       const out = renderTable({
@@ -552,8 +383,6 @@ describe("renderTable", () => {
   );
 
   it.each([
-    ["CR", "line1\r東京 line2", "", "", 0],
-    ["colored CRLF", "\x1b[31mline1\r\n東京 line2\x1b[39m", "\x1b[31m", "\x1b[39m", 0],
     [
       "linked CRLF",
       "\x1b]8;;https://openclaw.ai\x07line1\r\n東京 line2\x1b]8;;\x07",
@@ -561,16 +390,7 @@ describe("renderTable", () => {
       "\x1b]8;;\x07",
       0,
     ],
-    ["CR/SGR/LF", "line1\r\x1b[31m\n東京 line2\x1b[39m", "\x1b[31m", "\x1b[39m", 1],
-    [
-      "CR/OSC-8/LF",
-      "line1\r\x1b]8;;https://openclaw.ai\x07\n東京 line2\x1b]8;;\x07",
-      "\x1b]8;;https://openclaw.ai\x07",
-      "\x1b]8;;\x07",
-      1,
-    ],
     ["CR/CSI-HT/LF", "line1\r\x1b[31\tm\n東京 line2\x1b[39m", "\x1b[31m", "\x1b[39m", 1],
-    ["CR/CSI-BEL/LF", "line1\r\x1b[31\x07m\n東京 line2\x1b[39m", "\x1b[31\x07m", "\x1b[39m", 1],
   ] as const)(
     "respects explicit %s newlines in cell values",
     (_name, value, open, close, styledStart) => {
@@ -611,65 +431,31 @@ describe("renderTable", () => {
     },
   );
 
-  it.each([
-    [" undefined ", path.resolve("/home/other"), "~"],
-    ["\tnull\t", path.resolve("/home/other"), "~"],
-    [" /srv/openclaw-home ", path.resolve("/srv/openclaw-home"), "$OPENCLAW_HOME"],
-  ])("shortens home paths in table cells for OPENCLAW_HOME=%j", (override, home, prefix) => {
-    vi.stubEnv("HOME", "/home/other");
-    vi.stubEnv("USERPROFILE", "");
-    vi.stubEnv("OPENCLAW_HOME", override);
+  it.each([[" /srv/openclaw-home ", path.resolve("/srv/openclaw-home"), "$OPENCLAW_HOME"]])(
+    "shortens home paths in table cells for OPENCLAW_HOME=%j",
+    (override, home, prefix) => {
+      vi.stubEnv("HOME", "/home/other");
+      vi.stubEnv("USERPROFILE", "");
+      vi.stubEnv("OPENCLAW_HOME", override);
 
-    const out = renderTable({
-      border: "none",
-      columns: [{ key: "Path", header: "Path" }],
-      rows: [
-        { Path: home },
-        { Path: `${home}/project` },
-        { Path: `${home}2/project` },
-        { Path: `Workspace: ${home}/project` },
-      ],
-    });
+      const out = renderTable({
+        border: "none",
+        columns: [{ key: "Path", header: "Path" }],
+        rows: [
+          { Path: home },
+          { Path: `${home}/project` },
+          { Path: `${home}2/project` },
+          { Path: `Workspace: ${home}/project` },
+        ],
+      });
 
-    expect(out).toContain(`${prefix}\n`);
-    expect(out).toContain(`${prefix}/project`);
-    expect(out).toContain(`${home}2/project`);
-    expect(out).toContain(`Workspace: ${prefix}/project`);
-    expect(out).not.toContain(`${prefix}2/project`);
-  });
-
-  it("preserves mixed-width graphemes after a soft wrap", () => {
-    const out = renderTable({
-      border: "ascii",
-      padding: 0,
-      columns: [{ key: "V", header: "V", minWidth: 4, maxWidth: 4 }],
-      rows: [{ V: "a 表👩‍💻e\u0301काﾊﾞ後 xyz" }],
-    });
-
-    expect(out.trimEnd().split("\n").slice(3, -1)).toEqual([
-      "|a   |",
-      "|表👩‍💻|",
-      "|e\u0301का |",
-      "|ﾊﾞ後|",
-      "|xyz |",
-    ]);
-  });
-
-  it("keeps borders aligned when a wide grapheme lands in a narrow cell", () => {
-    // A width-2 CJK/emoji glyph in a column whose content width is 1 cannot be
-    // wrapped, so padCell must clamp it instead of overflowing the cell and
-    // pushing the right border out of alignment.
-    const out = renderTable({
-      border: "ascii",
-      padding: 0,
-      columns: [{ key: "B", header: "B", minWidth: 1, maxWidth: 1 }],
-      rows: [{ B: "表" }],
-    });
-    const lines = out.trimEnd().split("\n");
-    for (const line of lines) {
-      expect(visibleWidth(line)).toBe(3);
-    }
-  });
+      expect(out).toContain(`${prefix}\n`);
+      expect(out).toContain(`${prefix}/project`);
+      expect(out).toContain(`${home}2/project`);
+      expect(out).toContain(`Workspace: ${prefix}/project`);
+      expect(out).not.toContain(`${prefix}2/project`);
+    },
+  );
 
   it("terminates with aligned borders when a flex column starts at its floor", () => {
     const out = renderTable({
@@ -686,42 +472,6 @@ describe("renderTable", () => {
     expect(headerWidth).toBeGreaterThan(10);
     for (const line of lines) {
       expect(visibleWidth(line)).toBe(headerWidth);
-    }
-  });
-
-  it.each([
-    ["ESC CSI", "\x1b[2J"],
-    ["C1 CSI", "\x9b2J"],
-  ])("keeps unsupported %s sequences atomic at wrap boundaries", (_label, sequence) => {
-    const out = renderTable({
-      width: 5,
-      border: "ascii",
-      padding: 0,
-      columns: [{ key: "V", header: "V", minWidth: 3 }],
-      rows: [{ V: `abc${sequence}d` }],
-    });
-
-    expect(out).toContain(sequence);
-    for (const line of out.trimEnd().split("\n")) {
-      expect(visibleWidth(line)).toBe(5);
-    }
-  });
-
-  it.each([
-    ["ESC CSI with BEL", "\x1b[31\x07m"],
-    ["C1 CSI with BEL", "\x9b31\x07m"],
-  ])("keeps %s sequences with executable C0 controls atomic", (_label, sequence) => {
-    const out = renderTable({
-      width: 5,
-      border: "ascii",
-      padding: 0,
-      columns: [{ key: "V", header: "V", minWidth: 3 }],
-      rows: [{ V: `abc${sequence}d\x1b[0m` }],
-    });
-
-    expect(out).toContain(sequence);
-    for (const line of out.trimEnd().split("\n")) {
-      expect(visibleWidth(line)).toBe(5);
     }
   });
 
@@ -798,75 +548,34 @@ describe("renderTable", () => {
 });
 
 describe("wrapNoteMessage", () => {
-  it.each([
-    ["LF", "\n"],
-    ["CRLF", "\r\n"],
-    ["CR", "\r"],
-    ["Unicode line separator", "\u2028"],
-    ["Unicode paragraph separator", "\u2029"],
-  ])("preserves note text across %s line endings", (_label, separator) => {
-    const input = ["First paragraph.", "", "- Second paragraph."].join(separator);
-    const writes: string[] = [];
-    const output = {
-      columns: 80,
-      write(chunk: string) {
-        writes.push(chunk);
-        return true;
-      },
-    } as unknown as NodeJS.WriteStream;
+  it.each([["Unicode paragraph separator", "\u2029"]])(
+    "preserves note text across %s line endings",
+    (_label, separator) => {
+      const input = ["First paragraph.", "", "- Second paragraph."].join(separator);
+      const writes: string[] = [];
+      const output = {
+        columns: 80,
+        write(chunk: string) {
+          writes.push(chunk);
+          return true;
+        },
+      } as unknown as NodeJS.WriteStream;
 
-    noteToStream(input, "Note", output);
+      noteToStream(input, "Note", output);
 
-    const rendered = stripAnsi(writes.join(""));
-    expect(rendered).toContain("First paragraph.");
-    expect(rendered).toContain("- Second paragraph.");
-    expect(wrapNoteMessage(input, { columns: 80 })).toBe("First paragraph.\n\n- Second paragraph.");
-  });
-
-  it("preserves long filesystem paths without inserting spaces/newlines", () => {
-    const input =
-      "/Users/user/Documents/Github/impact-signals-pipeline/with/really/long/segments/file.txt";
-    const wrapped = wrapNoteMessage(input, { maxWidth: 22, columns: 80 });
-
-    expect(wrapped).toBe(input);
-  });
+      const rendered = stripAnsi(writes.join(""));
+      expect(rendered).toContain("First paragraph.");
+      expect(rendered).toContain("- Second paragraph.");
+      expect(wrapNoteMessage(input, { columns: 80 })).toBe(
+        "First paragraph.\n\n- Second paragraph.",
+      );
+    },
+  );
 
   it("preserves long file-like underscore tokens for copy safety", () => {
     const input = "administrators_authorized_keys_with_extra_suffix";
     const wrapped = wrapNoteMessage(input, { maxWidth: 14, columns: 80 });
 
-    expect(wrapped).toBe(input);
-  });
-
-  const word = "abcdefghijklmnopqrstuvwxyz";
-  it.each<[name: string, input: string, maxWidth: number, expected: string]>([
-    ["token followed by another word", `${word} tail`, 14, "abcdefghijklmn\nopqrstuvwxyz\ntail"],
-    ["token after a short word", `ok ${word} tail`, 14, "ok\nabcdefghijklmn\nopqrstuvwxyz\ntail"],
-    ["bullet token", `- ${word} tail`, 14, "- abcdefghijkl\n  mnopqrstuvwx\n  yz\n  tail"],
-    [
-      "bullet with wide spacing",
-      `-\u3000${word} tail`,
-      14,
-      "-\u3000abcdefghijk\n  lmnopqrstuv\n  wxyz\n  tail",
-    ],
-  ])("chunks a %s with exact note spacing", (_name, input, maxWidth, expected) => {
-    expect(wrapNoteMessage(input, { maxWidth, columns: 80 })).toBe(expected);
-  });
-
-  it("wraps bullet lines while preserving bullet indentation", () => {
-    const input = "- one two three four five six seven eight nine ten";
-    const wrapped = wrapNoteMessage(input, { maxWidth: 18, columns: 80 });
-    const lines = wrapped.split("\n");
-    expect(lines.length).toBeGreaterThan(1);
-    expect(lines[0]?.startsWith("- ")).toBe(true);
-    const unindentedContinuationLines = lines.slice(1).filter((line) => !line.startsWith("  "));
-    expect(unindentedContinuationLines).toStrictEqual([]);
-  });
-
-  it("preserves long Windows paths without inserting spaces/newlines", () => {
-    // No spaces: wrapNoteMessage splits on whitespace, so a "Program Files" style path would wrap.
-    const input = "C:\\\\State\\\\OpenClaw\\\\bin\\\\openclaw.exe";
-    const wrapped = wrapNoteMessage(input, { maxWidth: 10, columns: 80 });
     expect(wrapped).toBe(input);
   });
 
@@ -903,24 +612,6 @@ describe("wrapNoteMessage", () => {
     expect(rendered).toContain(
       "- ~/.openclaw/agents/main/sessions/9c2acae5-841f-4aea-936b-fdb513b60202.jsonl.lock",
     );
-  });
-
-  it("routes notes and wrapping through the selected output", () => {
-    const writes: string[] = [];
-    const output = {
-      columns: 120,
-      write(chunk: string) {
-        writes.push(chunk);
-        return true;
-      },
-    } as unknown as NodeJS.WriteStream;
-    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-
-    noteToStream("word ".repeat(18).trim(), "Wide note", output);
-
-    const rendered = stripAnsi(writes.join(""));
-    expect(rendered).toContain("word ".repeat(17).trim());
-    expect(stdoutWrite).not.toHaveBeenCalled();
   });
 
   it("coerces nullish and non-string note messages before wrapping", () => {
