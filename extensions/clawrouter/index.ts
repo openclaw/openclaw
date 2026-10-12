@@ -8,6 +8,7 @@ import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-en
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { registerClawRouterPoolMethod } from "./pool-gateway.js";
 import {
   buildClawRouterProviderConfig,
   CLAWROUTER_REASONING_EFFORT_LEVELS,
@@ -119,6 +120,7 @@ export default defineSingleProviderPluginEntry({
   name: "ClawRouter",
   description: "Managed multi-provider model routing and quotas",
   manifest,
+  register: registerClawRouterPoolMethod,
   provider() {
     const dynamicModels = new Map<string, Map<string, ProviderRuntimeModel>>();
 

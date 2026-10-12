@@ -51,7 +51,7 @@ import {
   type ActiveWorkerPlacement,
 } from "./worker-turn-failure.js";
 import type { WorkerTurnLauncherOptions } from "./worker-turn-launcher.types.js";
-import { createWorkerTurnRunOwner, type ActiveWorkerTurn } from "./worker-turn-run-owner.js";
+import * as workerTurnOwner from "./worker-turn-run-owner.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
 const loadWorkerTurnExecution = createLazyRuntimeModule(() => import("./worker-turn-execution.js"));
@@ -61,7 +61,7 @@ const loadPlacementSandbox = createLazyRuntimeModule(() => import("./placement-s
 class WorkerRuntimeRefreshInFlightError extends Error {}
 
 export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
-  const activeWorkerTurns = new Map<string, ActiveWorkerTurn>();
+  const activeWorkerTurns = new Map<string, workerTurnOwner.ActiveWorkerTurn>();
   const requiredAdmission = createRequiredWorkerTurnAdmission(options);
   const provider: SessionPlacementAdmissionProvider & {
     prepareSandbox(params: {
@@ -148,7 +148,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       });
     },
     async executeTurn(claim, inputTurn, runLocal, onAdmitted, assertRunCurrent) {
-      return await withRequiredSessionPlacement(
+      const previous = activeWorkerTurns.get(claim.sessionId);
+      const reply = await workerTurnOwner.prepareWorkerTurnReplyDelivery(previous, inputTurn);
+      const execution = withRequiredSessionPlacement(
         claim,
         {
           config: inputTurn.config,
@@ -376,18 +378,19 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             }
             placement = admitted.placement;
             turnClaim = admitted.turnClaim;
-            let activeWorkerTurn: ActiveWorkerTurn | undefined;
+            let activeWorkerTurn: workerTurnOwner.ActiveWorkerTurn | undefined;
             let handedOff = false;
             let terminalReceiptRequired = false;
             let terminalAtMs: number | undefined;
             let workspaceResolutionFailed = false;
             try {
               if (!remoteExec) {
-                activeWorkerTurn = await createWorkerTurnRunOwner({
+                activeWorkerTurn = await workerTurnOwner.createWorkerTurnRunOwner({
                   placements: options.placements,
                   claim: turnClaim,
                   sessionKey: placement.sessionKey,
                   turn,
+                  isReplyDelivered: reply.isDelivered,
                   assertCurrent: assertAdmissionCurrent,
                 });
                 activeWorkerTurn.signal.throwIfAborted();
@@ -468,6 +471,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 onTerminal: () => {
                   terminalAtMs = Date.now();
                 },
+                onReply: reply.deliver,
                 placement,
                 placements: options.placements,
                 workspace,
@@ -715,6 +719,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           }
         },
       );
+      return await reply.wait(execution);
     },
   };
   return provider;

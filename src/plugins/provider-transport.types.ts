@@ -1,5 +1,6 @@
 import type { StreamFn } from "../../packages/agent-core/src/types.js";
 import type { ProviderLocalServiceReconcileContext } from "../agents/provider-local-service-reconcile.js";
+import type { ModelCallUrgency } from "../agents/run-trigger.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type {
@@ -24,6 +25,10 @@ export type ProviderCreateStreamFnContext = ProviderNormalizeResolvedModelContex
  * through the normal `shared model runtime` stream path.
  */
 export type ProviderWrapStreamFnContext = ProviderPrepareExtraParamsContext & {
+  /** Per-model params only, with agent-specific model params taking precedence. */
+  modelParams?: Record<string, unknown>;
+  /** Host-classified urgency; providers may translate it into native scheduling hints. */
+  modelCallUrgency?: ModelCallUrgency;
   /** Wire-format API before simple completion projects an internal transport alias. */
   sourceApi?: ProviderRuntimeModel["api"];
   streamFn?: StreamFn;

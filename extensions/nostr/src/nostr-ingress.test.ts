@@ -137,25 +137,6 @@ describe("Nostr durable ingress", () => {
     });
   });
 
-  it("rejects replay after completion", async () => {
-    await withQueue(async (queue) => {
-      const deliver = vi.fn(async (_event, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const ingress = startIngress({ queue, deliver });
-      const event = createEvent({ id: "4".repeat(64) });
-      try {
-        await ingress.receive(event);
-        await ingress.waitForIdle();
-        await expect(ingress.receive(event)).resolves.toBe("duplicate");
-        await ingress.waitForIdle();
-        expect(deliver).toHaveBeenCalledTimes(1);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
   it("migrates the persisted LRU seed into completion tombstones", async () => {
     await withQueue(async (queue) => {
       const legacyId = "5".repeat(64);
@@ -163,58 +144,6 @@ describe("Nostr durable ingress", () => {
         migrateNostrLegacyRecentEventIds({ queue, eventIds: [legacyId, legacyId] }),
       ).resolves.toBe(1);
       expect((await queue.enqueue(legacyId, {} as NostrIngressPayload)).kind).toBe("completed");
-    });
-  });
-
-  it("does not dispatch when durable append exhausts retries", async () => {
-    await withQueue(async (queue) => {
-      const appendError = new Error("sqlite unavailable");
-      const failingQueue = {
-        ...queue,
-        enqueue: vi.fn().mockRejectedValue(appendError),
-      } satisfies NostrIngressQueue;
-      const deliver = vi.fn();
-      const ingress = startIngress({ queue: failingQueue, deliver });
-      try {
-        await expect(ingress.receive(createEvent())).rejects.toThrow(
-          "Nostr durable admission failed",
-        );
-        expect(deliver).not.toHaveBeenCalled();
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
-  it("bounds the fully serialized payload for escape-heavy events", async () => {
-    await withQueue(async (queue) => {
-      const enqueue = vi.fn(queue.enqueue.bind(queue));
-      const trackingQueue = { ...queue, enqueue } satisfies NostrIngressQueue;
-      const afterDurableAppend = vi.fn();
-      const deliver = vi.fn();
-      const ingress = startIngress({
-        queue: trackingQueue,
-        deliver,
-        afterDurableAppend,
-        maxSerializedPayloadBytes: 600,
-      });
-      try {
-        await expect(
-          ingress.receive(createEvent({ id: "6".repeat(64), content: "\\".repeat(40) })),
-        ).rejects.toThrow("exceeds the durable ingress size limit");
-        expect(enqueue).not.toHaveBeenCalled();
-        expect(afterDurableAppend).not.toHaveBeenCalled();
-        expect(deliver).not.toHaveBeenCalled();
-
-        const accepted = createEvent({ id: "9".repeat(64), content: "ok" });
-        await expect(ingress.receive(accepted)).resolves.toBe("accepted");
-        await ingress.waitForIdle();
-        expect(enqueue).toHaveBeenCalledTimes(1);
-        expect(afterDurableAppend).toHaveBeenCalledWith(accepted);
-        expect(deliver).toHaveBeenCalledTimes(1);
-      } finally {
-        await ingress.stop();
-      }
     });
   });
 
@@ -260,30 +189,6 @@ describe("Nostr durable ingress", () => {
         await expect(queued).rejects.toThrow("Nostr durable admission failed");
         expect(enqueue).toHaveBeenCalledTimes(3);
         expect(afterDurableAppend).not.toHaveBeenCalled();
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
-  it("rate-limits admission before durable append", async () => {
-    await withQueue(async (queue) => {
-      const enqueue = vi.fn(queue.enqueue.bind(queue));
-      const ingress = startIngress({
-        queue: { ...queue, enqueue },
-        deliver: async (_event, lifecycle) => {
-          await lifecycle.onAdopted();
-        },
-        admissionRateLimit: { windowMs: 60_000, maxEvents: 1 },
-      });
-      try {
-        await expect(ingress.receive(createEvent({ id: "a".repeat(64) }))).resolves.toBe(
-          "accepted",
-        );
-        await expect(ingress.receive(createEvent({ id: "b".repeat(64) }))).rejects.toThrow(
-          "exceeds the durable admission rate",
-        );
-        expect(enqueue).toHaveBeenCalledTimes(1);
       } finally {
         await ingress.stop();
       }

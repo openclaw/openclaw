@@ -51,6 +51,7 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import {
   listAgentsForGateway,
   loadGatewaySessionEntryReadOnly,
@@ -1669,7 +1670,7 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("loadGatewaySessionEntryReadOnly clones only the selected row and direct children", async () => {
+  test("worker history reads only the selected row and direct children", async () => {
     await withConfiguredStateDir("session-utils-exact-read-only-", async ({ stateDir }) => {
       const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
       const cfg = {
@@ -1693,31 +1694,28 @@ describe("gateway session utils", () => {
       expect(
         listSessionEntriesReadOnly({ agentId: "main", storePath }).map((item) => item.sessionKey),
       ).toContain(childKey);
-      const cloneSpy = vi.spyOn(globalThis, "structuredClone");
-      try {
-        expect(loadGatewaySessionEntryReadOnly(childKey, { clone: false }).entry).toMatchObject({
-          sessionId: "child",
-          spawnedBy: parentKey,
-        });
-        expect(
-          listSessionChildEntriesReadOnly({
+      expect(loadGatewaySessionEntryReadOnly(childKey, { clone: false }).entry).toMatchObject({
+        sessionId: "child",
+        spawnedBy: parentKey,
+      });
+      expect(
+        (
+          await listSessionChildEntriesReadOnly({
             agentId: "main",
             clone: false,
             sessionKey: parentKey,
             storePath,
-          }).map((item) => item.sessionKey),
-        ).toEqual([childKey]);
-        const loaded = loadGatewaySessionEntryReadOnly("main", {
-          includeStoreChildEntries: true,
-        });
+          })
+        ).map((item) => item.sessionKey),
+      ).toEqual([childKey]);
+      const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg,
+        key: "main",
+        includeStoreChildEntries: true,
+      });
 
-        expect(loaded.entry?.sessionId).toBe("parent");
-        expect(Object.keys(loaded.store).toSorted()).toEqual([childKey, parentKey]);
-        expect(loaded.entry).not.toBe(loaded.store[parentKey]);
-        expect(cloneSpy).toHaveBeenCalledTimes(1);
-      } finally {
-        cloneSpy.mockRestore();
-      }
+      expect(loaded.entry?.sessionId).toBe("parent");
+      expect(Object.keys(loaded.store).toSorted()).toEqual([childKey, parentKey]);
     });
   });
 

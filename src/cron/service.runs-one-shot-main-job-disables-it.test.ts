@@ -260,12 +260,16 @@ describe("CronService one-shot lifecycle", () => {
       );
       await cron.run(job.id, "force");
       expect(requestHeartbeatAndWait).toHaveBeenCalledOnce();
-      expect(deps.requestHeartbeat).not.toHaveBeenCalled();
-      expect(deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+      expect(deps.requestHeartbeat).toHaveBeenCalledOnce();
+      expect(deps.enqueueSystemEvent).toHaveBeenCalledTimes(2);
+      expect(drainSystemEventEntries(sessionKey()).map((event) => event.text)).toEqual([
+        expect.stringContaining("auto-disabled"),
+      ]);
       expectEmptyQueue();
       expect(cron.getJob(job.id)?.state).toMatchObject({
         lastRunStatus: "error",
         lastError: expect.stringContaining("heartbeat failed"),
+        autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 1 },
       });
     } finally {
       await cleanup();
@@ -339,6 +343,10 @@ describe("CronService one-shot lifecycle", () => {
         expect(stored?.enabled).toBe(!executionStarted);
         expect(stored?.state.consecutiveErrors).toBe(1);
         if (executionStarted) {
+          expect(stored?.state.autoDisabled).toMatchObject({
+            reason: "consecutive-failures",
+            consecutiveErrors: 1,
+          });
           expect(stored?.state.nextRunAtMs).toBeUndefined();
           expect(deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
             expect.stringContaining('Automation "one-shot" failed 1 times'),

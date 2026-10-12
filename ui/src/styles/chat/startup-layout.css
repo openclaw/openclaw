@@ -676,14 +676,14 @@ openclaw-chat-sidebar-region,
 
 .sidebar-region__primary[hidden],
 .sidebar-region:not(.sidebar-region--open) [data-region-header="side"],
-.sidebar-region--expanded:not(.sidebar-region--expanded-side) [data-region-header="side"],
-.sidebar-region--expanded-side > .sidebar-region__header {
+.sidebar-region--expanded:not(.sidebar-region--expanded-side) [data-region-header="side"] {
   display: none;
 }
 
-/* Focus the side in place; its header (including restore/close) stays reachable. */
+/* Keep the Layout menu and panel tabs reachable while focusing the side in place. */
 .sidebar-region--expanded-side {
-  grid-template-areas: "side-header" "side";
+  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-areas: "main-header" "side-header" "side";
 }
 
 .sidebar-region--bottom .sidebar-column__divider {

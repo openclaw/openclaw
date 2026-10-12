@@ -38,6 +38,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/qa-lab/src/providers/shared/auth-store.test.ts",
   "extensions/codex/src/app-server/auth-refresh-authority.integration.test.ts",
   "extensions/codex/src/app-server/auth-bridge.test.ts",
+  "extensions/codex/src/app-server/isolated-completion.auth-boundary.test.ts",
   "extensions/codex/src/app-server/auth-requirement-matrix.test.ts",
   "extensions/codex/src/app-server/attempt-startup-computer-use.test.ts",
   "extensions/codex/src/app-server/side-question.app-consent.test.ts",
@@ -53,6 +54,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/github-copilot/index.test.ts",
   "extensions/migrate-hermes/secrets.test.ts",
   "extensions/migrate-hermes/files-and-skills.test.ts",
+  // Provider-owned embedding auth resolves shared-store ownership through the host broker.
+  "extensions/google/embedding-provider.test.ts",
   "extensions/openai/binary-transport.test.ts",
   "extensions/openai/tts.test.ts",
   "extensions/microsoft/speech-provider.test.ts",

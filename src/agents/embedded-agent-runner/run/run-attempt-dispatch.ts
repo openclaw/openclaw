@@ -666,16 +666,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     },
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
   };
-  const rawAttempt = await withPreparedEmbeddedGatewayTools(
-    attemptParams,
-    attemptControls.isCurrent,
-    () => {
-      assertActiveRun();
-      placement?.assertCurrent();
-      return runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media);
-    },
-    resolvedSessionTarget,
-  )
+  const rawAttempt = await withPreparedEmbeddedGatewayTools(attemptParams, () => {
+    assertActiveRun();
+    placement?.assertCurrent();
+    return runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media);
+  })
     .catch((err: unknown): never => {
       throw input.getPostCompactionAbortError() ?? err;
     })

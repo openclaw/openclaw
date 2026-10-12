@@ -119,6 +119,8 @@ describe("managed worktree creation groups", () => {
   it("shares a prepared default with creators queued past its fetch settlement", async ({
     signal,
   }) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const head = await git(repo, "rev-parse", "HEAD");
     const secondAdmitted = createDeferred();
     const releaseSecond = createDeferred();
@@ -161,9 +163,13 @@ describe("managed worktree creation groups", () => {
       const late = await service.create({ repoRoot: repo, name: "cohort-late" });
       expect(await git(late.path, "rev-parse", "HEAD")).toBe(head);
       expect(fetches).toBe(1);
+      // An overlapping creation must not extend the freshness window indefinitely.
+      clock.mockReturnValue(now + 30_000);
+      await service.create({ repoRoot: repo, name: "cohort-expired" });
+      expect(fetches).toBe(2);
       releaseSecond.resolve();
       const createdSecond = await withinTest(second, signal);
-      expect(fetches).toBe(1);
+      expect(fetches).toBe(2);
       expect(await git(createdFirst.path, "rev-parse", "HEAD")).toBe(head);
       expect(await git(createdSecond.path, "rev-parse", "HEAD")).toBe(head);
       expect(
@@ -171,7 +177,7 @@ describe("managed worktree creation groups", () => {
       ).toBe("refs/remotes/origin/main");
       const repeated = await service.create({ repoRoot: repo, name: "cohort-second" });
       expect(repeated.id).toBe(createdSecond.id);
-      expect(fetches).toBe(1);
+      expect(fetches).toBe(2);
       await service.create({ repoRoot: repo, name: "cohort-fresh" });
       expect(fetches).toBe(2);
     } finally {
@@ -179,5 +185,35 @@ describe("managed worktree creation groups", () => {
       releaseSecond.resolve();
       await Promise.allSettled([first, second]);
     }
+  });
+
+  it("reuses a recent default, then refreshes after its freshness window", async () => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const original = await service.create({ repoRoot: repo, name: "original" });
+    const oldHead = await git(original.path, "rev-parse", "HEAD");
+    const remote = path.join(root, "remote.git");
+    const newHead = await git(
+      remote,
+      "-c",
+      "user.name=OpenClaw Test",
+      "-c",
+      "user.email=openclaw-test@example.invalid",
+      "commit-tree",
+      "HEAD^{tree}",
+      "-p",
+      "HEAD",
+      "-m",
+      "remote update",
+    );
+    await git(remote, "update-ref", "refs/heads/main", newHead);
+
+    clock.mockReturnValue(now + 29_000);
+    const recent = await service.create({ repoRoot: repo, name: "recent" });
+    expect(await git(recent.path, "rev-parse", "HEAD")).toBe(oldHead);
+
+    clock.mockReturnValue(now + 30_000);
+    const refreshed = await service.create({ repoRoot: repo, name: "refreshed" });
+    expect(await git(refreshed.path, "rev-parse", "HEAD")).toBe(newHead);
   });
 });

@@ -1,7 +1,7 @@
 import { icons } from "../../../components/icons.ts";
-import { t } from "../../../i18n/index.ts";
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,

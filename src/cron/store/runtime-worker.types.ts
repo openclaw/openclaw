@@ -188,7 +188,11 @@ export type CronRunFinalizationOutcome = CronJobExecutionResult & {
   endedAt: number;
   runReceipt?: CronRunReceiptHandle;
   activeJobMarker?: { jobRemoved?: true; scheduleMutated?: true; triggerMutated?: true };
-  request?: { preserveCadence: boolean; scheduleOwnershipAtMs: number };
+  request?: {
+    preserveCadence: boolean;
+    scheduleOwnershipAtMs: number;
+    onExitWatcherCompletion?: boolean;
+  };
 };
 
 type CronScheduleOwnershipFacts = {

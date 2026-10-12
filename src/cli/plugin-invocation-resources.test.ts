@@ -1,10 +1,11 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import {
   formatCliProcessFailure,
   runCliProcessChild,
@@ -12,8 +13,6 @@ import {
 } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const require = createRequire(import.meta.url);
-const entry = fileURLToPath(new URL("../entry.ts", import.meta.url));
 
 type ResourceEvent = { event: string; database: string; mode: string };
 
@@ -114,7 +113,11 @@ module.exports = {
       .map((line) => JSON.parse(line));
 
   const result = await runCliProcessChild({
-    nodeArgs: ["--import", require.resolve("tsx"), entry, "native-resource", "--rows"],
+    nodeArgs: [
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
+      "native-resource",
+      "--rows",
+    ],
     cwd: root,
     env: {
       PATH: process.env.PATH,

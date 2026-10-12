@@ -9,6 +9,9 @@ import {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
 } from "../config/sessions/session-accessor.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import { listSessionTranscriptInstancesInWorker } from "../config/sessions/session-history.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import {
   projectSessionMetadata,
   readMemorySessionTargets,
@@ -17,6 +20,7 @@ import type {
   MemorySessionSelectors,
   MemorySessionTarget,
 } from "../config/sessions/session-memory-targets.types.js";
+import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
 export type {
@@ -68,7 +72,7 @@ export type {
   SessionTranscriptCorpusEntry,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
 
-/** Durable ingestion guard; runtime discovery should use resolveMemorySessionTargetsAsync. */
+/** @deprecated Use loadMemorySessionMetadataAsync; removed at the next Plugin SDK major. */
 export function loadMemorySessionMetadata(params: {
   agentId: string;
   sessionId: string;
@@ -78,7 +82,7 @@ export function loadMemorySessionMetadata(params: {
   assertBoundIncognitoMemorySyncAccess(
     params,
     "loadMemorySessionMetadata",
-    "resolveMemorySessionTargetsAsync",
+    "loadMemorySessionMetadataAsync",
   );
   const instance = listSessionTranscriptInstances(params, {
     includeAllWindows: true,
@@ -91,7 +95,7 @@ export function loadMemorySessionMetadata(params: {
   return instance ? projectSessionMetadata(instance) : undefined;
 }
 
-/** Final synchronous admission guard for the durable ingestion owner. */
+/** @deprecated Use loadMemorySessionMetadataBatchAsync; removed at the next Plugin SDK major. */
 export function loadMemorySessionMetadataBatch(params: {
   agentId: string;
   storePath?: string;
@@ -101,7 +105,7 @@ export function loadMemorySessionMetadataBatch(params: {
     assertBoundIncognitoMemorySyncAccess(
       { ...params, ...session },
       "loadMemorySessionMetadataBatch",
-      "resolveMemorySessionTargetsAsync",
+      "loadMemorySessionMetadataBatchAsync",
     );
   }
   const selectors = new Map<string, Set<string | undefined>>();
@@ -130,6 +134,48 @@ export function loadMemorySessionMetadataBatch(params: {
     }
   }
   return metadata;
+}
+
+/** Read the selected transcript's recorded source metadata through its owner. */
+export async function loadMemorySessionMetadataAsync(
+  params: Parameters<typeof loadMemorySessionMetadata>[0],
+): Promise<MemorySessionTarget | undefined> {
+  return (await loadMemorySessionMetadataBatchAsync({ ...params, sessions: [params] }))[0];
+}
+
+/** One history read resolves the complete ingestion batch. */
+export async function loadMemorySessionMetadataBatchAsync(
+  params: Parameters<typeof loadMemorySessionMetadataBatch>[0],
+): Promise<MemorySessionTarget[]> {
+  const selectors = new Map<string, Set<string | undefined>>();
+  for (const { sessionId, sessionKey } of params.sessions) {
+    const keys = selectors.get(sessionId) ?? new Set<string | undefined>();
+    keys.add(sessionKey);
+    selectors.set(sessionId, keys);
+  }
+  if (selectors.size === 0) {
+    return [];
+  }
+  const agentId = normalizeAgentId(params.agentId);
+  const scope = { agentId, storePath: params.storePath };
+  const sessionIds = [...selectors.keys()];
+  const metadata =
+    getSessionActorStorageBinding(scope) || captureIncognitoSessionSource(scope)
+      ? (await resolveMemorySessionTargetsInWorker({ ...scope, sessionIds })).filter(
+          (entry) => entry.resolution === "live",
+        )
+      : (
+          await listSessionTranscriptInstancesInWorker(
+            { ...scope, projection: "list" },
+            { includeAllWindows: true, sessionIds },
+          )
+        ).map((instance) => projectSessionMetadata(instance));
+  return metadata.filter(
+    (entry) =>
+      entry.agentId === agentId &&
+      (selectors.get(entry.sessionId)?.has(undefined) ||
+        selectors.get(entry.sessionId)?.has(entry.sessionKey)),
+  );
 }
 
 /** @deprecated Use resolveMemorySessionTargetsAsync; removed at the next Plugin SDK major. */

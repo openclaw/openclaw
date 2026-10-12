@@ -88,6 +88,11 @@ export type SessionExactEntriesWorkerSelection =
     }
   | {
       sessionKeys?: never;
+      selection: { kind: "children"; parentSessionKeys: readonly string[] };
+      projection: "list" | "full";
+    }
+  | {
+      sessionKeys?: never;
       selection:
         | { kind: "session-id-or-key"; sessionIdOrKey: string }
         | { kind: "label"; label: string };
