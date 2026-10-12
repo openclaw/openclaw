@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -88,6 +88,9 @@ beforeAll(async () => {
   );
 });
 
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+});
 afterEach(() => vi.restoreAllMocks());
 afterAll(async () => {
   memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });

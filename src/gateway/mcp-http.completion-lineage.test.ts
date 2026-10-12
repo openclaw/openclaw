@@ -488,7 +488,7 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
       name: "handed to another completion owner",
       runId: "lineage-reowned-in-hook",
       seed: { completionOwnerSessionKey: requesterKey },
-      revoke: reownChild,
+      revoke: () => reownChild(),
     },
     {
       name: "reassigned in memory",

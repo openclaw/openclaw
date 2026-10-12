@@ -313,8 +313,8 @@ describe("Gateway memory transcript readers", () => {
   });
 
   it("hides out-of-page coordination errors and reveals output after an in-process human steer", async () => {
-    const { binding, scope, append } = await fixture();
-    await append(
+    const { binding, scope, appendMessage } = await fixture();
+    await appendMessage(
       event("coordination-input", "answer", {
         role: "user",
         content: "Internal coordination",
@@ -322,7 +322,7 @@ describe("Gateway memory transcript readers", () => {
         provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
       }),
     );
-    await append(
+    await appendMessage(
       event("coordination-error", "coordination-input", {
         role: "assistant",
         content: [],
@@ -338,14 +338,14 @@ describe("Gateway memory transcript readers", () => {
       expect(hidden).toEqual({ found: false, oversized: false, historyHidden: true });
       const before = await readSessionHistorySnapshotAsync({ target: scope, limit: 1 });
       expect(messageIds(before.history.messages)).toEqual(["answer"]);
-      await append(
+      await appendMessage(
         event("human-steer", "coordination-error", {
           role: "user",
           content: "Show me the result",
           __openclaw: { steerTargetRunId: "coordination" },
         }),
       );
-      await append(
+      await appendMessage(
         event("visible-result", "human-steer", {
           role: "assistant",
           content: "Visible result",
@@ -381,7 +381,7 @@ describe("Gateway memory transcript readers", () => {
 it("reads unbound Gateway transcript state after an in-process append without creating missing owners", async () => {
   const target = await fixture();
   expect(await readSessionMessageCountAsync(target.scope)).toBe(2);
-  await target.append(event("next", "answer", { role: "user", content: "Next question" }));
+  await target.appendMessage(event("next", "answer", { role: "user", content: "Next question" }));
   expect(await readSessionMessageCountAsync(target.scope)).toBe(3);
   expect(await readSessionMessageByIdAsync(target.scope, "next")).toMatchObject({ found: true });
   expect(readSessionTitleFieldsFromTranscript(target.scope)).toMatchObject({

@@ -37,8 +37,15 @@ vi.mock("node:sqlite", async (importOriginal) => ({
 }));
 vi.mock("node:worker_threads", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:worker_threads")>()),
+  // Gateway adapters prepare actor writes on the main thread, including under Vitest's pool.
+  isMainThread: true,
   Worker: vi.fn(function () {
     throw new Error("Memory adapter allocated a worker");
+  }),
+}));
+vi.mock("./session-worker-placement-context.js", () => ({
+  resolveSessionWorkerPlacementContext: () => ({
+    workerSessionPlacementService: { getMany: () => new Map() },
   }),
 }));
 

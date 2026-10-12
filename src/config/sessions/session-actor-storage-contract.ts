@@ -23,6 +23,7 @@ import type {
   SessionActorMemoryEntryWrites,
 } from "./session-actor-memory-entry-contract.js";
 import type {
+  SessionActorMemoryParentForkCallbacks,
   SessionActorMemoryForkReads,
   SessionActorMemoryForkWrites,
 } from "./session-actor-memory-fork-contract.js";
@@ -120,6 +121,8 @@ export type SessionActorStorageOutcome<Value> =
     };
 
 export type SessionActorStorageAuthority = SessionActorAuthority & {
+  /** Released fork callbacks remain with the host while the actor owns their synchronous execution. */
+  parentFork?: SessionActorMemoryParentForkCallbacks;
   /** The existing live pending-input owner decides whether reconciliation may interrupt custody. */
   isPendingInputProtected?(
     candidate: PendingInputCustodyCandidate,

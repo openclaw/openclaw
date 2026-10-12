@@ -107,11 +107,19 @@ export function forkMemorySessionEntryFromParent(
               kind: "entry",
               params: structuredClone(data),
               patch: patch && structuredClone(patch),
-              supportsCliFork: cliBackendSupportsSessionFork,
-              callbacks: { patch: callback, skipPatch, skipForkWhen, decisionSkipPatch },
             },
           },
-          memory.authority,
+          {
+            authorize: (...args) => memory.authority.authorize(...args),
+            assertCurrent: () => memory.authority.assertCurrent(),
+            parentFork: {
+              supportsCliFork: cliBackendSupportsSessionFork,
+              patch: callback,
+              skipPatch,
+              skipForkWhen,
+              decisionSkipPatch,
+            },
+          },
         ),
       );
     },

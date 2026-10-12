@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import zlib from "node:zlib";
 import { afterEach, expect, it, vi } from "vitest";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import * as projection from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import * as archiveWorkers from "../config/sessions/session-accessor.sqlite-archive.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
@@ -109,15 +111,11 @@ it("reads process-held incognito history by its key or explicit sentinel path", 
       storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
     };
     await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1, incognito: true });
-    await replaceTranscriptEvents(scope, [
-      { type: "session", id: scope.sessionId },
-      {
-        type: "message",
-        id: "private",
-        parentId: null,
-        message: { role: "user", content: "Private history" },
-      },
-    ]);
+    await appendTranscriptMessage(scope, {
+      eventId: "private",
+      parentId: null,
+      message: { role: "user", content: "Private history" },
+    });
     for (const sessionKey of [scope.sessionKey, undefined]) {
       expect(
         await readSessionMessagesMatchingIdAsync({ ...scope, sessionKey }, "private"),

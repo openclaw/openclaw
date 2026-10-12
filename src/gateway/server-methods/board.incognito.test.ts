@@ -33,7 +33,6 @@ const env = { OPENCLAW_STATE_DIR: "/synthetic/board-incognito-rpc" };
 const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
 
 beforeAll(() => {
-  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   setRuntimeConfigSnapshot(cfg, cfg);
 });
 
@@ -55,6 +54,7 @@ async function createSession(sessionKey: string, entry: SessionEntry) {
 }
 
 beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   resetPluginRuntimeStateForTest();
   review.mockReset();
   const policy = vi.spyOn(approvals, "readExecApprovalsPolicyReadOnlyAsync").mockResolvedValue({

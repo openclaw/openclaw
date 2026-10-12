@@ -17,19 +17,20 @@ export type SessionActorMemoryForkReads = {
   };
 };
 
+/** Host callbacks run against the current memory transaction, outside the cloned command. */
+export type SessionActorMemoryParentForkCallbacks = Pick<
+  ForkSessionEntryFromParentTargetParams,
+  "patch" | "skipPatch" | "skipForkWhen" | "decisionSkipPatch"
+> & {
+  supportsCliFork?: (provider: string) => boolean;
+};
+
 export type SessionActorMemoryForkWrites = {
   "session.parentFork.commit": {
     input: {
       kind: "entry";
       params: Omit<ParentForkEntryParams, "agentId" | "storePath">;
       patch?: ParentForkEntryPatch;
-      /** Backend support is prepared by the host; bindings come from the current parent. */
-      supportsCliFork?: (provider: string) => boolean;
-      /** Released callback API runs synchronously inside the memory owner, like its SQL transaction. */
-      callbacks?: Pick<
-        ForkSessionEntryFromParentTargetParams,
-        "patch" | "skipPatch" | "skipForkWhen" | "decisionSkipPatch"
-      >;
     };
     output: ForkSessionEntryFromParentTargetResult;
   };

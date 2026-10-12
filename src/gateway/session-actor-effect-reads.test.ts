@@ -8,6 +8,7 @@ import {
 } from "../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveApprovalRequestChannelAccountId } from "../infra/approval-request-account-binding.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
 import { readGitHubPublicationSession } from "./github-publication-availability.js";
 import { withSessionFileRoot } from "./server-methods/sessions-files.js";
@@ -37,7 +38,10 @@ afterEach(() => {
 async function fixture() {
   const owner = createMemorySessionActorOwner({
     agentId: "main",
-    path: "/synthetic/agents/main/sessions/incognito.sqlite",
+    path: resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: "/synthetic" },
+    }),
   });
   owners.push(owner);
   const actor = await owner.acquire(

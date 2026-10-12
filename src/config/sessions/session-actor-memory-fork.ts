@@ -15,6 +15,7 @@ import type { ForkSessionEntryFromParentTargetResult } from "./session-accessor.
 import { installSessionActorMemoryEntry } from "./session-actor-memory-entry-install.js";
 import { createSessionActorMemoryEvents } from "./session-actor-memory-events.js";
 import type {
+  SessionActorMemoryParentForkCallbacks,
   SessionActorMemoryForkCommand,
   SessionActorMemoryForkQuery,
   SessionActorMemoryForkWrites,
@@ -48,6 +49,7 @@ export function readSessionActorMemoryForkQuery(
 function commitParentFork(
   context: SessionActorMemoryStorageContext,
   input: SessionActorMemoryForkWrites["session.parentFork.commit"]["input"],
+  callbacks?: SessionActorMemoryParentForkCallbacks,
 ): ForkSessionEntryFromParentTargetResult {
   const parentKey = normalizeStoreSessionKey(input.params.parentTarget.canonicalKey);
   const targetKey = normalizeStoreSessionKey(input.params.sessionTarget.canonicalKey);
@@ -61,10 +63,10 @@ function commitParentFork(
     return { status: "missing-entry" };
   }
   if (
-    input.callbacks?.skipForkWhen?.(structuredClone(base)) ??
+    callbacks?.skipForkWhen?.(structuredClone(base)) ??
     (input.patch?.skipExisting && base.sessionId.trim())
   ) {
-    const skipped = input.callbacks?.skipPatch?.(structuredClone(base)) ?? input.patch?.skipped;
+    const skipped = callbacks?.skipPatch?.(structuredClone(base)) ?? input.patch?.skipped;
     const sessionEntry = skipped
       ? installSessionActorMemoryEntry(
           context.edit(targetKey),
@@ -81,7 +83,7 @@ function commitParentFork(
   const source = resolveParentForkSourceTranscript(parent.events.map(({ event }) => event));
   const decision = planParentForkDecision(parentEntry, estimateParentForkPromptTokens(source));
   if (decision.status === "skip") {
-    const patch = input.callbacks?.decisionSkipPatch?.({
+    const patch = callbacks?.decisionSkipPatch?.({
       decision,
       entry: structuredClone(base),
       parentEntry: structuredClone(parentEntry),
@@ -109,7 +111,7 @@ function commitParentFork(
   }
   const sessionId = randomUUID();
   const patch =
-    input.callbacks?.patch?.({
+    callbacks?.patch?.({
       decision,
       entry: structuredClone(base),
       parentEntry: structuredClone(parentEntry),
@@ -126,7 +128,7 @@ function commitParentFork(
       totalTokensVersion: undefined,
       cliSessionBindings: forkCliSessionBindings(
         parentEntry,
-        input.supportsCliFork ?? (() => false),
+        (provider) => callbacks?.supportsCliFork?.(provider) ?? false,
       ),
       cliSessionIds: undefined,
       claudeCliSessionId: undefined,
@@ -164,10 +166,11 @@ function commitParentFork(
 export function executeSessionActorMemoryForkCommand(
   context: SessionActorMemoryStorageContext,
   command: SessionActorMemoryForkCommand,
+  callbacks?: SessionActorMemoryParentForkCallbacks,
 ) {
   switch (command.type) {
     case "session.parentFork.commit":
-      return commitParentFork(context, command.input);
+      return commitParentFork(context, command.input, callbacks);
     case "session.parentFork.transcript": {
       const target = context.edit(context.state.hot.target.sessionKey);
       // Transcript-only forks precede child entry creation. Keep their window with the actor

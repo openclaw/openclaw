@@ -5,13 +5,20 @@ import type {
   SessionActorStorage,
 } from "./session-actor-contract.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
-import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
+import type {
+  SessionActorStorageAuthority,
+  SessionActorStorageOutcome,
+} from "./session-actor-storage-contract.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 const parentKey = "agent:main:dashboard:incognito-fork-parent";
 const childKey = "agent:main:dashboard:incognito-fork-child";
 const storePath = "/synthetic/incognito-forks";
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
+const forkAuthority: SessionActorStorageAuthority = {
+  ...authority,
+  parentFork: { supportsCliFork: (provider) => provider === "claude" },
+};
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
 afterEach(() => {
@@ -112,7 +119,6 @@ async function fixture(entry: Partial<SessionEntry> = {}) {
       sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
       fallbackEntry: { sessionId: "child-seed", updatedAt: 1, incognito: true as const },
     },
-    supportsCliFork: (provider: string) => provider === "claude",
   };
   return { owner, acquire, parent, child, forkInput };
 }
@@ -146,7 +152,7 @@ describe("memory actor fork and cut", () => {
     );
     const fork = storage(child).mutate(
       { type: "session.parentFork.commit", input: forkInput },
-      authority,
+      forkAuthority,
     );
     committed(await patch);
     const result = committed(await fork);
@@ -182,6 +188,25 @@ describe("memory actor fork and cut", () => {
     );
     expect(source?.branchEntries).toHaveLength(4);
     expect(reread?.branchEntries).toHaveLength(4);
+  });
+
+  it("does not inherit CLI bindings without host fork support", async () => {
+    const { child, forkInput } = await fixture({
+      cliSessionBindings: {
+        claude: { sessionId: "cli-parent", resumeCheckpointId: "checkpoint", forceReuse: true },
+      },
+    });
+    const result = committed(
+      await storage(child).mutate(
+        { type: "session.parentFork.commit", input: forkInput },
+        authority,
+      ),
+    );
+    expect(result.status).toBe("forked");
+    if (result.status !== "forked") {
+      throw new Error("Fork failed");
+    }
+    expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
   });
 
   it("rewinds and switches branches while retaining the original window and rejecting old identity", async () => {
@@ -305,8 +330,8 @@ describe("memory actor fork and cut", () => {
 
   it("does not publish a child when authority refuses the source copy", async () => {
     const { child, forkInput } = await fixture();
-    const denied: SessionActorAuthority = {
-      assertCurrent() {},
+    const denied: SessionActorStorageAuthority = {
+      ...forkAuthority,
       authorize(_stage, facts) {
         if (facts.target.sessionKey === parentKey) {
           throw new Error("Source access revoked");

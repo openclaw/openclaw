@@ -219,7 +219,7 @@ export function executeSessionActorMemoryEntryCommand(
           ([key, value]) => key !== sessionKey && value.hot.entry?.label === label,
         )
       ) {
-        const error = new Error(`Session label already exists: ${label}`);
+        const error = new Error(`label already in use: ${label}`);
         error.name = "SessionLabelConflictError";
         throw error;
       }

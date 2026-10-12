@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   createSessionEntryWithTranscript,
@@ -87,6 +87,8 @@ it("unbound readers observe committed entry and sharing changes without replacin
     const list = createSessionEntryListReader(scope);
     expect(current.readCurrent()?.modelSelectionLocked).toBe(false);
     expect((await list()).entries[0]?.entry.updatedAt).toBe(1);
+    using now = vi.spyOn(Date, "now");
+    now.mockReturnValue(2);
     const patched = await binding!.actor.storage.mutate(
       {
         type: "session.entry.patch",

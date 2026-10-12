@@ -1805,8 +1805,11 @@ describe("gateway session utils", () => {
         const key = "agent:main:dashboard:incognito-retired-owner";
         seedSessionEntries(storePath, {
           "agent:main:main": { sessionId: "durable-main", updatedAt: 1 },
-          [key]: { sessionId: "incognito-owner", updatedAt: 1, incognito: true },
         });
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: key, storePath },
+          { sessionId: "incognito-owner", updatedAt: 1, incognito: true },
+        );
         const cfg = {
           session: {
             store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),

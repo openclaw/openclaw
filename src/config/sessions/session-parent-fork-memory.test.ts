@@ -56,13 +56,14 @@ async function acquire(agentId: string, sessionKey: string) {
   return { actor, owner, binding };
 }
 
-async function fixture(childAgent = "main") {
+async function fixture(childAgent = "main", parentPatch: Partial<InternalSessionEntry> = {}) {
   const parent = await acquire("main", parentKey);
   const entry = {
     sessionId: "parent-session",
     lifecycleRevision: "parent-lifecycle",
     updatedAt: 1,
     incognito: true,
+    ...parentPatch,
   } satisfies InternalSessionEntry;
   const events = [
     {
@@ -295,5 +296,40 @@ it.each(["callback", "typed"])(
     expect(parent.owner.readSession(childKey, authority)?.entry?.sessionId).toBe(
       result.fork.sessionId,
     );
+  },
+);
+
+it.each(["existing-entry", "decision-skip"])(
+  "checks authority after selecting a %s memory child patch",
+  async (reason) => {
+    const { parent, childKey } = await fixture("main", {
+      totalTokens: 200_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    });
+    let patchSelected = false;
+    const selectPatch = () => {
+      patchSelected = true;
+      return { label: "unauthorized" };
+    };
+    await expect(
+      forkSessionEntryFromParentTarget({
+        agentId: "main",
+        storePath: parent.owner.path,
+        parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+        sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+        fallbackEntry: { sessionId: "child-seed", updatedAt: 2 },
+        skipForkWhen: () => reason === "existing-entry",
+        skipPatch: selectPatch,
+        decisionSkipPatch: selectPatch,
+        commitGuard: () => {
+          if (patchSelected) {
+            throw new Error("parent authority closed");
+          }
+        },
+      }),
+    ).rejects.toThrow("parent authority closed");
+    expect(patchSelected).toBe(true);
+    expect(parent.owner.readSession(childKey, authority)?.entry).toBeUndefined();
   },
 );

@@ -235,6 +235,11 @@ export function withIncognitoGatewaySessionStoreTarget<T>(params: {
     binding?.actor.assertReadable();
     snapshot = owner?.readSession(sessionKey, authority);
   }
+  const identity = owner?.identity ?? snapshot?.target.database;
+  const capturedReadSource = captureGatewaySessionReadSource(
+    captured,
+    identity?.kind === "memory" ? { identity: identity.incarnation } : undefined,
+  );
   let consuming = true;
   const assertCurrent = () => {
     if (!consuming) {
@@ -256,6 +261,8 @@ export function withIncognitoGatewaySessionStoreTarget<T>(params: {
         storeKeys: [sessionKey],
         store: snapshot?.entry ? { [sessionKey]: snapshot.entry } : {},
         readSource: { agentId, path: captured.path },
+        ...(capturedReadSource ? { capturedReadSource } : {}),
+        capturedReadSources: capturedReadSource ? [capturedReadSource] : [],
       },
       params.includeMembership ? new Map([[sessionKey, snapshot?.members ?? []]]) : new Map(),
       assertCurrent,

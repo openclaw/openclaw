@@ -12,6 +12,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { addSessionSuggestionInWorker } from "../../config/sessions/session-metadata-write.async.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -416,7 +417,7 @@ describe("session suggestion visibility and role ceilings", () => {
           visibility: "suggest",
         },
       );
-      addSessionSuggestion(
+      await addSessionSuggestionInWorker(
         { agentId: "main", sessionKey: incognitoKey },
         {
           id: "incognito-suggestion",

@@ -87,7 +87,7 @@ describe("session creation display titles", () => {
         const loser = createGatewaySession({
           ...common,
           agentId: childAgent,
-          key: childKey,
+          key: incognito ? undefined : childKey,
           parentSessionKey: parentKey,
           fork: true,
           label: "Contended",

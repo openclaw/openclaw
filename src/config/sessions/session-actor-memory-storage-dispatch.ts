@@ -236,7 +236,7 @@ export function mutateSessionActorMemoryStorage(
     case "session.parentFork.commit":
     case "session.parentFork.transcript":
     case "session.messageCut":
-      return executeSessionActorMemoryForkCommand(context, command);
+      return executeSessionActorMemoryForkCommand(context, command, authority.parentFork);
     case "session.pendingInput.mutate": {
       const window =
         command.input.kind === "finish"
