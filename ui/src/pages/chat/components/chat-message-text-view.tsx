@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, getOwner, onCleanup, runWithOwner, Show } from "solid-js";
 import {
   createMarkdownRef,
   type MarkdownContentValue,
@@ -229,6 +229,7 @@ type MarkdownContentProps = {
 
 /** Both transcript text and legacy slots share the same incremental DOM owner. */
 export function MarkdownContent(props: MarkdownContentProps) {
+  const solidOwner = getOwner();
   const fragment = document.createDocumentFragment();
   const markdown = createMarkdownRef(() => {
     const media = props.media;
@@ -236,7 +237,9 @@ export function MarkdownContent(props: MarkdownContentProps) {
       prefix: media.prefix,
       render(index, container) {
         const item = media.items[index];
-        return item ? mountLitContent(media.render(item, index), container) : undefined;
+        return item
+          ? runWithOwner(solidOwner, () => mountLitContent(media.render(item, index), container))
+          : undefined;
       },
     };
     return { content: props.content, media: renderer, incremental: props.incremental };

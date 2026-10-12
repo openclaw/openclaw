@@ -14,6 +14,7 @@ import {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { getChildLogger } from "../../logging/logger.js";
+import { assertAgentSessionWriteAdmission } from "../../sessions/session-agent-work-admission.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type {
   AgentDatabaseGenerationClaim,
@@ -92,6 +93,9 @@ export async function withSessionEntryWorker<T>(
   let execution: OpenClawAgentDatabaseExecution;
   let env: SessionEntryCommitContext["env"];
   try {
+    if (operationMode === "write") {
+      assertAgentSessionWriteAdmission(options);
+    }
     env = Object.freeze({ ...(options.env ?? process.env) });
     execution =
       retainedExecution ??
@@ -131,6 +135,9 @@ export async function withSessionEntryWorker<T>(
     },
   };
   const assertHeld = () => {
+    if (operationMode === "write") {
+      assertAgentSessionWriteAdmission(options);
+    }
     execution.assertCurrent();
     assertCurrent();
     preparedReadClaim?.assertCurrent();
