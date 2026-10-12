@@ -423,7 +423,7 @@ export const buildTelegramMessageContext = async ({
 
   const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
     ...inboundContext,
-    conversationAvatar: await resolveDirectAvatar?.(primaryCtx, cfg),
+    conversationAvatar: resolveDirectAvatar?.(primaryCtx, cfg),
     replyMedia,
     replyChain,
     promptContext,

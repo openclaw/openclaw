@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramDirectAvatarResolver } from "./bot-message-avatar.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
@@ -7,10 +7,6 @@ import type { TelegramContext } from "./bot/types.js";
 vi.mock("./bot/delivery.resolve-media.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./bot/delivery.resolve-media.js")>()),
   resolveMedia: vi.fn(),
-}));
-vi.mock("./bot-processing-outcome.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./bot-processing-outcome.js")>()),
-  getTelegramSpooledReplayLifecycle: () => undefined,
 }));
 
 const photo = { file_id: "photo-one", file_unique_id: "unique-one", width: 160, height: 160 };
@@ -44,6 +40,7 @@ function account(accountId = "sample-bot") {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers();
   vi.mocked(resolveMedia).mockReset().mockResolvedValue({
     path: "/media/inbound/portrait.png",
     id: "portrait.png",
@@ -55,13 +52,27 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("Telegram native direct portraits", () => {
+  it("returns immediately while a cold portrait request is pending", () => {
+    const { api, resolve } = account();
+    api.getUserProfilePhotos.mockReturnValueOnce(new Promise(() => {}));
+    expect(resolve(context(), {})).toBeUndefined();
+    expect(resolve(context(), {})).toBeUndefined();
+    expect(api.getUserProfilePhotos).toHaveBeenCalledOnce();
+    expect(resolveMedia).not.toHaveBeenCalled();
+  });
+
   it("downloads through the existing account media policy and reuses the bounded native-peer cache", async () => {
     const { api, resolve } = account();
     const ctx = context();
     const before = structuredClone(ctx.message);
-    expect(await resolve(ctx, {})).toBe("/media/inbound/portrait.png");
-    expect(await resolve(ctx, {})).toBe("/media/inbound/portrait.png");
+    expect(resolve(ctx, {})).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resolve(ctx, {})).toBe("/media/inbound/portrait.png");
     expect(api.getUserProfilePhotos).toHaveBeenCalledOnce();
     expect(api.getUserProfilePhotos).toHaveBeenCalledWith(
       1000000001,
@@ -89,7 +100,8 @@ describe("Telegram native direct portraits", () => {
         if (fails) {
           api.getUserProfilePhotos.mockRejectedValueOnce(new Error("request failed"));
         }
-        await resolve(context(), {});
+        resolve(context(), {});
+        await vi.advanceTimersByTimeAsync(0);
         expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
       } finally {
         removeListener.mockRestore();
@@ -113,7 +125,8 @@ describe("Telegram native direct portraits", () => {
       token: "test-token",
       abortSignal: controller.signal,
     });
-    expect(await resolve(context(), {})).toBeUndefined();
+    expect(resolve(context(), {})).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(0);
     expect(aborted).toHaveBeenCalledTimes(1);
     expect(resolveMedia).not.toHaveBeenCalled();
   });
@@ -122,11 +135,14 @@ describe("Telegram native direct portraits", () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(0);
     try {
       const { api, resolve } = account();
-      expect(await resolve(context(), {})).toBe("/media/inbound/portrait.png");
+      expect(resolve(context(), {})).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(resolve(context(), {})).toBe("/media/inbound/portrait.png");
       clock.mockReturnValue(5 * 60 * 1000 + 1);
       api.getUserProfilePhotos.mockResolvedValueOnce({ total_count: 0, photos: [] });
-      expect(await resolve(context(), {})).toBe("");
-      expect(await resolve(context(), {})).toBe("");
+      expect(resolve(context(), {})).toBe("/media/inbound/portrait.png");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(resolve(context(), {})).toBe("");
       expect(api.getUserProfilePhotos).toHaveBeenCalledTimes(2);
     } finally {
       clock.mockRestore();
@@ -138,7 +154,8 @@ describe("Telegram native direct portraits", () => {
     const second = account("another-bot");
     await first.resolve(context(), {});
     await first.resolve(context(1000000002), {});
-    await second.resolve(context(), {});
+    second.resolve(context(), {});
+    await vi.advanceTimersByTimeAsync(0);
     expect(first.api.getUserProfilePhotos.mock.calls.map(([id]) => id)).toEqual([
       1000000001, 1000000002,
     ]);
@@ -149,9 +166,12 @@ describe("Telegram native direct portraits", () => {
   it("keeps initials for absent, private, or unavailable photos", async () => {
     const { api, resolve } = account();
     api.getUserProfilePhotos.mockResolvedValueOnce({ total_count: 0, photos: [] });
-    expect(await resolve(context(), {})).toBe("");
+    expect(resolve(context(), {})).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resolve(context(), {})).toBe("");
     api.getUserProfilePhotos.mockRejectedValueOnce(new Error("unavailable"));
-    expect(await resolve(context(1000000002), {})).toBeUndefined();
+    expect(resolve(context(1000000002), {})).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(0);
     expect(resolveMedia).not.toHaveBeenCalled();
   });
 

@@ -2,7 +2,6 @@ import { AbortController as TelegramAbortController } from "abort-controller";
 import type { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTelegramMediaRuntimeOptions } from "./accounts.js";
-import { getTelegramSpooledReplayLifecycle } from "./bot-processing-outcome.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import type { TelegramContext } from "./bot/types.js";
 import type { TelegramTransport } from "./fetch.js";
@@ -20,15 +19,16 @@ export function createTelegramDirectAvatarResolver(params: {
   abortSignal?: AbortSignal;
 }) {
   const cache = new Map<number, { expiresAt: number; path?: string }>();
-  const pending = new Map<number, Promise<string | undefined>>();
-  return async (
+  const pending = new Set<number>();
+  return (
     ctx: Pick<TelegramContext, "message" | "me">,
     cfg: OpenClawConfig,
-  ): Promise<string | undefined> => {
+  ): string | undefined => {
     const message = ctx.message;
     const senderId = message.from?.id;
     // A private chat portrait describes its peer, not a group, channel, or forwarded author.
     if (
+      params.abortSignal?.aborted ||
       message.chat.type !== "private" ||
       !senderId ||
       message.from?.is_bot ||
@@ -40,19 +40,13 @@ export function createTelegramDirectAvatarResolver(params: {
     if (cached && cached.expiresAt > Date.now()) {
       return cached.path;
     }
-    const existing = pending.get(senderId);
-    if (existing) {
-      return existing;
-    }
-    if (pending.size >= AVATAR_MAX_ENTRIES) {
-      return undefined;
+    if (pending.has(senderId) || pending.size >= AVATAR_MAX_ENTRIES) {
+      return cached?.path;
     }
     const load = async () => {
-      const signals = [
-        AbortSignal.timeout(4_000),
-        params.abortSignal,
-        getTelegramSpooledReplayLifecycle()?.abortSignal,
-      ].filter((signal): signal is AbortSignal => signal !== undefined);
+      const signals = [AbortSignal.timeout(4_000), params.abortSignal].filter(
+        (signal): signal is AbortSignal => signal !== undefined,
+      );
       const abortSignal = AbortSignal.any(signals);
       // grammY requires its declared abort-controller signal; media fetches use the native signal.
       const apiAbort = new TelegramAbortController();
@@ -68,6 +62,9 @@ export function createTelegramDirectAvatarResolver(params: {
           { offset: 0, limit: 1 },
           apiAbort.signal,
         );
+        if (abortSignal.aborted) {
+          return undefined;
+        }
         const photo = photos.photos[0]?.[0];
         if (!photo) {
           // A successful empty response clears a prior portrait; failures leave it unchanged.
@@ -88,7 +85,7 @@ export function createTelegramDirectAvatarResolver(params: {
           maxBytes: AVATAR_MAX_BYTES,
           abortSignal,
         });
-        return media?.path;
+        return abortSignal.aborted ? undefined : media?.path;
       } catch {
         // Missing/private photos and transient API failures must not reject the message.
         return undefined;
@@ -96,22 +93,23 @@ export function createTelegramDirectAvatarResolver(params: {
         abortSignal.removeEventListener("abort", abort);
       }
     };
-    const request = load().then((path) => {
-      cache.delete(senderId);
-      cache.set(senderId, { path, expiresAt: Date.now() + AVATAR_TTL_MS });
-      if (cache.size > AVATAR_MAX_ENTRIES) {
-        const oldest = cache.keys().next().value;
-        if (oldest !== undefined) {
-          cache.delete(oldest);
+    pending.add(senderId);
+    // Portrait acquisition belongs to the bot account and must never delay an inbound turn.
+    void load()
+      .then((path) => {
+        if (params.abortSignal?.aborted) {
+          return;
         }
-      }
-      return path;
-    });
-    pending.set(senderId, request);
-    try {
-      return await request;
-    } finally {
-      pending.delete(senderId);
-    }
+        cache.delete(senderId);
+        cache.set(senderId, { path: path ?? cached?.path, expiresAt: Date.now() + AVATAR_TTL_MS });
+        if (cache.size > AVATAR_MAX_ENTRIES) {
+          const oldest = cache.keys().next().value;
+          if (oldest !== undefined) {
+            cache.delete(oldest);
+          }
+        }
+      })
+      .finally(() => pending.delete(senderId));
+    return cached?.path;
   };
 }
