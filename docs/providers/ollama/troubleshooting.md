@@ -127,6 +127,11 @@ sidebarTitle: "Troubleshooting"
   </Accordion>
 
   <Accordion title="Repeated tool errors stop the turn">
+    With `tools.toolSearch` unset, embedded runs using native local Ollama expose
+    policy-approved `web_search` and `web_fetch` directly. Explicit Tool Search
+    settings keep their configured behavior. Direct exposure does not enable a
+    denied tool or configure a web-search provider.
+
     OpenClaw stops after three consecutive identical failures for the same tool
     and arguments, including repeated unknown tool IDs. This protection is always
     active; enabling `tools.loopDetection` is not required.
