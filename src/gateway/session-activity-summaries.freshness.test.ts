@@ -94,6 +94,7 @@ describe("Activity recap freshness after transcript writes", () => {
           ?.state,
       ).toBe("current");
       await persistSessionTranscriptTurn(scope, {
+        expectedSessionId: scope.sessionId,
         messages: [
           {
             eventId: "freshness-append",

@@ -209,6 +209,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server/ws-connection/message-handler.control-ui-build-admission.test.ts",
   "src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts",
   "src/gateway/server/ws-connection/message-handler.worker.test.ts",
+  "src/gateway/session-activity-summaries.freshness.test.ts",
   "src/gateway/session-activity-summaries.retry.test.ts",
   "src/gateway/session-activity-summaries.test.ts",
   "src/gateway/session-companion-rpc.test.ts",
