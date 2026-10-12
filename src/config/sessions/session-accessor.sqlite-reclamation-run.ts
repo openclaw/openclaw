@@ -7,18 +7,19 @@ import {
 import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import { hasAgentDatabaseMaintenanceAuthority } from "../../state/openclaw-agent-db-lease.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { captureOpenClawAgentDatabaseValidationTransfer } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   deferOpenClawAgentPostCommitPublication,
   getOpenClawAgentDatabaseIfOpen,
   isIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
+  type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import {
-  captureOpenClawAgentDatabaseExecution,
-  supportsOpenClawAgentDatabaseExecution,
-} from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import type {
   DeleteSessionEntryLifecycleParams,
   SqliteSessionReclamationDiagnostics,
@@ -67,6 +68,15 @@ import { captureSessionEntryNativeMutationWitness } from "./session-entry-read-o
 import { publishSessionLifecycleWorkerEffects } from "./session-lifecycle-worker-publication.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
+function hasNativeReclamationOwner(options: OpenClawAgentDatabaseOptions): boolean {
+  return (
+    !isMainThread ||
+    getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance === true ||
+    hasAgentDatabaseMaintenanceAuthority() ||
+    isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options)
+  );
+}
+
 export async function runSessionDeletionPlanning(
   resolved: ReturnType<typeof resolveSqliteStoreScope>,
   params: DeleteSessionEntryLifecycleParams,
@@ -75,12 +85,11 @@ export async function runSessionDeletionPlanning(
   diagnostics?: SqliteSessionReclamationDiagnostics,
 ): Promise<SessionDeletionPlanningResult> {
   const databaseOptions = toDatabaseOptions(resolved);
-  // Cross-store handoffs retain their original connection identity comparison.
+  // Boot migration handoffs and the remaining incognito owner retain native planning.
   if (
     preparedSessionDeletionRequiresNativeTransaction() ||
     params.expectedDatabaseIdentity !== undefined ||
-    !isMainThread ||
-    !supportsOpenClawAgentDatabaseExecution(databaseOptions)
+    hasNativeReclamationOwner(databaseOptions)
   ) {
     return await runExclusiveSqliteSessionWrite(
       resolved,
@@ -124,7 +133,8 @@ export async function runSqliteSessionReclamation(params: {
     result: Extract<SessionMaintenanceReadResult, { kind: "maintenance-plan" }>,
     assertCurrent: () => void,
   ) => void;
-  forceInProcess: boolean;
+  /** @deprecated Native transactions are selected by the incognito or maintenance owner. */
+  forceInProcess?: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
   onWorkerResult?: (
     result: SqliteSessionReclamationResult,
@@ -135,14 +145,14 @@ export async function runSqliteSessionReclamation(params: {
   if (params.diagnostics) {
     params.diagnostics.kind = params.plan.kind;
   }
-  const nativeAuthority = preparedSessionDeletionRequiresNativeTransaction();
+  // Doctor/migrations retain exclusive native ownership; worker callers cannot redispatch.
+  const native = hasNativeReclamationOwner(params.plan.databaseOptions);
   if (
-    !nativeAuthority &&
+    !native &&
     (params.plan.kind === "entry" ||
       params.plan.kind === "lifecycle-artifacts" ||
       params.plan.kind === "maintenance-finalize" ||
-      params.plan.kind === "lifecycle-projection-commit") &&
-    supportsOpenClawAgentDatabaseExecution(params.plan.databaseOptions)
+      params.plan.kind === "lifecycle-projection-commit")
   ) {
     const participants = captureNativeSessionWorkerDeletion(
       collectReclamationDeletionEntries(params.plan),
@@ -158,18 +168,7 @@ export async function runSqliteSessionReclamation(params: {
       );
     }
   }
-  if (
-    nativeAuthority ||
-    params.forceInProcess ||
-    ((params.plan.kind === "maintenance-plan" ||
-      params.plan.kind === "maintenance-statistics" ||
-      params.plan.kind === "maintenance-age") &&
-      !supportsOpenClawAgentDatabaseExecution(params.plan.databaseOptions)) ||
-    isIncognitoOpenClawAgentSqlitePath(params.plan.databaseOptions.path, {
-      agentId: params.plan.databaseOptions.agentId,
-      env: params.plan.databaseOptions.env,
-    })
-  ) {
+  if (native) {
     return await runExclusiveSqliteSessionWrite(
       params.plan.databaseOptions,
       async () => {

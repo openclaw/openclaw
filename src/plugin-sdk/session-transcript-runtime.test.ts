@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptEvent,
   listSessionEntriesCore,
@@ -49,7 +50,7 @@ import {
   createSessionCatalogGitHubLinker,
   createSessionCatalogSourceActorProjector,
   readSessionTranscriptCatalogPage,
-  readSessionTranscriptCatalogTitle,
+  readSessionTranscriptCatalogTitleAsync,
 } from "./session-transcript-runtime.js";
 
 describe("session transcript runtime SDK", () => {
@@ -399,7 +400,14 @@ describe("native transcript catalog SDK", () => {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       const before = fs.readFileSync(databasePath);
-      const first = await read(2);
+      const sql = observeHostDataSql();
+      let first: Awaited<ReturnType<typeof read>>;
+      try {
+        first = await read(2);
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
       expect(first.items.map((item) => [item.type, item.text])).toEqual([
         ["agentMessage", "Answer"],
         ["agentMessage", "Second answer part"],
@@ -433,13 +441,38 @@ describe("native transcript catalog SDK", () => {
       if (!entry) {
         throw new Error("missing fixture entry");
       }
-      expect(readSessionTranscriptCatalogTitle({ ...scope, entry })).toBe("A useful session title");
-      expect(
-        readSessionTranscriptCatalogTitle({
+      await expect(readSessionTranscriptCatalogTitleAsync({ ...scope, entry })).resolves.toBe(
+        "A useful session title",
+      );
+      await expect(
+        readSessionTranscriptCatalogTitleAsync({
           ...scope,
           entry: { ...entry, label: "Named", displayName: "Display" },
         }),
-      ).toBe("Named");
+      ).resolves.toBe("Named");
+    });
+  });
+
+  it("reads a first title after an in-process append without caller SQL", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await seed([]);
+      const entry = { sessionId: scope.sessionId, updatedAt: 1 };
+      await expect(
+        readSessionTranscriptCatalogTitleAsync({ ...scope, entry }),
+      ).resolves.toBeUndefined();
+      await appendTranscriptMessage(scope, {
+        eventId: "first-title",
+        message: { role: "user", content: "Fresh title after append" },
+      });
+      const sql = observeHostDataSql();
+      try {
+        await expect(readSessionTranscriptCatalogTitleAsync({ ...scope, entry })).resolves.toBe(
+          "Fresh title after append",
+        );
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
     });
   });
 

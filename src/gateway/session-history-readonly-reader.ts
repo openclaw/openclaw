@@ -3,7 +3,10 @@ import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../co
 import { resolveConversationInDatabase } from "../config/sessions/session-accessor.sqlite-conversation-read.js";
 import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptRunInputVisibilityFromProjection } from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
-import { readTranscriptDisplayDeltaFromProjection } from "../config/sessions/session-accessor.sqlite-history-query.js";
+import {
+  readSessionTranscriptHistoryEventPageFromProjection,
+  readTranscriptDisplayDeltaFromProjection,
+} from "../config/sessions/session-accessor.sqlite-history-query.js";
 import {
   readCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
@@ -148,6 +151,12 @@ export function createReadonlySessionHistoryReader(
     readBoundedMessageTail: (options: SessionTranscriptBoundedMessageTailOptions) =>
       readSnapshot((projection) =>
         readSessionTranscriptBoundedMessageTailPageFromProjection(projection, options),
+      ),
+    readCatalogPage: (
+      options: Parameters<typeof readSessionTranscriptHistoryEventPageFromProjection>[1],
+    ) =>
+      readSnapshot((projection) =>
+        readSessionTranscriptHistoryEventPageFromProjection(projection, options),
       ),
     readArtifactSummaries: async (query: Extract<SessionArtifactReadQuery, { kind: "list" }>) => {
       const { readArtifactSummariesFromProjection } = await import("./session-artifact-read.js");

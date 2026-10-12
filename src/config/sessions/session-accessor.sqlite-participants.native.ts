@@ -7,7 +7,6 @@ import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
   deferOpenClawAgentPostCommitPublication,
-  getOpenClawAgentDatabaseIfOpen,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -156,13 +155,8 @@ function recordSessionParticipantWithAliasRead(
     return existing ? "updated" : "inserted";
   };
   if (transaction) {
-    if (getOpenClawAgentDatabaseIfOpen(options) !== transaction || !transaction.db.isTransaction) {
-      throw new Error("Session participant write lost its owning transaction");
-    }
     assertTransactionUsable(transaction.db);
-    const result = write(transaction);
-    assertTransactionUsable(transaction.db);
-    return result;
+    return write(transaction);
   }
   return runOpenClawAgentWriteTransaction(write, options, {
     operationLabel: "sessions.record-participant",

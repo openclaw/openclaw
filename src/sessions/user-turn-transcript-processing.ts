@@ -1,6 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
 import type { SessionPendingInputReceipt } from "../config/sessions/session-accessor.pending-inputs.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
 
 /** Adapt the released synchronous callback only when no async companion is provided. */
@@ -44,6 +45,13 @@ export function createUserTurnProcessingCompletion(
       if (!pendingInput?.complete) {
         return undefined;
       }
+      warnPluginSdkDeprecation({
+        family: "session-input-completion",
+        method: "UserTurnTranscriptRecorder.completeProcessing",
+        replacement: "await UserTurnTranscriptRecorder.completeProcessingAsync(outcome)",
+        compatibility: "Synchronous completion remains supported until the next Plugin SDK major.",
+        code: "DEP_SESSION_INPUT_COMPLETION",
+      });
       if (!processingCompletion) {
         if (processingCompletionPromise) {
           throw new Error("Input completion is pending; await completeProcessingAsync");

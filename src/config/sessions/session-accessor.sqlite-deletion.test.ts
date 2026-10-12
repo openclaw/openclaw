@@ -1,13 +1,17 @@
 import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type {
   AgentHarness,
@@ -15,6 +19,8 @@ import type {
 } from "../../agents/harness/types.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   markPluginRegistryActive,
@@ -33,7 +39,6 @@ import * as personalPublicationLifecycle from "../../state/github-personal-publi
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
@@ -664,7 +669,17 @@ describe("session deletion and native owner state", () => {
     expect(read()).toMatchObject({ sessionId });
     expect(bindings.has(sessionKey)).toBe(true);
 
-    await expect(owner.run(() => remove())).resolves.toMatchObject({ deleted: true });
+    const sql = observeHostDataSql();
+    try {
+      await expect(owner.run(() => remove())).resolves.toMatchObject({ deleted: true });
+      expect(
+        sql.queries.filter((query) =>
+          /\b(?:session_nodes|session_windows|transcript_events)\b/i.test(query),
+        ),
+      ).toEqual([]);
+    } finally {
+      sql.restore();
+    }
 
     expect(read()).toBeUndefined();
     expect(bindings.has(sessionKey)).toBe(false);
@@ -687,11 +702,17 @@ describe("session deletion and native owner state", () => {
           ? "native session is supervised"
           : "injected session delete failure";
       if (phase === "SQLite transaction") {
-        const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-        const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-        database.db.exec(
-          "CREATE TEMP TRIGGER reject_session_delete BEFORE DELETE ON session_nodes BEGIN SELECT RAISE(ABORT, 'injected session delete failure'); END",
-        );
+        probe.admission(workerAdmission, (request, grant, callback) => {
+          const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+          if (
+            request.stage === "commit" &&
+            isRecord(facts) &&
+            facts.kind === "session-native-binding"
+          ) {
+            throw new Error(failure);
+          }
+          callback(request, grant);
+        });
       }
       const owner = nativeOwner({
         prepare: async () => {
@@ -704,7 +725,7 @@ describe("session deletion and native owner state", () => {
 
       await expect(owner.run(() => remove())).rejects.toThrow(failure);
 
-      expect(afterCommit).toHaveBeenCalledTimes(phase === "SQLite transaction" ? 1 : 0);
+      expect(afterCommit).not.toHaveBeenCalled();
       expect(read()).toEqual(entryBefore);
       expect(await loadTranscriptEvents({ sessionKey, sessionId, storePath })).toEqual(events);
       expect(bindings.get(sessionKey)).toBe(`thread:${sessionKey}`);
@@ -714,26 +735,33 @@ describe("session deletion and native owner state", () => {
   it("keeps deletion successful and the binding absent when a publication observer fails", async () => {
     await seed();
     const owner = nativeOwner();
+    const listener = vi.fn(() => {
+      throw new Error("injected publication failure");
+    });
+    const unsubscribe = onSessionIdentityMutation(listener);
 
-    await expect(
-      owner.run(() =>
-        applySessionEntryLifecycleMutation({
-          storePath,
-          removals: [{ sessionKey }],
-          skipMaintenance: true,
-          beforeCommitInTransaction: () => {
-            const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-            const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-            deferOpenClawAgentPostCommitPublication(database, () => {
-              throw new Error("injected publication failure");
-            });
-          },
+    try {
+      await expect(
+        owner.run(() =>
+          applySessionEntryLifecycleMutation({
+            storePath,
+            removals: [{ sessionKey }],
+            skipMaintenance: true,
+          }),
+        ),
+      ).resolves.toMatchObject({ removedSessionKeys: [sessionKey] });
+
+      expect(listener).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          kind: "delete",
+          previous: { sessionId, sessionKeys: [sessionKey] },
         }),
-      ),
-    ).resolves.toMatchObject({ removedSessionKeys: [sessionKey] });
-
-    expect(read()).toBeUndefined();
-    expect(bindings.has(sessionKey)).toBe(false);
+      );
+      expect(read()).toBeUndefined();
+      expect(bindings.has(sessionKey)).toBe(false);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("publishes committed deletion when personal publication receipt cleanup fails", async () => {
@@ -767,24 +795,24 @@ describe("session deletion and native owner state", () => {
     }
   });
 
-  it("compensates partial commits even when another rollback fails", async () => {
+  it("keeps requested deletions durable when legacy companion cleanup fails", async () => {
     await seed();
     await seed(baseKey);
+    const survivorKey = "agent:main:survivor";
+    await seed(survivorKey);
     const commitError = new Error("companion commit failed after mutation");
-    const rollbackError = new Error("companion rollback reported failure");
     let commits = 0;
-    let rollbacks = 0;
+    const rollback = vi.fn();
+    const committedKeys: string[] = [];
     const owner = nativeOwner({
-      afterCommit: () => {
+      afterCommit: (key) => {
+        expect(read(key)).toBeUndefined();
+        committedKeys.push(key);
         if (++commits === 2) {
           throw commitError;
         }
       },
-      afterRollback: () => {
-        if (++rollbacks === 1) {
-          throw rollbackError;
-        }
-      },
+      afterRollback: rollback,
     });
     const deletion = owner.run(() =>
       applySessionEntryLifecycleMutation({
@@ -793,14 +821,17 @@ describe("session deletion and native owner state", () => {
         removals: [{ sessionKey: baseKey }, { sessionKey }],
       }),
     );
-    await expect(deletion).rejects.toMatchObject({
-      cause: commitError,
-      errors: [commitError, rollbackError],
+    await expect(deletion).resolves.toMatchObject({
+      removedSessionKeys: [baseKey, sessionKey],
     });
-    expect(read()?.sessionId).toBe(sessionId);
-    expect(read(baseKey)?.sessionId).toBe(sessionId);
-    expect(bindings.get(sessionKey)).toBe(`thread:${sessionKey}`);
-    expect(bindings.get(baseKey)).toBe(`thread:${baseKey}`);
+    expect(committedKeys).toEqual([baseKey, sessionKey]);
+    expect(rollback).not.toHaveBeenCalled();
+    expect(read()).toBeUndefined();
+    expect(read(baseKey)).toBeUndefined();
+    expect(bindings.has(sessionKey)).toBe(false);
+    expect(bindings.has(baseKey)).toBe(false);
+    expect(read(survivorKey)?.sessionId).toBe(sessionId);
+    expect(bindings.get(survivorKey)).toBe(`thread:${survivorKey}`);
   });
 
   it.for(["prepare", "finalize"] as const)(

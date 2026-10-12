@@ -399,8 +399,12 @@ export async function applySessionEntryLifecycleMutation(
     }
     const archivedTranscripts = [...publishedRemovalTranscripts, ...maintenanceArchivedTranscripts];
     const afterCount =
-      reclamationOptions && execution
-        ? await readSessionEntryLifecycleCountInWorker({ database: reclamationOptions, execution })
+      isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions)
+        ? await readSessionEntryLifecycleCountInWorker({
+            database:
+              reclamationOptions ?? resolveSessionReclamationDatabaseOptions(databaseOptions),
+            execution,
+          })
         : readSessionEntryCount(openOpenClawAgentDatabase(databaseOptions));
     emitArchivedTranscriptUpdates(archivedTranscripts);
     const archivedTranscriptDirectories = uniqueStrings(

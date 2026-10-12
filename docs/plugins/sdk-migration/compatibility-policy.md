@@ -34,6 +34,28 @@ Synchronous compatibility calls still commit before returning. Awaited mutations
 complete only after committed facts have been installed. SessionManager and its
 extension/provider adapters share the session-persistence warning budget.
 
+### Harness deletion companions
+
+Unbound `AgentHarnessSessionDeletionMutation` callbacks are deprecated. During
+Gateway operation, OpenClaw commits file-backed session deletion in its worker before
+calling the opaque `commit` callback. It does not invoke the opaque `rollback`
+callback when that database transaction fails, because the companion has not
+been changed. Legacy use emits one deprecation warning per plugin and callback
+family. The unbound callback contract is removed in the next Plugin SDK major.
+
+Wrap best-effort external cleanup in `createNativeSessionCommitFinalizer` from
+`openclaw/plugin-sdk/agent-harness-session-runtime`. A failed legacy callback is
+logged as a cleanup warning; it does not undo an acknowledged session deletion.
+A process exit after the session commit can leave companion cleanup unfinished,
+so cleanup must tolerate an absent session and be safe to retry.
+
+Use the existing native session binding lifecycle for reversible plugin-state
+changes that must settle with session deletion. Its worker receipt and rollback
+preserve those storage guarantees. Initializer rollback is marked complete only
+after the same receipt acknowledges deletion. Explicit stopped-owner Doctor/CLI
+maintenance retains its admitted native transaction, as does the process-local
+incognito owner during its separate migration.
+
 ### Retained helper contracts
 
 Transcript append and lock preparation now uses
@@ -519,7 +541,9 @@ Process-held incognito stores keep their native owner.
 Bundled memory search and memory-forget use the awaited readers. The synchronous
 exports retain their signatures and behavior for existing consumers until removal
 at the next Plugin SDK major. Deprecation is communicated through JSDoc and the
-compatibility registry; these readers emit no runtime warnings.
+compatibility registry, and a runtime warning once per plugin and reader family.
+The retained synchronous selector can still query participant rows on the calling
+thread; its awaited replacement keeps that work in the session worker.
 
 The prepared incognito actor adapters remain inactive for ordinary unbound
 calls. Under an explicit actor binding, Memory entry, reset-cutoff, corpus, and

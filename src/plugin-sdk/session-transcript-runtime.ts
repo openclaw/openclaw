@@ -82,6 +82,7 @@ export { hasPromptImageInput } from "../media/prompt-image-input.js";
 export {
   readSessionTranscriptCatalogPage,
   readSessionTranscriptCatalogTitle,
+  readSessionTranscriptCatalogTitleAsync,
   type SessionTranscriptCatalogPage,
 } from "../gateway/session-transcript-catalog.js";
 export {

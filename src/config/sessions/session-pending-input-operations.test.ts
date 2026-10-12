@@ -317,6 +317,38 @@ it.each(["cancelled", "consumed", "failed"] as const)(
   },
 );
 
+it("preserves synchronous SDK recorder completion until callers migrate to async", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const fixture = createFixture();
+    const recorder = createUserTurnTranscriptRecorder({
+      message: message("legacy-completion"),
+      trackInputCompletion: true,
+      target: {
+        ...scope,
+        storePath: fixture.database.path,
+        sessionEntry: { sessionId: scope.sessionId, updatedAt: 1 },
+      },
+    });
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      expect(
+        await recorder.stageApproved?.({ runId: "legacy-completion", assertCurrent: () => {} }),
+      ).toBe(true);
+      const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
+      expect(recorder.completeProcessing?.(outcome)).toEqual(outcome);
+      expect(
+        fixture.database.db.prepare("SELECT outcome_json FROM session_input_completions").get(),
+      ).toEqual({ outcome_json: JSON.stringify(outcome) });
+      expect(fixture.pending()).toEqual([]);
+      expect(await recorder.completeProcessingAsync?.(outcome)).toEqual(outcome);
+    } finally {
+      warning.mockRestore();
+      recorder.finishPendingInput?.("interrupted");
+      await recorder.waitForPendingInputSettlement?.();
+    }
+  });
+});
+
 it("retains cancellation disposition custody while accepted processing completion is waiting", async ({
   signal,
 }) => {

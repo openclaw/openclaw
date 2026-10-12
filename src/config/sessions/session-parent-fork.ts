@@ -1,21 +1,13 @@
 import path from "node:path";
-import { isMainThread } from "node:worker_threads";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { retainSqliteWorkerErrorCode } from "../../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { getChildLogger } from "../../logging/logger.js";
-import {
-  isIncognitoSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import {
-  captureOpenClawAgentDatabaseExecution,
-  supportsOpenClawAgentDatabaseExecution,
-} from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { forkCliSessionBindings } from "./cli-session-binding.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
@@ -38,7 +30,6 @@ import type {
   ParentForkEntryParams,
   ParentForkEntryPatch,
 } from "./session-parent-fork.types.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import { captureSessionStoreCandidateIdentities } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
@@ -58,20 +49,6 @@ type ForkOwner = Pick<
   "scope" | "database" | "assertCurrent" | "prepareEntry" | "readSource" | "restore" | "commit"
 >;
 type ForkDiscoveryOwner = Parameters<Parameters<typeof withSessionStoreTarget>[1]>[1];
-
-/** Native callbacks, incognito, and maintenance retain their existing owner. */
-export function supportsParentForkWorker(scope: ForkStoreScope): boolean {
-  if (!isMainThread || isIncognitoSessionKey(scope.sessionKey)) {
-    return false;
-  }
-  const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(scope.storePath);
-  return supportsOpenClawAgentDatabaseExecution({
-    agentId: normalizeAgentId(
-      scope.agentId ?? parseAgentSessionKey(scope.sessionKey)?.agentId ?? target.agentId,
-    ),
-    path: target.path,
-  });
-}
 
 function withForkWorkers<T>(
   scopes: { source: ForkStoreScope; target?: ForkStoreScope },
@@ -328,23 +305,21 @@ export async function forkParentEntryInWorker(
         return { status: "missing-entry" as const };
       }
       const skipExisting = plannedPatch?.skipExisting && prepared.base.sessionId?.trim();
-      let cliSessionBindings;
+      let cliForkProviders: string[] | undefined;
       if (!skipExisting) {
         await owner.restore(prepared.parentEntry.sessionId);
         const { cliBackendSupportsSessionFork } = await import("../../agents/cli-backends.js");
         owner.assertCurrent();
-        cliSessionBindings = forkCliSessionBindings(
-          prepared.parentEntry,
-          cliBackendSupportsSessionFork,
+        cliForkProviders = Object.keys(
+          forkCliSessionBindings(prepared.parentEntry, cliBackendSupportsSessionFork) ?? {},
         );
       }
       const result = await owner.commit({
         kind: "entry",
         agentId: owner.scope.agentId,
         params: planned,
-        prepared,
         patch: plannedPatch,
-        cliSessionBindings,
+        cliForkProviders,
       });
       if (result.status === "created" || result.status === "too-large") {
         throw new Error("Parent entry fork returned a transcript-only result");

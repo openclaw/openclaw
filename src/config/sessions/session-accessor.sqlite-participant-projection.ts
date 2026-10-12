@@ -61,10 +61,7 @@ const singleSessionParticipantQuery = createSqliteQueryCache((database) => {
         return last.rows;
       }
       const rows = query(key).rows;
-      last =
-        revision && getSqliteReadScopeRevision(database) === revision
-          ? { key, revision, rows }
-          : undefined;
+      last = revision ? { key, revision, rows } : undefined;
       return rows;
     });
 });

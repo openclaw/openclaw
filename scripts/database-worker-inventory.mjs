@@ -131,6 +131,54 @@ const reviewed = new Map([
     { priority: 2, evidence: "Session-entry read kernel; inspect each caller's execution context" },
   ],
   [
+    "src/config/sessions/session-accessor.sqlite-pending-inputs.ts",
+    {
+      priority: 2,
+      evidence:
+        "Completion uses the async pending-input owner; transcript append/consume kernels still serve released native transcript callbacks and incognito. Keep mixed SQL counted until those writer APIs cut over.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-pending-input-receipts.ts",
+    {
+      priority: 2,
+      evidence:
+        "Public receipt reads use session-pending-input-receipts.ts and the history worker; this native kernel also serves the explicitly retained incognito fallback.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-read.ts",
+    {
+      priority: 2,
+      evidence:
+        "Bundled SDK transcript consumers use async readers; deprecated SessionManager and synchronous SDK readers, native mutation callbacks, and incognito still reach shared kernels.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-projection-read.ts",
+    {
+      priority: 2,
+      evidence:
+        "Catalog and status reads use history workers; deprecated synchronous catalog-title/SessionManager readers and native incognito still share the projection kernel.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-provenance.ts",
+    {
+      priority: 2,
+      evidence:
+        "Window postimages serve worker writes and native writeSessionEntry callbacks. Cross-store membership/conversation authority and deprecated synchronous SDK mutation contracts retain native access; initializer deletion now uses the worker.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-reclamation.ts",
+    {
+      priority: 2,
+      evidence:
+        "Durable reclamation uses the mutation worker, including initializer rollback and postcommit harness cleanup. The shared kernel retains its explicitly excluded process-local incognito caller in runSqliteSessionReclamation.",
+    },
+  ],
+  [
     "src/config/sessions/session-transcript-search.ts",
     {
       priority: 4,

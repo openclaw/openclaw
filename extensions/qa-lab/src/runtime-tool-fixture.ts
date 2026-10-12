@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { loadTranscriptEventsSync } from "openclaw/plugin-sdk/session-store-runtime";
+import { loadTranscriptEvents } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   asBoolean,
   isRecord,
@@ -315,7 +315,7 @@ async function readSessionTranscriptBytes(
   if (!sessionId) {
     throw new Error(`session transcript entry not found for ${sessionKey}`);
   }
-  const transcriptBytes = loadTranscriptEventsSync({
+  const events = await loadTranscriptEvents({
     agentId: "qa",
     env: {
       ...process.env,
@@ -323,9 +323,8 @@ async function readSessionTranscriptBytes(
     },
     sessionId,
     sessionKey,
-  })
-    .map((event) => JSON.stringify(event))
-    .join("\n");
+  });
+  const transcriptBytes = events.map((event) => JSON.stringify(event)).join("\n");
   if (!transcriptBytes.trim()) {
     throw new Error(`session transcript is empty for ${sessionKey}`);
   }

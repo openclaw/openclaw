@@ -22,6 +22,7 @@ import type { LegacyCompactionMetrics } from "./legacy-compaction-history.js";
 import type {
   SessionTranscriptBoundedMessageTailOptions,
   SessionTranscriptBoundedMessageTailPage,
+  SessionTranscriptMessageEventPage,
 } from "./session-accessor.sqlite-projection-read.js";
 import type {
   SessionTranscriptRawDeltaLimits,
@@ -181,6 +182,13 @@ export type ChatHistoryDisplayResult =
 
 export type SessionHistoryWorkerRequest =
   | {
+      kind: "catalog-page";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: { offset: number; maxMessages: number; maxBytes: number };
+      };
+    }
+  | {
       kind: "active-accounting";
       params: { target: SessionTranscriptReadScope; options: SessionTranscriptAccountingOptions };
     }
@@ -271,6 +279,7 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "catalog-page"; result: SessionTranscriptMessageEventPage }
   | { kind: "active-accounting"; result: SessionTranscriptAccountingSnapshot }
   | { kind: "bounded-tail"; result: SessionTranscriptBoundedMessageTailPage }
   | { kind: "inline-visibility"; subagentCoordination: SessionHistorySubagentFacts }
