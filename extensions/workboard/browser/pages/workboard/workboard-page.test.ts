@@ -369,14 +369,14 @@ it.each([
     page.fixture.connection.connected = true;
     page.fixture.notify();
 
-    await afterWorkboardUpdate(() => expect(observe).toHaveBeenCalledOnce());
-    await afterWorkboardUpdate(() =>
+    await afterWorkboardUpdate(() => {
+      expect(observe).toHaveBeenCalledOnce();
       expect(
         page.container
           .querySelector(".workboard-detail .workboard-session-badge")
           ?.textContent?.trim(),
-      ).toBe(label),
-    );
+      ).toBe(label);
+    });
     expect(page.fixture.host.components.mountSessionSummary).not.toHaveBeenCalled();
 
     page.container.querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')!.click();
@@ -569,15 +569,13 @@ it.each(["canWrite", "connected"] as const)(
       expect(form.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false),
     );
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    await afterWorkboardUpdate(() =>
+    await afterWorkboardUpdate(() => {
       expect(page.request).toHaveBeenCalledWith("workboard.boards.upsert", {
         id: "planning",
         name: "Release planning",
-      }),
-    );
-    await afterWorkboardUpdate(() =>
-      expect(page.container.querySelector(".workboard-board-draft")).toBeNull(),
-    );
+      });
+      expect(page.container.querySelector(".workboard-board-draft")).toBeNull();
+    });
   },
 );
 
@@ -690,17 +688,17 @@ describe("selection reconciliation", () => {
         ),
       ];
       pending.reject(new Error("Save unavailable; retry this edit."));
-      await afterWorkboardUpdate(() => expect(page.workboard.state.draftSaving).toBe(false));
+      await afterWorkboardUpdate(() => {
+        expect(page.workboard.state.draftSaving).toBe(false);
+        expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
+          "Save unavailable; retry this edit.",
+        );
+      });
 
       expect(pendingTitle).toBe("Submitted task");
       expect(pendingNotes).toBe("Keep these unsaved notes");
       expect(pendingBusy).toBe("true");
       expect(enabledControls).toHaveLength(0);
-      await afterWorkboardUpdate(() =>
-        expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
-          "Save unavailable; retry this edit.",
-        ),
-      );
       const toast = expectDefined(visibleToast(page.container), "retry guidance");
       expect(toast.closest('[inert], [aria-hidden="true"]')).toBeNull();
       expect(toast.closest("[data-test-dialog]")).toBe(form().closest("[data-test-dialog]"));
