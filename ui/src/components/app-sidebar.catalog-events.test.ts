@@ -16,6 +16,13 @@ import "../test-helpers/app-sidebar-suite.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "./app-sidebar.ts";
 
+// Capture JSDOM's frame owner before the sidebar fixture installs its scheduler.
+const requestNativeFrame = window.requestAnimationFrame.bind(window);
+const cancelNativeFrame = window.cancelAnimationFrame.bind(window);
+const catalogClock: Parameters<typeof vi.useFakeTimers>[0] = {
+  toFake: ["setTimeout", "clearTimeout", "Date"],
+};
+
 async function mountTab(
   request = createGatewayRequestMock().mockResolvedValue(
     catalogPage([{ threadId: "stable", name: "Stable catalog" }]),
@@ -42,8 +49,8 @@ async function mountTab(
 
 describe("AppSidebar catalog event refresh", () => {
   beforeEach(() => {
-    // Keep jsdom's native animation intervals paired with native cleanup.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    // Catalog retries use timeouts; JSDOM retains its native frame interval.
+    vi.useFakeTimers(catalogClock);
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -146,7 +153,12 @@ describe("AppSidebar catalog event refresh", () => {
   });
 
   it("keeps agent startup quiet past three minutes and surfaces a later inspection failure", async () => {
+    // JSDOM may already own a native frame when the catalog clock takes over.
+    vi.useRealTimers();
+    const pendingFrame = requestNativeFrame(() => undefined);
+    vi.useFakeTimers(catalogClock);
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    cancelNativeFrame(pendingFrame);
     const request = createGatewayRequestMock().mockRejectedValue(
       new GatewayRequestError({
         code: "UNAVAILABLE",

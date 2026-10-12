@@ -35,7 +35,7 @@ import {
   createSessionActivitySummaries,
   type SessionActivitySummaryService,
 } from "./session-activity-summaries.js";
-import { readActivitySummaryBatch } from "./session-activity-summary-source.js";
+import { readActivitySummaryBatch } from "./session-activity-summary-source.worker.js";
 import {
   projectSessionActivitySummary,
   type ActivitySummaryTarget,

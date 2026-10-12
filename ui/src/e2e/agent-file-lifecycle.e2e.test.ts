@@ -1,5 +1,4 @@
 // Control UI E2E tests cover visible agent-file save outcomes and agent ownership.
-import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import { expect, it } from "vitest";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -115,9 +114,7 @@ suite.define(() => {
         const tooltipHost = modal.locator("openclaw-tooltip:has(.md-preview-expand-btn)");
         // Hover-intent timing is covered by the tooltip owner's fake-clock tests.
         await tooltipHost.evaluate((element) => element.setAttribute("delay", "0"));
-        const tooltip = tooltipHost.locator("wa-tooltip");
-        const body = tooltip.locator('[part="body"]');
-        const popup = tooltip.locator('wa-popup [part="popup"]');
+        const tooltip = tooltipHost.locator(".tooltip-surface[popover]");
         const hint = tooltip.locator(".tooltip-content");
         const settlePreview = async () => {
           await waitForControlUiProofSurface(dialog, [reader]);
@@ -126,15 +123,20 @@ suite.define(() => {
         const assertHint = async (label: string, screenshot: string) => {
           await reader.hover();
           await expand.hover();
-          await waitForControlUiProofSurface(popup, [body, hint, expand]);
+          await waitForControlUiProofSurface(tooltip, [hint, expand]);
           const trigger = await expand.elementHandle();
           expect(trigger).not.toBeNull();
           try {
             expect(
-              await tooltip.evaluate(
-                (element, anchor) => (element as WaTooltip).anchor === anchor,
-                trigger,
-              ),
+              await tooltipHost.evaluate((element, anchor) => {
+                const host = element as HTMLElement & { anchor?: Element | null };
+                const tooltipAnchor =
+                  host.anchor ??
+                  host.shadowRoot
+                    ?.querySelector<HTMLSlotElement>("slot:not([name])")
+                    ?.assignedElements({ flatten: true })[0];
+                return tooltipAnchor === anchor;
+              }, trigger),
             ).toBe(true);
           } finally {
             await trigger?.dispose();

@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
@@ -29,6 +33,7 @@ afterEach(() => {
   for (const operation of operations.splice(0)) {
     operation.complete();
   }
+  clearRuntimeConfigSnapshot();
 });
 beforeAll(() => {
   // openclaw-temp-dir: allow suite database root drains before removal
@@ -55,6 +60,7 @@ async function createFixture(selected = diagnostic) {
     model: selected.model,
   };
   const cfg: OpenClawConfig = { session: { store: storePath } };
+  setRuntimeConfigSnapshot(cfg);
   await replaceSessionEntry({ storePath, sessionKey }, entry);
   const replyOperation = createReplyOperation({
     sessionId: entry.sessionId,

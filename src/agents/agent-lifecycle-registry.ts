@@ -22,6 +22,7 @@ import {
   assertAgentDeletionFinalInDatabase,
   assertAgentDeletionLeaseFinal,
 } from "../state/agent-deletion-final-guard.js";
+import { getOrLoadAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
 import type {
   AgentDeletionInput,
   AgentDeletionJournalTransport,
@@ -42,6 +43,7 @@ import type { AgentProvenance } from "../state/agent-provenance.js";
 import { prepareOpenClawAgentDatabaseRegistryRemoval } from "../state/openclaw-agent-db-registry-listing.js";
 import { invalidateOpenClawAgentDatabaseValidationsForAgent } from "../state/openclaw-agent-db-validation-cache.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
+import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
@@ -49,6 +51,7 @@ import type {
 import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseCurrentReadOnly,
+  withCurrentOpenClawStateReadScope,
 } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -578,11 +581,25 @@ export function isAgentDeletionBlocked(
   options: OpenClawStateDatabaseOptions = {},
   database?: DatabaseSync,
 ): boolean {
-  return Boolean(
-    database
-      ? readAgentDeletionJournalInDatabase({ db: database }, agentId, "runtime")
-      : readAgentDeletionJournal(agentId, options, "runtime"),
-  );
+  if (database) {
+    return Boolean(readAgentDeletionJournalInDatabase({ db: database }, agentId, "runtime"));
+  }
+  return withCurrentOpenClawStateReadScope(options, (statePath) => {
+    // An active native transaction can see its own uncommitted deletion or rollback.
+    // The process-wide fact deliberately represents only committed journal state.
+    const opened = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(statePath, {
+      readOnly: true,
+    });
+    if (opened?.db.isTransaction) {
+      return Boolean(readAgentDeletionJournal(agentId, options, "runtime"));
+    }
+    return (
+      getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => {
+        const journal = readAgentDeletionJournal(agentId, options, "runtime");
+        return journal ? (journal.cleanupCompleted ? "complete" : "pending") : "absent";
+      }) !== "absent"
+    );
+  });
 }
 
 /** Keep persisted identity stable until the winning deletion completes or rolls back. */

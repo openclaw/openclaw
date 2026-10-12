@@ -34,10 +34,8 @@ import {
   recordAcquiringSessionEntry,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
 import type { SessionEntryMetadataReceipt } from "./session-entry-metadata-receipt.js";
-import {
-  retainSessionTranscriptWorkerPublication,
-  type SessionTranscriptAuthorityReceipt,
-} from "./session-transcript-authority.js";
+import { retainSessionTranscriptWorkerPublication } from "./session-transcript-authority.js";
+import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import type { SessionEntry } from "./types.js";
 
 /** A confirmed worker result invalidates row facts without opening a parent connection. */

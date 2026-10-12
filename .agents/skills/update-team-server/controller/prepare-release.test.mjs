@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,6 +9,128 @@ const source = readFileSync(new URL("./openclaw-release-deploy", import.meta.url
 const operation = source.match(/^prepare_release\(\) \{[\s\S]*?^\}/m)?.[0];
 assert.ok(operation);
 const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
+
+test("publishes standalone exact-commit releases with an inode-independent reusable package store", t => {
+  const root = mkdtempSync(join(tmpdir(), "team-publish-build-"));
+  t.after(() => {
+    spawnSync("chmod", ["-R", "u+w", root]);
+    rmSync(root, { recursive: true, force: true });
+  });
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+    GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+    OPENCLAW_TEAM_ROOT_GID: String(process.getgid()) };
+  const run = (command, args, cwd = root) => {
+    const result = spawnSync(command, args, { cwd, env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  const cp = process.platform === "darwin" ? "gcp" : "cp";
+  const mv = process.platform === "darwin" ? "gmv" : "mv";
+  if ([cp, mv].some(command => spawnSync(command, ["--version"]).status !== 0)) {
+    t.skip("GNU coreutils are required for the Linux controller's publication");
+    return;
+  }
+  const repository = join(root, "source"), buildHome = join(root, "build"), serving = join(root, "serving");
+  for (const directory of [repository, join(root, "package"), join(buildHome, "work"), join(buildHome, "cache"), join(serving, "staging"), join(serving, "releases")]) {
+    mkdirSync(directory, { recursive: true });
+  }
+  writeFileSync(join(root, "package/package.json"), JSON.stringify({ name: "fixture-dependency", version: "1.0.0" }));
+  const content = "module.exports = 'original dependency';\n";
+  writeFileSync(join(root, "package/index.js"), content);
+  run("tar", ["-czf", join(repository, "dependency.tgz"), "package"]);
+  writeFileSync(join(repository, "package.json"), JSON.stringify({
+    name: "fixture-release", version: "1.0.0", openclaw: { schemaVersions: { state: 1, agent: 1 } },
+    scripts: { build: "node fixture-build.cjs" }, dependencies: { "fixture-dependency": "file:./dependency.tgz" },
+  }));
+  writeFileSync(join(repository, "pnpm-workspace.yaml"), "packages: []\n");
+  writeFileSync(join(repository, "fixture-build.cjs"), `
+    const fs = require('node:fs');
+    const head = require('node:child_process').execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim();
+    fs.mkdirSync('dist/control-ui/assets', {recursive:true});
+    for (const name of ['.buildstamp', '.runtime-postbuildstamp']) fs.writeFileSync('dist/'+name, JSON.stringify({head}));
+    fs.writeFileSync('dist/build-info.json', JSON.stringify({commit:head, buildId:head}));
+    fs.writeFileSync('dist/index.js', 'fixture();');
+    fs.writeFileSync('dist/control-ui/index.html', '<script src="./assets/app.js"></script>');
+    fs.writeFileSync('dist/control-ui/assets/app.js', 'fixture();');
+  `);
+  run("pnpm", ["install", "--lockfile-only", "--ignore-scripts"], repository);
+  run("git", ["init", repository]);
+  run("git", ["add", "."], repository);
+  writeFileSync(join(repository, "retired-source"), "historical source excluded from releases");
+  run("git", ["add", "."], repository);
+  run("git", ["commit", "-m", "fixture baseline"], repository);
+  const retiredBlob = run("git", ["rev-parse", "HEAD:retired-source"], repository);
+  rmSync(join(repository, "retired-source"));
+  run("git", ["add", "-u"], repository);
+  run("git", ["commit", "-m", "fixture target"], repository);
+  const target = run("git", ["rev-parse", "HEAD"], repository);
+  writeFileSync(join(repository, "next-source"), "next revision");
+  run("git", ["add", "."], repository);
+  run("git", ["commit", "-m", "fixture successor"], repository);
+  const successor = run("git", ["rev-parse", "HEAD"], repository);
+  const library = new URL("./release-lib.mjs", import.meta.url).pathname;
+  const publish = source.match(/^publish_release\(\) \([\s\S]*?^\)/m)?.[0];
+  assert.ok(publish);
+  const program = `set -euo pipefail
+build_home=${quote(buildHome)}; work_root="$build_home/work"
+runtime_home=${quote(join(root, "runtime"))}
+serving_root=${quote(serving)}; releases_root="$serving_root/releases"
+mirror=${quote(repository)}; official_origin=https://github.com/openclaw/openclaw.git
+root_uid=${process.getuid()}; root_gid=${process.getgid()}; deploy_file_uid=$root_uid; deploy_gid=$root_gid
+node_bin=${quote(process.execPath)}; release_lib=${quote(library)}; frozen_main=${quote(successor)}
+clone_budget=30; build_budget=30; mirror_git_config=(-c gc.auto=0 -c maintenance.auto=false)
+run_build() { "$@"; }
+bounded_build() { shift; "$@"; }
+bounded() { shift; "$@"; }
+fail() { printf '%s\\n' "$*" >&2; exit 1; }
+proof() { [[ "$1" != release-capacity ]] || return 0; "$node_bin" --no-warnings "$release_lib" "$@"; }
+prewarm_release() { :; }
+chown() { command chown -hR "$root_uid:$root_gid" "$3"; }
+cp() { command ${quote(cp)} "$@"; }
+# A non-root fixture cannot rename the sealed directory on macOS; restore its mode before validation.
+mv() { chmod u+w "$2"; command ${quote(mv)} "$@"; chmod a-w "$3"; }
+${source.match(/^clean_candidate\(\) \{[\s\S]*?^\}/m)[0]}
+${source.match(/^cleanup_candidate_failure\(\) \{[\s\S]*?^\}/m)[0]}
+${publish}
+publish_release "$1" "$mirror"
+`;
+  run("bash", ["-c", program, "publish", target]);
+  const release = join(serving, "releases", target);
+  assert.equal(run("git", ["rev-parse", "HEAD"], release), target);
+  assert.equal(run("git", ["remote", "get-url", "origin"], release), "https://github.com/openclaw/openclaw.git");
+  assert.notEqual(spawnSync("git", ["cat-file", "-e", retiredBlob], { cwd: release }).status, 0,
+    "the release must not carry unrelated source history");
+  assert.equal(existsSync(join(release, ".git/objects/info/alternates")), false);
+  const dependency = join(release, "node_modules/fixture-dependency/index.js");
+  const storeFiles = [];
+  const walk = directory => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const file = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        walk(file);
+      } else if (entry.isFile() && readFileSync(file, "utf8") === content) {
+        storeFiles.push(file);
+      }
+    }
+  };
+  walk(join(buildHome, "cache/store"));
+  assert.ok(storeFiles.length, "successful publication retains pnpm's content-addressed store");
+  for (const file of storeFiles) {
+    assert.notEqual(statSync(file).ino, statSync(dependency).ino, "sealed dependency cannot share its store inode");
+    assert.ok(statSync(file).mode & 0o200, "sealing cannot chmod the retained store");
+  }
+  run("bash", ["-c", program, "publish", successor]);
+  for (const file of storeFiles) {
+    writeFileSync(file, "changed writable cache\n");
+  }
+  rmSync(repository, { recursive: true, force: true });
+  assert.equal(readFileSync(dependency, "utf8"), content);
+  assert.equal(readFileSync(join(serving, "releases", successor, "node_modules/fixture-dependency/index.js"), "utf8"), content);
+  assert.equal(run("git", ["show", `${target}:package.json`], release), readFileSync(join(release, "package.json"), "utf8"));
+  assert.deepEqual(readdirSync(join(buildHome, "work")), []);
+  assert.deepEqual(readdirSync(join(serving, "staging")), []);
+});
 
 test("builds historical checkouts through their existing runtime selector and package script", t => {
   const root = mkdtempSync(join(tmpdir(), "team-historical-build-"));
@@ -44,8 +166,12 @@ function prepare(t, scenario) {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const target = "a".repeat(40), events = join(root, "events");
   mkdirSync(join(root, "releases"));
-  if (scenario === "journal") writeFileSync(join(root, "activation.json"), "retained");
-  if (scenario === "published") mkdirSync(join(root, "releases", target));
+  if (scenario === "journal") {
+    writeFileSync(join(root, "activation.json"), "retained");
+  }
+  if (scenario === "published") {
+    mkdirSync(join(root, "releases", target));
+  }
   const program = `set -euo pipefail
 journal_file=${quote(join(root, "activation.json"))}
 releases_root=${quote(join(root, "releases"))}

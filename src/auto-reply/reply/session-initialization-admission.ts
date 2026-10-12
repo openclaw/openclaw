@@ -29,6 +29,7 @@ export type InitSessionStateParams = {
   commandAuthorized: boolean;
   ctx: FinalizedRuntimeMsgContext;
   expectedExistingSessionId?: string;
+  recordedSessionActivity?: InternalGetReplyOptions["recordedSessionActivity"];
   pinExpectedExistingSession?: boolean;
   newlyCreatedSessionId?: string;
   requestedSessionId?: string;
@@ -196,6 +197,7 @@ export function resolveReplySessionInitializationOptions(
   return {
     providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
     replyOperation: opts?.replyOperation,
+    recordedSessionActivity: opts?.recordedSessionActivity,
     ...(opts?.expectedExistingSessionId
       ? { expectedExistingSessionId: opts.expectedExistingSessionId }
       : {}),

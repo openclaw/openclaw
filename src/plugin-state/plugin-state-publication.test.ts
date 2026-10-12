@@ -234,6 +234,48 @@ describe("plugin state committed facts", () => {
     });
   });
 
+  it("keeps cached reads coherent after conditional writes and capacity rollback", async () => {
+    await withOpenClawTestState({ label: "plugin-state-conditional-receipts" }, async ({ env }) => {
+      const options = {
+        namespace: "receipts",
+        maxEntries: 1,
+        overflowPolicy: "reject-new" as const,
+        env,
+      };
+      const worker = createPluginStateKeyedStore<number>("receipt-test", options);
+      const native = createPluginStateSyncKeyedStore<number>("receipt-test", options);
+      const read = async (expected: number | undefined) => {
+        expect(await worker.lookup("key")).toBe(expected);
+        expect((await worker.observe("key")).value).toBe(expected);
+        expect(await worker.lookup("overflow")).toBeUndefined();
+        expect((await worker.observe("overflow")).value).toBeUndefined();
+        expect((await worker.entries()).map(({ key, value }) => ({ key, value }))).toEqual(
+          expected === undefined ? [] : [{ key: "key", value: expected }],
+        );
+      };
+
+      await read(undefined);
+      expect(await worker.registerIfAbsent("key", 1)).toBe(true);
+      await read(1);
+      expect(native.registerIfAbsent("key", 2)).toBe(false);
+      expect(await worker.registerIfAbsent("key", 3)).toBe(false);
+      await read(1);
+      expect(() => native.registerIfAbsent("overflow", 4)).toThrow("1-row limit");
+      await read(1);
+      await expect(worker.registerIfAbsent("overflow", 5)).rejects.toMatchObject({
+        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      });
+      await read(1);
+
+      expect(native.delete("key")).toBe(true);
+      await read(undefined);
+      expect(native.registerIfAbsent("key", 6)).toBe(true);
+      await read(6);
+      clearPluginStateStoreForTests();
+      await read(undefined);
+    });
+  });
+
   it.each(["lookup", "observe"] as const)(
     "keeps a prepared %s current only until its exact dependency commits",
     async (method) => {

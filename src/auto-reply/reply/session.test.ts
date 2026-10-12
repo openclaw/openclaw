@@ -292,6 +292,71 @@ afterEach(() => {
 describe("initSessionState guarded initialization", () => {
   registerSessionInitializationAdmissionTests({ makeStorePath });
 
+  it("reuses accepted activity without losing a later in-process entry update", async () => {
+    const storePath = await makeStorePath("openclaw-session-accepted-activity-");
+    const sessionKey = "agent:main:dashboard:accepted-activity";
+    const sessionId = "accepted-activity";
+    const at = Date.now() - 1_000;
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: { sessionId, updatedAt: at, lastInteractionAt: at },
+    });
+    const params = {
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "webchat", Surface: "webchat" },
+      recordedSessionActivity: { sessionId, sessionKey, at },
+    };
+    const initialized = await initSessionState(params);
+    expect(initialized.sessionEntry).toMatchObject({ updatedAt: at, lastInteractionAt: at });
+
+    const updated = expectDefined(
+      await upsertSessionEntryCore(
+        { storePath, sessionKey },
+        { label: "renamed after acceptance", lastInteractionAt: at + 100 },
+      ),
+      "updated session entry",
+    );
+    const resumed = await initSessionState(params);
+    const expected = {
+      label: "renamed after acceptance",
+      updatedAt: updated.updatedAt,
+      lastInteractionAt: at + 100,
+    };
+    expect(resumed.sessionEntry).toMatchObject(expected);
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(expected);
+  });
+
+  it.each(["session", "key", "reset"] as const)(
+    "does not reuse accepted activity after a %s change",
+    async (change) => {
+      const storePath = await makeStorePath("openclaw-session-replaced-activity-");
+      const sessionKey = "agent:main:dashboard:replaced-activity";
+      const sessionId = "replaced-activity";
+      const at = Date.now() - 1_000;
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: { sessionId, updatedAt: at, lastInteractionAt: at },
+      });
+      const initialized = await initSessionState({
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        ctx: {
+          Body: change === "reset" ? "/new" : "hello",
+          SessionKey: sessionKey,
+          Provider: "webchat",
+          Surface: "webchat",
+        },
+        recordedSessionActivity: {
+          sessionId: change === "session" ? "previous-session" : sessionId,
+          sessionKey: change === "key" ? "agent:main:dashboard:previous" : sessionKey,
+          at,
+        },
+      });
+      expect(initialized.sessionEntry.updatedAt).toBeGreaterThan(at);
+      expect(initialized.sessionEntry.lastInteractionAt).toBeGreaterThan(at);
+      if (change === "reset") {
+        expect(initialized.isNewSession).toBe(true);
+      }
+    },
+  );
+
   it("pins an admitted non-default-agent incognito session to its process-local store", async () => {
     const stateDir = await makeCaseDir("openclaw-session-incognito-init-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {

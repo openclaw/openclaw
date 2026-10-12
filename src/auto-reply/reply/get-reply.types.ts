@@ -68,6 +68,8 @@ type InternalReplySessionOptions = {
   /** Current external dashboard turn only; never persisted or inherited by another run. */
   dashboardReadAdmission?: DashboardMessageReadAdmission;
   expectedExistingSessionId?: string;
+  /** Activity committed with this input before ACK; initialization reuses its timestamp. */
+  recordedSessionActivity?: { sessionId: string; sessionKey: string; at: number };
   /** Retained predecessor evidence; reply admission must verify its session lineage and store. */
   expectedActiveReplyOperation?: ReplyOperation;
   /** First dispatch only: admission created this exact pinned session before reply initialization. */
