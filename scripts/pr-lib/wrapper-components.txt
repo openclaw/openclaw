@@ -693,7 +693,6 @@ src/config/sessions/targets-configured-agents.ts
 src/config/sessions/targets-path-validation.ts
 src/config/sessions/targets-read-availability.worker.ts
 src/config/sessions/targets.ts
-src/config/sessions/transcript-entry-anchor.ts
 src/config/sessions/transcript-payload.ts
 src/config/sessions/transcript-predicate-fields.ts
 src/config/sessions/transcript-target-binding.ts
