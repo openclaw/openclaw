@@ -42,7 +42,11 @@ export function createWorkerEnvironmentTransportLifecycle(options: {
   nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
   nodePortalCarrier?: import("./portal-node-carrier.js").WorkerNodePortalCarrier;
   closeWorkerPortals?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
-  closeEnvironmentComputers?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
+  closeEnvironmentComputers?: (
+    environmentId: string,
+    ownerEpoch?: number,
+    reason?: WorkerTunnelStopReason,
+  ) => Promise<void>;
 }) {
   if (
     !options.tunnelManager &&
@@ -60,7 +64,7 @@ export function createWorkerEnvironmentTransportLifecycle(options: {
         options.nodeDesktopCarrier?.stop(environmentId, ownerEpoch),
         options.nodePortalCarrier?.stop(environmentId, ownerEpoch),
         options.closeWorkerPortals?.(environmentId, ownerEpoch),
-        options.closeEnvironmentComputers?.(environmentId, ownerEpoch),
+        options.closeEnvironmentComputers?.(environmentId, ownerEpoch, reason),
       ]);
     },
   };
@@ -162,9 +166,12 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
 
   const project = (record: WorkerEnvironmentRecord) => {
     const cleanupError = options.getCleanupError(record);
+    // Match desktop admission: requested teardown fences the desktop before a dedicated
+    // machine leaves its usable state.
     const desktopAvailable =
       options.getConfig().cloudWorkers?.desktop === true &&
       ["ready", "idle", "attached"].includes(record.state) &&
+      record.destroyRequestedAtMs === null &&
       record.desktop !== null;
     const nodeTunnelStatus = nodeTunnels?.status(record.environmentId);
     const preparedProject = record.preparation
