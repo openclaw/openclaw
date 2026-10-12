@@ -9,12 +9,23 @@ import { parseVaultSecretId } from "../vault-secret-id.js";
 
 const VAULT_PROVIDER_ALIAS = "vault";
 
+function invalidVaultCliArgument(message: string): Error & { code: string; exitCode: number } {
+  // Commander parse-exit so run-main surfaces the message instead of the generic
+  // "The CLI command failed." title (same contract as memory-wiki / workboard CLIs).
+  console.error(message);
+  return Object.assign(new Error(message), {
+    name: "InvalidArgumentError",
+    code: "commander.invalidArgument",
+    exitCode: 1,
+  });
+}
+
 function normalizeVaultSecretId(label: string, value: string): string {
   try {
     parseVaultSecretId(value);
     return value;
   } catch {
-    throw new Error(`Invalid ${label} Vault secret id: ${value}`);
+    throw invalidVaultCliArgument(`Invalid ${label} Vault secret id: ${value}`);
   }
 }
 
