@@ -7,6 +7,11 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type { AssistantMessage, Model } from "../llm/types.js";
+import { activityByRunId } from "../logging/diagnostic-run-activity-state.js";
+import {
+  resetDiagnosticRunActivityForTest,
+  startDiagnosticRunActivityTracking,
+} from "../logging/diagnostic-run-activity.js";
 
 const completeSimple = vi.hoisted(() => vi.fn());
 // mock-isolation: Supply deterministic provider outcomes without registering live transports.
@@ -48,9 +53,14 @@ const assistant: AssistantMessage = {
 beforeEach(() => {
   resetDiagnosticEventsForTest();
   setDiagnosticsEnabledForProcess(true);
+  resetDiagnosticRunActivityForTest();
+  startDiagnosticRunActivityTracking();
   completeSimple.mockReset();
 });
-afterEach(() => resetDiagnosticEventsForTest());
+afterEach(() => {
+  resetDiagnosticRunActivityForTest();
+  resetDiagnosticEventsForTest();
+});
 
 describe("prepared background completion diagnostics", () => {
   it.each(["success", "returned-error", "throw"] as const)(
@@ -107,6 +117,7 @@ describe("prepared background completion diagnostics", () => {
         });
         expect(events.filter((event) => event.type === "model.usage")).toEqual([]);
         expect(completeSimple).toHaveBeenCalledOnce();
+        expect(activityByRunId.size).toBe(0);
       } finally {
         stop();
       }

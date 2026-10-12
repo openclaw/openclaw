@@ -283,8 +283,8 @@ timeline for current status.
 
     **New**: a single `resolveThinkingProfile(ctx)` that returns a
     `ProviderThinkingProfile` with the canonical `id`, optional `label`, and a
-    ranked level list. OpenClaw downgrades stale stored values by profile rank
-    automatically.
+    ranked level list. OpenClaw clamps unsupported requests by profile rank
+    during execution, preserving the stored preference across model switches.
 
     The context includes `provider`, `modelId`, optional merged `reasoning`,
     and optional merged model `compat` facts. Provider plugins can use those

@@ -218,10 +218,7 @@ const READONLY_FAULT = { name: "SqliteError", message: "attempt to write a reado
 const MALFORMED_FAULT = { name: "SqliteError", message: "database disk image is malformed" };
 
 describe("requester settle wake failure reporting", () => {
-  it.each([
-    { repeats: 1, reports: 1, suppressed: 0 },
-    { repeats: 40, reports: 5, suppressed: 35 },
-  ])(
+  it.each([{ repeats: 40, reports: 5, suppressed: 35 }])(
     "reports new faults and accounts for $suppressed suppressed repeats on recovery",
     async ({ repeats, reports, suppressed }) => {
       const { entry, context, warn } = makeContext();

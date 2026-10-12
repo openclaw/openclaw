@@ -16,6 +16,7 @@ import {
   readSecretStoreValue,
   writeSecretStoreEntry,
 } from "../../secrets/store/secret-store.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -119,6 +120,7 @@ async function sharingFixture(others: "none" | "suggest" = "none") {
 it("conceals foreign session questions for role-none readers while preserving global prompts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { client, cfg } = await sharingFixture();
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     manager.request({ ...requestParams, id: "foreign-question" });
     manager.request({
       questions: requestParams.questions,
@@ -146,6 +148,7 @@ it("conceals foreign session questions for role-none readers while preserving gl
 it("requires membership to resolve a suggest-capped guest question", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { owner, guest, cfg, client } = await sharingFixture("suggest");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     manager.request({ ...requestParams, id: "foreign-question" });
 
     expect((await call("question.get", { id: "foreign-question" }, { client, cfg }))[0]).toBe(true);
@@ -165,6 +168,7 @@ it("requires membership to resolve a suggest-capped guest question", async () =>
 it("scopes requested and resolved questions to operators allowed to see their session", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { owner, guest, cfg, profile: userProfile } = await sharingFixture();
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const viewer = ensureProfileForEmail("viewer@example.test");
     setUserProfileRole(viewer.id, "viewer");
     const makeQuestionClient = (

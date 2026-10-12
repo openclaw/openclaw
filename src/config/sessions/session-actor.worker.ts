@@ -224,11 +224,10 @@ export function createSessionActorWorker(
         | undefined;
       let stale: Extract<SessionActorOutcome<never>, { kind: "stale-version" }> | undefined;
       try {
-        database = context.open();
-        registerSessionActorEntryPatchOwner(database, prepareEntryPatch);
         requireTarget(target);
-        const opened = database;
         if (command.type === "session.actor.read") {
+          database = context.open();
+          registerSessionActorEntryPatchOwner(database, prepareEntryPatch);
           const before = read(database, target);
           context.admit("transaction", {
             kind: "session-actor-admission",
@@ -237,7 +236,10 @@ export function createSessionActorWorker(
           observed.settled("read");
           return structuredClone(before.hot);
         }
-        const outcome = context.writeTransaction(`session.actor.${phase}`, "Session actor", () => {
+        const operationLabel = `session.actor.${phase}`;
+        const outcome = context.writeTransaction(operationLabel, "Session actor", (opened) => {
+          database = opened;
+          registerSessionActorEntryPatchOwner(opened, prepareEntryPatch);
           const admit = (stage: "transaction" | "commit", publication: unknown) => {
             const revision = readSqliteNativeMutationRevision(opened.db);
             withoutSqliteDatabaseWriteScope(opened.db, () => context.admit(stage, publication));

@@ -1129,9 +1129,13 @@ read worker. The policy owner captures the original database path before yieldin
 and keeps legacy-file migration checks, normalization, fail-closed results, and
 warning throttling on the host. The reader preserves inherited snapshots and joins
 accepted reads before disposable source cleanup. Missing stores stay absent, and
-worker failures never retry through host SQLite. Synchronous execution-authorization
-callbacks and policy mutation, restore, and initialization keep their existing
-owners.
+worker failures never retry through host SQLite. Execution-authorization callbacks
+consume the current policy from in-process committed write publications, seeded
+by the existing authorization worker operation. Pending or unknown policy writes
+fail closed at execution; completed writes replace the policy before the next
+execution check. The callbacks no longer open or query a native reader. Policy
+mutation, restore, and initialization keep their existing worker owners; Doctor
+retains its synchronous maintenance transaction.
 
 Use Kysely for ordinary queries and mutations. The current
 `getNodeSqliteKysely` facade compiles queries; `executeSqliteQuerySync` runs them
@@ -2582,14 +2586,21 @@ consults after call closure, independently of the open-state check.
 Session usage retains its derived cache in the existing `cache_entries` owner.
 The `session-cost-usage-rollup-v3` scope holds the versioned transcript checkpoint
 and untimestamped contribution. The adjacent `session-cost-usage-projection-v1`
-scope stores UTC-date partitions containing quarter-hour session and model
+scope stores UTC-month partitions containing quarter-hour session and model
 aggregates. The checkpoint and affected partitions commit atomically. This
 replaces the previous whole-history per-event cache body; no tables, indexes,
 or database schema version change. Incognito sessions retain their existing
-process-local, nonpersistent cache and create no date partitions.
+process-local, nonpersistent cache and create no month partitions. Projection
+version 2 packs sparse quarters into monthly compressed bodies; version 1 daily
+rows are ignored and replaced by the normal resumable refresh, without a schema
+migration. Checkpoint and partition replacement remain atomic.
 
 Committed transcript publications schedule advancement through the existing
-usage worker queue. Startup and topology changes backfill in bounded batches.
+usage worker queue. Startup and topology changes backfill in bounded batches,
+yielding between batches. Cache writes wait outside the agent writer FIFO until
+foreground work drains, then commit one session at a time. Report reads use their
+separate worker lane and return partial or stale totals during backfill. Restart
+rediscovers unfinished sessions from their committed checkpoints.
 Deletion, transcript rewind or branch changes, and pricing revisions rebuild
 through the same owner. SQL and single-agent aggregation run in workers.
 Cross-agent reports fold worker summaries in global session order on the Gateway

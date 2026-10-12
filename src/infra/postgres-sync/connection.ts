@@ -109,8 +109,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       throw this.loseConnection();
     }
     const deadline = performance.now() + 120_000;
-    // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node MessagePort has no targetOrigin.
-    this.port.postMessage({ ...request, id });
+    this.port.postMessage({ ...request, id }, []);
     // A notify for an earlier request can arrive after this request starts.
     let observed: number;
     while ((observed = Atomics.load(this.control, 0)) !== id) {

@@ -100,7 +100,13 @@ it("checks same-file calls and propagates reachability through reviewed wrappers
     function bundled() { return ${second}(); }`,
   );
   expect(result.operations.size).toBe(0);
-  expect(result.violations).toHaveLength(2);
+  expect(result.violations).toEqual([
+    expect.stringContaining("extensions/plugin/runtime.ts:"),
+    expect.stringContaining(`${legacyFile}:`),
+    expect.stringContaining(
+      `${legacyFile}:${first}: reviewed compatibility operation is reachable`,
+    ),
+  ]);
 });
 
 it("requires the reviewed declaration's deprecation marker", () => {
@@ -180,6 +186,119 @@ it("retires deleted operations even when their module keeps other exports", () =
 it("does not read missing compatibility files from the current checkout", () => {
   expect(inspectDatabaseWorkerCompatibility(process.cwd(), new Map())).toEqual({
     operations: new Map(),
+    callLocations: new Map(),
     violations: [],
   });
+});
+
+const kernelFile = "src/session-kernel.ts";
+const kernel = `export function readKernel() { return 1; }`;
+const sharedOwner = `
+  import { readKernel } from '../session-kernel.js';
+  /** @deprecated Use workers. */
+  export function ${second}() { return readKernel(); }
+`;
+
+it("proves a transitive mixed kernel with only worker and deprecated callers", () => {
+  const result = inspect({
+    [secondFile]: sharedOwner,
+    [kernelFile]: `import { leaf } from './leaf.js';
+      export function readKernel() { return leaf(); }`,
+    "src/leaf.ts": `export function leaf() { return 1; }`,
+    "src/reader.worker.ts": `import { readKernel as read } from './session-kernel.js'; read();`,
+  });
+  expect(result.violations).toEqual([]);
+  expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
+  expect(result.operations.get("src/leaf.ts")).toEqual(new Set(["leaf"]));
+});
+
+it.each([
+  ["live call", "export function read() { return readKernel(); }"],
+  ["escaped callback", "export const callback = readKernel;"],
+  ["namespace escape", "export const callback = kernelApi;"],
+])("keeps a mixed kernel live after a bundled %s", (_label, consumer) => {
+  const result = inspect({
+    [secondFile]: sharedOwner,
+    [kernelFile]: `import { leaf } from './leaf.js';
+      export function readKernel() { return leaf(); }`,
+    "src/leaf.ts": `export function leaf() { return 1; }`,
+    "src/consumer.ts": `import { readKernel } from './session-kernel.js';
+      import * as kernelApi from './session-kernel.js'; ${consumer}`,
+  });
+  expect(result.violations).toEqual([]);
+  expect(result.operations.has(kernelFile)).toBe(false);
+  expect(result.operations.has("src/leaf.ts")).toBe(false);
+  expect(result.operations.get(secondFile)).toEqual(new Set([second]));
+});
+
+it.each(["register(readKernel)", "register(() => readKernel())"])(
+  "keeps an escaped worker callback live: %s",
+  (registration) => {
+    const result = inspect({
+      [secondFile]: sharedOwner,
+      [kernelFile]: kernel,
+      "src/reader.worker.ts": `import { readKernel } from './session-kernel.js';
+      ${registration};`,
+    });
+    expect(result.operations.has(kernelFile)).toBe(false);
+  },
+);
+
+it("keeps kernels reached through returned methods live", () => {
+  const result = inspect({
+    [secondFile]: `
+      import { readKernel } from '../session-kernel.js';
+      /** @deprecated Use workers. */
+      export function ${second}() { return { read() { return readKernel(); } }; }`,
+    [kernelFile]: kernel,
+  });
+  expect(result.operations.has(kernelFile)).toBe(false);
+});
+
+it("does not inherit a compatibility scope through callback arguments", () => {
+  const result = inspect({
+    [secondFile]: `import { readKernel } from '../session-kernel.js';
+      /** @deprecated Use workers. */
+      export function ${second}() { register(() => readKernel()); }`,
+    [kernelFile]: kernel,
+  });
+  expect(result.operations.has(kernelFile)).toBe(false);
+});
+
+it("rejects a reviewed API escaped by a discovered helper", () => {
+  const result = inspect({
+    [secondFile]: `import { helper } from '../helper.js';
+      /** @deprecated Use workers. */
+      export function ${second}() { helper(); }`,
+    "src/helper.ts": `import { ${first} } from './plugin-sdk/sqlite-runtime-legacy.js';
+      export function helper() { register(${first}); }`,
+  });
+  expect(result.operations.has(legacyFile)).toBe(false);
+  expect(result.violations).toEqual([expect.stringContaining("src/helper.ts:")]);
+});
+
+it("records direct call locations but excludes nested callback SQL", () => {
+  const result = inspect(
+    {},
+    `/** @deprecated Use workers. */
+export function ${first}() {
+  executeSqliteQuerySync(query);
+  register(() => executeSqliteQuerySync(query));
+}`,
+  );
+  expect(result.callLocations.get(legacyFile)).toEqual(new Set(["3:3", "4:3"]));
+});
+
+it("does not confuse a nested function path with a live top-level namesake", () => {
+  const result = inspect({
+    [secondFile]: `import { wrapper } from '../wrapper.js';
+      /** @deprecated Use workers. */
+      export function ${second}() { wrapper(); }`,
+    "src/wrapper.ts": `export function wrapper() {
+      const local = () => { function same() { return 1; } return 1; };
+      return local;
+    }
+    export function same() { return 2; }`,
+  });
+  expect(result.operations.get("src/wrapper.ts")?.has("same")).toBe(false);
 });

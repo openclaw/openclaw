@@ -127,7 +127,7 @@ it.each(["allowed", "transaction", "commit"] as const)(
   },
 );
 
-it("checks worker mutation authority after asynchronous patch preparation", async () => {
+it("checks legacy mutation authority after asynchronous patch preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
     const original = f.read();
@@ -151,8 +151,7 @@ it("checks worker mutation authority after asynchronous patch preparation", asyn
           return { label: "must not persist" };
         },
         {
-          shouldCommit: () => true,
-          workerGuard: { assertMutationAllowed },
+          assertCommitAllowed: assertMutationAllowed,
           skipMaintenance: true,
         },
       ),

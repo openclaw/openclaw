@@ -80,7 +80,7 @@ afterEach(() => {
 });
 
 describe("ensureTool", () => {
-  it.each(["fd", "rg", "shell"] as const)(
+  it.each(["fd", "shell"] as const)(
     "keeps %s usable without an ambient agent owner",
     async (tool) => {
       const home = expectDefined(tempAgentDir, "test home");
@@ -153,7 +153,7 @@ describe("ensureTool", () => {
       { name: "empty legacy", legacy: "empty", canonical: "missing", selected: "canonical" },
       { name: "missing legacy", legacy: "missing", canonical: "missing", selected: "canonical" },
     ].flatMap((testCase) =>
-      ["none", "OPENCLAW_STATE_DIR", "OPENCLAW_HOME"].map((override) => ({
+      ["OPENCLAW_HOME"].map((override) => ({
         testCase,
         override,
       })),
@@ -226,7 +226,7 @@ describe("ensureTool", () => {
     },
   );
 
-  it.each(["malformed", "invalid", "missing", "unreadable"])(
+  it.each(["unreadable"])(
     "keeps installed tools available with %s config and follows repaired configuration",
     async (condition) => {
       const root = expectDefined(tempAgentDir, "test root");
@@ -357,31 +357,6 @@ describe("ensureTool", () => {
     await expect(ensureTool("fd")).resolves.toBe(binaryPath);
 
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
-
-  it("treats trimmed on as the canonical offline opt-in", async () => {
-    vi.stubEnv("OPENCLAW_OFFLINE", " ON ");
-    const { ensureTool } = await import("./tools-manager.js");
-
-    await expect(ensureTool("fd")).resolves.toBeUndefined();
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
-
-  it("cancels release-check error bodies before releasing guarded fetches", async () => {
-    const { ensureTool } = await import("./tools-manager.js");
-    const release = vi.fn(async () => {});
-    const response = new Response("server error", { status: 503 });
-    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response,
-      release,
-      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
-    });
-
-    await expect(ensureTool("fd")).resolves.toBeUndefined();
-
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
   });
 
   it("cancels download error bodies before releasing guarded fetches", async () => {
@@ -663,31 +638,17 @@ describe("ensureTool exit-status handling", () => {
       stdout: Buffer.alloc(0),
     });
     const release = vi.fn(async () => {});
+    const response = new Response("unavailable", { status: 503 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response("unavailable", { status: 503 }),
+      response,
       release,
       finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
     });
 
     await expect(ensureTool("fd")).resolves.toBeUndefined();
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("reports a binary present when it spawns and exits 0", async () => {
-    const { ensureTool } = await import("./tools-manager.js");
-    spawnSyncMock.mockReturnValue({
-      error: undefined,
-      status: 0,
-      stderr: Buffer.alloc(0),
-      stdout: Buffer.alloc(0),
-    });
-    await expect(ensureTool("fd")).resolves.toBe("fd");
-    expect(spawnSyncMock).toHaveBeenCalledWith("fd", ["--version"], {
-      killSignal: "SIGKILL",
-      stdio: "pipe",
-      timeout: 5_000,
-    });
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 });

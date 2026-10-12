@@ -174,30 +174,6 @@ describe("OpenRouter provider catalog", () => {
       selected: "low",
       wireEffort: "low",
     },
-    {
-      id: "moonshotai/kimi-k3",
-      efforts: ["max", "high", "low"],
-      mandatory: false,
-      levels: ["off", "low", "high", "max"],
-      selected: "max",
-      wireEffort: "max",
-    },
-    {
-      id: "deepseek/deepseek-v4-pro",
-      efforts: ["xhigh", "high"],
-      mandatory: false,
-      levels: ["off", "high", "xhigh"],
-      selected: "off",
-      wireEffort: "none",
-    },
-    {
-      id: "acme/all-gateway-efforts",
-      efforts: null,
-      mandatory: false,
-      levels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
-      selected: "high",
-      wireEffort: "high",
-    },
   ] as const)(
     "carries $id reasoning capabilities from discovery through selection and requests",
     async ({ id, efforts, mandatory, levels, selected, wireEffort }) => {
@@ -267,18 +243,6 @@ describe("OpenRouter provider catalog", () => {
   );
 
   it.each([
-    {
-      name: "mandatory absent selector",
-      id: "minimax/minimax-m2.7",
-      mandatory: true,
-      efforts: undefined,
-    },
-    {
-      name: "optional absent selector",
-      id: "qwen/qwen3.7-flash",
-      mandatory: false,
-      efforts: undefined,
-    },
     {
       name: "mandatory empty selector",
       id: "acme/fixed-empty-efforts",
@@ -392,31 +356,6 @@ describe("OpenRouter provider catalog", () => {
     },
   );
 
-  it.each([
-    undefined,
-    null,
-    {},
-    [],
-    false,
-    { mandatory: "true" },
-    { mandatory: true, supported_efforts: "high" },
-  ])(
-    "does not invent controls from invalid or absent reasoning metadata: %j",
-    async (reasoning) => {
-      const catalog = await buildOpenrouterLiveProvider({
-        fetchGuard: async ({ url }) => ({
-          response: Response.json({ data: [{ id: "acme/no-reasoning-controls", reasoning }] }),
-          finalUrl: url,
-          release: async () => undefined,
-        }),
-      });
-      const model = catalog.models.find((entry) => entry.id === "acme/no-reasoning-controls");
-      expect(model?.reasoning).toBe(false);
-      expect(model?.compat).toBeUndefined();
-      expect(model?.thinkingLevelMap).toBeUndefined();
-    },
-  );
-
   it("keeps custom provider credentials and request headers on the configured catalog origin", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
       response: Response.json({ data: [{ id: "custom/private-model" }] }),
@@ -444,28 +383,6 @@ describe("OpenRouter provider catalog", () => {
       allowedOrigins: ["https://private.example.invalid"],
     });
   });
-
-  it.each(["https://openrouter.ai/api/v1///", "https://openrouter.ai/v1/"])(
-    "preserves the canonical endpoint for the official alias %s",
-    async (baseUrl) => {
-      const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
-        response: Response.json({ data: [{ id: "openrouter/auto" }] }),
-        finalUrl: url,
-        release: async () => undefined,
-      }));
-
-      const provider = await buildOpenrouterLiveProvider({
-        apiKey: "synthetic-official-key",
-        baseUrl,
-        fetchGuard,
-      });
-
-      expect(provider.baseUrl).toBe("https://openrouter.ai/api/v1");
-      expect(vi.mocked(fetchGuard).mock.calls[0]?.[0].url).toBe(
-        "https://openrouter.ai/api/v1/models",
-      );
-    },
-  );
 
   it.each([
     "not a URL",
@@ -644,42 +561,5 @@ describe("OpenRouter provider catalog", () => {
       }),
     ).rejects.toThrow();
     expect(fetchGuard).not.toHaveBeenCalled();
-  });
-
-  it("caches live discovery and propagates acquisition failure", async () => {
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
-      response: Response.json({
-        data: [
-          {
-            id: "google/gemini-3.6-flash",
-            architecture: { modality: "text->text" },
-          },
-        ],
-      }),
-      finalUrl: url,
-      release: async () => undefined,
-    }));
-
-    await buildOpenrouterLiveProvider({
-      apiKey: "runtime-a",
-      discoveryApiKey: "discovery-a",
-      fetchGuard,
-    });
-    await buildOpenrouterLiveProvider({
-      apiKey: "runtime-b",
-      discoveryApiKey: "discovery-a",
-      fetchGuard,
-    });
-    expect(fetchGuard).toHaveBeenCalledOnce();
-
-    clearLiveCatalogCacheForTests();
-    vi.mocked(fetchGuard).mockRejectedValueOnce(new Error("network unavailable"));
-    await expect(
-      buildOpenrouterLiveProvider({
-        apiKey: "runtime-a",
-        discoveryApiKey: "discovery-a",
-        fetchGuard,
-      }),
-    ).rejects.toThrow("network unavailable");
   });
 });

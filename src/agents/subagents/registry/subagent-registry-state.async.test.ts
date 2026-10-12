@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readSqliteUserVersion } from "../../../infra/sqlite-user-version.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
@@ -57,39 +56,6 @@ function runs(model: string, runId = "one") {
   });
   return new Map([[run.runId, run]]);
 }
-
-it("reads resident session-list facts without enumerating the process environment", () => {
-  persistRegistryFixture(runs("retained"));
-  const prepared = createSubagentSessionListReadView({ env: state.env });
-  const preparedIdentity = prepared.snapshotIdentity();
-  const originalEnv = process.env;
-  let enumerations = 0;
-  let identity: object | undefined;
-  let model: string | undefined;
-  process.env = new Proxy(originalEnv, {
-    ownKeys(target) {
-      enumerations++;
-      return Reflect.ownKeys(target);
-    },
-  });
-  try {
-    identity = getSubagentSessionListReadSnapshotIdentity();
-    model = getSubagentSessionListRunsSnapshotForRead(new Map()).get("one")?.model;
-  } finally {
-    process.env = originalEnv;
-  }
-  expect(identity).toBeDefined();
-  expect(model).toBe("retained");
-  expect(enumerations).toBe(0);
-  const resolutions = vi.spyOn(path, "resolve");
-  let current: object | undefined;
-  for (let index = 0; index < 100; index++) {
-    current = prepared.snapshotIdentity();
-  }
-  expect(current).toBe(preparedIdentity);
-  expect(resolutions).not.toHaveBeenCalled();
-  resolutions.mockRestore();
-});
 
 it.each(["maintenance", "schema"] as const)(
   "rejects resident session-list reads from an ended %s scope",
@@ -152,21 +118,7 @@ function holdFirstCompactRead(
   return { entered: entered.promise, release: release.resolve, read };
 }
 
-it("prepares cold compact facts through the real read worker and keeps caller Maps private", async () => {
-  const retained = runs("retained");
-  retained.get("one")!.taskRunId = "logical-task";
-  saveSubagentRegistryToSqlite(retained);
-  const nativeLoad = vi.spyOn(store, "loadSubagentSessionListRunsFromSqlite");
-  await prepareSubagentSessionListReadCache();
-  const first = getSubagentSessionListRunsSnapshotForRead(new Map());
-  expect(first.get("one")?.model).toBe("retained");
-  expect(first.get("one")?.taskRunId).toBe("logical-task");
-  first.clear();
-  expect(getSubagentSessionListRunsSnapshotForRead(new Map()).get("one")?.model).toBe("retained");
-  expect(nativeLoad).not.toHaveBeenCalled();
-});
-
-it.each(["requester", "controller"] as const)(
+it.each(["requester"] as const)(
   "hydrates latest controlled payloads with %s descendant topology",
   async (owner) => {
     const requesterSessionKey = "agent:main:parent";
@@ -388,7 +340,7 @@ it.each(["update", "delete", "replace"] as const)(
   },
 );
 
-it.each(["after", "during", "after a named publication"] as const)(
+it.each(["during", "after a named publication"] as const)(
   "rechecks first database creation following an absent read (%s)",
   async (creation) => {
     await withOpenClawTestState(

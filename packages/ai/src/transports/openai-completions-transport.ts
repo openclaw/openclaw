@@ -62,6 +62,7 @@ import {
   isOpenAICompletionsThinkingEnabled,
   resolveOpenAIClientBaseUrl,
   resolvePromptCacheKey,
+  withOpenAIErrorResponseHook,
   type MutableAssistantOutput,
 } from "./openai-transport-shared.js";
 import {
@@ -332,7 +333,7 @@ export function streamOpenAICompletionsRequest(
                 model,
                 context,
                 apiKey,
-                resolveProviderSimpleCompletionHeaders(model, options),
+                options,
                 cacheRetention === "none" ? undefined : options?.sessionId,
                 policy.compat,
               ),
@@ -520,7 +521,7 @@ function createDirectCompletionsClient(
   model: Model<"openai-completions">,
   context: Context,
   apiKey: string,
-  optionsHeaders: Record<string, string> | undefined,
+  options: OpenAICompletionsOptions | undefined,
   sessionId: string | undefined,
   compat: ReturnType<typeof resolveOpenAICompletionsCompat>,
 ) {
@@ -540,7 +541,13 @@ function createDirectCompletionsClient(
       headers["x-session-affinity"] = sessionId;
     }
   }
-  return createOpenAIProviderClient(model, apiKey, headers, optionsHeaders);
+  return createOpenAIProviderClient(
+    model,
+    apiKey,
+    headers,
+    resolveProviderSimpleCompletionHeaders(model, options),
+    options?.onResponse,
+  );
 }
 
 function createManagedCompletionsClient(
@@ -566,11 +573,15 @@ function createManagedCompletionsClient(
   const doneDetector = createSseDoneDetector();
   // The SDK replaces the fetch signal; keep liveness keyed to the exact
   // caller signal watched by the idle timer.
-  const baseFetch = buildGuardedModelFetch(model, undefined, {
-    onSseComment: () => notifyLlmRequestActivity(options?.signal, false),
-  });
+  const baseFetch = withOpenAIErrorResponseHook(
+    buildGuardedModelFetch(model, undefined, {
+      onSseComment: () => notifyLlmRequestActivity(options?.signal, false),
+    }),
+    options?.onResponse,
+    model,
+  );
   const doneDetectingFetch: typeof globalThis.fetch = async (url, init) => {
-    const response = await baseFetch(url as never, init);
+    const response = await baseFetch(url, init);
     if (!response.body || !response.ok) {
       return response;
     }

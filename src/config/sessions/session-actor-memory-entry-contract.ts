@@ -107,3 +107,17 @@ export type SessionActorMemoryEntryWrites = {
     output: { removedSessionKeys: string[] };
   };
 };
+
+export type SessionActorMemoryEntryQuery = {
+  [Key in keyof SessionActorMemoryEntryReads]: {
+    type: Key;
+    input: SessionActorMemoryEntryReads[Key]["input"];
+  };
+}[keyof SessionActorMemoryEntryReads];
+
+export type SessionActorMemoryEntryCommand = {
+  [Key in keyof SessionActorMemoryEntryWrites]: {
+    type: Key;
+    input: SessionActorMemoryEntryWrites[Key]["input"];
+  };
+}[keyof SessionActorMemoryEntryWrites];

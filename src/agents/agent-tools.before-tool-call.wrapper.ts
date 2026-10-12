@@ -110,6 +110,10 @@ export async function prepareBeforeToolCallExecutionParams(params: {
   signal?: AbortSignal;
 }): Promise<unknown> {
   const prepare = params.tool.prepareBeforeToolCallParams;
+  if (prepare && params.ctx?.awaitSessionDiffBaseline) {
+    await params.ctx.awaitSessionDiffBaseline();
+    params.signal?.throwIfAborted();
+  }
   return prepare
     ? await prepare(params.params, {
         ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),

@@ -29,6 +29,46 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it.each([false, true])(
+  "defers background writes behind later foreground work (abort=%s)",
+  async (abort) => {
+    const root = tempDirs.make("openclaw-background-admission-");
+    const options = { agentId: "usage", path: path.join(root, "agent.sqlite") };
+    const release = createDeferred();
+    const controller = new AbortController();
+    const reason = new Error("closed");
+    const order: string[] = [];
+    const held = runOpenClawAgentWorkerWrite(options, async () => {
+      order.push("held");
+      await release.promise;
+    });
+    const background = runOpenClawAgentWorkerWrite(
+      options,
+      async () => {
+        order.push("background");
+      },
+      undefined,
+      controller.signal,
+      "background",
+    );
+    const foreground = runOpenClawAgentWorkerWrite(options, async () => {
+      order.push("foreground");
+    });
+    const outcome = abort ? expect(background).rejects.toBe(reason) : background;
+    try {
+      if (abort) {
+        controller.abort(reason);
+      }
+      release.resolve();
+      await Promise.all([held, foreground, outcome]);
+      expect(order).toEqual(abort ? ["held", "foreground"] : ["held", "foreground", "background"]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([held, foreground, background]);
+    }
+  },
+);
+
 it.each(["write", "replace", "remove"] as const)(
   "revalidates the captured file after an awaited %s",
   async (change) => {

@@ -22,7 +22,13 @@ export async function servePublicSessionRepresentation(params: {
   requestKey: string;
   document: Pick<
     Parameters<typeof renderPublicSessionDocument>[0],
-    "latestUrl" | "canonicalUrl" | "cardUrl" | "entryUrl" | "clientAuthBasePath" | "assetBasePath"
+    | "latestUrl"
+    | "canonicalUrl"
+    | "cardUrl"
+    | "entryUrl"
+    | "clientAuthBasePath"
+    | "assetBasePath"
+    | "mediaBaseUrl"
   >;
   olderUrl: (offset: number) => string;
   unavailable: (status: 404 | 429 | 503, retryAfterSeconds?: number) => true | Promise<true>;
@@ -66,6 +72,9 @@ export async function servePublicSessionRepresentation(params: {
         return 503 as const;
       }
       const { body, etag } = representation;
+      if (typeof body !== "string") {
+        return 503 as const;
+      }
       res.setHeader("ETag", etag);
       if (req.headers["if-none-match"] === etag) {
         res.statusCode = 304;

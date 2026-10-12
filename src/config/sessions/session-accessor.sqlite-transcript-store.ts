@@ -60,7 +60,7 @@ import {
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { copyRetainedTranscriptPayload } from "./session-transcript-retained-data.js";
 import {
-  isSteerConfirmationRewrite,
+  transcriptRewritePreservesAdmission,
   transcriptRewritePreservesProjection,
 } from "./session-transcript-rewrite-effects.js";
 import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
@@ -614,10 +614,10 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
           );
         }
       }
-      // Steering correlation changes no admitted input. Keep its running turn's fence,
-      // while every other payload rewrite still invalidates admissions and cursors.
+      // Correlation and identical prompt captures preserve admitted input; other
+      // payload rewrites still invalidate admissions and cursors.
       const generation = rewrites.every((row) =>
-        isSteerConfirmationRewrite(row.expectedEventJson, row.eventJson),
+        transcriptRewritePreservesAdmission(row.expectedEventJson, row.eventJson),
       )
         ? undefined
         : rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
