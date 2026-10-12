@@ -89,6 +89,7 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
             provider: entry.provider,
             model: entry.model,
             stopReason: entry.stopReason,
+            mirrorKey: entry.mirrorKey,
             toolNames: entry.toolNames,
             toolResultCounts: entry.toolResultCounts,
             usageTotals,

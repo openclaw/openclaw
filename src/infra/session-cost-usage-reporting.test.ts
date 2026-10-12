@@ -247,3 +247,49 @@ it("preserves canonical tool calls and mixed content order in session logs", asy
     ]);
   });
 });
+
+it("lists a re-mirrored prompt once in session logs", async () => {
+  const root = tempDirs.make("openclaw-usage-mirrored-prompt-");
+  const sessionFile = path.join(root, "transcript.jsonl");
+  const timestamp = Date.UTC(2026, 8, 6, 12);
+  const prompt = (turn: string, idempotencyKey?: string) => ({
+    role: "user",
+    content: "Scheduled prompt",
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+    __openclaw: {
+      mirrorIdentity: `${turn}:prompt`,
+      mirrorOrigin: "codex-app-server",
+      mirrorSourceFingerprint: "synthetic-fingerprint",
+    },
+  });
+  const answer = { role: "assistant", content: [{ type: "text", text: "Done" }] };
+  const messages = [
+    prompt("turn-1"),
+    prompt("turn-1", "codex-app-server:thread:turn-1:prompt"),
+    answer,
+    prompt("turn-2"),
+    answer,
+  ];
+  await fs.writeFile(
+    sessionFile,
+    messages
+      .map((message, index) =>
+        JSON.stringify({
+          type: "message",
+          timestamp: new Date(timestamp + index).toISOString(),
+          message,
+        }),
+      )
+      .join("\n"),
+  );
+
+  await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+    const logs = await loadSessionLogs({ agentId: "main", sessionFile, config: {} });
+    expect(logs?.map(({ role, content }) => ({ role, content }))).toEqual([
+      { role: "user", content: "Scheduled prompt" },
+      { role: "assistant", content: "Done" },
+      { role: "user", content: "Scheduled prompt" },
+      { role: "assistant", content: "Done" },
+    ]);
+  });
+});

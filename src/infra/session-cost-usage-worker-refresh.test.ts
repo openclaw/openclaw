@@ -2,7 +2,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { createNativeStorageUsageAccess } from "./session-cost-usage-collection.test-support.js";
-import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
+import {
+  decodeUsageCostRollup,
+  encodeUsageCostRollup,
+  type UsageCostRollupEntry,
+} from "./session-cost-usage-rollup-codec.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
 
 const timestamp = Date.parse("2026-09-23T12:00:00.000Z");
@@ -153,5 +157,58 @@ describe("paged SQLite usage rollups", () => {
     expect(
       Object.values(result.rollup.buckets).find((bucket) => bucket.latency.count > 0)?.latency,
     ).toMatchObject({ count: 1, min: 1000, max: 1000, sum: 1000 });
+  });
+});
+
+describe("mirrored prompt rows", () => {
+  function prompt(id: string, parentId: string | null, turn: string, idempotencyKey?: string) {
+    return {
+      type: "message",
+      id,
+      parentId,
+      timestamp: new Date(timestamp).toISOString(),
+      message: {
+        role: "user",
+        content: "synthetic prompt",
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+        __openclaw: {
+          mirrorIdentity: `${turn}:prompt`,
+          mirrorOrigin: "codex-app-server",
+          mirrorSourceFingerprint: "synthetic-fingerprint",
+        },
+      },
+    };
+  }
+  const admitted = { seq: 1, event: prompt("admitted", null, "turn-1") };
+  const mirrored = {
+    seq: 2,
+    event: prompt("mirrored", "admitted", "turn-1", "codex-app-server:thread:turn-1:prompt"),
+  };
+  const answer = { seq: 3, event: message("answer", "mirrored", 3) };
+  const userMessages = (entry: UsageCostRollupEntry) =>
+    Object.values(entry.rollup.buckets).reduce(
+      (total, bucket) => total + bucket.messageCounts.user,
+      entry.rollup.untimestamped.messageCounts.user,
+    );
+
+  it("counts a prompt and its re-mirrored copy once", async () => {
+    expect(userMessages(await scan([admitted, mirrored, answer]))).toBe(1);
+  });
+
+  it("counts the pair once when a cached refresh ends between its rows", async () => {
+    const first = await scan([admitted]);
+    const encoded = encodeUsageCostRollup(first);
+    const cached = decodeUsageCostRollup(encoded.valueJson, first.pricingFingerprint, encoded.blob);
+    expect(userMessages(await scan([admitted, mirrored, answer], cached))).toBe(1);
+  });
+
+  it("counts repeated prompt text from separate turns", async () => {
+    const result = await scan([
+      admitted,
+      { seq: 2, event: message("first-answer", "admitted", 3) },
+      { seq: 3, event: prompt("again", "first-answer", "turn-2") },
+      { seq: 4, event: message("second-answer", "again", 3) },
+    ]);
+    expect(userMessages(result)).toBe(2);
   });
 });
