@@ -348,6 +348,8 @@ describe("diagnostic stability recorder", () => {
       requestPayloadBytes: 1234,
       responseStreamBytes: 567,
       timeToFirstByteMs: 89,
+      providerProcessingMs: 0.25,
+      providerWaitEstimateMs: 0.75,
       errorCategory: "TypeError",
       failureKind: "terminated",
       memory: {
@@ -358,9 +360,7 @@ describe("diagnostic stability recorder", () => {
         arrayBuffersBytes: 10,
       },
     });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await waitForDiagnosticEventsDrained();
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
@@ -377,6 +377,8 @@ describe("diagnostic stability recorder", () => {
       requestBytes: 1234,
       responseBytes: 567,
       timeToFirstByteMs: 89,
+      providerProcessingMs: 0.25,
+      providerWaitEstimateMs: 0.75,
       reason: "TypeError",
       failureKind: "terminated",
       memory: {

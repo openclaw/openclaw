@@ -1,4 +1,3 @@
-import { formatByteSize } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
@@ -7,10 +6,7 @@ import type { HealthSummary } from "../../commands/health.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type { DiagnosticStabilityBundle } from "../../logging/diagnostic-stability-bundle.js";
-import type {
-  DiagnosticStabilityEventRecord,
-  DiagnosticStabilitySnapshot,
-} from "../../logging/diagnostic-stability.js";
+import type { DiagnosticStabilitySnapshot } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
@@ -31,6 +27,7 @@ import { isGatewayMachineOutput } from "./output-mode.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
 import { addGatewayRunCommand } from "./run-command.js";
 import { normalizeStabilityBundleTarget } from "./stability-bundle-target.js";
+import { formatBytes, formatStabilityEvent } from "./stability-format.js";
 import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
 
 type GatewayRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
@@ -161,43 +158,6 @@ async function renderCostUsageSummaryAsync(
   }
 
   return lines;
-}
-
-function formatBytes(value: number | undefined): string {
-  if (value === undefined) {
-    return "n/a";
-  }
-  return formatByteSize(value, {
-    style: "iec",
-    maxUnit: "giga",
-    separator: " ",
-    fractionDigits: (amount, unit) => (unit === "byte" || amount >= 100 ? 0 : 1),
-  });
-}
-
-function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {
-  const parts = [
-    new Date(record.ts).toISOString(),
-    `#${record.seq}`,
-    record.type,
-    record.level ? `level=${record.level}` : "",
-    record.action ? `action=${record.action}` : "",
-    record.outcome ? `outcome=${record.outcome}` : "",
-    record.surface ? `surface=${record.surface}` : "",
-    record.channel ? `channel=${record.channel}` : "",
-    record.pluginId ? `plugin=${record.pluginId}` : "",
-    record.reason ? `reason=${record.reason}` : "",
-    record.bytes !== undefined ? `bytes=${formatBytes(record.bytes)}` : "",
-    record.limitBytes !== undefined ? `limit=${formatBytes(record.limitBytes)}` : "",
-    record.queueDepth !== undefined ? `queueDepth=${record.queueDepth}` : "",
-    record.queueLength !== undefined ? `queueLength=${record.queueLength}` : "",
-    record.droppedEvents !== undefined ? `dropped=${record.droppedEvents}` : "",
-    record.maxQueueLength !== undefined ? `maxQueue=${record.maxQueueLength}` : "",
-    record.queued !== undefined ? `queued=${record.queued}` : "",
-    record.memory ? `rss=${formatBytes(record.memory.rssBytes)}` : "",
-    record.memory ? `heap=${formatBytes(record.memory.heapUsedBytes)}` : "",
-  ].filter(Boolean);
-  return parts.join(" ");
 }
 
 function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boolean): string[] {
