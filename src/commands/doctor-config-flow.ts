@@ -493,10 +493,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       typeof authoredDefaultWorkspace === "string" ? authoredDefaultWorkspace : undefined,
   });
   explicitSetPaths.push(...(systemAgentWorkspace.explicitSetPaths ?? []));
-  applyConfigMutation(systemAgentWorkspace, {
-    fixHint: `Run "${doctorFixCommand}" to pin the system agent's workspace.`,
-    emitWarnings: true,
-  });
+  applyConfigMutation(
+    systemAgentWorkspace,
+    `Run "${doctorFixCommand}" to pin the system agent's workspace.`,
+  );
 
   if (shouldRepair) {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
