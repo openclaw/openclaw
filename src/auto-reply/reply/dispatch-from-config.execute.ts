@@ -77,6 +77,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     await settlement?.settle(false);
   };
   let didDeliverVisiblePartialReply = false;
+  let replyResolverError: string | undefined;
   const pendingToolProgress = new Set<Promise<void>>();
   const {
     onBlockReply,
@@ -479,6 +480,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     ) {
       throw error;
     }
+    // The generic reply consumes the exception; terminal diagnostics still need its cause.
+    replyResolverError = formatErrorMessage(error);
     failDispatchReplyOperation(error, "failed");
     if (!didDeliverVisiblePartialReply) {
       // Adoption retires ingress replay before the model starts. A progress ACK
@@ -529,6 +532,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       pendingContinuation,
       pendingContinuationSettlement,
       replyResult,
+      replyResolverError,
     });
     // Finalization now owns the exact settlement; earlier returns and throws release it here.
     pendingContinuationSettlement = undefined;

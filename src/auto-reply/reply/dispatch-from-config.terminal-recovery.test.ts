@@ -2,12 +2,14 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
+import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
   createDispatcher,
+  diagnosticMocks,
   mocks,
   noAbortResult,
   resetPluginTtsAndThreadMocks,
@@ -56,6 +58,9 @@ function createVisibleDispatchParams(
 }
 
 describe("dispatchReplyFromConfig visible admission recovery", () => {
+  let processedEvents: Extract<DiagnosticEventPayload, { type: "message.processed" }>[];
+  let unsubscribe: () => void;
+
   beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
     ({ createReplyOperation, replyRunRegistry } = await import("./reply-run-registry.js"));
@@ -66,6 +71,14 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   });
 
   beforeEach(() => {
+    processedEvents = [];
+    unsubscribe = onDiagnosticEvent((event) => {
+      if (event.type === "message.processed") {
+        processedEvents.push(event);
+      }
+    });
+    diagnosticMocks.forwardToRealPipeline = true;
+    diagnosticMocks.logMessageDispatchCompleted.mockClear();
     replyRunTesting.resetReplyRunRegistry();
     resetInboundDedupe();
     resetPluginTtsAndThreadMocks();
@@ -78,6 +91,8 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   });
 
   afterEach(() => {
+    unsubscribe();
+    diagnosticMocks.forwardToRealPipeline = false;
     vi.useRealTimers();
     replyRunTesting.resetReplyRunRegistry();
     resetInboundDedupe();
@@ -132,7 +147,8 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   });
 
   it("records a failed reply operation when recovering a visible partial", async () => {
-    const resolverError = new Error("provider failed after partial");
+    const secret = "sk-ant-abcdefghijklmnopqrstuvwxyz";
+    const resolverError = new Error(`provider failed after partial: ${secret}`);
     let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
     const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
       _ctx,
@@ -148,6 +164,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     };
     const dispatchParams = {
       ...createVisibleDispatchParams(replyResolver),
+      cfg: { diagnostics: { enabled: true } },
       replyOptions: {
         onPartialReply: vi.fn(async () => undefined),
       },
@@ -162,6 +179,16 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     });
     expect(result.queuedFinal).toBe(true);
     expect(readAgentRunTerminalOutcome(result)).toBe("failed");
+    expect(processedEvents).toEqual([
+      expect.objectContaining({
+        outcome: "error",
+        error: expect.stringContaining("provider failed after partial"),
+      }),
+    ]);
+    expect(JSON.stringify(processedEvents)).not.toContain(secret);
+    expect(diagnosticMocks.logMessageDispatchCompleted).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ outcome: "error", error: processedEvents[0]?.error }),
+    );
     expect(dispatchParams.replyOptions.onPartialReply).toHaveBeenCalledWith({
       text: "partial telegram reply",
     });
@@ -258,7 +285,10 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       };
       const params = {
         ...createVisibleDispatchParams(replyResolver),
-        cfg: { agents: { defaults: { silentReply: { group: silentReply } } } },
+        cfg: {
+          diagnostics: { enabled: true },
+          agents: { defaults: { silentReply: { group: silentReply } } },
+        },
         dispatcher,
         replyOptions: {
           turnAdoptionLifecycle: { onAdopted: vi.fn(async () => {}) },
@@ -292,6 +322,9 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       });
       expect(readAgentRunTerminalOutcome(result)).toBe("failed");
       expect(processedOutcome?.outcome).toBe("error");
+      expect(processedEvents).toEqual([
+        expect.objectContaining({ outcome: "error", error: resolverError.message }),
+      ]);
       if (origin !== surface) {
         expect(mocks.routeReply).toHaveBeenLastCalledWith(
           expect.objectContaining({

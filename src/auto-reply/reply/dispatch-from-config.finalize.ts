@@ -502,11 +502,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             : channelTransformSuppressed
               ? "channel_transform"
               : state.bindingState.pluginFallbackReason);
-  state.recordAgentDispatchCompleted(
-    dispatchOutcome,
-    dispatchReason ? { reason: dispatchReason } : undefined,
-  );
-  state.recordProcessed(dispatchOutcome, dispatchReason ? { reason: dispatchReason } : undefined);
+  const dispatchDetails = {
+    ...(dispatchReason ? { reason: dispatchReason } : {}),
+    ...(state.replyResolverError ? { error: state.replyResolverError } : {}),
+  };
+  state.recordAgentDispatchCompleted(dispatchOutcome, dispatchDetails);
+  state.recordProcessed(dispatchOutcome, dispatchDetails);
   state.markIdle(
     dispatchOutcome === "error"
       ? "message_error"
