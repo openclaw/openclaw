@@ -34,12 +34,13 @@ describe("session cost usage refresh", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
       const params = { config, agentId: "backoff-test", startMs: 0, endMs: Date.now() };
       const refresh = vi.mocked(refreshCostUsageCacheForAgent);
+      const fullRefresh = createDeferredCore<"refreshed">();
       let queuedSubset: ReturnType<typeof loadSessionCostSummariesFromCache> | undefined;
       let calls = 0;
-      refresh.mockImplementation(async () => {
+      refresh.mockImplementation(() => {
         calls += 1;
         if (calls <= 10) {
-          return "busy";
+          return Promise.resolve("busy");
         }
         if (calls === 11) {
           queuedSubset = loadSessionCostSummariesFromCache({
@@ -47,13 +48,12 @@ describe("session cost usage refresh", () => {
             agentId: params.agentId,
             sessions: [{ sessionFile }],
           });
-          await queuedSubset;
-          return "refreshed";
+          return fullRefresh.promise;
         }
         if (calls === 12) {
-          return "busy";
+          return Promise.resolve("busy");
         }
-        return "refreshed";
+        return Promise.resolve("refreshed");
       });
 
       vi.useFakeTimers();
@@ -84,8 +84,10 @@ describe("session cost usage refresh", () => {
         await vi.advanceTimersByTimeAsync(4_999);
         expect(refresh).toHaveBeenCalledTimes(10);
         await vi.advanceTimersByTimeAsync(1);
-        // Join the subset's real filesystem lookup before advancing the retry clock.
         await queuedSubset;
+        // Schedule the next batch outside the timer tick, regardless of filesystem timing.
+        fullRefresh.resolve("refreshed");
+        await fullRefresh.promise;
         await vi.advanceTimersByTimeAsync(0);
         expect(refresh).toHaveBeenCalledTimes(12);
         expect(refresh.mock.calls[10]?.[0].sessionFiles).toBeUndefined();
@@ -106,6 +108,8 @@ describe("session cost usage refresh", () => {
           // Complete queued work even if an assertion failed before the final retry.
           refresh.mockResolvedValue("refreshed");
           await queuedSubset;
+          fullRefresh.resolve("refreshed");
+          await fullRefresh.promise;
           await vi.runOnlyPendingTimersAsync();
           expect(
             await loadCostUsageSummaryFromCache({ ...params, requestRefresh: false }),
