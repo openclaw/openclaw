@@ -99,7 +99,7 @@ struct DashboardCloseShortcutTests {
         defer { NSApp.mainMenu = previousMenu }
         let controller = try DashboardWindowController(
             url: #require(URL(string: "about:blank")),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
@@ -128,12 +128,12 @@ struct DashboardCloseShortcutTests {
         _ = AppKitTestSupport.application
         let controller = DashboardWindowController(
             url: server.url(),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
-        controller.loadInBackground(
-            url: server.url(), auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        controller.update(
+            url: server.url(), auth: DashboardWindowAuth.unauthenticated)
         controller.show()
         return controller
     }

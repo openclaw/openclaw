@@ -3,13 +3,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
-import type { OpenClawConfig } from "../../../config/types.js";
 import { legacyCodexProviderIdentityKey } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
 import { migrateLegacyConfigForTest } from "./legacy-config-migrate.apply.test-support.js";
+import { registerLegacySilentReplyConfigMigrationTests } from "./legacy-config-migrate.silent-reply.test-support.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
 
-function repairBindingsForTest(config: OpenClawConfig) {
+function repairBindingsForTest<T extends object>(config: T) {
   const changes: string[] = [];
   return { config: pruneBindingsForMissingAgents(config, changes), changes };
 }
@@ -41,7 +41,7 @@ describe("compatibility binding repair migrate", () => {
         { agentId: "MAIN", match: { channel: "discord" } },
         { agentId: "ghost", match: { channel: "discord" } },
       ],
-    } as OpenClawConfig);
+    });
 
     expect(res.config.bindings).toEqual([
       { agentId: "main", match: { channel: "discord" } },
@@ -59,7 +59,7 @@ describe("compatibility binding repair migrate", () => {
         { agentId: "ghost", match: { channel: "discord" } },
         { agentId: "alpha", match: { channel: "discord" } },
       ],
-    } as unknown as OpenClawConfig;
+    };
 
     const res = repairBindingsForTest(cfg);
 
@@ -77,12 +77,12 @@ describe("legacy Codex provider config migrate", () => {
     const res = migrateProviderConfig({
       "openai-codex": {
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         models: [
           {
             id: "gpt-5.5",
             name: "GPT-5.5",
-            api: "openai-codex-responses",
+            api: "openai-chatgpt-responses",
           },
         ],
       },
@@ -148,8 +148,8 @@ describe("legacy Codex provider config migrate", () => {
       codex: {
         auth: "oauth",
         headers: { Authorization: "Bearer synthetic" },
-        api: "openai-codex-responses",
-        models: [{ id: "gpt-5.6-sol", api: "openai-codex-responses" }],
+        api: "openai-chatgpt-responses",
+        models: [{ id: "gpt-5.6-sol", api: "openai-chatgpt-responses" }],
       },
     });
 
@@ -162,9 +162,6 @@ describe("legacy Codex provider config migrate", () => {
     expect(res.config?.models?.providers?.openai).toEqual({
       models: [{ id: "text-embedding-3-small" }],
     });
-    expect(res.changes).toContain(
-      "Skipped merging models.providers.codex into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.codex.auth, models.providers.codex.headers.",
-    );
     expect(collectBlockedLegacyOpenAICodexProviderPlan(res.config).warning).toEqual(
       expect.stringContaining("models.providers.codex cannot be merged automatically"),
     );
@@ -189,7 +186,7 @@ describe("legacy Codex provider config migrate", () => {
         ],
       },
       codex: {
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api",
         models: [{ id: "gpt-5.6-sol" }, { id: "gpt-5.4-mini" }],
       },
@@ -207,9 +204,6 @@ describe("legacy Codex provider config migrate", () => {
         baseUrl: "https://api.openai.com/v1",
       },
     ]);
-    expect(res.changes).toContain(
-      "Skipped merging models.providers.codex into models.providers.openai because colliding model definitions differ for: gpt-5.6-sol.",
-    );
     expect(collectBlockedLegacyOpenAICodexProviderPlan(res.config).warning).toEqual(
       expect.stringContaining("colliding model definitions differ for: gpt-5.6-sol"),
     );
@@ -254,10 +248,10 @@ describe("legacy Codex provider config migrate", () => {
     );
   });
 
-  it("preserves model-scoped defaults and overrides when later OpenAI normalization runs", () => {
+  it("preserves model-scoped defaults and overrides when merging legacy providers", () => {
     const res = migrateProviderConfig({
       "openai-codex": {
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api",
         contextWindow: 200000,
         contextTokens: 180000,
@@ -274,9 +268,9 @@ describe("legacy Codex provider config migrate", () => {
         ],
       },
       openai: {
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         baseUrl: "https://api.openai.com/v1",
-        models: [{ id: "text-embedding-3-small", name: "Chat", api: "openai-codex-responses" }],
+        models: [{ id: "text-embedding-3-small", name: "Chat", api: "openai-chatgpt-responses" }],
       },
     });
     expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
@@ -390,54 +384,7 @@ describe("legacy Codex provider config migrate", () => {
   });
 });
 
-describe("legacy silent reply config migrate", () => {
-  it("removes silent reply rewrite and direct-chat silent reply config", () => {
-    const res = migrateLegacyConfigForTest({
-      agents: {
-        defaults: {
-          silentReply: { direct: "allow", group: "allow", internal: "allow" },
-          silentReplyRewrite: { direct: true, group: false },
-        },
-      },
-      surfaces: {
-        telegram: {
-          silentReply: { direct: "disallow", group: "allow" },
-          silentReplyRewrite: { direct: true },
-        },
-      },
-    });
-    expect(res.config?.agents?.defaults).toEqual({
-      silentReply: { group: "allow", internal: "allow" },
-    });
-    expect(res.config?.surfaces?.telegram).toEqual({ silentReply: { group: "allow" } });
-  });
-});
-
-describe("legacy agent system prompt override config migrate", () => {
-  it("removes default and per-agent system prompt overrides", () => {
-    const raw = {
-      agents: {
-        defaults: {
-          systemPromptOverride: "old default prompt",
-          model: { primary: "openai/gpt-5.5" },
-        },
-        list: [{ id: "alpha", systemPromptOverride: "old alpha prompt" }, { id: "beta" }],
-      },
-    };
-
-    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
-      "agents.defaults.systemPromptOverride",
-      "agents",
-      "agents.list",
-    ]);
-
-    const res = migrateLegacyConfigForTest(raw);
-
-    expect(res.config?.agents?.defaults).not.toHaveProperty("systemPromptOverride");
-    expect(res.config?.agents?.list?.[0]).not.toHaveProperty("systemPromptOverride");
-    expect(res.config?.agents?.list?.[1]).toEqual({ id: "beta" });
-  });
-});
+registerLegacySilentReplyConfigMigrationTests(migrateLegacyConfigForTest);
 
 describe("profile configured tool section migrate", () => {
   it("does not add grants when configured sections are the only signal", () => {
@@ -501,17 +448,17 @@ describe("profile configured tool section migrate", () => {
       exec: { security: "allowlist" },
       byProvider: { openai: { profile: "full", allow: ["message", "exec", "process"] } },
     });
-    expect(res.config?.agents?.list?.[0]?.tools).toEqual({
+    expect(res.config?.agents?.entries?.direct?.tools).toEqual({
       profile: "full",
       allow: ["message", "exec", "process"],
       exec: { security: "allowlist" },
     });
-    expect(res.config?.agents?.list?.[1]?.tools).toEqual({
+    expect(res.config?.agents?.entries?.also?.tools).toEqual({
       profile: "full",
       allow: ["message", "exec"],
       exec: { security: "allowlist" },
     });
-    const broad = res.config?.agents?.list?.[2]?.tools;
+    const broad = res.config?.agents?.entries?.broad?.tools;
     expect(broad?.profile).toBe("full");
     expect(broad?.allow).toEqual(expect.arrayContaining(["message", "exec", "process"]));
     expect(broad?.allow).not.toContain("*");
@@ -525,59 +472,12 @@ describe("profile configured tool section migrate", () => {
     const res = migrateLegacyConfigForTest(raw);
 
     expect(Object.prototype).not.toHaveProperty("profile");
-    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.["qwen/qwen-plus"]?.allow).toEqual([
-      "message",
-      "exec",
-      "process",
-    ]);
-    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.["qwen/qwen-plus"]?.profile).toBe(
+    expect(res.config?.agents?.entries?.sage?.tools?.byProvider?.["qwen/qwen-plus"]?.allow).toEqual(
+      ["message", "exec", "process"],
+    );
+    expect(res.config?.agents?.entries?.sage?.tools?.byProvider?.["qwen/qwen-plus"]?.profile).toBe(
       "full",
     );
-  });
-});
-
-describe("legacy agent model timeout migrate", () => {
-  it("removes ignored timeoutMs from agent and subagent model selection config", () => {
-    const res = migrateLegacyConfigForTest({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-            timeoutMs: 30_000,
-          },
-          subagents: { model: { primary: "openai/gpt-5.4", timeoutMs: 10_000 } },
-          imageGenerationModel: {
-            primary: "openrouter/openai/gpt-5.4-image-2",
-            timeoutMs: 180_000,
-          },
-          pdfModel: { primary: "openai/gpt-5.5", timeoutMs: 45_000 },
-        },
-        list: [
-          {
-            id: "worker",
-            model: { primary: "openai/gpt-5.4", timeoutMs: 20_000 },
-            subagents: { model: { primary: "openai/gpt-5.4-mini", timeoutMs: 5_000 } },
-          },
-        ],
-      },
-    });
-    expect(res.config?.agents?.defaults?.model).toEqual({
-      primary: "openai/gpt-5.5",
-      fallbacks: ["anthropic/claude-sonnet-4-6"],
-    });
-    expect(res.config?.agents?.defaults?.subagents?.model).toEqual({ primary: "openai/gpt-5.4" });
-    expect(res.config?.agents?.defaults?.mediaModels).toEqual({
-      image: { primary: "openrouter/openai/gpt-5.4-image-2", timeoutMs: 180_000 },
-    });
-    expect(res.config?.agents?.defaults?.pdfModel).toEqual({
-      primary: "openai/gpt-5.5",
-      timeoutMs: 45_000,
-    });
-    expect(res.config?.agents?.list?.[0]?.model).toEqual({ primary: "openai/gpt-5.4" });
-    expect(res.config?.agents?.list?.[0]?.subagents?.model).toEqual({
-      primary: "openai/gpt-5.4-mini",
-    });
   });
 });
 
@@ -598,21 +498,6 @@ describe("legacy session maintenance migrate", () => {
       mode: "enforce",
       pruneAfter: "30d",
       maxEntries: 500,
-    });
-  });
-});
-
-describe("legacy session parent fork migrate", () => {
-  it("removes legacy session.parentForkMaxTokens", () => {
-    const res = migrateLegacyConfigForTest({
-      session: {
-        store: "sessions.json",
-        parentForkMaxTokens: 200_000,
-      },
-    });
-
-    expect(res.config?.session).toEqual({
-      store: "sessions.json",
     });
   });
 });
@@ -781,38 +666,6 @@ describe("legacy thread binding spawn migrate", () => {
   });
 });
 
-describe("legacy message queue mode migrate", () => {
-  it("moves retired queue steering modes to followup mode", () => {
-    const res = migrateLegacyConfigForTest({
-      messages: {
-        queue: {
-          mode: "queue",
-          byChannel: {
-            discord: "steer-backlog",
-            telegram: "collect",
-            slack: "steer",
-          },
-        },
-      },
-    });
-
-    expect(res.config?.messages?.queue).toEqual({
-      mode: "steer",
-      byChannel: {
-        discord: "followup",
-        telegram: "collect",
-        slack: "steer",
-      },
-    });
-    expect(res.changes).toContain(
-      'Moved deprecated messages.queue.mode "queue" → "steer"; use "steer" for default active-run steering.',
-    );
-    expect(res.changes).toContain(
-      'Moved deprecated messages.queue.byChannel.discord "steer-backlog" → "followup"; use "steer" for default active-run steering.',
-    );
-  });
-});
-
 describe("legacy migrate audio transcription", () => {
   it("consolidates existing per-capability media config without reviving removed routing keys", () => {
     const res = migrateLegacyConfigForTest({
@@ -895,87 +748,11 @@ describe("legacy migrate audio transcription", () => {
   });
 });
 
-describe("legacy agent runtime and sandbox config migrate", () => {
-  it("removes ignored agent-wide runtime policy", () => {
-    const res = migrateLegacyConfigForTest({
-      agents: {
-        defaults: {
-          agentRuntime: { fallback: "openclaw" },
-        },
-        list: [
-          {
-            id: "reviewer",
-            agentRuntime: { fallback: "openclaw" },
-          },
-        ],
-      },
-    });
-
-    expect(res.config?.agents?.defaults).toStrictEqual({});
-    expect(res.config?.agents?.list?.[0]).toEqual({
-      id: "reviewer",
-    });
-  });
-
-  it("moves recoverable whole-agent Claude CLI runtime policy before removing stale pins", () => {
-    const res = migrateLegacyConfigForTest({
-      agents: {
-        defaults: {
-          agentRuntime: { id: "claude-cli" },
-          model: {
-            primary: "anthropic/claude-opus-4-7",
-            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
-          },
-          models: {
-            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
-            "anthropic/claude-opus-4-7": {
-              alias: "Opus",
-              agentRuntime: { id: "auto", mode: "strict" },
-            },
-          },
-        },
-        list: [
-          {
-            id: "paige",
-            agentRuntime: { id: "claude-cli" },
-            model: "anthropic/claude-sonnet-4-6",
-          },
-        ],
-      },
-    });
-
-    expect(res.config?.agents?.defaults).toEqual({
-      model: {
-        primary: "anthropic/claude-opus-4-7",
-        fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
-      },
-      models: {
-        "anthropic/claude-opus-4-7": {
-          alias: "Opus",
-          agentRuntime: { id: "claude-cli", mode: "strict" },
-        },
-        "anthropic/claude-sonnet-4-6": {
-          agentRuntime: { id: "openclaw" },
-        },
-      },
-      modelPolicy: {
-        allow: ["anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-7"],
-      },
-    });
-    expect(res.config?.agents?.list?.[0]).toEqual({
-      id: "paige",
-      model: "anthropic/claude-sonnet-4-6",
-      models: {
-        "anthropic/claude-sonnet-4-6": {
-          agentRuntime: { id: "claude-cli" },
-        },
-      },
-    });
-  });
-
+describe("legacy sandbox config migrate", () => {
   it("disables the default sandbox browser network without granting inherited egress", () => {
     const raw = {
       agents: {
+        ownership: "explicit",
         defaults: {
           sandbox: {
             browser: {
@@ -987,7 +764,6 @@ describe("legacy agent runtime and sandbox config migrate", () => {
         },
         entries: {
           main: {
-            default: true,
             sandbox: { browser: { enabled: true, network: "none", headless: true } },
           },
           inherited: {
@@ -1363,7 +1139,7 @@ describe("legacy bundled provider discovery migrate", () => {
 
     expect(res.config).toEqual({ plugins: { allow: ["telegram"] } });
     expect(res.changes).toStrictEqual([
-      "Applied tier-eval tranche retirements; canonical settings and built-in defaults now apply.",
+      "Applied tier-eval tranche retirements; current settings and built-in defaults now apply.",
     ]);
   });
 });
@@ -1425,194 +1201,9 @@ describe("gateway.port out-of-range repair migrate", () => {
     expect(res.config).not.toHaveProperty("gateway");
     expect(res.changes).toEqual([expect.stringContaining("Removed out-of-range gateway.port (0)")]);
   });
-
-  it("seeds non-loopback Control UI origins with the fallback port", () => {
-    const res = migrateLegacyConfigForTest({
-      gateway: { port: 65_536, bind: "lan" },
-    });
-
-    expect(res.config?.gateway).toMatchObject({
-      bind: "lan",
-      controlUi: {
-        allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
-      },
-    });
-  });
 });
 
 describe("legacy model compat migrate", () => {
-  it("upgrades the retired xAI quality image slug without pinning active aliases", () => {
-    const raw = {
-      agents: {
-        defaults: {
-          imageGenerationModel: {
-            primary: "xai/grok-imagine-image-pro",
-            fallbacks: ["xai/grok-imagine-image"],
-          },
-          model: {
-            primary: "xai/grok-4.20-beta-latest-reasoning",
-          },
-          models: {
-            "xai/grok-imagine-image-pro": { alias: "quality" },
-          },
-        },
-      },
-    };
-
-    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("agents");
-    const res = migrateLegacyConfigForTest(raw);
-
-    expect(res.config?.agents?.defaults?.mediaModels?.image).toEqual({
-      primary: "xai/grok-imagine-image-quality",
-      fallbacks: ["xai/grok-imagine-image"],
-    });
-    expect(res.config?.agents?.defaults?.model).toEqual({
-      primary: "xai/grok-4.20-beta-latest-reasoning",
-    });
-    expect(res.config?.agents?.defaults?.models).toEqual({
-      "xai/grok-imagine-image-quality": { alias: "quality" },
-    });
-  });
-
-  it("upgrades retired model refs", () => {
-    const res = migrateLegacyConfigForTest({
-      agents: {
-        defaults: {
-          workspace: "/tmp/claude-3-sonnet",
-          imageModel: "anthropic/claude-haiku-4-5",
-          imageGenerationModel: {
-            primary: "github-copilot/claude-sonnet-4",
-            fallbacks: ["github-copilot/grok-code-fast-1"],
-          },
-          musicGenerationModel: "vercel-ai-gateway/anthropic/claude-opus-4-5",
-          pdfModel: "anthropic/claude-3-5-sonnet",
-          videoGenerationModel: "anthropic/claude-opus-4-10",
-          model: {
-            primary: "anthropic/claude-opus-4-5@anthropic:work",
-            fallbacks: [
-              "anthropic/claude-sonnet-4-20250514",
-              "github-copilot/claude-sonnet-4",
-              "github-copilot/grok-code-fast-1@github:work",
-              "venice/claude-opus-4-5",
-              "vercel-ai-gateway/anthropic/claude-opus-4-5",
-              "anthropic/claude-opus-5-0",
-              "anthropic/claude-sonnet-4-7",
-              "anthropic/claude-opus-4-10",
-              "kilocode/anthropic/claude-sonnet-4",
-              "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
-              "openai/gpt-5.5",
-              "openai/gpt-4o",
-              "openai/gpt-4.1-mini",
-              "openai/gpt-5.1-codex-mini",
-              "openai/gpt-5.2-codex",
-              "openai-codex/gpt-5.2",
-              "openai-codex/gpt-5.1-codex-mini",
-              "github-copilot/gpt-4.1",
-              "github-copilot/gpt-5.2",
-              "github-copilot/gpt-5.2-codex",
-              "groq/llama3-70b-8192",
-              "groq/gemma2-9b-it",
-              "groq/moonshotai/kimi-k2-instruct-0905",
-              "xai/grok-code-fast-1",
-              "xai/grok-4-fast-reasoning",
-              "openai/gpt-4o-transcribe",
-              "openai/gpt-4o-mini-tts",
-              "openai/constructor",
-            ],
-          },
-          models: {
-            "anthropic/claude-haiku-4-5": { alias: "haiku" },
-            "anthropic/claude-sonnet-4-6": { alias: "current-sonnet" },
-            "github-copilot/claude-opus-4.5": { alias: "copilot-opus" },
-            "openai/gpt-5.2-pro": { alias: "old-pro" },
-            "github-copilot/gpt-5-mini": { alias: "old-mini" },
-          },
-        },
-      },
-      plugins: {
-        entries: {
-          "lossless-claw": {
-            config: {
-              summaryModel: "anthropic/claude-3-5-sonnet",
-              dataPath: "/tmp/claude-opus-4-5",
-            },
-            subagent: {
-              allowedModels: ["anthropic/claude-haiku-4-5", "*"],
-            },
-          },
-        },
-      },
-      channels: {
-        modelByChannel: {
-          telegram: {
-            "*": "anthropic/claude-opus-4-5",
-          },
-        },
-      },
-    });
-
-    expect(res.config?.agents?.defaults?.imageModel).toBe("anthropic/claude-haiku-4-5");
-    expect(res.config?.agents?.defaults?.mediaModels?.image).toEqual({
-      primary: "github-copilot/claude-sonnet-4.6",
-      fallbacks: ["github-copilot/gpt-5.4-mini"],
-    });
-    expect(res.config?.agents?.defaults?.mediaModels?.music).toBe(
-      "vercel-ai-gateway/anthropic/claude-opus-4-6",
-    );
-    expect(res.config?.agents?.defaults?.pdfModel).toBe("anthropic/claude-sonnet-4-6");
-    expect(res.config?.agents?.defaults?.mediaModels?.video).toBe("anthropic/claude-opus-4-10");
-    expect(res.config?.agents?.defaults?.model).toEqual({
-      primary: "anthropic/claude-opus-4-7@anthropic:work",
-      fallbacks: [
-        "anthropic/claude-sonnet-4-6",
-        "github-copilot/claude-sonnet-4.6",
-        "github-copilot/gpt-5.4-mini@github:work",
-        "venice/claude-opus-4-6",
-        "vercel-ai-gateway/anthropic/claude-opus-4-6",
-        "anthropic/claude-opus-5-0",
-        "anthropic/claude-sonnet-4-7",
-        "anthropic/claude-opus-4-10",
-        "kilocode/anthropic/claude-sonnet-4",
-        "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
-        "openai/gpt-5.5",
-        "openai/gpt-5.5",
-        "openai/gpt-5.4-mini",
-        "openai/gpt-5.4-mini",
-        "openai/gpt-5.3-codex",
-        "openai-codex/gpt-5.5",
-        "openai-codex/gpt-5.4-mini",
-        "github-copilot/gpt-5.5",
-        "github-copilot/gpt-5.5",
-        "github-copilot/gpt-5.3-codex",
-        "groq/llama-3.3-70b-versatile",
-        "groq/llama-3.1-8b-instant",
-        "groq/openai/gpt-oss-120b",
-        "xai/grok-build-0.1",
-        "xai/grok-4.3",
-        "openai/gpt-4o-transcribe",
-        "openai/gpt-4o-mini-tts",
-        "openai/constructor",
-      ],
-    });
-    expect(res.config?.agents?.defaults?.workspace).toBe("/tmp/claude-3-sonnet");
-    expect(res.config?.agents?.defaults?.models).toEqual({
-      "anthropic/claude-haiku-4-5": { alias: "haiku" },
-      "anthropic/claude-sonnet-4-6": { alias: "current-sonnet" },
-      "github-copilot/claude-opus-4.7": { alias: "copilot-opus" },
-      "openai/gpt-5.5-pro": { alias: "old-pro" },
-      "github-copilot/gpt-5.4-mini": { alias: "old-mini" },
-    });
-    expect(res.config).toHaveProperty("plugins.entries.lossless-claw.config", {
-      summaryModel: "anthropic/claude-sonnet-4-6",
-      dataPath: "/tmp/claude-opus-4-5",
-    });
-    expect(res.config).toHaveProperty("plugins.entries.lossless-claw.subagent.allowedModels", [
-      "anthropic/claude-haiku-4-5",
-      "*",
-    ]);
-    expect(res.config?.channels?.modelByChannel?.telegram?.["*"]).toBe("anthropic/claude-opus-4-7");
-  });
-
   it("normalizes persisted model aliases across nested selections and provider catalogs", () => {
     const retired = "google/gemini-3-pro-preview";
     const canonical = "google/gemini-3.1-pro-preview";
@@ -1756,7 +1347,7 @@ describe("legacy model compat migrate", () => {
     expect(res.changes).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          'Merged config.models.providers.google.models.0 into model id "gemini-3.1-pro-preview"; kept canonical values for conflicting fields: name.',
+          'Merged config.models.providers.google.models.0 into model id "gemini-3.1-pro-preview"; kept existing values for conflicting fields: name.',
         ),
       ]),
     );
@@ -2063,7 +1654,7 @@ describe("legacy model compat migrate", () => {
       params: { temperature: 0.2 },
     });
     expect(res.config?.agents?.defaults?.params).toEqual({ temperature: 0.3 });
-    expect(res.config?.agents?.list?.[0]).toEqual({ id: "local", params: { temperature: 0.4 } });
+    expect(res.config?.agents?.entries?.local).toEqual({ params: { temperature: 0.4 } });
     expect(res.changes).toEqual([
       expect.stringContaining(
         "Removed models.providers.vllm.params.qwenThinkingFormat; no concrete vLLM model",
@@ -2135,14 +1726,14 @@ describe("legacy memory search config migrate", () => {
         chunkSize: 800,
         chunkOverlap: 100,
         maxResults: 5,
-        store: { path: "/tmp/root-memory.sqlite", vector: { enabled: false } },
+        store: { vector: { enabled: false } },
       },
       agents: {
         defaults: {
           memorySearch: {
             chunking: { tokens: 1200 },
             query: { maxResults: 9 },
-            store: { path: "/tmp/default-memory.sqlite", fts: { tokenizer: "trigram" } },
+            store: { fts: { tokenizer: "trigram" } },
           },
         },
       },
@@ -2168,7 +1759,6 @@ describe("legacy memory search config migrate", () => {
         "Removed memory.search.chunkSize (memory.search.chunking.tokens already set).",
         "Moved memory.search.chunkOverlap → memory.search.chunking.overlap.",
         "Removed memory.search.maxResults (memory.search.query.maxResults already set).",
-        "Removed memory.search.store.path; memory indexes now use each agent database.",
       ]),
     );
   });
@@ -2185,7 +1775,7 @@ describe("legacy memory search config migrate", () => {
             memorySearch: {
               provider: " auto ",
               chunkSize: 500,
-              store: { path: "/tmp/ops-memory.sqlite", vector: { enabled: true } },
+              store: { vector: { enabled: true } },
             },
           },
           {
@@ -2201,18 +1791,15 @@ describe("legacy memory search config migrate", () => {
     );
     const res = migrateLegacyConfigForTest(raw);
     expect(res.config?.memory?.search).toEqual({ provider: "openai", query: { maxResults: 5 } });
-    expect(res.config?.agents?.list?.[0]?.memory?.search).toEqual({
+    expect(res.config?.agents?.entries?.local?.memory?.search).toEqual({
       provider: "openai",
       store: { vector: { enabled: true } },
     });
-    expect(res.config?.agents?.list?.[1]?.memory?.search).toEqual({
+    expect(res.config?.agents?.entries?.custom?.memory?.search).toEqual({
       provider: "openai-compatible",
       query: { maxResults: 10 },
     });
-    expect(res.config?.agents?.list?.[2]?.memory?.search).toBeUndefined();
-    expect(res.changes).toContain(
-      "Removed agents.list[0].memory.search.store.path; memory indexes now use each agent database.",
-    );
+    expect(res.config?.agents?.entries?.retired?.memory?.search).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

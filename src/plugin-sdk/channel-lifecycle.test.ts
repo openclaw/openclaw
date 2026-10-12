@@ -1,6 +1,3 @@
-/**
- * Tests channel lifecycle hooks and SDK-visible lifecycle dispatch behavior.
- */
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -65,37 +62,28 @@ describe("plugin-sdk channel lifecycle helpers", () => {
     });
   });
 
-  it("resolves waitUntilAbort when signal aborts", async () => {
-    const abort = new AbortController();
-    const task = waitUntilAbort(abort.signal);
-    await expectTaskPending(task);
-
-    abort.abort();
-    await expect(task).resolves.toBeUndefined();
-  });
-
-  it("runs abort cleanup before resolving", async () => {
-    const abort = new AbortController();
-    const onAbort = vi.fn(async () => undefined);
-
-    const task = waitUntilAbort(abort.signal, onAbort);
-    abort.abort();
-
-    await expect(task).resolves.toBeUndefined();
-    expect(onAbort).toHaveBeenCalledOnce();
-  });
-
-  it("rejects when an abort cleanup throws synchronously", async () => {
+  it.each(["none", "success", "throw"] as const)("settles abort cleanup: %s", async (outcome) => {
     const abort = new AbortController();
     const failure = new Error("abort cleanup failed");
-    const task = waitUntilAbort(abort.signal, () => {
-      throw failure;
+    const onAbort = vi.fn(() => {
+      if (outcome === "throw") {
+        throw failure;
+      }
+      return Promise.resolve();
     });
-    const rejected = expect(task).rejects.toBe(failure);
-
+    const task = waitUntilAbort(abort.signal, outcome === "none" ? undefined : onAbort);
+    if (outcome === "none") {
+      await expectTaskPending(task);
+    }
+    const settled =
+      outcome === "throw"
+        ? expect(task).rejects.toBe(failure)
+        : expect(task).resolves.toBeUndefined();
     abort.abort();
-
-    await rejected;
+    await settled;
+    if (outcome !== "none") {
+      expect(onAbort).toHaveBeenCalledOnce();
+    }
   });
 
   it("keeps passive account lifecycle pending until abort, then stops once", async () => {
@@ -195,13 +183,26 @@ describe("plugin-sdk channel lifecycle helpers", () => {
     expect(assertAfterAbort).not.toHaveBeenCalled();
   });
 
-  it("keeps server task pending until close, then resolves", async () => {
+  it.each([false, true])("keeps server task pending until close (abort=%s)", async (useAbort) => {
     const server = createFakeServer();
-    const task = keepHttpServerTaskAlive({ server });
+    const abort = new AbortController();
+    const onAbort = vi.fn(async () => {
+      server.close();
+    });
+    const task = keepHttpServerTaskAlive({
+      server,
+      ...(useAbort ? { abortSignal: abort.signal, onAbort } : {}),
+    });
     await expectTaskPending(task);
-
-    server.close();
+    if (useAbort) {
+      abort.abort();
+    } else {
+      server.close();
+    }
     await expect(task).resolves.toBeUndefined();
+    if (useAbort) {
+      expect(onAbort).toHaveBeenCalledOnce();
+    }
   });
 
   it.each(["success", "throw", "reject"] as const)(
@@ -231,22 +232,4 @@ describe("plugin-sdk channel lifecycle helpers", () => {
       }
     },
   );
-
-  it("triggers abort hook once and resolves after close", async () => {
-    const server = createFakeServer();
-    const abort = new AbortController();
-    const onAbort = vi.fn(async () => {
-      server.close();
-    });
-
-    const task = keepHttpServerTaskAlive({
-      server,
-      abortSignal: abort.signal,
-      onAbort,
-    });
-
-    abort.abort();
-    await expect(task).resolves.toBeUndefined();
-    expect(onAbort).toHaveBeenCalledOnce();
-  });
 });

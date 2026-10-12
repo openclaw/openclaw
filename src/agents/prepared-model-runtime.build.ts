@@ -75,7 +75,7 @@ export type PreparedModelRuntimeBuildResult = Readonly<{
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }>;
 
-function groupBuildCandidates<T extends PreparedModelRuntimeBuildCandidate, K>(
+export function groupBuildCandidates<T extends PreparedModelRuntimeBuildCandidate, K>(
   candidates: readonly T[],
   keyOf: (candidate: T) => K,
 ): Map<K, T[]> {
@@ -99,6 +99,7 @@ async function buildSnapshotBatch(
   onStage?: (stage: string) => void,
   onPrepared?: (input: PreparedModelRuntimeInput, result: PreparedModelRuntimeBuildResult) => void,
   signal?: AbortSignal,
+  providerDiscoveryTimeoutMs?: number,
 ): Promise<PreparedModelRuntimeBuildResult[]> {
   const configs = new Map<
     OpenClawConfig,
@@ -135,6 +136,7 @@ async function buildSnapshotBatch(
   ) => {
     const catalogAccess = await createFullModelCatalogAccess(
       {
+        catalogOwner: candidate.catalogOwner,
         agentFacts,
         nativeConfigFingerprint: candidate.nativeConfigFingerprint,
         catalogFacts,
@@ -344,6 +346,8 @@ async function buildSnapshotBatch(
               agentFacts,
               pluginGeneration,
               catalogMode,
+              true,
+              { providerDiscoveryTimeoutMs },
             );
             assertPreparedModelRuntimeInputCurrent(input, candidate.isBuildCurrent);
             catalogSources.set(input, catalogSource);
@@ -470,6 +474,7 @@ export function startSerializedSnapshotBuildBatch(
     onPrepared: (input: PreparedModelRuntimeInput, result: PreparedModelRuntimeBuildResult) => void;
   },
   acquisitionSignal?: AbortSignal,
+  providerDiscoveryTimeoutMs?: number,
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult[]>;
   completion: Promise<void>;
@@ -535,6 +540,7 @@ export function startSerializedSnapshotBuildBatch(
           }
         : undefined,
       signal,
+      providerDiscoveryTimeoutMs,
     );
   })();
   let abandoned = false;

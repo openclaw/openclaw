@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEventForTest } from "../../audit/message-audit-events.test-support.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -11,8 +11,9 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { updateDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
+import { resolveDeliveryQueueStateEnv } from "../delivery-queue-state-context.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
-import { failDurableDelivery } from "./delivery-completion.js";
+import * as deliveryCompletionRuntime from "./delivery-completion.js";
 import * as mediaSpool from "./delivery-queue-media-spool.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { renewDeliveryPlatformSendLease } from "./delivery-queue-platform-lease.js";
@@ -173,18 +174,21 @@ describe("exhausted delivery producer recovery", () => {
       sessionKey: "agent:main:directchat:direct:recipient",
       storePath: path.join(tmpDir(), "sessions.json"),
     };
-    await sessionAccessor.replaceSessionEntry(completion, {
-      sessionId: completion.sessionId,
-      updatedAt: now,
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text: "pending final",
-        context: { channel: "directchat", to: "recipient" },
-        createdAt: now,
-        intentId: completion.intentId,
-        deliveries: stale ? [] : [{ id, state: "queued" }],
+    await sessionAccessor.replaceSessionEntry(
+      { ...completion, env: resolveDeliveryQueueStateEnv(tmpDir()) },
+      {
+        sessionId: completion.sessionId,
+        updatedAt: now,
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "pending final",
+          context: { channel: "directchat", to: "recipient" },
+          createdAt: now,
+          intentId: completion.intentId,
+          deliveries: stale ? [] : [{ id, state: "queued" }],
+        },
       },
-    });
+    );
     return completion;
   }
 
@@ -235,7 +239,7 @@ describe("exhausted delivery producer recovery", () => {
           status: "suppressed",
           reason: "no_visible_payload",
         });
-        vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockRejectedValueOnce(
+        vi.spyOn(deliveryCompletionRuntime, "settleDurableDelivery").mockRejectedValueOnce(
           new Error("synthetic rejection projection failure"),
         );
         throw new PlatformMessageNotDispatchedError("synthetic permanent rejection", {
@@ -268,7 +272,10 @@ describe("exhausted delivery producer recovery", () => {
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(audits).toEqual(["suppressed", "failed"]);
       expect(
-        sessionAccessor.loadSessionEntry(completion)?.pendingFinalDelivery?.deliveries,
+        sessionAccessor.loadSessionEntry({
+          ...completion,
+          env: resolveDeliveryQueueStateEnv(tmpDir()),
+        })?.pendingFinalDelivery?.deliveries,
       ).toEqual([{ id, state: "suppressed" }]);
       expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("settlement");
     } finally {
@@ -320,7 +327,11 @@ describe("exhausted delivery producer recovery", () => {
     if (!staged) {
       throw new Error("Expected settlement owner");
     }
-    await failDurableDelivery(completion, tmpDir());
+    await deliveryCompletionRuntime.settleDurableDelivery(
+      completion,
+      { platformSendStarted: true },
+      tmpDir(),
+    );
     expect(await queueStorage.finalizeDeliveryFailureSettlement(staged, tmpDir())).toBe(true);
     expect(
       await queueStorage.stageDeliveryFailureSettlement(staged, staged.settlement!, tmpDir()),
@@ -332,12 +343,14 @@ describe("exhausted delivery producer recovery", () => {
     await preparePendingFinal(id);
     const entered = createDeferred();
     const release = createDeferred();
-    const update = sessionAccessor.patchSessionEntryCore;
-    vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(async (...args) => {
-      entered.resolve();
-      await release.promise;
-      return update(...args);
-    });
+    const settle = deliveryCompletionRuntime.settleDurableDelivery;
+    vi.spyOn(deliveryCompletionRuntime, "settleDurableDelivery").mockImplementationOnce(
+      async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return settle(...args);
+      },
+    );
     const audits: string[] = [];
     const unsubscribe = onTrustedMessageAuditEventForTest((event) => {
       if (event.action === "message.outbound.finished") {
@@ -346,7 +359,11 @@ describe("exhausted delivery producer recovery", () => {
     });
     const startup = recover("startup");
     try {
-      await entered.promise;
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        startup,
+        "Recovery finished before entering durable settlement",
+      );
       await recover("recurring");
       expect(audits).toEqual([]);
     } finally {
@@ -369,7 +386,7 @@ describe("exhausted delivery producer recovery", () => {
     await fs.writeFile(artifact, "audio-bytes");
     const completion = await preparePendingFinal(id, [{ text: "reply", mediaUrl: artifact }]);
     const fault = vi
-      .spyOn(sessionAccessor, "patchSessionEntryCore")
+      .spyOn(deliveryCompletionRuntime, "settleDurableDelivery")
       .mockRejectedValueOnce(new Error("synthetic owner fault"));
     await recover("startup");
     expect(await queueStorage.findDeliveryIntentOwner(id, tmpDir())).toMatchObject({
@@ -380,9 +397,12 @@ describe("exhausted delivery producer recovery", () => {
     await expect(queueStorage.reserveDeliveryAttempt(id, 5, tmpDir())).rejects.toThrow(
       "No pending",
     );
-    expect(sessionAccessor.loadSessionEntry(completion)?.pendingFinalDelivery?.deliveries).toEqual([
-      { id, state: "queued" },
-    ]);
+    expect(
+      sessionAccessor.loadSessionEntry({
+        ...completion,
+        env: resolveDeliveryQueueStateEnv(tmpDir()),
+      })?.pendingFinalDelivery?.deliveries,
+    ).toEqual([{ id, state: "queued" }]);
     const database = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
     });
@@ -403,7 +423,12 @@ describe("exhausted delivery producer recovery", () => {
     fault.mockRestore();
     await recover("recurring");
     expect(queueStatus(id)).toBe("failed");
-    expect(sessionAccessor.loadSessionEntry(completion)).toMatchObject({
+    expect(
+      sessionAccessor.loadSessionEntry({
+        ...completion,
+        env: resolveDeliveryQueueStateEnv(tmpDir()),
+      }),
+    ).toMatchObject({
       pendingFinalDelivery: { deliveries: [{ id, state: "unknown" }] },
       pendingDeliveryNotice: { intentId: completion.intentId, state: "owed" },
     });
@@ -433,7 +458,10 @@ describe("exhausted delivery producer recovery", () => {
       });
       expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("settlement");
       expect(
-        sessionAccessor.loadSessionEntry(completion)?.pendingFinalDelivery?.deliveries,
+        sessionAccessor.loadSessionEntry({
+          ...completion,
+          env: resolveDeliveryQueueStateEnv(tmpDir()),
+        })?.pendingFinalDelivery?.deliveries,
       ).toEqual([{ id, state: "unknown" }]);
     } finally {
       unsubscribe();

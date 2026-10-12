@@ -6,7 +6,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { completeSimple } from "../llm/stream.js";
 import type { Api, AssistantMessage, Model } from "../llm/types.js";
-import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
 import { completeSimpleWithTimeout, isLiveTestEnabled } from "./live-test-helpers.js";
@@ -189,7 +189,7 @@ export async function resolveLiveDirectModelPool(params: {
   const { resolveModelAsync } = await import("./embedded-agent-runner/model.js");
   const cfg = getRuntimeConfig();
   const agentDir = resolveDefaultAgentDir(cfg);
-  const authStorage = discoverAuthStorage(agentDir);
+  const { authStorage } = await discoverAuthStorageFacts(agentDir);
   const modelRegistry = discoverModels(authStorage, agentDir, { config: cfg });
   const rawModel = process.env[params.envVar]?.trim();
   const parsed = rawModel ? parseModelRef(rawModel, params.provider) : null;

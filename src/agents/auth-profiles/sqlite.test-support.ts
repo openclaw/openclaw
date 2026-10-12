@@ -4,6 +4,7 @@ import path from "node:path";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import type { ApiKeyCredential, AuthProfileStore } from "./types.js";
 
@@ -37,7 +38,8 @@ export async function withAgentDirEnv(
     );
   } finally {
     clearRuntimeAuthProfileStoreSnapshots();
-    closeOpenClawAgentDatabasesForTest();
+    await cleanupSessionStateForTest({ stateDir: root, rootPath: root });
+    closeOpenClawAgentDatabasesForTest(root);
     closeOpenClawStateDatabaseForTest();
     fs.rmSync(root, { recursive: true, force: true });
   }

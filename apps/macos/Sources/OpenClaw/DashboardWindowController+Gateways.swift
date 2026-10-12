@@ -115,11 +115,8 @@ extension DashboardWindowController {
         snapshot: DashboardGatewaySnapshot,
         dispatch: Bool) -> String
     {
-        guard let data = try? JSONEncoder().encode(snapshot),
-              let json = String(data: data, encoding: .utf8)
-        else {
-            return ""
-        }
+        guard let data = try? JSONEncoder().encode(snapshot) else { return "" }
+        let json = String(bytes: data, encoding: .utf8)!
         let event = dispatch
             ? "window.dispatchEvent(new CustomEvent('openclaw:native-gateways-changed'," +
             "{detail:window.__OPENCLAW_NATIVE_GATEWAYS__}));"

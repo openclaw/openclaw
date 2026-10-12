@@ -19,7 +19,7 @@ import {
   dispatchReplyFromConfig,
   globalBeforeAll0,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -128,36 +128,63 @@ describe("dispatch binding activity settlement", () => {
   );
 
   it.each([
-    { change: "bindingId", outcome: "complete" },
-    { change: "bindingId", outcome: "fail" },
-    { change: "bindingId", outcome: "replace-again" },
-    { change: "boundAt", outcome: "complete" },
-    { change: "targetSessionKey", outcome: "complete" },
-    { change: "targetKind", outcome: "complete" },
+    { owner: "ACP", change: "bindingId", outcome: "complete" },
+    { owner: "ACP", change: "bindingId", outcome: "fail" },
+    { owner: "ACP", change: "bindingId", outcome: "replace-again" },
+    { owner: "ACP", change: "boundAt", outcome: "complete" },
+    { owner: "ACP", change: "targetSessionKey", outcome: "complete" },
+    { owner: "ACP", change: "targetKind", outcome: "complete" },
+    { owner: "plugin", change: "bindingId", outcome: "complete" },
+    { owner: "plugin", change: "targetSessionKey", outcome: "complete" },
+    { owner: "plugin", change: "boundAt", outcome: "complete" },
+    { owner: "plugin", change: "targetKind", outcome: "complete" },
   ] as const)(
-    "settles a replacement ACP binding after $change changes: $outcome",
-    async ({ change, outcome }) => {
-      mocks.tryFastAbortFromMessage.mockResolvedValue({ handled: true, aborted: false });
-      const original: SessionBindingRecord = {
-        bindingId: "binding-acp-before",
-        targetSessionKey: "agent:main:acp:before",
-        targetKind: "session",
-        status: "active",
-        boundAt: 1,
-        conversation: { channel: "discord", accountId: "default", conversationId: "C123" },
-      };
+    "settles replacement $owner ownership after $change changes: $outcome",
+    async ({ owner, change, outcome }) => {
+      const plugin = owner === "plugin";
+      if (plugin) {
+        setNoAbort();
+        mockPluginBindingClaim();
+      } else {
+        mocks.tryFastAbortFromMessage.mockResolvedValue({ handled: true, aborted: false });
+      }
+      const original: SessionBindingRecord = plugin
+        ? createPluginBindingRecord({
+            bindingId: "binding-owner-before",
+            targetSessionKey: "plugin-binding:test:before",
+            conversation: {
+              channel: "discord",
+              accountId: "default",
+              conversationId: "channel:activity",
+            },
+            pluginRoot: "/tmp/test-plugin",
+          })
+        : {
+            bindingId: "binding-acp-before",
+            targetSessionKey: "agent:main:acp:before",
+            targetKind: "session",
+            status: "active",
+            boundAt: 1,
+            conversation: { channel: "discord", accountId: "default", conversationId: "C123" },
+          };
       const replacement: SessionBindingRecord = {
         ...original,
-        bindingId: change === "bindingId" ? "binding-acp-after" : original.bindingId,
-        boundAt: change === "boundAt" ? 2 : original.boundAt,
+        bindingId: change === "bindingId" ? "binding-owner-after" : original.bindingId,
+        boundAt: change === "boundAt" ? original.boundAt + 1 : original.boundAt,
         targetSessionKey:
-          change === "targetSessionKey" ? "agent:main:acp:after" : original.targetSessionKey,
+          change === "targetSessionKey" || (plugin && change === "bindingId")
+            ? plugin
+              ? "plugin-binding:test:after"
+              : "agent:main:acp:after"
+            : original.targetSessionKey,
         targetKind: change === "targetKind" ? "subagent" : original.targetKind,
       };
       let current = original;
-      sessionBindingMocks.resolveByConversation.mockImplementation(() => {
-        throw new Error("dispatch must await binding reads");
-      });
+      if (!plugin) {
+        sessionBindingMocks.resolveByConversation.mockImplementation(() => {
+          throw new Error("dispatch must await binding reads");
+        });
+      }
       sessionBindingMocks.resolveByConversationAsync.mockImplementation(async () => current);
       const firstActivity = createDeferred();
       const firstStarted = createDeferred();
@@ -178,25 +205,30 @@ describe("dispatch binding activity settlement", () => {
         ctx: buildTestCtx({
           Provider: "discord",
           Surface: "discord",
-          To: "discord:C123",
-          SessionKey: "agent:main:discord:C123",
+          To: plugin ? "channel:activity" : "discord:C123",
+          SessionKey: plugin ? "agent:main:discord:channel:activity" : "agent:main:discord:C123",
+          ...(plugin ? { Body: "hello" } : {}),
         }),
         cfg: emptyConfig,
         dispatcher,
-        replyResolver,
+        ...(plugin ? {} : { replyResolver }),
       });
       await Promise.race([firstStarted.promise, dispatch]);
       current = replacement;
       firstActivity.resolve();
       await Promise.race([replacementStarted.promise, dispatch]);
       expect(sessionBindingMocks.touch).toHaveBeenCalledTimes(2);
-      expect(sessionBindingMocks.touch).toHaveBeenLastCalledWith(
-        replacement.bindingId,
-        undefined,
-        replacement.conversation,
-      );
-      expect(mocks.tryFastAbortFromMessage).not.toHaveBeenCalled();
-      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      if (plugin) {
+        expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
+      } else {
+        expect(sessionBindingMocks.touch).toHaveBeenLastCalledWith(
+          replacement.bindingId,
+          undefined,
+          replacement.conversation,
+        );
+        expect(mocks.tryFastAbortFromMessage).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      }
       const failure =
         outcome === "complete"
           ? undefined
@@ -219,83 +251,26 @@ describe("dispatch binding activity settlement", () => {
         expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
       } else {
         await dispatch;
-        expect(mocks.tryFastAbortFromMessage).toHaveBeenCalledOnce();
-        expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+        if (plugin) {
+          expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledExactlyOnceWith(
+            "openclaw-codex-app-server",
+            expect.anything(),
+            expect.objectContaining({
+              pluginBinding: expect.objectContaining({
+                bindingId: current.bindingId,
+                boundAt: current.boundAt,
+              }),
+            }),
+          );
+        } else {
+          expect(mocks.tryFastAbortFromMessage).toHaveBeenCalledOnce();
+          expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+        }
       }
       expect(sessionBindingMocks.touch).toHaveBeenCalledTimes(2);
-      expect(replyResolver).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["bindingId", "targetSessionKey", "boundAt", "targetKind"] as const)(
-    "refreshes plugin ownership when %s changes while activity is pending",
-    async (change) => {
-      setNoAbort();
-      mockPluginBindingClaim();
-      const original = createPluginBindingRecord({
-        bindingId: "binding-owner-before",
-        targetSessionKey: "plugin-binding:test:before",
-        conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel:activity",
-        },
-        pluginRoot: "/tmp/test-plugin",
-      });
-      let current = original;
-      sessionBindingMocks.resolveByConversationAsync.mockImplementation(async () => current);
-      const mutation = createDeferred();
-      const started = createDeferred();
-      const replacementMutation = createDeferred();
-      const replacementStarted = createDeferred();
-      sessionBindingMocks.touch
-        .mockImplementationOnce(() => {
-          started.resolve();
-          return mutation.promise;
-        })
-        .mockImplementationOnce(() => {
-          replacementStarted.resolve();
-          return replacementMutation.promise;
-        });
-      const dispatch = dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          Provider: "discord",
-          Surface: "discord",
-          To: "channel:activity",
-          Body: "hello",
-          SessionKey: "agent:main:discord:channel:activity",
-        }),
-        cfg: emptyConfig,
-        dispatcher: createDispatcher(),
-      });
-      await started.promise;
-      current = {
-        ...original,
-        bindingId: change === "bindingId" ? "binding-owner-after" : original.bindingId,
-        targetSessionKey:
-          change === "bindingId" || change === "targetSessionKey"
-            ? "plugin-binding:test:after"
-            : original.targetSessionKey,
-        boundAt: change === "boundAt" ? original.boundAt + 1 : original.boundAt,
-        targetKind: change === "targetKind" ? "subagent" : original.targetKind,
-      };
-      mutation.resolve();
-      await Promise.race([replacementStarted.promise, dispatch]);
-      expect(sessionBindingMocks.touch).toHaveBeenCalledTimes(2);
-      expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
-      replacementMutation.resolve();
-      await dispatch;
-      expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledExactlyOnceWith(
-        "openclaw-codex-app-server",
-        expect.anything(),
-        expect.objectContaining({
-          pluginBinding: expect.objectContaining({
-            bindingId: current.bindingId,
-            boundAt: current.boundAt,
-          }),
-        }),
-      );
-      expect(sessionBindingMocks.touch).toHaveBeenCalledTimes(2);
+      if (!plugin) {
+        expect(replyResolver).not.toHaveBeenCalled();
+      }
     },
   );
 });
@@ -429,33 +404,24 @@ describe("channel-derived ACP route admission", () => {
     },
   );
 
-  it("preserves an explicit direct ACP target without a runtime binding", async () => {
-    const runtime = createAcpRuntime([{ type: "done" }]);
-    acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
-    sessionBindingMocks.resolveByConversationAsync.mockResolvedValue(null);
-    await dispatchReplyFromConfig({
-      ctx: prepareContext(false),
-      cfg: { acp: { enabled: true, dispatch: { enabled: true } } },
-      dispatcher: createDispatcher(),
-    });
-    expect(runtime.runTurn).toHaveBeenCalledOnce();
-    expect(runtime.runTurn.mock.calls[0]?.[0].handle.sessionKey).toBe(binding.targetSessionKey);
-  });
-  it("preserves the prepared thread target while revalidating its parent binding", async () => {
-    const ctx = prepareContext(true, "1234:42");
-    const runtime = createAcpRuntime([{ type: "done" }]);
-    acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
-    sessionBindingMocks.resolveByConversationAsync.mockImplementation(async (ref) =>
-      ref.conversationId === binding.conversation.conversationId ? binding : null,
-    );
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: { acp: { enabled: true, dispatch: { enabled: true } } },
-      dispatcher: createDispatcher(),
-    });
-    expect(runtime.runTurn).toHaveBeenCalledOnce();
-    expect(runtime.runTurn.mock.calls[0]?.[0].handle.sessionKey).toBe(
-      `${binding.targetSessionKey}:thread:1234:42`,
-    );
-  });
+  it.each([
+    { bound: false, threadId: undefined, target: binding.targetSessionKey },
+    { bound: true, threadId: "1234:42", target: `${binding.targetSessionKey}:thread:1234:42` },
+  ])(
+    "preserves the prepared ACP target (bound: $bound, thread: $threadId)",
+    async ({ bound, threadId, target }) => {
+      const runtime = createAcpRuntime([{ type: "done" }]);
+      acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
+      sessionBindingMocks.resolveByConversationAsync.mockImplementation(async (ref) =>
+        bound && ref.conversationId === binding.conversation.conversationId ? binding : null,
+      );
+      await dispatchReplyFromConfig({
+        ctx: prepareContext(bound, threadId),
+        cfg: { acp: { enabled: true, dispatch: { enabled: true } } },
+        dispatcher: createDispatcher(),
+      });
+      expect(runtime.runTurn).toHaveBeenCalledOnce();
+      expect(runtime.runTurn.mock.calls[0]?.[0].handle.sessionKey).toBe(target);
+    },
+  );
 });

@@ -19,6 +19,7 @@ import { requesterProfileSchema } from "../schema/typebox.js";
 import {
   describeSessionLinkRule,
   describeSessionsHistoryTool,
+  SESSION_LINK_RULE_DESCRIPTION,
   SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import { stripToolMessages } from "./chat-history-text.js";
@@ -42,6 +43,7 @@ import {
 import {
   createSessionVisibilityRowChecker,
   formatSessionToolAccessDenial,
+  isSessionToolMainAlias,
   resolveSessionReference,
   resolveSessionToolAccess,
   resolveSessionToolContext,
@@ -78,11 +80,7 @@ const SessionsHistoryOutputSchema = Type.Union([
       contentTruncated: Type.Boolean(),
       contentRedacted: Type.Boolean(),
       bytes: Type.Number(),
-      sessionLinkRule: Type.Optional(
-        Type.String({
-          description: "How to build Control UI URLs for sessionKey values in this result.",
-        }),
-      ),
+      sessionLinkRule: Type.Optional(Type.String({ description: SESSION_LINK_RULE_DESCRIPTION })),
       offset: Type.Optional(Type.Number()),
       nextOffset: Type.Optional(Type.Number()),
       hasMore: Type.Optional(Type.Boolean()),
@@ -111,25 +109,6 @@ type ChatHistoryPaginationMetadata = Partial<
   }
 >;
 
-function truncateHistoryText(
-  text: string,
-  maxChars = SESSIONS_HISTORY_TEXT_MAX_CHARS,
-): {
-  text: string;
-  truncated: boolean;
-  redacted: boolean;
-} {
-  // sessions_history is a tool surface, not a log sink. Keep it redacted even
-  // when operators disable general-purpose log redaction.
-  const sanitized = redactToolPayloadText(text);
-  const redacted = sanitized !== text;
-  if (sanitized.length <= maxChars) {
-    return { text: sanitized, truncated: false, redacted };
-  }
-  const cut = truncateUtf16Safe(sanitized, maxChars);
-  return { text: `${cut}\n…(truncated)…`, truncated: true, redacted };
-}
-
 function sanitizeHistoryMessage(
   message: unknown,
   maxChars = SESSIONS_HISTORY_TEXT_MAX_CHARS,
@@ -145,10 +124,14 @@ function sanitizeHistoryMessage(
   let truncated = false;
   let redacted = false;
   const sanitizeText = (text: string) => {
-    const result = truncateHistoryText(text, maxChars);
-    truncated ||= result.truncated;
-    redacted ||= result.redacted;
-    return result.text;
+    // Tool output stays redacted even when general-purpose log redaction is disabled.
+    const sanitized = redactToolPayloadText(text);
+    redacted ||= sanitized !== text;
+    if (sanitized.length <= maxChars) {
+      return sanitized;
+    }
+    truncated = true;
+    return `${truncateUtf16Safe(sanitized, maxChars)}\n…(truncated)…`;
   };
   // Tool result details often contain very large nested payloads.
   for (const field of ["details", "usage", "cost"]) {
@@ -404,11 +387,7 @@ export function createSessionsHistoryTool(opts?: {
       }).sessionAgentId;
       const normalizedInputKey = sessionKeyParam.trim();
       const isCurrentSession = normalizedInputKey === "current";
-      const isConfiguredMainAlias =
-        normalizedInputKey === "main" ||
-        normalizedInputKey === "global" ||
-        normalizedInputKey === mainKey ||
-        normalizedInputKey === alias;
+      const isConfiguredMainAlias = isSessionToolMainAlias(normalizedInputKey, { mainKey, alias });
       const inputStoreOwner =
         shouldResolveSessionIdInput(sessionKeyParam) && !isConfiguredMainAlias
           ? { kind: "none" as const }

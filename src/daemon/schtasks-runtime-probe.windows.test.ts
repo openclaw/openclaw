@@ -41,7 +41,7 @@ it.each([
     detail: "service runtime inspection failed",
     inspectionFailure: {
       code: "service-runtime-inspection-failed",
-      detail: `Scheduled Task probe timed out after ${expected} ms (ETIMEDOUT).`,
+      detail: `Scheduled Task check timed out after ${expected} ms (ETIMEDOUT).`,
       timeoutMs: expected,
     },
     missingUnit: false,

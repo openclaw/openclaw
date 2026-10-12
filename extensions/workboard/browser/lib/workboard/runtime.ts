@@ -1,11 +1,15 @@
+import type { WorkboardChange } from "@openclaw/workboard-contract";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { WORKBOARD_DRAFT_DEFAULTS } from "./card-state.ts";
+import { normalizeWorkboardChange } from "./change-payload.ts";
 import { WORKBOARD_STATUSES, type WorkboardUiState } from "./types.ts";
 
 export type WorkboardHost = object;
 
-export type WorkboardLoadToken = {
-  queuedAfterGeneration?: number;
-  catalogOnly: boolean;
+export type WorkboardClientContext = {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  requestUpdate?: () => void;
 };
 
 type WorkboardLiveRefreshEntry = {
@@ -17,33 +21,21 @@ type WorkboardLiveRefreshEntry = {
 
 type WorkboardRuntime = {
   state?: WorkboardUiState;
+  cardsRevision?: WorkboardChange | null;
   loadPromise?: Promise<boolean>;
-  loadToken?: WorkboardLoadToken;
+  loadClient?: GatewayBrowserClient;
+  loadCatalogOnly?: boolean;
   loadError?: string;
-  loadGeneration?: number;
-  liveRefreshGeneration?: number;
   liveChangeEpoch?: string;
   liveHighestSeenRevision?: number;
   liveAppliedRevision?: number;
   liveRefreshPending?: boolean;
-  liveInvalidationRevision?: number;
   liveRefreshPromise?: Promise<void>;
   liveRefreshRetryTimer?: ReturnType<typeof setTimeout>;
   liveRefreshEntry?: WorkboardLiveRefreshEntry;
 };
 
 const workboardRuntimes = new WeakMap<WorkboardHost, WorkboardRuntime>();
-export function nextWorkboardLoadGeneration(host: WorkboardHost): number {
-  const runtime = getWorkboardRuntime(host);
-  const generation = (runtime.loadGeneration ?? 0) + 1;
-  runtime.loadGeneration = generation;
-  return generation;
-}
-
-export function isCurrentWorkboardLoadGeneration(host: WorkboardHost, generation: number): boolean {
-  return getWorkboardRuntime(host).loadGeneration === generation;
-}
-
 export function invalidateWorkboardLoads(host: WorkboardHost) {
   const runtime = getWorkboardRuntime(host);
   const state = runtime.state;
@@ -57,15 +49,15 @@ export function invalidateWorkboardLoads(host: WorkboardHost) {
       }
     }
   }
-  nextWorkboardLoadGeneration(host);
+  delete runtime.cardsRevision;
   delete runtime.loadPromise;
-  delete runtime.loadToken;
+  delete runtime.loadClient;
+  delete runtime.loadCatalogOnly;
 }
 
 export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
   const runtime = getWorkboardRuntime(host);
   const loadInFlight = Boolean(runtime.loadPromise);
-  runtime.liveRefreshGeneration = (runtime.liveRefreshGeneration ?? 0) + 1;
   if (runtime.liveRefreshRetryTimer) {
     clearTimeout(runtime.liveRefreshRetryTimer);
     delete runtime.liveRefreshRetryTimer;
@@ -76,7 +68,6 @@ export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
   delete runtime.liveHighestSeenRevision;
   delete runtime.liveAppliedRevision;
   delete runtime.liveRefreshPending;
-  delete runtime.liveInvalidationRevision;
   if (loadInFlight) {
     invalidateWorkboardLoads(host);
   }
@@ -97,9 +88,7 @@ export function resetWorkboardConnectionState(host: WorkboardHost) {
     state.loaded = false;
     state.loadAttempted = false;
   }
-  nextWorkboardLoadGeneration(host);
-  delete runtime.loadPromise;
-  delete runtime.loadToken;
+  invalidateWorkboardLoads(host);
 }
 
 function createDefaultState(): WorkboardUiState {
@@ -130,20 +119,8 @@ function createDefaultState(): WorkboardUiState {
     expandedEmptyStatuses: new Set(),
     lastRefreshAt: null,
     lastRefreshError: null,
-    draftOpen: false,
-    draftDiscardOpen: false,
+    ...WORKBOARD_DRAFT_DEFAULTS,
     draftSaving: false,
-    editingCardId: null,
-    editingCardBase: null,
-    draftTitle: "",
-    draftNotes: "",
-    draftStatus: "todo",
-    draftPriority: "normal",
-    draftLabels: "",
-    draftAgentId: "",
-    draftSessionKey: "",
-    draftTemplateId: "",
-    draftCommentBody: "",
     detailCardId: null,
     detailTab: "overview",
     detailCommentBody: "",
@@ -180,4 +157,12 @@ export function workboardMutationsReady(state: WorkboardUiState): boolean {
 
 export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
   return Boolean(state.bulkSaving || state.draftSaving || state.busyCardIds.size);
+}
+
+export function hasCurrentWorkboardCards(host: WorkboardHost, payload: unknown): boolean {
+  const change = normalizeWorkboardChange(payload);
+  const held = getWorkboardRuntime(host).cardsRevision;
+  return Boolean(
+    change && held && change.epoch === held.epoch && change.cardsRevision === held.revision,
+  );
 }

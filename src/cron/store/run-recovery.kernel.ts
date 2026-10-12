@@ -8,7 +8,7 @@ import {
 } from "../service/startup-run-repair.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "../service/state.js";
 import type { CronJob } from "../types.js";
-import { deleteCronJobRowInDatabase, upsertCronJobRow } from "./row-codec.js";
+import { deleteCronJobRowInDatabase, updateCronRuntimeRow } from "./row-codec.js";
 import { readCronDeliveryAttemptStateInDatabase } from "./run-receipt-delivery.js";
 import {
   findActiveCronRunReceiptInDatabase,
@@ -74,6 +74,7 @@ export function repairCronRunInDatabase(params: {
   ) {
     return { kind: "superseded", ...(currentReceipt ? { receipt: currentReceipt } : {}) };
   }
+  const previousEnabled = job.enabled ?? true;
   let changed = false;
   if (proposal.queuedAtMs !== undefined && job.state.queuedAtMs === proposal.queuedAtMs) {
     delete job.state.queuedAtMs;
@@ -217,7 +218,7 @@ export function repairCronRunInDatabase(params: {
     }
     return { kind: "superseded", ...(currentReceipt ? { receipt: currentReceipt } : {}) };
   }
-  upsertCronJobRow(database.db, storeKey, job, row.sort_order);
+  updateCronRuntimeRow(database.db, storeKey, job, previousEnabled);
   return {
     kind: "repaired",
     ...(interrupted ? { interrupted } : {}),

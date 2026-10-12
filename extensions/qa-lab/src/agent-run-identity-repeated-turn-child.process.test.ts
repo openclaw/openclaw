@@ -87,7 +87,9 @@ it(
       const output = createQaChildOutputTail(128 * 1024);
       child.stdout?.on("data", (chunk) => appendQaChildOutputTail(output, chunk));
       child.stderr?.on("data", (chunk) => appendQaChildOutputTail(output, chunk));
-      const exit = await withTimeout(once(child, "close"), 60_000).catch((error: unknown) => {
+      // A cold child boots, runs two turns, and closes its databases; loaded CI shards need
+      // close to a minute for that (59s observed), so the bound leaves real headroom.
+      const exit = await withTimeout(once(child, "close"), 180_000).catch((error: unknown) => {
         throw new Error(`Repeated ingress child did not close: ${readQaChildOutputTail(output)}`, {
           cause: error,
         });
@@ -153,5 +155,5 @@ it(
         agent.close();
       }
     }),
-  90_000,
+  240_000,
 );

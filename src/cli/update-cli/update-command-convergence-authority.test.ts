@@ -3,11 +3,13 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import * as updateCheck from "../../infra/update-check.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { readGitRuntimeArtifactIdentity } from "../../infra/update-git-runtime.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import * as pluginRecords from "../../plugins/installed-plugin-index-records.js";
 import * as pluginLifecycle from "../../plugins/plugin-lifecycle-lease.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { VERSION } from "../../version.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
@@ -33,6 +35,7 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
     signal: null,
     killed: false,
     termination: "exit",
+    cleanup: "normal",
   }),
 }));
 vi.mock("./shared.js", async (importOriginal) => ({
@@ -73,13 +76,7 @@ const snapshot: ConfigFileSnapshot = {
 const pluginUpdate: PostCorePluginUpdateResult = {
   status: "ok",
   changed: true,
-  sync: {
-    changed: false,
-    switchedToBundled: [],
-    switchedToNpm: [],
-    warnings: [],
-    errors: [],
-  },
+  sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
   npm: { changed: false, outcomes: [] },
   integrityDrifts: [],
   warnings: [],
@@ -103,11 +100,22 @@ afterEach(() => {
 });
 
 type ConvergenceParams = Parameters<typeof convergeUpdatePlugins>[0];
-function convergenceParams(
-  overrides: Pick<ConvergenceParams, "result"> & Partial<ConvergenceParams>,
-): ConvergenceParams {
+function convergenceParams({
+  result,
+  ...overrides
+}: Omit<Partial<ConvergenceParams>, "result"> & {
+  result: Partial<ConvergenceParams["result"]>;
+}): ConvergenceParams {
   return {
     root: "/isolated",
+    result: {
+      status: "ok",
+      mode: "git",
+      root: "/isolated",
+      steps: [],
+      durationMs: 0,
+      ...result,
+    },
     installKindChanged: false,
     configSnapshot: snapshot,
     requestedChannel: null,
@@ -122,15 +130,96 @@ function convergenceParams(
   };
 }
 
+function doctorOperation(args: string[]) {
+  return args.includes("--repair") ? "repair" : args.includes("--lint") ? "readiness" : "validate";
+}
+
 describe("candidate convergence Doctor dispatch authority", () => {
-  it.each(
-    [false, true].flatMap((candidateRuntime) =>
-      ["unchanged", "changed-during"].map((scenario) => ({
-        candidateRuntime,
-        scenario,
-      })),
-    ),
-  )(
+  it("cancels runtime classification with its enclosing command scope", async () => {
+    const controller = new AbortController();
+    const cancellation = new Error("Update command was cancelled");
+    vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockImplementationOnce(
+      async (_root, options) => {
+        await Promise.resolve();
+        controller.abort(cancellation);
+        options?.signal?.throwIfAborted();
+        return "package";
+      },
+    );
+    await expect(
+      withCommandProcessScope(
+        () => sourceRuntime.completeSourceUpdateRuntime({ root: "/isolated", timeoutMs: 1_000 }),
+        controller.signal,
+      ),
+    ).rejects.toBe(cancellation);
+  });
+
+  it.each(["prepared", "classified"] as const)(
+    "checks current updater authority before returning %s runtime completion",
+    async (noOp) => {
+      let current = noOp !== "prepared";
+      const refusal = new Error("Runtime completion no longer belongs to this updater");
+      vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockImplementationOnce(async () => {
+        await Promise.resolve();
+        current = false;
+        return "package";
+      });
+      await expect(
+        sourceRuntime.completeSourceUpdateRuntime({
+          root: "/isolated",
+          timeoutMs: 1_000,
+          sourceRuntimePrepared: noOp === "prepared" ? true : undefined,
+          assertCurrent: () => {
+            if (!current) {
+              throw refusal;
+            }
+          },
+        }),
+      ).rejects.toBe(refusal);
+    },
+  );
+
+  it.each(["prepared source", "package"] as const)(
+    "leaves unused plugin state untouched during %s runtime completion",
+    async (installation) => {
+      const root = tempDirs.make("openclaw-runtime-completion-");
+      const state = path.join(root, "unavailable-state");
+      await fs.writeFile(state, "not a state directory");
+      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: VERSION }));
+      vi.stubEnv("OPENCLAW_STATE_DIR", state);
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
+      vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", undefined);
+      vi.mocked(shared.readPackageVersion).mockResolvedValue(VERSION);
+      mocks.convergeCandidate.mockResolvedValue({
+        pluginUpdate: { ...pluginUpdate, changed: false },
+        configSnapshot: snapshot,
+      });
+
+      const { resultWithPostUpdate } = await convergeUpdatePlugins(
+        convergenceParams({
+          root,
+          candidateRuntime: true,
+          coreAlreadyCurrent: true,
+          result: {
+            root,
+            status: "skipped",
+            reason: "already-current",
+            mode: installation === "package" ? "npm" : "git",
+            sourceRuntimePrepared: installation === "prepared source" ? true : undefined,
+          },
+        }),
+      );
+
+      expect(resultWithPostUpdate).toMatchObject({ status: "skipped", reason: "already-current" });
+      expect(mocks.convergeCandidate).toHaveBeenCalledOnce();
+      expect(await fs.readFile(state, "utf8")).toBe("not a state directory");
+    },
+  );
+
+  it.each([
+    { candidateRuntime: false, scenario: "changed-during" },
+    { candidateRuntime: true, scenario: "unchanged" },
+  ])(
     "compares the activated Git fact after convergence ($scenario, candidate=$candidateRuntime)",
     async ({ candidateRuntime, scenario }) => {
       const root = tempDirs.make("openclaw-git-verification-");
@@ -160,25 +249,19 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockResolvedValue({
           changed: false,
         });
-        mocks.convergeCandidate.mockImplementation(async () => {
-          if (scenario === "changed-during") {
-            await fs.writeFile(writer, "export const generation = 2;\n");
-          }
-          return { pluginUpdate: { ...pluginUpdate, changed: false }, configSnapshot: snapshot };
+        mocks.convergeCandidate.mockResolvedValue({
+          pluginUpdate: { ...pluginUpdate, changed: false },
+          configSnapshot: snapshot,
         });
       }
       const { resultWithPostUpdate: result } = await convergeUpdatePlugins(
         convergenceParams({
           candidateRuntime,
           result: {
-            status: "ok",
-            mode: "git",
             root,
             before: { sha: "same-commit", version: VERSION },
             after: { sha: "same-commit", version: VERSION },
             gitRuntime: activated,
-            steps: [],
-            durationMs: 0,
           },
           root,
           channel: "dev",
@@ -238,17 +321,13 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
       const outcome = convergeUpdatePlugins(
         convergenceParams({
           result: {
-            status: "ok",
             mode: runtime === "npm" ? "npm" : "git",
-            root: "/isolated",
             before: { version: VERSION, sha: "old-checkout", buildId: "updater-build" },
             after: {
               version,
               sha: rebuilt ? "old-checkout" : "target-checkout",
               buildId: "published-build",
             },
-            steps: [],
-            durationMs: 0,
           },
           downgradeRisk: true,
           assertCurrent: () => {
@@ -301,8 +380,8 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
       const delegate = vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess");
       const runtime = vi
         .spyOn(sourceRuntime, "completeSourceUpdateRuntime")
-        .mockImplementation(async ({ lease }) => {
-          lease.assertOwned();
+        .mockImplementation(async ({ assertCurrent }) => {
+          assertCurrent?.();
           events.push("source-published");
           return { changed: true };
         });
@@ -329,15 +408,11 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
           result: {
             status: retainedDifferentRuntime ? "skipped" : "ok",
             ...(retainedDifferentRuntime ? { reason: "already-current" } : {}),
-            mode: "git",
-            root: "/isolated",
             before: { version: VERSION, sha: "old-checkout" },
             after: {
               version: retainedDifferentRuntime ? "2026.9.4" : VERSION,
               sha: "target-checkout",
             },
-            steps: [],
-            durationMs: 0,
           },
           downgradeRisk: retainedDifferentRuntime,
           opts: { json: true, yes: true, acceptCapabilities: true },
@@ -381,7 +456,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
           expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.9.4");
           if (changed === "runtime") {
             await params.beforePublication?.();
-            await params.beforePersistentEffect?.();
+            params.assertCurrent?.();
             events.push("publish");
           }
           return { changed: changed === "runtime" };
@@ -408,10 +483,6 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
             result: {
               status: "skipped",
               reason: "already-current",
-              mode: "git",
-              root: "/isolated",
-              steps: [],
-              durationMs: 0,
             },
             packageUpdateNodeRunner: "/selected/node",
             beforeRuntimePublication: park,
@@ -435,7 +506,11 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
             : [],
         );
         if (changed === "plugins") {
-          expect(mocks.runExec).toHaveBeenCalled();
+          expect(mocks.runExec.mock.calls.map(([, args]) => doctorOperation(args))).toEqual([
+            "repair",
+            "validate",
+            "readiness",
+          ]);
           expect(mocks.runExec.mock.calls.every(([command]) => command === "/selected/node")).toBe(
             true,
           );
@@ -449,7 +524,6 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
   );
 
   it.each([
-    "live",
     "doctor-revocation",
     "config-read-revocation",
     "validation-replacement",
@@ -487,11 +561,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
     }
     const dispatched: string[] = [];
     mocks.runExec.mockImplementation(async (_command, args: string[]) => {
-      const operation = args.includes("--repair")
-        ? "repair"
-        : args.includes("--lint")
-          ? "readiness"
-          : "validate";
+      const operation = doctorOperation(args);
       dispatched.push(operation);
       await Promise.resolve();
       if (boundary === "doctor-revocation" && operation === "repair") {
@@ -518,7 +588,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
     const outcome = convergeUpdatePlugins(
       convergenceParams({
         candidateRuntime: true,
-        result: { status: "ok", mode: "npm", root: "/isolated", steps: [], durationMs: 0 },
+        result: { mode: "npm" },
         assertCurrent,
         beforeDoctor: async () => {
           await Promise.resolve();
@@ -548,9 +618,6 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
     } else if (boundary === "maintenance-at-risk") {
       await expect(outcome).rejects.toBe(maintenanceRefusal);
       expect(dispatched).toEqual([]);
-    } else if (boundary === "live") {
-      expect((await outcome).resultWithPostUpdate.status).toBe("ok");
-      expect(dispatched).toEqual(["repair", "validate", "readiness"]);
     } else {
       await expect(outcome).rejects.toBe(stale);
       // The terminal caller check is too late if the mutating child was dispatched.

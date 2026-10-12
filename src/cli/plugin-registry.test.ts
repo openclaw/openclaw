@@ -1,5 +1,6 @@
 // Plugin registry CLI tests cover canonical process-root load scopes.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ensurePluginRegistryLoaded } from "./plugin-registry.js";
 
 const logger = {
   info: vi.fn(),
@@ -93,25 +94,26 @@ const mocks = vi.hoisted(() => ({
     >(),
 }));
 
-let ensurePluginRegistryLoaded: typeof import("./plugin-registry.js").ensurePluginRegistryLoaded;
-
 vi.mock("../plugins/loader.js", () => ({
   loadAndActivateRootPluginRegistry: (
     ...args: Parameters<typeof mocks.loadAndActivateRootPluginRegistry>
   ) => mocks.loadAndActivateRootPluginRegistry(...args),
 }));
 
+// mock-isolation: Registry selection uses fixture channel ids without persisted channel discovery.
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
-  resolveConfiguredChannelPluginIds: (
+  resolveConfiguredChannelPluginIdsAsync: async (
     ...args: Parameters<typeof mocks.resolveConfiguredChannelPluginIds>
   ) => mocks.resolveConfiguredChannelPluginIds(...args),
   resolveChannelPluginIds: (...args: Parameters<typeof mocks.resolveChannelPluginIds>) =>
     mocks.resolveChannelPluginIds(...args),
 }));
 
+// mock-isolation: Registry selection uses fixture plugin ids without installed-plugin discovery.
 vi.mock("../plugins/effective-plugin-ids.js", () => ({
-  resolveEffectivePluginIds: (...args: Parameters<typeof mocks.resolveEffectivePluginIds>) =>
-    mocks.resolveEffectivePluginIds(...args),
+  resolveEffectivePluginIdsAsync: async (
+    ...args: Parameters<typeof mocks.resolveEffectivePluginIds>
+  ) => mocks.resolveEffectivePluginIds(...args),
 }));
 
 vi.mock("../plugins/runtime/load-context.resolve.js", () => ({
@@ -143,11 +145,6 @@ vi.mock("../plugins/runtime/load-context.js", () => ({
 }));
 
 describe("ensurePluginRegistryLoaded", () => {
-  beforeAll(async () => {
-    const mod = await import("./plugin-registry.js");
-    ensurePluginRegistryLoaded = mod.ensurePluginRegistryLoaded;
-  });
-
   beforeEach(() => {
     mocks.loadAndActivateRootPluginRegistry.mockReset();
     mocks.resolveConfiguredChannelPluginIds.mockReset();

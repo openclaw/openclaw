@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { vi } from "vitest";
 import type { PluginRuntime, PluginStateKeyedStore } from "../api.js";
 import { createVisitorAccessReader } from "./access.js";
-import { VisitorPolicyClient } from "./cloudflare.js";
+import { VisitorPolicyClient, type VisitorTarget } from "./cloudflare.js";
 import type { VisitorAccessConfig } from "./config.js";
 import { VisitorAccessService, type VisitorGrant } from "./visitors.js";
 
@@ -27,6 +27,11 @@ const config: VisitorAccessConfig = {
   maxVisitors: 50,
 };
 const policiesPath = "/client/v4/accounts/test-account/access/apps/test-app/policies";
+const githubProvider = {
+  issuer: "https://example.cloudflareaccess.com",
+  providerId: "github-provider",
+  githubAccountIdClaim: "github_account_id",
+};
 export type GatewayRoles = NonNullable<NonNullable<OpenClawConfig["gateway"]>["roles"]>;
 export const guestRole: GatewayRoles["definitions"][string] = {
   accessPolicyPlugin: "visitor-access",
@@ -50,13 +55,26 @@ type PolicyFixture = {
   id: string;
   name: string;
   decision: string;
-  include: { email: { email: string } }[];
+  include: Array<
+    | { email: { email: string } }
+    | { oidc: { identity_provider_id: string; claim_name: string; claim_value: string } }
+  >;
 };
 
-export function visitorGrant(email: string, overrides: Partial<VisitorGrant> = {}): VisitorGrant {
+type GrantOverrides = Partial<Omit<VisitorGrant, "email" | "githubAccountId">>;
+
+export function visitorGrant(
+  email: string,
+  overrides?: GrantOverrides,
+): VisitorGrant & { email: string };
+export function visitorGrant(
+  githubAccountId: number,
+  overrides?: GrantOverrides,
+): VisitorGrant & { githubAccountId: number };
+export function visitorGrant(target: VisitorTarget, overrides: GrantOverrides = {}): VisitorGrant {
   return {
     grantId: randomUUID(),
-    email,
+    ...(typeof target === "string" ? { email: target } : { githubAccountId: target }),
     createdAt: NOW - DAY_MS,
     expiresAt: NOW + DAY_MS,
     ...overrides,
@@ -67,18 +85,46 @@ type ProfileFixture = {
   id: string;
   emails: readonly string[];
   role?: string;
+  effectiveRole?: string;
+  roleSource?: "assigned" | "githubLogin" | "default";
   mergedInto?: string | null;
   githubIdentity?: { login: string } | null;
 };
 
-export function visitorProfileFixture(initial: ProfileFixture[] = []) {
+export function visitorProfileFixture(
+  initial: ProfileFixture[] = [],
+  githubProfiles: Array<{ accountId: number; profileId: string }> = [],
+) {
   let profiles = initial;
+  const response = async (method: string, params?: Record<string, unknown>) => {
+    if (method !== "users.list") {
+      throw new Error("Unexpected Gateway request");
+    }
+    const requested = params?.githubAccountIds;
+    return {
+      profiles,
+      ...(Array.isArray(requested)
+        ? {
+            githubProfiles: githubProfiles.filter(({ accountId }) => requested.includes(accountId)),
+          }
+        : {}),
+    };
+  };
   const withUserProfileIdentity: NonNullable<
     PluginRuntime["gateway"]["withUserProfileIdentity"]
-  > = async ({ profileId, emails }, run) => {
+  > = async ({ profileId, emails, githubAccountIds }, run) => {
     const assertCurrent = () => {
       const profile = profiles.find(({ id }) => id === profileId);
-      if (!profile || emails.some((email) => !profile.emails.includes(email))) {
+      if (
+        !profile ||
+        emails.some((email) => !profile.emails.includes(email)) ||
+        githubAccountIds?.some(
+          (accountId) =>
+            !githubProfiles.some(
+              (identity) => identity.accountId === accountId && identity.profileId === profileId,
+            ),
+        )
+      ) {
         throw new Error("Profile bindings changed");
       }
     };
@@ -90,18 +136,28 @@ export function visitorProfileFixture(initial: ProfileFixture[] = []) {
     async request() {
       throw new Error("Expected a mocked Gateway request");
     },
+    subscribeSessionChanges() {
+      throw new Error("Unexpected session change subscription");
+    },
     async readSessionFacts() {
       throw new Error("Unexpected session facts request");
     },
+    async withSessionFacts() {
+      throw new Error("Unexpected selected session facts request");
+    },
+    async openPluginPanel() {
+      throw new Error("Unexpected plugin panel request");
+    },
     withUserProfileIdentity,
+    resolveGitHubAccount: async ({ login }) => ({ accountId: 42, login }),
   };
-  const request = vi.spyOn(gateway, "request").mockResolvedValue({ profiles });
+  const request = vi.spyOn(gateway, "request").mockImplementation(response);
   return {
     gateway,
     request,
     setProfiles(this: void, next: ProfileFixture[]) {
       profiles = next;
-      request.mockResolvedValue({ profiles });
+      request.mockImplementation(response);
     },
   };
 }
@@ -111,15 +167,26 @@ export function visitorFixture(
     config?: Partial<VisitorAccessConfig>;
     grants?: VisitorGrant[];
     emails?: string[];
-    githubEmail?: string | null;
+    githubAccountIds?: number[];
+    githubAccountId?: number;
+    githubLogin?: string;
     gatewayConfig?: OpenClawConfig;
     profiles?: ProfileFixture[];
+    githubProfiles?: Array<{ accountId: number; profileId: string }>;
     store?: PluginStateKeyedStore<VisitorGrant>;
     gateway?: PluginRuntime["gateway"];
   } = {},
 ) {
   const resolved = { ...config, ...options.config };
-  const grants = new Map(options.grants?.map((grant) => [grant.email, grant]));
+  const oidcProvider =
+    options.gatewayConfig?.gateway?.auth?.trustedProxy?.cloudflareAccessOidc ?? githubProvider;
+  const grants = new Map(
+    options.grants?.map((grant) => [
+      "email" in grant ? grant.email : `github:${grant.githubAccountId}`,
+      grant,
+    ]),
+  );
+  const targets: VisitorTarget[] = [...(options.emails ?? []), ...(options.githubAccountIds ?? [])];
   const store: PluginStateKeyedStore<VisitorGrant> = {
     async register(key, grant) {
       grants.set(key, structuredClone(grant));
@@ -187,12 +254,22 @@ export function visitorFixture(
     beforeWrite: () => Promise<void>;
     afterWrite: () => void;
   } = {
-    policy: options.emails?.length
+    policy: targets.length
       ? {
           id: "visitors",
           name: resolved.policyName,
           decision: "allow",
-          include: options.emails.map((email) => ({ email: { email } })),
+          include: targets.map((target) =>
+            typeof target === "string"
+              ? { email: { email: target } }
+              : {
+                  oidc: {
+                    identity_provider_id: oidcProvider.providerId,
+                    claim_name: oidcProvider.githubAccountIdClaim,
+                    claim_value: String(target),
+                  },
+                },
+          ),
         }
       : undefined,
     failWrites: false,
@@ -204,12 +281,6 @@ export function visitorFixture(
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const url = requestUrl(input);
     const method = init?.method ?? "GET";
-    if (url.origin === "https://api.github.com") {
-      if (!/^\/users\/[a-z0-9-]+$/.test(url.pathname) || method !== "GET") {
-        throw new Error("Unexpected GitHub request");
-      }
-      return Response.json({ email: options.githubEmail ?? null });
-    }
     if (url.origin !== "https://api.cloudflare.com" || !url.pathname.startsWith(policiesPath)) {
       throw new Error("Unexpected Cloudflare endpoint");
     }
@@ -251,7 +322,7 @@ export function visitorFixture(
   const gatewayConfig = options.gatewayConfig ?? {
     gateway: { roles: { default: "guest", definitions: { guest: guestRole, staff: staffRole } } },
   };
-  const directory = visitorProfileFixture(options.profiles);
+  const directory = visitorProfileFixture(options.profiles, options.githubProfiles);
   const runtime: Pick<PluginRuntime, "gateway" | "config"> = {
     gateway: options.gateway ?? directory.gateway,
     config: {
@@ -264,15 +335,21 @@ export function visitorFixture(
       },
     },
   };
+  const resolveGitHubAccount = vi
+    .spyOn(runtime.gateway, "resolveGitHubAccount")
+    .mockImplementation(async ({ login }) => ({
+      accountId: options.githubAccountId ?? 42,
+      login: options.githubLogin ?? login.toLowerCase(),
+    }));
   const assertCurrent = vi.fn<() => void>();
-  const policy = new VisitorPolicyClient(resolved, fetcher);
+  const policy = new VisitorPolicyClient(resolved, fetcher, undefined, () => oidcProvider);
   const service = new VisitorAccessService(
     resolved,
     options.store ?? store,
     policy,
     logger,
     createVisitorAccessReader(runtime),
-    fetcher,
+    runtime.gateway.resolveGitHubAccount,
   );
   services.add(service);
   return {
@@ -280,13 +357,20 @@ export function visitorFixture(
     policy,
     fetcher,
     grants,
+    resolveGitHubAccount,
     gatewayRequest: directory.request,
     setProfiles: directory.setProfiles,
     logger,
     service,
     store,
     authority: { assertCurrent },
-    emails: () => cloudflare.policy?.include.map((rule) => rule.email.email) ?? [],
+    emails: () =>
+      cloudflare.policy?.include.flatMap((rule) => ("email" in rule ? [rule.email.email] : [])) ??
+      [],
+    targets: () =>
+      cloudflare.policy?.include.map((rule) =>
+        "email" in rule ? rule.email.email : Number(rule.oidc.claim_value),
+      ) ?? [],
     mutations: () =>
       fetcher.mock.calls.filter(([, init]) => init?.method !== "GET" && init?.method),
   };

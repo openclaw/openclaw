@@ -28,6 +28,7 @@ private actor SidebarPreviewCache: OpenClawChatTranscriptCache {
     private var released: Bool
     private var continuation: CheckedContinuation<Void, Never>?
     private(set) var requests: [(String, String?)] = []
+    private var requestWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(text: String, held: Bool = false) {
         self.text = text
@@ -40,8 +41,15 @@ private actor SidebarPreviewCache: OpenClawChatTranscriptCache {
         self.continuation = nil
     }
 
+    func waitUntilStarted() async {
+        guard self.requests.isEmpty else { return }
+        await withCheckedContinuation { self.requestWaiters.append($0) }
+    }
+
     func loadTranscript(sessionKey: String, agentID: String?) async -> [OpenClawChatMessage] {
         self.requests.append((sessionKey, agentID))
+        self.requestWaiters.forEach { $0.resume() }
+        self.requestWaiters.removeAll()
         if !self.released { await withCheckedContinuation { self.continuation = $0 } }
         return [.init(role: "assistant", content: [
             .init(type: "text", text: self.text, mimeType: nil, fileName: nil, content: nil),
@@ -117,7 +125,8 @@ struct ChatSessionSidebarPreviewsTests {
         let next = SidebarPreviewCache(text: "Gateway B", held: !oldLoadPending)
         if oldLoadPending {
             let pending = Task { await store.refresh(firstRequest, cache: old) }
-            try await waitUntil("old cache read starts") { await old.requests.count == 1 }
+            await old.waitUntilStarted()
+            #expect(await old.requests.count == 1)
             await store.refresh(secondRequest, cache: next)
             await old.release()
             await pending.value
@@ -125,7 +134,8 @@ struct ChatSessionSidebarPreviewsTests {
             await store.refresh(firstRequest, cache: old)
             #expect(store.text(for: row, in: firstRequest) == "Gateway A")
             let pending = Task { await store.refresh(secondRequest, cache: next) }
-            try await waitUntil("new cache read starts") { await next.requests.count == 1 }
+            await next.waitUntilStarted()
+            #expect(await next.requests.count == 1)
             #expect(store.text(for: row, in: secondRequest) == nil)
             await next.release()
             await pending.value
@@ -162,7 +172,7 @@ struct ChatSessionSidebarPreviewsTests {
     }
 
     private func row(key: String) -> OpenClawChatSessionEntry {
-        var row = OpenClawChatSessionEntry.placeholder(key: key)
+        var row = OpenClawChatSessionEntry(key: key)
         row.agentId = "research"
         row.sessionId = "same-session"
         row.updatedAt = 1

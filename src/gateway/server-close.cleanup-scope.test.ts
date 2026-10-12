@@ -2,7 +2,7 @@ import "./server-worker-free.test-support.js";
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -35,6 +35,10 @@ const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory({
   disposeAllCodeModeRuns: async () => {},
   closeProviderTransportDispatcherPool: async () => {},
   drainRetainedEmbeddingProviders: async () => {},
+});
+
+beforeEach(() => {
+  mocks.closePluginStateDatabaseAsync.mockClear();
 });
 
 afterEach(() => {

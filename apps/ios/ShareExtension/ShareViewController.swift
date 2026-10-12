@@ -129,67 +129,57 @@ final class ShareViewController: UIViewController {
 
     private func sendMessageToGateway(_ message: String, attachments: [ShareAttachment]) async throws {
         guard let config = ShareGatewayRelaySettings.loadConfigDiscardingUnscopedDeviceAuth() else {
+            throw Self.gatewayError(10, message: NSLocalizedString(
+                "OpenClaw is not connected to a gateway yet.",
+                comment: "Share extension missing gateway error"))
+        }
+        guard config.requiresForegroundSignIn != true else {
             throw NSError(
                 domain: "OpenClawShare",
-                code: 10,
-                userInfo: [
-                    NSLocalizedDescriptionKey: NSLocalizedString(
-                        "OpenClaw is not connected to a gateway yet.",
-                        comment: "Share extension missing gateway error"),
-                ])
+                code: 12,
+                userInfo: [NSLocalizedDescriptionKey: NSLocalizedString(
+                    "This gateway uses Cloudflare Access. Open OpenClaw and send from the app; your share stays here.",
+                    comment: "Share extension foreground browser sign-in requirement")])
         }
         guard let url = URL(string: config.gatewayURLString) else {
-            throw NSError(
-                domain: "OpenClawShare",
-                code: 11,
-                userInfo: [
-                    NSLocalizedDescriptionKey: NSLocalizedString(
-                        "Invalid saved gateway URL.",
-                        comment: "Share extension invalid gateway error"),
-                ])
+            throw Self.gatewayError(11, message: NSLocalizedString(
+                "Invalid saved gateway URL.",
+                comment: "Share extension invalid gateway error"))
         }
 
         let gateway = GatewayNodeSession()
         defer {
             Task { await gateway.disconnect() }
         }
-        func connect(clientId: String) async throws {
-            try await gateway.connect(
-                url: url,
-                credentials: GatewayNodeSessionCredentials(
-                    token: config.token,
-                    password: config.password),
-                connectOptions: GatewayConnectOptions(
-                    role: "node",
-                    scopes: [],
-                    caps: [],
-                    commands: [],
-                    permissions: [:],
-                    clientId: clientId,
-                    clientMode: "node",
-                    clientDisplayName: "OpenClaw Share",
-                    deviceIdentityProfile: .shareExtension,
-                    includeDeviceIdentity: true,
-                    allowStoredDeviceAuth: config.gatewayStableID != nil,
-                    deviceAuthGatewayID: config.gatewayStableID),
-                sessionBox: nil,
-                onConnected: {},
-                onDisconnected: { _ in },
-                onInvoke: { req in
-                    BridgeInvokeResponse(
-                        id: req.id,
-                        ok: false,
-                        error: OpenClawNodeError(
-                            code: .invalidRequest,
-                            message: "share extension does not support node invoke"))
-                })
-        }
-        do {
-            try await connect(clientId: "openclaw-ios")
-        } catch {
-            guard self.shouldRetryWithLegacyClientId(error) else { throw error }
-            try await connect(clientId: "moltbot-ios")
-        }
+        try await gateway.connect(
+            url: url,
+            credentials: GatewayNodeSessionCredentials(
+                token: config.token,
+                password: config.password),
+            connectOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-ios",
+                clientMode: "node",
+                clientDisplayName: "OpenClaw Share",
+                deviceIdentityProfile: .shareExtension,
+                includeDeviceIdentity: true,
+                allowStoredDeviceAuth: config.gatewayStableID != nil,
+                deviceAuthGatewayID: config.gatewayStableID),
+            sessionBox: nil,
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(
+                    id: req.id,
+                    ok: false,
+                    error: OpenClawNodeError(
+                        code: .invalidRequest,
+                        message: "share extension does not support node invoke"))
+            })
 
         struct AgentRequestPayload: Codable {
             var message: String
@@ -228,25 +218,8 @@ final class ShareViewController: UIViewController {
         _ = try await gateway.request(method: "node.event", paramsJSON: nodeEventParams, timeoutSeconds: 25)
     }
 
-    private func shouldRetryWithLegacyClientId(_ error: Error) -> Bool {
-        if let gatewayError = error as? GatewayResponseError {
-            let code = gatewayError.code.lowercased()
-            let message = gatewayError.message.lowercased()
-            let pathValue = (gatewayError.details["path"]?.value as? String)?.lowercased() ?? ""
-            let mentionsClientIdPath =
-                message.contains("/client/id") || message.contains("client id")
-                || pathValue.contains("/client/id")
-            let isInvalidConnectParams =
-                (code.contains("invalid") && code.contains("connect"))
-                || message.contains("invalid connect params")
-            if isInvalidConnectParams, mentionsClientIdPath {
-                return true
-            }
-        }
-
-        let text = error.localizedDescription.lowercased()
-        return text.contains("invalid connect params")
-            && (text.contains("/client/id") || text.contains("client id"))
+    private static func gatewayError(_ code: Int, message: String) -> NSError {
+        NSError(domain: "OpenClawShare", code: code, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
     private func extractSharedContent() async -> ExtractedShareContent {
@@ -271,10 +244,8 @@ final class ShareViewController: UIViewController {
                     from: provider,
                     index: attachments.count)
                 attachments.append(attachment)
-            } catch let error as ShareImageProcessor.ProcessError {
-                attachmentError = error
             } catch {
-                attachmentError = .encodeFailed
+                attachmentError = error as? ShareImageProcessor.ProcessError ?? .encodeFailed
             }
         }
         attachmentSummary.acceptedImageCount = attachments.count

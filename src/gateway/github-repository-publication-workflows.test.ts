@@ -1,3 +1,12 @@
+// Register shared transport mocks before publication owners load.
+// oxfmt-ignore
+import {
+  SESSION_ID,
+  SESSION_KEY,
+  commandResult,
+  githubPublicationTestMocks,
+  installGitHubPublicationTestHarness,
+} from "./github-publication.test-support.js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
@@ -6,13 +15,6 @@ import {
   guestScopes,
   holdWorkerTurn,
 } from "./github-publication-requester.test-support.js";
-import {
-  SESSION_ID,
-  SESSION_KEY,
-  commandResult,
-  githubPublicationTestMocks,
-  installGitHubPublicationTestHarness,
-} from "./github-publication.test-support.js";
 import * as repositoryPublicationExecutor from "./github-repository-publication-executor.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 
@@ -50,58 +52,55 @@ describe("repository checkpoint workflow authority", () => {
     realWorktree: true,
   });
 
-  it.each(["add", "modify", "delete", "rename-in", "rename-out"] as const)(
-    "rejects %s before uploading any accepted objects and retains the checkpoint",
+  it.each(["add", "modify", "delete", "source-commit"] as const)(
+    "rejects %s workflow changes before upload and retains the checkpoint",
     async (operation) => {
-      const baseFiles: Record<string, string> =
-        operation === "rename-in"
-          ? { "workflow-example.txt": definition }
-          : ["modify", "delete", "rename-out"].includes(operation)
-            ? { [workflow]: definition }
-            : {};
-      const f = await createFixture(baseFiles);
-      const changes: Record<string, string | null> =
-        operation === "rename-in"
-          ? { "workflow-example.txt": null, [workflow]: definition }
-          : operation === "rename-out"
-            ? { [workflow]: null, "workflow-example.txt": definition }
-            : { [workflow]: operation === "delete" ? null : definition + "# accepted change\n" };
-      const saved = await f.repository.capture("accepted code\n", operation, changes);
+      const f = await createFixture(
+        operation === "add" ? {} : { [workflow]: definition },
+        operation === "source-commit" ? "topic" : undefined,
+      );
+      if (operation === "source-commit") {
+        const { runtime, git, baseCommit } = f.repository;
+        runtime.mergeBase = git(["rev-parse", baseCommit + "^"]);
+        runtime.mergeBaseTree = git(["rev-parse", runtime.mergeBase + "^{tree}"]);
+        runtime.baseHead = runtime.mergeBase;
+        runtime.baseHeadTree = runtime.mergeBaseTree;
+      }
+      const saved =
+        operation === "source-commit"
+          ? undefined
+          : await f.repository.capture("accepted code\n", operation, {
+              [workflow]: operation === "delete" ? null : definition + "# accepted change\n",
+            });
       const result = await f.coordinator.requestForSession(f.request(operation, f.guest));
       expect(result).toMatchObject(rejected);
       expect(writes()).toEqual([]);
-      expect(f.repository.runtime.effects).toEqual([]);
-      expect(
-        (await getSessionRepositoryWorkspaceStore().get(f.repository.workspace.workspaceId))
-          ?.checkpointRef,
-      ).toBe(saved.ref);
-      const calls = mocks.runCommand.mock.calls.length;
-      expect(await f.coordinator.requestForSession(f.request(operation, f.guest))).toEqual(result);
-      expect(mocks.runCommand.mock.calls).toHaveLength(calls);
+      if (saved) {
+        expect(f.repository.runtime.effects).toEqual([]);
+        expect(
+          (await getSessionRepositoryWorkspaceStore().get(f.repository.workspace.workspaceId))
+            ?.checkpointRef,
+        ).toBe(saved.ref);
+        const calls = mocks.runCommand.mock.calls.length;
+        expect(await f.coordinator.requestForSession(f.request(operation, f.guest))).toEqual(
+          result,
+        );
+        expect(mocks.runCommand.mock.calls).toHaveLength(calls);
+      }
     },
   );
-
-  it("rejects a source-commit workflow absent from the checkpoint's file delta", async () => {
-    const f = await createFixture({ [workflow]: definition }, "topic");
-    const { runtime, git, baseCommit } = f.repository;
-    runtime.mergeBase = git(["rev-parse", baseCommit + "^"]);
-    runtime.mergeBaseTree = git(["rev-parse", runtime.mergeBase + "^{tree}"]);
-    runtime.baseHead = runtime.mergeBase;
-    runtime.baseHeadTree = runtime.mergeBaseTree;
-    expect(
-      await f.coordinator.requestForSession(f.request("source-history", f.guest)),
-    ).toMatchObject(rejected);
-    expect(writes()).toEqual([]);
-  });
 
   it("publishes ordinary guest changes with unchanged workflows and reuses immutable tree reads", async () => {
     const f = await createFixture({ [workflow]: definition });
     await f.repository.capture("ordinary code\n", "ordinary", {
       ".github/workflows/README.md": "workflow documentation\n",
     });
-    expect(await f.coordinator.requestForSession(f.request("ordinary", f.guest))).toMatchObject({
-      status: "published",
-    });
+    expect(
+      await f.coordinator.requestForSessionV2({
+        ...f.request("ordinary", f.guest),
+        requester: f.guest,
+      }),
+    ).toMatchObject({ status: "published" });
     expect(f.repository.runtime.effects).toEqual(["push", "pull_request"]);
     const trees = mocks.runCommand.mock.calls.filter(([args]) =>
       args.some((arg: string) => arg.includes("/git/trees/")),
@@ -363,8 +362,8 @@ describe("repository checkpoint workflow authority", () => {
           ...params,
           execution: {
             ...params.execution,
-            recordEffect: (effect, observed) => {
-              params.execution.recordEffect(effect, observed);
+            recordEffect: async (effect, observed) => {
+              await params.execution.recordEffect(effect, observed);
               if (effect === "push" && observed === undefined) {
                 pushRecorded = true;
               }

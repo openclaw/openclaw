@@ -7,6 +7,7 @@ import {
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
 import { packToArchive } from "../plugins/test-helpers/archive-fixtures.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
 
 const scanPackageInstallSourceMock = vi.fn();
 const scanInstalledPackageDependencyTreeMock = vi.fn();
@@ -117,7 +118,7 @@ describe("hook install policy warnings", () => {
     }
     if (source === "npm") {
       runCommandWithTimeoutMock.mockImplementation(async (argv, options) => {
-        if (argv[0] !== "npm" || argv[1] !== "pack" || !options.cwd) {
+        if (npmCommandArgs(argv)?.[0] !== "pack" || !options.cwd) {
           throw new Error("unexpected npm fixture command");
         }
         fs.copyFileSync(sourcePath, path.join(options.cwd, "hooks.tgz"));

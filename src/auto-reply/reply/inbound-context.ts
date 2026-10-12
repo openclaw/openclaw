@@ -1,4 +1,3 @@
-// Builds prompt context facts from inbound channel and sender metadata.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
@@ -155,9 +154,7 @@ function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   normalized.BodyForAgent = normalized.agentText;
   normalized.BodyForCommands = normalized.commandText;
 
-  const label =
-    normalizeOptionalString(normalized.ConversationLabel) ??
-    normalizeOptionalString(resolveConversationLabel(normalized));
+  const label = resolveConversationLabel(normalized);
   if (label) {
     normalized.ConversationLabel = label;
   }

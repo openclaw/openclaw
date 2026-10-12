@@ -106,6 +106,7 @@ Tool result `content` is the model-visible result; `details` is runtime metadata
 
 - `toolResult.details` is stripped before provider replay and before compaction input.
 - Persisted session transcripts keep only bounded `details`; oversized metadata is replaced with a compact summary marked `persistedDetailsTruncated: true`.
+- Display history retains tool status flags and session keys, plus command exit codes, durations, and bounded working directories when the tool provides them.
 - Plugins and tools should put text the model must read in `content`, not only in `details`.
 
 When a tool-error warning is the agent's only reply, WebChat displays and retains it. The warning does not by itself change a completed agent run into a runtime failure; the failed tool result remains recorded separately.
@@ -120,6 +121,8 @@ When a run is already active, inbound messages steer into it by default. `messag
 | `followup`        | Run the message after the active run finishes.      |
 | `collect`         | Batch compatible messages into one later turn.      |
 | `interrupt`       | Abort the active run, then start the newest prompt. |
+
+Messages with separate durable ingress admission, including Discord and Telegram messages, stay in separate followup turns even in `collect` mode. Compatible Gateway `chat.send` inputs can still combine.
 
 The queue uses a built-in 500ms debounce for steer, followup, and collect batching. `messages.queue.cap` defaults to 20 queued messages, and `messages.queue.drop` defaults to `summarize` (`old` and `new` are also available). Configure per-channel overrides via `messages.queue.byChannel` and `messages.queue.debounceMsByChannel`.
 
@@ -162,17 +165,44 @@ Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/ref
 
 Details: [Configuration](/gateway/config-agents/messages-and-talk#messages) and channel docs.
 
+## Agent reactions to WebChat prompts
+
+During an admitted WebChat turn, the agent can acknowledge the current prompt with
+the existing message tool:
+
+```json
+{ "action": "react", "emoji": "👍" }
+```
+
+Omit the target and message ID: the host binds this action to the committed current
+prompt and the running agent's identity. Set `remove: true` with the same emoji to
+remove that agent's reaction. Repeating an add or removal is a no-op. The reaction
+appears in session history and live updates; it does not mirror to an inherited
+external channel. External reactions still require the normal channel routing and
+external message ID.
+
+Queued turns bind the reaction to their own committed prompt when execution
+begins. Steering updates the current prompt only after the new input is committed
+and consumed by the running agent; pending or rejected input does not retarget a
+reaction. Collected inputs use their committed combined prompt.
+
+Acknowledgment reactions do not replace the final answer. Omit `final` or set
+`final: false` when more work follows. Only an explicit `final: true` addition,
+requested as the complete response, can count as source-reply completion. Removals,
+no-ops, dry runs, and failed reactions never count. Normal message-tool permissions
+still apply, and the current-prompt capability expires with its admitted turn.
+
 ## Silent replies
 
-The silent token `NO_REPLY` (case-insensitive, so `no_reply` also matches) is never delivered as user-visible text. When a turn also has pending tool media, such as generated TTS audio, OpenClaw strips the silent text but still delivers the media attachment.
+The silent token `NO_REPLY` (case-insensitive, so `no_reply` also matches) is reserved for sessions connected to external message channels and is never delivered as user-visible text. Subagents, the Control UI, and other internal sessions must return a result or continue unfinished work; a silent token cannot complete their task. When a turn also has pending tool media, such as generated TTS audio, OpenClaw strips the silent text but still delivers the media attachment.
 
 Silence policy resolves by conversation type:
 
 - Direct conversations never receive `NO_REPLY` prompt guidance. An undelivered required answer still needs recovery; the token cannot waive that obligation.
 - Accepted group/channel requests require a reply by default, including unmentioned messages admitted with `requireMention: false`. Mention and access gates still decide which messages reach the agent. To allow unaddressed requests to finish silently, explicitly set `silentReply.group: "allow"` at one of the configuration scopes below; mentions and authorized commands still require a response.
-- [Ambient room events](/channels/ambient-room-events) and internal helper turns can remain silent. In `message_tool` visible-reply mode, an optional turn stays silent by not calling `message(action=send)`.
+- [Ambient room events](/channels/ambient-room-events) can remain silent. In `message_tool` visible-reply mode, an optional turn stays silent by not calling `message(action=send)`. Private subagent completions record the parent's reviewed outcome internally; they do not need a silent token to keep that result private.
 
-Defaults live under `agents.defaults.silentReply`; `surfaces.<id>.silentReply` can override group/internal policy per surface.
+Defaults live under `agents.defaults.silentReply.group`; `surfaces.<id>.silentReply.group` can override group policy per surface. Doctor removes the retired `internal` setting during config migration.
 
 Generic internal runner failures stay quiet for optional turns that have not shown visible output, including groups explicitly configured to allow silence. Required turns still receive an error. Classified recovery guidance, such as missing-auth, rate-limit, or overload notices, remains deliverable, and visible progress receives a failure outcome rather than being left unfinished. Direct chats show compact failure copy by default; raw runner details show only when `/verbose full` is enabled.
 

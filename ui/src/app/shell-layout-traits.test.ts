@@ -126,21 +126,6 @@ describe("shell layout publication", () => {
     expect(activeLayout(content)).toEqual([]);
   });
 
-  it("updates the shell when a page detaches and republishes when that page reconnects", async () => {
-    const { shell, content } = await mountShell();
-    const page = createPage({ pluginEmbed: true });
-    content.append(page);
-    await updatePage(page, shell);
-    expect(activeLayout(content)).toEqual(["embed"]);
-
-    page.remove();
-    // No shell navigation or requestUpdate: the detached page must retire its facts.
-    expect(activeLayout(content)).toEqual([]);
-
-    content.append(page);
-    expect(activeLayout(content)).toEqual(["embed"]);
-  });
-
   it("does not publish or update the shell again for unchanged rendered facts", async () => {
     const { shell, content } = await mountShell();
     const page = createPage({ pluginEmbed: true });
@@ -159,49 +144,42 @@ describe("shell layout publication", () => {
     expect(activeLayout(content)).toEqual(["toolbar"]);
   });
 
-  it("clears facts when a page removes itself after its first render", async () => {
-    const { shell, content } = await mountShell();
-    const page = createPage({ pluginEmbed: true });
-    page.removeAfterRender = true;
-    content.append(page);
-    await page.updateComplete;
-    expect(page.querySelector("section")).not.toBeNull();
-    expect(page.isConnected).toBe(false);
-
-    await Promise.resolve();
-    await shell.updateComplete;
-    expect(activeLayout(content)).toEqual([]);
-
-    content.append(page);
-    await Promise.resolve();
-    await shell.updateComplete;
-    expect(activeLayout(content)).toEqual(["embed"]);
-  });
-
-  it("applies layout before the reporter is inserted or measured and clears it on disconnect", async () => {
-    const { shell, content } = await mountShell();
-    const style = document.createElement("style");
-    style.textContent = ".content--plugin-embed { padding-left: 16px; }";
-    shell.append(style);
-    const page = createPage({ pluginEmbed: true });
-    const observations: { connected: boolean; padding: string }[] = [];
-    page.inspectPrimary = (element) => {
-      if (element) {
-        observations.push({
-          connected: element.isConnected,
-          padding: getComputedStyle(content).paddingLeft,
-        });
+  it.each([false, true])(
+    "publishes before measurement and retires/reconnects a page (self-removal: %s)",
+    async (selfRemoval) => {
+      const { shell, content } = await mountShell();
+      const style = document.createElement("style");
+      style.textContent = ".content--plugin-embed { padding-left: 16px; }";
+      shell.append(style);
+      const page = createPage({ pluginEmbed: true });
+      page.removeAfterRender = selfRemoval;
+      const observations: { connected: boolean; padding: string }[] = [];
+      page.inspectPrimary = (element) => {
+        if (element) {
+          observations.push({
+            connected: element.isConnected,
+            padding: getComputedStyle(content).paddingLeft,
+          });
+        }
+      };
+      content.append(page);
+      await page.updateComplete;
+      expect(observations).toEqual([{ connected: false, padding: "16px" }]);
+      expect(page.querySelector("section")).not.toBeNull();
+      if (!selfRemoval) {
+        expect(activeLayout(content)).toEqual(["embed"]);
+        page.remove();
       }
-    };
-    content.append(page);
-    await page.updateComplete;
-    expect(observations).toEqual([{ connected: false, padding: "16px" }]);
-
-    page.remove();
-    expect(content.classList.contains("content--plugin-embed")).toBe(false);
-    await shell.updateComplete;
-    expect(content.classList.contains("content--plugin-embed")).toBe(false);
-  });
+      expect(page.isConnected).toBe(false);
+      expect(activeLayout(content)).toEqual([]);
+      await shell.updateComplete;
+      expect(activeLayout(content)).toEqual([]);
+      content.append(page);
+      expect(activeLayout(content)).toEqual(["embed"]);
+      await shell.updateComplete;
+      expect(activeLayout(content)).toEqual(["embed"]);
+    },
+  );
 
   it("keeps sibling dock facts out of content, including a page moved out of content", async () => {
     const { shell, content, dock } = await mountShell();

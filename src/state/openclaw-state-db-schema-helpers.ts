@@ -6,16 +6,7 @@ import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 
 export function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
-  return tableHasColumns(db, tableName, [columnName]);
-}
-
-export function tableHasColumns(
-  db: DatabaseSync,
-  tableName: string,
-  columnNames: readonly string[],
-): boolean {
-  const existing = readTableColumns(db, tableName);
-  return columnNames.every((columnName) => existing.has(columnName));
+  return readTableColumns(db, tableName).has(columnName);
 }
 
 function readTableColumns(db: DatabaseSync, tableName: string): Set<string> {

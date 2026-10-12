@@ -17,16 +17,11 @@ type AnthropicAuthModel = {
 export function usesFoundryBearerAuth(model: AnthropicAuthModel): boolean {
   return (
     model.provider === "microsoft-foundry" &&
-    (model.authHeader === true || hasBearerAuthorizationHeader(model.headers))
-  );
-}
-
-function hasBearerAuthorizationHeader(headers?: Record<string, string>): boolean {
-  if (!headers) {
-    return false;
-  }
-  return Object.entries(headers).some(
-    ([key, value]) => key.toLowerCase() === "authorization" && /^bearer\s+\S+/i.test(value.trim()),
+    (model.authHeader === true ||
+      Object.entries(model.headers ?? {}).some(
+        ([key, value]) =>
+          key.toLowerCase() === "authorization" && /^bearer\s+\S+/i.test(value.trim()),
+      ))
   );
 }
 

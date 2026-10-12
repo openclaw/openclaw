@@ -26,6 +26,7 @@ import { withClawAgentConfigRemoval } from "./lifecycle-config-removal.js";
 import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
 import { createClawRemoveTestFixtures } from "./lifecycle-state.test-helpers.js";
+import { digestClawMcpServer, readClawMcpServerRefs, upsertClawMcpServerRef } from "./mcp.js";
 import {
   persistClawInstallRecord,
   persistClawPackageRef,
@@ -121,6 +122,53 @@ describe("Claw status and remove", () => {
     await expect(readFile(join(current.plan.agent.workspace, "SOUL.md"), "utf8")).resolves.toBe(
       "managed\n",
     );
+  });
+
+  it("does not reconcile pending MCP provenance before rejecting remove without Gateway", async () => {
+    const current = await addFixture();
+    const server = { command: "docs-mcp", args: [] };
+    const mcpOptions = {
+      listMcpServers: async () => ({
+        ok: true as const,
+        path: "config",
+        config: {},
+        mcpServers: { docs: server },
+        runtimeConfig: current.getConfig(),
+        sourceConfigBeforeMigrations: current.getConfig(),
+      }),
+    };
+    const ref = {
+      schemaVersion: "openclaw.clawMcpServerRef.v1" as const,
+      agentId: "worker",
+      name: "docs",
+      configDigest: digestClawMcpServer(server),
+      relationship: "managed" as const,
+      origin: "claw-introduced" as const,
+      independentOwner: false,
+      status: "complete" as const,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    };
+    upsertClawMcpServerRef(ref, { env: current.env });
+    const config = current.getConfig();
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config,
+      ...mcpOptions,
+    });
+    upsertClawMcpServerRef({ ...ref, status: "pending" }, { env: current.env });
+
+    await expect(
+      applyClawRemovePlan(plan, {
+        env: current.env,
+        config,
+        consentPlanIntegrity: plan.planIntegrity,
+        ...mcpOptions,
+      }),
+    ).rejects.toMatchObject({ code: "monitor_gateway_required" });
+    expect(readClawMcpServerRefs("worker", { env: current.env })).toMatchObject([
+      { name: "docs", status: "pending" },
+    ]);
   });
 
   it("rejects cleanup when an expected-missing agent id was recreated", async () => {
@@ -323,6 +371,7 @@ describe("Claw status and remove", () => {
       consentPlanIntegrity: remove.planIntegrity,
       purgeSessions: async () => undefined,
     });
+    expect(removed.error).toBeUndefined();
     expect(removed).toMatchObject({ status: "complete", agentRemoved: false });
     await expect(readClawStatus("worker", { env: current.env, config: {} })).resolves.toMatchObject(
       {
@@ -456,6 +505,7 @@ describe("Claw status and remove", () => {
     const result = await applyClawRemovePlan(plan, {
       ...removeOptions(current, plan, config),
     });
+    expect(result.error).toBeUndefined();
     expect(result).toMatchObject({
       status: "complete",
       agentRemoved: true,
@@ -839,7 +889,6 @@ describe("Claw status and remove", () => {
     });
     const packageDeps = {
       resolvePlugin,
-      acquirePackageLease: vi.fn(() => ({ heartbeat: vi.fn(), release: vi.fn() })),
     };
     const plan = await buildClawRemovePlan("worker", {
       env: current.env,
@@ -855,12 +904,12 @@ describe("Claw status and remove", () => {
       }),
     );
 
-    await expect(
-      applyClawRemovePlan(plan, {
-        ...removeOptions(current, plan, config),
-        packageDeps,
-      }),
-    ).resolves.toMatchObject({ status: "complete", agentRemoved: true });
+    const result = await applyClawRemovePlan(plan, {
+      ...removeOptions(current, plan, config),
+      packageDeps,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result).toMatchObject({ status: "complete", agentRemoved: true });
   });
 
   it("blocks removal when the created agent config changed", async () => {

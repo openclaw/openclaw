@@ -20,11 +20,13 @@ Read `extended-stable-backports.md`; a clean cherry-pick, green
 release checks, or a regenerated baseline does not by itself explain the
 maintenance risk.
 
-Use this path only for a `.33+` Gateway distribution from either of the two
-trailing completed months: the `openclaw` npm package, official npm plugins,
+Use this path only for a `.33+` Gateway distribution from the trailing
+completed month: the `openclaw` npm package, official npm plugins,
 and matching Docker Gateway images. Use
 `scripts/openclaw-npm-extended-stable-release.mjs` and the release workflows
-on pinned current `main` for command and validation requirements.
+at the frozen candidate Q=C for qualification; independently trusted P owns
+admission, verification, and publication. Deliberately backport missing Q
+contracts before freezing C, without importing future-main scenarios.
 
 1. On `extended-stable/YYYY.M.33`, verify the root and every publishable official
    plugin have the intended version. Generate and commit the complete
@@ -36,8 +38,8 @@ on pinned current `main` for command and validation requirements.
    Release Validation derives `npm_dist_tag=extended-stable` from the version.
 3. Run complete Full Release Validation against the canonical branch with
    `release_profile=stable`; save its run ID and successful `run_attempt`.
-   Use the trusted main-pinned helper's canonical `release-ci/*` producer,
-   which attests the immutable target SHA in its manifest. Direct branch/main
+   Use the canonical helper's candidate-owned `release-ci/*` producer at Q=C,
+   after independent P admission. Preserve its target, coverage, and descriptor. Direct branch/main
    producers do not satisfy protected-tag shared publication. Current manifests
    include qualified npm and prepared Docker artifacts; use that same run ID
    and attempt for npm preflight publication evidence. Also run the supplemental
@@ -52,7 +54,7 @@ on pinned current `main` for command and validation requirements.
    direct canonical-branch/main producers and narrow reruns.
 6. With publication/tag-push authority, create and push a protected lightweight
    `release-publish/<tooling-sha12>-<epoch>` tag at the frozen trusted-main
-   Tooling SHA: `git tag "$PUBLISH_REF" "$TOOLING_SHA"`, then
+   P SHA (not Q): `git tag "$PUBLISH_REF" "$TOOLING_SHA"`, then
    `git push origin "refs/tags/$PUBLISH_REF"`. Set `PUBLISH_REF` to the chosen
    protected tag name before running these commands. Dispatch
    `OpenClaw Release Publish` with `--ref` set to that tooling tag, the product
@@ -69,9 +71,31 @@ on pinned current `main` for command and validation requirements.
    Docker, and finalization. Docker-only recovery may dispatch from `main` with
    `publish_openclaw_npm=false` and `publish_docker_only=true`; that path does
    not attach evidence or finalize the release.
-8. From a clean current-`main` checkout, run
-   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P`.
-   Verify package signatures, source commits, inventories, exact versions, and selectors.
+8. Keep separate clean checkouts for trusted current-main tooling and the exact
+   frozen release source. Install the trusted tooling checkout with
+   `pnpm install --frozen-lockfile`, then run its verifier with the frozen
+   release checkout as the working directory. Use a disposable release
+   worktree with no existing `node_modules`, then expose only the trusted
+   tooling install through the same link used by the publication workflow:
+
+   ```bash
+   VERSION=YYYY.M.P
+   TOOLING_ROOT=/absolute/path/to/clean-current-main
+   RELEASE_ROOT=/absolute/path/to/frozen-release-source
+   test "$(node -e 'console.log(require(process.argv[1]).version)' "$RELEASE_ROOT/package.json")" = "$VERSION"
+   test ! -e "$RELEASE_ROOT/node_modules"
+   ln -s "$TOOLING_ROOT/node_modules" "$RELEASE_ROOT/node_modules"
+   (
+     cd "$RELEASE_ROOT"
+     node --import tsx "$TOOLING_ROOT/scripts/openclaw-npm-postpublish-verify.ts" "$VERSION"
+   )
+   ```
+
+   The script, external dependencies, and TypeScript loader come from trusted
+   current main. The frozen `cwd` supplies its immutable source manifests and
+   workspace path aliases, matching the release workflow's `.release-harness`
+   layout. A different source version must fail closed. Verify package
+   signatures, source commits, inventories, exact versions, and selectors.
    To promote an already-published core version to `extended-stable`, use
    `promote_extended_stable` in the `openclaw/releases` dist-tag workflow
    from that repository's `main`. Follow
@@ -82,6 +106,7 @@ on pinned current `main` for command and validation requirements.
    patch range. The same action can select an older extended-stable version
    for rollback. Repair other selectors separately with
    approved credential-isolated tooling. Never republish a version.
+
 9. Require `Docker Release` to verify default, slim, browser, and architecture
    images in GHCR and Docker Hub, including attestations and platform versions.
    It must advance only

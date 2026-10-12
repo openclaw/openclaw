@@ -15,6 +15,10 @@ import {
   type HeartbeatConfig,
 } from "./heartbeat-config.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
+import {
+  isConversationExecCompletion,
+  isHeartbeatDeliveryAwarenessEvent,
+} from "./heartbeat-events-filter.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
 import type { runHeartbeatOnce } from "./heartbeat-runner-run.js";
 import { isConfiguredHeartbeatAgent, isTargetedUnscheduledWake } from "./heartbeat-wake-policy.js";
@@ -29,6 +33,8 @@ import {
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 import { isSessionEventWakePollDeferred } from "./session-event-wake.js";
+import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
+import { peekDeliverableSystemEventEntries } from "./system-events.js";
 
 const loadHeartbeatExecution = createLazyRuntimeModule(() => import("./heartbeat-runner-run.js"));
 
@@ -63,7 +69,6 @@ export function startHeartbeatRunner(opts: {
   // follow-ups. Persisted monitor ticks bypass it.
   const state = {
     cfg: opts.cfg ?? getRuntimeConfig(),
-    runtime,
     agents: new Map<string, HeartbeatAgentState>(),
     stopped: false,
   };
@@ -95,7 +100,11 @@ export function startHeartbeatRunner(opts: {
     now: number,
     reason?: string,
     intent: HeartbeatWakeIntent = "event",
-    options: { authoritativeScheduledTick?: boolean; retainedWork?: boolean } = {},
+    options: {
+      authoritativeScheduledTick?: boolean;
+      retainedWork?: boolean;
+      conversationTurn?: boolean;
+    } = {},
   ): DeferDecision => {
     const decision = shouldDeferWake({
       intent,
@@ -104,6 +113,7 @@ export function startHeartbeatRunner(opts: {
       lastRunStartedAtMs: agent.lastRunStartedAtMs,
       recentRunStarts: agent.recentRunStarts,
       retainedWork: options.retainedWork,
+      conversationTurn: options.conversationTurn,
     });
     if (decision.defer && decision.reason === "flood") {
       if (!agent.floodLoggedSinceLastRun) {
@@ -213,9 +223,16 @@ export function startHeartbeatRunner(opts: {
         agent.intervalMs = scheduledEveryMs;
         agent.heartbeat = { ...agent.heartbeat, every: `${scheduledEveryMs}ms` };
       }
+      const pendingEvents = execEventWake
+        ? peekDeliverableSystemEventEntries(
+            resolveSystemEventQueueKey(requestedSessionKey ?? "global", agentId),
+          ).filter((event) => !isHeartbeatDeliveryAwarenessEvent(event))
+        : [];
       const deferral = evaluateWakeDeferral(agent, now, reason, intent, {
         authoritativeScheduledTick,
         retainedWork,
+        conversationTurn:
+          pendingEvents.length > 0 && pendingEvents.every(isConversationExecCompletion),
       });
       if (deferral.defer) {
         // Retained exec work never owns cadence unless a scheduled tick joined it.
@@ -260,7 +277,7 @@ export function startHeartbeatRunner(opts: {
           ...(scheduledEveryMs !== undefined ? { scheduledEveryMs } : {}),
           ...(targeted ? { sessionKey: requestedSessionKey } : {}),
           tasks: requestedTasks,
-          deps: { runtime: state.runtime },
+          deps: { runtime },
         };
         const execute = runOnce ?? (await loadHeartbeatExecution()).runHeartbeatOnce;
         // Import can outlive this runner or its wake generation. The wake owner
@@ -350,8 +367,7 @@ export function startHeartbeatRunner(opts: {
     // Agent state is disjoint; concurrent broadcast dispatch prevents a slow
     // session from starving another agent's independent wake.
     const agentOutcomes = await Promise.all(enrolledAgents.map((agent) => runOneAgent(agent)));
-    let ran = false;
-    let firstResult: HeartbeatRunResult | undefined;
+    const ran = agentOutcomes.some(({ result }) => result.status === "ran");
     let firstFailure: Extract<HeartbeatRunResult, { status: "failed" }> | undefined;
     let firstGuardSkip: Extract<HeartbeatRunResult, { status: "skipped" }> | undefined;
     for (const { result, retryable } of agentOutcomes) {
@@ -360,8 +376,6 @@ export function startHeartbeatRunner(opts: {
         // cooldown, so the retry does not replay their completed work.
         return result;
       }
-      ran ||= result.status === "ran";
-      firstResult ??= result;
       if (result.status === "failed") {
         firstFailure ??= result;
       }
@@ -382,7 +396,7 @@ export function startHeartbeatRunner(opts: {
     return (
       firstGuardSkip ??
       firstFailure ??
-      firstResult ?? {
+      agentOutcomes[0]?.result ?? {
         status: "skipped",
         reason: isInterval ? "not-due" : "disabled",
       }

@@ -14,7 +14,6 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   getLoadedOpenRouterModelCapabilities,
-  getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -129,18 +128,7 @@ function sanitizePromptModelId(value: unknown): string | undefined {
     return undefined;
   }
   const normalized = truncateUtf16Safe(
-    Array.from(value)
-      .filter((char) => {
-        const codePoint = char.codePointAt(0) ?? 0;
-        return (
-          codePoint > 0x1f &&
-          (codePoint < 0x7f || codePoint > 0x9f) &&
-          codePoint !== 0x2028 &&
-          codePoint !== 0x2029
-        );
-      })
-      .join("")
-      .trim(),
+    value.replace(/[\p{Cc}\u2028\u2029]/gu, "").trim(),
     MAX_PROMPT_MODEL_ID_DISPLAY_CHARS,
   );
   return normalized || undefined;
@@ -250,7 +238,7 @@ export default defineSingleProviderPluginEntry({
       ctx: ProviderResolveDynamicModelContext,
     ): ProviderRuntimeModel {
       const apiModelId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
-      const capabilities = getOpenRouterModelCapabilities(apiModelId);
+      const capabilities = getLoadedOpenRouterModelCapabilities(apiModelId);
       return {
         id: ctx.modelId,
         name: capabilities?.name ?? ctx.modelId,
@@ -313,9 +301,15 @@ export default defineSingleProviderPluginEntry({
             }),
           });
         },
-        staticRun: async () => ({
-          provider: buildOpenrouterProvider(),
-        }),
+        staticRun: async (ctx) => {
+          // Configured OpenRouter models complete from this catalog through synchronous
+          // capability reads, and thinking levels are chosen from that row. Load capabilities
+          // first (persisted catalog, or one fetch) only when a caller selected OpenRouter.
+          if (ctx.providerIds?.includes(PROVIDER_ID)) {
+            await loadOpenRouterModelCapabilities(OPENROUTER_DEFAULT_MODEL_REF);
+          }
+          return { provider: buildOpenrouterProvider() };
+        },
       },
       resolveDynamicModel: buildDynamicOpenRouterModel,
       // Resolve the catalog model even when a configured row already exists.
@@ -388,9 +382,11 @@ export default defineSingleProviderPluginEntry({
       isCacheTtlEligible: ({ modelId }) =>
         OPENROUTER_CACHE_TTL_MODEL_FAMILY.test(normalizeOpenRouterModelFamilyId(modelId) ?? ""),
       resolveUsageAuth: async (ctx) => {
-        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-          envDirect: [ctx.env.OPENROUTER_API_KEY],
-        });
+        const apiKey = (
+          await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
+            envDirect: [ctx.env.OPENROUTER_API_KEY],
+          })
+        )?.[0];
         return apiKey ? { token: apiKey } : null;
       },
       fetchUsageSnapshot: async (ctx) =>

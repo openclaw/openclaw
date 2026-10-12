@@ -20,8 +20,6 @@ vi.mock("matrix-js-sdk/lib/matrix.js", async (importOriginal) => {
     ...actual,
     createClient: (...args: Parameters<typeof actual.createClient>) => {
       const client = actual.createClient(...args);
-      // Keep the actual SDK object and plugin lifecycle; no network/sync loop is
-      // needed to hold crypto initialization or replay at the cancellation boundary.
       vi.spyOn(client, "initRustCrypto").mockImplementation(fixture.init);
       vi.spyOn(client, "startClient").mockImplementation(async (...options) => {
         await fixture.start(...options);
@@ -66,29 +64,41 @@ describe("Matrix encrypted startup ownership", () => {
     expect(fixture.reconcile).not.toHaveBeenCalled();
   });
 
-  it.each(["startup abort", "deadline", "generation stop"] as const)(
-    "cancels startup promptly but drains room replay before backend stop (%s)",
-    async (reason) => {
+  it.each([
+    { phase: "replay", reason: "startup abort" },
+    { phase: "replay", reason: "deadline" },
+    { phase: "replay", reason: "generation stop" },
+    { phase: "initialization", reason: "deadline" },
+  ])(
+    "cancels $phase promptly on $reason but drains it before backend stop",
+    async ({ phase, reason }) => {
       vi.useFakeTimers();
-      const replayStarted = createDeferred<void>();
-      const finishReplay = createDeferred<void>();
+      const started = createDeferred<void>();
+      const finish = createDeferred<void>();
       const abort = new AbortController();
       let replaySignal: AbortSignal | undefined;
-      fixture.reconcile.mockImplementation(async (_client, signal, assertCurrent) => {
-        assertCurrent();
-        replaySignal = signal;
-        replayStarted.resolve();
-        await finishReplay.promise;
-        assertCurrent();
-      });
+      const hold = async () => {
+        started.resolve();
+        await finish.promise;
+      };
+      if (phase === "initialization") {
+        fixture.init.mockImplementation(hold);
+      } else {
+        fixture.reconcile.mockImplementation(async (_client, signal, assertCurrent) => {
+          assertCurrent();
+          replaySignal = signal;
+          await hold();
+          assertCurrent();
+        });
+      }
       const startup = client.start({ abortSignal: abort.signal, readyTimeoutMs: 1000 });
       const startupSettled = Promise.allSettled([startup]);
       let shutdown: Promise<void> | undefined;
       try {
         await Promise.race([
-          replayStarted.promise,
+          started.promise,
           startup.then(() => {
-            throw new Error("Encrypted startup bypassed room recovery");
+            throw new Error(`Encrypted startup bypassed ${phase}`);
           }),
         ]);
         if (reason === "startup abort") {
@@ -99,48 +109,25 @@ describe("Matrix encrypted startup ownership", () => {
           shutdown = client.stopWithoutPersist();
         }
         await expect(startup).rejects.toMatchObject({ name: "AbortError" });
-        expect(replaySignal?.aborted).toBe(true);
+        if (phase === "replay") {
+          expect(replaySignal?.aborted).toBe(true);
+        }
         shutdown ??= client.stopWithoutPersist();
         await Promise.resolve();
         expect(fixture.stop).not.toHaveBeenCalled();
-        finishReplay.resolve();
+        finish.resolve();
         await shutdown;
         expect(fixture.stop).toHaveBeenCalledTimes(1);
+        if (phase === "initialization") {
+          expect(fixture.start).not.toHaveBeenCalled();
+          expect(fixture.reconcile).not.toHaveBeenCalled();
+        }
         await expect(client.start()).rejects.toThrow("fully stopped");
       } finally {
-        finishReplay.resolve();
+        finish.resolve();
         await startupSettled;
         await shutdown;
       }
     },
   );
-
-  it("bounds Rust initialization without tearing down its still-owned backend", async () => {
-    vi.useFakeTimers();
-    const started = createDeferred<void>();
-    const finish = createDeferred<void>();
-    fixture.init.mockImplementation(async () => {
-      started.resolve();
-      await finish.promise;
-    });
-    const startup = client.start({ readyTimeoutMs: 1000 });
-    const rejected = expect(startup).rejects.toMatchObject({ name: "AbortError" });
-    let shutdown: Promise<void> | undefined;
-    try {
-      await started.promise;
-      await vi.advanceTimersByTimeAsync(1000);
-      await rejected;
-      shutdown = client.stopWithoutPersist();
-      await Promise.resolve();
-      expect(fixture.stop).not.toHaveBeenCalled();
-      finish.resolve();
-      await shutdown;
-      expect(fixture.start).not.toHaveBeenCalled();
-      expect(fixture.reconcile).not.toHaveBeenCalled();
-    } finally {
-      finish.resolve();
-      await startup.catch(() => undefined);
-      await shutdown;
-    }
-  });
 });

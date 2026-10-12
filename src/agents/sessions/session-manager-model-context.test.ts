@@ -3,14 +3,18 @@ import fs from "node:fs";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { LEGACY_MISSING_TOOL_RESULT_TEXT } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptEvent,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  replaceTranscriptEvents,
+  replaceTranscriptEventsSync,
+} from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -20,7 +24,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
-it("reports context queue overload without losing context and recovers in admission order", async () => {
+it("reports context queue overload without losing context and completes every admitted read", async () => {
   await withOpenClawTestState({ label: "model-context-pressure" }, async (state) => {
     const scope = {
       agentId: "main",
@@ -66,7 +70,10 @@ it("reports context queue overload without losing context and recovers in admiss
       expect(source.buildSessionContext()).toEqual(expected);
       release.resolve();
       expect(await Promise.all(accepted)).toEqual(Array.from({ length: 128 }, () => expected));
-      expect(completed).toEqual(Array.from({ length: 128 }, (_, index) => index));
+      // Foreground reads run on a worker pool, so completion order is not FIFO.
+      expect(completed.toSorted((a, b) => a - b)).toEqual(
+        Array.from({ length: 128 }, (_, index) => index),
+      );
       expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
         expected,
       );
@@ -517,6 +524,9 @@ it.each([false, true, "path"])("keeps model reads non-persisting (%s)", async (i
     expect(SessionManager.readSessionContext(scope, (messages) => Array.from(messages))).toEqual(
       [],
     );
+    expect(
+      await SessionManager.readSessionContextAsync(scope, (messages) => [...messages]),
+    ).toEqual([]);
     expect(fs.existsSync(scope.storePath)).toBe(false);
     await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
@@ -655,15 +665,14 @@ it.each(
       };
       const spy = incognito
         ? undefined
-        : vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(async function (
-            this: WorkerTaskPool<unknown, unknown>,
-            ...args
-          ) {
-            spy!.mockRestore();
-            const result = await this.run(...args);
-            mutate();
-            return result;
-          });
+        : vi
+            .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+            .mockImplementationOnce(async (...args) => {
+              spy!.mockRestore();
+              const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
+              mutate();
+              return result;
+            });
       try {
         const pending = SessionManager.openModelContextAsync(scope, { admission });
         if (incognito) {
@@ -683,7 +692,9 @@ it.each(
 
 it.each(
   [false, true].flatMap((incognito) =>
-    (["append", "rewrite", "other-session"] as const).map((mutation) => ({ incognito, mutation })),
+    (
+      ["append", "rewrite", "delete", "branch", "compaction", "reset", "other-session"] as const
+    ).map((mutation) => ({ incognito, mutation })),
   ),
 )(
   "validates unadmitted context before acceptance (incognito=$incognito mutation=$mutation)",
@@ -699,7 +710,10 @@ it.each(
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const source = SessionManager.open(scope);
-      source.appendMessage({ role: "user", content: "before", timestamp: 1 });
+      const first = source.appendMessage({ role: "user", content: "before", timestamp: 1 });
+      if (mutation === "branch") {
+        source.appendMessage(makeUserMessage("branch tip", 2));
+      }
       const expected = source.buildSessionContext();
       let mutationSource = source;
       if (mutation === "other-session") {
@@ -717,6 +731,21 @@ it.each(
       const mutate = () => {
         if (mutation === "rewrite") {
           expect(
+            replaceTranscriptEventsSync(scope, [
+              source.getHeader(),
+              ...source
+                .getEntries()
+                .map((entry) =>
+                  entry.type === "message"
+                    ? Object.assign({}, entry, { message: makeUserMessage("rewritten prefix", 1) })
+                    : entry,
+                ),
+            ]),
+          ).toBe(true);
+          return;
+        }
+        if (mutation === "delete") {
+          expect(
             source.removeTrailingEntries(
               (entry) =>
                 entry.type === "message" &&
@@ -724,26 +753,33 @@ it.each(
                 entry.message.content === "before",
             ),
           ).toBe(1);
+          return;
+        }
+        if (mutation === "branch") {
+          source.branch(first);
+        } else if (mutation === "compaction") {
+          source.appendCompaction("summary", first, 1);
+        } else if (mutation === "reset") {
+          source.resetLeaf();
         }
         mutationSource.appendMessage({ role: "user", content: "after", timestamp: 2 });
       };
       const spy = incognito
         ? undefined
-        : vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(async function (
-            this: WorkerTaskPool<unknown, unknown>,
-            ...args
-          ) {
-            spy!.mockRestore();
-            const result = await this.run(...args);
-            mutate();
-            return result;
-          });
+        : vi
+            .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+            .mockImplementationOnce(async (...args) => {
+              spy!.mockRestore();
+              const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
+              mutate();
+              return result;
+            });
       try {
         const pending = SessionManager.openModelContextAsync(scope);
         if (incognito) {
           mutate();
         }
-        if (mutation === "other-session") {
+        if (mutation === "other-session" || mutation === "append") {
           expect((await pending).buildSessionContext()).toEqual(expected);
         } else {
           await expect(pending).rejects.toThrow("Session transcript changed during context read");
@@ -840,7 +876,7 @@ it.each(["details", "text", "duplicate-object", "late-array-call"])(
         content: [
           {
             type: "text",
-            text: marker === "details" ? "missing" : DEFAULT_MISSING_TOOL_RESULT_TEXT,
+            text: marker === "details" ? "missing" : LEGACY_MISSING_TOOL_RESULT_TEXT,
           },
         ],
         ...(marker === "details" ? { details: { openclawSyntheticMissingToolResult: true } } : {}),
@@ -867,7 +903,7 @@ it.each(["details", "text", "duplicate-object", "late-array-call"])(
         await waitForSessionTranscriptProjection(scope);
         const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
         // Preserve duplicate members from imported JSON; JavaScript objects would collapse them.
-        const content = `{"part":{"type":"text","text":"ordinary"},"part":{"type":"text","text":${JSON.stringify(DEFAULT_MISSING_TOOL_RESULT_TEXT)}}}`;
+        const content = `{"part":{"type":"text","text":"ordinary"},"part":{"type":"text","text":${JSON.stringify(LEGACY_MISSING_TOOL_RESULT_TEXT)}}}`;
         database.db
           .prepare(
             "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.content', json(?)) WHERE session_id = ? AND json_extract(event_json, '$.id') = ?",

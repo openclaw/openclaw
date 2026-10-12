@@ -5,17 +5,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const installMocks = vi.hoisted(() => ({
   ensureLlamaServerInstalled: vi.fn(),
-  resolveManagedLlamaServerPaths: vi.fn(),
 }));
 
 vi.mock("./llama-server-install.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./llama-server-install.js")>()),
   ensureLlamaServerInstalled: installMocks.ensureLlamaServerInstalled,
-  resolveManagedLlamaServerPaths: installMocks.resolveManagedLlamaServerPaths,
 }));
 
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { selectLlamaServerAsset } from "./llama-server-install.js";
+import { buildLlamaCppModel } from "./defaults.js";
+import { selectLlamaServerAsset } from "./llama-server-assets.js";
 import {
   ensureLlamaCppModel,
   ensureManagedLlamaServerForChat,
@@ -39,11 +38,7 @@ async function createPresetFixture(label: string) {
     command: path.join(tempRoot, "llama-server"),
     asset,
   });
-  installMocks.resolveManagedLlamaServerPaths.mockReturnValue({
-    installDir: tempRoot,
-    command: path.join(tempRoot, "llama-server"),
-    presetPath,
-  });
+  await fs.writeFile(path.join(tempRoot, "llama-server"), "test runtime");
   return { tempRoot, presetPath };
 }
 
@@ -208,7 +203,7 @@ describe("managed llama.cpp media artifacts and presets", () => {
         signal: controller.signal,
       }),
     ).rejects.toBe(controller.signal.reason);
-    expect(await fs.readdir(tempRoot)).toEqual([]);
+    expect(await fs.readdir(tempRoot)).toEqual(["llama-server"]);
   });
 
   it("reuses verified curated model and projector bytes without metadata or download requests", async () => {
@@ -314,7 +309,7 @@ describe("managed llama.cpp media artifacts and presets", () => {
         "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\npooling = mean";
       await fs.writeFile(
         presetPath,
-        `version = 1\n\n${chat}\n${hasEmbedding ? `\n${embedding}\n` : ""}`,
+        `version = 1\n\n${chat}\n[stale]\nmodel = /models/stale.gguf\n${hasEmbedding ? `\n${embedding}\n` : ""}`,
       );
       for (const artifact of [recipe.model, recipe.projector]) {
         await fs.writeFile(path.join(tempRoot, artifact.fileName), "GGUF");
@@ -327,7 +322,9 @@ describe("managed llama.cpp media artifacts and presets", () => {
             command: path.join(tempRoot, "llama-server"),
             args: ["--models-preset", presetPath, "--models-max", "1"],
           },
-          models: [],
+          models: [
+            buildLlamaCppModel({ id: "custom-chat", name: "Chat", source: "/models/chat.gguf" }),
+          ],
           params: { modelCacheDir: tempRoot, mediaModels: { ocr: recipe.id, vision: "vision" } },
         },
         model: {
@@ -342,6 +339,7 @@ describe("managed llama.cpp media artifacts and presets", () => {
       });
       const preset = await fs.readFile(presetPath, "utf8");
       expect(preset).toContain(chat);
+      expect(preset).not.toContain("[stale]");
       expect(preset).toContain(`mmproj = ${path.join(tempRoot, recipe.projector.fileName)}`);
       expect(preset).toContain("image-max-tokens = 512");
       expect(preset).toContain("mmproj-device = CUDA1");

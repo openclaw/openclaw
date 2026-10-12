@@ -12,6 +12,7 @@ import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createQaGatewayChild } from "./gateway-child.js";
+import { buildFailedResponseEvents } from "./providers/mock-openai/mock-openai-events.js";
 import { attachQaMockResponsesWebSocketServer } from "./providers/mock-openai/mock-openai-responses-websocket.js";
 import { MockResponseStream } from "./providers/mock-openai/mock-openai-stream.js";
 import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
@@ -31,7 +32,8 @@ type Scenario = {
   id: string;
   count: number;
   mode: "allow" | "deny";
-  issued: boolean;
+  failedResponses: number;
+  unacknowledgedRetries: number;
   outputs: unknown[];
 };
 type ProcessIdentity = { pid: number; startTimeTicks: number };
@@ -263,8 +265,26 @@ export default {
               (item) => item && typeof item === "object" && String(item.type).endsWith("_output"),
             ),
           );
-          if (!current.issued) {
-            current.issued = true;
+          if (current.failedResponses > 0 && current.outputs.length === 0) {
+            current.unacknowledgedRetries++;
+          }
+          const acknowledged = new Set(
+            current.outputs.flatMap((item) =>
+              item &&
+              typeof item === "object" &&
+              "type" in item &&
+              item.type === "function_call_output" &&
+              "call_id" in item &&
+              typeof item.call_id === "string"
+                ? [item.call_id]
+                : [],
+            ),
+          );
+          const pending = Array.from({ length: current.count }, (_, i) => i).filter(
+            (i) => !acknowledged.has(`call_${current.id}_${i}`),
+          );
+          // Retry only missing calls; constructing or sending a response does not prove execution.
+          if (pending.length > 0) {
             const native = tools.find(({ tool }) =>
               ["exec_command", "shell_command", "shell"].includes(tool.name ?? ""),
             );
@@ -275,7 +295,7 @@ export default {
             }
             const properties = native.tool.parameters?.properties ?? {};
             expect(Object.hasOwn(properties, "login")).toBe(true);
-            for (let i = 0; i < current.count; i++) {
+            for (const i of pending) {
               const command =
                 current.mode === "deny"
                   ? "printf PRESSURE_DENIED > pressure-denied.txt"
@@ -300,8 +320,14 @@ export default {
           } else {
             stream.message({ id: `msg_${current.id}`, text: `PRESSURE_DONE_${current.id}` });
           }
+          let events = stream.complete(16);
+          if (selection === "matched" && current.count === 20 && current.failedResponses === 0) {
+            // Drop the entire tool response before delivery; issuing it is not an acknowledgment.
+            current.failedResponses++;
+            events = buildFailedResponseEvents();
+          }
           return {
-            events: stream.complete(16),
+            events,
             model: typeof body.model === "string" ? body.model : "",
           };
         };
@@ -426,7 +452,14 @@ export default {
           );
           for (const count of selection === "matched" ? [1, 5, 20, 1] : [5]) {
             const mode = selection === "matched" && reports.length === 3 ? "deny" : "allow";
-            scenario = { id: randomUUID(), count, mode, issued: false, outputs: [] };
+            scenario = {
+              id: randomUUID(),
+              count,
+              mode,
+              outputs: [],
+              failedResponses: 0,
+              unacknowledgedRetries: 0,
+            };
             const callsBefore = (await readCalls()).length;
             const monitoring = new AbortController();
             let peakRelays = 0;
@@ -544,6 +577,10 @@ export default {
               );
             }
             expect(calls).toHaveLength(expectedCalls);
+            if (selection === "matched" && count === 20) {
+              expect(scenario.failedResponses).toBe(1);
+              expect(scenario.unacknowledgedRetries).toBeGreaterThan(0);
+            }
             expect(healthErrors).toEqual([]);
             if (selection !== "matched") {
               expect(peakRelays).toBe(0);
@@ -610,7 +647,7 @@ export default {
               ).stdout.trim();
               const current = await readProcess(row.pid);
               expect(current?.startTimeTicks).toBe(row.startTimeTicks);
-              expect(version).toBe("codex-cli 0.158.0");
+              expect(version).toBe("codex-cli 0.160.0");
               binaryIdentities.push({
                 pid: row.pid,
                 startTimeTicks: row.startTimeTicks,
@@ -632,6 +669,7 @@ export default {
               mode,
               binaries: binaryIdentities,
               syntheticPolicyDelayMs: 75,
+              injectedResponseFailures: scenario.failedResponses,
               sampling:
                 "Non-atomic /proc snapshots; RSS can count shared pages; CPU omits work outside samples; elapsed windows are observation intervals, not process lifetimes.",
               // /proc sampling misses short-lived children and shares pages between RSS values.

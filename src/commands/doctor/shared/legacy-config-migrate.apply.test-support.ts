@@ -20,15 +20,6 @@ export function migrateLegacyConfigForTest(
   const visibleChanges = changes.filter(
     (change) => change !== "Moved agents.list → keyed agents.entries.",
   );
-  const agents = next.agents as Record<string, unknown> | undefined;
-  const entries = agents?.entries as Record<string, Record<string, unknown>> | undefined;
-  if (agents && entries) {
-    Object.defineProperty(agents, "list", {
-      configurable: true,
-      enumerable: false,
-      value: Object.entries(entries).map(([id, entry]) => Object.assign({ id }, entry)),
-    });
-  }
   return visibleChanges.length === 0
     ? { config: null, changes: visibleChanges }
     : { config: next as OpenClawConfig, changes: visibleChanges };

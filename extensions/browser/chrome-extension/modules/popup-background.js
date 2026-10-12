@@ -185,7 +185,7 @@ export function createPopupMessageHandler({
             await reconcilePairingInvalidation();
             const accessible = await policy.listAccessibleTabs();
             const hint = getRelayStatusHint();
-            sendResponse({
+            return sendResponse({
               paired: Boolean(relayUrl),
               state: getRelayState(),
               accessMode,
@@ -195,31 +195,25 @@ export function createPopupMessageHandler({
               retiredCopilotCustodyBlocked,
               ...(hint ? { hint } : {}),
             });
-            return;
           }
           case "pair":
-            sendResponse(
+            return sendResponse(
               await applyPairing({
                 pairingString: msg.pairingString,
                 accessMode: msg.accessMode,
                 source: "manual",
               }),
             );
-            return;
           case "unpair":
-            sendResponse(await unpair());
-            return;
+            return sendResponse(await unpair());
           case "setNativeBootstrapEnabled":
             if (typeof msg.enabled !== "boolean") {
-              sendResponse({ ok: false, error: "Invalid automatic setup setting." });
-              return;
+              return sendResponse({ ok: false, error: "Invalid automatic setup setting." });
             }
-            sendResponse({ ok: true, result: await enableNativeBootstrap(msg.enabled) });
-            return;
+            return sendResponse({ ok: true, result: await enableNativeBootstrap(msg.enabled) });
           case "setAccessMode": {
             if (msg.accessMode !== ACCESS_MODE_ALL && msg.accessMode !== ACCESS_MODE_SELECTED) {
-              sendResponse({ ok: false, error: "Invalid access mode." });
-              return;
+              return sendResponse({ ok: false, error: "Invalid access mode." });
             }
             await requireAutomationAllowed();
             const restricting = msg.accessMode === ACCESS_MODE_SELECTED;
@@ -240,8 +234,7 @@ export function createPopupMessageHandler({
               }
               throw error;
             }
-            sendResponse({ ok: true, accessMode: storedMode });
-            return;
+            return sendResponse({ ok: true, accessMode: storedMode });
           }
           case "toggleTabAccess": {
             const tabId = msg.tabId;
@@ -250,14 +243,15 @@ export function createPopupMessageHandler({
               (msg.accessMode !== ACCESS_MODE_ALL && msg.accessMode !== ACCESS_MODE_SELECTED) ||
               typeof msg.grant !== "boolean"
             ) {
-              sendResponse({ ok: false, error: "Invalid tab access action." });
-              return;
+              return sendResponse({ ok: false, error: "Invalid tab access action." });
             }
             await accessReady;
             await requireAutomationAllowed();
             if (policy.mode !== msg.accessMode) {
-              sendResponse({ ok: false, error: "Browser access mode changed. Refresh and retry." });
-              return;
+              return sendResponse({
+                ok: false,
+                error: "Browser access mode changed. Refresh and retry.",
+              });
             }
             const revocation = policy.beginRevocation(tabId);
             try {
@@ -273,13 +267,12 @@ export function createPopupMessageHandler({
                   }
                 } else {
                   const selected = await isTabSelected(await chromeApi.tabs.get(tabId));
-                  if (!msg.grant && selected) {
+                  if (msg.grant !== selected) {
                     policy.invalidateTab(tabId);
-                    await detachDebugger(tabId);
-                    await removeTabFromOpenClawGroup(tabId);
-                  } else if (msg.grant && !selected) {
-                    policy.invalidateTab(tabId);
-                    await addTabToOpenClawGroup(tabId);
+                    if (!msg.grant) {
+                      await detachDebugger(tabId);
+                    }
+                    await (msg.grant ? addTabToOpenClawGroup : removeTabFromOpenClawGroup)(tabId);
                   }
                 }
                 scheduleTabsSync();
@@ -289,19 +282,17 @@ export function createPopupMessageHandler({
               policy.endRevocation(revocation);
             }
             const state = await policy.inspectTab(tabId);
-            sendResponse({ ok: true, accessible: state.accessible, denied: state.denied });
-            return;
+            return sendResponse({ ok: true, accessible: state.accessible, denied: state.denied });
           }
           case "getTabAccess": {
             await accessReady;
             const state = await policy.inspectTab(msg.tabId);
-            sendResponse({
+            return sendResponse({
               accessMode: policy.mode,
               accessible: state.accessible,
               eligible: state.eligible,
               denied: state.denied,
             });
-            return;
           }
           default:
             sendResponse({ ok: false, error: "unknown message" });

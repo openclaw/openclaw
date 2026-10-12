@@ -67,4 +67,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     }
   }
   configurePrepareGitHooks();
+  if (existsSync(join(DEFAULT_PACKAGE_ROOT, "scripts/native-protocol-inputs.json"))) {
+    const { prepareNativeProtocol } = await import("./prepare-native-protocol.mjs");
+    await prepareNativeProtocol();
+  }
 }

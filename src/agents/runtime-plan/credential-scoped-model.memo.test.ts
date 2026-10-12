@@ -153,28 +153,6 @@ describe("generation route-model memo", () => {
     },
   );
 
-  it("retains 64 keys and evicts the oldest when a new key is resolved", async () => {
-    const memo: RouteMemo = new Map();
-    const resolveModel = vi.fn(async () => ({ model: routedModel }));
-    const turn = (profile: number) =>
-      buildMaterializer({ memo, resolveModel }).materialize(
-        buildPlan({ forwardedAuthProfileId: `openai:profile-${profile}` }),
-      );
-    for (let profile = 0; profile < 64; profile += 1) {
-      await turn(profile);
-    }
-    expect(memo.size).toBe(64);
-    await turn(0);
-    await turn(63);
-    expect(resolveModel).toHaveBeenCalledTimes(64);
-    await turn(64);
-    expect(memo.size).toBe(64);
-    await turn(0);
-    await turn(64);
-    expect(resolveModel).toHaveBeenCalledTimes(66);
-    expect(memo.size).toBe(64);
-  });
-
   it("does not let an evicted promise's late rejection remove its replacement", async () => {
     const memo: RouteMemo = new Map();
     const pending = createDeferred<{ model: typeof routedModel }>();

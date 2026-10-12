@@ -13,16 +13,20 @@ auth health, sandbox images, and plugin installs.
 
 <AccordionGroup>
   <Accordion title="3. Legacy state migrations (disk layout)">
-    Doctor can migrate older on-disk layouts into the current structure:
+    Supported upgrade sources are state shapes written by releases shipped on or after July 1, 2026. The July Doctor importer could still leave `provider` and `lastProvider` aliases on session rows. Session reads refuse those rows with a migration-required error until `openclaw doctor --fix` runs; Doctor backs up the affected SQLite databases, then rewrites the aliases into the canonical `delivery` state and its query projections together. Rows that still need the retired `room` → `groupChannel` conversion are refused without changing the original store: preserve the state, install OpenClaw `2026.9.5`, run `openclaw doctor --fix`, then upgrade again. Rows with current fields remain supported even when obsolete metadata remains alongside them. July-era `sessions.json` and JSONL transcript imports remain supported.
 
-    - Session rows and transcripts: import legacy `sessions.json` and JSONL history from `~/.openclaw/sessions/` or per-agent `sessions/` directories into `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+    Doctor can migrate supported on-disk layouts into the current structure:
+
+    - Session rows and transcripts: import legacy `sessions.json` and JSONL history from per-agent `sessions/` directories or explicitly configured stores into `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
     - Agent dir: from `~/.openclaw/agent/` to `~/.openclaw/agents/<agentId>/agent/`
     - WhatsApp auth state (Baileys): from legacy `~/.openclaw/credentials/*.json` (except `oauth.json`) to `~/.openclaw/credentials/whatsapp/<accountId>/...` (default account id: `default`)
     - Signed device identity: from `~/.openclaw/identity/device.json` into the `primary` `device_identities` row in `state/openclaw.sqlite`; Doctor also owns repair of invalid canonical rows; Gateway and node-host startup refuse an unimported identity instead of creating a replacement, and leave the separate device-auth file untouched
 
     Imports of the pre-June `tasks/runs.sqlite`, `flows/registry.sqlite`, and `plugin-state/state.sqlite` databases are retired. Doctor leaves these files untouched. Older installations that need their records should [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions) and run its Doctor migrations before installing `latest`; June-and-later releases already use the shared state database.
 
-    Legacy Skill Workshop proposal imports, skill relocation, and collection-backup repair belong to Doctor, including the repair pass during `openclaw update`. Normal Gateway and local CLI startup leave those artifacts untouched and do not discover Workshop backup roots or scan proposals for repair. Run `openclaw doctor --fix` or `openclaw doctor --yes` against the same state and config to complete a legacy Workshop migration. Plain Doctor can report remaining Workshop artifacts with repair guidance.
+    The JSON plugin index at `plugins/installs.json` is retired. Doctor leaves it unchanged and directs operators to run `openclaw doctor --fix` on `2026.9.5` with a pre-update backup. Updates also check this original file before stopping the running Gateway. Current SQLite plugin indexes and install records remain supported.
+
+    Retired Skill Workshop proposals belong to Doctor, including the repair pass during `openclaw update`. Doctor exports each pending or quarantined draft to `<agentDir>/workshop-skills/.archive/.retired-proposals/<proposal-id>/`, drops the retired proposal tables, and removes `<state-dir>/skill-workshop/proposals/`. Normal Gateway and local CLI startup leave those artifacts untouched. A failed export keeps the tables and files and reports a warning; rerun `openclaw doctor --fix` after fixing the cause.
 
     A rewritten or truncated legacy audit raw archive does not stop Doctor or update finalization. Doctor quarantines it beside itself, preserves the sanitized archive and existing SQLite records, and reports the quarantined path once. Later repairs continue. See [legacy audit recovery](/cli/update/repair-and-recovery#skipped-legacy-audit-recovery) for retained backups and recovery limits.
 
@@ -30,9 +34,13 @@ auth health, sandbox images, and plugin installs.
 
     Repair prepares retained archive media normalization from read-only database snapshots before stopping a managed Gateway. Unchanged archives require no archive write transaction. Doctor records verified content and file identities in existing migration metadata, so another run at the same version skips parsing and reading unchanged archive copies. Imports, restores, changed files, and new versions invalidate those facts; canonical blob digests are still checked. Actual repairs retain stopped-writer authority and source revalidation.
 
+    Automatic discovery no longer imports the pre-agent `~/.openclaw/sessions/` layout. An explicit session-store path remains supported, including a configured path at that location.
+
     Legacy session-file import and repair belong to Doctor. Gateway startup checks readiness without importing those files; runtime session access uses only SQLite. An unreadable legacy session index and its transcripts remain at their original paths, and repeated startups refuse readiness with the Doctor command for the active profile. Stop the Gateway, back up its state, repair the named source, and run `openclaw doctor --fix` before restarting it. The [targeted migration sequence](/cli/doctor#session-sqlite-migration) provides inspection and validation evidence. Current SQLite maintenance does not require legacy files to remain on disk.
 
     When an unavailable plugin still needs legacy session files, Doctor retains those originals after verifying the core import. Startup accepts the retained files only when their session owners have matching verified imports. An unused configured agent does not need an empty database for another agent's history. Changed, unassigned, or unimported source rows still require repair before startup.
+
+    Deferred session import receipts bind the database inode and supported creation time, so a virtual filesystem device-number change after reboot does not invalidate a verified import. Retained source files keep their SHA-256 and size checks; normal SQLite edits and deletions remain authoritative. Doctor's import/recovery pass upgrades older device-and-inode receipts once in the existing receipt JSON. If the old physical identity no longer matches, Doctor verifies retained sources against canonical history before rebinding. A changed or incomplete database keeps its recovery warning and cannot replay retained sessions.
 
     Doctor retains one prepared plugin selection through planning and post-session repair. A deferred external plugin stays deferred while admitted plugins complete their repairs; changing maintenance scopes does not add unplanned actions or block an update with an action-order mismatch. When no plugin migration is deferred and no verified legacy session source is retained, the post-session plugin repair runs its detectors once and skips the completion certification pass. Gateway startup reports pending repairs without executing them.
 
@@ -56,17 +64,13 @@ auth health, sandbox images, and plugin installs.
 
     Doctor reports the embedded owner and the existing explicit quarantine command for an operator who has inspected the data and stopped OpenClaw. Independent state migrations still run; repairs requiring the refused database are skipped and reported as warnings. Admission is derived from the database files and held only in the running process. After repairing or explicitly quarantining the misplaced copy, restart the Gateway to evaluate admission again. There is no persisted refusal or separate clearance record.
 
-    `openclaw doctor --fix` imports legacy outbound and session delivery queues from `delivery-queue/` and `session-delivery-queue/` into SQLite. At this one-time cutover, pending entries whose original enqueue time is **72 hours old or older** are preserved without automatic delivery. Missing, invalid, or future enqueue times also require manual review. A recent retry or file modification does not renew an old message. Normal SQLite queue delivery and retry policies are unchanged.
+    JSON delivery files under `delivery-queue/` and `session-delivery-queue/` were last written before July 1, 2026. Their import is retired. Doctor and startup leave these files untouched and stop with guidance to upgrade through `2026.9.7` and run its `openclaw doctor --fix` first. Back up the full state directory, including queue-owned media, before that intermediate upgrade. Current SQLite queues and their retry policies are unchanged.
 
-    Doctor also prepares retired raw outbound rows already in SQLite, including interrupted preparation and media-staging checkpoints. It loads the configured plugin runtime only when preparation or send reconciliation needs it, preserves the existing modifier order and cancellation policy, and disposes that runtime before completing repair. Prepared checkpoints finish without rerunning modifiers. Missing plugins or media leave the existing custody and retry warnings for another `doctor --fix` pass. Normal Gateway startup reports legacy queue files and rows without converting them; it continues recovery and retries for the current prepared queue.
+    Doctor also prepares retired raw outbound rows already in SQLite, including interrupted preparation and media-staging checkpoints. It loads the configured plugin runtime only when preparation or send reconciliation needs it, preserves the existing modifier order and cancellation policy, and disposes that runtime before completing repair. Prepared checkpoints finish without rerunning modifiers. Missing plugins or media leave the existing custody and retry warnings for another `doctor --fix` pass. Normal Gateway startup reports legacy SQLite rows without converting them; it continues recovery and retries for the current prepared queue.
 
     If plugin cleanup reports retained resources, Doctor keeps its maintenance ownership and fails the repair. Resolve that process's cleanup failure before restarting the Gateway; another invocation cannot take over its lease while those resources may still write. Fully settled callback errors remain visible but do not retain maintenance ownership.
 
-    Handled source files are retained byte-for-byte as private `.migrated` backups (numbered when an existing backup differs). These files are not read as pending messages. Import receipts commit with the queue decision, so retrying cleanup after a crash cannot recreate a consumed message. Safely retained old entries produce warnings, not a failed upgrade; malformed or conflicting sources remain in place for repair. Run `openclaw doctor --fix` against the same state directory to retry incomplete cleanup.
-
-    For withheld messages and existing failed sources, queue-owned attachments are copied into a sibling `<source>.media.migrated/` backup before retiring the source. Filenames retain the original spool name and a SHA-256 content suffix. The original JSON is not rewritten. These private recovery artifacts have no automatic expiry; archive them or remove them explicitly after review. Ordinary archive backups include the `.migrated` files and media copies, but a portable SQLite snapshot alone does not. External files and remote URLs are not copied or downloaded, and may no longer be available. Pending copies retain their source spool files through the existing SQLite migration receipt, even when a copy fails; normal media cleanup releases them only after verified backups are recorded. Cleanup retries verify and reuse those recorded copies without requiring the original spool file. A missing or unsafe attachment leaves the source in place with a cleanup warning. Complete this cleanup before running an older build, whose media cleanup does not understand these retention receipts.
-
-    Review the preserved text, recipients, and any available attachments before sending a **new** message through the normal channel interface. Do not rename archived files back into the queue or restore old pending rows to request replay. Existing failed entries and delivered markers keep their terminal meaning.
+    Existing `.migrated` JSON files and `.media.migrated` directories remain recovery artifacts. They are not pending messages and are not automatically removed. Review preserved recipients, text, and attachments before sending a new message; do not rename archived files back into a queue to request replay.
 
     Doctor emits warnings when migrations leave legacy folders behind as backups. WhatsApp auth is intentionally only migrated via `openclaw doctor`. Talk provider/provider-map normalization compares by structural equality, so key-order-only diffs no longer trigger repeat no-op `doctor --fix` changes.
 
@@ -97,7 +101,7 @@ auth health, sandbox images, and plugin installs.
     Doctor scans all installed plugin manifests for deprecated top-level capability keys (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders`). When found, it offers to move them into the `contracts` object and rewrite the manifest file in-place. This migration is idempotent; if `contracts` already has the same values, the legacy key is removed without duplicating data.
   </Accordion>
   <Accordion title="3b. Legacy cron store migrations">
-    Doctor also checks the legacy cron job store (`~/.openclaw/cron/jobs.json`) for old job shapes before importing canonical rows into SQLite.
+    Doctor repairs supported historical shapes in SQLite cron rows and imports supported `jobs-quarantine.json` sidecars. Retired `jobs.json`, `jobs-state.json`, and `runs/*.jsonl` files require an intermediate upgrade through `2026.9.7`; Doctor preserves them and stops before cron repair. See the [retention policy](/gateway/doctor/config-migrations#retention-policy).
 
     Current cron cleanups include:
 
@@ -107,6 +111,24 @@ auth health, sandbox images, and plugin installs.
     - top-level delivery fields (`deliver`, `channel`, `to`, `provider`, ...) → `delivery`
     - payload `provider` delivery aliases → explicit `delivery.channel`
     - legacy `notify: true` webhook fallback jobs → explicit webhook delivery from the retired raw `cron.webhook` value when valid; announce jobs keep their chat delivery and get `delivery.completionDestination`. Doctor then removes the old config key. Without a usable legacy webhook, the inert top-level `notify` marker is removed for no-target jobs (existing delivery, including announce, is preserved) since runtime delivery never reads it.
+
+    Legacy default-agent ownership is repaired only by Doctor. Gateway startup
+    leaves stored cron ownership unchanged. An ownerless job whose config still
+    retains a legacy default marker waits for repair without consuming its due
+    occurrence or disabling a one-shot. Manual runs return `openclaw doctor --fix`
+    guidance; explicitly owned jobs continue normally. Doctor pins the historical
+    owner before removing that marker, preserving the job's definition and runtime
+    state. Unresolved historical jobs also require Doctor before updates or removal,
+    and the current system agent does not gain management access to them. Operator
+    inspection remains available. For a legacy `agents.list` without a default
+    marker, Doctor pins historical ownerless jobs to the first agent in the list
+    before converting the roster. Current keyed `agents.entries` configurations
+    without a legacy marker keep their dynamic system-agent selection.
+
+    Missing interval anchors are repaired by Doctor. Runtime scheduling can
+    calculate the next run without writing an anchor into an old definition.
+    Schedule maintenance and run outcomes preserve stored ownership and authored
+    fields; intentional enable/disable transitions change only the enabled field.
 
     The Gateway also sanitizes malformed cron rows at load time so valid jobs keep running. Malformed rows are quarantined in the shared SQLite state database in the same transaction that removes them from active scheduling; doctor reports those records and imports any `jobs-quarantine.json` sidecars left by older releases.
 
@@ -128,6 +150,7 @@ auth health, sandbox images, and plugin installs.
 
     - **State dir missing**: warns about catastrophic state loss, prompts to recreate the directory, and reminds you that it cannot recover missing data.
     - **State dir permissions**: verifies writability; offers to repair permissions (and emits a `chown` hint when owner/group mismatch is detected).
+      Config repairs, including during updates, preserve a writable state root owned by another user (for example a Kubernetes `fsGroup` volume with mode `2775`). They report its path, owner IDs, and retained mode as a warning. Config and backup files still require mode `600`; owned-directory hardening and private credential directory checks remain enforced.
     - **macOS cloud-synced state dir**: warns when state resolves under iCloud Drive (`~/Library/Mobile Documents/com~apple~CloudDocs/...`) or `~/Library/CloudStorage/...`, because sync-backed paths can cause slower I/O and lock/sync races.
     - **Windows cloud-synced state dir**: warns when state resolves under a OneDrive sync root (from `OneDrive`, `OneDriveConsumer`, or `OneDriveCommercial`), because sync-backed paths can cause slower I/O, lock/sync races, and Files On-Demand dehydration. To relocate, stop the Gateway, move the whole state directory, set `OPENCLAW_STATE_DIR` for the Gateway service (not just one shell), restart, and rerun doctor.
     - **Linux SD or eMMC state dir**: warns when state resolves to an `mmcblk*` mount source, because SD/eMMC-backed random I/O can be slower and wear faster under session and credential writes.
@@ -149,7 +172,7 @@ auth health, sandbox images, and plugin installs.
 
     Doctor also imports legacy generated provider catalogs (`plugins/*/catalog.json` and retained migration claims) into agent SQLite while preserving provider credentials. Run `openclaw doctor --fix` to import these catalogs or repair persisted generated models whose transport API cannot be derived. Ordinary model loading reads canonical SQLite catalogs without importing sidecars or repairing saved rows. Initial disk discovery and explicit registry refresh report legacy catalogs with a Doctor command; hot model lookups and lifecycle-captured catalogs do not inspect legacy files. Newly generated catalogs are still normalized before publication.
 
-    Legacy Codex OAuth profiles with encrypted sidecar credentials are repaired only by doctor. Run `openclaw doctor --fix` from an interactive terminal on the original host so it can recover the legacy encryption key, including from macOS Keychain when needed, and import supported credentials into the SQLite auth store. If the legacy material cannot be recovered, sign in again with `openclaw models auth login --provider openai` on the Gateway host.
+    OAuth credential sidecar imports are retired. Doctor leaves their files and encryption keys untouched. When a legacy `auth-profiles.json` still references a sidecar, Doctor refuses the migration: upgrade through `2026.9.7` and run `openclaw doctor --fix` from an interactive terminal on the original host before retrying; that release can recover the historical key and import the credentials. Unreferenced sidecars stay in place without blocking. See [retention policy](/gateway/doctor/config-migrations#retention-policy).
 
   </Accordion>
   <Accordion title="6. Hooks model validation">
@@ -159,7 +182,7 @@ auth health, sandbox images, and plugin installs.
     When sandboxing is enabled, doctor checks Docker images and offers to build or switch to legacy names if the current image is missing.
   </Accordion>
   <Accordion title="7b. Plugin install cleanup">
-    Doctor repairs legacy official ClawHub install records that predate recorded source authority. With `--fix`, it backfills the existing official host/channel fields only when the original spec and every recorded package identity agree with the official catalog. Local sources, partial or conflicting authority, and unverifiable identities require reinstalling. Ordinary legacy npm records with a consistent official spec already satisfy trust. See [Trusted plugin state refused](/tools/plugin#trusted-plugin-state-refused) for refusal reason codes and remedies.
+    Doctor repairs legacy official ClawHub install records that predate recorded source authority. With `--fix`, it backfills the existing official host/channel fields only when the original spec and every recorded package identity agree with the official catalog. Local sources, partial or conflicting authority, and unverifiable identities require reinstalling to obtain trust for restricted runtime capabilities. Ordinary legacy npm records with a consistent official spec already satisfy trust. Plugin-scoped state and ingress queues do not require trusted provenance. See [Plugin runtime trust refused](/tools/plugin#plugin-runtime-trust-refused) for refusal reason codes and remedies.
 
     When a local Gateway is unreachable, doctor compares the CLI state directory with the installed service's effective environment. It prints both paths when they differ, or reports that the service paths could not be verified. Unreadable or commandless service definitions and unavailable referenced environment files are unknown, not evidence that the paths match. Windows batch assignments with unresolved variable expansion or unsupported escaping also remain unverified; inspect their service environment with `openclaw gateway status --deep` before choosing a repair. Run inspection and repair with the Gateway's `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH`; matching config and executable versions alone does not establish matching plugin installation state.
 

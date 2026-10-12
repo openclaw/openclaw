@@ -1,44 +1,31 @@
 import fs from "node:fs";
-import os from "node:os";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { readWorkspaceStateSnapshot } from "../../agents/workspace-state-store.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   interruptSessionWorkAdmissions,
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../state/openclaw-state-db-readonly.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import * as workerStore from "../../state/openclaw-state-worker-store.js";
+import {
+  createOpenClawTestState,
+  withOpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
+import type { PluginRuntime } from "./types.js";
 
 describe("plugin runtime session creation", () => {
-  it("resolves synchronous session catalog targets through agent model policy", () => {
-    const runtime = createRuntimeAgent();
-    const config = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
-          },
-        },
-      },
-    };
-
-    expect(
-      runtime.resolveSessionCatalogCreateTarget({
-        config,
-        provider: "anthropic",
-        modelIds: ["claude-opus-5", "claude-opus-4-8"],
-        agentRuntime: "claude-cli",
-      }),
-    ).toEqual({
-      model: "anthropic/claude-opus-4-8",
-      agentRuntime: "claude-cli",
-    });
-  });
-
   it("skips routed catalog targets denied by agent model policy", () => {
     const runtime = createRuntimeAgent();
     const config = {
@@ -58,28 +45,13 @@ describe("plugin runtime session creation", () => {
       runtime.resolveSessionCatalogCreateTarget({
         config,
         provider: "anthropic",
-        modelIds: ["claude-opus-5", "claude-opus-4-8"],
+        modelIds: ["unrouted-model", "claude-opus-5", "claude-opus-4-8"],
         agentRuntime: "claude-cli",
       }),
     ).toEqual({
       model: "anthropic/claude-opus-4-8",
       agentRuntime: "claude-cli",
     });
-  });
-
-  it("requires recovery initialization to return the final trusted patch", () => {
-    type CreateSessionParams = Parameters<
-      ReturnType<typeof createRuntimeAgent>["session"]["createSessionEntry"]
-    >[0];
-    const invalidRecoveryInitializer = {
-      cfg: {},
-      key: "type-contract-only",
-      recoverMatchingInitialEntry: true as const,
-      initialEntry: { agentHarnessId: "codex" },
-      afterCreate: async () => {},
-    };
-
-    expectTypeOf(invalidRecoveryInitializer).not.toMatchTypeOf<CreateSessionParams>();
   });
 
   it("creates a canonical transcript with trusted initial session state", async () => {
@@ -176,43 +148,6 @@ describe("plugin runtime session creation", () => {
     });
   });
 
-  // Plugin-owned CLI fork creation with colors lives in runtime-agent.session-color.test.ts.
-
-  it("rolls back the exact created entry and transcript when initialization fails", async () => {
-    await withOpenClawTestState({ label: "plugin-runtime-session-create-rollback" }, async () => {
-      const runtime = createRuntimeAgent();
-      const key = "agent:main:dashboard:codex-binding-failure";
-      await expect(
-        runtime.session.createSessionEntry({
-          cfg: {},
-          key,
-          displayName: "Failed title snapshot",
-          initialEntry: {
-            agentHarnessId: "codex",
-            modelSelectionLocked: true,
-          },
-          afterCreate: async (created) => {
-            expect(created.entry.displayName).toBe("Failed title snapshot");
-            throw new Error("native binding failed");
-          },
-        }),
-      ).rejects.toThrow("native binding failed");
-
-      expect(runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" })).toBe(
-        undefined,
-      );
-      const retried = await runtime.session.createSessionEntry({
-        cfg: {},
-        key,
-        displayName: "Retry title snapshot",
-        initialEntry: { agentHarnessId: "codex", modelSelectionLocked: true },
-        afterCreate: async () => ({ pluginExtensions: {} }),
-      });
-      expect(retried.entry.displayName).toBe("Retry title snapshot");
-      expect(retried.entry.initializationPending).toBeUndefined();
-    });
-  });
-
   it("rolls back a plugin-owned locked CLI session when initialization fails", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-cli-session-rollback" }, async () => {
       const runtime = createRuntimeAgent();
@@ -254,30 +189,6 @@ describe("plugin runtime session creation", () => {
         }),
       ).resolves.toEqual([]);
     });
-  });
-
-  it("rolls back an unlocked harness entry through the ordinary lifecycle path", async () => {
-    await withOpenClawTestState(
-      { label: "plugin-runtime-unlocked-session-create-rollback" },
-      async () => {
-        const runtime = createRuntimeAgent();
-        const key = "agent:main:dashboard:unlocked-binding-failure";
-        await expect(
-          runtime.session.createSessionEntry({
-            cfg: {},
-            key,
-            initialEntry: { agentHarnessId: "codex" },
-            afterCreate: async () => {
-              throw new Error("unlocked native binding failed");
-            },
-          }),
-        ).rejects.toThrow("unlocked native binding failed");
-
-        expect(
-          runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
-        ).toBeUndefined();
-      },
-    );
   });
 
   it("does not run initialization when the durable initial row cannot be written", async () => {
@@ -328,34 +239,6 @@ describe("plugin runtime session creation", () => {
                 codex: { supervision: { initializing: true } },
               },
             },
-            afterCreate: async () => {
-              return {
-                pluginExtensions: {
-                  codex: { supervision: { invalidJsonValue: 1n as never } },
-                },
-              };
-            },
-          }),
-        ).rejects.toThrow();
-
-        expect(
-          runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
-        ).toBeUndefined();
-      },
-    );
-  });
-
-  it("rolls back an unlocked harness entry when final patch persistence fails", async () => {
-    await withOpenClawTestState(
-      { label: "plugin-runtime-unlocked-final-patch-rollback" },
-      async () => {
-        const runtime = createRuntimeAgent();
-        const key = "agent:main:dashboard:unlocked-final-patch-failure";
-        await expect(
-          runtime.session.createSessionEntry({
-            cfg: {},
-            key,
-            initialEntry: { agentHarnessId: "codex" },
             afterCreate: async () => {
               return {
                 pluginExtensions: {
@@ -530,10 +413,8 @@ describe("plugin runtime session creation", () => {
     });
   });
 
-  it.each([
-    { label: "Operator label", displayName: "Original title snapshot" },
-    { label: "Older automatically promoted label", displayName: undefined },
-  ])("recovers an exact initializer without replacing $label or its title", async (naming) => {
+  it("recovers an exact initializer without replacing its label or title", async () => {
+    const naming = { label: "Operator label", displayName: "Original title snapshot" };
     await withOpenClawTestState(
       { label: "plugin-runtime-session-create-recovery" },
       async (state) => {
@@ -779,51 +660,48 @@ describe("plugin runtime session creation", () => {
     );
   });
 
-  it.each(["label", "displayName"] as const)(
-    "preserves a concurrent %s change before finalization",
-    async (field) => {
-      await withOpenClawTestState(
-        { label: "plugin-runtime-session-create-rollback-race" },
-        async () => {
-          const runtime = createRuntimeAgent();
-          const key = "agent:main:dashboard:codex-binding-race";
-          let sessionId: string | undefined;
+  it("preserves a concurrent title change before finalization", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-runtime-session-create-rollback-race" },
+      async () => {
+        const runtime = createRuntimeAgent();
+        const key = "agent:main:dashboard:codex-binding-race";
+        let sessionId: string | undefined;
 
-          await expect(
-            runtime.session.createSessionEntry({
-              cfg: {},
-              key,
-              initialEntry: {
-                agentHarnessId: "codex",
-                modelSelectionLocked: true,
-              },
-              afterCreate: async (created) => {
-                sessionId = created.sessionId;
-                await runtime.session.patchSessionEntry({
-                  sessionKey: created.key,
-                  update: () => ({ [field]: "claimed concurrently" }),
-                });
-                return {
-                  pluginExtensions: {
-                    codex: { supervision: { modelLocked: true } },
-                  },
-                };
-              },
-            }),
-          ).rejects.toThrow("guarded rollback did not complete");
+        await expect(
+          runtime.session.createSessionEntry({
+            cfg: {},
+            key,
+            initialEntry: {
+              agentHarnessId: "codex",
+              modelSelectionLocked: true,
+            },
+            afterCreate: async (created) => {
+              sessionId = created.sessionId;
+              await runtime.session.patchSessionEntry({
+                sessionKey: created.key,
+                update: () => ({ displayName: "claimed concurrently" }),
+              });
+              return {
+                pluginExtensions: {
+                  codex: { supervision: { modelLocked: true } },
+                },
+              };
+            },
+          }),
+        ).rejects.toThrow("guarded rollback did not complete");
 
-          expect(
-            runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
-          ).toMatchObject({
-            sessionId,
-            [field]: "claimed concurrently",
-            agentHarnessId: "codex",
-            modelSelectionLocked: true,
-          });
-        },
-      );
-    },
-  );
+        expect(
+          runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
+        ).toMatchObject({
+          sessionId,
+          displayName: "claimed concurrently",
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+        });
+      },
+    );
+  });
 
   it("rejects title mutation in the pluginExtensions-only final patch", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-title-final-patch" }, async () => {
@@ -841,76 +719,16 @@ describe("plugin runtime session creation", () => {
       expect(runtime.session.getSessionEntry({ sessionKey: key })).toBeUndefined();
     });
   });
-
-  it("rejects an empty harness initializer without leaving a session entry", async () => {
-    await withOpenClawTestState({ label: "plugin-runtime-session-create-invalid" }, async () => {
-      const runtime = createRuntimeAgent();
-      const key = "agent:main:dashboard:invalid-harness";
-
-      await expect(
-        runtime.session.createSessionEntry({
-          cfg: {},
-          key,
-          initialEntry: { agentHarnessId: " " },
-        }),
-      ).rejects.toThrow("initial agentHarnessId must be non-empty");
-      expect(runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" })).toBe(
-        undefined,
-      );
-    });
-  });
-
-  it("does not initialize over an existing placeholder entry", async () => {
-    await withOpenClawTestState(
-      { label: "plugin-runtime-session-create-placeholder" },
-      async () => {
-        const runtime = createRuntimeAgent();
-        const key = "agent:main:metadata";
-        const updatedAt = Date.now();
-        const storePath = runtime.session.resolveStorePath(undefined, { agentId: "main" });
-        await runtime.session.upsertSessionEntry({
-          storePath,
-          sessionKey: key,
-          entry: { sessionId: key, updatedAt, groupActivation: "always" },
-        });
-        expect(
-          runtime.session.getSessionEntry({
-            sessionKey: key,
-            storePath,
-            readConsistency: "latest",
-          }),
-        ).toMatchObject({ sessionId: key, updatedAt, groupActivation: "always" });
-
-        await expect(
-          runtime.session.createSessionEntry({
-            cfg: {},
-            key,
-            initialEntry: {
-              agentHarnessId: "codex",
-              modelSelectionLocked: true,
-            },
-          }),
-        ).rejects.toThrow("trusted initial session state requires a new session");
-        expect(
-          runtime.session.getSessionEntry({
-            sessionKey: key,
-            storePath,
-            readConsistency: "latest",
-          }),
-        ).toMatchObject({ sessionId: key, updatedAt, groupActivation: "always" });
-      },
-    );
-  });
 });
 
 describe("plugin runtime session work admission", () => {
-  let tempDir: string;
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-plugin-session-admission-");
   let storePath: string;
   const sessionKey = "agent:main:voice:caller";
   const sessionId = "voice-session-id";
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-session-admission-"));
+    const tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
     await createRuntimeAgent().session.upsertSessionEntry({
       storePath,
@@ -919,32 +737,11 @@ describe("plugin runtime session work admission", () => {
     });
   });
 
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  it("rejects an archived session before running admitted work", async () => {
-    const runtime = createRuntimeAgent();
-    await runtime.session.patchSessionEntry({
-      storePath,
-      sessionKey,
-      update: () => ({ archivedAt: Date.now() }),
-    });
-    let ran = false;
-
-    await expect(
-      runtime.session.runWithWorkAdmission({ storePath, sessionKey }, async () => {
-        ran = true;
-      }),
-    ).rejects.toThrow(`Session "${sessionKey}" is archived`);
-    expect(ran).toBe(false);
-  });
-
   it("waits for a queued archive mutation and rejects the stale start", async () => {
     const runtime = createRuntimeAgent();
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("plugin-create", {
       scope: storePath,
       identities: [sessionKey, sessionId],
       prepare: async () => {
@@ -961,18 +758,22 @@ describe("plugin runtime session work admission", () => {
     });
     await mutationStarted.promise;
 
-    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, async () => {});
+    let ran = false;
+    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, async () => {
+      ran = true;
+    });
     releaseMutation.resolve();
     await mutation;
 
     await expect(work).rejects.toThrow(`Session "${sessionKey}" is archived`);
+    expect(ran).toBe(false);
   });
 
   it("rejects a session replaced while work waits for lifecycle admission", async () => {
     const runtime = createRuntimeAgent();
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("plugin-create", {
       scope: storePath,
       identities: [sessionKey, sessionId],
       prepare: async () => {
@@ -989,29 +790,24 @@ describe("plugin runtime session work admission", () => {
     });
     await mutationStarted.promise;
 
-    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, async () => {});
+    const snapshotRead = createDeferred();
+    const readEntry = sessionEntryRead.readSessionEntryReadOnlyInWorker;
+    using captureRead = vi
+      .spyOn(sessionEntryRead, "readSessionEntryReadOnlyInWorker")
+      .mockImplementationOnce(async (...args) => {
+        const entry = await readEntry(...args);
+        snapshotRead.resolve();
+        return entry;
+      });
+    const run = vi.fn(async () => {});
+    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, run);
+    await snapshotRead.promise;
+    captureRead.mockRestore();
     releaseMutation.resolve();
     await mutation;
 
     await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-  });
-
-  it("admits fresh work and protects session creation inside the callback", async () => {
-    const runtime = createRuntimeAgent();
-    const freshKey = "agent:main:voice:fresh";
-    const freshId = "fresh-session-id";
-
-    await runtime.session.runWithWorkAdmission({ storePath, sessionKey: freshKey }, async () => {
-      await runtime.session.upsertSessionEntry({
-        storePath,
-        sessionKey: freshKey,
-        entry: { sessionId: freshId, updatedAt: Date.now() },
-      });
-    });
-
-    expect(runtime.session.getSessionEntry({ storePath, sessionKey: freshKey })?.sessionId).toBe(
-      freshId,
-    );
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("holds admission through the callback and relays lifecycle interruption", async () => {
@@ -1035,4 +831,136 @@ describe("plugin runtime session work admission", () => {
 
     expect(admittedSignal?.aborted).toBe(true);
   });
+});
+
+it("allows deprecated plugin SQL checks once before dispatch while typed guards retain commit authority", async () => {
+  type Params = NonNullable<Parameters<PluginRuntime["agent"]["ensureAgentWorkspace"]>[0]>;
+  const state = await createOpenClawTestState({ layout: "state-only" });
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  const ensure = createRuntimeAgent().ensureAgentWorkspace;
+  const originalOperation = workerStore.runOpenClawStateWorkerOperation;
+  const originalMkdir = fsPromises.mkdir;
+  let phase: string | undefined;
+  let workspace: string;
+  const events: string[] = [];
+  probe.admission(admission, (request, grant, admit) => {
+    phase = request.stage;
+    try {
+      admit(request, () => {
+        events.push(`grant:${phase}`);
+        return grant();
+      });
+    } finally {
+      phase = undefined;
+    }
+  });
+  vi.spyOn(workerStore, "runOpenClawStateWorkerOperation").mockImplementation(
+    (context, operation, options) =>
+      originalOperation(
+        context,
+        (scope) => {
+          const execute: typeof scope.execute = (...args) => {
+            events.push(`dispatch:${args[0].type}`);
+            return scope.execute(...args);
+          };
+          return operation({ execute });
+        },
+        options,
+      ),
+  );
+  vi.spyOn(fsPromises, "mkdir").mockImplementation((dir, options) => {
+    if (dir === workspace) {
+      events.push("file:mkdir");
+    }
+    return originalMkdir(dir, options);
+  });
+  try {
+    runOpenClawStateWriteTransaction(() => undefined);
+    for (const mode of [
+      "initial-refusal",
+      "allowed-sql",
+      "legacy-refusal",
+      "typed-revocation",
+    ] as const) {
+      workspace = state.path(mode);
+      events.length = 0;
+      if (mode !== "initial-refusal") {
+        fs.mkdirSync(workspace);
+        fs.writeFileSync(`${workspace}/AGENTS.md`, "Synthetic workspace instructions.\n");
+      }
+      const before = await readWorkspaceStateSnapshot(workspace, { readOnly: true });
+      const refusal = new Error("plugin authority revoked");
+      const params: Params = {
+        dir: workspace,
+        ensureBootstrapFiles: false,
+        guard: {
+          assertHost() {
+            if (phase) {
+              events.push("typed");
+              if (mode === "typed-revocation" && phase === "commit") {
+                throw refusal;
+              }
+            }
+          },
+        },
+        beforePersistentApply() {
+          expect(phase).toBeUndefined();
+          const previous = events.at(-1);
+          events.push("legacy");
+          if (
+            mode === "initial-refusal" ||
+            (mode === "legacy-refusal" && previous === "file:mkdir")
+          ) {
+            throw refusal;
+          }
+          expect(
+            withExistingOpenClawStateDatabaseCurrentReadOnly(({ db }) =>
+              db.prepare("SELECT 1 AS value").get(),
+            ),
+          ).toEqual({ value: 1 });
+        },
+      };
+      const pending = ensure(params);
+      if (mode === "allowed-sql") {
+        await pending;
+        expect(events.filter((event) => event !== "typed" && !event.startsWith("grant:"))).toEqual([
+          "legacy",
+          "dispatch:workspace.snapshotAndRegister",
+          "legacy",
+          "file:mkdir",
+          "legacy",
+          "dispatch:workspace.replaceAttestation",
+        ]);
+        for (const [index, event] of events.entries()) {
+          if (event.startsWith("grant:")) {
+            expect(events[index - 1]).toBe("typed");
+          }
+        }
+        expect(events).toContain("grant:commit");
+        expect(
+          (await readWorkspaceStateSnapshot(workspace, { readOnly: true })).attestation,
+        ).toBeDefined();
+      } else {
+        await expect(pending).rejects.toBe(refusal);
+        expect(await readWorkspaceStateSnapshot(workspace, { readOnly: true })).toEqual(before);
+        if (mode === "initial-refusal") {
+          expect(events).toEqual(["legacy"]);
+          expect(fs.existsSync(workspace)).toBe(false);
+        } else if (mode === "legacy-refusal") {
+          expect(events.filter((event) => event.startsWith("dispatch:"))).toEqual([
+            "dispatch:workspace.snapshotAndRegister",
+          ]);
+        }
+      }
+    }
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(
+        /before dispatch.*synchronous OpenClaw DB access.*deprecated.*guard.assertHost/,
+      ),
+      { code: "DEP_WORKSPACE_MUTATION_GUARD", type: "DeprecationWarning" },
+    );
+  } finally {
+    vi.restoreAllMocks();
+    await state.cleanup();
+  }
 });

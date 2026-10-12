@@ -103,10 +103,10 @@ jobs:
           install-screenshot-emulators: ${{ (github.event_name == 'workflow_dispatch' && inputs.operation == 'release') && 'true' || 'false' }}
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@a0102e0972be65f351c307e2d64b9314a57c8073 # v1.324.0
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
-          ruby-version: "3.4.10"
-          bundler: "4.0.21"
+          ruby-version: "3.4.11"
+          bundler: "4.0.22"
           bundler-cache: false
           working-directory: apps/android
 
@@ -114,9 +114,9 @@ jobs:
         working-directory: apps/android
         run: |
           set -euo pipefail
-          bundle _4.0.21_ install --jobs 4 --retry 3
-          bundle _4.0.21_ check
-          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+          bundle _4.0.22_ install --jobs 4 --retry 3
+          bundle _4.0.22_ check
+          test "$(bundle _4.0.22_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
 
       - name: Create apps-signing read token
         id: apps-signing-token
@@ -156,8 +156,6 @@ jobs:
           GOOGLE_PLAY_TRACK: internal
           GOOGLE_PLAY_VALIDATE_ONLY: "0"
           SIPS: ${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh
-          SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW: "true"
-          SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW: "false"
         run: |
           set -euo pipefail
           gh auth setup-git
@@ -183,7 +181,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Retain emulator startup diagnostics
+      - name: Retain screenshot diagnostics
         if: always() && github.event_name == 'workflow_dispatch' && inputs.operation == 'release'
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -193,6 +191,8 @@ jobs:
             ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/emulator.log
             ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/emulator-args.txt
             ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/process-status.txt
+            ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/ui-dumps/openclaw-*.xml
+            ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/activity-start/openclaw-*.txt
           if-no-files-found: ignore
           retention-days: 30
 

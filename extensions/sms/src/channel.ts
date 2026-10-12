@@ -119,7 +119,11 @@ const collectSmsOpenDmFindings = createConditionalWarningCollector.findings({
   title: "SMS security warning",
 });
 
-function smsSetupPatch(input: SmsSetupInput): Record<string, unknown> {
+function applySmsAccountConfig(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  input: SmsSetupInput;
+}): OpenClawConfig {
   const patch: Record<string, unknown> = {};
   for (const key of [
     "accountSid",
@@ -132,19 +136,10 @@ function smsSetupPatch(input: SmsSetupInput): Record<string, unknown> {
     "dmPolicy",
     "allowFrom",
   ] as const) {
-    if (input[key] !== undefined) {
-      patch[key] = input[key];
+    if (params.input[key] !== undefined) {
+      patch[key] = params.input[key];
     }
   }
-  return patch;
-}
-
-function applySmsAccountConfig(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  input: SmsSetupInput;
-}): OpenClawConfig {
-  const patch = smsSetupPatch(params.input);
   const channels = { ...params.cfg.channels };
   const current = { ...(channels[CHANNEL_ID] as Record<string, unknown> | undefined) };
   if (params.accountId === DEFAULT_ACCOUNT_ID) {

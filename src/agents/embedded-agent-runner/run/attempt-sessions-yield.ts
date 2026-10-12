@@ -1,9 +1,9 @@
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../../../llm/types.js";
-import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SessionManager } from "../../sessions/index.js";
 import { buildUsageWithNoCost } from "../../stream-message-shared.js";
 import { isRunnerAbortError } from "../abort.js";
+import { preserveTrailingTranscriptMetadata } from "./transcript-tail-metadata.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
 
@@ -65,25 +65,23 @@ export function queueSessionsYieldInterruptMessage(activeSession: {
 // Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
 // After strip, the transcript must end with a non-assistant role so subagent
 // completion auto-announce can inject a continuation turn.
-export function stripSessionsYieldArtifacts(activeSession: {
+export async function stripSessionsYieldArtifacts(activeSession: {
   messages: AgentMessage[];
   agent: { state: { messages: AgentMessage[] } };
-  sessionManager: Pick<SessionManager, "removeTrailingEntries">;
-}): boolean {
+  sessionManager: Pick<SessionManager, "removeTrailingEntriesAsync">;
+}): Promise<boolean> {
   const strippedMessages = activeSession.messages.slice();
 
   // The tool-calling assistant turn and synthetic abort artifacts form one
   // non-continuable suffix after sessions_yield.
-  while (strippedMessages.length > 0) {
-    const last = strippedMessages.at(-1);
-    const removable =
-      last?.role === "assistant" ||
-      (last?.role === "custom" && last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE);
-    if (!removable) {
-      break;
-    }
-    strippedMessages.pop();
-  }
+  strippedMessages.length =
+    strippedMessages.findLastIndex(
+      (message) =>
+        message?.role !== "assistant" &&
+        !(
+          message?.role === "custom" && message.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE
+        ),
+    ) + 1;
 
   const removedMessages = activeSession.messages.slice(strippedMessages.length);
   if (removedMessages.length === 0) {
@@ -95,7 +93,7 @@ export function stripSessionsYieldArtifacts(activeSession: {
   let remainingAssistantCount = removedMessages.filter(
     (message) => message.role === "assistant",
   ).length;
-  const removedEntries = activeSession.sessionManager.removeTrailingEntries(
+  const removedEntries = await activeSession.sessionManager.removeTrailingEntriesAsync(
     (entry) => {
       if (
         entry.type === "custom_message" &&
@@ -114,11 +112,7 @@ export function stripSessionsYieldArtifacts(activeSession: {
       return true;
     },
     {
-      preserveTrailing: (entry) =>
-        entry.type === "custom" ||
-        entry.type === "label" ||
-        entry.type === "session_info" ||
-        (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+      preserveTrailing: preserveTrailingTranscriptMetadata,
     },
   );
   activeSession.agent.state.messages = strippedMessages;

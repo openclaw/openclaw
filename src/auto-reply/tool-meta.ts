@@ -22,9 +22,8 @@ export function formatToolAggregateParts(
   const filtered = (metas ?? []).filter(Boolean).map(shortenHomeInString);
   const display = resolveToolDisplay({ name: toolName });
   const compactCommandSummary = filtered.length > 0 && isShellToolDisplayName(toolName);
-  const prefix = compactCommandSummary ? display.emoji : `${display.emoji} ${display.label}`;
   if (!filtered.length) {
-    return { text: `${display.emoji} ${display.label}` };
+    return { text: display.label };
   }
 
   const rawSegments: string[] = [];
@@ -38,9 +37,7 @@ export function formatToolAggregateParts(
     const slash = m.lastIndexOf("/");
     const dir = m.slice(0, slash);
     const base = m.slice(slash + 1);
-    if (!grouped[dir]) {
-      grouped[dir] = [];
-    }
+    grouped[dir] ??= [];
     grouped[dir].push(base);
   }
 
@@ -53,7 +50,7 @@ export function formatToolAggregateParts(
   const meta = allSegments.join("; ");
   const detail = formatMetaForDisplay(toolName, meta, options?.markdown);
   return {
-    text: compactCommandSummary ? `${prefix} ${detail}` : `${prefix}: ${detail}`,
+    text: compactCommandSummary ? detail : `${display.label}: ${detail}`,
     detail,
   };
 }
@@ -74,32 +71,23 @@ function formatMetaForDisplay(
 ): string {
   const normalized = normalizeLowercaseStringOrEmpty(toolName);
   if (normalized === "exec" || normalized === "bash") {
-    const { flags, body } = splitExecFlags(meta);
+    const flags: string[] = [];
+    const bodyParts: string[] = [];
+    for (const part of meta
+      .split(" · ")
+      .map((segment) => segment.trim())
+      .filter(Boolean)) {
+      (part === "elevated" || part === "pty" ? flags : bodyParts).push(part);
+    }
     if (flags.length > 0) {
+      const body = bodyParts.join(" · ");
       if (!body) {
         return flags.join(" · ");
       }
-      return `${flags.join(" · ")} · ${maybeWrapMarkdown(body, markdown)}`;
+      return `${flags.join(" · ")} · ${markdown ? formatInlineCodeSpan(body) : body}`;
     }
   }
-  return maybeWrapMarkdown(meta, markdown);
-}
-
-function splitExecFlags(meta: string): { flags: string[]; body: string } {
-  const parts = meta
-    .split(" · ")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const flags: string[] = [];
-  const bodyParts: string[] = [];
-  for (const part of parts) {
-    if (part === "elevated" || part === "pty") {
-      flags.push(part);
-      continue;
-    }
-    bodyParts.push(part);
-  }
-  return { flags, body: bodyParts.join(" · ") };
+  return markdown ? formatInlineCodeSpan(meta) : meta;
 }
 
 function isPathLike(value: string): boolean {
@@ -110,8 +98,4 @@ function isPathLike(value: string): boolean {
     !value.includes("||") &&
     /^~?(\/[^\s]+)+$/.test(value)
   );
-}
-
-function maybeWrapMarkdown(value: string, markdown?: boolean): string {
-  return markdown ? formatInlineCodeSpan(value) : value;
 }

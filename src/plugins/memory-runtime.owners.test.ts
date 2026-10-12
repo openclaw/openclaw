@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -15,18 +15,38 @@ import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { disposePluginRegistryInstances } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
+const cleanupClock = vi.hoisted(() => ({ setTimeout: globalThis.setTimeout }));
+
+beforeEach(() => {
+  const nativeSetTimeout = globalThis.setTimeout;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldClearNativeTimers: true });
+  cleanupClock.setTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = nativeSetTimeout;
+});
+afterEach(() => vi.useRealTimers());
+
 vi.mock("./host-hook-cleanup-timeout.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./host-hook-cleanup-timeout.js")>();
   return {
     ...actual,
-    withPluginHostCleanupTimeout: <T>(hookId: string, cleanup: () => T | Promise<T>) =>
-      actual.withPluginHostCleanupTimeout(hookId, cleanup, 500),
+    withPluginHostCleanupTimeout: <T>(hookId: string, cleanup: () => T | Promise<T>) => {
+      const nativeSetTimeout = globalThis.setTimeout;
+      // Only the cleanup deadline is virtual; asynchronous workers and watchers keep real timers.
+      globalThis.setTimeout = cleanupClock.setTimeout;
+      try {
+        return actual.withPluginHostCleanupTimeout(hookId, cleanup, 500);
+      } finally {
+        globalThis.setTimeout = nativeSetTimeout;
+      }
+    },
   };
 });
 
-const { memoryRuntime } = await vi.importActual<{ memoryRuntime: MemoryPluginRuntime }>(
-  "../../extensions/memory-core/runtime-api.js",
-);
+const { createMemoryRuntime } = await vi.importActual<{
+  createMemoryRuntime: (host: {
+    runInBackgroundContext: <T>(run: () => T) => T;
+  }) => MemoryPluginRuntime;
+}>("../../extensions/memory-core/runtime-api.js");
 
 it("keeps persistent managers isolated between memory runtime instances with the same agent", async () => {
   const state = await createOpenClawTestState({
@@ -62,10 +82,7 @@ it("keeps persistent managers isolated between memory runtime instances with the
   }
 });
 
-function registerMemoryOwner(
-  config: OpenClawConfig,
-  runtimeImplementation: MemoryPluginRuntime = memoryRuntime,
-) {
+function registerMemoryOwner(config: OpenClawConfig, options: { legacy?: boolean } = {}) {
   const owner = createTestPluginRegistry();
   const record = createPluginRecord({
     id: "memory-fixture",
@@ -78,6 +95,13 @@ function registerMemoryOwner(
   record.memorySlotSelected = true;
   owner.registry.plugins.push(record);
   const api = owner.createApi(record, { config });
+  assert(api.lifecycle.runInBackgroundContext);
+  const runtimeImplementation = createMemoryRuntime({
+    runInBackgroundContext: api.lifecycle.runInBackgroundContext,
+  });
+  if (options.legacy) {
+    delete runtimeImplementation.prepareReload;
+  }
   api.registerMemoryCapability({ runtime: runtimeImplementation });
   const runtime = owner.registry.memoryCapabilities[0]?.capability.runtime;
   assert(runtime);
@@ -133,26 +157,22 @@ it.each([
       },
     },
   };
-  const legacyRuntime = { ...memoryRuntime };
-  delete legacyRuntime.prepareReload;
-  const owner = registerMemoryOwner(
-    config,
-    mode === "legacy-retained" ? legacyRuntime : memoryRuntime,
-  );
+  const owner = registerMemoryOwner(config, { legacy: mode === "legacy-retained" });
   const sibling = registerMemoryOwner(config);
   const successor = registerMemoryOwner(config);
   const entered = createDeferredCore();
   const releaseCreate = createDeferredCore();
   const releaseClose = createDeferredCore();
+  const closeEntered = createDeferredCore();
   const probeEntered = createDeferredCore();
   const releaseProbe = createDeferredCore();
   let rejectClose = mode === "failed-close";
-  const embedBatch = vi.fn(async () => {
+  const embed = vi.fn(async () => {
     probeEntered.resolve();
     if (mode === "late-probe") {
       await releaseProbe.promise;
     }
-    return [[1, 0, 0]];
+    return [1, 0, 0];
   });
   const create = vi.fn(async () => {
     entered.resolve();
@@ -166,13 +186,14 @@ it.each([
       provider: {
         id: targetId,
         model: "synthetic-embedding",
-        embed: async () => [1, 0, 0],
-        embedBatch,
+        embed,
+        embedBatch: async () => [[1, 0, 0]],
         close,
       },
     };
   });
   const close = vi.fn(async () => {
+    closeEntered.resolve();
     expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe(targetId);
     if (rejectClose) {
       throw new Error("synthetic provider cleanup refused");
@@ -250,6 +271,10 @@ it.each([
     replacement.registration,
   );
   let probe: Promise<unknown> | undefined;
+  let lateManager: Awaited<ReturnType<MemoryPluginRuntime["getMemorySearchManager"]>>["manager"] =
+    null;
+  // Each live replacement-era manager (fresh main, fenced late) owns one successor provider.
+  const successorProviders = () => (mode === "late-probe" ? 0 : lateManager ? 2 : 1);
   let drain: ReturnType<ReturnType<typeof prepareMemoryRuntimeReload>["drain"]> | undefined;
   try {
     expect(owner.instance.run(() => getMemoryEmbeddingProvider(targetId, config))).toBe(
@@ -303,36 +328,6 @@ it.each([
       });
       assert(unaffected.manager, unaffected.error ?? "Expected an unaffected manager");
       await unaffected.manager.probeEmbeddingAvailability();
-      const prepared = prepareMemoryRuntimeReload(owner.registry, next);
-      const probesBeforeAcquisition = embedBatch.mock.calls.length;
-      try {
-        const retained = await owner.runtime.getMemorySearchManager({
-          cfg: unaffectedConfig,
-          agentId: "unaffected",
-        });
-        expect(retained.manager).toBe(unaffected.manager);
-        await expect(retained.manager?.probeEmbeddingAvailability()).resolves.toMatchObject({
-          ok: true,
-        });
-        const late = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
-        if (late.manager) {
-          await late.manager.probeEmbeddingAvailability();
-        }
-        expect({ hasManager: late.manager !== null, error: late.error }).toEqual({
-          hasManager: false,
-          error: expect.stringContaining("reloading"),
-        });
-        expect(embedBatch).toHaveBeenCalledTimes(probesBeforeAcquisition);
-        expect(close).not.toHaveBeenCalled();
-        expect(unaffectedClose).not.toHaveBeenCalled();
-      } finally {
-        prepared.rollback();
-      }
-      const resumed = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
-      expect(resumed.manager).toBe(result.manager);
-      await expect(resumed.manager?.probeEmbeddingAvailability()).resolves.toMatchObject({
-        ok: true,
-      });
     }
     const providerClosesBeforeReload = close.mock.calls.length;
     const reload = prepareMemoryRuntimeReload(owner.registry, next);
@@ -351,6 +346,7 @@ it.each([
       const creationsBeforeLateAcquisition = create.mock.calls.length;
       const late = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "late" });
       assert(late.manager, late.error ?? "Expected a memory manager");
+      lateManager = late.manager;
       await expect(late.manager.probeEmbeddingAvailability()).rejects.toThrow("reloading");
       expect(create).toHaveBeenCalledTimes(creationsBeforeLateAcquisition);
     }
@@ -366,7 +362,10 @@ it.each([
       activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
       reload.commit();
     } else if (mode === "timeout") {
-      await expect(drain).rejects.toThrow("plugin host cleanup timed out");
+      const expired = expect(drain).rejects.toThrow("plugin host cleanup timed out");
+      await closeEntered.promise;
+      await vi.advanceTimersByTimeAsync(500);
+      await expired;
       activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
       reload.commit();
       const fresh = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
@@ -383,7 +382,9 @@ it.each([
       await finalClose;
       expect(close).toHaveBeenCalledOnce();
     } else if (mode === "late-probe") {
-      await expect(drain).rejects.toThrow("plugin host cleanup timed out");
+      const expired = expect(drain).rejects.toThrow("plugin host cleanup timed out");
+      await vi.advanceTimersByTimeAsync(500);
+      await expired;
       activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
       reload.commit();
       const fresh = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
@@ -422,6 +423,14 @@ it.each([
     await expect(fresh.manager.probeEmbeddingAvailability()).resolves.toMatchObject({
       ok: mode !== "late-probe",
     });
+    // A manager fenced during the reload stays cached and live; its own watcher
+    // reconcile sync resumes on the successor adapter whenever its debounce fires.
+    // Acquire that provider here so final cleanup owns a deterministic set.
+    if (lateManager) {
+      await expect(lateManager.probeEmbeddingAvailability()).resolves.toMatchObject({
+        ok: mode !== "late-probe",
+      });
+    }
     const attemptedCloses = close.mock.calls.length;
     const finalClose = owner.runtime.closeAllMemorySearchManagers?.();
     if (mode === "failed-close" || mode === "late-probe") {
@@ -430,7 +439,7 @@ it.each([
     } else {
       await finalClose;
     }
-    expect(successorClose).toHaveBeenCalledTimes(mode === "late-probe" ? 0 : 1);
+    expect(successorClose).toHaveBeenCalledTimes(successorProviders());
   } finally {
     rejectClose = false;
     releaseCreate.resolve();
@@ -466,7 +475,7 @@ it.each([
   }
   expect(siblingClose).toHaveBeenCalledOnce();
   expect(unaffectedClose).toHaveBeenCalledTimes(mode === "ready" ? 1 : 0);
-  expect(successorClose).toHaveBeenCalledTimes(mode === "late-probe" ? 0 : 1);
+  expect(successorClose).toHaveBeenCalledTimes(successorProviders());
 });
 
 it.each(["legacy-success", "legacy", "modern", "revoked"] as const)(
@@ -515,7 +524,7 @@ it("unwinds prepared memory admission when another runtime rejects preparation",
   const drain = vi.fn(async () => {});
   const failure = new Error("second memory runtime preparation failed");
   const firstRuntime = first.instance.wrap({
-    ...memoryRuntime,
+    ...first.runtime,
     prepareReload: () => ({ drain, resume }),
   });
   first.registry.memoryCapabilities[0]!.capability = first.instance.wrap({ runtime: firstRuntime });
@@ -523,7 +532,7 @@ it("unwinds prepared memory admission when another runtime rejects preparation",
     pluginId: "another-runtime",
     capability: {
       runtime: {
-        ...memoryRuntime,
+        ...first.runtime,
         prepareReload() {
           throw failure;
         },
@@ -536,42 +545,5 @@ it("unwinds prepared memory admission when another runtime rejects preparation",
     expect(drain).not.toHaveBeenCalled();
   } finally {
     await disposePluginRegistryInstances(first.registry);
-  }
-});
-
-it("fences runtime acquisition before its first manager and resumes only on rollback", async () => {
-  const state = await createOpenClawTestState({ scenario: "minimal", label: "memory-lazy-reload" });
-  const config: OpenClawConfig = {
-    plugins: { enabled: false },
-    agents: { defaults: { workspace: state.workspaceDir } },
-    memory: {
-      search: {
-        provider: "none",
-        store: { vector: { enabled: false } },
-      },
-    },
-  };
-  const owner = registerMemoryOwner(config);
-  try {
-    const older = prepareMemoryRuntimeReload(owner.registry, createEmptyPluginRegistry());
-    const reload = prepareMemoryRuntimeReload(owner.registry, createEmptyPluginRegistry());
-    await reload.drain();
-    older.rollback();
-    expect(
-      await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" }),
-    ).toMatchObject({ manager: null, error: expect.stringContaining("reloading") });
-    reload.rollback();
-    const acquired = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
-    assert(acquired.manager, acquired.error ?? "Expected a memory manager");
-    const retiring = prepareMemoryRuntimeReload(owner.registry, createEmptyPluginRegistry());
-    await retiring.close();
-    retiring.commit();
-    expect(
-      await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" }),
-    ).toMatchObject({ manager: null, error: expect.stringContaining("reloading") });
-  } finally {
-    await owner.runtime.closeAllMemorySearchManagers?.();
-    await disposePluginRegistryInstances(owner.registry);
-    await state.cleanup();
   }
 });

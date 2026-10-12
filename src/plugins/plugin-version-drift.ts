@@ -20,7 +20,7 @@ import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-st
 import { checkMinHostVersion } from "./min-host-version.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubInstall,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
+  resolveTrustedSourceLinkedOfficialNpmInstall,
 } from "./official-external-install-records.js";
 import { satisfiesPluginApiRange } from "./package-compat.js";
 import { resolveClawHubUpdateSpecs } from "./update-source.js";
@@ -294,7 +294,7 @@ function shouldCompareOfficialInstallToGateway(params: {
   pluginId: string;
   record: PluginInstallRecord;
 }): boolean {
-  const officialNpmSpec = resolveTrustedSourceLinkedOfficialNpmSpec(params);
+  const officialNpmSpec = resolveTrustedSourceLinkedOfficialNpmInstall(params)?.npmSpec;
   if (officialNpmSpec) {
     return parseRegistryNpmSpec(officialNpmSpec)?.selectorKind !== "exact-version";
   }
@@ -338,7 +338,7 @@ export function resolveOfficialPluginCohortNpmSpecs(params: {
     ) {
       continue;
     }
-    const official = resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record });
+    const official = resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId, record })?.npmSpec;
     const packageName = official ? parseRegistryNpmSpec(official)?.name : undefined;
     if (
       packageName &&

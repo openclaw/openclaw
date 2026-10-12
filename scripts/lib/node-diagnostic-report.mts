@@ -3,6 +3,11 @@ import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts
 
 export const NODE_DIAGNOSTIC_REPORT_GRACE_MS = 2_000;
 
+/** Selects the POSIX Node signal-report path shared by child test harnesses. */
+export function shouldEnableNodeDiagnosticReports(): boolean {
+  return process.platform !== "win32" && !process.versions.bun;
+}
+
 type NodeDiagnosticReport = {
   threadId?: number;
   javascriptStack: Record<string, unknown>;

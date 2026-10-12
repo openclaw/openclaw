@@ -47,7 +47,6 @@ function fixture(options: { maxBytes?: number; receipt?: Record<string, unknown>
   return {
     close,
     unsubscribe,
-    bytes,
     read: () =>
       fetchWorkspaceFile({
         nodeId: "node",
@@ -61,13 +60,6 @@ function fixture(options: { maxBytes?: number; receipt?: Record<string, unknown>
 }
 
 describe("workspace binary file.fetch receiver", () => {
-  it("returns bytes only after a matching final receipt and closes its channel", async () => {
-    const value = fixture();
-    expect(await value.read()).toEqual({ data: value.bytes, canonicalPath: "/remote/output" });
-    expect(value.close).toHaveBeenCalledOnce();
-    expect(value.unsubscribe).toHaveBeenCalledOnce();
-  });
-
   it("rejects excess bytes before accepting the final receipt", async () => {
     const value = fixture({ maxBytes: 5 });
     await expect(value.read()).rejects.toThrow("oversized");

@@ -1,6 +1,5 @@
 // Prepares presentation-only catalog facts and owns their metadata-scoped cache.
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginCatalogEntry } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
@@ -15,8 +14,8 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   resolveTrustedOfficialClawHubPackageName,
-  resolveTrustedSourceLinkedOfficialClawHubSpec,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
+  resolveTrustedSourceLinkedOfficialClawHubInstall,
+  resolveTrustedSourceLinkedOfficialNpmInstall,
 } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -301,23 +300,6 @@ export function normalizeKinds(kind: string | readonly string[] | undefined): st
   return values.length > 0 ? [...new Set(values)] : undefined;
 }
 
-export function normalizeCatalogMetadata(
-  value: unknown,
-): { featured?: boolean; order?: number } | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const featured = typeof value.featured === "boolean" ? value.featured : undefined;
-  const order =
-    typeof value.order === "number" && Number.isFinite(value.order) ? value.order : undefined;
-  return featured === undefined && order === undefined
-    ? undefined
-    : {
-        ...(featured !== undefined ? { featured } : {}),
-        ...(order !== undefined ? { order } : {}),
-      };
-}
-
 export function normalizeFeaturedAt(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0 });
 }
@@ -401,20 +383,14 @@ export function compareCatalogEntries(
   if (featured !== 0) {
     return featured;
   }
-  if (left.featured && right.featured) {
-    const leftFeaturedAt = left.featuredAt;
-    const rightFeaturedAt = right.featuredAt;
-    if (leftFeaturedAt !== undefined || rightFeaturedAt !== undefined) {
-      if (leftFeaturedAt === undefined) {
-        return 1;
-      }
-      if (rightFeaturedAt === undefined) {
-        return -1;
-      }
-      if (leftFeaturedAt !== rightFeaturedAt) {
-        return rightFeaturedAt - leftFeaturedAt;
-      }
+  if (left.featured && right.featured && left.featuredAt !== right.featuredAt) {
+    if (left.featuredAt === undefined) {
+      return 1;
     }
+    if (right.featuredAt === undefined) {
+      return -1;
+    }
+    return right.featuredAt - left.featuredAt;
   }
   const order = (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER);
   return order !== 0 ? order : left.name.localeCompare(right.name);
@@ -478,16 +454,16 @@ export function resolveInstalledHostedOfficialEntry(params: {
 } {
   const identityPluginId = params.installOwner ?? params.record.pluginId;
   const trustedOfficialClawHubSpec = params.installRecord
-    ? resolveTrustedSourceLinkedOfficialClawHubSpec({
+    ? resolveTrustedSourceLinkedOfficialClawHubInstall({
         pluginId: identityPluginId,
         record: params.installRecord,
-      })
+      })?.clawhubSpec
     : undefined;
   const trustedOfficialNpmSpec = params.installRecord
-    ? resolveTrustedSourceLinkedOfficialNpmSpec({
+    ? resolveTrustedSourceLinkedOfficialNpmInstall({
         pluginId: identityPluginId,
         record: params.installRecord,
-      })
+      })?.npmSpec
     : undefined;
   const sourceLinkedOfficialClawHubPackage = trustedOfficialClawHubSpec
     ? parseClawHubPluginSpec(trustedOfficialClawHubSpec)?.name

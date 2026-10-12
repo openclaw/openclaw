@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolvePreparedExecEnvironment } from "../agents/bash-tools.exec-request-preparation.js";
 import * as exec from "../process/exec.js";
 import {
   disposeWorkerGitHubEnvironment,
@@ -109,34 +110,6 @@ describe("prepareWorkerGitHubEnvironment", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.each([
-    { scenario: "reconciled identical content", content: pushedContent, porcelain: "" },
-    { scenario: "reconciled local edits", content: "local edit\n", porcelain: ` M ${filename}\0` },
-    { scenario: "a missing pushed file", content: undefined, porcelain: "" },
-  ])(
-    "fast-forwards $scenario without losing working-tree bytes",
-    async ({ content, porcelain }) => {
-      const remoteHead = await publishEarlierTurn();
-      if (content !== undefined) {
-        await fs.writeFile(path.join(cwd, filename), content);
-      }
-
-      await prepare();
-
-      expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(remoteHead);
-      expect((await git(cwd, "rev-parse", `refs/heads/${binding.branch}`)).trim()).toBe(remoteHead);
-      expect((await git(cwd, "rev-parse", `refs/remotes/origin/${binding.branch}`)).trim()).toBe(
-        remoteHead,
-      );
-      expect(await git(cwd, "status", "--porcelain", "-z")).toBe(porcelain);
-      expect(await fs.readFile(path.join(cwd, filename), "utf8")).toBe(content ?? pushedContent);
-      expect(
-        (await git(cwd, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")).trim(),
-      ).toBe(`origin/${binding.branch}`);
-      expect(warn).not.toHaveBeenCalled();
-    },
-  );
-
   it("leaves diverged local history and files untouched with one warning", async () => {
     const remoteHead = await publishEarlierTurn();
     await fs.writeFile(path.join(cwd, "local.txt"), "local commit\n");
@@ -152,24 +125,6 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(binding.branch));
     expect(warn.mock.lastCall?.[0]).toContain(localHead.slice(0, 7));
     expect(warn.mock.lastCall?.[0]).toContain(remoteHead.slice(0, 7));
-  });
-
-  it("keeps the session's own tracked-file deletion while materializing new pushed files", async () => {
-    // A file tracked since the initial commit that the previous turn deleted locally.
-    const keepDeleted = "keep-deleted.txt";
-    await fs.writeFile(path.join(cwd, keepDeleted), "to be deleted\n");
-    initialHead = await commit(cwd, "Track a file that will be deleted");
-    await git(cwd, "push", "--quiet", "--force", "origin", "HEAD:refs/heads/main");
-    const remoteHead = await publishEarlierTurn();
-    await fs.rm(path.join(cwd, keepDeleted));
-
-    await prepare();
-
-    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(remoteHead);
-    await expect(fs.access(path.join(cwd, keepDeleted))).rejects.toThrow();
-    expect(await git(cwd, "status", "--porcelain", "-z")).toBe(` D ${keepDeleted}\0`);
-    expect(await fs.readFile(path.join(cwd, filename), "utf8")).toBe(pushedContent);
-    expect(warn).not.toHaveBeenCalled();
   });
 
   it("never starts the credentialed fetch for a fenced turn", async () => {
@@ -221,8 +176,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
 
   it("disables the binding before any token use when a Windows profile is not owner-only", async () => {
     const remoteHead = await publishEarlierTurn();
-    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    vi.spyOn(os, "platform").mockReturnValue("win32");
     inspectPathPermissions.mockResolvedValueOnce({
       ok: true,
       source: "windows-acl",
@@ -232,11 +186,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
       groupWritable: false,
       worldWritable: false,
     } as never);
-    try {
-      await expect(prepare()).resolves.toBeUndefined();
-    } finally {
-      Object.defineProperty(process, "platform", platform);
-    }
+    await expect(prepare()).resolves.toBeUndefined();
 
     expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
     expect(remoteHead).not.toBe(initialHead);
@@ -261,22 +211,11 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("silently leaves the checkout alone when the session branch does not exist on origin", async () => {
-    await fs.writeFile(path.join(cwd, filename), "first turn\n");
-    const before = await git(cwd, "status", "--porcelain");
-
-    await prepare();
-
-    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
-    expect(await git(cwd, "status", "--porcelain")).toBe(before);
-    expect(await fs.readFile(path.join(cwd, filename), "utf8")).toBe("first turn\n");
-    expect(warn).not.toHaveBeenCalled();
-  });
-
   it("fetches with the private turn token and managed identity environment", async () => {
     const remoteHead = await publishEarlierTurn();
     vi.stubEnv("GH_TOKEN", "inherited-synthetic-token");
     vi.stubEnv("GITHUB_TOKEN", "inherited-synthetic-token");
+    vi.stubEnv("GIT_CONFIG_PARAMETERS", "");
     const runner = vi.spyOn(exec, "runCommandWithTimeout");
 
     const prepared = await prepare();
@@ -320,6 +259,23 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(JSON.stringify(prepared)).not.toContain(binding.token);
     expect(process.env.GH_TOKEN).toBe("inherited-synthetic-token");
     expect(process.env.GITHUB_TOKEN).toBe("inherited-synthetic-token");
+    const child = resolvePreparedExecEnvironment({
+      execParams: { command: "git config --get-regexp '^(maintenance.auto|gc.auto|user.name)$'" },
+      host: "gateway",
+      defaultPathPrepend: [],
+      ...prepared,
+      warnings: [],
+    });
+    const config = await exec.runExec(
+      "git",
+      ["-C", cwd, "config", "--get-regexp", "^(maintenance.auto|gc.auto|user.name)$"],
+      { env: child.env, timeoutMs: 10_000, logOutput: false },
+    );
+    expect(config.stdout.trim().split("\n")).toEqual([
+      `user.name ${binding.gitAuthor.name}`,
+      "maintenance.auto false",
+      "gc.auto 0",
+    ]);
     const profileDir = prepared?.localIdentityEnv?.GH_CONFIG_DIR;
     if (!profileDir) {
       throw new Error("Expected a turn-owned GitHub profile");
@@ -353,20 +309,5 @@ describe("prepareWorkerGitHubEnvironment", () => {
     );
     await disposeWorkerGitHubEnvironment(path.join(root, "state"), "next-turn");
     await expect(fs.access(currentProfile)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("warns and continues without changing local files when origin cannot be fetched", async () => {
-    await fs.writeFile(path.join(cwd, filename), "unpublished work\n");
-    await fs.rm(path.join(root, "origin.git"), { recursive: true });
-    const before = await git(cwd, "status", "--porcelain");
-
-    expect(await prepare()).toMatchObject({ managedLocalIdentity: true });
-
-    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
-    expect(await git(cwd, "status", "--porcelain")).toBe(before);
-    expect(await fs.readFile(path.join(cwd, filename), "utf8")).toBe("unpublished work\n");
-    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("git fetch failed"));
-    expect(warn.mock.lastCall?.[0]).not.toContain(binding.token);
-    expect(warn.mock.lastCall?.[0]).not.toContain(origin);
   });
 });

@@ -29,6 +29,7 @@ import type { ApplicationGateway } from "../app/gateway.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:pr-reader-lifetime";
@@ -397,7 +398,7 @@ suite.define(() => {
           async ({ page }) => {
             await page.addInitScript(() =>
               localStorage.setItem(
-                "openclaw:control-ui:community-invite",
+                "openclaw:control-ui:community-invite:v2",
                 JSON.stringify({ dismissedAtMs: 1770000000000 }),
               ),
             );
@@ -473,11 +474,13 @@ suite.define(() => {
               additions: original.additions,
             });
             const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+            await openDetailsPullRequests(pane);
             const chip = pane.locator(".chat-pr").first();
             await chip.locator(".chat-pr__number").filter({ hasText: "#101" }).waitFor();
             await chip.locator(".chat-pr__checks-pill").click();
             await pane.getByText("original-workspace check", { exact: true }).waitFor();
             await page.keyboard.press("Escape");
+            await pane.locator('.chat-details[role="dialog"]').waitFor();
             const screenshot = async (name: string) => {
               if (artifacts) {
                 await writeFile(
@@ -532,6 +535,8 @@ suite.define(() => {
             expect(await refreshFromBrowser(page)).toEqual(["operator.read"]);
             releaseProvider.resolve();
             const settled = await racePromiseWithAbortSignal(changedDelivery.promise, signal);
+            // A new session incarnation resets the pane-local Details presentation.
+            await openDetailsPullRequests(pane);
             await chip
               .locator(".chat-pr__number")
               .filter({ hasText: `#${settled.number}` })

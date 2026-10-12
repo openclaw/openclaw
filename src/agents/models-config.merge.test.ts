@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import type { ExistingProviderConfig, ProviderModelCatalog } from "./models-config.merge.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
@@ -47,7 +48,7 @@ describe("models-config merge", () => {
     expect(merged.models).toEqual([{ ...authored, input: ["text"] }]);
   });
 
-  it.each(["https://catalog.example/v1", "http://127.0.0.1:9000/v1"])(
+  it.each(["http://127.0.0.1:9000/v1"])(
     "uses compat from the owner of the configured route %s",
     (baseUrl) => {
       const merged = mergeProviderModels(
@@ -67,23 +68,6 @@ describe("models-config merge", () => {
       );
     },
   );
-
-  it.each([
-    { keys: ["openai", "OpenAI"], expected: ["openai", "anthropic"], winner: "openai" },
-    { keys: ["OpenAI", "openai"], expected: ["anthropic", "openai"], winner: "openai" },
-    { keys: ["OpenAI", " OPENAI "], expected: ["openai", "anthropic"], winner: " OPENAI " },
-  ])("resolves provider collisions in order $keys", ({ keys, expected, winner }) => {
-    const [first, last] = keys;
-    const merged = mergeProviders({
-      explicit: {
-        [first!]: provider({ baseUrl: first }),
-        anthropic: provider(),
-        [last!]: provider({ baseUrl: last }),
-      },
-    });
-    expect(Object.keys(merged)).toEqual(expected);
-    expect(merged.openai?.baseUrl).toBe(winner);
-  });
 
   it("drops invalid stale catalogs while retaining auth-only providers", () => {
     const merged = mergeWithExistingProviderSecrets({

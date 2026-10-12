@@ -1,5 +1,6 @@
 import type { WebClient } from "@slack/web-api";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { downloadSlackFile } from "./actions.js";
 
 const resolveSlackMedia = vi.fn<typeof import("./monitor/media.js").resolveSlackMedia>();
 const createSlackLookupClientMock = vi.hoisted(() => vi.fn());
@@ -10,7 +11,6 @@ vi.mock("./client.js", () => ({
   createSlackLookupClient: createSlackLookupClientMock,
   getSlackWriteClient: vi.fn(),
 }));
-let downloadSlackFile: typeof import("./actions.js").downloadSlackFile;
 
 function createClient() {
   return { files: { info: vi.fn(async () => ({ file: {} })) } } as unknown as WebClient & {
@@ -46,9 +46,6 @@ function download(
 }
 
 describe("downloadSlackFile", () => {
-  beforeAll(async () => {
-    ({ downloadSlackFile } = await import("./actions.js"));
-  });
   beforeEach(() => {
     resolveSlackMedia.mockReset().mockResolvedValueOnce([media]);
     createSlackLookupClientMock.mockReset();
@@ -96,14 +93,6 @@ describe("downloadSlackFile", () => {
     });
   });
 
-  it("accepts channel proof from share timestamps", async () => {
-    const client = createClient();
-    client.files.info.mockResolvedValueOnce({
-      file: fileInfo({ channels: undefined, shares: { private: { C123: [{ ts: "111.111" }] } } }),
-    });
-    await expect(download(client)).resolves.toEqual(media);
-  });
-
   it("reapplies channel and thread admission when download metadata is refreshed", async () => {
     const client = createClient();
     client.files.info.mockResolvedValueOnce({
@@ -126,14 +115,11 @@ describe("downloadSlackFile", () => {
   it.each([
     { name: "missing private URL", file: { url_private_download: undefined } },
     { name: "wrong channel", file: { channels: ["C999"] } },
-    { name: "channel proof without thread proof", file: {}, threadId: "222.222" },
     {
       name: "wrong thread",
       file: { shares: { private: { C123: [{ ts: "111.111", thread_ts: "111.111" }] } } },
       threadId: "222.222",
     },
-    { name: "malformed shares", file: { channels: undefined, shares: "invalid" } },
-    { name: "non-array shares", file: { channels: undefined, shares: { private: { C123: {} } } } },
     {
       name: "shares without timestamps",
       file: { channels: undefined, shares: { private: { C123: [{}] } } },

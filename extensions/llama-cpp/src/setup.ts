@@ -30,10 +30,15 @@ import {
   selectLlamaServerAsset,
   type LlamaServerAsset,
 } from "./llama-server-assets.js";
+import {
+  ensureLlamaServerInstalled,
+  UnsupportedLlamaServerHostError,
+} from "./llama-server-install.js";
 import type { ManagedLlamaChatModel } from "./llama-server-preset.js";
 import {
   ensureLlamaCppModel,
   prepareManagedLlamaServer,
+  resolveLlamaCppModelDownloadSize,
   type ManagedLlamaServer,
 } from "./managed-server.js";
 import { resolveLlamaCppMediaModels } from "./media-config.js";
@@ -70,27 +75,21 @@ function describeEmbeddingDownload(isDefault: boolean): string {
     : "your configured local embedding model";
 }
 
-function readPrimaryModel(config: ProviderAppGuidedSetupContext["config"]): string | undefined {
-  const model = config.agents?.defaults?.model;
-  return typeof model === "string" ? model : model?.primary;
-}
-
-function configuredCandidates(
+async function configuredCandidates(
   config: ProviderAppGuidedSetupContext["config"],
-  scope: "detection" | "setup",
-): LlamaCppChatCandidate[] {
-  const existing = config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  const managedExisting = existing?.localService ? existing : undefined;
-  const provider = buildLlamaCppProviderConfig({
-    existing: managedExisting,
-    // Detection reports persisted inventory; interactive setup may still offer the default.
-    ...(managedExisting && scope === "detection" ? { modelInventory: managedExisting.models } : {}),
+): Promise<LlamaCppChatCandidate[]> {
+  const provider = config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  if (!provider?.localService) {
+    return [];
+  }
+  const { resolveDefaultModelForAgent } = await import("openclaw/plugin-sdk/agent-runtime");
+  const primary = resolveDefaultModelForAgent({
+    cfg: config,
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
   });
-  const primary = readPrimaryModel(config);
-  const primaryId = primary?.startsWith(`${LLAMA_CPP_PROVIDER_ID}/`)
-    ? primary.slice(LLAMA_CPP_PROVIDER_ID.length + 1)
-    : undefined;
-  const mediaModels = resolveLlamaCppMediaModels(managedExisting);
+  const primaryId = primary.provider === LLAMA_CPP_PROVIDER_ID ? primary.model : undefined;
+  const mediaModels = resolveLlamaCppMediaModels(provider);
   return provider.models
     .filter((model) => model.id !== mediaModels?.ocr && model.id !== mediaModels?.vision)
     .map((model) => ({ model, provider }))
@@ -192,7 +191,7 @@ export async function detectLlamaCppSetup(ctx: ProviderAppGuidedSetupContext) {
   ) {
     return null;
   }
-  for (const candidate of configuredCandidates(ctx.config, "detection")) {
+  for (const candidate of await configuredCandidates(ctx.config)) {
     if (await resolveCachedCandidate(candidate, ctx.signal)) {
       return {
         modelRef: `${LLAMA_CPP_PROVIDER_ID}/${candidate.model.id}`,
@@ -278,8 +277,37 @@ async function resolveSetupPlan(
     return { kind: "chat", candidate, cachedPath: configuredPath };
   }
 
-  const provider = candidate?.provider ?? buildLlamaCppProviderConfig();
+  const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  const provider = existing?.localService ? existing : buildLlamaCppProviderConfig();
   const cacheDir = resolveLlamaCppModelCacheDir(provider);
+  if (candidate) {
+    const source = resolveLlamaCppModelSource(candidate.model);
+    let size: number | undefined;
+    try {
+      if (path.isAbsolute(source) || !/^[a-z][a-z\d+.-]*:/iu.test(source)) {
+        const cachedPath = await ensureLlamaCppModel({
+          source,
+          cacheDir,
+          download: false,
+          signal: ctx.signal,
+        });
+        return { kind: "chat", candidate, cachedPath };
+      }
+      size = await resolveLlamaCppModelDownloadSize(source, cacheDir, ctx.signal);
+    } catch (error) {
+      ctx.signal?.throwIfAborted();
+      await ctx.prompter.note(
+        `Cannot use configured model ${candidate.model.name}: ${error instanceof Error ? error.message : String(error)} Check params.modelPath and retry llama.cpp setup.`,
+        "Setup skipped",
+      );
+      return undefined;
+    }
+    const consent = await ctx.prompter.confirm({
+      message: `${runtimeNote ? `${runtimeNote}\n` : ""}Download ${candidate.model.name} (${size ? `${(size / BYTES_PER_GB).toFixed(1)} GB` : "size unknown"}), ${describeEmbeddingDownload(embeddingModelIsDefault)}, and the verified ${asset.backend.toUpperCase()} runtime on Gateway host ${os.hostname()}, then use this model?`,
+      initialValue: false,
+    });
+    return consent ? { kind: "chat", candidate } : undefined;
+  }
   const cachedModels = new Map<string, string>();
   // A cancelled activation may leave a complete download without configured inventory.
   // Credit only verified artifacts, before charging disk space for a retry.
@@ -339,11 +367,10 @@ async function resolveSetupPlan(
     return undefined;
   }
 
-  const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   if (
     localMemoryIntent &&
     existing &&
-    (!existing.localService || configuredCandidates(ctx.config, "detection").length > 0)
+    (!existing.localService || (await configuredCandidates(ctx.config)).length > 0)
   ) {
     await ctx.prompter.note(
       "Embedding-only setup cannot replace an existing llama.cpp server or configured llama.cpp chat routes. Move those routes to another provider, remove any existing server config, then retry llama.cpp setup.",
@@ -393,7 +420,7 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     asset = selectLlamaServerAsset(hardware.platform, hardware.arch, { kind: "cpu" });
     runtimeNote = `${error instanceof Error ? error.message : String(error)} This recommendation uses CPU execution.`;
   }
-  const candidates = configuredCandidates(ctx.config, "setup");
+  const candidates = await configuredCandidates(ctx.config);
   const plan = await resolveSetupPlan(
     ctx,
     candidates,
@@ -409,6 +436,14 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
 
   const progress = ctx.prompter.progress("Preparing managed llama.cpp server…");
   try {
+    // Decide install/reuse before fetching GGUFs, preserving validating self-built
+    // servers on older macOS. prepareManagedLlamaServer revalidates the installed
+    // server after the model downloads; completed installations are not memoized.
+    await ensureLlamaServerInstalled({
+      asset,
+      signal: ctx.signal,
+      onProgress: (status) => progress.update(formatDownloadProgress("llama.cpp runtime", status)),
+    });
     let chatModel: ManagedLlamaChatModel;
     if (plan.kind === "chat") {
       const chatModelPath =
@@ -448,16 +483,14 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     const managed = await prepareManagedLlamaServer({
       chatModel,
       configuredChatModelIds: mediaModels
-        ? undefined
+        ? managedExisting?.models.map((model) => model.id)
         : plan.kind === "chat"
           ? plan.candidate.provider.models.map((model) => model.id)
           : [],
-      // Media admission budgets one resident model. Clone its active preset and
-      // service settings so later chat/embedding setup retains that same policy.
+      // Keep media's one-model residency when later setup replaces its router.
       ...(mediaModels
         ? { mediaModels: [], modelsMax: 1, localService: managedExisting?.localService }
         : {}),
-      embeddingModelIsDefault: embeddingModel.isDefault,
       embeddingModelPath,
       asset,
       isolated: true,
@@ -483,7 +516,9 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     progress.stop("llama.cpp setup failed");
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(
-      `Managed llama.cpp setup failed. Run openclaw doctor, fix the reported runtime or model issue, then retry. ${detail}`,
+      error instanceof UnsupportedLlamaServerHostError
+        ? `Managed llama.cpp setup is unavailable on this host. ${detail}`
+        : `Managed llama.cpp setup failed. Run openclaw doctor, fix the reported runtime or model issue, then retry. ${detail}`,
       { cause: error },
     );
   }

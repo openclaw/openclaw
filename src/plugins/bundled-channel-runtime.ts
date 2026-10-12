@@ -12,11 +12,6 @@ import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
 export { resolveBundledPluginGeneratedPath as resolveBundledChannelGeneratedPath };
 
-type BundledMetadataScope =
-  | { kind: "default" }
-  | { kind: "empty" }
-  | { kind: "env"; env: NodeJS.ProcessEnv };
-
 /** Bundled channel plugin metadata used by generators and runtime path resolvers. */
 export type BundledChannelPluginMetadata = {
   dirName: string;
@@ -29,40 +24,6 @@ export type BundledChannelPluginMetadata = {
   packageManifest?: OpenClawPackageManifest;
   rootDir: string;
 };
-
-function resolveBundledMetadataScope(params?: {
-  rootDir?: string;
-  scanDir?: string;
-}): BundledMetadataScope {
-  const overrideDir = params?.scanDir
-    ? path.resolve(params.scanDir)
-    : params?.rootDir
-      ? resolveBundledPluginsDirForRoot(params.rootDir)
-      : undefined;
-  if (!overrideDir) {
-    return params?.rootDir ? { kind: "empty" } : { kind: "default" };
-  }
-  if (!pluginCacheExistsSync(overrideDir)) {
-    return { kind: "empty" };
-  }
-  return {
-    kind: "env",
-    env: {
-      ...process.env,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: overrideDir,
-      ...(isVitestRuntimeEnv() ? { OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1" } : {}),
-    },
-  };
-}
-
-function resolveBundledPluginsDirForRoot(rootDir: string): string | undefined {
-  const candidates = [
-    path.join(rootDir, "extensions"),
-    path.join(rootDir, "dist-runtime", "extensions"),
-    path.join(rootDir, "dist", "extensions"),
-  ];
-  return candidates.find((candidate) => pluginCacheExistsSync(candidate));
-}
 
 function toBundledChannelPluginMetadata(
   record: PluginManifestRecord,
@@ -92,11 +53,24 @@ export function listBundledChannelPluginMetadata(params?: {
   includeChannelConfigs?: boolean;
   includeSyntheticChannelConfigs?: boolean;
 }): readonly BundledChannelPluginMetadata[] {
-  const scope = resolveBundledMetadataScope(params);
-  if (scope.kind === "empty") {
+  const rootDir = params?.rootDir;
+  const overrideDir = params?.scanDir
+    ? path.resolve(params.scanDir)
+    : rootDir
+      ? ["extensions", "dist-runtime/extensions", "dist/extensions"]
+          .map((relative) => path.join(rootDir, relative))
+          .find((candidate) => pluginCacheExistsSync(candidate))
+      : undefined;
+  if (overrideDir ? !pluginCacheExistsSync(overrideDir) : rootDir) {
     return [];
   }
   return resolvePluginMetadataSnapshot({
-    env: scope.kind === "env" ? scope.env : undefined,
+    env: overrideDir
+      ? {
+          ...process.env,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: overrideDir,
+          ...(isVitestRuntimeEnv() ? { OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1" } : {}),
+        }
+      : undefined,
   }).plugins.flatMap((record) => toBundledChannelPluginMetadata(record) ?? []);
 }

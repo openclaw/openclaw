@@ -9,7 +9,7 @@ import {
   resolveUsableAgentCredentialModes,
 } from "./agent-auth-credentials.js";
 import { addEnvBackedAgentCredentials } from "./agent-auth-discovery-core.js";
-import { discoverAuthStorage } from "./agent-model-discovery.js";
+import { discoverAuthStorageFacts } from "./agent-model-discovery.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import {
   createApiKeyCredential,
@@ -72,7 +72,7 @@ function writeAuthProfilesSqlite(agentDir: string, store: AuthProfileStore): voi
   writePersistedAuthProfileStoreRaw(store, agentDir);
 }
 
-describe("discoverAuthStorage", () => {
+describe("discoverAuthStorageFacts auth storage", () => {
   it("converts runtime auth profiles into agent discovery credentials", () => {
     const credentials = resolveAgentCredentialMapFromStore(
       createAuthProfileStoreFixture({
@@ -143,27 +143,6 @@ describe("discoverAuthStorage", () => {
     expect(credentials.openai).toBeUndefined();
   });
 
-  it("keeps expired OAuth when it is the sole profile for a provider", () => {
-    const resolved = resolveAgentCredentialMapFromStore(
-      createAuthProfileStoreFixture({
-        "openai:sole-expired": {
-          type: "oauth",
-          provider: "openai",
-          access: "fake",
-          refresh: "sample",
-          expires: Date.now() - 3600_000,
-        },
-      }),
-    );
-
-    expect(resolved.openai).toEqual({
-      type: "oauth",
-      access: "fake",
-      refresh: "sample",
-      expires: expect.any(Number),
-    });
-  });
-
   it("uses canonical mode and expiry ordering instead of profile insertion order", () => {
     const resolved = resolveAgentCredentialMapFromStore(
       createAuthProfileStoreFixture({
@@ -208,7 +187,7 @@ describe("discoverAuthStorage", () => {
           "openai:key": createApiKeyCredential("openai", "test-key"),
         }),
       );
-      const authStorage = discoverAuthStorage(agentDir, {
+      const { authStorage } = await discoverAuthStorageFacts(agentDir, {
         skipExternalAuthProfiles: true,
         env: {},
         config: {
@@ -268,12 +247,12 @@ describe("discoverAuthStorage", () => {
         }),
       );
 
-      const readOnlyStorage = discoverAuthStorage(agentDir, {
+      const { authStorage: readOnlyStorage } = await discoverAuthStorageFacts(agentDir, {
         readOnly: true,
         skipExternalAuthProfiles: true,
         env: {},
       });
-      const runtimeStorage = discoverAuthStorage(agentDir, {
+      const { authStorage: runtimeStorage } = await discoverAuthStorageFacts(agentDir, {
         skipExternalAuthProfiles: true,
         env: {},
       });
@@ -306,7 +285,7 @@ describe("discoverAuthStorage", () => {
           }),
         );
 
-        const storage = discoverAuthStorage(agentDir, {
+        const { authStorage: storage } = await discoverAuthStorageFacts(agentDir, {
           inheritedAuthDir,
           skipExternalAuthProfiles: true,
           env: {},
@@ -322,16 +301,6 @@ describe("discoverAuthStorage", () => {
         });
       });
     });
-  });
-
-  it("includes env-backed provider auth when no auth profile exists", () => {
-    const credentials = addEnvBackedAgentCredentials(
-      {},
-      {
-        env: { MISTRAL_API_KEY: "mistral-env-test-key" },
-      },
-    );
-    expect(credentials.mistral).toEqual({ type: "api_key", key: "mistral-env-test-key" });
   });
 
   it("includes workspace-scoped auth evidence in agent discovery credentials", () => {

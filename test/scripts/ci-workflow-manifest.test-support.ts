@@ -40,6 +40,13 @@ export function runCiManifestFixture(options: {
   nodeTestShards?: Record<string, unknown>[];
   nodeTestGroupsCodec?: boolean;
   bunTestRuntime?: boolean;
+  nativeBunInspection?: {
+    report: {
+      staleEntries: string[];
+      changedInputs: { file: string; reason: "changed" | "unreadable" }[];
+    };
+    failure?: "inspect" | "summary";
+  };
   bunUiTestRuntime?: boolean | "requires-ftl-flag";
   startupCorpusCoverage?: boolean;
   startupCorpusSelection?: boolean;
@@ -49,6 +56,7 @@ export function runCiManifestFixture(options: {
   targetSelector?: boolean;
   changedPlannerDependencies?: string[];
   dockerSeedPlannerSource?: string;
+  publishedDriverUpdateCapability?: boolean;
   changedPaths?: string[] | null;
   checkFamilyScope?: boolean;
   ciLintPlan?: Awaited<ReturnType<typeof createChangedCiLintPlan>>;
@@ -87,6 +95,7 @@ export function runCiManifestFixture(options: {
   missingTargetFiles?: string[];
   uiE2eProjectsCapability?: boolean;
   uiReleaseTier?: boolean;
+  uiTestGroupsSource?: string;
   uiE2eSelectorSource?: string;
   uiRealGatewayShards?: boolean;
   remoteTagRefs?: Record<string, string>;
@@ -136,13 +145,30 @@ export function runCiManifestFixture(options: {
       writeFileSync(target, "export {};\n");
     }
     if (options.bunTestRuntime) {
+      const inspection = options.nativeBunInspection;
       writeFileSync(
         path.join(scriptsDir, "ci-test-runtime.mts"),
         `${options.bunUiTestRuntime ? `import { ciTestShardRequiresBun as currentRuntime } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-test-runtime.mts")).href)};` : ""}
         export const ciTestShardRequiresBun = (shard, policy) =>
           policy !== "node" && (shard.configs?.includes("fixture-bun.config.ts") ||
             ${options.bunUiTestRuntime === "requires-ftl-flag" ? 'shard.env?.BUN_JSC_useFTLJIT === "false" &&' : ""}
-            ${options.bunUiTestRuntime ? `currentRuntime(shard, policy, ${JSON.stringify(process.cwd())})` : "false"});`,
+            ${options.bunUiTestRuntime ? `currentRuntime(shard, policy, ${JSON.stringify(process.cwd())})` : "false"});
+        ${
+          inspection
+            ? `import { appendFileSync, mkdirSync, renameSync } from "node:fs";
+               export function inspectNativeBunQualifications() {
+                 appendFileSync(${JSON.stringify(path.join(root, "native-bun-inspections.log"))}, "called\\n");
+                 ${inspection.failure === "inspect" ? 'throw new Error("fixture inspection unavailable");' : ""}
+                 ${
+                   inspection.failure === "summary"
+                     ? `renameSync(process.env.GITHUB_STEP_SUMMARY, process.env.GITHUB_STEP_SUMMARY + ".before-native-report");
+                        mkdirSync(process.env.GITHUB_STEP_SUMMARY);`
+                     : ""
+                 }
+                 return ${JSON.stringify(inspection.report)};
+               }`
+            : ""
+        }`,
       );
     }
     for (const dependency of options.changedPlannerDependencies ?? []) {
@@ -253,7 +279,8 @@ export function runCiManifestFixture(options: {
       copyFileSync("test/vitest/vitest.ui-paths.mjs", uiPaths);
       appendFileSync(
         path.join(scriptsDir, "ci-node-test-plan.mts"),
-        `\nexport const createUiTestShardGroups = (options) => ({
+        options.uiTestGroupsSource ??
+          `\nexport const createUiTestShardGroups = (options) => ({
           ui: [{configs: ["ui/vitest.config.ts"], shard_name: "ui", includePatterns: ${JSON.stringify(uiTargets)}, env: {fixtureTier: JSON.stringify(options)}}],
           e2e: [{configs: ["test/vitest/vitest.ui-e2e.config.ts"], shard_name: "e2e", includePatterns: options.uiE2eFiles ? [...options.uiE2eFiles, ...${JSON.stringify(CI_MANIFEST_FIXTURE_TARGETS.real)}] : ${JSON.stringify(e2eTargets)}, env: {fixtureTier: JSON.stringify(options)}}],
         });\n`,
@@ -395,6 +422,7 @@ export function runCiManifestFixture(options: {
           "check:assertion-safety": "true",
           "check:max-lines-ratchet": "true",
           "check:test-timeout-race-ratchet": "true",
+          "check:test-mock-exports": "true",
         }
       : {};
     writeFileSync(
@@ -521,6 +549,10 @@ export function runCiManifestFixture(options: {
         options.dockerSeedPlannerSource ??
           `export { resolveDockerSeedLanes, resolveChangedDockerSeedLanes } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-docker-seed-plan.mts")).href)};\n`,
       );
+      copyFileSync(
+        "scripts/lib/ci-published-driver-update-plan.mts",
+        path.join(scriptsDir, "ci-published-driver-update-plan.mts"),
+      );
       const sqliteLifecycleProof = path.join(
         root,
         "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
@@ -590,6 +622,9 @@ export function runCiManifestFixture(options: {
           ? ["openclawkit-tests-contract-v1"]
           : []),
         ...(options.bundledPlanner ? ["docker-seed-e2e-contract-v1"] : []),
+        ...((options.publishedDriverUpdateCapability ?? options.bundledPlanner)
+          ? ["published-driver-update-contract-v1"]
+          : []),
         ...((options.targetHostedRunnerProfileContract ?? options.bundledPlanner)
           ? ["hosted-runner-profile-contract-v1"]
           : []),
@@ -679,6 +714,9 @@ export function runCiManifestFixture(options: {
       if (correction.status !== 0) {
         return {
           output: `${correction.stdout}${correction.stderr}`,
+          manifestStdout: "",
+          manifestStderr: "",
+          nativeBunInspectionCalls: 0,
           outputs: {} as Record<string, string>,
           checkPlanOutputs: {} as Record<string, string>,
           status: correction.status,
@@ -743,7 +781,6 @@ export function runCiManifestFixture(options: {
         ),
         GITHUB_REF: "refs/heads/main",
         OPENCLAW_CI_HOSTED_HEALTHY: "",
-        OPENCLAW_CI_AUTHOR_ASSOCIATION: "CONTRIBUTOR",
         OPENCLAW_CI_HEAD_REPOSITORY: options.repository ?? "openclaw/openclaw",
         OPENCLAW_CI_RUNNER_BACKEND: options.runnerBackend ?? options.runnerProfile ?? "",
         OPENCLAW_CI_RUNNER_PROFILE: options.runnerProfile ?? options.runnerBackend ?? "blacksmith",
@@ -792,11 +829,22 @@ export function runCiManifestFixture(options: {
     }
     return {
       output: `${run.stdout}${run.stderr}${checkPlanRun?.stdout ?? ""}${checkPlanRun?.stderr ?? ""}`,
+      manifestStdout: run.stdout,
+      manifestStderr: run.stderr,
+      nativeBunInspectionCalls: existsSync(path.join(root, "native-bun-inspections.log"))
+        ? readFileSync(path.join(root, "native-bun-inspections.log"), "utf8").trim().split("\n")
+            .length
+        : 0,
       outputChars: readFileSync(outputPath, "utf8").length,
       outputs,
       checkPlanOutputs,
       status: checkPlanRun ? checkPlanRun.status : run.status,
-      summary: readFileSync(summaryPath, "utf8"),
+      summary: readFileSync(
+        existsSync(summaryPath + ".before-native-report")
+          ? summaryPath + ".before-native-report"
+          : summaryPath,
+        "utf8",
+      ),
     };
   } finally {
     rmSync(root, { force: true, recursive: true });

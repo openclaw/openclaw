@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import { loadPendingSessionDeliveries } from "../../../infra/session-delivery-queue-storage.js";
 import { prepareClaimedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
@@ -7,20 +8,18 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
+  type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
-import { persistSubagentRunsToDiskAsyncOrThrow } from "../registry/subagent-registry-state.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
-import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryToSqlite,
-} from "../registry/subagent-registry.store.sqlite.js";
+import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 /** Admit the actual worker before tests add deliberate runtime write-failure triggers. */
@@ -28,13 +27,40 @@ export async function admitCompletionFixtureDatabase(): Promise<void> {
   await loadPendingSessionDeliveries(captureOpenClawStateWorkerContext());
 }
 
+export function readCompletionSystemEvents(database: OpenClawStateDatabase) {
+  return database.db
+    .prepare("SELECT id FROM delivery_queue_entries WHERE entry_kind = 'systemEvent'")
+    .all();
+}
+
 export function seedSubagentCompletionDelivery(params: {
   subagent: SubagentRunRecord;
   databaseOptions?: OpenClawStateDatabaseOptions;
 }): void {
   runOpenClawStateWriteTransaction((database) => {
-    upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(params.subagent));
+    writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(params.subagent)], []);
   }, params.databaseOptions);
+}
+
+export function seedSubagentCompletionOwner(
+  params: Parameters<typeof seedSubagentCompletionDelivery>[0],
+): void {
+  seedSubagentCompletionDelivery(params);
+  subagentRuns.set(params.subagent.runId, params.subagent);
+}
+
+export async function withSubagentCompletionWorkerState(
+  run: (database: OpenClawStateDatabase) => Promise<void>,
+): Promise<void> {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawStateDatabase();
+    await admitCompletionFixtureDatabase();
+    try {
+      await run(database);
+    } finally {
+      subagentRuns.clear();
+    }
+  });
 }
 
 export async function advanceRequesterWakeTime(
@@ -104,16 +130,11 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
     throw new Error("requester unavailable");
   });
   const warn = vi.fn();
-  const persist = () => saveSubagentRegistryToSqlite(subagentRuns);
   const controller = new SubagentLifecycleController({
     runs: subagentRuns,
     resumedRuns: new Set(),
     subagentAnnounceTimeoutMs: 1_000,
     getRuntimeConfig: () => ({}),
-    persist,
-    persistOrThrow: persist,
-    persistAsyncOrThrow: (context, callbacks, ...runIds) =>
-      persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, runIds, { context, ...callbacks }),
     clearPendingLifecycleError: vi.fn(),
     countPendingDescendantRuns: async () => 0,
     getLatestRunForChildSession: getLatestLiveSubagentRunByChildSessionKey,
@@ -145,6 +166,44 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
     },
   };
 }
+
+export async function observeRequesterOutcomePublication(
+  cut: "rejected" | "committed",
+  originalStateDir: string,
+) {
+  const completionStore = await import("./subagent-completion-admission.store.js");
+  const settle = completionStore.mutateRequesterCompletionBatch;
+  const reconciledBatches: string[][] = [];
+  let retainedBeforePublication = false;
+  const observed = vi
+    .spyOn(completionStore, "mutateRequesterCompletionBatch")
+    .mockImplementation((params) => {
+      if (params.operation.kind !== "settle") {
+        return settle(params);
+      }
+      if (params.committed) {
+        reconciledBatches.push(params.entries.map((subagent) => subagent.runId));
+      }
+      return settle({
+        ...params,
+        onCommitted(receipt) {
+          params.onCommitted?.(receipt);
+          if (cut === "committed" && !retainedBeforePublication) {
+            retainedBeforePublication = true;
+            process.env.OPENCLAW_STATE_DIR = `${originalStateDir}/replacement-source`;
+          }
+        },
+      });
+    });
+  return {
+    reconciledBatches,
+    get retainedBeforePublication() {
+      return retainedBeforePublication;
+    },
+    restore: () => observed.mockRestore(),
+  };
+}
+
 export function armRequesterWake(
   input: ReturnType<typeof records>,
   batchRunIds = [input.subagent.runId],
@@ -179,4 +238,8 @@ export async function reopenCompletionFixtureOwners() {
     subagentRuns.set(runId, entry);
   }
   return database;
+}
+
+export function currentCompletionRun(input: { subagent: SubagentRunRecord }): SubagentRunRecord {
+  return expectDefined(subagentRuns.get(input.subagent.runId), "published completion run");
 }

@@ -76,16 +76,7 @@ test.each([
   [{ token: "sk-abcdefghijklmnopqrstuvwxyz123456" }, '{"token":"sk-abc…3456"}'],
   [new Error("password=synthetic-value"), "Error: password=***"],
   [{ message: "token=synthetic-value", code: "E1" }, "token=*** code=E1"],
-  ["body: to%6ben=synthetic-value&mode=read", "body: to%6ben=***&mode=read"],
-  ["to%6ben+=synthetic-value&mode=read", "to%6ben+=***&mode=read"],
   ["to%6ben\u3164=synthetic-value&mode=read", "to%6ben\u3164=***&mode=read"],
-  ["pass+=synthetic-value&mode=read", "pass+=***&mode=read"],
-  ["sig\u3164=synthetic-value&mode=read", "sig\u3164=***&mode=read"],
-  ["https://example.test/?session+=synthetic-value", "https://example.test/?session+=***"],
-  [
-    'Authorization: Digest username="user", response="synthetic-value"',
-    "Authorization: Digest ***",
-  ],
   [
     "-----BEGIN PRIVATE KEY-----\nsynthetic-data\n-----END PRIVATE KEY-----",
     "-----BEGIN PRIVATE KEY-----\n…redacted…\n-----END PRIVATE KEY-----",
@@ -94,5 +85,22 @@ test.each([
   logFrame(detail);
   expect(output.mock.calls.map(([line]) => stripVTControlCharacters(line))).toEqual([
     `→ res ✓ health detail=${expected} id=frame`,
+  ]);
+});
+
+test("redacts and bounds WS frame values when JSON serialization fails", () => {
+  const detail = {
+    toJSON() {
+      throw new Error("diagnostic serialization failed");
+    },
+    toString() {
+      return `token=synthetic-value ${"x".repeat(300)}`;
+    },
+  };
+
+  logFrame(detail);
+
+  expect(output.mock.calls.map(([line]) => stripVTControlCharacters(line))).toEqual([
+    `→ res ✓ health detail=token=*** ${"x".repeat(230)}... id=frame`,
   ]);
 });

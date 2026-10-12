@@ -11,6 +11,7 @@ import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
+import { bindExecutionGuards } from "./update-command-execution.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
 import * as verification from "./update-command-verification.js";
@@ -73,7 +74,7 @@ export function registerNativeAdmissionTests({
           mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
             admitExecutor(await executor.enter(dir));
           });
-          return executeMutableUpdate(params);
+          return executeMutableUpdate(await bindExecutionGuards(params));
         });
         expect(result?.result).toMatchObject({
           status: "error",
@@ -358,7 +359,7 @@ export function registerNativeAdmissionTests({
           mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
             admitExecutor(await executor.enter(root));
           });
-          return executeMutableUpdate(params);
+          return executeMutableUpdate(await bindExecutionGuards(params));
         });
         expect(execution?.result.status).toBe(scenario.refused ? "error" : "ok");
         expect(await fs.readFile(artifact, "utf8")).toBe(

@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import {
+  withOpenClawAgentDatabaseReadOnly,
+  type OpenClawAgentReadOnlyDatabase,
+} from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-inventory.js";
 import {
@@ -32,15 +35,18 @@ export type SessionStoreTargetsReadResult =
       available: false;
       reason: "database-missing" | "schema-missing" | "read-failed";
     };
-type FixedSessionStoreReadSnapshot =
+type SessionStoreReadSnapshot<T> =
   | {
       available: true;
       databaseAgentId: string;
       databasePath: string;
-      hasUnscopedRow: boolean;
-      scopedAgentIds: Set<string>;
+      value: T;
     }
   | Extract<SessionStoreTargetsReadResult, { available: false }>;
+type FixedSessionStoreReadSnapshot = SessionStoreReadSnapshot<{
+  hasUnscopedRow: boolean;
+  scopedAgentIds: Set<string>;
+}>;
 export type SessionStoreTargetsReadCache = Map<string, FixedSessionStoreReadSnapshot>;
 
 type SessionStoreTargetsReadOptions = {
@@ -64,13 +70,16 @@ function dedupeTargetsByStorePath(targets: SessionStoreTarget[]): SessionStoreTa
   return [...new Map(targets.map((target) => [target.storePath, target])).values()];
 }
 
-function readSessionStoreTargetSnapshot(params: {
-  cache?: SessionStoreTargetsReadCache;
-  databaseAgentId: string;
-  env: NodeJS.ProcessEnv;
-  sqlitePath: string;
-  readCandidates?: readonly SessionStoreReadCandidate[];
-}): FixedSessionStoreReadSnapshot {
+function readSessionStoreTargetSnapshot<T>(
+  params: {
+    cache?: Map<string, SessionStoreReadSnapshot<T>>;
+    databaseAgentId: string;
+    env: NodeJS.ProcessEnv;
+    sqlitePath: string;
+    readCandidates?: readonly SessionStoreReadCandidate[];
+  },
+  read: (database: OpenClawAgentReadOnlyDatabase) => T,
+): SessionStoreReadSnapshot<T> {
   const databasePath = params.readCandidates
     ? assertSessionStoreReadCandidate(params.sqlitePath, params.readCandidates)
     : params.sqlitePath;
@@ -79,34 +88,23 @@ function readSessionStoreTargetSnapshot(params: {
   if (cached) {
     return cached;
   }
-  let snapshot: FixedSessionStoreReadSnapshot;
+  let snapshot: SessionStoreReadSnapshot<T>;
   if (!fs.existsSync(params.sqlitePath)) {
     snapshot = { available: false, reason: "database-missing" };
   } else {
     try {
-      const result = withOpenClawAgentDatabaseReadOnly(
-        (database) => {
-          const scopedAgentIds = new Set<string>();
-          let hasUnscopedRow = false;
-          for (const sessionKey of iterateSessionEntryKeys(database)) {
-            const parsed = parseAgentSessionKey(sessionKey);
-            if (parsed) {
-              scopedAgentIds.add(normalizeAgentId(parsed.agentId));
-            } else {
-              hasUnscopedRow = true;
-            }
-          }
-          return {
+      const result = withOpenClawAgentDatabaseReadOnly(read, {
+        agentId: params.databaseAgentId,
+        env: params.env,
+        path: databasePath,
+      });
+      snapshot = result.found
+        ? {
+            available: true,
             databaseAgentId: params.databaseAgentId,
             databasePath,
-            hasUnscopedRow,
-            scopedAgentIds,
-          };
-        },
-        { agentId: params.databaseAgentId, env: params.env, path: databasePath },
-      );
-      snapshot = result.found
-        ? { available: true, ...result.value }
+            value: result.value,
+          }
         : { available: false, reason: result.reason };
     } catch {
       // An unreadable candidate cannot prove absence for cleanup or placement.
@@ -141,17 +139,32 @@ function resolveFixedSessionStoreTargetsReadOnly(
       registeredDatabases: params.registeredDatabases,
       readCandidates: params.readCandidates,
     });
-    const snapshot = readSessionStoreTargetSnapshot({
-      cache: params.cache,
-      databaseAgentId: normalizeAgentId(resolvedTarget.agentId ?? defaultAgentId),
-      env,
-      sqlitePath: resolvedTarget.path,
-      readCandidates: params.readCandidates,
-    });
+    const snapshot = readSessionStoreTargetSnapshot(
+      {
+        cache: params.cache,
+        databaseAgentId: normalizeAgentId(resolvedTarget.agentId ?? defaultAgentId),
+        env,
+        sqlitePath: resolvedTarget.path,
+        readCandidates: params.readCandidates,
+      },
+      (database) => {
+        const scopedAgentIds = new Set<string>();
+        let hasUnscopedRow = false;
+        for (const sessionKey of iterateSessionEntryKeys(database)) {
+          const parsed = parseAgentSessionKey(sessionKey);
+          if (parsed) {
+            scopedAgentIds.add(normalizeAgentId(parsed.agentId));
+          } else {
+            hasUnscopedRow = true;
+          }
+        }
+        return { scopedAgentIds, hasUnscopedRow };
+      },
+    );
     if (!snapshot.available) {
       return snapshot;
     }
-    if (snapshot.scopedAgentIds.has(requested)) {
+    if (snapshot.value.scopedAgentIds.has(requested)) {
       params.onResolvedTarget?.(fixedTarget, {
         agentId: snapshot.databaseAgentId,
         path: snapshot.databasePath,
@@ -169,7 +182,8 @@ function resolveFixedSessionStoreTargetsReadOnly(
     if (!ownerValidated) {
       return { available: false, reason: "read-failed" };
     }
-    const ownsUnscopedRows = snapshot.databaseAgentId === requested && snapshot.hasUnscopedRow;
+    const ownsUnscopedRows =
+      snapshot.databaseAgentId === requested && snapshot.value.hasUnscopedRow;
     if (ownsUnscopedRows) {
       params.onResolvedTarget?.(fixedTarget, {
         agentId: snapshot.databaseAgentId,
@@ -224,13 +238,16 @@ export function resolveExistingAgentSessionStoreTargetsReadOnlyResult(
       registeredDatabases: params.registeredDatabases,
       readCandidates: params.readCandidates,
     });
-    const snapshot = readSessionStoreTargetSnapshot({
-      cache: params.cache,
-      databaseAgentId: normalizeAgentId(resolved.agentId ?? target.agentId),
-      env,
-      sqlitePath: resolved.path,
-      readCandidates: params.readCandidates,
-    });
+    // Per-agent paths establish the namespace; opening consumes the admitted schema facts.
+    const snapshot = readSessionStoreTargetSnapshot(
+      {
+        databaseAgentId: normalizeAgentId(resolved.agentId ?? target.agentId),
+        env,
+        sqlitePath: resolved.path,
+        readCandidates: params.readCandidates,
+      },
+      () => undefined,
+    );
     if (!snapshot.available) {
       // A missing configured store can have readable siblings during migration.
       // Present but unreadable stores must not let partial visibility prove absence.

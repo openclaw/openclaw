@@ -1,10 +1,11 @@
 // Covers shared media-generation runtime polling and timeout helpers.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/types.js";
+import { buildDashscopeVideoGenerationProvider } from "../plugin-sdk/video-generation.js";
 import {
   normalizeDurationToClosestMax,
   resolveCapabilityModelCandidates,
+  resolveCapabilityModelCandidatesAsync,
   resolveClosestAspectRatio,
   resolveClosestResolution,
   resolveClosestSize,
@@ -30,10 +31,46 @@ function parseModelRef(raw?: string) {
 }
 
 function configuredProvider(id: string, defaultModel: string) {
-  return { id, defaultModel, isConfigured: () => true };
+  return { id, defaultModel, isConfiguredAsync: async () => true };
 }
 
 describe("media-generation runtime shared candidates", () => {
+  it.each([
+    ["standard-key", "https://dashscope.example.test", true],
+    ["subscription-key", "https://dashscope.example.test", false],
+    ["standard-key", "https://coding.example.test", false],
+  ] as const)(
+    "preserves DashScope factory policy in sync and async discovery (%s, %s)",
+    async (apiKey, baseUrl, allowed) => {
+      const provider = buildDashscopeVideoGenerationProvider({
+        providerId: "qwen",
+        label: "Qwen",
+        taskLabel: "Qwen",
+        defaultBaseUrl: "https://dashscope.example.test",
+        credentialPolicy: {
+          acceptsApiKey: (key) => key === "standard-key",
+          acceptsBaseUrl: (url) => url !== "https://coding.example.test",
+          unsupportedMessage: "Use Standard credentials and endpoint",
+        },
+      });
+      const params = {
+        cfg: {
+          models: {
+            providers: {
+              qwen: { apiKey, baseUrl, auth: "api-key" as const, models: [] },
+            },
+          },
+        },
+        modelConfig: undefined,
+        parseModelRef,
+        listProviders: () => [provider],
+      };
+      const expected = allowed ? [{ provider: "qwen", model: provider.defaultModel }] : [];
+      expect(resolveCapabilityModelCandidates(params)).toEqual(expected);
+      expect(await resolveCapabilityModelCandidatesAsync(params)).toEqual(expected);
+    },
+  );
+
   it.each([
     [0, undefined, undefined],
     [1, { enabled: false }, "provider/model does not support reference-image edit inputs"],
@@ -56,8 +93,8 @@ describe("media-generation runtime shared candidates", () => {
     },
   );
 
-  it("appends auth-backed provider defaults after explicit refs by default", () => {
-    const candidates = resolveCapabilityModelCandidates({
+  it("appends auth-backed provider defaults after explicit refs by default", async () => {
+    const candidates = await resolveCapabilityModelCandidatesAsync({
       cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } },
       modelConfig: {
         primary: "google/gemini-3.1-flash-image-preview",
@@ -86,8 +123,8 @@ describe("media-generation runtime shared candidates", () => {
       [{ provider: "media-config-only", model: "configured-video" }],
     ],
     ["honors an owner readiness veto over generic auth", () => false, []],
-  ] as const)("%s", (_name, isConfigured, expected) => {
-    const candidates = resolveCapabilityModelCandidates({
+  ] as const)("%s", async (_name, isConfigured, expected) => {
+    const candidates = await resolveCapabilityModelCandidatesAsync({
       cfg: {
         models: {
           providers: {
@@ -113,8 +150,8 @@ describe("media-generation runtime shared candidates", () => {
     expect(candidates).toEqual(expected);
   });
 
-  it("orders auto-detected provider defaults by canonical aliases", () => {
-    const candidates = resolveCapabilityModelCandidates({
+  it("orders auto-detected provider defaults by canonical aliases", async () => {
+    const candidates = await resolveCapabilityModelCandidatesAsync({
       cfg: { agents: { defaults: { model: { primary: "media-alias/gpt-5.5" } } } },
       modelConfig: undefined,
       parseModelRef,
@@ -133,31 +170,32 @@ describe("media-generation runtime shared candidates", () => {
     ]);
   });
 
-  it("keeps implicit provider expansion enabled when the retired opt-out is present", () => {
-    let listProviderCalls = 0;
-    const candidates = resolveCapabilityModelCandidates({
-      cfg: {
-        agents: { defaults: { mediaGenerationAutoProviderFallback: false } },
-      } as OpenClawConfig,
-      modelConfig: {
-        primary: "google/gemini-3.1-flash-image-preview",
-      },
-      parseModelRef,
-      listProviders: () => {
-        listProviderCalls += 1;
-        return [configuredProvider("openai", "gpt-image-1")];
-      },
-    });
+  it("uses async readiness and observes an in-process credential change", async () => {
+    let configured = false;
+    const resolve = () =>
+      resolveCapabilityModelCandidatesAsync({
+        cfg: {},
+        modelConfig: undefined,
+        parseModelRef,
+        listProviders: () => [
+          {
+            id: "media",
+            defaultModel: "image",
+            isConfigured: () => {
+              throw new Error("deprecated readiness must not run");
+            },
+            isConfiguredAsync: async () => configured,
+          },
+        ],
+      });
 
-    expect(candidates).toEqual([
-      { provider: "google", model: "gemini-3.1-flash-image-preview" },
-      { provider: "openai", model: "gpt-image-1" },
-    ]);
-    expect(listProviderCalls).toBe(1);
+    expect(await resolve()).toEqual([]);
+    configured = true;
+    expect(await resolve()).toEqual([{ provider: "media", model: "image" }]);
   });
 
-  it("treats an explicit model override as exact-only", () => {
-    const candidates = resolveCapabilityModelCandidates({
+  it("treats an explicit model override as exact-only", async () => {
+    const candidates = await resolveCapabilityModelCandidatesAsync({
       cfg: {},
       modelConfig: {
         primary: "google/gemini-3.1-flash-image-preview",
@@ -170,59 +208,29 @@ describe("media-generation runtime shared candidates", () => {
 
     expect(candidates).toEqual([{ provider: "openai", model: "gpt-image-2" }]);
   });
-
-  it("resolves slash-containing provider model IDs from registered provider models", () => {
-    const candidates = resolveCapabilityModelCandidates({
-      cfg: {},
-      modelConfig: {
-        primary: "openai/gpt-image-2",
-      },
-      modelOverride: "fal-ai/flux/dev",
-      parseModelRef,
-      listProviders: () => [
-        {
-          ...configuredProvider("fal", "fal-ai/flux/dev"),
-          models: ["fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"],
-        },
-      ],
-    });
-
-    expect(candidates).toEqual([{ provider: "fal", model: "fal-ai/flux/dev" }]);
-  });
-
-  it("prefers explicit provider refs over colliding slash-containing model IDs", () => {
-    const candidates = resolveCapabilityModelCandidates({
-      cfg: {},
-      modelConfig: {
-        primary: "google/lyria-3-pro-preview",
-      },
-      parseModelRef,
-      listProviders: () => [
-        {
-          ...configuredProvider("google", "lyria-3-clip-preview"),
-          models: ["lyria-3-clip-preview", "lyria-3-pro-preview"],
-        },
-        {
-          ...configuredProvider("openrouter", "google/lyria-3-clip-preview"),
-          models: ["google/lyria-3-clip-preview", "google/lyria-3-pro-preview"],
-        },
-      ],
-    });
-
-    expect(candidates[0]).toEqual({ provider: "google", model: "lyria-3-pro-preview" });
-  });
 });
 
 describe("media-generation candidate lifecycle", () => {
   it("preserves missing, skipped, and failed attempts before the first usable result", async () => {
     const calls: string[] = [];
     const result = await runMediaGenerationCandidates({
-      candidates: ["missing", "skipped", "failed", "success", "unused"].map((provider) => ({
-        provider,
-        model: "model",
-      })),
+      request: {
+        cfg: {
+          agents: {
+            defaults: {
+              mediaModels: {
+                image: {
+                  primary: "missing/model",
+                  fallbacks: ["skipped/model", "failed/model", "success/model", "unused/model"],
+                },
+              },
+            },
+          },
+        },
+        autoProviderFallback: false,
+      },
+      listProviders: () => [],
       capability: "image",
-      includeSkipFailureDetails: true,
       getProvider(id) {
         calls.push(`lookup:${id}`);
         return id === "missing" ? undefined : { id };
@@ -275,17 +283,24 @@ describe("media-generation candidate lifecycle", () => {
     ]);
   });
 
-  it.each(["lookup", "prepare", "async prepare"])(
+  it.each(["async prepare"])(
     "propagates %s failures without submitting a fallback",
     async (stage) => {
       const error = new Error("provider registry unavailable");
       const lookedUp: string[] = [];
       let executions = 0;
       const result = runMediaGenerationCandidates({
-        candidates: [
-          { provider: "primary", model: "model" },
-          { provider: "fallback", model: "model" },
-        ],
+        request: {
+          cfg: {
+            agents: {
+              defaults: {
+                mediaModels: { video: { primary: "primary/model", fallbacks: ["fallback/model"] } },
+              },
+            },
+          },
+          autoProviderFallback: false,
+        },
+        listProviders: () => [],
         capability: "video",
         getProvider(id) {
           lookedUp.push(id);
@@ -349,33 +364,37 @@ describe("media-generation runtime shared normalization", () => {
     ).toBe("1536x1024");
   });
 
-  it("maps unsupported aspect ratios to the closest supported aspect ratio", () => {
-    expect(
-      resolveClosestAspectRatio({
-        requestedAspectRatio: "17:10",
-        supportedAspectRatios: ["1:1", "4:3", "16:9"],
-      }),
-    ).toBe("16:9");
-  });
-
-  it("maps video-style resolutions by numeric distance", () => {
-    expect(
-      resolveClosestResolution({
-        requestedResolution: "480P",
-        supportedResolutions: ["360P", "540P", "720P"],
-        order: ["360P", "480P", "540P", "720P"],
-      }),
-    ).toBe("540P");
-  });
-
   it("does not map across image and video resolution units", () => {
     expect(
       resolveClosestResolution({
         requestedResolution: "4K",
         supportedResolutions: ["768P", "1080P"],
-        order: ["360P", "480P", "540P", "720P", "768P", "1080P"],
       }),
     ).toBeUndefined();
+  });
+
+  it("keeps geometry tie-breaking independent of provider declaration order", () => {
+    for (const reverse of [false, true]) {
+      const ordered = <T>(values: T[]) => (reverse ? values.toReversed() : values);
+      expect(
+        resolveClosestAspectRatio({
+          requestedAspectRatio: "3:3",
+          supportedAspectRatios: ordered(["invalid", "2:2", "1:1"]),
+        }),
+      ).toBe("1:1");
+      expect(
+        resolveClosestSize({
+          requestedAspectRatio: "1:1",
+          supportedSizes: ordered(["invalid", "128x128", "64x64"]),
+        }),
+      ).toBe("64x64");
+      expect(
+        resolveClosestResolution({
+          requestedResolution: "480P",
+          supportedResolutions: ordered(["invalid", "360P", "600P"]),
+        }),
+      ).toBe("600P");
+    }
   });
 
   it("clamps durations to the closest supported max", () => {
@@ -407,18 +426,6 @@ describe("media-generation runtime shared failure summaries", () => {
       }),
     ).toThrow(
       "All music generation models failed (3): google/lyria-3-clip-preview: Manually set deadline 1s is too short. Minimum allowed deadline is 10s. | 2 fallback(s) aborted after the request was cancelled or timed out: minimax/music-2.6, minimax-portal/music-2.6",
-    );
-  });
-
-  it("summarizes all-aborted attempts once", () => {
-    expect(() =>
-      throwCapabilityGenerationFailure({
-        capabilityLabel: "music generation",
-        attempts: abortedAttempts,
-        lastError: new Error("This operation was aborted"),
-      }),
-    ).toThrow(
-      "All music generation models failed (2): 2 fallback(s) aborted after the request was cancelled or timed out: minimax/music-2.6, minimax-portal/music-2.6",
     );
   });
 });

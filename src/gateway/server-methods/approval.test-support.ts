@@ -8,6 +8,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { captureGatewayDeviceRevocation } from "../device-revocation.js";
+import type { ExecApprovalRecord } from "../exec-approval-manager.js";
 import { getOperatorApprovalDetailedInDatabase } from "../operator-approval-store.kernel.js";
 import type { OperatorApprovalDatabase } from "../operator-approval-store.types.js";
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
@@ -20,7 +21,12 @@ import {
   bindGatewayRequestHandlerMutationAuthority,
   bindWebSocketRequestMutationAuthority,
 } from "./session-mutation-guards.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestOptions } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  GatewayRequestOptions,
+} from "./types.js";
 
 export function getOperatorApproval(
   params: Parameters<typeof getOperatorApprovalDetailedInDatabase>[0],
@@ -111,6 +117,8 @@ type ApprovalInvocationParams = {
     | "approval.resolve"
     | "exec.approval.get"
     | "exec.approval.list"
+    | "exec.approval.grants.list"
+    | "exec.approval.grants.revoke"
     | "exec.approval.resolve"
     | "exec.approval.waitDecision"
     | "plugin.approval.list"
@@ -199,4 +207,48 @@ export async function handleApprovalResolve<
   };
   using authority = createApprovalRequestAuthority(options);
   return await handleOwnedApprovalResolve({ ...params, context, authority });
+}
+
+export function requestedEvent<TPayload>(record: ExecApprovalRecord<TPayload>) {
+  return {
+    id: record.id,
+    request: record.request,
+    createdAtMs: record.createdAtMs,
+    expiresAtMs: record.expiresAtMs,
+  };
+}
+
+type ApprovalClientLookup = NonNullable<GatewayRequestContext["getApprovalClientConnIds"]>;
+
+export function createApprovalClient(params: {
+  connId: string;
+  clientId: string;
+  deviceId?: string;
+  scopes?: string[];
+  approvalRuntime?: boolean;
+}): GatewayClient {
+  return {
+    connId: params.connId,
+    connect: {
+      client: { id: params.clientId },
+      device: params.deviceId ? { id: params.deviceId } : undefined,
+      scopes: params.scopes ?? ["operator.approvals"],
+    },
+    ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
+  } as GatewayClient;
+}
+
+export function createApprovalClientLookup(clients: GatewayClient[]): ApprovalClientLookup {
+  return (opts = {}) =>
+    new Set(
+      clients
+        .filter((client) => {
+          if (opts.excludeConnId && client.connId === opts.excludeConnId) {
+            return false;
+          }
+          return opts.filter?.(client, opts.record) ?? true;
+        })
+        .map((client) => client.connId)
+        .filter((connId): connId is string => typeof connId === "string" && connId.length > 0),
+    );
 }

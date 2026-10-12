@@ -54,61 +54,6 @@ function runWebCommand(
   });
 }
 
-async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
-  const { getRuntimeConfig } = await import("../../config/config.js");
-  const { getCapabilityWebSearchCommandSecretTargets } =
-    await import("../command-secret-targets.js");
-  const { resolveLocalCapabilityRuntimeConfig } = await import("./shared.js");
-  const { runWebSearch } = await import("../../web-search/runtime.js");
-  const rawConfig = getRuntimeConfig();
-  const scopedTargets = getCapabilityWebSearchCommandSecretTargets(rawConfig, {
-    providerId: params.provider,
-  });
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
-    commandName: "infer web search",
-    ...scopedTargets,
-    config: rawConfig,
-  });
-  return runWebSearch({
-    config: cfg,
-    providerId: params.provider,
-    args: {
-      query: params.query,
-      count: params.limit,
-      limit: params.limit,
-    },
-  });
-}
-
-async function runWebFetchCommand(params: { url: string; provider?: string; format?: string }) {
-  const { getRuntimeConfig } = await import("../../config/config.js");
-  const { getCapabilityWebFetchCommandSecretTargets } =
-    await import("../command-secret-targets.js");
-  const { resolveLocalCapabilityRuntimeConfig } = await import("./shared.js");
-  const { resolveWebFetchDefinition } = await import("../../web-fetch/runtime.js");
-  const rawConfig = getRuntimeConfig();
-  const scopedTargets = getCapabilityWebFetchCommandSecretTargets(rawConfig, {
-    providerId: params.provider,
-  });
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
-    commandName: "infer web fetch",
-    ...scopedTargets,
-    config: rawConfig,
-  });
-  const resolved = resolveWebFetchDefinition({
-    config: cfg,
-    providerId: params.provider,
-  });
-  if (!resolved) {
-    throw new Error("web.fetch is disabled or no provider is available.");
-  }
-  const result = await resolved.definition.execute({
-    url: params.url,
-    format: params.format,
-  });
-  return { provider: resolved.provider.id, result };
-}
-
 export function registerWebCapabilityCommands(capability: Command): void {
   const web = capability.command("web").description("Web capabilities");
 
@@ -122,10 +67,31 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .action((opts) =>
       runWebCommand("web.search", opts.json, async () => {
         const { parseOptionalPositiveInteger } = await import("./shared.js");
-        return runWebSearchCommand({
-          query: String(opts.query),
-          provider: opts.provider as string | undefined,
-          limit: parseOptionalPositiveInteger(opts.limit, "--limit"),
+        const query = String(opts.query);
+        const provider = opts.provider as string | undefined;
+        const limit = parseOptionalPositiveInteger(opts.limit, "--limit");
+        const { getRuntimeConfig } = await import("../../config/config.js");
+        const { getCapabilityWebSearchCommandSecretTargets } =
+          await import("../command-secret-targets.js");
+        const { resolveLocalCapabilityRuntimeConfig } = await import("./shared.js");
+        const { runWebSearch } = await import("../../web-search/runtime.js");
+        const rawConfig = getRuntimeConfig();
+        const scopedTargets = getCapabilityWebSearchCommandSecretTargets(rawConfig, {
+          providerId: provider,
+        });
+        const cfg = await resolveLocalCapabilityRuntimeConfig({
+          commandName: "infer web search",
+          ...scopedTargets,
+          config: rawConfig,
+        });
+        return runWebSearch({
+          config: cfg,
+          providerId: provider,
+          args: {
+            query,
+            count: limit,
+            limit,
+          },
         });
       }),
     );
@@ -138,13 +104,37 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--format <format>", "Format hint")
     .option("--json", "Output JSON", false)
     .action((opts) =>
-      runWebCommand("web.fetch", opts.json, () =>
-        runWebFetchCommand({
-          url: String(opts.url),
-          provider: opts.provider as string | undefined,
-          format: opts.format as string | undefined,
-        }),
-      ),
+      runWebCommand("web.fetch", opts.json, async () => {
+        const url = String(opts.url);
+        const provider = opts.provider as string | undefined;
+        const format = opts.format as string | undefined;
+        const { getRuntimeConfig } = await import("../../config/config.js");
+        const { getCapabilityWebFetchCommandSecretTargets } =
+          await import("../command-secret-targets.js");
+        const { resolveLocalCapabilityRuntimeConfig } = await import("./shared.js");
+        const { resolveWebFetchDefinition } = await import("../../web-fetch/runtime.js");
+        const rawConfig = getRuntimeConfig();
+        const scopedTargets = getCapabilityWebFetchCommandSecretTargets(rawConfig, {
+          providerId: provider,
+        });
+        const cfg = await resolveLocalCapabilityRuntimeConfig({
+          commandName: "infer web fetch",
+          ...scopedTargets,
+          config: rawConfig,
+        });
+        const resolved = resolveWebFetchDefinition({
+          config: cfg,
+          providerId: provider,
+        });
+        if (!resolved) {
+          throw new Error("web.fetch is disabled or no provider is available.");
+        }
+        const result = await resolved.definition.execute({
+          url,
+          extractMode: format,
+        });
+        return { provider: resolved.provider.id, result };
+      }),
     );
 
   registerLocalProvidersCommand(web, "List web providers", async (cfg, agentId) => {
@@ -154,6 +144,9 @@ export function registerWebCapabilityCommands(capability: Command): void {
     const { isWebSearchProviderConfigured, listWebSearchProviders } =
       await import("../../web-search/runtime.js");
     const agentDir = resolveAgentDir(cfg, agentId);
+    const { ensureAuthProfileStoreWithoutExternalProfilesAsync } =
+      await import("../../agents/auth-profiles/store-runtime.js");
+    const authStore = await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
     const selectedSearchProvider = normalizeLowercaseStringOrEmpty(
       cfg.tools?.web?.search?.provider,
     );
@@ -161,7 +154,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
     return {
       search: listWebSearchProviders({ config: cfg }).map((provider) => ({
         available: true,
-        configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir }),
+        configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir, authStore }),
         selected: provider.id === selectedSearchProvider,
         id: provider.id,
         envVars: provider.envVars,

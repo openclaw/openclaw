@@ -4,6 +4,7 @@ import { parseGithubResponse } from "./gh-api-preflight.mjs";
 import { execPrGh, execPrGhJson } from "./github.mjs";
 
 const OID = /^[0-9a-f]{40}$/;
+const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 // REST values normalize into GitHub's MergeStateStatus enum, never arbitrary admission states.
 // https://docs.github.com/en/graphql/reference/pulls#mergestatestatus
 const MERGE_STATES = new Set(
@@ -25,10 +26,10 @@ function requireEvidence(condition, message) {
   }
 }
 
-function requireRestSupport(condition, message) {
+function requireRestSupport(condition, message, code = "OPENCLAW_REST_UNSUPPORTED") {
   if (!condition) {
-    const error = new Error(`REST merge: ${message}; use GraphQL.`);
-    error.code = "OPENCLAW_REST_UNSUPPORTED";
+    const error = new Error(`REST merge: ${message}.`);
+    error.code = code;
     throw error;
   }
 }
@@ -72,6 +73,8 @@ function apiArgs(repo, endpoint, extra = []) {
     `repos/${repo.nameWithOwner}${endpoint}`,
     "-H",
     "Cache-Control: max-age=0",
+    "-H",
+    "X-GitHub-Api-Version: 2026-03-10",
     ...extra,
   ];
 }
@@ -118,6 +121,10 @@ export function readMergePolicy(repo) {
     // stderr, inaccessible repositories, and generic 404s do not prove absence.
     response = String(error.stdout ?? "");
     const parsed = parseGithubResponse(response);
+    requireEvidence(
+      !(parsed.status === "404" && parsed.body?.message === "Not Found"),
+      "classic branch-protection policy is unavailable to this writer; a generic 404 or hidden GraphQL rule cannot prove absence",
+    );
     if (parsed.status !== "404" || parsed.body?.message !== "Branch not protected") {
       throw error;
     }
@@ -188,6 +195,13 @@ function readPullRequest(repo, authority, pr) {
     record.state !== "open" || (!record.merged && record.auto_merge === null),
     "open PR already has an auto-merge request or inconsistent lifecycle",
   );
+  // API 2026-03-10 omits the landed commit from PR resources. Use the complete
+  // GraphQL observation; the async result alone cannot replace the PR receipt.
+  requireRestSupport(
+    !record.merged || record.state !== "closed" || Object.hasOwn(record, "merge_commit_sha"),
+    "merged PR commit requires GraphQL observation",
+    "OPENCLAW_REST_MERGED_RECEIPT_UNAVAILABLE",
+  );
   requireEvidence(
     !record.merged || (record.state === "closed" && OID.test(record.merge_commit_sha ?? "")),
     "merged PR has no valid merge commit",
@@ -217,7 +231,7 @@ function pullRequest(record) {
   };
 }
 
-function beginRead(repo, pr, observe) {
+function beginRead(repo, pr, observe, priorCiObservation) {
   const startedAtMs = Date.now();
   // Included headers select the protected writer route, so pooled-reader
   // permissions cannot establish the actor's access to branch policy.
@@ -240,7 +254,9 @@ function beginRead(repo, pr, observe) {
   // reduced privileges cannot invalidate the retained head and tree proof.
   const receipt = observe && record.merged;
   requireRestSupport(
-    receipt || authority.permissions?.admin === true,
+    receipt ||
+      authority.permissions?.admin === true ||
+      (priorCiObservation && authority.permissions?.push === true),
     "policy-reader admin access changed",
   );
   const policy = receipt ? null : readMergePolicy(repo);
@@ -584,7 +600,88 @@ function mergeBody(value) {
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
+function asyncMergeResponse(repo, pr, head, uuid, payload) {
+  const args = apiArgs(repo, `/pulls/${pr}/merge-async${uuid ? `/${uuid}` : ""}`, [
+    "--include",
+    ...(uuid ? [] : ["--method", "PUT", "--input", "-"]),
+  ]);
+  // Old protected Octopool rejects this header before generic JSON rewriting.
+  // Keep it first: older parsers can delegate on an unknown flag like --hostname.
+  args.splice(1, 0, "-H", "X-Octopool-Require: merge-async-v1");
+  let raw;
+  try {
+    raw = execPrGh(
+      args,
+      { encoding: "utf8", ...(uuid ? {} : { input: JSON.stringify(payload) }) },
+      "plain",
+    );
+  } catch (error) {
+    const conflict = parseGithubResponse(String(error.stdout ?? ""));
+    if (!uuid && conflict.status === "409" && UUID.test(conflict.body?.details?.uuid ?? "")) {
+      requireEvidence(
+        false,
+        `async request ${conflict.body.details.uuid} already exists; inspect its options and ownership without resubmitting`,
+      );
+    }
+    throw error;
+  }
+  const response = parseGithubResponse(raw);
+  const result = response.body;
+  const details = result?.details;
+  requireEvidence(
+    (uuid ? response.status === "200" : ["200", "202"].includes(response.status)) &&
+      ["pending", "merged", "enqueued", "failed"].includes(result?.status) &&
+      typeof details?.message === "string" &&
+      details.message.length <= 4096,
+    "invalid async merge response; reconcile the retained intent without resubmitting",
+  );
+  if (result.status === "pending") {
+    requireEvidence(
+      UUID.test(details.uuid ?? "") &&
+        (!uuid || details.uuid === uuid) &&
+        details.expected_head_sha === head &&
+        details.merge_method === "squash" &&
+        details.merge_action === "direct_merge" &&
+        (details.bypass_rules === undefined || details.bypass_rules === false),
+      "async merge request does not match the prepared head and direct squash options",
+    );
+  } else if (result.status === "merged") {
+    requireEvidence(OID.test(details.sha ?? ""), "async merge result has no valid commit");
+  }
+  requireEvidence(
+    result.status === "merged" || details.sha == null,
+    "unmerged async result unexpectedly contains a commit",
+  );
+  requireEvidence(
+    response.status !== "202" || result.status === "pending",
+    "async acceptance did not return a pending request UUID",
+  );
+  return {
+    uuid: uuid ?? details.uuid ?? null,
+    status: result.status,
+    message: details.message,
+    sha: result.status === "merged" ? details.sha : null,
+  };
+}
+
 function main([mode, repository, prValue, head, bodySnapshot, expectedObservation, ...extra]) {
+  if (mode === "merge-result") {
+    requireEvidence(
+      /^[1-9][0-9]*$/.test(prValue ?? "") &&
+        Number.isSafeInteger(Number(prValue)) &&
+        UUID.test(head ?? "") &&
+        OID.test(bodySnapshot ?? "") &&
+        expectedObservation === undefined &&
+        extra.length === 0,
+      "invalid async merge status arguments",
+    );
+    process.stdout.write(
+      `${JSON.stringify(
+        asyncMergeResponse(parseRepository(repository), Number(prValue), bodySnapshot, head),
+      )}\n`,
+    );
+    return;
+  }
   const observing = ["observe", "observe-admission", "observe-prior-ci"].includes(mode);
   const priorCiObservation = mode === "observe-prior-ci";
   requireEvidence(
@@ -602,7 +699,7 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
   const repo = parseRepository(repository);
   const pr = Number(prValue);
   const body = mode === "merge" ? mergeBody(bodySnapshot) : undefined;
-  const snapshot = beginRead(repo, pr, observing);
+  const snapshot = beginRead(repo, pr, observing, priorCiObservation);
   const checks =
     mode === "checks" || ((observing || mode === "merge") && snapshot.record.state === "open")
       ? readRequiredMergeChecks(repo, snapshot.record.head.sha, snapshot.policy)
@@ -672,6 +769,12 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
       transport: "rest",
     };
   } else {
+    // The async endpoint also merges downstack PRs. This owner admits one PR;
+    // GitHub includes `stack` on REST resources belonging to a stack.
+    requireEvidence(
+      current.stack == null,
+      "stacked PRs require review and authorization of the full stack",
+    );
     requireEvidence(
       current.state === "open" &&
         !current.draft &&
@@ -695,17 +798,11 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
     const payload = {
       sha: head,
       merge_method: "squash",
+      merge_action: "direct_merge",
+      bypass_rules: false,
       commit_message: body,
     };
-    result = execPrGhJson(
-      apiArgs(repo, `/pulls/${pr}/merge`, ["--method", "PUT", "--input", "-"]),
-      { input: JSON.stringify(payload), stdio: ["pipe", "pipe", "pipe"] },
-      "plain",
-    );
-    requireEvidence(
-      result?.merged === true && OID.test(result.sha ?? ""),
-      "merge response did not confirm acceptance; reconcile the retained intent before any further request",
-    );
+    result = asyncMergeResponse(repo, pr, head, undefined, payload);
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
@@ -720,8 +817,12 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         : String(error.stderr || error.message).trim(),
     );
     if (
-      ["observe", "observe-admission", "checks", "preview"].includes(process.argv[2]) &&
-      (error.coreQuotaExhausted || error.code === "OPENCLAW_REST_UNSUPPORTED")
+      ["observe", "observe-admission", "observe-prior-ci", "checks", "preview"].includes(
+        process.argv[2],
+      ) &&
+      (error.code === "OPENCLAW_REST_MERGED_RECEIPT_UNAVAILABLE" ||
+        (process.argv[2] !== "observe-prior-ci" &&
+          (error.coreQuotaExhausted || error.code === "OPENCLAW_REST_UNSUPPORTED")))
     ) {
       process.stdout.write('{"restUnavailable":true}\n');
     } else {

@@ -82,10 +82,7 @@ function durableDeliveryDigest(params: {
     .digest("hex");
 }
 
-function mediaDeliveryNonces(params: { deliveryQueueId?: string; deliveryPartIndex?: number }): {
-  message?: string;
-  upload?: string;
-} {
+function mediaDeliveryNonces(params: Parameters<typeof durableDeliveryDigest>[0]) {
   const digest = durableDeliveryDigest(params);
   if (!digest) {
     return {};
@@ -96,10 +93,9 @@ function mediaDeliveryNonces(params: { deliveryQueueId?: string; deliveryPartInd
   };
 }
 
-function textDeliveryNonce(params: {
-  deliveryQueueId?: string;
-  deliveryPartIndex?: number;
-}): string | undefined {
+function textDeliveryNonce(
+  params: Parameters<typeof durableDeliveryDigest>[0],
+): string | undefined {
   const digest = durableDeliveryDigest(params);
   return digest ? `openclaw-text:${digest}` : undefined;
 }
@@ -141,26 +137,15 @@ function createOutboundContext(params: {
   assertDirectAdapterHandoff?: () => void;
 }) {
   const account = resolveClickClackAccount({ cfg: params.cfg, accountId: params.accountId });
-  const assertDirectAdapterHandoff = params.assertDirectAdapterHandoff;
-  const fetcher = fetch;
   const client = createClickClackClient({
     baseUrl: account.apiEndpoint,
     token: account.token,
     correlationId: params.correlationId,
-    fetch: assertDirectAdapterHandoff
-      ? (input, init) => {
-          assertDirectAdapterHandoff();
-          return fetcher(input, init);
-        }
-      : undefined,
+    beforeRequest: params.assertDirectAdapterHandoff,
   });
   return { account, client };
 }
 
-/**
- * Sends visible text to a normalized ClickClack target and returns the created
- * message id, or undefined when sanitization removes all content.
- */
 export async function sendClickClackText(params: {
   cfg: CoreConfig;
   accountId?: string | null;
@@ -203,29 +188,17 @@ export async function sendClickClackText(params: {
   return message.id;
 }
 
-export async function sendClickClackMedia(params: {
-  cfg: CoreConfig;
-  accountId?: string | null;
-  to: string;
-  text: string;
-  mediaUrl: string;
-  mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  threadId?: string | number | null;
-  replyToId?: string | number | null;
-  /** Opaque durable intent id used only to derive ClickClack's message nonce. */
-  deliveryQueueId?: string;
-  /** Stable platform-send index within the durable intent. */
-  deliveryPartIndex?: number;
-  /** Records recipient-visible dispatch immediately before message creation. */
-  onPlatformSendDispatch?: () => Promise<void>;
-  assertDirectAdapterHandoff?: () => void;
-  onDeliveryResult?: (result: {
-    messageId: string;
-    receipt: MessageReceipt;
-  }) => Promise<void> | void;
-}): Promise<string> {
+export async function sendClickClackMedia(
+  params: Omit<Parameters<typeof sendClickClackText>[0], "correlationId" | "provenance"> &
+    Pick<OutboundMediaLoadOptions, "mediaAccess" | "mediaReadFile"> & {
+      mediaUrl: string;
+      mediaLocalRoots?: readonly string[];
+      onDeliveryResult?: (result: {
+        messageId: string;
+        receipt: MessageReceipt;
+      }) => Promise<void> | void;
+    },
+): Promise<string> {
   const nonces = mediaDeliveryNonces(params);
   const { account, client } = createOutboundContext(params);
   const maxBytes = Math.min(
@@ -236,14 +209,15 @@ export async function sendClickClackMedia(params: {
     }) ?? CLICKCLACK_MAX_UPLOAD_BYTES,
     CLICKCLACK_MAX_UPLOAD_BYTES,
   );
+  const mediaLoadOptions = {
+    maxBytes,
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
+  };
   const preloadedMedia = nonces.upload
     ? undefined
-    : await loadOutboundMediaFromUrl(params.mediaUrl, {
-        maxBytes,
-        mediaAccess: params.mediaAccess,
-        mediaLocalRoots: params.mediaLocalRoots,
-        mediaReadFile: params.mediaReadFile,
-      });
+    : await loadOutboundMediaFromUrl(params.mediaUrl, mediaLoadOptions);
   const workspaceId = await resolveWorkspaceId(client, account.workspace);
   const persistedUpload = nonces.upload
     ? await client.findUploadByNonce({ workspaceId, nonce: nonces.upload })
@@ -252,13 +226,7 @@ export async function sendClickClackMedia(params: {
   let mediaFilename = preloadedMedia?.fileName?.trim();
   if (!upload) {
     const media =
-      preloadedMedia ??
-      (await loadOutboundMediaFromUrl(params.mediaUrl, {
-        maxBytes,
-        mediaAccess: params.mediaAccess,
-        mediaLocalRoots: params.mediaLocalRoots,
-        mediaReadFile: params.mediaReadFile,
-      }));
+      preloadedMedia ?? (await loadOutboundMediaFromUrl(params.mediaUrl, mediaLoadOptions));
     const contentType = media.contentType?.trim() || "application/octet-stream";
     const filename = media.fileName?.trim() || `attachment${extensionForMime(contentType) ?? ""}`;
     mediaFilename = filename;

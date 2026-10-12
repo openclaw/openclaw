@@ -66,13 +66,13 @@ describe("Claude CLI command progress", () => {
       }
     });
     try {
-      handlers.emitCliToolUseStart({
+      handlers.emitParsedToolUseStart({
         toolCallId: "bash-1",
         name: "Bash",
         kind: "tool_use",
         args: { command: "echo retained" },
       });
-      handlers.emitCliToolResult({
+      handlers.emitParsedToolResult({
         toolCallId: "bash-1",
         name: "Bash",
         isError: false,
@@ -115,13 +115,13 @@ describe("Claude CLI command progress", () => {
         mergeChannelProgressDraftLine([startLine], endLine, { maxLines: 4 })[0]?.detail,
       ).toContain("echo retained");
 
-      handlers.emitCliToolUseStart({
+      handlers.emitParsedToolUseStart({
         toolCallId: "mcp-1",
         name: "mcp__openclaw__exec",
         kind: "mcp_tool_use",
         args: { command: "requested command" },
       });
-      handlers.emitCliToolResult({
+      handlers.emitParsedToolResult({
         toolCallId: "mcp-1",
         name: "mcp__openclaw__exec",
         isError: false,
@@ -141,13 +141,13 @@ describe("Claude CLI command progress", () => {
         ["mcp-gemini-1", "mcp_openclaw_exec", "exec"],
         ["mcp-third-party-1", "mcp_docs_exec", "mcp_docs_exec"],
       ] as const) {
-        handlers.emitCliToolUseStart({
+        handlers.emitParsedToolUseStart({
           toolCallId,
           name,
           kind: "tool_use",
           args: { command: "requested command" },
         });
-        handlers.emitCliToolResult({
+        handlers.emitParsedToolResult({
           toolCallId,
           name,
           isError: false,

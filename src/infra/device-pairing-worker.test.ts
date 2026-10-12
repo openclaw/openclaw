@@ -1,25 +1,36 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
+import {
+  isPairedDeviceTokenIdentityCurrent,
+  resolvePairedDeviceTokenIdentity,
+} from "./device-pairing-identity.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
+import { loadPairedDevicePairingStoreRecordReadOnly } from "./device-pairing-store-readonly.js";
 import {
   persistDevicePairingStoreState,
   readDevicePairingStoreStateFromDatabase,
   type DevicePairingStoreState,
 } from "./device-pairing-store.js";
-import { ensureDeviceToken, verifyDeviceToken } from "./device-pairing-tokens.js";
+import {
+  ensureDeviceToken,
+  rotateDeviceToken,
+  verifyDeviceToken,
+} from "./device-pairing-tokens.js";
 import {
   getPairedDevice,
   getPendingDevicePairing,
   listDevicePairing,
   listDevicePairingReadOnly,
+  requestDevicePairing,
   updatePairedDeviceMetadata,
 } from "./device-pairing.js";
 import * as queries from "./kysely-sync.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 let baseDir: string;
 let database: ReturnType<typeof openOpenClawStateDatabase>;
@@ -159,65 +170,51 @@ test("keeps public list, lookup, and pending bytes while executing no host queri
   }
 });
 
-test.each(["owner", "bootstrap"] as const)(
-  "rolls back %s approval when live policy is revoked before worker commit",
-  async (kind) => {
-    const before = JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db));
-    let allowed = true;
-    let revokeAfterGrant = true;
-    const isApprovalCurrent = () => {
-      if (revokeAfterGrant) {
-        queueMicrotask(() => {
-          allowed = false;
-        });
-      }
-      return allowed;
-    };
-    const approve = () =>
-      kind === "owner"
-        ? approveDevicePairing(
-            "newest",
-            { callerScopes: ["operator.read"], isApprovalCurrent },
-            baseDir,
-          )
-        : approveBootstrapDevicePairing(
-            "newest",
-            { roles: ["operator"], scopes: ["operator.read"] },
-            { isApprovalCurrent },
-            baseDir,
-          );
+test("rolls back owner approval when live policy is revoked before worker commit", async () => {
+  const before = JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db));
+  let allowed = true;
+  let revokeAfterGrant = true;
+  const isApprovalCurrent = () => {
+    if (revokeAfterGrant) {
+      queueMicrotask(() => {
+        allowed = false;
+      });
+    }
+    return allowed;
+  };
+  const approve = () =>
+    approveDevicePairing("newest", { callerScopes: ["operator.read"], isApprovalCurrent }, baseDir);
 
-    await expect(approve()).resolves.toEqual({
-      status: "forbidden",
-      reason: "approval-policy-changed",
-    });
-    expect(JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db))).toBe(before);
-    allowed = true;
-    revokeAfterGrant = false;
-    await expect(approve()).resolves.toMatchObject({
-      status: "approved",
-      requestId: "newest",
-      device: { deviceId: "paired-rich", publicKey: "synthetic-replacement-key" },
-    });
-    expect(await getPendingDevicePairing("newest", baseDir)).toBeNull();
-    expect((await getPairedDevice("paired-rich", baseDir))?.publicKey).toBe(
-      "synthetic-replacement-key",
-    );
-  },
-);
+  await expect(approve()).resolves.toEqual({
+    status: "forbidden",
+    reason: "approval-policy-changed",
+  });
+  expect(JSON.stringify(readDevicePairingStoreStateFromDatabase(database.db))).toBe(before);
+  allowed = true;
+  revokeAfterGrant = false;
+  await expect(approve()).resolves.toMatchObject({
+    status: "approved",
+    requestId: "newest",
+    device: { deviceId: "paired-rich", publicKey: "synthetic-replacement-key" },
+  });
+  expect(await getPendingDevicePairing("newest", baseDir)).toBeNull();
+  expect((await getPairedDevice("paired-rich", baseDir))?.publicKey).toBe(
+    "synthetic-replacement-key",
+  );
+});
 
-test("refreshes cached reads after another connection replaces pairing authority", async () => {
+test("refreshes cached reads after a sibling owner replaces pairing authority", async () => {
   await expect(getPairedDevice("paired-rich", baseDir)).resolves.toMatchObject({
     publicKey: "synthetic-original-key",
   });
   await listDevicePairing(baseDir);
-  const other = new DatabaseSync(database.path);
+  const other = openNodeSqliteDatabase(database.path);
   try {
     other
       .prepare(
         "UPDATE device_pairing_paired SET public_key = ?, display_name = ? WHERE device_id = ?",
       )
-      .run("synthetic-external-key", "External fixture", "paired-rich");
+      .run("synthetic-sibling-key", "Sibling fixture", "paired-rich");
   } finally {
     other.close();
   }
@@ -306,15 +303,15 @@ test("reconnects without replacing paired rows or changing unrelated device fiel
   }
 });
 
-test("reconnect receipts ignore pending rows while invalidating foreign pairing changes", async () => {
+test("reconnect receipts ignore pending rows while invalidating sibling pairing changes", async () => {
   await listDevicePairing(baseDir);
   const previousBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
   expect(previousBinding).not.toBeNull();
-  const other = new DatabaseSync(database.path);
+  const other = openNodeSqliteDatabase(database.path);
   try {
     other
       .prepare("UPDATE device_pairing_paired SET public_key = ? WHERE device_id = ?")
-      .run("synthetic-foreign-key", "paired-rich");
+      .run("synthetic-sibling-key", "paired-rich");
     // A receipt must not decode unrelated pending requests.
     other
       .prepare("UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = ?")
@@ -376,25 +373,13 @@ test.each(["reply lost", "policy revoked", "callback throws"] as const)(
         throw callbackError;
       }
     });
-    const original = stateWorker.runOpenClawStateWorkerOperation;
-    const delivery = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        original(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                const result = await scope.execute(command, executeOptions);
-                if (command.type === "devicePairing.approveBootstrap" && fault === "reply lost") {
-                  throw deliveryError;
-                }
-                return result;
-              },
-            }),
-          options,
-        ),
-      );
+    const delivery = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      const result = await scope.execute(command, executeOptions);
+      if (command.type === "devicePairing.approveBootstrap" && fault === "reply lost") {
+        throw deliveryError;
+      }
+      return result;
+    });
     let allowed = true;
     try {
       const approval = approveBootstrapDevicePairing(
@@ -442,3 +427,36 @@ test.each(["reply lost", "policy revoked", "callback throws"] as const)(
     }
   },
 );
+
+test("rechecks the original operator generation through reopened read-only pairing storage", async () => {
+  const isolatedDir = tempDirs.make("pairing-operator-generation-");
+  const deviceId = "recovery-device";
+  const scopes = ["operator.read"];
+  const { request } = await requestDevicePairing(
+    { deviceId, publicKey: "synthetic-recovery-public-key", role: "operator", scopes },
+    isolatedDir,
+  );
+  await expect(
+    approveDevicePairing(request.requestId, { callerScopes: scopes }, isolatedDir),
+  ).resolves.toMatchObject({ status: "approved" });
+  const isolatedDatabase = openOpenClawStateDatabase({
+    env: { ...process.env, OPENCLAW_STATE_DIR: isolatedDir },
+  });
+  try {
+    const original = await loadPairedDevicePairingStoreRecordReadOnly(deviceId, isolatedDir);
+    const identity = resolvePairedDeviceTokenIdentity(original, "operator");
+    if (!identity) {
+      throw new Error("Original admitted operator token has no generation");
+    }
+    await closeOpenClawStateDatabaseByPathAsync(isolatedDatabase.path);
+    const reopened = await loadPairedDevicePairingStoreRecordReadOnly(deviceId, isolatedDir);
+    expect(isPairedDeviceTokenIdentityCurrent(reopened, "operator", identity, scopes)).toBe(true);
+    await expect(
+      rotateDeviceToken({ deviceId, role: "operator", baseDir: isolatedDir }),
+    ).resolves.toMatchObject({ ok: true });
+    const rotated = await loadPairedDevicePairingStoreRecordReadOnly(deviceId, isolatedDir);
+    expect(isPairedDeviceTokenIdentityCurrent(rotated, "operator", identity, scopes)).toBe(false);
+  } finally {
+    await closeOpenClawStateDatabaseByPathAsync(isolatedDatabase.path);
+  }
+});

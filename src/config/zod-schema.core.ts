@@ -2,14 +2,14 @@ import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
-import type { OpenRouterRouting, VercelGatewayRouting } from "../llm/types.js";
 import { normalizeExactAllowedHost } from "../secrets/exact-hostname.js";
 import { ENV_SECRET_REF_ID_RE, SECRET_PROVIDER_ALIAS_PATTERN } from "../secrets/ref-contract.js";
-import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./model-config-vocabulary.js";
+import { MODEL_APIS } from "./model-config-vocabulary.js";
 import { isBuiltInModelProviderOverlayId } from "./model-provider-overlay-ids.js";
 import { AgentRuntimePolicySchema } from "./zod-schema.agent-entry-base.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { DmConfigSchema } from "./zod-schema.messages.js";
+import { ModelCompatSchema } from "./zod-schema.model-compat.js";
 import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -120,7 +120,6 @@ const EgressProxyExactHostSchema = z
     }
   });
 
-/** Schema for one configured env/file/exec/store secret provider entry. */
 export const SecretProviderSchema = z.union([
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
@@ -128,7 +127,6 @@ export const SecretProviderSchema = z.union([
   SecretsStoreProviderSchema,
 ]);
 
-/** Schema for the top-level `secrets` config block. */
 export const SecretsConfigSchema = z
   .strictObject({
     egressProxy: z
@@ -160,164 +158,6 @@ const ModelApiSchema = z.enum(MODEL_APIS, {
       ? `"${LEGACY_OPENAI_CODEX_RESPONSES_API}" is a removed api id; use "${OPENAI_CHATGPT_RESPONSES_API}"`
       : undefined,
 });
-
-const RoutingPercentileCutoffsSchema = z.strictObject({
-  p50: z.number().optional(),
-  p75: z.number().optional(),
-  p90: z.number().optional(),
-  p99: z.number().optional(),
-});
-
-const OpenRouterRoutingSchema = z.strictObject({
-  allow_fallbacks: z.boolean().optional(),
-  require_parameters: z.boolean().optional(),
-  data_collection: z.enum(["deny", "allow"]).optional(),
-  zdr: z.boolean().optional(),
-  enforce_distillable_text: z.boolean().optional(),
-  order: z.array(z.string()).optional(),
-  only: z.array(z.string()).optional(),
-  ignore: z.array(z.string()).optional(),
-  quantizations: z.array(z.string()).optional(),
-  sort: z
-    .union([
-      z.string(),
-      z.strictObject({
-        by: z.string().optional(),
-        partition: z.string().nullable().optional(),
-      }),
-    ])
-    .optional(),
-  max_price: z
-    .strictObject({
-      prompt: z.union([z.number(), z.string()]).optional(),
-      completion: z.union([z.number(), z.string()]).optional(),
-      image: z.union([z.number(), z.string()]).optional(),
-      audio: z.union([z.number(), z.string()]).optional(),
-      request: z.union([z.number(), z.string()]).optional(),
-    })
-    .optional(),
-  preferred_min_throughput: z.union([z.number(), RoutingPercentileCutoffsSchema]).optional(),
-  preferred_max_latency: z.union([z.number(), RoutingPercentileCutoffsSchema]).optional(),
-} satisfies Record<keyof OpenRouterRouting, z.ZodType>);
-
-const VercelGatewayRoutingSchema = z.strictObject({
-  only: z.array(z.string()).optional(),
-  order: z.array(z.string()).optional(),
-} satisfies Record<keyof VercelGatewayRouting, z.ZodType>);
-
-const ModelCompatSchema = z
-  .strictObject({
-    /** Whether the provider supports the `store` field. Default: auto-detected from URL. */
-    supportsStore: z.boolean().optional(),
-    /** Whether provider accepts prompt-cache/session affinity keys. */
-    supportsPromptCacheKey: z.boolean().optional(),
-    /** Opts this model into stored HTTP continuation on a verified compatible endpoint. */
-    supportsResponsesContinuation: z.boolean().optional(),
-    /** Whether the provider supports the `developer` role (vs `system`). Default: auto-detected from URL. */
-    supportsDeveloperRole: z.boolean().optional(),
-    /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
-    supportsReasoningEffort: z.boolean().optional(),
-    /** Whether the model accepts the `temperature` parameter. Default: true. */
-    supportsTemperature: z.boolean().optional(),
-    /**
-     * Whether the provider honors top-level `instructions`. Defaults to true only for verified
-     * native routes (OpenAI, xAI); every other route defaults to false and embeds the system
-     * prompt in `input` unless set true here after verifying against that endpoint.
-     */
-    supportsInstructions: z.boolean().optional(),
-    /**
-     * Whether the provider supports `stream_options: { include_usage: true }` for token usage in
-     * streaming responses. Default: true.
-     */
-    supportsUsageInStreaming: z.boolean().optional(),
-    /** Whether this model supports tool/function calling. */
-    supportsTools: z.boolean().optional(),
-    /** Code-mode tier consumed by `tools.codeMode.enabled: "auto"`; absent means "capable". */
-    codeMode: z.enum(["preferred", "capable"]).optional(),
-    /** Whether the provider supports the `strict` field in tool definitions. Default: true. */
-    supportsStrictMode: z.boolean().optional(),
-    /**
-     * Whether the provider supports JSON Schema through `response_format`. Default: false for
-     * unknown compatible endpoints.
-     */
-    supportsJsonSchemaResponseFormat: z.boolean().optional(),
-    /** Whether all message parts must be coerced to plain strings. */
-    requiresStringContent: z.boolean().optional(),
-    /** Whether unknown message payload keys must be stripped before requests. */
-    strictMessageKeys: z.boolean().optional(),
-    /** Reasoning detail block types safe to expose in visible transcripts. */
-    visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
-    /** Provider-accepted reasoning effort labels. */
-    supportedReasoningEfforts: z.array(z.string().min(1)).optional(),
-    /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
-    reasoningEffortMap: z.record(z.string().min(1), z.string().min(1)).optional(),
-    /** Which field to use for max tokens. Default: auto-detected from URL. */
-    maxTokensField: z
-      .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
-      .optional(),
-    /** Reasoning/thinking payload dialect for provider-compatible APIs. */
-    thinkingFormat: z.enum(MODEL_THINKING_FORMATS).optional(),
-    /** Whether tool results require the `name` field. Default: auto-detected from URL. */
-    requiresToolResultName: z.boolean().optional(),
-    /**
-     * Whether a user message after tool results requires an assistant message in between. Default:
-     * auto-detected from URL.
-     */
-    requiresAssistantAfterToolResult: z.boolean().optional(),
-    /**
-     * Whether thinking blocks must be converted to text blocks with <thinking> delimiters.
-     * Default: auto-detected from URL.
-     */
-    requiresThinkingAsText: z.boolean().optional(),
-    /**
-     * Whether all replayed assistant messages must include an empty reasoning_content field when
-     * reasoning is enabled. Default: auto-detected from URL.
-     */
-    requiresReasoningContentOnAssistantMessages: z.boolean().optional(),
-    /** Named tool-schema profile used by provider adapters. */
-    toolSchemaProfile: z.string().optional(),
-    /** JSON Schema keywords rejected by this provider's tool schema validator. */
-    unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
-    /** Encoding expected for tool-call arguments in provider payloads. */
-    toolCallArgumentsEncoding: z.string().optional(),
-    /** Whether OpenAI-style calls must be reshaped to Anthropic-compatible tool payloads. */
-    requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
-    /** OpenRouter-specific routing preferences. Only used when baseUrl points to OpenRouter. */
-    openRouterRouting: OpenRouterRoutingSchema.optional(),
-    /** Vercel AI Gateway routing preferences. Only used when baseUrl points to Vercel AI Gateway. */
-    vercelGatewayRouting: VercelGatewayRoutingSchema.optional(),
-    /** Whether z.ai supports top-level `tool_stream: true` for streaming tool call deltas. Default: false. */
-    zaiToolStream: z.boolean().optional(),
-    /**
-     * Cache control convention for prompt caching. "anthropic" applies Anthropic-style
-     * `cache_control` markers to the system prompt, last tool definition, and last user/assistant
-     * text content.
-     */
-    cacheControlFormat: z.literal("anthropic").optional(),
-    /**
-     * Whether to send known session-affinity headers (`session_id`, `x-client-request-id`,
-     * `x-session-affinity`) from `options.sessionId` when caching is enabled. Default: false.
-     */
-    sendSessionAffinityHeaders: z.boolean().optional(),
-    /**
-     * Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when
-     * caching is enabled. Default: true.
-     */
-    sendSessionIdHeader: z.boolean().optional(),
-    /**
-     * Whether the provider accepts per-tool `eager_input_streaming`. When false, the Anthropic
-     * provider omits `tools[].eager_input_streaming` and sends the legacy
-     * `fine-grained-tool-streaming-2025-05-14` beta header for tool-enabled requests. Default:
-     * true.
-     */
-    supportsEagerToolInputStreaming: z.boolean().optional(),
-    /**
-     * Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"`
-     * or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true.
-     */
-    supportsLongCacheRetention: z.boolean().optional(),
-  })
-  .optional();
 
 const ConfiguredProviderRequestTlsSchema = z
   .strictObject({
@@ -406,7 +246,6 @@ const ThinkingLevelMapSchema = z.strictObject({
 const ModelDefinitionSchema = z.strictObject({
   /** Provider-facing model id. */
   id: z.string().min(1),
-  /** Human-readable display name. */
   name: z.string().min(1),
   /** Optional API adapter override for this model. */
   api: ModelApiSchema.optional(),
@@ -466,13 +305,11 @@ const ModelProviderLocalServiceSchema = z
     command: z.string().min(1),
     /** Arguments passed without shell expansion. */
     args: z.array(z.string()).optional(),
-    /** Working directory for the local service process. */
     cwd: z.string().min(1).optional(),
     /** Environment variables added to the service process. */
     env: z.record(z.string(), z.string().register(sensitive)).optional(),
     /** Optional health endpoint polled before the provider is considered ready. */
     healthUrl: z.string().min(1).optional(),
-    /** Startup readiness timeout in milliseconds. */
     readyTimeoutMs: z.number().int().positive().optional(),
     /** Idle timeout in milliseconds before stopping the local service. */
     idleStopMs: z.number().int().nonnegative().optional(),
@@ -493,7 +330,6 @@ const ModelProviderSchema = z.strictObject({
   api: ModelApiSchema.optional(),
   /** Provider-level default max output tokens. */
   maxTokens: z.number().positive().optional(),
-  /** Provider request timeout in seconds. */
   timeoutSeconds: z.number().int().positive().optional(),
   /** Optional provider deployment/API region used by provider plugins that expose regional endpoints. */
   region: z.string().min(1).optional(),
@@ -569,7 +405,6 @@ export const ModelsConfigSchema = z
     /** Merge provider config with bundled catalogs or replace bundled catalogs entirely. */
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: ModelProvidersSchema.optional(),
-    /** Hosted model catalog refresh settings. */
     catalogRefresh: ModelCatalogRefreshConfigSchema,
   })
   .optional();
@@ -639,11 +474,9 @@ export const BlockStreamingChunkSchema = z.strictObject({
     .optional(),
 });
 
-const MarkdownTableModeSchema = z.enum(["off", "bullets", "code", "block"]);
-
 export const MarkdownConfigSchema = z
   .strictObject({
-    tables: MarkdownTableModeSchema.optional(),
+    tables: z.enum(["off", "bullets", "code", "block"]).optional(),
   })
   .optional();
 
@@ -776,20 +609,14 @@ const MediaUnderstandingAttachmentsSchema = z
     mode: z.union([z.literal("first"), z.literal("all")]).optional(),
     /** Max number of attachments to process (default: 1). */
     maxAttachments: z.number().int().positive().optional(),
-    /** Attachment ordering preference. */
     prefer: z
       .union([z.literal("first"), z.literal("last"), z.literal("path"), z.literal("url")])
       .optional(),
   })
   .optional();
 
-const MediaUnderstandingCapabilitiesSchema = z
-  .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
-  .optional();
-
-const ProviderOptionValueSchema = z.union([z.string(), z.number(), z.boolean()]);
 const ProviderOptionsSchema = z
-  .record(z.string(), z.record(z.string(), ProviderOptionValueSchema))
+  .record(z.string(), z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])))
   .optional();
 
 const MediaUnderstandingRuntimeFields = {
@@ -816,7 +643,9 @@ const MediaUnderstandingModelSchema = z
     /** Model id for provider-based understanding. */
     model: z.string().optional(),
     /** Optional capability tags for shared model lists. */
-    capabilities: MediaUnderstandingCapabilitiesSchema,
+    capabilities: z
+      .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
+      .optional(),
     /** Use a CLI command instead of provider API. */
     type: z.union([z.literal("provider"), z.literal("cli")]).optional(),
     /** CLI binary (required when type=cli). */
@@ -825,7 +654,6 @@ const MediaUnderstandingModelSchema = z
     args: z.array(z.string()).optional(),
     /** Optional max output characters for this model entry. */
     maxChars: z.number().int().positive().optional(),
-    /** Optional max bytes for this model entry. */
     maxBytes: z.number().int().positive().optional(),
     ...MediaUnderstandingRuntimeFields,
     /** Auth profile id to use for this provider. */
@@ -848,7 +676,6 @@ const ToolsMediaCapabilitySchema = z
     /** Default max output characters. */
     maxChars: z.number().int().positive().optional(),
     ...MediaUnderstandingRuntimeFields,
-    /** Attachment selection policy. */
     attachments: MediaUnderstandingAttachmentsSchema,
   })
   .optional();

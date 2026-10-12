@@ -41,39 +41,37 @@ async function settle() {
 }
 
 describe("Control UI presence activity", () => {
-  it("reports the first foreground ready visit once per document, not reconnect or remount", async () => {
-    const store = setup();
-    const first = store.current();
-    expect(first.request).not.toHaveBeenCalled();
-    store.ready();
-    await settle();
-    expect(first.request).toHaveBeenCalledExactlyOnceWith("presence.activity", {});
-    store.gateway.connect();
-    store.current().request.mockResolvedValue({ ok: true });
-    store.ready();
-    expect(store.current().request).not.toHaveBeenCalled();
-    store.stop();
-    disposers.push(startGatewayPresenceActivity(store.gateway, store.target));
-    expect(store.current().request).not.toHaveBeenCalled();
-  });
-
-  it("does not convert hidden initial ready, visibility recovery, events or synthetic scrolling into activity", async () => {
-    const store = setup("hidden");
-    store.ready();
-    store.input("keydown");
-    store.visible.mockReturnValue("visible");
-    store.target.dispatchEvent(new Event("visibilitychange"));
-    store.target.dispatchEvent(new Event("scroll"));
-    store.input("pointerdown", false);
-    store
-      .current()
-      .opts.onEvent?.({ type: "event", event: "chat", payload: { text: "agent output" } });
-    store.current().opts.onEvent?.({ type: "event", event: "tick" });
-    expect(store.current().request).not.toHaveBeenCalled();
-    store.input("wheel");
-    await settle();
-    expect(store.current().request).toHaveBeenCalledExactlyOnceWith("presence.activity", {});
-  });
+  it.each(["visible", "hidden"] as const)(
+    "reports one genuine visit per initially %s document",
+    async (visibility) => {
+      const store = setup(visibility);
+      const first = store.current();
+      expect(first.request).not.toHaveBeenCalled();
+      store.ready();
+      if (visibility === "hidden") {
+        store.input("keydown");
+        store.visible.mockReturnValue("visible");
+        store.target.dispatchEvent(new Event("visibilitychange"));
+        store.target.dispatchEvent(new Event("scroll"));
+        store.input("pointerdown", false);
+        store
+          .current()
+          .opts.onEvent?.({ type: "event", event: "chat", payload: { text: "agent output" } });
+        store.current().opts.onEvent?.({ type: "event", event: "tick" });
+        expect(first.request).not.toHaveBeenCalled();
+        store.input("wheel");
+      }
+      await settle();
+      expect(first.request).toHaveBeenCalledExactlyOnceWith("presence.activity", {});
+      store.gateway.connect();
+      store.current().request.mockResolvedValue({ ok: true });
+      store.ready();
+      expect(store.current().request).not.toHaveBeenCalled();
+      store.stop();
+      disposers.push(startGatewayPresenceActivity(store.gateway, store.target));
+      expect(store.current().request).not.toHaveBeenCalled();
+    },
+  );
 
   it("throttles continuous trusted input and reports immediately after idle without trailing work", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);

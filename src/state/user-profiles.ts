@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sql } from "kysely";
-import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import {
@@ -16,7 +15,6 @@ import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
 import {
   assertGitHubEmailIdentityBinding,
   githubAuthenticationSubject,
-  selectUserProfileGitHubIdentities,
 } from "./user-profile-github-identity.js";
 import { publishUserProfilesChange } from "./user-profile-list.js";
 import {
@@ -28,9 +26,7 @@ import {
   requireResolvedUserProfileMetadataById,
   selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
-  selectUserProfileEmails,
   toUserProfile,
-  userProfileAvatarPresence,
   userProfilesDb,
 } from "./user-profiles-internal.js";
 import {
@@ -40,7 +36,6 @@ import {
 import {
   ensureUserProfileRoleSchema,
   ensureUserProfilesSchema,
-  hasEnsuredUserProfileRoleSchema,
   UserProfileNotFoundError,
 } from "./user-profiles-schema.js";
 import {
@@ -66,38 +61,6 @@ export function normalizeInitialDisplayName(name: string | null | undefined): st
   return normalized ? truncateUtf16Safe(normalized, MAX_USER_PROFILE_DISPLAY_NAME_LENGTH) : null;
 }
 
-export function selectUserProfileListItemById(
-  db: DatabaseSync,
-  profileId: string,
-): UserProfileListItem {
-  const kysely = userProfilesDb(db);
-  const profile = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("user_profiles")
-      .select([
-        "id",
-        "display_name",
-        "avatar_mime",
-        "merged_into",
-        ...(hasEnsuredUserProfileRoleSchema(db) ? (["role"] as const) : []),
-        "created_at",
-        "updated_at",
-        userProfileAvatarPresence,
-      ])
-      .where("id", "=", profileId),
-  );
-  if (!profile) {
-    throw new UserProfileNotFoundError(profileId);
-  }
-  return {
-    ...toUserProfile(profile),
-    emails: selectUserProfileEmails(db, profileId),
-    githubIdentity: selectUserProfileGitHubIdentities(db, [profileId]).get(profileId) ?? null,
-    hasAvatar: profile.has_avatar === 1,
-  };
-}
-
 /** Resolves a durable profile reference to its current one-hop merge head. */
 export function resolveUserProfileId(
   profileId: string,
@@ -106,18 +69,6 @@ export function resolveUserProfileId(
   ensureUserProfilesSchema(options);
   const { db } = openOpenClawStateDatabase(options);
   return selectResolvedUserProfileMetadataById(db, profileId)?.id;
-}
-
-/** Reads a profile's protocol-facing representation through its merge head. */
-export function getUserProfileListItem(
-  profileId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): UserProfileListItem {
-  const database = openOpenClawStateDatabase(options);
-  ensureUserProfilesSchema(options, database);
-  const { db } = database;
-  const profile = requireResolvedUserProfileMetadataById(db, profileId);
-  return selectUserProfileListItemById(db, profile.id);
 }
 
 /** Reads the role assigned to an existing profile's current merge head. */

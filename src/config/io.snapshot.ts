@@ -14,13 +14,10 @@ import {
 } from "./agent-roster-provenance.js";
 import { captureConfigReadEnvMutation, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
+import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
 import { ConfigIncludeError, ConfigIncludeReadError } from "./includes.js";
 import { createConfigIoContext, type ConfigIoContext } from "./io.context.js";
-import {
-  createConfigReadError,
-  formatInvalidConfigDetails,
-  isConfigReadFailure,
-} from "./io.invalid-config.js";
+import { createConfigReadError, isConfigReadFailure } from "./io.invalid-config.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   prepareSuspiciousConfigRead,
@@ -62,7 +59,7 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
-import { findLegacyConfigIssues, migratePersistedImplicitMainRoster } from "./legacy.js";
+import { findLegacyConfigIssues } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { captureManagedConfigSnapshotPreparation } from "./runtime-snapshot.js";
@@ -82,10 +79,6 @@ type InternalReadOptions = {
     current: OpenClawConfig,
   ) => boolean | Promise<boolean>;
 };
-
-function listResolvedIncludePaths(includeFilePathsForWatch: ReadonlySet<string>): string[] {
-  return [...includeFilePathsForWatch].toSorted();
-}
 
 export async function readConfigFileSnapshotInternal(
   context: ConfigIoContext,
@@ -135,10 +128,15 @@ async function readConfigSnapshotWithPreparation(
     issue: ConfigFileSnapshot["issues"][number],
     runtimeConfig: OpenClawConfig = fallbackSourceConfig,
     readError?: ConfigFileSnapshot["readError"],
-  ) =>
-    createConfigFileSnapshot({
+    cause?: unknown,
+  ) => {
+    if (cause !== undefined) {
+      // Keep the original stack in process without exposing it in config RPC/JSON diagnostics.
+      Object.defineProperty(issue, "cause", { value: cause });
+    }
+    return createConfigFileSnapshot({
       path: configPath,
-      includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
+      includedPaths: [...includeFilePathsForWatch].toSorted(),
       exists: true,
       raw: fallbackRaw,
       parsed: fallbackParsed,
@@ -151,6 +149,7 @@ async function readConfigSnapshotWithPreparation(
       warnings: [],
       legacyIssues: [],
     });
+  };
 
   try {
     const raw = await deps.measure(
@@ -158,8 +157,7 @@ async function readConfigSnapshotWithPreparation(
       () => sourceRaw ?? readConfigFileIfPresent(deps, configPath),
     );
     if (raw === undefined) {
-      const migrated = migratePersistedImplicitMainRoster({});
-      const config = coerceConfig(migrated.config);
+      const config = coerceConfig(applyImplicitAgentRosterDefaults({}));
       const metadata = context.createValidationPluginMetadataSnapshotLoader({
         env: deps.env,
         allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
@@ -234,7 +232,7 @@ async function readConfigSnapshotWithPreparation(
       const message =
         error instanceof ConfigIncludeError
           ? error.message
-          : `Include resolution failed: ${String(error)}`;
+          : `Include resolution failed at ${configPath}: ${String(error)}`;
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: invalidSourceSnapshot(
           {
@@ -246,6 +244,8 @@ async function readConfigSnapshotWithPreparation(
             message,
           },
           coerceConfig(effectiveParsed),
+          undefined,
+          error,
         ),
         includeFileHashesForWrite,
         includeFileTargetsForWrite,
@@ -267,14 +267,7 @@ async function readConfigSnapshotWithPreparation(
       path: warning.configPath,
       message: `Missing env var "${warning.varName}" - feature using this value will be unavailable`,
     }));
-    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw, {
-      env: deps.env,
-      homedir: deps.homedir,
-    });
-    envVarWarnings.push(
-      ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
-    );
-    const effectiveConfigRaw = rosterMigration.config;
+    const effectiveConfigRaw = applyImplicitAgentRosterDefaults(readResolution.resolvedConfigRaw);
     // The write revision covers every authored input, without hashing runtime defaults or env.
     const snapshotHash = hashConfigRevision(
       raw,
@@ -319,7 +312,7 @@ async function readConfigSnapshotWithPreparation(
     );
     const snapshotSource = () => ({
       path: configPath,
-      includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
+      includedPaths: [...includeFilePathsForWatch].toSorted(),
       exists: true,
       raw,
       parsed: effectiveParsed,
@@ -458,7 +451,7 @@ async function readConfigSnapshotWithPreparation(
       const uid = process.getuid?.();
       const uidHint = typeof uid === "number" ? String(uid) : "$(id -u)";
       message = [
-        `read failed: ${String(error)}`,
+        `read failed at ${configPath}: ${String(error)}`,
         "",
         "Config file is not readable by the current process. If running in a container",
         "or 1-click deployment, fix ownership with:",
@@ -467,7 +460,7 @@ async function readConfigSnapshotWithPreparation(
       ].join("\n");
       deps.logger.error(message);
     } else {
-      message = `read failed: ${String(error)}`;
+      message = `read failed at ${configPath}: ${String(error)}`;
     }
     return await finalizeReadConfigSnapshotInternalResult(deps, {
       snapshot: invalidSourceSnapshot(
@@ -475,6 +468,7 @@ async function readConfigSnapshotWithPreparation(
         fallbackSourceConfig,
         // Diagnostic classification must not broaden readError's unavailable-source write guard.
         fallbackRaw === null ? { code: nodeError?.code ?? null } : undefined,
+        error,
       ),
       envSnapshotForRestore: fallbackEnvSnapshotForRestore,
       includeFileHashesForWrite,
@@ -529,7 +523,7 @@ export async function prepareConfigRecoveryFromContext(
         plan.candidate.raw,
       );
       if (isConfigReadFailure(snapshot)) {
-        throw createConfigReadError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
+        throw createConfigReadError(snapshot);
       }
       return snapshot.valid ? { snapshot, pluginMetadataSnapshot, apply: plan.apply } : null;
     } finally {
@@ -644,22 +638,14 @@ export async function readBestEffortConfigSnapshotFromContext(
   context: ConfigIoContext,
 ): Promise<BestEffortConfigSnapshot> {
   const operation = async () => {
-    const result = await readConfigFileSnapshotInternal(context);
-    if (!result.snapshot.valid) {
-      return {
-        config: result.snapshot.config,
-        sourceConfig: result.snapshot.sourceConfig,
-        configDiagnostics: {
-          path: result.snapshot.path,
-          issues: result.snapshot.issues,
-        },
-      };
-    }
+    const { snapshot } = await readConfigFileSnapshotInternal(context);
     return {
       // The snapshot already materialized under the caller's plugin-validation policy.
-      config: context.finalizeLoadedRuntimeConfig(result.snapshot.config),
-      sourceConfig: result.snapshot.sourceConfig,
-      configDiagnostics: null,
+      config: snapshot.valid
+        ? context.finalizeLoadedRuntimeConfig(snapshot.config)
+        : snapshot.config,
+      sourceConfig: snapshot.sourceConfig,
+      configDiagnostics: snapshot.valid ? null : { path: snapshot.path, issues: snapshot.issues },
     };
   };
   // Unobserved CLI reads resolve plugin metadata before command-specific admission.

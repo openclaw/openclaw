@@ -3,6 +3,7 @@
 // dispatcher) and passes its timeout abort signal via init.signal, so a
 // never-resolving signal-honoring stub plus fake timers exercises the real
 // abort path with no live sockets or wall-clock bounds to flake on loaded CI.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listInworldVoices } from "./tts.js";
 

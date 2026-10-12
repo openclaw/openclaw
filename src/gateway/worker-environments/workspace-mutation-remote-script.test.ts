@@ -4,7 +4,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { waitForChildClose, waitForDead, waitForFile } from "../../../test/helpers/process-wait.js";
+import { waitForDead, waitForFile } from "../../../test/helpers/process-wait.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -21,6 +21,7 @@ import {
 } from "./workspace-sync-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const RECEIVER_CLEANUP_MS = 10_000;
 
 function spawnTransaction(argv: string[], env: NodeJS.ProcessEnv) {
   const child = spawn(process.execPath, argv, { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -29,11 +30,14 @@ function spawnTransaction(argv: string[], env: NodeJS.ProcessEnv) {
   child.stderr.on("data", (chunk: string) => {
     stderr += chunk;
   });
-  const exited = waitForChildClose(child, 10_000).then(({ code, signal }) => ({
-    code,
-    signal,
-    stderr,
-  }));
+  const closed = createDeferred<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    stderr: string;
+  }>();
+  // Capture close at spawn so teardown can still join it after the test aborts.
+  child.once("close", (code, signal) => closed.resolve({ code, signal, stderr }));
+  const exited = closed.promise;
   return { pid: child.pid, exited };
 }
 
@@ -76,7 +80,7 @@ function parseReceiverOwner(name: string) {
 describe("remote workspace mutation receiver script", () => {
   it.skipIf(process.platform === "win32")(
     "keeps receiver ownership after its controller dies while a descendant can still mutate",
-    async () => {
+    async ({ signal }) => {
       const root = tempDirs.make("openclaw-workspace-receiver-lock-");
       let home = path.join(root, "home");
       const bin = path.join(root, "bin");
@@ -157,7 +161,7 @@ process.kill = function(pid, signal) {
       let gateReleased = false;
       let reset: ReturnType<typeof runCommandWithTimeout> | undefined;
       try {
-        await waitForFile(receiverMarker, 10_000);
+        await waitForFile(receiverMarker, signal);
         receiverGateReady = true;
         const workspaceKey = createHash("sha256").update(workspace).digest("hex");
         const lock = path.join(path.dirname(workspace), `.openclaw-accepted-lock-${workspaceKey}`);
@@ -165,9 +169,13 @@ process.kill = function(pid, signal) {
         const { receiverPid, controllerPid } = parseReceiverOwner(ownerName!);
         expect(Number.isSafeInteger(receiverPid)).toBe(true);
         expect(controllerPid).toBe(receiver.pid);
-        await waitForDead(receiverPid, 10_000);
+        await waitForDead(receiverPid, signal);
         process.kill(controllerPid, "SIGKILL");
-        expect(await receiver.exited).toMatchObject({ code: null, signal: "SIGKILL", stderr: "" });
+        expect(await withinTest(receiver.exited, signal)).toMatchObject({
+          code: null,
+          signal: "SIGKILL",
+          stderr: "",
+        });
 
         reset = runCommandWithTimeout(
           [
@@ -183,7 +191,7 @@ process.kill = function(pid, signal) {
           ],
           { timeoutMs: 10_000, baseEnv: env },
         );
-        await waitForFile(contenderMarker, 10_000);
+        await waitForFile(contenderMarker, signal);
         await expect(fs.readFile(path.join(workspace, "current.txt"), "utf8")).resolves.toBe(
           "current\n",
         );
@@ -210,7 +218,10 @@ process.kill = function(pid, signal) {
         } else if (!gateReleased && receiver.pid !== undefined) {
           process.kill(receiver.pid, "SIGKILL");
         }
-        await receiver.exited.catch(() => undefined);
+        // Cleanup hang guard after release or SIGKILL, not a readiness race.
+        await withinTest(receiver.exited, AbortSignal.timeout(RECEIVER_CLEANUP_MS)).catch(
+          () => undefined,
+        );
         await reset?.catch(() => undefined);
       }
     },

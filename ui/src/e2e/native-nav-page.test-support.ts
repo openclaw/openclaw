@@ -84,9 +84,9 @@ export function createNativeNavPageOpener(suite: ReturnType<typeof createControl
       waitUntil: options.beforeNavigate ? "domcontentloaded" : "load",
     });
     expect(response?.status()).toBe(200);
-    // The brand row only becomes visible on desktop widths; drawer widths keep
+    // The rail only becomes visible on desktop widths; drawer widths keep
     // the sidebar hidden, so wait for DOM attachment instead of visibility.
-    await page.locator(options.readySelector ?? ".sidebar-brand").waitFor({ state: "attached" });
+    await page.locator(options.readySelector ?? ".sidebar-rail").waitFor({ state: "attached" });
     if (options.scenario) {
       await gateway.waitForRequest("sessions.list");
     }

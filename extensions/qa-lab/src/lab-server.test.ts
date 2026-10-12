@@ -4,9 +4,17 @@ import { createServer, request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeQaLabSuiteResultFixture } from "./lab-server-suite.test-support.js";
 import { resolveUiAssetVersion } from "./lab-server-ui.js";
 import { startQaLabServer, type QaLabServerStartParams } from "./lab-server.js";
+import * as suiteSummary from "./suite-summary.js";
 
 const qaChannelMock = vi.hoisted(() => ({
   resolveAccount: vi.fn(),
@@ -56,6 +64,13 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
 }));
 
 const cleanups: Array<() => Promise<void>> = [];
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 async function makeTempDir(prefix: string) {
   const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
@@ -175,29 +190,6 @@ async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
   return catalog;
 }
 
-async function waitForFileContent(filePath: string, expected: string, timeoutMs = 5_000) {
-  let content: string | undefined;
-  await vi.waitFor(
-    async () => {
-      try {
-        content = await readFile(filePath, "utf8");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-          throw error;
-        }
-      }
-      if (content !== expected) {
-        throw new Error(`file did not reach expected content: ${filePath}`);
-      }
-    },
-    { interval: 1, timeout: timeoutMs },
-  );
-  if (content === undefined) {
-    throw new Error(`file did not reach expected content: ${filePath}`);
-  }
-  return content;
-}
-
 async function expectFileMissing(filePath: string): Promise<void> {
   try {
     await readFile(filePath, "utf8");
@@ -240,60 +232,6 @@ async function createQaLabRepoRootFixture(params?: {
     "utf8",
   );
   return repoRoot;
-}
-
-type QaLabSuiteScenarioFixture = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  steps: unknown[];
-  details?: string;
-};
-
-async function createQaLabSuiteResultFixture(params?: {
-  scenarios?: QaLabSuiteScenarioFixture[];
-  watchUrl?: string;
-}) {
-  const outputDir = await makeTempDir("qa-lab-suite-result-");
-  const scenarios = params?.scenarios ?? [
-    { name: "Channel chat baseline", status: "pass" as const, steps: [] },
-  ];
-  const report = "# QA report\n";
-  const evidencePath = path.join(outputDir, "qa-evidence.json");
-  const reportPath = path.join(outputDir, "qa-suite-report.md");
-  const summaryPath = path.join(outputDir, "qa-suite-summary.json");
-  await Promise.all([
-    writeFile(
-      evidencePath,
-      JSON.stringify({
-        entries: scenarios.map((scenario) => ({ result: { status: scenario.status } })),
-      }),
-      "utf8",
-    ),
-    writeFile(reportPath, report, "utf8"),
-    writeFile(
-      summaryPath,
-      JSON.stringify({
-        run: { status: "completed" },
-        counts: {
-          total: scenarios.length,
-          passed: scenarios.filter((scenario) => scenario.status === "pass").length,
-          failed: scenarios.filter((scenario) => scenario.status === "fail").length,
-          skipped: scenarios.filter((scenario) => scenario.status === "skip").length,
-        },
-        scenarios,
-      }),
-      "utf8",
-    ),
-  ]);
-  return {
-    evidencePath,
-    outputDir,
-    report,
-    reportPath,
-    scenarios,
-    summaryPath,
-    ...(params?.watchUrl ? { watchUrl: params.watchUrl } : {}),
-  };
 }
 
 async function writeEvidenceFixture(
@@ -370,7 +308,7 @@ describe("qa-lab server", () => {
       executionKind: "suite",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture(),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-")),
     });
 
     const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
@@ -448,7 +386,7 @@ describe("qa-lab server", () => {
     async ({ status }) => {
       const lab = await startQaLabServerForTest();
       cleanups.push(lab.stop);
-      const result = await createQaLabSuiteResultFixture({
+      const result = await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
         scenarios: [{ name: "Channel chat baseline", status, steps: [] }],
       });
       suiteLaunchMock.runQaSuite.mockResolvedValue({
@@ -516,7 +454,7 @@ describe("qa-lab server", () => {
     async (invalidResult) => {
       const lab = await startQaLabServerForTest();
       cleanups.push(lab.stop);
-      const result = await createQaLabSuiteResultFixture();
+      const result = await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"));
       await writeFile(result.summaryPath, invalidResult.summary, "utf8");
       suiteLaunchMock.runQaSuite.mockResolvedValue({
         executionKind: "flow",
@@ -546,7 +484,7 @@ describe("qa-lab server", () => {
   it("keeps implicit suites green for catalog-verified report-only optional skips", async () => {
     const lab = await startQaLabServerForTest();
     cleanups.push(lab.stop);
-    const result = await createQaLabSuiteResultFixture({
+    const result = await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
       scenarios: [
         { name: "Channel chat baseline", status: "pass", steps: [] },
         {
@@ -587,7 +525,9 @@ describe("qa-lab server", () => {
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture({ watchUrl: "http://runtime-watch.invalid" }),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
+        watchUrl: "http://runtime-watch.invalid",
+      }),
     });
 
     const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
@@ -623,7 +563,7 @@ describe("qa-lab server", () => {
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture(),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-")),
     });
 
     const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
@@ -661,7 +601,17 @@ describe("qa-lab server", () => {
     );
   });
 
-  it("allows only one concurrent request to commit a resolved suite plan", async () => {
+  it("allows only one concurrent request to commit a resolved suite plan", async ({ signal }) => {
+    const summaryValidated = Promise.withResolvers<number>();
+    const readSummary = suiteSummary.readQaSuiteFailedOrSkippedScenarioCountFromFile;
+    using _ = vi
+      .spyOn(suiteSummary, "readQaSuiteFailedOrSkippedScenarioCountFromFile")
+      .mockImplementation((...args) => {
+        const validation = readSummary(...args);
+        // Returning the same promise lets the server publish status before this test resumes.
+        void validation.then(summaryValidated.resolve, summaryValidated.reject);
+        return validation;
+      });
     const lab = await startQaLabServerForTest();
     cleanups.push(lab.stop);
     let finishSuite: ((value: unknown) => void) | undefined;
@@ -688,14 +638,13 @@ describe("qa-lab server", () => {
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture(),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-")),
     });
-    await vi.waitFor(async () => {
-      const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
-        runner: { status: string };
-      };
-      expect(bootstrap.runner.status).toBe("completed");
-    });
+    await withinTest(summaryValidated.promise, signal);
+    const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
+      runner: { status: string };
+    };
+    expect(bootstrap.runner.status).toBe("completed");
   });
 
   it("rejects empty and unknown explicit selections before dispatch", async () => {
@@ -716,7 +665,9 @@ describe("qa-lab server", () => {
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture({ watchUrl: lab.baseUrl }),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
+        watchUrl: lab.baseUrl,
+      }),
     });
 
     const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
@@ -1437,22 +1388,25 @@ describe("qa-lab server", () => {
     expect(await readFile(markerPath, "utf8")).toContain("models list --all --json");
   });
 
-  it("aborts an in-flight runner model catalog when the lab stops", async () => {
+  it("aborts an in-flight runner model catalog when the lab stops", async ({ signal }) => {
     const repoRoot = await makeTempDir("qa-lab-abort-catalog-");
     const markerPath = path.join(repoRoot, "runner-catalog-started.txt");
     const stoppedPath = path.join(repoRoot, "runner-catalog-stopped.txt");
 
     await mkdir(path.join(repoRoot, "dist"), { recursive: true });
     await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
+    await writeFile(path.join(repoRoot, "dist/package.json"), '{"type":"module"}');
     await writeFile(
       path.join(repoRoot, "dist/index.js"),
       [
-        'const fs = require("node:fs");',
+        'import fs from "node:fs";',
+        fixtureReceiptClientSource(receipts.endpoint),
         "process.on('SIGTERM', () => {",
         `  fs.writeFileSync(${JSON.stringify(stoppedPath)}, "terminated", "utf8");`,
         "  process.exit(0);",
         "});",
         `fs.writeFileSync(${JSON.stringify(markerPath)}, process.env.OPENCLAW_CODEX_DISCOVERY_LIVE || "", "utf8");`,
+        `sendReceipt(${JSON.stringify(markerPath)}, "started");`,
         "setInterval(() => {}, 1000);",
       ].join("\n"),
       "utf8",
@@ -1477,12 +1431,14 @@ describe("qa-lab server", () => {
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(bootstrapResponse.status).toBe(200);
-    expect(await waitForFileContent(markerPath, "0")).toBe("0");
+    await withinTest(receipts.waitFor(markerPath, "started"), signal);
+    expect(await readFile(markerPath, "utf8")).toBe("0");
 
     await lab.stop();
     stopped = true;
     if (process.platform !== "win32") {
-      expect(await waitForFileContent(stoppedPath, "terminated")).toBe("terminated");
+      // stop joins the catalog command's close, after its SIGTERM handler writes this marker.
+      expect(await readFile(stoppedPath, "utf8")).toBe("terminated");
     }
   });
 

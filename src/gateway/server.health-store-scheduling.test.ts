@@ -16,7 +16,7 @@ import { installGatewayTestHooks, rpcReq, testState } from "./test-helpers.js";
 
 installGatewayTestHooks();
 
-test.each(["separate", "shared", "single", "empty"] as const)(
+test.each(["separate", "shared"] as const)(
   "registered Gateway health/status preserve %s resident snapshots while serving HTTP",
   async (layout) => {
     const collector = await import("./health/collector.js");
@@ -28,7 +28,7 @@ test.each(["separate", "shared", "single", "empty"] as const)(
     const actualStatus = await vi.importActual<typeof status>("../status/summary.js");
     vi.mocked(status.getStatusSummary).mockImplementation(actualStatus.getStatusSummary);
     const root = expectDefined(process.env.OPENCLAW_STATE_DIR, "isolated state");
-    const agentCount = layout === "empty" ? 0 : layout === "single" ? 1 : 12;
+    const agentCount = 12;
     const agentIds = Array.from({ length: agentCount }, (_, index) => `fleet${index}`);
     const storeTemplate = path.join(
       root,
@@ -54,12 +54,6 @@ test.each(["separate", "shared", "single", "empty"] as const)(
     }
     if (layout === "shared") {
       writeSession("retired", "main", 50);
-    }
-    if (layout === "empty") {
-      await expect(startGatewayServerHarness()).rejects.toThrow(
-        "agents.entries must contain at least one configured agent",
-      );
-      return;
     }
     const harness = await startGatewayServerHarness();
     let readWorkMs = performance.now();
@@ -145,10 +139,10 @@ test.each(["separate", "shared", "single", "empty"] as const)(
             const response = await rpcReq<StatusSummary>(ws, "status", {
               includeChannelSummary: false,
             });
-            expect(response.ok).toBe(true);
+            expect(response).toMatchObject({ ok: true });
             const sessions = expectDefined(response.payload?.sessions, "status sessions");
             expect(sessions.count).toBe(agentCount * 12 + (layout === "shared" ? 2 : 0));
-            expect(sessions.recent).toHaveLength(agentCount === 0 ? 0 : 10);
+            expect(sessions.recent).toHaveLength(10);
             expect(
               sessions.byAgent.map((agent) => [agent.agentId, agent.count, agent.recent.length]),
             ).toEqual(

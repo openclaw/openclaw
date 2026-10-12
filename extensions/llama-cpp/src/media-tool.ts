@@ -130,13 +130,13 @@ export function registerLlamaCppMediaTool(
             2_147_483_647,
           );
           const source =
-            input.startsWith("media://") || path.isAbsolute(input)
+            input.startsWith("media://") || input.startsWith("~") || path.isAbsolute(input)
               ? input
               : path.resolve(workspace ?? process.cwd(), input);
           signal?.throwIfAborted();
           const image = await api.runtime.media.loadWebMedia(source, {
             maxBytes,
-            localRoots,
+            localRoots: [...localRoots, ...(ctx.fsPolicy?.readOnlyRoots ?? [])],
             ...(signal ? { requestInit: { signal } } : {}),
           });
           signal?.throwIfAborted();
@@ -171,7 +171,9 @@ export function registerLlamaCppMediaTool(
               "The local image model returned no text. Run managed local media setup again.",
             );
           }
-          return textResult(truncateUtf16Safe(result.text, maxChars), {
+          const text = truncateUtf16Safe(result.text, maxChars);
+          return textResult(text, {
+            text,
             task,
             provider: LLAMA_CPP_PROVIDER_ID,
             model: result.model ?? model.id,

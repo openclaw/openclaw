@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import "../../test-support/browser-security.mock.js";
 import {
   installAgentContractHooks,
@@ -12,10 +12,6 @@ import {
   setBrowserControlServerTabUrl,
 } from "../server.control-server.test-harness.js";
 import { getBrowserTestFetch } from "../test-support/fetch.js";
-
-beforeAll(async () => {
-  await import("../../server.js");
-});
 
 describe("browser page text route", () => {
   installAgentContractHooks();

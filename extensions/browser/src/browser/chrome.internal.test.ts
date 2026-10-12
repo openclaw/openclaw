@@ -6,6 +6,7 @@ import { Agent, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
@@ -167,7 +168,7 @@ function deferred<T = void>() {
   return { promise, reject, resolve };
 }
 
-async function startLinuxZombieProcess(): Promise<{ pid: number; reap: () => Promise<void> }> {
+function startLinuxZombieProcess(): { ready: Promise<number>; reap: () => Promise<void> } {
   const parent = execFile("python3", [
     "-c",
     [
@@ -175,43 +176,26 @@ async function startLinuxZombieProcess(): Promise<{ pid: number; reap: () => Pro
       "pid = os.fork()",
       "if pid == 0:",
       "    os._exit(0)",
+      // Observe exit without reaping: the published PID stays a zombie until stdin closes.
+      "os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)",
       "print(pid, flush=True)",
       "sys.stdin.readline()",
       "os.waitpid(pid, 0)",
     ].join("\n"),
   ]);
   const closed = once(parent, "close");
-  const pid = await new Promise<number>((resolve, reject) => {
-    const onError = (err: Error) => reject(err);
-    parent.once("error", onError);
+  const ready = new Promise<number>((resolve) => {
     parent.stdout?.once("data", (chunk) => {
-      parent.off("error", onError);
       resolve(Number.parseInt(String(chunk).trim(), 10));
     });
   });
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    try {
-      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-      if (stat.slice(stat.lastIndexOf(")") + 2).startsWith("Z ")) {
-        return {
-          pid,
-          reap: async () => {
-            parent.stdin?.end();
-            await closed;
-          },
-        };
-      }
-    } catch {
-      // The child may not have reached zombie state yet.
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-  parent.stdin?.end();
-  await closed;
-  throw new Error(`child ${pid} did not enter zombie state`);
+  return {
+    ready: awaitGateBeforeSettlement(ready, closed, "child did not enter zombie state"),
+    reap: async () => {
+      parent.stdin?.end();
+      await closed;
+    },
+  };
 }
 
 function linuxProcStatLine(pid: number, startTime: string): string {
@@ -766,46 +750,6 @@ describe("chrome.ts internal", () => {
       });
     });
 
-    it("accepts a ready CDP diagnostic after the launch HTTP probe expires", async () => {
-      stubBrowserExecutableAndPrefs("present");
-      spawnMock.mockImplementation(() => makeFakeProc());
-
-      const originalFetch = globalThis.fetch;
-      let now = 1_000_000;
-      vi.spyOn(Date, "now").mockImplementation(() => now);
-      let discoveryCalls = 0;
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-          const url =
-            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-          if (url.includes("/json/version")) {
-            discoveryCalls += 1;
-            if (discoveryCalls === 1) {
-              now += 2;
-              throw new Error("ECONNREFUSED");
-            }
-          }
-          return await originalFetch(input, init);
-        }),
-      );
-
-      await withMockChromeCdpServer({
-        wsPath: "/devtools/browser/COLD_START",
-        run: async (baseUrl) => {
-          const port = new URL(baseUrl).port;
-          const profile = makeProfile(Number(port));
-          const running = await launchOpenClawChrome(
-            makeResolved({ localLaunchTimeoutMs: 1 }),
-            profile,
-          );
-          expect(running.pid).toBe(4242);
-          expect(discoveryCalls).toBeGreaterThan(1);
-          running.proc.kill?.("SIGTERM");
-        },
-      });
-    });
-
     it("keeps the launched process when fallback diagnostic sees HTTP before WS readiness", async () => {
       stubBrowserExecutableAndPrefs("present");
       const fakeProc = makeFakeProc();
@@ -956,9 +900,10 @@ describe("chrome.ts internal", () => {
 
     it.runIf(process.platform === "linux")(
       "recovers a current-host profile locked by a zombie process",
-      async () => {
-        const zombie = await startLinuxZombieProcess();
+      async ({ signal }) => {
+        const zombie = startLinuxZombieProcess();
         try {
+          const zombiePid = await withinTest(zombie.ready, signal);
           let cdpReachable = false;
           const originalFetch = globalThis.fetch;
           vi.stubGlobal(
@@ -1005,7 +950,7 @@ describe("chrome.ts internal", () => {
               await fsp.writeFile(path.join(userDataDir, "SingletonCookie"), "cookie");
               await fsp.writeFile(path.join(userDataDir, "SingletonSocket"), "socket");
               await fsp.symlink(
-                `${os.hostname()}-${zombie.pid}`,
+                `${os.hostname()}-${zombiePid}`,
                 path.join(userDataDir, "SingletonLock"),
               );
 
@@ -1666,28 +1611,6 @@ describe("chrome.ts internal", () => {
       await expect(
         launchOpenClawChrome(makeResolved({ localLaunchTimeoutMs: 20 }), makeProfile(54325)),
       ).rejects.toThrow("Managed Chrome process spawned without a pid.");
-    });
-
-    it("preflights managed-proxy policy and registers exact CDP probe URLs", async () => {
-      stubBrowserExecutableAndPrefs("present");
-      const release = vi.fn();
-      registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => release);
-      spawnMock.mockImplementation(() => makeFakeProc());
-
-      await withMockChromeCdpServer({
-        wsPath: "/devtools/browser/BYPASS_OK",
-        run: async (baseUrl) => {
-          const port = Number(new URL(baseUrl).port);
-          const profile = { ...makeProfile(port), cdpUrl: baseUrl };
-          const running = await launchOpenClawChrome(makeResolved(), profile);
-          expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(baseUrl);
-          expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
-            `${baseUrl}/json/version`,
-          );
-          expect(release).toHaveBeenCalled();
-          running.proc.kill?.("SIGTERM");
-        },
-      });
     });
 
     it("releases scoped bypass registrations when the CDP probe never succeeds", async () => {

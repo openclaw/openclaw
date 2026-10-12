@@ -1,5 +1,9 @@
 import { expect, it, vi } from "vitest";
-import type { WorkerOperationContext } from "./worker-operation-registry.js";
+import {
+  createWorkerOperationRegistry,
+  type WorkerOperationContext,
+  type WorkerWriteOperationContext,
+} from "./worker-operation-registry.js";
 
 const { loaded, read } = vi.hoisted(() => ({
   loaded: [] as string[],
@@ -19,16 +23,19 @@ vi.mock("../infra/push-web-store.worker.js", () => {
 vi.mock("../agents/worktrees/dispatch.worker.js", () => {
   throw new Error("APNs preparation loaded worktrees");
 });
-vi.mock("../fleet/registry.worker.js", () => {
-  throw new Error("APNs preparation loaded fleet");
-});
 
 import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 
 it("loads only the requested domain and routes exact operation names after preparation", async () => {
-  const context: WorkerOperationContext = {
+  const context: WorkerWriteOperationContext = {
     open: () => {
       throw new Error("The registry must leave database opening to its handler");
+    },
+    write: () => {
+      throw new Error("The registry must leave transactions to its handler");
+    },
+    writeAdmitted: () => {
+      throw new Error("The registry must leave transactions to its handler");
     },
     stateOptions: () => ({ path: "synthetic-state.sqlite", env: {} }),
   };
@@ -52,4 +59,28 @@ it("loads only the requested domain and routes exact operation names after prepa
     path: "synthetic-state.sqlite",
   });
   expect(read).toHaveBeenCalledExactlyOnceWith(command.input, context);
+});
+
+it("prepares exact operations without loading another kernel under the same namespace", async () => {
+  type Operations = {
+    "session.read": { input: string; output: string };
+    "session.write": { input: string; output: void };
+  };
+  const loadRead = vi.fn(async () => ({
+    "session.read": (input: string, context: { agentId: string }) => `${context.agentId}:${input}`,
+  }));
+  const loadWrite = vi.fn(async () => ({ "session.write": (_input: string) => {} }));
+  const registry = createWorkerOperationRegistry<Operations, { agentId: string }, keyof Operations>(
+    {
+      "session.read": loadRead,
+      "session.write": loadWrite,
+    },
+  );
+  const command = { type: "session.read", input: "entry" } as const;
+  expect(() => registry.execute(command, { agentId: "agent" })).toThrow("not prepared");
+  await Promise.all([registry.prepare(command.type), registry.prepare(command.type)]);
+  expect(registry.execute(command, { agentId: "agent" })).toBe("agent:entry");
+  expect(loadRead).toHaveBeenCalledOnce();
+  expect(loadWrite).not.toHaveBeenCalled();
+  expect(registry.has({ type: "session.write", input: "entry" })).toBe(false);
 });

@@ -1,4 +1,3 @@
-// Setup migration snapshots bind retries to unchanged source and target state.
 import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -20,7 +19,6 @@ const ONBOARDING_TARGET_LOCK_OPTIONS = {
 };
 const activeSetupMigrationTargetLock = new AsyncLocalStorage<string>();
 const MEANINGFUL_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta", "telemetry"]);
-const MEANINGFUL_WIZARD_CONFIG_IGNORED_KEYS = new Set(["securityAcknowledgedAt"]);
 const MEANINGFUL_WORKSPACE_ENTRIES = [
   "AGENTS.md",
   "SOUL.md",
@@ -69,9 +67,7 @@ function buildSetupMigrationSnapshotConfig(config: OpenClawConfig): Record<strin
     }
     // Risk acknowledgement can be accepted between retries; freshness already ignores it.
     const wizard = Object.fromEntries(
-      Object.entries(value).filter(
-        ([wizardKey]) => !MEANINGFUL_WIZARD_CONFIG_IGNORED_KEYS.has(wizardKey),
-      ),
+      Object.entries(value).filter(([wizardKey]) => wizardKey !== "securityAcknowledgedAt"),
     );
     if (Object.keys(wizard).length > 0) {
       snapshot[key] = wizard;
@@ -207,21 +203,18 @@ export async function buildSetupMigrationTargetSnapshot(params: {
 /** Hashes only source paths represented by the provider's concrete migration plan. */
 export async function buildSetupMigrationPlanSourceSnapshot(plan: MigrationPlan): Promise<string> {
   const hash = crypto.createHash("sha256");
-  const itemSources = [
-    ...new Set(
-      plan.items
-        .map((item) => item.source?.trim())
-        .filter((source): source is string => Boolean(source))
-        .map((source) => path.resolve(resolveUserPath(source))),
-    ),
-  ].toSorted();
   const sources = [
     ...new Set(
-      itemSources.flatMap((source) =>
-        path.extname(source) === ".db"
+      plan.items.flatMap((item) => {
+        const input = item.source?.trim();
+        if (!input) {
+          return [];
+        }
+        const source = path.resolve(resolveUserPath(input));
+        return path.extname(source) === ".db"
           ? [source, `${source}-wal`, `${source}-shm`, `${source}-journal`]
-          : [source],
-      ),
+          : [source];
+      }),
     ),
   ].toSorted();
   for (const [index, source] of sources.entries()) {

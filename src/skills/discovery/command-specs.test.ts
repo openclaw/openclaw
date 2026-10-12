@@ -84,6 +84,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(specs[0]?.displayName).toBe("Emoji Skill");
     expect(specs[0]?.description).toBe(entry.skill.description);
     expect(specs[0]?.skillFile).toBe(entry.skill.filePath);
+    expect(specs[0]).not.toHaveProperty("skillFileHost");
   });
 
   it("preserves bundle command descriptions for provider-specific limits", async () => {

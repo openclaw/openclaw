@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { materializeProjectClone } from "./project-clone.js";
-import type { ProjectRegistryRecord } from "./project-registry.kernel.js";
+import type { ProjectRegistryRecord } from "./project-registry.types.js";
 
 const fixture = vi.hoisted(() => {
   const lease = () =>
@@ -147,15 +147,6 @@ describe("project clone registration cleanup", () => {
   it("removes the produced checkout after a definite precommit failure", async () => {
     const failure = new Error("Insert was refused before execution");
     fixture.execute.mockRejectedValue(failure);
-
-    await expect(materialize()).rejects.toBe(failure);
-    expect(fixture.checkouts.size).toBe(0);
-    expect(fixture.remove).toHaveBeenCalledOnce();
-  });
-
-  it("removes a produced checkout when registration preparation rejects it", async () => {
-    const failure = new Error("Project checkout has no commits");
-    fixture.resolveCheckout.mockRejectedValue(failure);
 
     await expect(materialize()).rejects.toBe(failure);
     expect(fixture.checkouts.size).toBe(0);

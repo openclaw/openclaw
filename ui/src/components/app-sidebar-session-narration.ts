@@ -75,12 +75,12 @@ export type SidebarNarrationSyncInput = {
   connected: boolean;
   connectionIdentity: object | null;
   source: NarrationSource | null;
-  rows: readonly SidebarRecentSession[];
+  rows: readonly Pick<SidebarRecentSession, "key" | "hasActiveRun" | "startedAt" | "updatedAt">[];
   openSessionKey: string;
   agentId: string;
 };
 
-function rowRecency(row: SidebarRecentSession): number {
+function rowRecency(row: Pick<SidebarRecentSession, "startedAt" | "updatedAt">): number {
   return row.startedAt ?? row.updatedAt ?? 0;
 }
 
@@ -104,6 +104,7 @@ export class SidebarSessionNarrationController {
   };
   private connectionIdentity: object | null = null;
   private connected = false;
+  private disposed = false;
   private enabled = false;
   private agentId = "main";
   private desiredKeys = new Set<string>();
@@ -128,6 +129,9 @@ export class SidebarSessionNarrationController {
   ) {}
 
   sync(input: SidebarNarrationSyncInput): void {
+    if (this.disposed) {
+      return;
+    }
     if (!this.input) {
       this.visibilityDocument = globalThis.document ?? null;
       this.visibilityDocument?.addEventListener("visibilitychange", this.handleVisibilityChange);
@@ -236,6 +240,15 @@ export class SidebarSessionNarrationController {
     this.syncReleases();
   }
 
+  /** Final teardown retains cleanup custody; no later sync will resume it. */
+  dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.disconnect();
+  }
+
   private async subscribeKey(key: string): Promise<void> {
     const source = this.source;
     const connectionIdentity = this.connectionIdentity;
@@ -303,6 +316,8 @@ export class SidebarSessionNarrationController {
       retry.retryAt = 0;
       if (this.input) {
         this.sync(this.input);
+      } else {
+        this.syncReleases();
       }
     }, delay);
   }
@@ -366,7 +381,12 @@ export class SidebarSessionNarrationController {
 
   private syncReleases(): void {
     for (const [owned, retry] of this.pendingReleases) {
-      if (!this.connected || owned.connectionIdentity !== this.connectionIdentity) {
+      // Final cleanup uses the original handles even after presentation ends.
+      // Their coordinator owns connection retirement and shared-viewer safety.
+      if (
+        !this.disposed &&
+        (!this.connected || owned.connectionIdentity !== this.connectionIdentity)
+      ) {
         this.cancelRetry(retry);
         retry.retryAt = 0;
         // DOM detachment pauses cleanup without retiring the socket's leases.
@@ -437,28 +457,25 @@ export class SidebarSessionNarrationController {
     // A newly subscribed sidebar can join mid-run. Within one run the server's
     // cumulative snapshot grows monotonically, so length arithmetic decides
     // append vs rejoin without storing the raw stream.
-    if (record.replace === true) {
-      // Handle before any truthiness gate: an EMPTY replacement retracts the
-      // narration line (streamLength 0 takes publishText's clearing path).
-      const replacement = messageText ?? deltaText;
+    const replacement = record.replace === true;
+    if (replacement || messageText !== null) {
+      const snapshot = messageText ?? deltaText;
+      const appends =
+        !replacement &&
+        deltaText !== "" &&
+        consumed > 0 &&
+        snapshot.length - deltaText.length === consumed;
+      // An empty replacement still reaches publishText's clearing path.
       this.publishText(key, {
-        streamLength: replacement.length,
-        fragment: replacement,
-        reset: true,
+        streamLength: snapshot.length,
+        fragment: appends ? deltaText : snapshot,
+        reset: !appends,
         immediate,
       });
       return;
     }
     if (deltaText) {
-      if (messageText !== null) {
-        const appends = consumed > 0 && messageText.length - deltaText.length === consumed;
-        this.publishText(key, {
-          streamLength: messageText.length,
-          fragment: appends ? deltaText : messageText,
-          reset: !appends,
-          immediate,
-        });
-      } else if (consumed > 0) {
+      if (consumed > 0) {
         this.publishText(key, {
           streamLength: consumed + deltaText.length,
           fragment: deltaText,
@@ -466,19 +483,11 @@ export class SidebarSessionNarrationController {
           immediate,
         });
       }
-      // consumed === 0 with a bare delta: a mid-run join may sit INSIDE an
-      // internal-context block whose opening delimiter we never saw. Stay
-      // silent until a cumulative snapshot or replacement aligns the stream.
+      // A bare delta cannot align a mid-run join inside an internal-context block.
+      // Stay silent until a cumulative snapshot or replacement aligns the stream.
       return;
     }
-    if (messageText !== null) {
-      this.publishText(key, {
-        streamLength: messageText.length,
-        fragment: messageText,
-        reset: true,
-        immediate,
-      });
-    } else if (immediate) {
+    if (immediate) {
       const pending = this.throttles.get(key)?.pending;
       if (pending != null) {
         this.publishImmediate(key, pending);
@@ -670,19 +679,15 @@ export class SidebarSessionNarrationController {
 
   private publishActivity(key: string, text: string): void {
     const line = deriveSidebarNarrationLine(text);
-    if (line) {
-      if (this.lines.get(key) !== line) {
-        this.lines.set(key, line);
-        this.onLinesChanged(new Map(this.lines));
-      }
+    // A full visible buffer that normalizes to nothing retracts the prior line.
+    const changed = line ? this.lines.get(key) !== line : this.lines.delete(key);
+    if (!changed) {
       return;
     }
-    // The activity text is the full visible buffer: normalizing it to nothing
-    // means only suppressed content remains (e.g. a replacement that reduced
-    // to REPLY_SKIP or a heartbeat), so retract any previously shown line.
-    if (this.lines.delete(key)) {
-      this.onLinesChanged(new Map(this.lines));
+    if (line) {
+      this.lines.set(key, line);
     }
+    this.onLinesChanged(new Map(this.lines));
   }
 
   private clearLine(key: string): void {

@@ -1,6 +1,8 @@
+import fs from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import { isStaleIdentitylessUpdateRun } from "../infra/update-run-activity.js";
 import { readInterruptedUpdateCandidateAsync } from "../infra/update-run-interruption-worker.js";
 import { reconcileInterruptedUpdateRuns } from "../infra/update-run-interruption.js";
 import {
@@ -10,11 +12,14 @@ import {
 } from "../infra/update-run-ledger.js";
 import { getUpdateRun, listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { ABANDONED_UPDATE_RUN_MS } from "../infra/update-run-timeouts.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import {
   isArtifactPreservingStateRead,
   withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { noteStaleUpdateRuns } from "./doctor-update-run.js";
 
 const snapshot = vi.hoisted(() => ({ active: false }));
@@ -47,6 +52,110 @@ beforeEach(() => {
   vi.mocked(readInterruptedUpdateCandidateAsync).mockResolvedValue(undefined);
 });
 afterEach(() => vi.resetAllMocks());
+
+it.each([
+  { migrateState: false, running: false },
+  { migrateState: true, running: false },
+  { migrateState: true, running: true },
+])(
+  "keeps history read failure advisory without refreshing update activity (migrateState=$migrateState, running=$running)",
+  async ({ migrateState, running }) => {
+    await withOpenClawTestState({ label: "update-history-refusal" }, async () => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - ABANDONED_UPDATE_RUN_MS - 1);
+      let run: UpdateRunRecord;
+      try {
+        run = createUpdateRun({ trigger: "cli" });
+      } finally {
+        clock.mockRestore();
+      }
+      const completed = running ? run : finishUpdateRun(run.runId, { status: "succeeded" });
+      const failure = Object.assign(
+        new Error("runtime binary not executable: /fixture/node (EACCES)"),
+        {
+          code: "EACCES",
+        },
+      );
+      vi.mocked(readInterruptedUpdateCandidateAsync).mockRejectedValue(failure);
+      vi.mocked(listUpdateRunsAsync).mockRejectedValue(failure);
+
+      await expect(noteStaleUpdateRuns({ migrateState })).resolves.toBeUndefined();
+
+      expect(note).toHaveBeenCalledWith(expect.stringContaining(failure.message), "Update history");
+      const saved = getUpdateRun(run.runId)!;
+      expect(saved.status).toBe(completed.status);
+      expect(saved.finishedAtMs).toBe(completed.finishedAtMs);
+      expect(saved.updatedAtMs).toBe(completed.updatedAtMs);
+      expect(isStaleIdentitylessUpdateRun(saved)).toBe(running);
+      if (migrateState) {
+        expect(saved.steps).toContainEqual(
+          expect.objectContaining({
+            step: "warning:update-history-reconciliation",
+            status: "completed",
+            detail: expect.stringContaining(failure.message),
+          }),
+        );
+      } else {
+        expect(saved).toEqual(completed);
+      }
+    });
+  },
+);
+
+it("repairs config after update history discovery cannot launch its runtime", async () => {
+  await withOpenClawTestState(
+    { label: "history-failure-config-repair", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+    async (state) => {
+      await state.writeConfig({
+        gateway: { mode: "local", bind: "localhost" },
+        plugins: { enabled: false },
+      });
+      vi.mocked(withOpenClawStateDatabaseReadSnapshot).mockRejectedValueOnce(
+        Object.assign(new Error("runtime binary not executable: /fixture/node (EACCES)"), {
+          code: "EACCES",
+        }),
+      );
+
+      const result = await runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        repairPrefixedConfig: true,
+      });
+
+      expect(result.snapshot.valid).toBe(true);
+      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
+        gateway: { bind: "loopback" },
+      });
+      expect(note).toHaveBeenCalledWith(expect.stringContaining("EACCES"), "Update history");
+    },
+  );
+});
+
+it("keeps a warning visible when the existing history database cannot record it", async () => {
+  await withOpenClawTestState({ label: "history-warning-unavailable" }, async (state) => {
+    vi.mocked(listUpdateRunsAsync).mockRejectedValue(new Error("history unavailable"));
+    await expect(noteStaleUpdateRuns()).resolves.toBeUndefined();
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("history unavailable"),
+      "Update history",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("warning could not be saved"),
+      "Update history",
+    );
+    await expect(fs.access(state.statePath("state", "openclaw.sqlite"))).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
+  });
+});
+
+it("does not admit mutations while a history child still has unsettled process custody", async () => {
+  const failure = new CommandProcessCleanupError({
+    cause: new Error("child cleanup is unsettled"),
+  });
+  vi.mocked(listUpdateRunsAsync).mockRejectedValue(failure);
+  await expect(noteStaleUpdateRuns()).rejects.toBe(failure);
+});
 
 it.each([false, true])(
   "shares one snapshot for history reads (migrateState=%s)",
@@ -124,8 +233,14 @@ it.each([
   await noteStaleUpdateRuns({});
 
   expect(note).toHaveBeenCalledOnce();
+  // Runtime preflight failures carry the plain-language headline plus a reason-code line;
+  // every other failure keeps the reason in the headline.
   expect(note).toHaveBeenCalledWith(
-    expect.stringContaining(`OpenClaw update failed: ${failure.reason}`),
+    expect.stringContaining(
+      failure.reason === "node-runtime-preflight"
+        ? `Reason code: ${failure.reason}`
+        : `OpenClaw update failed: ${failure.reason}.`,
+    ),
     "Update history",
   );
   expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: latest });
@@ -251,7 +366,8 @@ it.each(["state migration is pending", "data/settings upgrade is unfinished"])(
       await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: ["resolved"] });
       const repaired = await output();
       expect(repaired).not.toContain(warnings[3]);
-      for (const warning of warnings.slice(0, 3)) {
+      expect(repaired).not.toContain(warnings[0]);
+      for (const warning of warnings.slice(1, 3)) {
         expect(repaired).toContain(warning);
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
@@ -270,7 +386,7 @@ it.each(["state migration is pending", "data/settings upgrade is unfinished"])(
       });
       const laterHistory = finishUpdateRun(later.runId, { status: "succeeded" });
       latestRunId = later.runId;
-      expect(await output()).toContain(warnings[3]);
+      expect(await output()).not.toContain(warnings[3]);
       expect(getUpdateRun(later.runId)).toEqual(laterHistory);
     });
   },

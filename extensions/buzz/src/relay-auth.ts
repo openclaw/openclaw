@@ -52,20 +52,6 @@ async function waitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Prom
   });
 }
 
-function createBuzzAuthSigner(params: {
-  secretKey: Uint8Array;
-  authTag?: string[];
-}): (template: EventTemplate) => Promise<VerifiedEvent> {
-  return async (template) =>
-    finalizeEvent(
-      {
-        ...template,
-        tags: params.authTag ? [...template.tags, params.authTag] : template.tags,
-      },
-      params.secretKey,
-    );
-}
-
 function isLoopbackRelayUrl(relayUrl: string): boolean {
   const hostname = new URL(relayUrl).hostname.toLowerCase();
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
@@ -113,10 +99,15 @@ async function connectAndAuthenticateBuzzRelay(params: {
   authTag?: string[];
   signal?: AbortSignal;
 }): Promise<void> {
-  const signAuth = createBuzzAuthSigner({
-    secretKey: params.secretKey,
-    authTag: params.authTag,
-  });
+  const { secretKey, authTag } = params;
+  const signAuth = async (template: EventTemplate): Promise<VerifiedEvent> =>
+    finalizeEvent(
+      {
+        ...template,
+        tags: authTag ? [...template.tags, authTag] : template.tags,
+      },
+      secretKey,
+    );
   await params.relay.connect({ abort: params.signal });
   await authenticateBuzzRelay({ relay: params.relay, signAuth, signal: params.signal });
   params.relay.onauth = signAuth;

@@ -55,6 +55,7 @@ export function renderSessionLeadingState(
   avatarAuth?: SessionAvatarAuth,
   trailingState = false,
   icon?: TemplateResult,
+  runVisibility?: Parameters<typeof renderSessionGlyph>[0]["runVisibility"],
 ): {
   running: boolean;
   leadingIndicator: TemplateResult | typeof nothing;
@@ -66,6 +67,7 @@ export function renderSessionLeadingState(
   const running = session.hasActiveRun || subagentsWorking;
   const ownRunQueued = session.hasActiveRun && session.status === "queued";
   const runState = {
+    runVisibility,
     running: running && !trailingState && session.attention.kind !== "question",
     queued: ownRunQueued && !subagentsWorking,
     runningLabel:
@@ -76,7 +78,7 @@ export function renderSessionLeadingState(
   // Transient attention always outranks the persistent decorative icon.
   const iconContent =
     session.attention.kind !== "none" && !trailingState
-      ? renderSessionAttentionIcon(session.attention, true)
+      ? renderSessionAttentionIcon(session.attention)
       : (icon ?? (session.icon ? renderPersistentSessionIcon(session.icon) : nothing));
   if (iconContent !== nothing) {
     return {
@@ -88,23 +90,8 @@ export function renderSessionLeadingState(
       }),
     };
   }
-  if (session.isChild && !trailingState) {
-    if (session.channelAvatarUrl) {
-      ensureChannelAvatarElement();
-      return {
-        running,
-        leadingIndicator: renderSessionGlyph({
-          content: html`<openclaw-channel-avatar
-            .routeUrl=${session.channelAvatarUrl}
-            .authTokens=${avatarAuth?.authTokens ?? []}
-            .authReady=${avatarAuth?.authReady ?? false}
-          ></openclaw-channel-avatar>`,
-          ...runState,
-          circular: true,
-          badge: session.unread && !running ? renderSessionUnreadBadge() : nothing,
-        }),
-      };
-    }
+  const child = session.isChild && !trailingState;
+  if (child && !session.channelAvatarUrl) {
     return {
       running,
       leadingIndicator: running
@@ -113,16 +100,17 @@ export function renderSessionLeadingState(
     };
   }
 
-  const ownerChip = ownerActor?.id?.trim()
-    ? renderSessionOwnerChip(
-        ownerActor,
-        "row",
-        attribution,
-        ownerViewing,
-        participants,
-        participantCount,
-      )
-    : undefined;
+  const ownerChip =
+    !child && ownerActor?.id?.trim()
+      ? renderSessionOwnerChip(
+          ownerActor,
+          "row",
+          attribution,
+          ownerViewing,
+          participants,
+          participantCount,
+        )
+      : undefined;
   if (session.channelAvatarUrl) {
     ensureChannelAvatarElement();
     return {
@@ -134,8 +122,8 @@ export function renderSessionLeadingState(
           .routeUrl=${session.channelAvatarUrl}
           .authTokens=${avatarAuth?.authTokens ?? []}
           .authReady=${avatarAuth?.authReady ?? false}
-          .fallback=${ownerChip ?? nothing}
-        ></openclaw-channel-avatar>`,
+          >${ownerChip ?? nothing}</openclaw-channel-avatar
+        >`,
         ...runState,
         badge: session.unread && !running && !trailingState ? renderSessionUnreadBadge() : nothing,
         circular: true,

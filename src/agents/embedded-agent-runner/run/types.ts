@@ -77,7 +77,7 @@ export type EmbeddedAttemptClientToolCallSlot = {
   completed: boolean;
 };
 
-type EmbeddedRunAttemptBase = Omit<
+export type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedAgentParams,
   | "provider"
   | "model"
@@ -164,13 +164,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Audited exact denies that the plugin harness must enforce against native equivalents. */
   pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  preparedTtsPreferences?: import("../../../tts/tts-preferences.js").PreparedTtsPreferences;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
   initialReplayState?: EmbeddedRunReplayState;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
   contextEngine?: ContextEngine;
-  /** Resolved model context window in tokens for assemble/compact budgeting. */
-  contextTokenBudget?: number;
   /** Native model context window before session or operator caps are applied. */
   modelContextWindow?: number;
   /** Per-model contextTokens cap authored by the operator; absent when none was authored. */
@@ -195,8 +194,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   delegationCapability?: DelegationCapability;
   /** Concrete degraded-runtime reason for this attempt, when known. */
   degradedReason?: string | null;
-  /** Final prepared harness for this attempt; not evidence of native session/model ownership. */
-  agentHarnessId?: string;
+  /** Actual embedded harness declaration, supplied by its invocation owner. */
+  supportsTurnScopedToolRestrictions?: boolean;
   /** Non-authorizing expectation; the harness must verify its current private binding. */
   expectedSessionRuntimeOwnership?: {
     model: "native";
@@ -238,6 +237,13 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   registerPluginRuntimeRefreshConsumer?: (isCurrent: () => boolean) => void;
   /** Completed native attempt results excluded by the original admission read fence. */
   pluginRuntimeRefreshMessages?: AgentMessage[];
+  /** Host-owned same-turn recovery context; never a new user turn or execution authority. */
+  continuation?: {
+    /** Original current request, retained outside bounded historical projections. */
+    prompt: string;
+    /** Settled attempt snapshots, in order, including completed tool calls and results. */
+    messages: AgentMessage[];
+  };
   /** Run-owned permission changes survive native attempt replacement, never user cancellation. */
   permissionChange?: {
     readonly owner: object;

@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   execFile: vi.fn(),
+  extractWindowsVcRuntime: vi.fn(),
   fetchWithSsrFGuard: vi.fn(),
   resolveLlamaCppDataDir: vi.fn(),
 }));
@@ -28,6 +29,9 @@ vi.mock("./defaults.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./defaults.js")>()),
   resolveLlamaCppDataDir: mocks.resolveLlamaCppDataDir,
 }));
+vi.mock("./llama-server-vc-runtime.js", () => ({
+  extractWindowsVcRuntime: mocks.extractWindowsVcRuntime,
+}));
 
 import {
   LLAMA_SERVER_BUILD,
@@ -36,11 +40,11 @@ import {
   selectLlamaServerAsset,
   type LlamaServerAsset,
 } from "./llama-server-assets.js";
-import { listLlamaServerDevices } from "./llama-server-command.js";
 import {
   downloadVerifiedFile,
   ensureLlamaServerInstalled,
   sha256File,
+  UnsupportedLlamaServerHostError,
 } from "./llama-server-install.js";
 
 type FileHandle = Awaited<ReturnType<typeof fs.open>>;
@@ -50,6 +54,7 @@ const tempRoots: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   mocks.execFile.mockReset();
+  mocks.extractWindowsVcRuntime.mockReset();
   mocks.fetchWithSsrFGuard.mockReset();
   mocks.resolveLlamaCppDataDir.mockReset();
   await Promise.all(
@@ -79,16 +84,38 @@ async function createCpuArchive() {
   tempRoots.push(root);
   mocks.resolveLlamaCppDataDir.mockReturnValue(root);
   const source = selectLlamaServerAsset("win32", "arm64", { kind: "cpu" });
+  const runtime = source.dependencies![0]!;
+  if (runtime.archive !== "vc-redist") {
+    throw new Error("expected the Windows CPU asset to use the Visual C++ redistributable");
+  }
   const serverBytes = await new JSZip()
     .file(source.executable, "server")
     .generateAsync({ type: "nodebuffer" });
+  const runtimeBytes = Buffer.from("verified Visual C++ runtime bundle");
   const asset: LlamaServerAsset = {
     ...source,
-    sizeBytes: serverBytes.length,
     sha256: createHash("sha256").update(serverBytes).digest("hex"),
+    dependencies: [
+      {
+        ...runtime,
+        sha256: createHash("sha256").update(runtimeBytes).digest("hex"),
+        size: runtimeBytes.byteLength,
+      },
+    ],
   };
-  mockDownload(serverBytes);
-  return { root, asset };
+  mocks.extractWindowsVcRuntime.mockImplementation(
+    async ({ asset: dependency, destDir }: { asset: typeof runtime; destDir: string }) => {
+      for (const file of dependency.files) {
+        await fs.writeFile(path.join(destDir, file.target), `runtime:${file.target}`);
+      }
+      return destDir;
+    },
+  );
+  mocks.fetchWithSsrFGuard.mockImplementation(async ({ url }: { url: string }) => ({
+    response: new Response(new Uint8Array(url === runtime.url ? runtimeBytes : serverBytes)),
+    release: vi.fn(),
+  }));
+  return { root, asset, runtime };
 }
 
 function mockVersionOutput(output: string): void {
@@ -140,126 +167,6 @@ function installWriteFileThroughWrite(handle: FileHandle): void {
     }
   }) as typeof handle.writeFile;
 }
-
-describe("installed llama-server devices", () => {
-  it("reads backend ordinals and per-device memory without pooling or nvidia-smi mapping", async () => {
-    mockVersionOutput(
-      [
-        "ggml_cuda_init: found 2 CUDA devices",
-        "Available devices:",
-        "  CUDA0: Large GPU (24576 MiB, 20480 MiB free)",
-        "  CUDA1: Small GPU (4096 MiB, 1024 MiB free)",
-      ].join("\n"),
-    );
-    await expect(listLlamaServerDevices({ command: "llama-server" })).resolves.toEqual([
-      {
-        id: "CUDA0",
-        name: "Large GPU",
-        totalMemoryBytes: 24 * 1024 ** 3,
-        availableMemoryBytes: 20 * 1024 ** 3,
-      },
-      {
-        id: "CUDA1",
-        name: "Small GPU",
-        totalMemoryBytes: 4 * 1024 ** 3,
-        availableMemoryBytes: 1024 ** 3,
-      },
-    ]);
-  });
-
-  it.each([
-    "Available devices:\n  (none)",
-    "  CUDA0: Test GPU (unknown MiB, unknown MiB free)",
-    "  CUDA0: Test GPU (0 MiB, 0 MiB free)",
-    "  CUDA0: Test GPU (8192 MiB, -1 MiB free)",
-    "  CUDA0: Test GPU (9007199254740992 MiB, 1024 MiB free)",
-  ])("does not admit missing or malformed device memory: %s", async (output) => {
-    mockVersionOutput(output);
-    await expect(listLlamaServerDevices({ command: "llama-server" })).resolves.toEqual([]);
-  });
-
-  it("rejects conflicting records for the same runtime device", async () => {
-    mockVersionOutput(
-      "  CUDA0: GPU (8192 MiB, 7168 MiB free)\n  CUDA0: Other GPU (24576 MiB, 20480 MiB free)",
-    );
-    await expect(listLlamaServerDevices({ command: "llama-server" })).rejects.toThrow(
-      /duplicate device CUDA0/u,
-    );
-  });
-
-  it("probes the service environment and working directory with the caller's cancellation", async () => {
-    vi.stubEnv("CUDA_VISIBLE_DEVICES", "0,1");
-    try {
-      mockVersionOutput("Available devices:\n  (none)");
-      const controller = new AbortController();
-      await listLlamaServerDevices({
-        command: "llama-server",
-        env: { CUDA_VISIBLE_DEVICES: "" },
-        cwd: "/local-service",
-        signal: controller.signal,
-      });
-      expect(mocks.execFile).toHaveBeenCalledWith(
-        "llama-server",
-        ["--list-devices"],
-        expect.objectContaining({
-          env: expect.objectContaining({ CUDA_VISIBLE_DEVICES: "" }),
-          cwd: "/local-service",
-          signal: controller.signal,
-          timeout: 15_000,
-        }),
-        expect.any(Function),
-      );
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it.runIf(process.platform === "win32")(
-    "matches the local service's case-insensitive configured environment override",
-    async () => {
-      vi.stubEnv("CUDA_VISIBLE_DEVICES", "0,1");
-      try {
-        mockVersionOutput("Available devices:\n  (none)");
-        await listLlamaServerDevices({
-          command: "llama-server",
-          env: { cuda_visible_devices: "1" },
-        });
-        const options = mocks.execFile.mock.calls[0]?.[2];
-        expect(options.env).toHaveProperty("cuda_visible_devices", "1");
-        expect(options.env).not.toHaveProperty("CUDA_VISIBLE_DEVICES");
-      } finally {
-        vi.unstubAllEnvs();
-      }
-    },
-  );
-
-  it("does not spawn an already cancelled device probe", async () => {
-    const controller = new AbortController();
-    controller.abort(new Error("device probe cancelled"));
-    await expect(
-      listLlamaServerDevices({ command: "llama-server", signal: controller.signal }),
-    ).rejects.toThrow("device probe cancelled");
-    expect(mocks.execFile).not.toHaveBeenCalled();
-  });
-
-  it("does not return prepared devices if cancellation arrives during enumeration", async () => {
-    const controller = new AbortController();
-    mocks.execFile.mockImplementation(
-      (
-        _command: string,
-        _args: string[],
-        _options: unknown,
-        callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
-      ) => {
-        controller.abort(new Error("device probe cancelled"));
-        callback(null, "  CUDA0: GPU (8192 MiB, 7168 MiB free)", "");
-      },
-    );
-    await expect(
-      listLlamaServerDevices({ command: "llama-server", signal: controller.signal }),
-    ).rejects.toThrow("device probe cancelled");
-  });
-});
 
 describe("cached file integrity", () => {
   it("reuses unchanged verified bytes but detects replacement, edits, and deletion", async () => {
@@ -532,11 +439,16 @@ describe("ensureLlamaServerInstalled", () => {
     const versionReply = createDeferred<string>();
     mocks.execFile.mockImplementation(
       (
-        _command: string,
+        file: string,
         _args: string[],
         _options: unknown,
         callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
       ) => {
+        // macOS hosts probe the product version first; hold only the server probe.
+        if (file === "/usr/bin/sw_vers") {
+          callback(null, "26.0\n", "");
+          return;
+        }
         started.resolve();
         void versionReply.promise.then((output) => callback(null, output, ""));
       },
@@ -552,7 +464,7 @@ describe("ensureLlamaServerInstalled", () => {
     );
     await expect(first).resolves.toMatchObject({ command });
     await expect(ensureLlamaServerInstalled()).resolves.toMatchObject({ command });
-    expect(mocks.execFile).toHaveBeenCalledTimes(2);
+    expect(mocks.execFile.mock.calls.filter(([file]) => file === command)).toHaveLength(2);
   });
 
   it("rejects a different active build even when output mentions the pinned build later", async () => {
@@ -566,8 +478,8 @@ describe("ensureLlamaServerInstalled", () => {
     );
   });
 
-  it("uses the wider version timeout only for a freshly extracted CPU ZIP", async () => {
-    const { root, asset } = await createCpuArchive();
+  it("allows slow version initialization before publication, after publication, and on reuse", async () => {
+    const { root, asset, runtime } = await createCpuArchive();
     const calls: Array<{ command: string; args: string[]; timeout?: number }> = [];
     mocks.execFile.mockImplementation(
       (
@@ -577,11 +489,30 @@ describe("ensureLlamaServerInstalled", () => {
         callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
       ) => {
         calls.push({ command, args, timeout: options.timeout });
-        callback(
-          null,
-          `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
-          "",
-        );
+        // Measured Metal initialization took 23 seconds even for an installed runtime.
+        if (options.timeout !== undefined && options.timeout < 23_000) {
+          callback(
+            Object.assign(new Error("version initialization timed out"), {
+              cmd: [command, ...args].join(" "),
+              killed: true,
+              signal: "SIGTERM" as const,
+            }),
+            "",
+            "",
+          );
+          return;
+        }
+        void Promise.all(
+          runtime.files.map((file) => fs.stat(path.join(path.dirname(command), file.target))),
+        )
+          .then(() => {
+            callback(
+              null,
+              `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
+              "",
+            );
+          })
+          .catch((error: unknown) => callback(error as ExecFileException, "", ""));
       },
     );
 
@@ -597,11 +528,81 @@ describe("ensureLlamaServerInstalled", () => {
       })),
     ).toEqual([
       { published: false, args: ["--version"], timeout: 120_000 },
-      { published: true, args: ["--version"], timeout: 15_000 },
-      { published: true, args: ["--version"], timeout: 15_000 },
+      { published: false, args: ["--version"], timeout: 120_000 },
+      { published: true, args: ["--version"], timeout: 120_000 },
+      { published: true, args: ["--version"], timeout: 120_000 },
     ]);
     expect(await fs.readFile(command, "utf8")).toBe("server");
+    for (const file of runtime.files) {
+      expect(await fs.readFile(path.join(path.dirname(command), file.target), "utf8")).toBe(
+        `runtime:${file.target}`,
+      );
+    }
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ url: runtime.url }),
+    );
     expect((await fs.readdir(root)).every((entry) => !entry.startsWith("."))).toBe(true);
+  });
+
+  it("does not fetch the VC runtime when the fresh CPU ZIP already starts", async () => {
+    const { root, asset, runtime } = await createCpuArchive();
+    mockVersionOutput(
+      `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
+    );
+
+    const { command } = resolveManagedLlamaServerPaths(asset);
+    await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
+
+    expect(mocks.extractWindowsVcRuntime).not.toHaveBeenCalled();
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalledWith(
+      expect.objectContaining({ url: runtime.url }),
+    );
+    for (const file of runtime.files) {
+      await expect(fs.stat(path.join(path.dirname(command), file.target))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
+    expect(await fs.readFile(command, "utf8")).toBe("server");
+    expect((await fs.readdir(root)).every((entry) => !entry.startsWith("."))).toBe(true);
+  });
+
+  it("does not fetch the VC runtime when the fresh CPU ZIP reports a different build", async () => {
+    const { root, asset, runtime } = await createCpuArchive();
+    mockVersionOutput("version: 0.1.0-dev (build 1, commit deadbeef0)");
+
+    await expect(ensureLlamaServerInstalled({ asset })).rejects.toThrow(
+      `expected b${LLAMA_SERVER_BUILD} (${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
+    );
+
+    expect(mocks.extractWindowsVcRuntime).not.toHaveBeenCalled();
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalledWith(
+      expect.objectContaining({ url: runtime.url }),
+    );
+    expect(await fs.readdir(root)).toEqual([]);
+  });
+
+  it("preserves both launch errors when the VC runtime fallback cannot start the server", async () => {
+    const { root, asset } = await createCpuArchive();
+    let attempt = 0;
+    mocks.execFile.mockImplementation(
+      (
+        command: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
+      ) => {
+        const detail = attempt++ === 0 ? "initial launch failed" : "fallback launch failed";
+        const error = new Error(detail) as ExecFileException;
+        error.cmd = `${command} --version`;
+        callback(error, "", "");
+      },
+    );
+
+    await expect(ensureLlamaServerInstalled({ asset })).rejects.toThrow(
+      /Initial startup detail: .*initial launch failed.*Fallback detail: .*fallback launch failed/u,
+    );
+    expect(mocks.extractWindowsVcRuntime).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(root)).toEqual([]);
   });
 
   it("aborts fresh validation and removes the unpublished CPU ZIP files", async () => {
@@ -632,15 +633,7 @@ describe("ensureLlamaServerInstalled", () => {
     expect(await fs.readdir(root)).toEqual([]);
   });
 
-  it.each([
-    "ready",
-    "wrong-server-size",
-    "wrong-runtime-size",
-    "corrupt-runtime",
-    "missing-runtime",
-    "no-device",
-    "cancelled",
-  ] as const)(
+  it.each(["ready", "corrupt-runtime", "missing-runtime", "no-device", "cancelled"] as const)(
     "publishes the complete CUDA installation only after verification: %s",
     async (outcome) => {
       const root = await fs.realpath(
@@ -653,6 +646,13 @@ describe("ensureLlamaServerInstalled", () => {
         devices: [{ driverVersion: "551.78", computeCapability: 8.6 }],
       });
       const runtime = source.dependencies![0]!;
+      if (runtime.archive === "vc-redist") {
+        throw new Error("expected the CUDA dependency archive before the Visual C++ runtime");
+      }
+      const vcRuntime = source.dependencies![1]!;
+      if (vcRuntime.archive !== "vc-redist") {
+        throw new Error("expected the CUDA asset to include the Visual C++ runtime");
+      }
       const serverZip = new JSZip()
         .file(source.executable, "server")
         .file("ggml-cuda.dll", "backend");
@@ -666,17 +666,16 @@ describe("ensureLlamaServerInstalled", () => {
       const runtimeBytes = await runtimeZip.generateAsync({ type: "nodebuffer" });
       const asset: LlamaServerAsset = {
         ...source,
-        sizeBytes: serverBytes.length + Number(outcome === "wrong-server-size"),
         sha256: createHash("sha256").update(serverBytes).digest("hex"),
         dependencies: [
           {
             ...runtime,
-            sizeBytes: runtimeBytes.length + Number(outcome === "wrong-runtime-size"),
             sha256:
               outcome === "corrupt-runtime"
                 ? "0".repeat(64)
                 : createHash("sha256").update(runtimeBytes).digest("hex"),
           },
+          ...(outcome === "no-device" ? [vcRuntime] : []),
         ],
       };
       const controller = new AbortController();
@@ -729,13 +728,11 @@ describe("ensureLlamaServerInstalled", () => {
         expect(commandCalls).toEqual([
           { args: ["--version"], timeout: 120_000 },
           { args: ["--list-devices"], timeout: 15_000 },
-          { args: ["--version"], timeout: 15_000 },
+          { args: ["--version"], timeout: 120_000 },
           { args: ["--list-devices"], timeout: 15_000 },
         ]);
       } else {
         const expected = {
-          "wrong-server-size": /size mismatch/iu,
-          "wrong-runtime-size": /size mismatch/iu,
           "corrupt-runtime": /SHA-256 mismatch/u,
           "missing-runtime": /regular file cudart64_12\.dll/u,
           "no-device": /could not initialize an NVIDIA CUDA device/u,
@@ -748,6 +745,10 @@ describe("ensureLlamaServerInstalled", () => {
             { args: ["--version"], timeout: 120_000 },
             { args: ["--list-devices"], timeout: 15_000 },
           ]);
+          expect(mocks.extractWindowsVcRuntime).not.toHaveBeenCalled();
+          expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalledWith(
+            expect.objectContaining({ url: vcRuntime.url }),
+          );
         } else {
           expect(commandCalls).toEqual([]);
         }
@@ -760,6 +761,106 @@ describe("ensureLlamaServerInstalled", () => {
   );
 });
 
+describe("macOS runtime floor", () => {
+  const pinnedVersion = `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`;
+  const dyldFailure = Object.assign(
+    new Error("dyld: Symbol not found: _cblas_sgemm$NEWLAPACK$ILP64"),
+    {
+      cmd: "llama-server --version",
+    },
+  );
+
+  async function prepareMac(
+    productVersion: string | ExecFileException,
+    installed: "none" | "valid" | "crashes",
+  ) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-macos-"));
+    tempRoots.push(root);
+    mocks.resolveLlamaCppDataDir.mockReturnValue(root);
+    const asset = selectLlamaServerAsset("darwin", "x64", { kind: "cpu" });
+    const { command } = resolveManagedLlamaServerPaths(asset);
+    if (installed !== "none") {
+      await fs.mkdir(path.dirname(command), { recursive: true });
+      await fs.writeFile(command, "");
+    }
+    mocks.execFile.mockImplementation(
+      (
+        file: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
+      ) => {
+        if (file !== "/usr/bin/sw_vers") {
+          callback(installed === "crashes" ? dyldFailure : null, pinnedVersion, "");
+        } else if (typeof productVersion !== "string") {
+          callback(productVersion, "", "");
+        } else {
+          callback(null, `${productVersion}\n`, "");
+        }
+      },
+    );
+    return { asset, command };
+  }
+
+  it("refuses macOS below 13.3 before downloading the verified build", async () => {
+    const { asset } = await prepareMac("12.7.6", "none");
+
+    const install = ensureLlamaServerInstalled({ asset });
+    await expect(install).rejects.toBeInstanceOf(UnsupportedLlamaServerHostError);
+    await expect(install).rejects.toThrow(
+      "requires macOS 13.3+; this Mac runs macOS 12.7.6. Build llama-server for this Mac and set models.providers.llama-cpp.localService.command",
+    );
+    expect(mocks.execFile.mock.calls.map(([file]) => file)).toEqual(["/usr/bin/sw_vers"]);
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
+  it("reuses a validating build on macOS below 13.3", async () => {
+    const { asset, command } = await prepareMac("12.7.6", "valid");
+
+    await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
+    expect(mocks.execFile.mock.calls.map(([file]) => file)).toEqual([command]);
+  });
+
+  it("explains a build that cannot start on macOS below 13.3", async () => {
+    const { asset } = await prepareMac("12.7.6", "crashes");
+
+    const install = ensureLlamaServerInstalled({ asset });
+    await expect(install).rejects.toBeInstanceOf(UnsupportedLlamaServerHostError);
+    await expect(install).rejects.toMatchObject({
+      message: expect.stringContaining("requires macOS 13.3+"),
+      cause: expect.objectContaining({ message: expect.stringContaining("dyld") }),
+    });
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
+  it.each(["13.3", "26.0.1"])("keeps the verified build on macOS %s", async (productVersion) => {
+    const { asset, command } = await prepareMac(productVersion, "valid");
+
+    await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
+  });
+
+  it("keeps the launch error when the macOS version cannot be read", async () => {
+    const { asset, command } = await prepareMac(
+      Object.assign(new Error("sw_vers unavailable"), { cmd: "sw_vers" }),
+      "crashes",
+    );
+
+    const install = ensureLlamaServerInstalled({ asset });
+    await expect(install).rejects.not.toBeInstanceOf(UnsupportedLlamaServerHostError);
+    await expect(install).rejects.toThrow("dyld");
+    expect(mocks.execFile.mock.calls.map(([file]) => file)).toEqual([command, "/usr/bin/sw_vers"]);
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
+  it("keeps the launch error for a build that cannot start on a supported Mac", async () => {
+    const { asset } = await prepareMac("13.3", "crashes");
+
+    const install = ensureLlamaServerInstalled({ asset });
+    await expect(install).rejects.not.toBeInstanceOf(UnsupportedLlamaServerHostError);
+    await expect(install).rejects.toThrow("dyld");
+  });
+});
+
 describe("CUDA runtime selection", () => {
   it("pins the verified archives and extraction limit", () => {
     const asset = selectLlamaServerAsset("win32", "x64", {
@@ -770,21 +871,17 @@ describe("CUDA runtime selection", () => {
 
     expect(asset).toMatchObject({
       name: "llama-b10809-bin-win-cuda-12.4-x64.zip",
-      sizeBytes: 253_938_543,
       sha256: "c77bfcd9ed8d91e8721a2d6a290b907fddd4fa5412a47b21c6fa1709116b85f9",
       limits: {
         maxArchiveBytes: 400 * mebibyte,
         maxExtractedBytes: 600 * mebibyte,
         maxEntryBytes: 521 * mebibyte,
       },
-      dependencies: [
-        {
-          name: "cudart-llama-bin-win-cuda-12.4-x64.zip",
-          sizeBytes: 391_443_627,
-          sha256: "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
-          limits: { maxEntries: 3, maxEntryBytes: 521 * mebibyte },
-        },
-      ],
+    });
+    expect(asset.dependencies?.[0]).toMatchObject({
+      name: "cudart-llama-bin-win-cuda-12.4-x64.zip",
+      sha256: "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+      limits: { maxEntries: 3, maxEntryBytes: 521 * mebibyte },
     });
   });
 
@@ -828,4 +925,77 @@ describe("CUDA runtime selection", () => {
       ).toThrow(/No verified CUDA/u);
     },
   );
+});
+
+describe("Windows VC runtime selection", () => {
+  it.each([
+    ["darwin", "x64"],
+    ["linux", "arm64"],
+    ["linux", "x64"],
+  ] as const)("does not add a VC runtime dependency on %s/%s", (platform, arch) => {
+    const asset = selectLlamaServerAsset(platform, arch, { kind: "cpu" });
+
+    expect(asset.dependencies?.some((dependency) => dependency.archive === "vc-redist")).not.toBe(
+      true,
+    );
+  });
+
+  it.each([
+    [
+      "arm64",
+      "VC_redist.arm64.exe",
+      "https://download.visualstudio.microsoft.com/download/pr/ece44298-3977-4f73-ab91-c13fe79cfea8/B70EF586669A620A0A30A1156969C05C6A3831DC8F8BC992DA75779D2A92F944/VC_redist.arm64.exe",
+      "b70ef586669a620a0a30a1156969c05c6a3831dc8f8bc992da75779d2a92f944",
+      11_870_816,
+      684_112,
+      11_176_508,
+      "a1",
+      [
+        { source: "msvcp140.dll_arm64", target: "msvcp140.dll" },
+        { source: "vcruntime140.dll_arm64", target: "vcruntime140.dll" },
+      ],
+    ],
+    [
+      "x64",
+      "VC_redist.x64.exe",
+      "https://download.visualstudio.microsoft.com/download/pr/ebdab8e5-1d7b-4d9f-a11b-cbb1720c3b12/843068991DAAA1F73AD9F6239BCE4D0F6A07A51F18C37EA2A867E9BECA71295C/VC_redist.x64.exe",
+      "843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c",
+      18_731_856,
+      630_000,
+      18_091_661,
+      "a4",
+      [
+        { source: "msvcp140.dll_amd64", target: "msvcp140.dll" },
+        { source: "vcruntime140.dll_amd64", target: "vcruntime140.dll" },
+        { source: "vcruntime140_1.dll_amd64", target: "vcruntime140_1.dll" },
+      ],
+    ],
+  ] as const)(
+    "pins the Microsoft %s app-local runtime",
+    (arch, name, url, sha256, size, containerOffset, containerSize, nestedCabinet, files) => {
+      const asset = selectLlamaServerAsset("win32", arch, { kind: "cpu" });
+      const runtime = asset.dependencies?.find((dependency) => dependency.archive === "vc-redist");
+
+      expect(runtime).toEqual({
+        archive: "vc-redist",
+        name,
+        url,
+        sha256,
+        size,
+        containerOffset,
+        containerSize,
+        nestedCabinet,
+        files,
+      });
+    },
+  );
+
+  it("stages the x64 runtime with the CUDA dependencies", () => {
+    const asset = selectLlamaServerAsset("win32", "x64", {
+      kind: "cuda",
+      devices: [{ driverVersion: "551.78", computeCapability: 8.6 }],
+    });
+
+    expect(asset.dependencies?.some((dependency) => dependency.archive === "vc-redist")).toBe(true);
+  });
 });

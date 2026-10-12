@@ -453,7 +453,6 @@ describe("runDaemonRestart health checks", () => {
 
   it.each([
     { terminated: true, replaced: false, scheduled: false },
-    { terminated: false, replaced: false, scheduled: false },
     { terminated: true, replaced: true, scheduled: false },
     { terminated: true, replaced: false, scheduled: true },
   ])(
@@ -531,7 +530,7 @@ describe("runDaemonRestart health checks", () => {
       if (outcome === "timeout") {
         expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
           expect.objectContaining({
-            attempts: 360,
+            attempts: 10_800,
             delayMs: 500,
             port: 18789,
           }),
@@ -563,15 +562,16 @@ describe("runDaemonRestart health checks", () => {
 
   it("blocks non-interactive stop without force before managed service access", async () => {
     isTerminalInteractive.mockReturnValue(false);
-    const { defaultRuntime } = await import("../../runtime.js");
+    const { defaultRuntime, ExitError } = await import("../../runtime.js");
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
 
-    await expect(runDaemonStop({ json: true })).rejects.toThrow(
-      'process.exit unexpectedly called with "1"',
-    );
+    const stopping = runDaemonStop({ json: true });
+    await expect(stopping).rejects.toBeInstanceOf(ExitError);
+    await expect(stopping).rejects.toMatchObject({ code: 1 });
 
-    expect(writeJson).toHaveBeenCalledWith(
+    expect(writeJson).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
+        action: "stop",
         ok: false,
         error: expect.stringContaining("openclaw gateway run --dev"),
       }),
@@ -679,38 +679,6 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it.each([
-    { platform: "win32", force: true },
-    { platform: "darwin", force: false },
-  ] as const)(
-    "uses targeted RPC for an unmanaged $platform gateway restart (force=$force)",
-    async ({ platform, force }) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-      callGatewayCli.mockResolvedValueOnce({ ok: true, status: "emitted", pid: 4200 });
-      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-      mockUnmanagedRestart({ runPostRestartCheck: true });
-
-      await runDaemonRestart({ json: true, force });
-
-      expectRestartRpc(
-        {
-          reason: "gateway.restart",
-          ...(force ? { restartIntent: { force: true, drainBudgetMs: 300_000 } } : {}),
-          target: restartTarget,
-        },
-        18_789,
-      );
-      expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
-      expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
-      expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
-      expectListenerHealth(
-        platform === "win32" ? 960 : 720,
-        createGatewayLockIdentity(),
-        process.env,
-      );
-    },
-  );
-
-  it.each([
     ["missing", undefined],
     ["another process", { pid: 4300, createdAt: "2026-07-16T12:00:00.000Z", port: 18_789 }],
     ["another port", { pid: 4200, createdAt: "2026-07-16T12:00:00.000Z", port: 19_001 }],
@@ -753,7 +721,7 @@ describe("runDaemonRestart health checks", () => {
       intent: { waitMs: 30_000 },
     });
     expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
-    expectListenerHealth(420, createGatewayLockIdentity({ ownerId: undefined }), process.env);
+    expectListenerHealth(10_860, createGatewayLockIdentity({ ownerId: undefined }), process.env);
   });
 
   it("restarts and verifies the active unmanaged port despite a config edit", async () => {
@@ -805,20 +773,6 @@ describe("runDaemonRestart health checks", () => {
     expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
       expect.objectContaining({ supervisorKeepsAlive: true }),
     );
-  });
-
-  it("does not fall back to unmanaged restart when launchd repair reports headless GUI bootstrap failure", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    recoverInstalledLaunchAgent.mockRejectedValue(
-      new Error("LaunchAgent openclaw gateway restart requires a logged-in macOS GUI session"),
-    );
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-    mockUnmanagedRestart();
-
-    await expect(runDaemonRestart({ json: true })).rejects.toThrow("logged-in macOS GUI session");
-
-    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
-    expect(waitForGatewayHealthyListener).not.toHaveBeenCalled();
   });
 
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {

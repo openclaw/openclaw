@@ -2,8 +2,6 @@
  * Browser plugin registration helpers. This file keeps registration lazy while
  * advertising Browser tools, services, node-host commands, and audits.
  */
-import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Duplex } from "node:stream";
 import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   AnyAgentTool,
@@ -62,16 +60,8 @@ function deriveChatTypeFromSessionKey(
   sessionKey: string | undefined,
 ): "direct" | "group" | "channel" | undefined {
   const tokens = new Set(sessionKey?.toLowerCase().split(":") ?? []);
-  if (tokens.has("group")) {
-    return "group";
-  }
-  if (tokens.has("channel")) {
-    return "channel";
-  }
-  if (tokens.has("direct") || tokens.has("dm")) {
-    return "direct";
-  }
-  return undefined;
+  const chatType = (["group", "channel", "direct"] as const).find((kind) => tokens.has(kind));
+  return chatType ?? (tokens.has("dm") ? "direct" : undefined);
 }
 
 type BrowserToolOptions = NonNullable<
@@ -132,7 +122,6 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): BrowserToolOp
   };
 }
 
-/** Browser plugin reload policy. */
 export const browserPluginReload = {
   restartPrefixes: ["browser"],
   hotPrefixes: [
@@ -150,7 +139,6 @@ export const browserPluginReload = {
   ],
 };
 
-/** Node-host command descriptors exposed by the Browser plugin. */
 function createBrowserProxyNodeHostCommand(command: string): OpenClawPluginNodeHostCommand {
   return {
     command,
@@ -185,7 +173,6 @@ export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   createBrowserProxyNodeHostCommand(BROWSER_PROXY_UPLOAD_COMMAND),
 ];
 
-/** Security audit collectors contributed by the Browser plugin. */
 export const browserSecurityAuditCollectors: OpenClawPluginSecurityAuditCollector[] = [
   async (ctx) => {
     const { collectBrowserSecurityAuditFindings } = await loadBrowserRegistrationRuntimeModule();
@@ -258,7 +245,6 @@ function createLazyBrowserPluginService(
   };
 }
 
-/** Register Browser tool factories, CLI, gateway methods, services, and audits. */
 export function registerBrowserPlugin(api: OpenClawPluginApi) {
   const runtime = initializeBrowserSessionTabStore(api.runtime);
   api.session.controls.registerControlUiDescriptor({
@@ -346,40 +332,38 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "browser" },
     },
   );
-  // Remote extension relay: lets the Chrome extension connect directly to this
-  // gateway over wss:// (no node host on the browser machine). auth:"plugin"
-  // with no nodeCapability means the gateway does not pre-enforce token auth;
-  // the handler self-validates the host-local relay secret. Path kept in sync
-  // with GATEWAY_EXTENSION_RELAY_PATH (hardcoded here to stay lazy).
-  api.registerHttpRoute({
-    path: "/browser/extension",
-    auth: "plugin",
-    match: "exact",
-    handler: (_req: IncomingMessage, res: ServerResponse) => {
-      res.writeHead(426, { "Content-Type": "text/plain" });
-      res.end("Upgrade Required: connect the OpenClaw Chrome extension over WebSocket.");
+  for (const { path, client, loadUpgrade } of [
+    {
+      // Keep the relay path in sync with GATEWAY_EXTENSION_RELAY_PATH without eager loading.
+      path: "/browser/extension",
+      client: "the OpenClaw Chrome extension",
+      loadUpgrade: async () =>
+        (await getGatewayExtensionRelayModule()).handleGatewayExtensionUpgrade,
     },
-    handleUpgrade: async (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-      // Direct relay activity prepares the teardown module consumed by lazy service shutdown.
-      await loadBrowserRegistrationRuntimeModule();
-      const { handleGatewayExtensionUpgrade } = await getGatewayExtensionRelayModule();
-      return await handleGatewayExtensionUpgrade(req, socket, head);
+    {
+      path: "/browser/screencast",
+      client: "the browser screencast",
+      loadUpgrade: async () =>
+        (await import("./src/browser/screencast/upgrade.js")).handleBrowserScreencastUpgrade,
     },
-  });
-  api.registerHttpRoute({
-    path: "/browser/screencast",
-    auth: "plugin",
-    match: "exact",
-    handler: (_req: IncomingMessage, res: ServerResponse) => {
-      res.writeHead(426, { "Content-Type": "text/plain" });
-      res.end("Upgrade Required: connect the browser screencast over WebSocket.");
-    },
-    handleUpgrade: async (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-      await loadBrowserRegistrationRuntimeModule();
-      const { handleBrowserScreencastUpgrade } =
-        await import("./src/browser/screencast/upgrade.js");
-      return await handleBrowserScreencastUpgrade(req, socket, head);
-    },
-  });
+  ]) {
+    api.registerHttpRoute({
+      path,
+      // Each upgrade handler validates its own authority before admitting the socket.
+      auth: "plugin",
+      match: "exact",
+      handler: (_req, res) => {
+        res.writeHead(426, { "Content-Type": "text/plain" });
+        res.end(`Upgrade Required: connect ${client} over WebSocket.`);
+      },
+      handleUpgrade: async (req, socket, head) => {
+        // Direct socket activity prepares teardown consumed by lazy service shutdown.
+        await loadBrowserRegistrationRuntimeModule();
+        return await (
+          await loadUpgrade()
+        )(req, socket, head);
+      },
+    });
+  }
   api.registerService(createLazyBrowserPluginService(runtime));
 }

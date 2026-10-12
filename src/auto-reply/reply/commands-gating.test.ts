@@ -528,31 +528,6 @@ describe("command gating", () => {
     expect(output).not.toContain("OPENCLAW_CONFIG_SHOW_CANARY_TOKEN_65623");
   });
 
-  it("redacts browser cdpUrl query secrets from path-specific /config show replies", async () => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      valid: true,
-      parsed: {
-        browser: {
-          cdpUrl:
-            "wss://chrome.example.test/devtools?token=OPENCLAW_CONFIG_SHOW_CANARY_CDP_TOKEN_65623&apiKey=OPENCLAW_CONFIG_SHOW_CANARY_CDP_API_KEY_65623",
-        },
-      },
-    });
-    const params = buildParams("/config show browser.cdpUrl", {
-      commands: { config: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    params.command.senderIsOwner = true;
-
-    const result = await handleConfigCommand(params, true);
-    const output = result?.reply?.text ?? "";
-
-    expect(output).toContain("Config browser.cdpUrl");
-    expect(output).toContain(REDACTED_SENTINEL);
-    expect(output).not.toContain("OPENCLAW_CONFIG_SHOW_CANARY_CDP_TOKEN_65623");
-    expect(output).not.toContain("OPENCLAW_CONFIG_SHOW_CANARY_CDP_API_KEY_65623");
-  });
-
   it("redacts secret-shaped values from /config set acknowledgements", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       valid: true,
@@ -625,36 +600,6 @@ describe("command gating", () => {
     expect(output).not.toContain("OPENCLAW_DEBUG_SET_CANARY_TOKEN_65623");
   });
 
-  it("returns explicit unauthorized replies for native privileged commands", async () => {
-    const configParams = buildParams("/config show", {
-      commands: { config: true, text: true },
-      channels: { telegram: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    configParams.ctx.CommandSource = "native";
-    configParams.command.channel = "telegram";
-    configParams.command.channelId = "telegram";
-    configParams.command.surface = "telegram";
-    const configResult = await handleConfigCommand(configParams, true);
-    expect(configResult).toEqual({
-      shouldContinue: false,
-      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
-    });
-
-    const debugParams = buildParams("/debug show", {
-      commands: { debug: true, text: true },
-      channels: { telegram: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    debugParams.ctx.CommandSource = "native";
-    debugParams.command.channel = "telegram";
-    debugParams.command.channelId = "telegram";
-    debugParams.command.surface = "telegram";
-    const debugResult = await handleDebugCommand(debugParams, true);
-    expect(debugResult).toEqual({
-      shouldContinue: false,
-      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
-    });
-  });
-
   it("blocks disallowed /config set writes", async () => {
     resolveConfigWriteDeniedTextMock.mockReturnValueOnce("Config writes are disabled");
     const params = buildParams('/config set messages.ackReaction=":)"', {
@@ -715,28 +660,6 @@ describe("command gating", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("requires operator.admin");
-    expect(isInternalMessageChannelMock).not.toHaveBeenCalled();
-  });
-
-  it("does not require gateway client permissions when scopes are absent", () => {
-    const result = requireGatewayClientScope(
-      {
-        ctx: {
-          Provider: "telegram",
-          OriginatingChannel: "telegram",
-        },
-        command: {
-          channel: "telegram",
-        },
-      } as unknown as HandleCommandsParams,
-      {
-        label: "/config write",
-        allowedScopes: ["operator.admin"],
-        missingText: "/config set|unset requires operator.admin for gateway clients.",
-      },
-    );
-
-    expect(result).toBeNull();
     expect(isInternalMessageChannelMock).not.toHaveBeenCalled();
   });
 

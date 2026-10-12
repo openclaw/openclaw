@@ -4,6 +4,7 @@ import "../../../styles.css";
 import "../../../styles/chat.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 let container: HTMLDivElement | undefined;
 afterEach(() => {
@@ -75,7 +76,7 @@ function activityFixture(note = "") {
 describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () => {
   it.each(["standalone", "inline"] as const)(
     "fits visible rows, caps expanded content, and shrinks after collapse (%s)",
-    (presentation) => {
+    async (presentation) => {
       container = document.body.appendChild(document.createElement("div"));
       container.style.width = "760px";
       const group = activityFixture();
@@ -113,6 +114,7 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
         );
       };
       draw();
+      await settleToolBridges(container);
       const body = container.querySelector<HTMLElement>(".chat-activity-group__body")!;
       const compactHeight = body.getBoundingClientRect().height;
       expect(body.querySelectorAll(":scope > .chat-bubble")).toHaveLength(4);
@@ -123,6 +125,7 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
 
       const toggle = () => body.querySelector<HTMLButtonElement>(".chat-tool-msg-summary")!.click();
       toggle();
+      await settleToolBridges(container);
       expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(14);
       expect(body.getBoundingClientRect().height).toBeCloseTo(
         Math.min(420, window.innerHeight * 0.58),
@@ -133,13 +136,101 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
       expect(body.scrollTop).toBeGreaterThan(0);
 
       toggle();
+      await settleToolBridges(container);
       expect(body.getBoundingClientRect().height).toBe(compactHeight);
       expect(body.scrollHeight).toBe(body.clientHeight);
       expect(body.scrollTop).toBe(0);
     },
   );
 
-  it("preserves non-tool text beside a card moved under its parent", () => {
+  it("caps an opened lone step whose nested calls are all routine", async () => {
+    container = document.body.appendChild(document.createElement("div"));
+    container.style.width = "760px";
+    const runId = "lone-step";
+    const group = messageGroup("step", "tool", [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "step",
+            name: "exec",
+            runId,
+            arguments: { title: "Watch the build", code: "// Poll until done" },
+          },
+        ],
+        activity: [
+          {
+            itemId: "tool:step",
+            toolCallId: "step",
+            kind: "tool",
+            name: "exec",
+            title: "Exec",
+            phase: "end",
+            status: "completed",
+            commandBearing: true,
+          },
+        ],
+        timestamp: 1000,
+      },
+      ...Array.from({ length: 40 }, (_, index) => ({
+        role: "custom",
+        content: [
+          {
+            type: "toolCall",
+            id: "poll-" + index,
+            name: "process",
+            runId,
+            parentToolCallId: "step",
+            arguments: { action: "poll" },
+          },
+          {
+            type: "toolResult",
+            toolCallId: "poll-" + index,
+            toolName: "process",
+            content: [{ type: "text", text: "running" }],
+          },
+        ],
+        activity: [],
+        timestamp: 1001 + index,
+      })),
+    ]);
+    const expanded = new Set<string>();
+    const draw = () =>
+      render(
+        renderActivityGroup([group], {
+          showReasoning: false,
+          isToolExpanded: (id: string) => expanded.has(id),
+          onToggleToolExpanded: (id: string) => {
+            expanded.add(id);
+            draw();
+          },
+        }),
+        container!,
+      );
+    draw();
+    await settleToolBridges(container);
+    expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
+    const body = container.querySelector<HTMLElement>(".chat-activity-group__body")!;
+    const chevronOpacity = (row: number) =>
+      getComputedStyle(body.querySelectorAll(".chat-tool-row__chevron")[row]!).opacity;
+    expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(1);
+    expect(body.scrollHeight).toBe(body.clientHeight);
+    // The step's own row keeps its chevron; rows under it reveal theirs on hover.
+    expect(chevronOpacity(0)).not.toBe("0");
+
+    body.querySelector<HTMLButtonElement>(".chat-tool-msg-summary")!.click();
+    await settleToolBridges(container);
+    expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(41);
+    expect(chevronOpacity(1)).toBe("0");
+    expect(body.getBoundingClientRect().height).toBeCloseTo(
+      Math.min(420, window.innerHeight * 0.58),
+      0,
+    );
+    expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
+  });
+
+  it("preserves non-tool text beside a card moved under its parent", async () => {
     container = document.body.appendChild(document.createElement("div"));
     const note = "Keep this explanation visible.";
     render(
@@ -149,6 +240,7 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
       }),
       container,
     );
+    await settleToolBridges(container);
     expect(container.querySelectorAll(".chat-tool-row")).toHaveLength(4);
     expect(container.querySelectorAll(".chat-activity-group__body > .chat-bubble")).toHaveLength(5);
     expect(container.querySelector(".chat-text")?.textContent).toContain(note);

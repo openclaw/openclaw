@@ -33,8 +33,8 @@ function createInput(overrides: Partial<PromptErrorInput> = {}): PromptErrorInpu
     activeSession: {
       agent: { state: { messages: [] } },
       messages: [],
-      sessionManager: SessionManager.inMemory(),
       sendCustomMessage: hoisted.sendCustomMessage,
+      sessionManager: SessionManager.inMemory(),
     },
     attempt: { runId: "run-1", sessionId: "session-1" },
     error: new Error("prompt failed"),
@@ -108,7 +108,8 @@ describe("handleEmbeddedAttemptPromptError", () => {
     expect(hoisted.sendCustomMessage).toHaveBeenCalledWith(
       {
         customType: "openclaw.sessions_yield",
-        content: expect.stringContaining("wait for follow-up"),
+        content:
+          "wait for follow-up\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]",
         display: false,
         details: { source: "sessions_yield", message: "wait for follow-up" },
       },
@@ -116,25 +117,32 @@ describe("handleEmbeddedAttemptPromptError", () => {
     );
   });
 
-  it("marks yield state before fallible recovery begins", async () => {
-    const recoveryError = new Error("settle failed");
-    let marked = false;
-    hoisted.isSessionsYieldAbortError.mockReturnValue(true);
-    hoisted.waitForEmbeddedAbortSettle.mockImplementationOnce(async () => {
-      expect(marked).toBe(true);
-      throw recoveryError;
-    });
+  it.each(["steering release", "yield settlement"] as const)(
+    "marks yield state before fallible %s",
+    async (phase) => {
+      const recoveryError = new Error("recovery failed");
+      let marked = false;
+      hoisted.isSessionsYieldAbortError.mockReturnValue(true);
+      const recovery =
+        phase === "steering release"
+          ? hoisted.releaseLeasedSteering
+          : hoisted.waitForEmbeddedAbortSettle;
+      recovery.mockImplementationOnce(async () => {
+        expect(marked).toBe(true);
+        throw recoveryError;
+      });
 
-    await expect(
-      handleEmbeddedAttemptPromptError(
-        createInput({
-          error: new Error("yield handoff"),
-          markYieldAborted: () => {
-            marked = true;
-          },
-          yieldDetected: true,
-        }),
-      ),
-    ).rejects.toBe(recoveryError);
-  });
+      await expect(
+        handleEmbeddedAttemptPromptError(
+          createInput({
+            error: new Error("yield handoff"),
+            markYieldAborted: () => {
+              marked = true;
+            },
+            yieldDetected: true,
+          }),
+        ),
+      ).rejects.toBe(recoveryError);
+    },
+  );
 });

@@ -1,4 +1,3 @@
-// Google plugin module resolves Gemini API partner attribution headers.
 import {
   resolveProviderRequestHeaders,
   type ProviderRequestCapability,

@@ -23,7 +23,6 @@ export const SessionsSendToolSchema = Type.Object({
 const SessionsSendDeliverySchema = Type.Object(
   {
     status: Type.Union([Type.Literal("pending"), Type.Literal("skipped")]),
-    mode: Type.Literal("announce"),
   },
   { additionalProperties: false },
 );

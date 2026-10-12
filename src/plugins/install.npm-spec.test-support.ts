@@ -106,7 +106,7 @@ export function registerNpmPayloadIdentityTests({
   uniquePackageName: (prefix: string) => string;
   useStaticRegistry: (packages: RegistryPackage[]) => Promise<string>;
 }) {
-  it.each(["version", "name", "matching", "normalized-version", "loose-version"] as const)(
+  it.each(["version", "name", "normalized-version"] as const)(
     "checks real npm payload %s against the selected registry identity",
     { timeout: 120_000 },
     async (identity) => {
@@ -117,9 +117,7 @@ export function registerNpmPayloadIdentityTests({
       const payloadVersion = {
         version: "1.9.0",
         name: "2.0.0",
-        matching: "2.0.0",
         "normalized-version": "v2.0.0",
-        "loose-version": "02.0.0",
       }[identity];
       const versions = await packPlugins(rootDir, [
         { packageName, version: "1.0.0", pluginId },

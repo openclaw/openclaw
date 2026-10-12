@@ -1,13 +1,13 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { buildConversationIdentity } from "../config/sessions/conversation-identity.js";
 import {
   listConversations,
   registerConversationAddresses,
-  resolveConversationRegistryScope,
+  prepareConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOutboundSessionRoute } from "../infra/outbound/outbound-session.js";
@@ -22,8 +22,10 @@ import {
 } from "../plugin-sdk/plugin-test-runtime.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { runGatewayConversationList } from "./conversation-list.js";
 
@@ -48,7 +50,7 @@ const LIVE_CHANNELS = CHANNELS.filter((entry) => !entry.retiredOnly);
 let plugins: ChannelPlugin[];
 beforeAll(async () => {
   plugins = await Promise.all(
-    CHANNELS.map(async ({ channel }) => {
+    [...CHANNELS.map(({ channel }) => channel), "discord"].map(async (channel) => {
       const facade = await loadBundledPluginFacade<Record<string, ChannelPlugin>>({
         pluginId: channel,
         artifactBasename: "api.js",
@@ -65,7 +67,7 @@ beforeEach(() => {
   );
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
   // Only the live account still has a running monitor, so only it registers an adapter.
-  for (const { channel } of CHANNELS) {
+  for (const { id: channel } of plugins) {
     registerSessionBindingAdapter({
       channel,
       accountId: LIVE_ACCOUNT_ID,
@@ -75,30 +77,44 @@ beforeEach(() => {
   }
 });
 
-afterEach(() => {
+const tempDirs = createTempDirTracker();
+afterEach(async () => {
   resetPluginRuntimeStateForTest();
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   vi.unstubAllEnvs();
+  tempDirs.cleanup();
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("conversation listings after removing matrix, telegram and slack accounts", () => {
+async function createConversationStore(channels: OpenClawConfig["channels"]) {
+  const stateDir = tempDirs.make("channel-conversation-list-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const storePath = path.join(stateDir, "main.sqlite");
+  openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+  const config: OpenClawConfig = {
+    agents: { entries: { main: {} } },
+    channels,
+    session: { store: storePath },
+  };
+  return { config, scope: await prepareConversationRegistryScope({ config, agentId: "main" }) };
+}
+
+const deps = {
+  listConversations,
+  registerConversationAddresses,
+  resolveOutboundChannelPlugin: () => undefined,
+  resolveOutboundSessionRoute,
+};
+
+describe("conversation listings after removing accounts", () => {
   it("lists live conversations across channels and preserves retired history", async () => {
-    const stateDir = tempDirs.make("channel-conversation-list-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const storePath = path.join(stateDir, "main.sqlite");
-    openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-    const config: OpenClawConfig = {
-      agents: { entries: { main: { default: true } } },
-      channels: {
-        matrix: { accounts: { [LIVE_ACCOUNT_ID]: {} } },
-        telegram: { accounts: { [LIVE_ACCOUNT_ID]: {} } },
-        slack: { accounts: { [LIVE_ACCOUNT_ID]: {} } },
-      },
-      session: { store: storePath },
-    };
-    const scope = resolveConversationRegistryScope({ config, agentId: "main" });
+    const { config, scope } = await createConversationStore({
+      matrix: { accounts: { [LIVE_ACCOUNT_ID]: {} } },
+      telegram: { accounts: { [LIVE_ACCOUNT_ID]: {} } },
+      slack: { accounts: { [LIVE_ACCOUNT_ID]: {} } },
+    });
     const identities = CHANNELS.flatMap(({ channel, peerId, retiredOnly, ...rest }) =>
       (retiredOnly ? [RETIRED_ACCOUNT_ID] : [RETIRED_ACCOUNT_ID, LIVE_ACCOUNT_ID]).map(
         (accountId) =>
@@ -115,19 +131,11 @@ describe("conversation listings after removing matrix, telegram and slack accoun
           ),
       ),
     );
-    registerConversationAddresses(scope, identities);
-    const before = listConversations(scope);
+    await registerConversationAddresses(scope, identities);
+    const before = await listConversations(scope);
     expect(before).toHaveLength(identities.length);
 
-    const result = await runGatewayConversationList(
-      { config, agentId: "main", limit: 10 },
-      {
-        listConversations,
-        registerConversationAddresses,
-        resolveOutboundChannelPlugin: () => undefined,
-        resolveOutboundSessionRoute,
-      },
-    );
+    const result = await runGatewayConversationList({ config, agentId: "main", limit: 10 }, deps);
 
     expect(
       result.conversations.map((conversation) => ({
@@ -135,6 +143,42 @@ describe("conversation listings after removing matrix, telegram and slack accoun
         accountId: conversation.accountId,
       })),
     ).toEqual(LIVE_CHANNELS.map(({ channel }) => ({ channel, accountId: LIVE_ACCOUNT_ID })));
-    expect(listConversations(scope)).toEqual(before);
+    expect(await listConversations(scope)).toEqual(before);
+  });
+
+  it("searches the active Discord account and preserves inactive history", async () => {
+    const { config, scope } = await createConversationStore({
+      discord: { accounts: { [LIVE_ACCOUNT_ID]: {} } },
+    });
+    const identities = ["retired-one", "retired-two", LIVE_ACCOUNT_ID].map((accountId) =>
+      expectDefined(
+        buildConversationIdentity({
+          channel: "discord",
+          accountId,
+          kind: "channel",
+          peerId: "123456789012345678",
+          deliveryTarget: "channel:123456789012345678",
+          nativeChannelId: "123456789012345678",
+        }),
+        "synthetic Discord conversation identity",
+      ),
+    );
+    await registerConversationAddresses(scope, identities);
+    const before = await listConversations(scope);
+
+    const result = await runGatewayConversationList(
+      { config, agentId: "main", channel: "discord", query: "123456789012345678", limit: 10 },
+      deps,
+    );
+
+    expect(result.conversations).toEqual([
+      expect.objectContaining({
+        conversationRef: expectDefined(identities[2], "active account identity").conversationRef,
+        accountId: LIVE_ACCOUNT_ID,
+        target: "channel:123456789012345678",
+      }),
+    ]);
+    expect(await listConversations(scope)).toEqual(before);
+    expect(before).toHaveLength(3);
   });
 });

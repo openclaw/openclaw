@@ -162,7 +162,7 @@ struct ChatSessionSnoozeTests {
     }
 
     private static func entry(snoozedUntil: Double?) -> OpenClawChatSessionEntry {
-        var entry = OpenClawChatSessionEntry.placeholder(key: "agent:main:work")
+        var entry = OpenClawChatSessionEntry(key: "agent:main:work")
         entry.snoozedUntil = snoozedUntil
         return entry
     }

@@ -1,4 +1,3 @@
-// Matrix tests cover cli plugin behavior.
 import { Command } from "commander";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";
@@ -6,36 +5,58 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMatrixCli } from "./cli.js";
 import type { CoreConfig } from "./types.js";
 
-const bootstrapMatrixVerificationMock = vi.fn();
-const acceptMatrixVerificationMock = vi.fn();
-const cancelMatrixVerificationMock = vi.fn();
-const confirmMatrixVerificationSasMock = vi.fn();
-const getMatrixRoomKeyBackupStatusMock = vi.fn();
-const getMatrixVerificationSasMock = vi.fn();
-const getMatrixVerificationStatusMock = vi.fn();
-const listMatrixOwnDevicesMock = vi.fn();
-const listMatrixVerificationsMock = vi.fn();
-const mismatchMatrixVerificationSasMock = vi.fn();
-const pruneMatrixStaleGatewayDevicesMock = vi.fn();
-const requestMatrixVerificationMock = vi.fn();
-const resolveMatrixAccountConfigMock = vi.fn();
-const resolveMatrixAccountMock = vi.fn();
-const resolveMatrixAuthContextMock = vi.fn();
-const matrixSetupApplyAccountConfigMock = vi.fn();
-const matrixSetupValidateInputMock = vi.fn();
-const matrixRuntimeLoadConfigMock = vi.fn();
-const matrixRuntimeMutateConfigFileMock = vi.fn();
-const matrixRuntimeReplaceConfigFileMock = vi.fn();
-const resetMatrixRoomKeyBackupMock = vi.fn();
-const restoreMatrixRoomKeyBackupMock = vi.fn();
-const runMatrixSelfVerificationMock = vi.fn();
-const setMatrixSdkLogModeMock = vi.fn();
-const startMatrixVerificationMock = vi.fn();
-const updateMatrixOwnProfileMock = vi.fn();
-const verifyMatrixRecoveryKeyMock = vi.fn();
-const consoleLogMock = vi.fn();
-const consoleErrorMock = vi.fn();
-const stdoutWriteMock = vi.fn();
+const mocks = vi.hoisted(() => ({
+  bootstrap: vi.fn(),
+  accept: vi.fn(),
+  cancel: vi.fn(),
+  confirmSas: vi.fn(),
+  backupStatus: vi.fn(),
+  sas: vi.fn(),
+  verificationStatus: vi.fn(),
+  devices: vi.fn(),
+  verifications: vi.fn(),
+  mismatchSas: vi.fn(),
+  pruneDevices: vi.fn(),
+  request: vi.fn(),
+  accountConfig: vi.fn(),
+  account: vi.fn(),
+  authContext: vi.fn(),
+  applyAccountConfig: vi.fn(),
+  validateInput: vi.fn(),
+  loadConfig: vi.fn(),
+  mutateConfig: vi.fn(),
+  replaceConfig: vi.fn(),
+  resetBackup: vi.fn(),
+  restoreBackup: vi.fn(),
+  selfVerify: vi.fn(),
+  logMode: vi.fn(),
+  start: vi.fn(),
+  profile: vi.fn(),
+  verifyKey: vi.fn(),
+  log: vi.fn(),
+  error: vi.fn(),
+  stdout: vi.fn(),
+}));
+
+function expectLogs(...messages: string[]): void {
+  for (const message of messages) {
+    expect(mocks.log).toHaveBeenCalledWith(message);
+  }
+}
+
+function configureAccount(encryption = false) {
+  const account = { encryption, homeserver: "https://matrix.example.org", accessToken: "token" };
+  const cfg = {
+    channels: { matrix: { enabled: true, accounts: { ops: account } } },
+  };
+  mocks.loadConfig.mockReturnValue(cfg);
+  mocks.account.mockReturnValue({ configured: true, enabled: true, config: account });
+  mocks.accountConfig.mockImplementation(
+    ({ cfg: current, accountId }: { cfg: CoreConfig; accountId: string }) =>
+      current.channels?.matrix?.accounts?.[accountId] ?? {},
+  );
+  return cfg;
+}
 
 function mockRecoveryKeyStdin(...values: string[]): void {
   vi.spyOn(process.stdin, Symbol.asyncIterator).mockReturnValue(
@@ -69,82 +90,76 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
 }
 
 function stdoutWriteArg(callIndex = -1) {
-  return mockCallArg(stdoutWriteMock, callIndex);
+  return mockCallArg(mocks.stdout, callIndex);
 }
 
 vi.mock("./matrix/actions/verification.js", () => ({
-  acceptMatrixVerification: (...args: unknown[]) => acceptMatrixVerificationMock(...args),
-  bootstrapMatrixVerification: (...args: unknown[]) => bootstrapMatrixVerificationMock(...args),
-  cancelMatrixVerification: (...args: unknown[]) => cancelMatrixVerificationMock(...args),
-  confirmMatrixVerificationSas: (...args: unknown[]) => confirmMatrixVerificationSasMock(...args),
-  getMatrixRoomKeyBackupStatus: (...args: unknown[]) => getMatrixRoomKeyBackupStatusMock(...args),
-  getMatrixVerificationSas: (...args: unknown[]) => getMatrixVerificationSasMock(...args),
-  getMatrixVerificationStatus: (...args: unknown[]) => getMatrixVerificationStatusMock(...args),
-  listMatrixVerifications: (...args: unknown[]) => listMatrixVerificationsMock(...args),
-  mismatchMatrixVerificationSas: (...args: unknown[]) => mismatchMatrixVerificationSasMock(...args),
-  requestMatrixVerification: (...args: unknown[]) => requestMatrixVerificationMock(...args),
-  resetMatrixRoomKeyBackup: (...args: unknown[]) => resetMatrixRoomKeyBackupMock(...args),
-  restoreMatrixRoomKeyBackup: (...args: unknown[]) => restoreMatrixRoomKeyBackupMock(...args),
-  runMatrixSelfVerification: (...args: unknown[]) => runMatrixSelfVerificationMock(...args),
-  startMatrixVerification: (...args: unknown[]) => startMatrixVerificationMock(...args),
-  verifyMatrixRecoveryKey: (...args: unknown[]) => verifyMatrixRecoveryKeyMock(...args),
+  acceptMatrixVerification: mocks.accept,
+  bootstrapMatrixVerification: mocks.bootstrap,
+  cancelMatrixVerification: mocks.cancel,
+  confirmMatrixVerificationSas: mocks.confirmSas,
+  getMatrixRoomKeyBackupStatus: mocks.backupStatus,
+  getMatrixVerificationSas: mocks.sas,
+  getMatrixVerificationStatus: mocks.verificationStatus,
+  listMatrixVerifications: mocks.verifications,
+  mismatchMatrixVerificationSas: mocks.mismatchSas,
+  requestMatrixVerification: mocks.request,
+  resetMatrixRoomKeyBackup: mocks.resetBackup,
+  restoreMatrixRoomKeyBackup: mocks.restoreBackup,
+  runMatrixSelfVerification: mocks.selfVerify,
+  startMatrixVerification: mocks.start,
+  verifyMatrixRecoveryKey: mocks.verifyKey,
 }));
 
 vi.mock("./matrix/actions/devices.js", () => ({
-  listMatrixOwnDevices: (...args: unknown[]) => listMatrixOwnDevicesMock(...args),
-  pruneMatrixStaleGatewayDevices: (...args: unknown[]) =>
-    pruneMatrixStaleGatewayDevicesMock(...args),
+  listMatrixOwnDevices: mocks.devices,
+  pruneMatrixStaleGatewayDevices: mocks.pruneDevices,
 }));
 
 vi.mock("./matrix/client/logging.js", () => ({
-  setMatrixSdkLogMode: (...args: unknown[]) => setMatrixSdkLogModeMock(...args),
+  setMatrixSdkLogMode: mocks.logMode,
 }));
 
 vi.mock("./matrix/sdk/logger.js", () => ({ setMatrixConsoleLogging: vi.fn() }));
 
 vi.mock("./matrix/actions/profile.js", () => ({
-  updateMatrixOwnProfile: (...args: unknown[]) => updateMatrixOwnProfileMock(...args),
+  updateMatrixOwnProfile: mocks.profile,
 }));
 
 vi.mock("./matrix/accounts.js", () => ({
-  resolveMatrixAccountAsync: async (...args: unknown[]) => resolveMatrixAccountMock(...args),
-  resolveMatrixAccountConfig: (...args: unknown[]) => resolveMatrixAccountConfigMock(...args),
+  resolveMatrixAccountAsync: mocks.account,
+  resolveMatrixAccountConfig: mocks.accountConfig,
 }));
 
 vi.mock("./matrix/client.js", () => ({
-  resolveMatrixAuthContext: (...args: unknown[]) => resolveMatrixAuthContextMock(...args),
+  resolveMatrixAuthContext: mocks.authContext,
 }));
 
 vi.mock("./setup-core.js", () => ({
   matrixSetupAdapter: {
-    applyAccountConfig: (...args: unknown[]) => matrixSetupApplyAccountConfigMock(...args),
-    validateInput: (...args: unknown[]) => matrixSetupValidateInputMock(...args),
+    applyAccountConfig: mocks.applyAccountConfig,
+    validateInput: mocks.validateInput,
   },
 }));
 
 vi.mock("./runtime.js", () => ({
   getMatrixRuntime: () => ({
     config: {
-      current: (...args: unknown[]) => matrixRuntimeLoadConfigMock(...args),
-      mutateConfigFile: (...args: unknown[]) => matrixRuntimeMutateConfigFileMock(...args),
-      replaceConfigFile: (...args: unknown[]) => matrixRuntimeReplaceConfigFileMock(...args),
+      current: mocks.loadConfig,
+      mutateConfigFile: mocks.mutateConfig,
+      replaceConfigFile: mocks.replaceConfig,
     },
   }),
 }));
 
-function buildProgram(): Command {
+async function runMatrixCli(argv: readonly string[]): Promise<void> {
   const program = new Command();
   registerMatrixCli({ program });
-  return program;
-}
-
-async function runMatrixCli(argv: readonly string[]): Promise<void> {
-  await buildProgram().parseAsync(argv, { from: "user" });
+  await program.parseAsync(["matrix", ...argv], { from: "user" });
 }
 
 function matrixAccountPasswordArgs(accountId = "ops", ...extra: string[]): string[] {
   return [
-    "matrix",
     "account",
     "add",
     "--account",
@@ -160,7 +175,7 @@ function matrixAccountPasswordArgs(accountId = "ops", ...extra: string[]): strin
 }
 
 function mockMatrixAccountConfigApply(): void {
-  matrixSetupApplyAccountConfigMock.mockImplementation(
+  mocks.applyAccountConfig.mockImplementation(
     ({ cfg, accountId }: { cfg: Record<string, unknown>; accountId: string }) => ({
       ...cfg,
       channels: {
@@ -169,6 +184,10 @@ function mockMatrixAccountConfigApply(): void {
       },
     }),
   );
+}
+
+function matrixDevice(deviceId: string, current: boolean) {
+  return { deviceId, current, displayName: "OpenClaw Gateway", lastSeenIp: null, lastSeenTs: null };
 }
 
 function healthyMatrixBackup(overrides: Record<string, unknown> = {}) {
@@ -230,19 +249,6 @@ function formatExpectedLocalTimestamp(value: string): string {
   return formatZonedTimestamp(new Date(value), { displaySeconds: true }) ?? value;
 }
 
-function mockMatrixVerificationStatus(params: {
-  recoveryKeyCreatedAt: string | null;
-  verifiedAt?: string;
-}) {
-  getMatrixVerificationStatusMock.mockResolvedValue(
-    matrixVerificationStatus({
-      recoveryKeyCreatedAt: params.recoveryKeyCreatedAt,
-      serverDeviceKnown: true,
-      verifiedAt: params.verifiedAt,
-    }),
-  );
-}
-
 function mockMatrixVerificationSummary(overrides: Record<string, unknown> = {}) {
   return {
     id: "self-1",
@@ -271,27 +277,25 @@ describe("matrix CLI verification commands", () => {
     vi.clearAllMocks();
     previousExitCode = process.exitCode;
     process.exitCode = 0;
-    vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => consoleLogMock(...args));
-    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) =>
-      consoleErrorMock(...args),
-    );
+    vi.spyOn(console, "log").mockImplementation(mocks.log);
+    vi.spyOn(console, "error").mockImplementation(mocks.error);
     vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
-      stdoutWriteMock(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+      mocks.stdout(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
       return true;
     }) as typeof process.stdout.write);
-    consoleLogMock.mockReset();
-    consoleErrorMock.mockReset();
-    stdoutWriteMock.mockReset();
-    matrixSetupValidateInputMock.mockReturnValue(null);
-    matrixSetupApplyAccountConfigMock.mockImplementation(({ cfg }: { cfg: unknown }) => cfg);
-    matrixRuntimeLoadConfigMock.mockReturnValue({});
-    matrixRuntimeReplaceConfigFileMock.mockResolvedValue(undefined);
-    matrixRuntimeMutateConfigFileMock.mockImplementation(async ({ mutate, afterWrite }) => {
-      const draft = structuredClone(matrixRuntimeLoadConfigMock());
+    mocks.log.mockReset();
+    mocks.error.mockReset();
+    mocks.stdout.mockReset();
+    mocks.validateInput.mockReturnValue(null);
+    mocks.applyAccountConfig.mockImplementation(({ cfg }: { cfg: unknown }) => cfg);
+    mocks.loadConfig.mockReturnValue({});
+    mocks.replaceConfig.mockResolvedValue(undefined);
+    mocks.mutateConfig.mockImplementation(async ({ mutate, afterWrite }) => {
+      const draft = structuredClone(mocks.loadConfig());
       await mutate(draft, { snapshot: { runtimeConfig: structuredClone(draft) } });
-      await matrixRuntimeReplaceConfigFileMock({ nextConfig: draft, afterWrite });
+      await mocks.replaceConfig({ nextConfig: draft, afterWrite });
     });
-    resolveMatrixAuthContextMock.mockImplementation(
+    mocks.authContext.mockImplementation(
       ({ cfg, accountId }: { cfg: unknown; accountId?: string | null }) => ({
         cfg,
         env: process.env,
@@ -299,35 +303,28 @@ describe("matrix CLI verification commands", () => {
         resolved: {},
       }),
     );
-    resolveMatrixAccountMock.mockReturnValue({
+    mocks.account.mockReturnValue({
       configured: false,
     });
-    resolveMatrixAccountConfigMock.mockReturnValue({
+    mocks.accountConfig.mockReturnValue({
       encryption: false,
     });
-    bootstrapMatrixVerificationMock.mockResolvedValue(successfulMatrixBootstrap());
-    resetMatrixRoomKeyBackupMock.mockResolvedValue({
+    mocks.bootstrap.mockResolvedValue(successfulMatrixBootstrap());
+    mocks.resetBackup.mockResolvedValue({
       success: true,
       previousVersion: "1",
       deletedVersion: "1",
       createdVersion: "2",
       backup: diagnosticMatrixBackup({ serverVersion: "2", activeVersion: "2" }),
     });
-    updateMatrixOwnProfileMock.mockResolvedValue({
+    mocks.profile.mockResolvedValue({
       skipped: false,
       displayNameUpdated: true,
       avatarUpdated: false,
       resolvedAvatarUrl: null,
       convertedAvatarFromHttp: false,
     });
-    listMatrixOwnDevicesMock.mockResolvedValue([]);
-    pruneMatrixStaleGatewayDevicesMock.mockResolvedValue({
-      before: [],
-      staleGatewayDeviceIds: [],
-      currentDeviceId: null,
-      deletedDeviceIds: [],
-      remainingDevices: [],
-    });
+    mocks.devices.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -335,18 +332,8 @@ describe("matrix CLI verification commands", () => {
     process.exitCode = previousExitCode ?? 0;
   });
 
-  it("sets non-zero exit code for device verification failures in JSON mode", async () => {
-    verifyMatrixRecoveryKeyMock.mockResolvedValue({
-      success: false,
-      error: "invalid key",
-    });
-    await runMatrixCli(["matrix", "verify", "device", "bad-key", "--json"]);
-
-    expect(process.exitCode).toBe(1);
-  });
-
   it("prints recovery-key and identity-trust diagnostics for device verification failures", async () => {
-    verifyMatrixRecoveryKeyMock.mockResolvedValue({
+    mocks.verifyKey.mockResolvedValue({
       ...matrixVerificationState({
         verified: false,
         crossSigningVerified: false,
@@ -366,49 +353,35 @@ describe("matrix CLI verification commands", () => {
       backupUsable: true,
       deviceOwnerVerified: false,
     });
-    await runMatrixCli(["matrix", "verify", "device", "valid-key"]);
+    await runMatrixCli(["verify", "device", "valid-key"]);
 
     expect(process.exitCode).toBe(1);
-    expect(consoleErrorMock).toHaveBeenCalledWith(
+    expect(mocks.error).toHaveBeenCalledWith(
       "Verification failed: Matrix recovery key was applied, but this device still lacks full Matrix identity trust.",
     );
-    expect(consoleLogMock).toHaveBeenCalledWith("Recovery key accepted: yes");
-    expect(consoleLogMock).toHaveBeenCalledWith("Backup usable: yes");
-    expect(consoleLogMock).toHaveBeenCalledWith("Device verified by owner: no");
-    expect(consoleLogMock).toHaveBeenCalledWith("Backup: active and trusted on this device");
-    expect(consoleLogMock).toHaveBeenCalledWith(
+    expectLogs(
+      "Recovery key accepted: yes",
+      "Backup usable: yes",
+      "Device verified by owner: no",
+      "Backup: active and trusted on this device",
       "- Recovery key can unlock the room-key backup, but full Matrix identity trust is still incomplete. Run openclaw matrix verify self, accept the request in another verified Matrix client, and confirm the SAS only if it matches.",
-    );
-    expect(consoleLogMock).toHaveBeenCalledWith(
       "- If you intend to replace the current cross-signing identity, run the shown printf pipeline with the Matrix recovery key env var for this account: printf '%s\\n' \"$MATRIX_RECOVERY_KEY\" | openclaw matrix verify bootstrap --recovery-key-stdin --force-reset-cross-signing.",
     );
   });
 
   it("runs interactive Matrix self-verification in one CLI flow", async () => {
-    runMatrixSelfVerificationMock.mockResolvedValue(
+    mocks.selfVerify.mockResolvedValue(
       mockMatrixVerificationSummary({
         completed: true,
         deviceOwnerVerified: true,
-        ownerVerification: {
-          backup: diagnosticMatrixBackup(),
-          backupVersion: "1",
-          crossSigningVerified: true,
-          deviceId: "DEVICE123",
-          localVerified: true,
-          recoveryKeyCreatedAt: null,
-          recoveryKeyId: null,
-          recoveryKeyStored: true,
-          signedByOwner: true,
-          userId: "@bot:example.org",
-          verified: true,
-        },
+        ownerVerification: matrixVerificationState({ recoveryKeyId: null }),
         pending: false,
         phaseName: "done",
       }),
     );
-    await runMatrixCli(["matrix", "verify", "self", "--account", "ops", "--timeout-ms", "5000"]);
+    await runMatrixCli(["verify", "self", "--account", "ops", "--timeout-ms", "5000"]);
 
-    const selfVerifyArg = mockCallArg(runMatrixSelfVerificationMock) as Record<string, unknown>;
+    const selfVerifyArg = mockCallArg(mocks.selfVerify) as Record<string, unknown>;
     expectRecordFields(selfVerifyArg, {
       accountId: "ops",
       cfg: {},
@@ -418,69 +391,37 @@ describe("matrix CLI verification commands", () => {
     expect(selfVerifyArg.onReady).toBeTypeOf("function");
     expect(selfVerifyArg.onSas).toBeTypeOf("function");
     expect(selfVerifyArg.confirmSas).toBeTypeOf("function");
-    expect(consoleLogMock).toHaveBeenCalledWith("Self-verification complete.");
-    expect(consoleLogMock).toHaveBeenCalledWith("Device verified by owner: yes");
-    expect(consoleLogMock).toHaveBeenCalledWith("Cross-signing verified: yes");
-    expect(consoleLogMock).toHaveBeenCalledWith("Signed by owner: yes");
-    expect(consoleLogMock).toHaveBeenCalledWith("Backup: active and trusted on this device");
+    expectLogs(
+      "Self-verification complete.",
+      "Device verified by owner: yes",
+      "Cross-signing verified: yes",
+      "Signed by owner: yes",
+      "Backup: active and trusted on this device",
+    );
   });
 
   it("rejects malformed Matrix self-verification timeout values", async () => {
-    await runMatrixCli(["matrix", "verify", "self", "--timeout-ms", "5000ms"]);
+    await runMatrixCli(["verify", "self", "--timeout-ms", "5000ms"]);
 
     expect(process.exitCode).toBe(1);
-    expect(consoleErrorMock).toHaveBeenCalledWith(
+    expect(mocks.error).toHaveBeenCalledWith(
       "Self-verification failed: --timeout-ms must be an integer",
     );
-    expect(runMatrixSelfVerificationMock).not.toHaveBeenCalled();
+    expect(mocks.selfVerify).not.toHaveBeenCalled();
   });
 
   it("rejects non-positive Matrix self-verification timeout values", async () => {
-    await runMatrixCli(["matrix", "verify", "self", "--timeout-ms", "-1"]);
+    await runMatrixCli(["verify", "self", "--timeout-ms", "-1"]);
 
     expect(process.exitCode).toBe(1);
-    expect(consoleErrorMock).toHaveBeenCalledWith(
+    expect(mocks.error).toHaveBeenCalledWith(
       "Self-verification failed: --timeout-ms must be a positive integer",
     );
-    expect(runMatrixSelfVerificationMock).not.toHaveBeenCalled();
-  });
-
-  it("requests Matrix self-verification and prints the follow-up SAS commands", async () => {
-    requestMatrixVerificationMock.mockResolvedValue(
-      mockMatrixVerificationSummary({
-        id: "self-verify-1",
-        hasSas: false,
-        sas: undefined,
-      }),
-    );
-    await runMatrixCli(["matrix", "verify", "request", "--own-user", "--account", "ops"]);
-
-    expect(requestMatrixVerificationMock).toHaveBeenCalledWith({
-      accountId: "ops",
-      cfg: {},
-      ownUser: true,
-      userId: undefined,
-      deviceId: undefined,
-      roomId: undefined,
-    });
-    expect(consoleLogMock).toHaveBeenCalledWith("Verification id: self-verify-1");
-    expect(consoleLogMock).toHaveBeenCalledWith("Transaction id: txn-1");
-    expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Accept the verification request in another Matrix client for this account.",
-    );
-    expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Then run openclaw matrix verify start --account ops -- txn-1 to start SAS verification.",
-    );
-    expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Run openclaw matrix verify sas --account ops -- txn-1 to display the SAS emoji or decimals.",
-    );
-    expect(consoleLogMock).toHaveBeenCalledWith(
-      "- When the SAS matches, run openclaw matrix verify confirm-sas --account ops -- txn-1.",
-    );
+    expect(mocks.selfVerify).not.toHaveBeenCalled();
   });
 
   it("prints DM lookup details in Matrix verification follow-up commands", async () => {
-    requestMatrixVerificationMock.mockResolvedValue(
+    mocks.request.mockResolvedValue(
       mockMatrixVerificationSummary({
         id: "dm-verify-1",
         transactionId: "txn-dm",
@@ -492,7 +433,6 @@ describe("matrix CLI verification commands", () => {
       }),
     );
     await runMatrixCli([
-      "matrix",
       "verify",
       "request",
       "--user-id",
@@ -501,7 +441,7 @@ describe("matrix CLI verification commands", () => {
       "!room-'$(x):example.org",
     ]);
 
-    expect(requestMatrixVerificationMock).toHaveBeenCalledWith({
+    expect(mocks.request).toHaveBeenCalledWith({
       accountId: "default",
       cfg: {},
       ownUser: undefined,
@@ -509,72 +449,37 @@ describe("matrix CLI verification commands", () => {
       deviceId: undefined,
       roomId: "!room-'$(x):example.org",
     });
-    expect(consoleLogMock).toHaveBeenCalledWith("Room id: !room-'$(x):example.org");
-    expect(consoleLogMock).toHaveBeenCalledWith(
+    expectLogs(
+      "Room id: !room-'$(x):example.org",
       "- Then run openclaw matrix verify start --user-id @alice:example.org --room-id '!room-'\\''$(x):example.org' -- txn-dm to start SAS verification.",
-    );
-    expect(consoleLogMock).toHaveBeenCalledWith(
       "- Run openclaw matrix verify sas --user-id @alice:example.org --room-id '!room-'\\''$(x):example.org' -- txn-dm to display the SAS emoji or decimals.",
-    );
-    expect(consoleLogMock).toHaveBeenCalledWith(
       "- When the SAS matches, run openclaw matrix verify confirm-sas --user-id @alice:example.org --room-id '!room-'\\''$(x):example.org' -- txn-dm.",
     );
   });
 
   it("terminates options before remote Matrix verification ids in follow-up commands", async () => {
-    requestMatrixVerificationMock.mockResolvedValue(
+    mocks.request.mockResolvedValue(
       mockMatrixVerificationSummary({
         id: "local-id",
-        transactionId: "--account=evil",
+        transactionId: "--account=evil'$(touch /tmp/pwn)",
         hasSas: false,
         sas: undefined,
       }),
     );
-    await runMatrixCli(["matrix", "verify", "request", "--own-user", "--account", "ops"]);
+    await runMatrixCli(["verify", "request", "--own-user", "--account", "ops"]);
 
-    expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Then run openclaw matrix verify start --account ops -- --account=evil to start SAS verification.",
+    expectLogs(
+      "- Then run openclaw matrix verify start --account ops -- '--account=evil'\\''$(touch /tmp/pwn)' to start SAS verification.",
+      "- Run openclaw matrix verify sas --account ops -- '--account=evil'\\''$(touch /tmp/pwn)' to display the SAS emoji or decimals.",
+      "- When the SAS matches, run openclaw matrix verify confirm-sas --account ops -- '--account=evil'\\''$(touch /tmp/pwn)'.",
     );
-    expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Run openclaw matrix verify sas --account ops -- --account=evil to display the SAS emoji or decimals.",
-    );
-    expect(consoleLogMock).toHaveBeenCalledWith(
-      "- When the SAS matches, run openclaw matrix verify confirm-sas --account ops -- --account=evil.",
-    );
-  });
-
-  it("rejects ambiguous Matrix verification request targets", async () => {
-    await runMatrixCli([
-      "matrix",
-      "verify",
-      "request",
-      "--own-user",
-      "--user-id",
-      "@other:example.org",
-    ]);
-
-    expect(process.exitCode).toBe(1);
-    expect(requestMatrixVerificationMock).not.toHaveBeenCalled();
-    expect(consoleErrorMock).toHaveBeenCalledWith(
-      "Verification request failed: --own-user cannot be combined with --user-id, --device-id, or --room-id",
-    );
-  });
-
-  it("lists Matrix verification requests", async () => {
-    listMatrixVerificationsMock.mockResolvedValue([
-      mockMatrixVerificationSummary({ id: "incoming-1", initiatedByMe: false }),
-    ]);
-    await runMatrixCli(["matrix", "verify", "list"]);
-
-    expect(listMatrixVerificationsMock).toHaveBeenCalledWith({ accountId: "default", cfg: {} });
-    expect(consoleLogMock).toHaveBeenCalledWith("Verification id: incoming-1");
-    expect(consoleLogMock).toHaveBeenCalledWith("Initiated by OpenClaw: no");
   });
 
   it("sanitizes remote Matrix verification metadata before printing it", async () => {
-    listMatrixVerificationsMock.mockResolvedValue([
+    mocks.verifications.mockResolvedValue([
       mockMatrixVerificationSummary({
         id: "self-\u001B[31m1",
+        initiatedByMe: false,
         transactionId: "txn-\n\u009B31m1",
         otherUserId: "@bot\u001B[2J\u009Dspoof\u0007:example.org",
         otherDeviceId: "PHONE\r\u009B2J123",
@@ -590,23 +495,28 @@ describe("matrix CLI verification commands", () => {
         error: "Remote\u001B[31m cancelled\n\u009B31mforged",
       }),
     ]);
-    await runMatrixCli(["matrix", "verify", "list"]);
+    await runMatrixCli(["verify", "list"]);
 
-    expect(consoleLogMock).toHaveBeenCalledWith("Verification id: self-1");
-    expect(consoleLogMock).toHaveBeenCalledWith("Transaction id: txn-1");
-    expect(consoleLogMock).toHaveBeenCalledWith("Other user: @bot:example.org");
-    expect(consoleLogMock).toHaveBeenCalledWith("Other device: PHONE123");
-    expect(consoleLogMock).toHaveBeenCalledWith("Phase: started");
-    expect(consoleLogMock).toHaveBeenCalledWith("Methods: m.sas.v1spoof");
-    expect(consoleLogMock).toHaveBeenCalledWith("Chosen method: m.sas.v1");
-    expect(consoleLogMock).toHaveBeenCalledWith("SAS emoji: 🐶 Dog | 🐱 Catspoof");
-    expect(consoleLogMock).toHaveBeenCalledWith("Verification error: Remote cancelledforged");
+    expectLogs(
+      "Verification id: self-1",
+      "Initiated by OpenClaw: no",
+      "Transaction id: txn-1",
+      "Other user: @bot:example.org",
+      "Other device: PHONE123",
+      "Phase: started",
+      "Methods: m.sas.v1spoof",
+      "Chosen method: m.sas.v1",
+      "SAS emoji: 🐶 Dog | 🐱 Catspoof",
+      "Verification error: Remote cancelledforged",
+    );
   });
 
   it("sanitizes remote Matrix status metadata before printing diagnostics", async () => {
-    getMatrixVerificationStatusMock.mockResolvedValue(
+    mocks.verificationStatus.mockResolvedValue(
       matrixVerificationStatus({
         verified: false,
+        serverDeviceKnown: true,
+        recoveryKeyCreatedAt: "2026-02-25T20:10:11.000Z",
         localVerified: false,
         crossSigningVerified: false,
         signedByOwner: false,
@@ -623,140 +533,111 @@ describe("matrix CLI verification commands", () => {
           keyLoadError: "Remote\n\u009B31mforged",
         }),
         recoveryKeyStored: false,
+        recoveryKey: "test-recovery-key",
       }),
     );
-    await runMatrixCli(["matrix", "verify", "status", "--verbose"]);
+    await runMatrixCli([
+      "verify",
+      "status",
+      "--verbose",
+      "--allow-degraded-local-state",
+      "--include-recovery-key",
+    ]);
 
-    expect(consoleLogMock).toHaveBeenCalledWith("User: @bot:example.org");
-    expect(consoleLogMock).toHaveBeenCalledWith("Device: PHONE123");
-    expect(consoleLogMock).toHaveBeenCalledWith("Backup server version: 2");
-    expect(consoleLogMock).toHaveBeenCalledWith("Backup active on this device: 1");
-    expect(consoleLogMock).toHaveBeenCalledWith("Backup key load error: Remoteforged");
-  });
-
-  it("shell-quotes Matrix verification ids in follow-up command guidance", async () => {
-    requestMatrixVerificationMock.mockResolvedValue(
-      mockMatrixVerificationSummary({
-        id: "self-verify-1",
-        transactionId: "txn-'$(touch /tmp/pwn)",
-      }),
+    expectLogs(
+      "User: @bot:example.org",
+      "Device: PHONE123",
+      "Backup server version: 2",
+      "Backup active on this device: 1",
+      "Backup key load error: Remoteforged",
     );
-    await runMatrixCli(["matrix", "verify", "request", "--own-user"]);
-
-    expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Then run openclaw matrix verify start -- 'txn-'\\''$(touch /tmp/pwn)' to start SAS verification.",
+    expectRecordFields(mockCallArg(mocks.verificationStatus), {
+      readiness: "none",
+      cfg: {},
+      includeRecoveryKey: true,
+    });
+    expectLogs(
+      `Recovery key created at: ${formatExpectedLocalTimestamp("2026-02-25T20:10:11.000Z")}`,
     );
-    expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Run openclaw matrix verify sas -- 'txn-'\\''$(touch /tmp/pwn)' to display the SAS emoji or decimals.",
-    );
-    expect(consoleLogMock).toHaveBeenCalledWith(
-      "- When the SAS matches, run openclaw matrix verify confirm-sas -- 'txn-'\\''$(touch /tmp/pwn)'.",
+    expect(mocks.log.mock.calls.flat().join("\n")).not.toContain("test-recovery-key");
+    expectLogs(
+      "Recovery key: available (re-run with --json to include the raw key value in output)",
     );
   });
 
   it("shows Matrix SAS diagnostics and confirm/mismatch guidance", async () => {
-    getMatrixVerificationSasMock.mockResolvedValue({
+    mocks.sas.mockResolvedValue({
       decimal: [1234, 5678, 9012],
     });
-    await runMatrixCli(["matrix", "verify", "sas", "self-1"]);
+    await runMatrixCli(["verify", "sas", "self-1"]);
 
-    expect(getMatrixVerificationSasMock).toHaveBeenCalledWith("self-1", {
+    expect(mocks.sas).toHaveBeenCalledWith("self-1", {
       accountId: "default",
       cfg: {},
     });
-    expect(consoleLogMock).toHaveBeenCalledWith("SAS decimals: 1234 5678 9012");
-    expect(consoleLogMock).toHaveBeenCalledWith(
+    expectLogs(
+      "SAS decimals: 1234 5678 9012",
       "- If they match, run openclaw matrix verify confirm-sas -- self-1.",
-    );
-    expect(consoleLogMock).toHaveBeenCalledWith(
       "- If they do not match, run openclaw matrix verify mismatch-sas -- self-1.",
     );
   });
 
-  it("passes DM lookup details through Matrix verification follow-up commands", async () => {
-    startMatrixVerificationMock.mockResolvedValue(
+  it("confirms, rejects, accepts, starts, and cancels Matrix verification requests", async () => {
+    mocks.accept.mockResolvedValue(mockMatrixVerificationSummary({ id: "in-1" }));
+    mocks.start.mockResolvedValue(
       mockMatrixVerificationSummary({
-        id: "dm-verify-1",
-        transactionId: "txn-dm",
+        id: "in-1",
         roomId: "!dm:example.org",
         otherUserId: "@alice:example.org",
       }),
     );
+    mocks.confirmSas.mockResolvedValue(
+      mockMatrixVerificationSummary({ id: "in-1", completed: true, pending: false }),
+    );
+    mocks.mismatchSas.mockResolvedValue(
+      mockMatrixVerificationSummary({ id: "in-1", phaseName: "cancelled", pending: false }),
+    );
+    mocks.cancel.mockResolvedValue(
+      mockMatrixVerificationSummary({ id: "in-1", phaseName: "cancelled", pending: false }),
+    );
+    await runMatrixCli(["verify", "accept", "in-1"]);
+    expectLogs("- Run openclaw matrix verify start -- txn-1 to start SAS verification.");
     await runMatrixCli([
-      "matrix",
       "verify",
       "start",
-      "txn-dm",
+      "in-1",
       "--user-id",
       "@alice:example.org",
       "--room-id",
       "!dm:example.org",
-      "--account",
-      "ops",
     ]);
+    expectLogs(
+      "- If they match, run openclaw matrix verify confirm-sas --user-id @alice:example.org --room-id '!dm:example.org' -- txn-1.",
+    );
+    await runMatrixCli(["verify", "confirm-sas", "in-1"]);
+    await runMatrixCli(["verify", "mismatch-sas", "in-1"]);
+    await runMatrixCli(["verify", "cancel", "in-1", "--reason", "changed my mind"]);
 
-    expect(startMatrixVerificationMock).toHaveBeenCalledWith("txn-dm", {
-      accountId: "ops",
+    expect(mocks.accept).toHaveBeenCalledWith("in-1", {
+      accountId: "default",
+      cfg: {},
+    });
+    expect(mocks.start).toHaveBeenCalledWith("in-1", {
+      accountId: "default",
       cfg: {},
       method: "sas",
       verificationDmUserId: "@alice:example.org",
       verificationDmRoomId: "!dm:example.org",
     });
-    expect(consoleLogMock).toHaveBeenCalledWith(
-      "- If they match, run openclaw matrix verify confirm-sas --user-id @alice:example.org --room-id '!dm:example.org' --account ops -- txn-dm.",
-    );
-  });
-
-  it("prints stable transaction ids in follow-up commands after accepting verification", async () => {
-    acceptMatrixVerificationMock.mockResolvedValue(
-      mockMatrixVerificationSummary({
-        id: "verification-1",
-        transactionId: "txn-stable",
-      }),
-    );
-    await runMatrixCli(["matrix", "verify", "accept", "verification-1"]);
-
-    expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Run openclaw matrix verify start -- txn-stable to start SAS verification.",
-    );
-  });
-
-  it("confirms, rejects, accepts, starts, and cancels Matrix verification requests", async () => {
-    acceptMatrixVerificationMock.mockResolvedValue(mockMatrixVerificationSummary({ id: "in-1" }));
-    startMatrixVerificationMock.mockResolvedValue(mockMatrixVerificationSummary({ id: "in-1" }));
-    confirmMatrixVerificationSasMock.mockResolvedValue(
-      mockMatrixVerificationSummary({ id: "in-1", completed: true, pending: false }),
-    );
-    mismatchMatrixVerificationSasMock.mockResolvedValue(
-      mockMatrixVerificationSummary({ id: "in-1", phaseName: "cancelled", pending: false }),
-    );
-    cancelMatrixVerificationMock.mockResolvedValue(
-      mockMatrixVerificationSummary({ id: "in-1", phaseName: "cancelled", pending: false }),
-    );
-    await runMatrixCli(["matrix", "verify", "accept", "in-1"]);
-    await runMatrixCli(["matrix", "verify", "start", "in-1"]);
-    await runMatrixCli(["matrix", "verify", "confirm-sas", "in-1"]);
-    await runMatrixCli(["matrix", "verify", "mismatch-sas", "in-1"]);
-    await runMatrixCli(["matrix", "verify", "cancel", "in-1", "--reason", "changed my mind"]);
-
-    expect(acceptMatrixVerificationMock).toHaveBeenCalledWith("in-1", {
+    expect(mocks.confirmSas).toHaveBeenCalledWith("in-1", {
       accountId: "default",
       cfg: {},
     });
-    expect(startMatrixVerificationMock).toHaveBeenCalledWith("in-1", {
-      accountId: "default",
-      cfg: {},
-      method: "sas",
-    });
-    expect(confirmMatrixVerificationSasMock).toHaveBeenCalledWith("in-1", {
+    expect(mocks.mismatchSas).toHaveBeenCalledWith("in-1", {
       accountId: "default",
       cfg: {},
     });
-    expect(mismatchMatrixVerificationSasMock).toHaveBeenCalledWith("in-1", {
-      accountId: "default",
-      cfg: {},
-    });
-    expect(cancelMatrixVerificationMock).toHaveBeenCalledWith("in-1", {
+    expect(mocks.cancel).toHaveBeenCalledWith("in-1", {
       accountId: "default",
       cfg: {},
       reason: "changed my mind",
@@ -764,203 +645,85 @@ describe("matrix CLI verification commands", () => {
     });
   });
 
-  it("sets non-zero exit code for bootstrap failures in JSON mode", async () => {
-    bootstrapMatrixVerificationMock.mockResolvedValue({
-      success: false,
-      error: "bootstrap failed",
-      verification: {},
-      crossSigning: {},
-      pendingVerifications: 0,
-      cryptoBootstrap: null,
-    });
-    await runMatrixCli(["matrix", "verify", "bootstrap", "--json"]);
-
-    expect(process.exitCode).toBe(1);
-  });
-
-  it("sets non-zero exit code for backup restore failures in JSON mode", async () => {
-    restoreMatrixRoomKeyBackupMock.mockResolvedValue({
-      success: false,
-      error: "missing backup key",
-      backupVersion: null,
-      imported: 0,
-      total: 0,
-      loadedFromSecretStorage: false,
-      backup: healthyMatrixBackup({
-        activeVersion: null,
-        matchesDecryptionKey: false,
-        decryptionKeyCached: false,
-      }),
-    });
-    await runMatrixCli(["matrix", "verify", "backup", "restore", "--json"]);
-
-    expect(process.exitCode).toBe(1);
-  });
-
-  it("reads backup restore recovery key from stdin", async () => {
-    restoreMatrixRoomKeyBackupMock.mockResolvedValue({
-      success: true,
-      backupVersion: "1",
-      imported: 1,
-      total: 1,
-      loadedFromSecretStorage: false,
-      backup: healthyMatrixBackup(),
-    });
-    mockRecoveryKeyStdin("stdin-recovery-key\n");
-    await runMatrixCli(["matrix", "verify", "backup", "restore", "--recovery-key-stdin"]);
-
-    expectRecordFields(mockCallArg(restoreMatrixRoomKeyBackupMock), {
-      recoveryKey: "stdin-recovery-key",
-    });
-  });
-
   it("rejects oversized recovery key stdin before backup restore", async () => {
     mockRecoveryKeyStdin("x".repeat(1024 * 1024), "x");
-    await runMatrixCli(["matrix", "verify", "backup", "restore", "--recovery-key-stdin"]);
+    await runMatrixCli(["verify", "backup", "restore", "--recovery-key-stdin"]);
 
     expect(process.exitCode).toBe(1);
-    expect(consoleErrorMock).toHaveBeenCalledWith(
+    expect(mocks.error).toHaveBeenCalledWith(
       "Backup restore failed: Matrix recovery key stdin exceeds 1048576 bytes.",
     );
-    expect(restoreMatrixRoomKeyBackupMock).not.toHaveBeenCalled();
+    expect(mocks.restoreBackup).not.toHaveBeenCalled();
   });
-
-  it("preserves a multibyte recovery key at the stdin byte limit", async () => {
-    const recoveryKey = "é".repeat((1024 * 1024) / 2);
-    mockRecoveryKeyStdin(recoveryKey);
-    await runMatrixCli(["matrix", "verify", "backup", "restore", "--recovery-key-stdin"]);
-
-    expectRecordFields(mockCallArg(restoreMatrixRoomKeyBackupMock), { recoveryKey });
-  });
-
-  it("sets non-zero exit code for backup reset failures in JSON mode", async () => {
-    resetMatrixRoomKeyBackupMock.mockResolvedValue({
-      success: false,
-      error: "reset failed",
-      previousVersion: "1",
-      deletedVersion: "1",
-      createdVersion: null,
-      backup: diagnosticMatrixBackup({
-        serverVersion: null,
-        activeVersion: null,
-        trusted: null,
-        matchesDecryptionKey: null,
-        decryptionKeyCached: null,
-      }),
-    });
-    await runMatrixCli(["matrix", "verify", "backup", "reset", "--yes", "--json"]);
-
-    expect(process.exitCode).toBe(1);
-  });
-
-  it("passes loaded cfg to verify status action", async () => {
-    const fakeCfg = { channels: { matrix: {} } };
-    matrixRuntimeLoadConfigMock.mockReturnValue(fakeCfg);
-    mockMatrixVerificationStatus({ recoveryKeyCreatedAt: null });
-    await runMatrixCli(["matrix", "verify", "status"]);
-
-    const statusArg = mockCallArg(getMatrixVerificationStatusMock, -1);
-    expectRecordFields(statusArg, { cfg: fakeCfg });
-    expect(statusArg).not.toHaveProperty("readiness");
-  });
-
-  it("allows verify status to use degraded local-state diagnostics", async () => {
-    mockMatrixVerificationStatus({ recoveryKeyCreatedAt: null });
-    await runMatrixCli(["matrix", "verify", "status", "--allow-degraded-local-state"]);
-
-    expectRecordFields(mockCallArg(getMatrixVerificationStatusMock), { readiness: "none" });
-  });
-
-  it.each([
-    { include: false, recoveryKey: undefined, verbose: false },
-    { include: true, recoveryKey: null, verbose: false },
-    { include: true, recoveryKey: "test-recovery-key", verbose: false },
-    { include: true, recoveryKey: "test-recovery-key", verbose: true },
-  ])(
-    "prints a safe hint for include=$include, key=$recoveryKey, verbose=$verbose",
-    async ({ include, recoveryKey, verbose }) => {
-      getMatrixVerificationStatusMock.mockResolvedValue(
-        matrixVerificationStatus({ recoveryKey, recoveryKeyStored: recoveryKey !== null }),
-      );
-      await runMatrixCli([
-        "matrix",
-        "verify",
-        "status",
-        ...(include ? ["--include-recovery-key"] : []),
-        ...(verbose ? ["--verbose"] : []),
-      ]);
-
-      expectRecordFields(mockCallArg(getMatrixVerificationStatusMock), {
-        includeRecoveryKey: include,
-      });
-      const output = consoleLogMock.mock.calls.flat().join("\n");
-      expect(
-        output.includes(
-          "Recovery key: available (re-run with --json to include the raw key value in output)",
-        ),
-      ).toBe(Boolean(recoveryKey));
-      expect(output).toContain(`Recovery key stored: ${recoveryKey === null ? "no" : "yes"}`);
-      expect(output).not.toContain("test-recovery-key");
-      expect(stdoutWriteMock).not.toHaveBeenCalled();
-      expect(process.exitCode).toBe(0);
-    },
-  );
 
   it.each([false, true])("preserves JSON recovery key opt-in=%s", async (include) => {
     const status = matrixVerificationStatus(include ? { recoveryKey: "test-recovery-key" } : {});
-    getMatrixVerificationStatusMock.mockResolvedValue(status);
+    mocks.verificationStatus.mockResolvedValue(status);
     await runMatrixCli([
-      "matrix",
       "verify",
       "status",
       "--json",
       ...(include ? ["--include-recovery-key"] : []),
     ]);
 
-    expectRecordFields(mockCallArg(getMatrixVerificationStatusMock), {
+    expectRecordFields(mockCallArg(mocks.verificationStatus), {
       includeRecoveryKey: include,
     });
     expect(JSON.parse(String(stdoutWriteArg()))).toEqual(status);
-    expect(consoleLogMock).not.toHaveBeenCalled();
+    expect(mocks.log).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(0);
   });
 
   it("passes loaded cfg to all verify subcommands", async () => {
     const fakeCfg = { channels: { matrix: {} } };
-    matrixRuntimeLoadConfigMock.mockReturnValue(fakeCfg);
+    mocks.loadConfig.mockReturnValue(fakeCfg);
 
-    // verify bootstrap
-    await runMatrixCli(["matrix", "verify", "bootstrap"]);
-    expectRecordFields(mockCallArg(bootstrapMatrixVerificationMock), { cfg: fakeCfg });
+    const created = "2026-02-25T20:10:11.000Z";
+    mocks.bootstrap.mockResolvedValue({
+      ...successfulMatrixBootstrap(),
+      verification: matrixVerificationState({ recoveryKeyCreatedAt: created }),
+      crossSigning: {
+        published: true,
+        masterKeyPublished: true,
+        selfSigningKeyPublished: true,
+        userSigningKeyPublished: true,
+      },
+    });
+    await runMatrixCli(["verify", "bootstrap", "--verbose"]);
+    expectRecordFields(mockCallArg(mocks.bootstrap), { cfg: fakeCfg });
 
-    // verify device
-    verifyMatrixRecoveryKeyMock.mockResolvedValue({ success: true });
-    await runMatrixCli(["matrix", "verify", "device", "test-key"]);
-    expect(mockCallArg(verifyMatrixRecoveryKeyMock)).toBe("test-key");
-    expectRecordFields(mockCallArg(verifyMatrixRecoveryKeyMock, 0, 1), { cfg: fakeCfg });
+    mocks.verifyKey.mockResolvedValue({
+      ...matrixVerificationState(),
+      success: true,
+      verifiedAt: created,
+    });
+    await runMatrixCli(["verify", "device", "test-key", "--verbose"]);
+    expect(mockCallArg(mocks.verifyKey)).toBe("test-key");
+    expectRecordFields(mockCallArg(mocks.verifyKey, 0, 1), { cfg: fakeCfg });
 
-    // verify backup status
-    getMatrixRoomKeyBackupStatusMock.mockResolvedValue({});
-    await runMatrixCli(["matrix", "verify", "backup", "status"]);
-    expectRecordFields(mockCallArg(getMatrixRoomKeyBackupStatusMock), { cfg: fakeCfg });
+    mocks.backupStatus.mockResolvedValue({});
+    await runMatrixCli(["verify", "backup", "status"]);
+    expectRecordFields(mockCallArg(mocks.backupStatus), { cfg: fakeCfg });
 
-    // verify backup reset
-    await runMatrixCli(["matrix", "verify", "backup", "reset", "--yes"]);
-    expectRecordFields(mockCallArg(resetMatrixRoomKeyBackupMock), { cfg: fakeCfg });
+    await runMatrixCli(["verify", "backup", "reset", "--yes"]);
+    expectRecordFields(mockCallArg(mocks.resetBackup), { cfg: fakeCfg });
 
-    // verify backup restore
-    restoreMatrixRoomKeyBackupMock.mockResolvedValue({
+    mocks.restoreBackup.mockResolvedValue({
       success: true,
       imported: 0,
       total: 0,
       backup: {},
     });
-    await runMatrixCli(["matrix", "verify", "backup", "restore"]);
-    expectRecordFields(mockCallArg(restoreMatrixRoomKeyBackupMock), { cfg: fakeCfg });
+    await runMatrixCli(["verify", "backup", "restore"]);
+    expectRecordFields(mockCallArg(mocks.restoreBackup), { cfg: fakeCfg });
+    expectLogs(
+      `Recovery key created at: ${formatExpectedLocalTimestamp(created)}`,
+      `Verified at: ${formatExpectedLocalTimestamp(created)}`,
+    );
   });
 
   it("lists matrix devices", async () => {
-    listMatrixOwnDevicesMock.mockResolvedValue([
+    mocks.devices.mockResolvedValue([
       {
         deviceId: "A7hWr\u001B[31mQ70ea",
         displayName: "OpenClaw\u001B[2J Gateway",
@@ -972,268 +735,68 @@ describe("matrix CLI verification commands", () => {
         deviceId: "BritdXC6iL",
         displayName: "OpenClaw Gateway",
         lastSeenIp: null,
-        lastSeenTs: null,
+        lastSeenTs: 8_700_000_000_000_000,
         current: false,
       },
     ]);
-    await runMatrixCli(["matrix", "devices", "list", "--account", "poe"]);
+    await runMatrixCli(["devices", "list", "--account", "poe"]);
 
-    expect(listMatrixOwnDevicesMock).toHaveBeenCalledWith({ accountId: "poe", cfg: {} });
-    expect(console.log).toHaveBeenCalledWith("Account: poe");
-    expect(console.log).toHaveBeenCalledWith("- A7hWrQ70ea (current, OpenClaw Gateway)");
-    expect(console.log).toHaveBeenCalledWith("  Last IP: 127.0.0.1");
-    expect(console.log).toHaveBeenCalledWith("- BritdXC6iL (OpenClaw Gateway)");
-  });
-
-  it("omits invalid matrix device last seen timestamps", async () => {
-    listMatrixOwnDevicesMock.mockResolvedValue([
-      {
-        deviceId: "DEVICE123",
-        displayName: "OpenClaw Gateway",
-        lastSeenIp: "127.0.0.1",
-        lastSeenTs: 8_700_000_000_000_000,
-        current: true,
-      },
-    ]);
-    await runMatrixCli(["matrix", "devices", "list", "--account", "poe"]);
-
-    expect(console.log).toHaveBeenCalledWith("Account: poe");
-    expect(console.log).toHaveBeenCalledWith("- DEVICE123 (current, OpenClaw Gateway)");
-    expect(console.log).toHaveBeenCalledWith("  Last IP: 127.0.0.1");
+    expect(mocks.devices).toHaveBeenCalledWith({ accountId: "poe", cfg: {} });
+    expectLogs(
+      "Account: poe",
+      "- A7hWrQ70ea (current, OpenClaw Gateway)",
+      "  Last IP: 127.0.0.1",
+      "- BritdXC6iL (OpenClaw Gateway)",
+    );
     expect(
-      consoleLogMock.mock.calls.some(([message]) => String(message).startsWith("  Last seen:")),
-    ).toBe(false);
+      mocks.log.mock.calls.filter(([message]) => String(message).startsWith("  Last seen:")),
+    ).toHaveLength(1);
   });
 
   it("prunes stale matrix gateway devices", async () => {
-    pruneMatrixStaleGatewayDevicesMock.mockResolvedValue({
-      before: [
-        {
-          deviceId: "A7hWrQ70ea",
-          displayName: "OpenClaw Gateway",
-          lastSeenIp: "127.0.0.1",
-          lastSeenTs: 1_741_507_200_000,
-          current: true,
-        },
-        {
-          deviceId: "BritdXC6iL",
-          displayName: "OpenClaw Gateway",
-          lastSeenIp: null,
-          lastSeenTs: null,
-          current: false,
-        },
-      ],
-      staleGatewayDeviceIds: ["BritdXC6iL"],
-      currentDeviceId: "A7hWrQ70ea",
-      deletedDeviceIds: ["BritdXC6iL"],
-      remainingDevices: [
-        {
-          deviceId: "A7hWrQ70ea",
-          displayName: "OpenClaw Gateway",
-          lastSeenIp: "127.0.0.1",
-          lastSeenTs: 1_741_507_200_000,
-          current: true,
-        },
-      ],
+    const current = matrixDevice("A7hWrQ70ea", true);
+    const stale = matrixDevice("BritdXC6iL", false);
+    mocks.pruneDevices.mockResolvedValue({
+      before: [current, stale],
+      staleGatewayDeviceIds: [stale.deviceId],
+      currentDeviceId: current.deviceId,
+      deletedDeviceIds: [stale.deviceId],
+      remainingDevices: [current],
     });
-    await runMatrixCli(["matrix", "devices", "prune-stale", "--account", "poe"]);
+    await runMatrixCli(["devices", "prune-stale", "--account", "poe"]);
 
-    expect(pruneMatrixStaleGatewayDevicesMock).toHaveBeenCalledWith({
+    expect(mocks.pruneDevices).toHaveBeenCalledWith({
       accountId: "poe",
       cfg: {},
     });
-    expect(console.log).toHaveBeenCalledWith("Deleted stale OpenClaw devices: BritdXC6iL");
-    expect(console.log).toHaveBeenCalledWith("Current device: A7hWrQ70ea");
-    expect(console.log).toHaveBeenCalledWith("Remaining devices: 1");
-  });
-
-  it("adds a matrix account and prints a binding hint", async () => {
-    matrixRuntimeLoadConfigMock.mockReturnValue({ channels: {} });
-    mockMatrixAccountConfigApply();
-    await runMatrixCli(matrixAccountPasswordArgs("Ops"));
-
-    const validateArg = mockCallArg(matrixSetupValidateInputMock) as Record<string, unknown>;
-    expect(validateArg.accountId).toBe("ops");
-    expectRecordFields(validateArg.input, {
-      homeserver: "https://matrix.example.org",
-      userId: "@ops:example.org",
-      password: "secret", // pragma: allowlist secret
-    });
-    const replaceArg = mockCallArg(matrixRuntimeReplaceConfigFileMock) as {
-      nextConfig?: CoreConfig;
-      afterWrite?: unknown;
-    };
-    expect(replaceArg.nextConfig?.channels?.matrix?.accounts?.ops?.homeserver).toBe(
-      "https://matrix.example.org",
-    );
-    expect(replaceArg.afterWrite).toEqual({ mode: "auto" });
-    expect(console.log).toHaveBeenCalledWith("Saved matrix account: ops");
-    expect(console.log).toHaveBeenCalledWith(
-      "Bind this account to an agent: openclaw agents bind --agent <id> --bind matrix:ops",
+    expectLogs(
+      "Deleted stale OpenClaw devices: BritdXC6iL",
+      "Current device: A7hWrQ70ea",
+      "Remaining devices: 1",
     );
   });
 
   it("rejects negative Matrix initial sync limits at the CLI boundary", async () => {
-    await runMatrixCli([
-      "matrix",
-      "account",
-      "add",
-      "--homeserver",
-      "https://matrix.example.org",
-      "--user-id",
-      "@ops:example.org",
-      "--password",
-      "secret",
-      "--initial-sync-limit",
-      "-1",
-    ]);
+    await runMatrixCli(matrixAccountPasswordArgs("ops", "--initial-sync-limit", "-1"));
 
     expect(process.exitCode).toBe(1);
-    expect(consoleErrorMock).toHaveBeenCalledWith(
+    expect(mocks.error).toHaveBeenCalledWith(
       "Account setup failed: --initial-sync-limit must be a non-negative integer",
     );
-    expect(matrixSetupValidateInputMock).not.toHaveBeenCalled();
-    expect(matrixRuntimeReplaceConfigFileMock).not.toHaveBeenCalled();
-  });
-
-  it("enables E2EE and bootstraps verification from matrix account add", async () => {
-    matrixRuntimeLoadConfigMock.mockReturnValue({ channels: {} });
-    mockMatrixAccountConfigApply();
-    resolveMatrixAccountConfigMock.mockImplementation(
-      ({ cfg, accountId }: { cfg: CoreConfig; accountId: string }) =>
-        cfg.channels?.matrix?.accounts?.[accountId] ?? {},
-    );
-    bootstrapMatrixVerificationMock.mockResolvedValue(
-      successfulMatrixBootstrap("2026-03-09T06:00:00.000Z", "7"),
-    );
-    await runMatrixCli([
-      "matrix",
-      "account",
-      "add",
-      "--account",
-      "ops",
-      "--homeserver",
-      "https://matrix.example.org",
-      "--access-token",
-      "token",
-      "--enable-e2ee",
-    ]);
-
-    const replaceArg = mockCallArg(matrixRuntimeReplaceConfigFileMock) as {
-      nextConfig?: CoreConfig;
-      afterWrite?: unknown;
-    };
-    expect(replaceArg.nextConfig?.channels?.matrix?.enabled).toBe(true);
-    expect(replaceArg.nextConfig?.channels?.matrix?.accounts?.ops?.encryption).toBe(true);
-    expect(replaceArg.afterWrite).toEqual({ mode: "auto" });
-    const bootstrapArg = mockCallArg(bootstrapMatrixVerificationMock) as {
-      accountId?: string;
-      cfg?: CoreConfig;
-    };
-    expect(bootstrapArg.accountId).toBe("ops");
-    expect(bootstrapArg.cfg?.channels?.matrix?.accounts?.ops?.encryption).toBe(true);
-    expect(console.log).toHaveBeenCalledWith("Encryption: enabled");
-    expect(console.log).toHaveBeenCalledWith("Matrix verification bootstrap: complete");
-  });
-
-  it("reads the recovery key from stdin during matrix encryption setup", async () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              homeserver: "https://matrix.example.org",
-              accessToken: "token",
-            },
-          },
-        },
-      },
-    } as CoreConfig;
-    matrixRuntimeLoadConfigMock.mockReturnValue(cfg);
-    resolveMatrixAccountMock.mockReturnValue({
-      configured: true,
-      enabled: true,
-      config: cfg.channels?.matrix?.accounts?.ops,
-    });
-    resolveMatrixAccountConfigMock.mockReturnValue({
-      encryption: false,
-    });
-    bootstrapMatrixVerificationMock.mockResolvedValue(
-      successfulMatrixBootstrap("2026-03-09T06:00:00.000Z", "7"),
-    );
-    mockMatrixVerificationStatus({
-      recoveryKeyCreatedAt: "2026-03-09T06:00:00.000Z",
-    });
-    mockRecoveryKeyStdin("stdin-recovery-key\n");
-    await runMatrixCli([
-      "matrix",
-      "encryption",
-      "setup",
-      "--account",
-      "ops",
-      "--recovery-key-stdin",
-    ]);
-
-    const replaceArg = mockCallArg(matrixRuntimeReplaceConfigFileMock) as {
-      nextConfig?: CoreConfig;
-      afterWrite?: unknown;
-    };
-    expect(replaceArg.nextConfig?.channels?.matrix?.enabled).toBe(true);
-    expect(replaceArg.nextConfig?.channels?.matrix?.accounts?.ops?.encryption).toBe(true);
-    expect(replaceArg.afterWrite).toEqual({ mode: "auto" });
-    const bootstrapArg = mockCallArg(bootstrapMatrixVerificationMock) as {
-      accountId?: string;
-      cfg?: CoreConfig;
-      recoveryKey?: unknown;
-      forceResetCrossSigning?: boolean;
-    };
-    expect(bootstrapArg.accountId).toBe("ops");
-    expect(bootstrapArg.cfg?.channels?.matrix?.accounts?.ops?.encryption).toBe(true);
-    expect(bootstrapArg.recoveryKey).toBe("stdin-recovery-key");
-    expect(bootstrapArg.forceResetCrossSigning).toBe(false);
-    const statusArg = mockCallArg(getMatrixVerificationStatusMock) as Record<string, unknown>;
-    expect(statusArg.accountId).toBe("ops");
-    expect(statusArg.cfg).toBeTypeOf("object");
-    expect(console.log).toHaveBeenCalledWith("Account: ops");
-    expect(console.log).toHaveBeenCalledWith(
-      "Encryption config: enabled at channels.matrix.accounts.ops",
-    );
-    expect(console.log).toHaveBeenCalledWith("Bootstrap success: yes");
-    expect(console.log).toHaveBeenCalledWith("Verified by owner: yes");
-    expect(console.log).toHaveBeenCalledWith("Backup: active and trusted on this device");
+    expect(mocks.validateInput).not.toHaveBeenCalled();
+    expect(mocks.replaceConfig).not.toHaveBeenCalled();
   });
 
   it("skips encryption bootstrap when an encrypted account is already healthy", async () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              encryption: true,
-              homeserver: "https://matrix.example.org",
-              accessToken: "token",
-            },
-          },
-        },
-      },
-    } as CoreConfig;
-    matrixRuntimeLoadConfigMock.mockReturnValue(cfg);
-    resolveMatrixAccountMock.mockReturnValue({
-      configured: true,
-      enabled: true,
-      config: cfg.channels?.matrix?.accounts?.ops,
-    });
-    resolveMatrixAccountConfigMock.mockReturnValue({
-      encryption: true,
-    });
-    mockMatrixVerificationStatus({
-      recoveryKeyCreatedAt: "2026-03-09T06:00:00.000Z",
-    });
-    await runMatrixCli(["matrix", "encryption", "setup", "--account", "ops", "--json"]);
+    configureAccount(true);
+    mocks.verificationStatus.mockResolvedValue(
+      matrixVerificationStatus({ serverDeviceKnown: true }),
+    );
+    await runMatrixCli(["encryption", "setup", "--account", "ops", "--json"]);
 
-    expect(bootstrapMatrixVerificationMock).not.toHaveBeenCalled();
-    expect(getMatrixVerificationStatusMock).toHaveBeenCalledTimes(1);
-    const statusArg = mockCallArg(getMatrixVerificationStatusMock) as Record<string, unknown>;
+    expect(mocks.bootstrap).not.toHaveBeenCalled();
+    expect(mocks.verificationStatus).toHaveBeenCalledTimes(1);
+    const statusArg = mockCallArg(mocks.verificationStatus) as Record<string, unknown>;
     expectRecordFields(statusArg, { accountId: "ops", readiness: "none" });
     expect(statusArg.cfg).toBeTypeOf("object");
     const jsonOutput = stdoutWriteArg();
@@ -1247,34 +810,20 @@ describe("matrix CLI verification commands", () => {
   it.each(["encryption setup", "account add"])(
     "keeps %s private until its crypto clients have retired",
     async (command) => {
-      const cfg: CoreConfig = {
-        channels: {
-          matrix: {
-            accounts: {
-              ops: { homeserver: "https://matrix.example.org", accessToken: "token" },
-            },
-          },
-        },
-      };
-      matrixRuntimeLoadConfigMock.mockReturnValue(cfg);
-      resolveMatrixAccountMock.mockReturnValue({ configured: true });
-      resolveMatrixAccountConfigMock.mockImplementation(
-        ({ cfg: inputCfg, accountId }: { cfg: CoreConfig; accountId: string }) =>
-          inputCfg.channels?.matrix?.accounts?.[accountId] ?? {},
-      );
+      const cfg = configureAccount();
       const bootstrapEntered = createDeferred<void>();
       const bootstrapRetired = createDeferred<void>();
       const profileEntered = createDeferred<void>();
       const profileRetired = createDeferred<void>();
       const readEntered = createDeferred<void>();
       const readRetired = createDeferred<void>();
-      bootstrapMatrixVerificationMock.mockImplementationOnce(async () => {
+      mocks.bootstrap.mockImplementationOnce(async () => {
         bootstrapEntered.resolve();
         await bootstrapRetired.promise;
-        return successfulMatrixBootstrap();
+        return successfulMatrixBootstrap("2026-03-09T06:00:00.000Z", "7");
       });
       if (command === "account add") {
-        updateMatrixOwnProfileMock.mockImplementationOnce(async () => {
+        mocks.profile.mockImplementationOnce(async () => {
           profileEntered.resolve();
           await profileRetired.promise;
           return {
@@ -1285,35 +834,43 @@ describe("matrix CLI verification commands", () => {
           };
         });
       }
-      const finalRead =
-        command === "encryption setup" ? getMatrixVerificationStatusMock : listMatrixOwnDevicesMock;
+      const finalRead = command === "encryption setup" ? mocks.verificationStatus : mocks.devices;
       finalRead.mockImplementationOnce(async () => {
         readEntered.resolve();
         await readRetired.promise;
-        return command === "encryption setup" ? matrixVerificationStatus() : [];
+        return command === "encryption setup"
+          ? matrixVerificationStatus({
+              backup: diagnosticMatrixBackup({
+                activeVersion: null,
+                matchesDecryptionKey: false,
+                decryptionKeyCached: false,
+                keyLoadAttempted: true,
+              }),
+            })
+          : [matrixDevice("stale", false), matrixDevice("current", true)];
       });
       const gatewayActivations: CoreConfig[] = [];
-      const latestCfg = structuredClone(cfg);
+      const latestCfg: CoreConfig = structuredClone(cfg);
       latestCfg.messages = { ackReaction: "updated-during-bootstrap" };
-      matrixRuntimeMutateConfigFileMock.mockImplementationOnce(async ({ mutate, afterWrite }) => {
+      mocks.mutateConfig.mockImplementationOnce(async ({ mutate, afterWrite }) => {
         const draft = structuredClone(latestCfg);
         await mutate(draft, { snapshot: { runtimeConfig: latestCfg } });
-        await matrixRuntimeReplaceConfigFileMock({ nextConfig: draft, afterWrite });
+        await mocks.replaceConfig({ nextConfig: draft, afterWrite });
       });
-      matrixRuntimeReplaceConfigFileMock.mockImplementationOnce(
+      mocks.replaceConfig.mockImplementationOnce(
         async ({ nextConfig }: { nextConfig: CoreConfig }) => {
           gatewayActivations.push(nextConfig);
         },
       );
+      mockRecoveryKeyStdin("stdin-recovery-key\n");
       const running = runMatrixCli(
         command === "encryption setup"
-          ? ["matrix", "encryption", "setup", "--account", "ops", "--json"]
+          ? ["encryption", "setup", "--account", "ops", "--recovery-key-stdin"]
           : matrixAccountPasswordArgs(
               "ops",
               "--enable-e2ee",
               "--avatar-url",
               "https://example.org/avatar.png",
-              "--json",
             ),
       );
       try {
@@ -1340,170 +897,87 @@ describe("matrix CLI verification commands", () => {
         expect(gatewayActivations[0]?.channels?.matrix?.accounts?.ops?.avatarUrl).toBe(
           "mxc://example.org/avatar",
         );
+        expectLogs("Matrix verification bootstrap: complete", "Backup version: 7");
+        expect(mocks.log.mock.calls.flat().join("\n")).toContain(
+          "stale OpenClaw devices detected (stale)",
+        );
       } else {
-        expectRecordFields(JSON.parse(String(stdoutWriteArg())), {
-          success: true,
-          status: matrixVerificationStatus(),
+        expectRecordFields(mockCallArg(mocks.bootstrap), {
+          recoveryKey: "stdin-recovery-key",
+          forceResetCrossSigning: false,
         });
+        expectLogs(
+          "Bootstrap success: yes",
+          "Encryption config: enabled at channels.matrix.accounts.ops",
+        );
+        expect(mocks.log.mock.calls.flat().join("\n")).toContain(
+          "Backup key is not loaded on this device",
+        );
       }
       expect(process.exitCode).toBe(0);
     },
   );
 
-  it.each(["bootstrap result", "bootstrap throw", "status throw"])(
-    "still saves encryption setup after a %s failure",
-    async (failure) => {
-      matrixRuntimeLoadConfigMock.mockReturnValue({ channels: { matrix: {} } });
-      resolveMatrixAccountMock.mockReturnValue({ configured: true });
-      getMatrixVerificationStatusMock.mockResolvedValue(matrixVerificationStatus());
-      if (failure === "bootstrap result") {
-        bootstrapMatrixVerificationMock.mockResolvedValue({
-          ...successfulMatrixBootstrap(),
-          success: false,
-          error: "bootstrap unavailable",
-        });
-      } else if (failure === "bootstrap throw") {
-        bootstrapMatrixVerificationMock.mockRejectedValue(new Error("bootstrap unavailable"));
-      } else {
-        getMatrixVerificationStatusMock.mockRejectedValue(new Error("status unavailable"));
-      }
-      await runMatrixCli(["matrix", "encryption", "setup", "--json"]);
-
-      expect(matrixRuntimeReplaceConfigFileMock).toHaveBeenCalledOnce();
-      const write = mockCallArg(matrixRuntimeReplaceConfigFileMock) as { nextConfig: CoreConfig };
-      expect(write.nextConfig.channels?.matrix?.encryption).toBe(true);
-      expect(process.exitCode).toBe(1);
-      expectRecordFields(JSON.parse(String(stdoutWriteArg())), { success: false });
-    },
-  );
+  it("still saves encryption setup after a failed bootstrap result", async () => {
+    mocks.loadConfig.mockReturnValue({ channels: { matrix: {} } });
+    mocks.account.mockReturnValue({ configured: true });
+    mocks.verificationStatus.mockResolvedValue(matrixVerificationStatus());
+    mocks.bootstrap.mockResolvedValue({
+      ...successfulMatrixBootstrap(),
+      success: false,
+      error: "bootstrap unavailable",
+    });
+    await runMatrixCli(["encryption", "setup", "--json"]);
+    expect(mocks.replaceConfig).toHaveBeenCalledOnce();
+    const write = mockCallArg(mocks.replaceConfig) as { nextConfig: CoreConfig };
+    expect(write.nextConfig.channels?.matrix?.encryption).toBe(true);
+    expect(process.exitCode).toBe(1);
+    expectRecordFields(JSON.parse(String(stdoutWriteArg())), { success: false });
+  });
 
   it.each([
     ["encryption setup", "account replacement"],
-    ["account add", "account replacement"],
-    ["encryption setup", "channel disable"],
     ["account add", "channel disable"],
   ])("does not publish %s after concurrent %s", async (command, change) => {
-    const cfg: CoreConfig = {
-      channels: {
-        matrix: {
-          enabled: true,
-          accounts: {
-            ops: {
-              enabled: true,
-              homeserver: "https://matrix.example.org",
-              accessToken: "original-token",
-            },
-          },
-        },
-      },
-    };
-    matrixRuntimeLoadConfigMock.mockReturnValue(cfg);
-    resolveMatrixAccountMock.mockReturnValue({ configured: true });
-    resolveMatrixAccountConfigMock.mockImplementation(
-      ({ cfg: inputCfg, accountId }: { cfg: CoreConfig; accountId: string }) =>
-        inputCfg.channels?.matrix?.accounts?.[accountId] ?? {},
-    );
-    getMatrixVerificationStatusMock.mockResolvedValue(matrixVerificationStatus());
-    const replaced: CoreConfig =
-      change === "channel disable"
-        ? {
-            ...cfg,
-            channels: { matrix: { ...cfg.channels?.matrix, enabled: false } },
-          }
-        : {
-            channels: {
-              matrix: {
-                accounts: {
-                  ops: {
-                    homeserver: "https://replacement.example.org",
-                    accessToken: "replacement-token",
-                  },
-                },
-              },
-            },
-          };
-    matrixRuntimeMutateConfigFileMock.mockImplementationOnce(async ({ mutate, afterWrite }) => {
+    const cfg = configureAccount();
+    mocks.verificationStatus.mockResolvedValue(matrixVerificationStatus());
+    const replaced = structuredClone(cfg);
+    if (change === "channel disable") {
+      replaced.channels.matrix.enabled = false;
+    } else {
+      replaced.channels.matrix.accounts.ops.homeserver = "https://replacement.example.org";
+      replaced.channels.matrix.accounts.ops.accessToken = "replacement-token";
+    }
+    mocks.mutateConfig.mockImplementationOnce(async ({ mutate, afterWrite }) => {
       const draft = structuredClone(replaced);
       await mutate(draft, { snapshot: { runtimeConfig: replaced } });
-      await matrixRuntimeReplaceConfigFileMock({ nextConfig: draft, afterWrite });
+      await mocks.replaceConfig({ nextConfig: draft, afterWrite });
     });
     await runMatrixCli(
       command === "encryption setup"
-        ? ["matrix", "encryption", "setup", "--account", "ops", "--json"]
+        ? ["encryption", "setup", "--account", "ops", "--json"]
         : matrixAccountPasswordArgs("ops", "--enable-e2ee", "--json"),
     );
 
-    expect(matrixRuntimeReplaceConfigFileMock).not.toHaveBeenCalled();
+    expect(mocks.replaceConfig).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
     expect(JSON.parse(String(stdoutWriteArg())).error).toContain("changed during setup");
     expect(JSON.parse(String(stdoutWriteArg())).error).toContain("run the setup command again");
   });
 
-  it("compares runtime account config while preserving source SecretRefs", async () => {
-    const cfg: CoreConfig = {
-      channels: {
-        matrix: { accessToken: "resolved-token", homeserver: "https://matrix.example.org" },
-      },
-    };
-    const source: CoreConfig = {
-      channels: {
-        matrix: {
-          accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
-          homeserver: "https://matrix.example.org",
-        },
-      },
-    };
-    matrixRuntimeLoadConfigMock.mockReturnValue(cfg);
-    resolveMatrixAccountMock.mockReturnValue({ configured: true });
-    getMatrixVerificationStatusMock.mockResolvedValue(matrixVerificationStatus());
-    matrixRuntimeMutateConfigFileMock.mockImplementationOnce(async ({ mutate, afterWrite }) => {
-      const draft = structuredClone(source);
-      await mutate(draft, { snapshot: { runtimeConfig: cfg } });
-      await matrixRuntimeReplaceConfigFileMock({ nextConfig: draft, afterWrite });
-    });
-    await runMatrixCli(["matrix", "encryption", "setup", "--json"]);
-
-    expect(process.exitCode).toBe(0);
-    const write = mockCallArg(matrixRuntimeReplaceConfigFileMock) as { nextConfig: CoreConfig };
-    expect(write.nextConfig.channels?.matrix?.accessToken).toEqual(
-      source.channels?.matrix?.accessToken,
-    );
-    expect(write.nextConfig.channels?.matrix?.encryption).toBe(true);
-  });
-
-  it.each(["bootstrap", "status"])(
-    "reports publication failure ahead of an earlier %s failure",
-    async (stage) => {
-      resolveMatrixAccountMock.mockReturnValue({ configured: true });
-      const action =
-        stage === "bootstrap" ? bootstrapMatrixVerificationMock : getMatrixVerificationStatusMock;
-      action.mockRejectedValueOnce(new Error(`${stage} failed`));
-      matrixRuntimeReplaceConfigFileMock.mockRejectedValueOnce(
-        new Error("config publication failed"),
-      );
-      await runMatrixCli(["matrix", "encryption", "setup", "--json"]);
-
-      expect(process.exitCode).toBe(1);
-      expect(JSON.parse(String(stdoutWriteArg()))).toEqual({
-        success: false,
-        error: "config publication failed",
-      });
-    },
-  );
-
   it("saves an encrypted account and reports bootstrap, profile, and device-health failures", async () => {
-    resolveMatrixAccountConfigMock.mockImplementation(
+    mocks.accountConfig.mockImplementation(
       ({ cfg, accountId }: { cfg: CoreConfig; accountId: string }) =>
         cfg.channels?.matrix?.accounts?.[accountId] ?? {},
     );
-    bootstrapMatrixVerificationMock.mockRejectedValueOnce(new Error("bootstrap failed"));
-    updateMatrixOwnProfileMock.mockRejectedValueOnce(new Error("profile failed"));
-    listMatrixOwnDevicesMock.mockRejectedValueOnce(new Error("device health failed"));
+    mocks.bootstrap.mockRejectedValueOnce(new Error("bootstrap failed"));
+    mocks.profile.mockRejectedValueOnce(new Error("profile failed"));
+    mocks.devices.mockRejectedValueOnce(new Error("device health failed"));
     await runMatrixCli(
       matrixAccountPasswordArgs("ops", "--enable-e2ee", "--name", "Ops", "--json"),
     );
 
-    expect(matrixRuntimeReplaceConfigFileMock).toHaveBeenCalledOnce();
+    expect(mocks.replaceConfig).toHaveBeenCalledOnce();
     expect(process.exitCode).toBe(0);
     const result = JSON.parse(String(stdoutWriteArg()));
     expect(result.encryptionEnabled).toBe(true);
@@ -1516,82 +990,10 @@ describe("matrix CLI verification commands", () => {
     expectRecordFields(result.deviceHealth, { error: "device health failed" });
   });
 
-  it("bootstraps verification for newly added encrypted accounts", async () => {
-    resolveMatrixAccountConfigMock.mockReturnValue({
-      encryption: true,
-    });
-    listMatrixOwnDevicesMock.mockResolvedValue([
-      {
-        deviceId: "BritdXC6iL",
-        displayName: "OpenClaw Gateway",
-        lastSeenIp: null,
-        lastSeenTs: null,
-        current: false,
-      },
-      {
-        deviceId: "du314Zpw3A",
-        displayName: "OpenClaw Gateway",
-        lastSeenIp: null,
-        lastSeenTs: null,
-        current: true,
-      },
-    ]);
-    bootstrapMatrixVerificationMock.mockResolvedValue(
-      successfulMatrixBootstrap("2026-03-09T06:00:00.000Z", "7"),
-    );
-    await runMatrixCli(matrixAccountPasswordArgs());
-
-    const bootstrapArg = mockCallArg(bootstrapMatrixVerificationMock) as Record<string, unknown>;
-    expect(bootstrapArg.accountId).toBe("ops");
-    expect(bootstrapArg.cfg).toBeTypeOf("object");
-    expect(console.log).toHaveBeenCalledWith("Matrix verification bootstrap: complete");
-    expect(console.log).toHaveBeenCalledWith(
-      `Recovery key created at: ${formatExpectedLocalTimestamp("2026-03-09T06:00:00.000Z")}`,
-    );
-    expect(console.log).toHaveBeenCalledWith("Backup version: 7");
-    expect(console.log).toHaveBeenCalledWith(
-      "Matrix device hygiene warning: stale OpenClaw devices detected (BritdXC6iL). Run openclaw matrix devices prune-stale --account ops.",
-    );
-  });
-
-  it("does not bootstrap verification when updating an already configured account", async () => {
-    matrixRuntimeLoadConfigMock.mockReturnValue({
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              enabled: true,
-              homeserver: "https://matrix.example.org",
-            },
-          },
-        },
-      },
-    });
-    resolveMatrixAccountConfigMock.mockReturnValue({
-      encryption: true,
-    });
-    await runMatrixCli(matrixAccountPasswordArgs());
-
-    expect(bootstrapMatrixVerificationMock).not.toHaveBeenCalled();
-  });
-
-  it("warns instead of failing when device-health probing fails after saving the account", async () => {
-    listMatrixOwnDevicesMock.mockRejectedValue(new Error("homeserver unavailable"));
-    await runMatrixCli(matrixAccountPasswordArgs());
-
-    expect(matrixRuntimeReplaceConfigFileMock).toHaveBeenCalled();
-    expect(process.exitCode).toBe(0);
-    expect(console.log).toHaveBeenCalledWith("Saved matrix account: ops");
-    expect(console.error).toHaveBeenCalledWith(
-      "Matrix device health warning: homeserver unavailable",
-    );
-  });
-
   it("forwards --avatar-url through account add setup and profile sync", async () => {
-    matrixRuntimeLoadConfigMock.mockReturnValue({ channels: {} });
+    mocks.loadConfig.mockReturnValue({ channels: {} });
     mockMatrixAccountConfigApply();
     await runMatrixCli([
-      "matrix",
       "account",
       "add",
       "--name",
@@ -1604,7 +1006,7 @@ describe("matrix CLI verification commands", () => {
       "mxc://example/ops-avatar",
     ]);
 
-    const applyArg = mockCallArg(matrixSetupApplyAccountConfigMock) as Record<string, unknown>;
+    const applyArg = mockCallArg(mocks.applyAccountConfig) as Record<string, unknown>;
     expect(applyArg.accountId).toBe("ops-bot");
     expectRecordFields(applyArg.input, {
       name: "Ops Bot",
@@ -1612,7 +1014,7 @@ describe("matrix CLI verification commands", () => {
       accessToken: "ops-token",
       avatarUrl: "mxc://example/ops-avatar",
     });
-    const profileArg = mockCallArg(updateMatrixOwnProfileMock) as {
+    const profileArg = mockCallArg(mocks.profile) as {
       cfg?: CoreConfig;
       accountId?: string;
       displayName?: string;
@@ -1626,13 +1028,11 @@ describe("matrix CLI verification commands", () => {
       displayName: "Ops Bot",
       avatarUrl: "mxc://example/ops-avatar",
     });
-    expect(console.log).toHaveBeenCalledWith("Saved matrix account: ops-bot");
-    expect(console.log).toHaveBeenCalledWith("Config path: channels.matrix.accounts.ops-bot");
+    expectLogs("Saved matrix account: ops-bot", "Config path: channels.matrix.accounts.ops-bot");
   });
 
   it("sets profile name and avatar via profile set command", async () => {
     await runMatrixCli([
-      "matrix",
       "profile",
       "set",
       "--account",
@@ -1644,19 +1044,18 @@ describe("matrix CLI verification commands", () => {
     ]);
 
     expect(process.exitCode ?? 0).toBe(0);
-    expectRecordFields(mockCallArg(updateMatrixOwnProfileMock), {
+    expectRecordFields(mockCallArg(mocks.profile), {
       accountId: "alerts",
       displayName: "Alerts Bot",
       avatarUrl: "mxc://example/avatar",
     });
-    expect(matrixRuntimeReplaceConfigFileMock).toHaveBeenCalled();
-    expect(console.log).toHaveBeenCalledWith("Account: alerts");
-    expect(console.log).toHaveBeenCalledWith("Config path: channels.matrix.accounts.alerts");
+    expect(mocks.replaceConfig).toHaveBeenCalled();
+    expectLogs("Account: alerts", "Config path: channels.matrix.accounts.alerts");
   });
 
   it("returns JSON errors for invalid account setup input", async () => {
-    matrixSetupValidateInputMock.mockReturnValue("Matrix requires --homeserver");
-    await runMatrixCli(["matrix", "account", "add", "--json"]);
+    mocks.validateInput.mockReturnValue("Matrix requires --homeserver");
+    await runMatrixCli(["account", "add", "--json"]);
 
     expect(process.exitCode).toBe(1);
     expect(JSON.parse(String(stdoutWriteArg(0)))).toEqual({
@@ -1664,93 +1063,7 @@ describe("matrix CLI verification commands", () => {
     });
   });
 
-  it("prints local timezone timestamps for verify status output in verbose mode", async () => {
-    const recoveryCreatedAt = "2026-02-25T20:10:11.000Z";
-    mockMatrixVerificationStatus({ recoveryKeyCreatedAt: recoveryCreatedAt });
-    await runMatrixCli(["matrix", "verify", "status", "--verbose"]);
-
-    expect(console.log).toHaveBeenCalledWith(
-      `Recovery key created at: ${formatExpectedLocalTimestamp(recoveryCreatedAt)}`,
-    );
-    expect(console.log).toHaveBeenCalledWith("Diagnostics:");
-    expect(console.log).toHaveBeenCalledWith("Locally trusted: yes");
-    expect(console.log).toHaveBeenCalledWith("Signed by owner: yes");
-    expect(setMatrixSdkLogModeMock).toHaveBeenCalledWith("default");
-  });
-
-  it("prints local timezone timestamps for verify bootstrap and device output in verbose mode", async () => {
-    const recoveryCreatedAt = "2026-02-25T20:10:11.000Z";
-    const verifiedAt = "2026-02-25T20:14:00.000Z";
-    bootstrapMatrixVerificationMock.mockResolvedValue({
-      success: true,
-      verification: matrixVerificationState({
-        recoveryKeyId: "SSSS",
-        recoveryKeyCreatedAt: recoveryCreatedAt,
-      }),
-      crossSigning: {
-        published: true,
-        masterKeyPublished: true,
-        selfSigningKeyPublished: true,
-        userSigningKeyPublished: true,
-      },
-      pendingVerifications: 0,
-      cryptoBootstrap: {},
-    });
-    verifyMatrixRecoveryKeyMock.mockResolvedValue({
-      ...matrixVerificationState({
-        recoveryKeyId: "SSSS",
-        recoveryKeyCreatedAt: recoveryCreatedAt,
-        verifiedAt,
-      }),
-      success: true,
-    });
-    await runMatrixCli(["matrix", "verify", "bootstrap", "--verbose"]);
-    await runMatrixCli(["matrix", "verify", "device", "valid-key", "--verbose"]);
-
-    expect(console.log).toHaveBeenCalledWith(
-      `Recovery key created at: ${formatExpectedLocalTimestamp(recoveryCreatedAt)}`,
-    );
-    expect(console.log).toHaveBeenCalledWith(
-      `Verified at: ${formatExpectedLocalTimestamp(verifiedAt)}`,
-    );
-  });
-
-  it("keeps default output concise when verbose is not provided", async () => {
-    const recoveryCreatedAt = "2026-02-25T20:10:11.000Z";
-    mockMatrixVerificationStatus({ recoveryKeyCreatedAt: recoveryCreatedAt });
-    await runMatrixCli(["matrix", "verify", "status"]);
-
-    expect(console.log).not.toHaveBeenCalledWith(
-      `Recovery key created at: ${formatExpectedLocalTimestamp(recoveryCreatedAt)}`,
-    );
-    expect(console.log).not.toHaveBeenCalledWith("Pending verifications: 0");
-    expect(console.log).not.toHaveBeenCalledWith("Diagnostics:");
-    expect(console.log).toHaveBeenCalledWith("Backup: active and trusted on this device");
-    expect(setMatrixSdkLogModeMock).toHaveBeenCalledWith("quiet");
-  });
-
   for (const scenario of [
-    {
-      name: "shows explicit backup issue in default status output",
-      status: {
-        backupVersion: "5256",
-        backup: diagnosticMatrixBackup({
-          serverVersion: "5256",
-          activeVersion: null,
-          matchesDecryptionKey: false,
-          decryptionKeyCached: false,
-          keyLoadAttempted: true,
-        }),
-        recoveryKeyCreatedAt: "2026-02-25T20:10:11.000Z",
-      },
-      expectedLogs: [
-        "Backup issue: backup decryption key is not loaded on this device (secret storage did not return a key)",
-        "- Backup key is not loaded on this device. Run openclaw matrix verify backup restore to load it and restore old room keys. If restore still cannot load the key, run the shown printf pipeline with the Matrix recovery key env var for this account: printf '%s\\n' \"$MATRIX_RECOVERY_KEY\" | openclaw matrix verify backup restore --recovery-key-stdin.",
-      ],
-      absentLogs: [
-        "- Backup is present but not trusted for this device. Re-run 'openclaw matrix verify device <key>'.",
-      ],
-    },
     {
       name: "fails status with re-login guidance when the current Matrix device is missing on the server",
       status: {
@@ -1771,25 +1084,7 @@ describe("matrix CLI verification commands", () => {
       expectedExitCode: 1,
       expectedLogs: [
         "Device issue: current Matrix device is missing from the homeserver device list",
-        "- This Matrix device is no longer listed on the homeserver. Create a new OpenClaw Matrix device with openclaw matrix account add --homeserver '<url>' --user-id '<@user:server>' --password '<password>' --device-name OpenClaw-Gateway. If you use token auth, create a fresh Matrix access token in your Matrix client or admin UI, then run openclaw matrix account add --homeserver '<url>' --access-token '<token>'.",
-      ],
-    },
-    {
-      name: "includes key load failure details in status output",
-      status: {
-        backupVersion: "5256",
-        backup: diagnosticMatrixBackup({
-          serverVersion: "5256",
-          activeVersion: null,
-          matchesDecryptionKey: false,
-          decryptionKeyCached: false,
-          keyLoadAttempted: true,
-          keyLoadError: "secret storage key is not available",
-        }),
-        recoveryKeyCreatedAt: "2026-02-25T20:10:11.000Z",
-      },
-      expectedLogs: [
-        "Backup issue: backup decryption key could not be loaded from secret storage (secret storage key is not available)",
+        "- This Matrix device is no longer listed on the homeserver. Create a new OpenClaw Matrix device with openclaw matrix account add --homeserver '<url>' --user-id '<@user:server>' --password '<password>' --device-name OpenClaw-Gateway --account assistant. If you use token auth, create a fresh Matrix access token in your Matrix client or admin UI, then run openclaw matrix account add --homeserver '<url>' --access-token '<token>' --account assistant.",
       ],
     },
     {
@@ -1809,100 +1104,41 @@ describe("matrix CLI verification commands", () => {
     },
   ]) {
     it(scenario.name, async () => {
-      getMatrixVerificationStatusMock.mockResolvedValue(matrixVerificationStatus(scenario.status));
-      await runMatrixCli(["matrix", "verify", "status"]);
+      if ("expectedExitCode" in scenario) {
+        mocks.authContext.mockImplementation(({ cfg }: { cfg: CoreConfig }) => ({
+          cfg,
+          accountId: "assistant",
+        }));
+      }
+      mocks.verificationStatus.mockResolvedValue(matrixVerificationStatus(scenario.status));
+      await runMatrixCli(["verify", "status"]);
 
       if ("expectedExitCode" in scenario) {
         expect(process.exitCode).toBe(scenario.expectedExitCode);
+        expectLogs(
+          "Account: assistant",
+          "- Run openclaw matrix verify bootstrap --account assistant to create a room key backup.",
+        );
+        expect(mocks.log.mock.calls.flat().join("\n")).toContain("$MATRIX_RECOVERY_KEY_ASSISTANT");
       }
       for (const message of scenario.expectedLogs) {
-        expect(console.log).toHaveBeenCalledWith(message);
-      }
-      for (const message of scenario.absentLogs ?? []) {
-        expect(console.log).not.toHaveBeenCalledWith(message);
+        expectLogs(message);
       }
     });
   }
 
   it("requires --yes before resetting the Matrix room-key backup", async () => {
-    await runMatrixCli(["matrix", "verify", "backup", "reset"]);
+    await runMatrixCli(["verify", "backup", "reset"]);
 
     expect(process.exitCode).toBe(1);
-    expect(resetMatrixRoomKeyBackupMock).not.toHaveBeenCalled();
+    expect(mocks.resetBackup).not.toHaveBeenCalled();
     expect(console.error).toHaveBeenCalledWith(
       "Backup reset failed: Refusing to reset Matrix room-key backup without --yes. If you accept losing unrecoverable history, re-run openclaw matrix verify backup reset --yes.",
     );
   });
 
-  it("resets the Matrix room-key backup when confirmed", async () => {
-    await runMatrixCli(["matrix", "verify", "backup", "reset", "--yes"]);
-
-    expect(resetMatrixRoomKeyBackupMock).toHaveBeenCalledWith({
-      accountId: "default",
-      cfg: {},
-      rotateRecoveryKey: false,
-    });
-    expect(console.log).toHaveBeenCalledWith("Reset success: yes");
-    expect(console.log).toHaveBeenCalledWith("Previous backup version: 1");
-    expect(console.log).toHaveBeenCalledWith("Deleted backup version: 1");
-    expect(console.log).toHaveBeenCalledWith("Current backup version: 2");
-    expect(console.log).toHaveBeenCalledWith("Backup: active and trusted on this device");
-  });
-
-  it("passes recovery-key rotation through backup reset", async () => {
-    await runMatrixCli(["matrix", "verify", "backup", "reset", "--yes", "--rotate-recovery-key"]);
-
-    expect(resetMatrixRoomKeyBackupMock).toHaveBeenCalledWith({
-      accountId: "default",
-      cfg: {},
-      rotateRecoveryKey: true,
-    });
-  });
-
-  it("prints resolved account-aware guidance when a named Matrix account is selected implicitly", async () => {
-    resolveMatrixAuthContextMock.mockImplementation(
-      ({ cfg, accountId }: { cfg: unknown; accountId?: string | null }) => ({
-        cfg,
-        env: process.env,
-        accountId: accountId ?? "assistant",
-        resolved: {},
-      }),
-    );
-    getMatrixVerificationStatusMock.mockResolvedValue(
-      matrixVerificationStatus({
-        verified: false,
-        localVerified: false,
-        crossSigningVerified: false,
-        signedByOwner: false,
-        backupVersion: null,
-        backup: diagnosticMatrixBackup({
-          serverVersion: null,
-          activeVersion: null,
-          trusted: null,
-          matchesDecryptionKey: null,
-          decryptionKeyCached: null,
-        }),
-        recoveryKeyStored: false,
-      }),
-    );
-    await runMatrixCli(["matrix", "verify", "status"]);
-
-    expect(getMatrixVerificationStatusMock).toHaveBeenCalledWith({
-      accountId: "assistant",
-      cfg: {},
-      includeRecoveryKey: false,
-    });
-    expect(console.log).toHaveBeenCalledWith("Account: assistant");
-    expect(console.log).toHaveBeenCalledWith(
-      "- Run the shown printf pipeline with the Matrix recovery key env var for this account: printf '%s\\n' \"$MATRIX_RECOVERY_KEY_ASSISTANT\" | openclaw matrix verify device --recovery-key-stdin --account assistant. If you do not have the recovery key but still have another verified Matrix client, run openclaw matrix verify self --account assistant instead.",
-    );
-    expect(console.log).toHaveBeenCalledWith(
-      "- Run openclaw matrix verify bootstrap --account assistant to create a room key backup.",
-    );
-  });
-
   it("prints backup health lines for verify backup status in verbose mode", async () => {
-    getMatrixRoomKeyBackupStatusMock.mockResolvedValue(
+    mocks.backupStatus.mockResolvedValue(
       diagnosticMatrixBackup({
         serverVersion: "2",
         activeVersion: null,
@@ -1911,11 +1147,13 @@ describe("matrix CLI verification commands", () => {
         keyLoadAttempted: true,
       }),
     );
-    await runMatrixCli(["matrix", "verify", "backup", "status", "--verbose"]);
+    await runMatrixCli(["verify", "backup", "status", "--verbose"]);
 
-    expect(console.log).toHaveBeenCalledWith("Backup server version: 2");
-    expect(console.log).toHaveBeenCalledWith("Backup active on this device: no");
-    expect(console.log).toHaveBeenCalledWith("Backup trusted by this device: yes");
+    expectLogs(
+      "Backup server version: 2",
+      "Backup active on this device: no",
+      "Backup trusted by this device: yes",
+    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

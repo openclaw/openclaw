@@ -1,7 +1,11 @@
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
+import * as providerFetch from "../provider-transport-fetch.js";
 import { prepareGooglePromptCacheStreamFn } from "./google-prompt-cache.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 export type SessionCustomEntry = {
   type: "custom";
@@ -13,14 +17,14 @@ export type SessionCustomEntry = {
 };
 
 export type TestGooglePromptCacheSessionManager = {
-  appendCustomEntry(customType: string, data: unknown): void | Promise<void>;
+  appendCustomEntryAsync(customType: string, data: unknown): Promise<void>;
   getEntries(): SessionCustomEntry[];
 };
 
 export function makeSessionManager(entries: SessionCustomEntry[] = []) {
   let counter = 0;
   return {
-    appendCustomEntry(customType: string, data: unknown) {
+    async appendCustomEntryAsync(customType: string, data: unknown) {
       counter += 1;
       entries.push({
         type: "custom" as const,
@@ -141,8 +145,7 @@ export function streamOptions(streamFn: { mock: { calls: unknown[][] } }, callIn
 
 export function preparePromptCacheStream(params: {
   apiKey?: string;
-  buildGuardedFetch?: () => typeof fetch;
-  fetchMock?: ReturnType<typeof vi.fn>;
+  fetchMock?: typeof fetch;
   model?: ReturnType<typeof makeGoogleModel>;
   now: number;
   sessionManager: TestGooglePromptCacheSessionManager;
@@ -150,24 +153,49 @@ export function preparePromptCacheStream(params: {
   streamFn: StreamFn;
 }) {
   const model = params.model ?? makeGoogleModel();
-  return prepareGooglePromptCacheStreamFn(
-    {
-      apiKey: params.apiKey ?? "gemini-api-key",
-      extraParams: { cacheRetention: "long" },
-      model,
-      modelId: model.id,
-      provider: "google",
-      sessionManager: params.sessionManager,
-      signal: params.signal,
-      streamFn: params.streamFn,
-    },
-    {
-      ...(params.buildGuardedFetch
-        ? { buildGuardedFetch: params.buildGuardedFetch }
-        : params.fetchMock
-          ? { buildGuardedFetch: () => params.fetchMock as typeof fetch }
-          : {}),
-      now: () => params.now,
-    },
+  vi.spyOn(Date, "now").mockReturnValue(params.now);
+  if (params.fetchMock) {
+    vi.spyOn(providerFetch, "buildGuardedModelFetch").mockReturnValue(params.fetchMock);
+  }
+  return prepareGooglePromptCacheStreamFn({
+    apiKey: params.apiKey ?? "gemini-api-key",
+    extraParams: { cacheRetention: "long" },
+    model,
+    modelId: model.id,
+    provider: "google",
+    sessionManager: params.sessionManager,
+    signal: params.signal,
+    streamFn: params.streamFn,
+  });
+}
+
+export async function createReadyGooglePromptCacheEntry(params: {
+  now: number;
+  cachedContent?: string;
+  expireTime?: string;
+}) {
+  const entries: SessionCustomEntry[] = [];
+  const { streamFn } = createCapturingStreamFn();
+  const wrapped = await preparePromptCacheStream({
+    now: params.now,
+    sessionManager: makeSessionManager(entries),
+    fetchMock: createCacheFetchMock({
+      name: params.cachedContent ?? "cachedContents/existing",
+      expireTime: params.expireTime ?? new Date(params.now + 3_600_000).toISOString(),
+    }),
+    streamFn,
+  });
+  if (!wrapped) {
+    throw new Error("Expected a Google prompt-cache wrapper");
+  }
+  await wrapped(
+    makeGoogleModel(),
+    { systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`, messages: [] },
+    {},
   );
+  const entry = entries[0];
+  if (!entry?.data || typeof entry.data !== "object") {
+    throw new Error("Expected the cache owner to persist a ready entry");
+  }
+  return { ...entry, data: entry.data };
 }

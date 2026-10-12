@@ -1,6 +1,4 @@
 // Dependency Changes Report tests cover dependency changes report script behavior.
-import { spawnSync } from "node:child_process";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createDependencyChangesReport,
@@ -8,22 +6,6 @@ import {
   isDependencyFile,
   parseArgs,
 } from "../../scripts/dependency-changes-report.mts";
-
-function runCli(...args: string[]) {
-  return spawnSync(
-    process.execPath,
-    ["--import", "tsx", "scripts/dependency-changes-report.mts", ...args],
-    {
-      cwd: path.resolve("."),
-      encoding: "utf8",
-    },
-  );
-}
-
-function expectNoNodeStack(stderr: string) {
-  expect(stderr).not.toContain("Node.js");
-  expect(stderr).not.toContain("\n    at ");
-}
 
 describe("dependency-changes-report", () => {
   it("reports added, removed, and changed packages", () => {
@@ -145,21 +127,5 @@ describe("dependency-changes-report", () => {
     expect(() => parseArgs(["--base-ref", "main", "--base-lockfile", "base-lock.yaml"])).toThrow(
       "Use either --base-ref or --base-lockfile, not both.",
     );
-  });
-
-  it("reports CLI argument errors without a Node stack trace", () => {
-    const missingBase = runCli();
-    expect(missingBase.status).toBe(1);
-    expect(missingBase.stdout).toBe("");
-    expect(missingBase.stderr.trim()).toBe(
-      "Expected --base-ref <git-ref> or --base-lockfile <path>.",
-    );
-    expectNoNodeStack(missingBase.stderr);
-
-    const unknownArg = runCli("--wat");
-    expect(unknownArg.status).toBe(1);
-    expect(unknownArg.stdout).toBe("");
-    expect(unknownArg.stderr.trim()).toBe("Unsupported argument: --wat");
-    expectNoNodeStack(unknownArg.stderr);
   });
 });

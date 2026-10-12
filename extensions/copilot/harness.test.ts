@@ -1,5 +1,5 @@
 // Copilot tests cover harness plugin behavior.
-import type { CopilotClient, SessionEvent } from "@github/copilot-sdk";
+import type { CopilotClient, SessionConfig, SessionEvent } from "@github/copilot-sdk";
 import { attachModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   AgentHarness,
@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CopilotSessionBinding } from "./harness.js";
 import { asFinalizationAttempt, createCopilotAgentHarness } from "./harness.test-support.js";
 import type { CopilotAttemptDeps } from "./src/attempt-types.js";
-import type { CopilotSessionConfig, resolvePoolAcquire } from "./src/attempt.js";
+import type { resolvePoolAcquire } from "./src/attempt.js";
 import { createCopilotTestHostCapabilities } from "./src/host-capability.test-support.js";
 import type { CopilotClientPool, PoolKey } from "./src/runtime.js";
 
@@ -135,7 +135,7 @@ function createMockCopilotClient(overrides: Record<string, unknown> = {}): Copil
 function mockEstablishedSession(
   sdkSessionId: string,
   createClient: () => CopilotClient = createMockCopilotClient,
-  sessionConfig?: CopilotSessionConfig,
+  sessionConfig?: SessionConfig,
 ) {
   mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
     await deps.onSessionEstablished?.({

@@ -317,7 +317,7 @@ describe("Gateway config selection before migration admission", () => {
         JSON.stringify({
           gateway: { mode: "local" },
           meta: { lastTouchedAt: "2026-02-15T00:00:00.000Z" },
-          agents: { list: [{ id: "main" }, { id: "helper" }] },
+          agents: { entries: { main: {}, helper: {} } },
           plugins: {
             enabled: false,
             installs: { example: { source: "path", installPath: path.join(root, "plugin") } },
@@ -455,6 +455,7 @@ describe("Gateway config selection before migration admission", () => {
       expect(JSON.parse(results[0]!.slice("__RESULT__".length))).toEqual([
         { dev, allowUnconfigured },
       ]);
+      expect(fs.existsSync(configPath)).toBe(false);
     },
     75_000,
   );

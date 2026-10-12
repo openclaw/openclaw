@@ -93,8 +93,8 @@ describe("placement reclaim with provider-owned node teardown", () => {
           runId: "pending-run",
           owner: { kind: "worker", environmentId, ownerEpoch: attached.ownerEpoch },
         });
-        placements.markWorkspaceResultPending(claim);
-        placements.startWorkspaceResultDrain(claim);
+        await placements.markWorkspaceResultPending(claim);
+        await placements.startWorkspaceResultDrain(claim);
         placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
         harness = createHarness(support.testState.stateDb, placements, harnessOptions);
       }
@@ -312,7 +312,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           expect.soft(outcome).toBe(primaryError);
         }
         expect(placements.get(active.sessionId)?.state).toBe("draining");
-        expect(placements.listPendingWorkspaceResults()).toEqual([
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
           expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
         ]);
         expect(destroy).toHaveBeenCalledOnce();
@@ -323,7 +323,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           turnClaim: null,
           recoveryError: null,
         });
-        expect(placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(service.get(environmentId)?.state).toBe("destroyed");
         expect(destroy).toHaveBeenCalledTimes(2);
         expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
@@ -408,6 +408,7 @@ describe("SSH placement cleanup after worker credential expiry", () => {
           placements,
           environments: service,
           dispatch: harness.service,
+          reportChanges: (sweep) => sweep(),
           getConfig: () => support.testState.config,
           now: () => support.testState.nowMs,
           info: vi.fn(),
@@ -424,7 +425,7 @@ describe("SSH placement cleanup after worker credential expiry", () => {
         state: operation === "move" ? "local" : "reclaimed",
         turnClaim: null,
       });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     },
   );
 });

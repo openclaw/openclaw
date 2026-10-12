@@ -9,25 +9,23 @@ import {
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.ts";
-import type { DashboardsRouteData } from "./view.ts";
+import type { DashboardsRouteData } from "./view.tsx";
 
 export function dashboardsRouteData(
   context: ApplicationContext,
   snapshot: SessionListSnapshot,
 ): DashboardsRouteData {
+  const sessionConfig = {
+    agentsList: context.agents.state.agentsList,
+    hello: context.gateway.snapshot.hello,
+  };
   return {
     result: snapshot.result,
     error: snapshot.error,
     basePath: context.basePath,
     fallbackAgentId: resolveSessionNavigationAgentId(context),
-    globalScope: isUiGlobalScopeConfigured({
-      agentsList: context.agents.state.agentsList,
-      hello: context.gateway.snapshot.hello,
-    }),
-    mainKey: resolveUiConfiguredMainKey({
-      agentsList: context.agents.state.agentsList,
-      hello: context.gateway.snapshot.hello,
-    }),
+    globalScope: isUiGlobalScopeConfigured(sessionConfig),
+    mainKey: resolveUiConfiguredMainKey(sessionConfig),
   };
 }
 
@@ -35,7 +33,7 @@ async function loadDashboardsRoute(context: ApplicationContext): Promise<Dashboa
   const query = dashboardSessionListQuery(context.agentSelection.state.scopeId);
   let snapshot = context.sessions.listSnapshot(query);
   if (!snapshot.result && !snapshot.loading) {
-    await context.sessions.refreshList({ ...query, force: true });
+    await context.sessions.refreshList(query);
     snapshot = context.sessions.listSnapshot(query);
   }
   return dashboardsRouteData(context, snapshot);

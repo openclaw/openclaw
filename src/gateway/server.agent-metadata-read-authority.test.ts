@@ -150,7 +150,7 @@ describe("agent RPC metadata-read authority", () => {
             .soft(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry)
             .toEqual(beforeEntry);
           expect.soft(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(f.before);
-          expect.soft(listSessionPendingInputs(f.scope).total).toBe(0);
+          expect.soft((await listSessionPendingInputs(f.scope)).total).toBe(0);
           expect.soft(execution.observer).not.toHaveBeenCalled();
           expect.soft(agentCommandMock).not.toHaveBeenCalled();
           expect.soft(f.context.chatAbortControllers.has(f.runId)).toBe(false);
@@ -172,7 +172,7 @@ describe("agent RPC metadata-read authority", () => {
           expect.soft(f.context.dedupe.get(`agent:${f.runId}`)).toBe(retained);
           expect.soft(writeObserver).not.toHaveBeenCalled();
           expect.soft(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(f.before);
-          expect.soft(listSessionPendingInputs(f.scope).total).toBe(0);
+          expect.soft((await listSessionPendingInputs(f.scope)).total).toBe(0);
         }
       } finally {
         release.resolve();

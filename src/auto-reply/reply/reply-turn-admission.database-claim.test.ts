@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sessionEntries from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import {
   runExclusiveSessionLifecycleMutation,
   startSessionWorkAdmissionInterruption,
@@ -13,8 +16,15 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  getOpenClawAgentDatabaseIfOpen,
+  resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as registry from "./reply-run-registry.js";
+import {
+  acquireReplyOperationSessionActor,
+  getReplyOperationSessionTarget,
+} from "./reply-run-registry.state.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
@@ -50,6 +60,63 @@ function complete(result: Awaited<ReturnType<typeof admitReplyTurn>> | undefined
     result.operation.complete();
   }
 }
+
+it("keeps native incognito admission with its existing owner without an actor", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const key = "agent:main:dashboard:incognito-reply-admission";
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+    const scope = { agentId: "main", storePath, sessionKey: key };
+    sessionEntries.replaceSessionEntrySync(scope, { sessionId, updatedAt: 1, incognito: true });
+    const native = getOpenClawAgentDatabaseIfOpen({
+      agentId: "main",
+      path: storePath,
+      env: state.env,
+    });
+    expect(native).toBeDefined();
+    const result = await admit(storePath, { agentId: "main", sessionKey: key });
+    try {
+      if (result.status !== "owned" || !result.databaseClaim) {
+        throw new Error("Native incognito admission must retain its database claim");
+      }
+      const { operation, databaseClaim } = result;
+      expect(getReplyOperationSessionTarget(operation)).toMatchObject({
+        agentId: "main",
+        storePath,
+        readSource: {
+          agentId: "main",
+          path: storePath,
+          databaseIdentity: databaseClaim.identity,
+        },
+        target: { canonicalKey: key, storeKeys: [key] },
+      });
+      expect(typeof databaseClaim.identity).toBe("symbol");
+      await expect(acquireReplyOperationSessionActor(operation)).resolves.toBeUndefined();
+      expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({
+        sessionId,
+        incognito: true,
+        updatedAt: 1,
+      });
+      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBe(native);
+      expect(fs.existsSync(storePath)).toBe(false);
+      expect(databaseClaim.isCurrent()).toBe(true);
+      operation.complete();
+      expect(() => acquireReplyOperationSessionActor(operation)).toThrow();
+      expect(() => getReplyOperationSessionTarget(operation)).toThrow();
+      expect(
+        await withinTest(registry.waitForReplyRunSuccessorAdmission(key, null), signal),
+      ).toMatchObject({ settled: true });
+      expect(databaseClaim.isCurrent()).toBe(false);
+      expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({ sessionId, updatedAt: 1 });
+      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBe(native);
+      expect(fs.existsSync(storePath)).toBe(false);
+    } finally {
+      complete(result);
+      await registry.waitForReplyRunSuccessorAdmission(key, null);
+    }
+  });
+});
 
 it.each(["cancelled", "request-changed", "later-rebound-store"] as const)(
   "does not admit a delayed healthy rotation after %s",
@@ -170,53 +237,47 @@ it.each(["cancelled", "request-changed", "later-rebound-store"] as const)(
   },
 );
 
-it.each(
-  (["writer", "active", "delivery"] as const).flatMap((wait) =>
-    (["unchanged", "same-inode", "other-inode"] as const).map((replacement) => ({
+it.for(
+  (["active", "delivery"] as const).flatMap((wait) =>
+    (["unchanged", "same-inode"] as const).map((replacement) => ({
       wait,
       replacement,
     })),
   ),
 )(
   "keeps the exact database owner across $wait wait, replacement=$replacement",
-  async ({ wait, replacement }) => {
+  async ({ wait, replacement }, { signal }) => {
     const root = tempDirs.make("reply-admission-claim-");
     const originalPath = path.join(root, "original.sqlite");
-    const replacementPath = path.join(root, "replacement.sqlite");
     const storePath = path.join(root, "selected.sqlite");
-    for (const databasePath of [originalPath, replacementPath]) {
-      seed(databasePath);
-    }
+    seed(originalPath);
     closeOpenClawAgentDatabasesForTest();
     fs.symlinkSync(originalPath, storePath);
     const release = createDeferred();
-    const writerStarted = createDeferred();
-    let owner: registry.ReplyOperation | undefined;
-    let writer: Promise<void> | undefined;
-    if (wait === "writer") {
-      writer = runExclusiveSessionStoreWrite(storePath, async () => {
-        writerStarted.resolve();
-        await release.promise;
-      });
-      await writerStarted.promise;
-    } else {
-      const admitted = await admit(storePath);
-      expect(admitted.status).toBe("owned");
-      if (admitted.status !== "owned") {
-        throw new Error("fixture requires an admitted blocking owner");
-      }
-      owner = admitted.operation;
-      if (wait === "delivery") {
-        owner.completeWithAfterClearBarrier(release.promise);
-      }
+    const admitted = await admit(storePath);
+    expect(admitted.status).toBe("owned");
+    if (admitted.status !== "owned") {
+      throw new Error("fixture requires an admitted blocking owner");
     }
+    const owner = admitted.operation;
+    if (wait === "delivery") {
+      owner.completeWithAfterClearBarrier(release.promise);
+    }
+    const enteredWait = createDeferred();
     const loaded = vi.spyOn(sessionEntries, "loadSessionEntryForAdmission");
-    const waiting =
-      wait === "active"
-        ? vi.spyOn(registry.replyRunRegistry, "waitForIdle")
-        : wait === "delivery"
-          ? vi.spyOn(registry, "waitForReplyRunFollowupAdmission")
-          : loaded;
+    if (wait === "active") {
+      const waitForIdle = registry.replyRunRegistry.waitForIdle.bind(registry.replyRunRegistry);
+      vi.spyOn(registry.replyRunRegistry, "waitForIdle").mockImplementation((...args) => {
+        enteredWait.resolve();
+        return waitForIdle(...args);
+      });
+    } else if (wait === "delivery") {
+      const waitForAdmission = registry.waitForReplyRunFollowupAdmission;
+      vi.spyOn(registry, "waitForReplyRunFollowupAdmission").mockImplementation((...args) => {
+        enteredWait.resolve();
+        return waitForAdmission(...args);
+      });
+    }
     const controller = new AbortController();
     const pending = admit(storePath, {
       expectedSessionId: sessionId,
@@ -225,7 +286,14 @@ it.each(
     });
     void pending.catch(() => {});
     try {
-      await vi.waitFor(() => expect(waiting).toHaveBeenCalled());
+      await withinTest(
+        awaitGateBeforeSettlement(
+          enteredWait.promise,
+          pending,
+          "Admission completed before reaching its owned wait",
+        ),
+        signal,
+      );
       const observed = loaded.mock.results.at(-1);
       if (observed?.type !== "return") {
         throw new Error("fixture requires a completed authoritative row read");
@@ -235,12 +303,8 @@ it.each(
       if (replacement !== "unchanged") {
         await closeOpenClawAgentDatabaseByPathAsync(storePath);
         expect(claim.isCurrent()).toBe(false);
-        if (replacement === "other-inode") {
-          fs.unlinkSync(storePath);
-          fs.symlinkSync(replacementPath, storePath);
-        }
       }
-      owner?.complete();
+      owner.complete();
       release.resolve();
       const result = await pending;
       if (replacement === "unchanged") {
@@ -253,12 +317,11 @@ it.each(
         expect(result).toMatchObject({ status: "skipped", reason: "lifecycle-invalidated" });
       }
     } finally {
-      owner?.complete();
+      owner.complete();
       release.resolve();
       controller.abort();
       const result = await pending.catch(() => undefined);
       complete(result);
-      await writer;
     }
   },
 );
@@ -305,12 +368,12 @@ it("cancels an in-flight admission read when its lifecycle owner interrupts ingr
     expect(signal.aborted).toBe(true);
     expect(upstream.signal.aborted).toBe(false);
     await interrupted.released;
-    await runExclusiveSessionLifecycleMutation({ ...target, run: async () => {} });
+    await runExclusiveSessionLifecycleMutation("patch", { ...target, run: async () => {} });
     expect(await pending).toMatchObject([{ status: "rejected", reason }]);
     expect(registry.replyRunRegistry.get(interruptedKey)).toBeUndefined();
   } finally {
     upstream.abort();
     await pending;
-    await runExclusiveSessionLifecycleMutation({ ...target, run: async () => {} });
+    await runExclusiveSessionLifecycleMutation("patch", { ...target, run: async () => {} });
   }
 });

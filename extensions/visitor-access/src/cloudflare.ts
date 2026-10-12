@@ -13,10 +13,20 @@ const policyReferenceSchema = z.object({
 const emailRuleSchema = z.strictObject({
   email: z.strictObject({ email: z.email().max(254) }),
 });
+const githubRuleSchema = z.strictObject({
+  oidc: z.strictObject({
+    identity_provider_id: z.string().min(1),
+    claim_name: z.string().min(1),
+    claim_value: z
+      .string()
+      .regex(/^[1-9][0-9]*$/u)
+      .refine((value) => Number.isSafeInteger(Number(value))),
+  }),
+});
 const managedPolicySchema = policyReferenceSchema
   .extend({
     decision: z.literal("allow"),
-    include: z.array(emailRuleSchema).max(10_000),
+    include: z.array(z.union([emailRuleSchema, githubRuleSchema])).max(10_000),
     exclude: z.array(z.unknown()).max(0).optional(),
     require: z.array(z.unknown()).max(0).optional(),
   })
@@ -33,6 +43,22 @@ const responseSchema = z.object({
 });
 
 type ManagedPolicy = z.infer<typeof managedPolicySchema>;
+type GitHubProvider = { issuer: string; providerId: string; githubAccountIdClaim: string };
+
+function requireGithubProvider(provider: GitHubProvider | undefined): GitHubProvider {
+  if (!provider) {
+    throw new VisitorAccessError(
+      "GitHub account invitations require the existing trusted-proxy Cloudflare Access OIDC provider and GitHub account-ID claim mapping. Configure that sign-in mapping before inviting by GitHub account.",
+    );
+  }
+  return provider;
+}
+
+export type VisitorTarget = string | number;
+
+export function visitorTargetKey(target: VisitorTarget): string {
+  return typeof target === "string" ? target : `github:${target}`;
+}
 
 export class VisitorPolicyClient {
   private readonly policiesUrl: string;
@@ -41,38 +67,62 @@ export class VisitorPolicyClient {
     private readonly config: VisitorAccessConfig,
     private readonly fetcher: typeof fetch = fetch,
     private readonly signal?: AbortSignal,
+    private readonly readGithubProvider?: () => GitHubProvider | undefined,
   ) {
     this.policiesUrl = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(config.accountId)}/access/apps/${encodeURIComponent(config.appId)}/policies`;
   }
 
-  async read(assertCurrent?: () => void): Promise<{ id: string; emails: string[] } | undefined> {
+  async read(
+    assertCurrent?: () => void,
+  ): Promise<{ id: string; targets: VisitorTarget[] } | undefined> {
     const policy = await this.readPolicy(assertCurrent);
-    return policy ? { id: policy.id, emails: this.policyEmails(policy) } : undefined;
+    return policy ? { id: policy.id, targets: this.policyTargets(policy) } : undefined;
   }
 
   async update(
-    change: (emails: readonly string[]) => string[] | Promise<string[]>,
+    change: (targets: readonly VisitorTarget[]) => VisitorTarget[] | Promise<VisitorTarget[]>,
     assertCurrent?: () => void,
-  ): Promise<string[]> {
+  ): Promise<VisitorTarget[]> {
     // Every mutation starts from Cloudflare, preserving dashboard edits made since
     // the previous tool call. The service serializes its own mutations separately.
     const policy = await this.readPolicy(assertCurrent);
-    const current = policy ? this.policyEmails(policy) : [];
+    const configured = this.readGithubProvider?.();
+    const githubProvider = configured && { ...configured };
+    const current = policy ? this.policyTargets(policy, githubProvider) : [];
     if (this.signal?.aborted) {
       throw new VisitorAccessError("Visitor access is stopping; retry after the gateway starts.");
     }
-    const emails = [...new Set(await change(current))];
-    if (emails.length === current.length && emails.every((email) => current.includes(email))) {
-      return emails;
+    const targets = [...new Set(await change(current))];
+    const usesGithub = [...current, ...targets].some((target) => typeof target === "number");
+    const assertPolicyCurrent = () => {
+      assertCurrent?.();
+      if (usesGithub) {
+        const currentProvider = this.readGithubProvider?.();
+        if (
+          currentProvider?.issuer !== githubProvider?.issuer ||
+          currentProvider?.providerId !== githubProvider?.providerId ||
+          currentProvider?.githubAccountIdClaim !== githubProvider?.githubAccountIdClaim
+        ) {
+          throw new VisitorAccessError(
+            "The GitHub account-ID mapping changed; inspect the visitor policy before retrying.",
+          );
+        }
+        requireGithubProvider(githubProvider);
+      }
+    };
+    assertPolicyCurrent();
+    if (targets.length === current.length && targets.every((target) => current.includes(target))) {
+      return targets;
     }
-    if (policy && emails.length === 0) {
+    if (policy && targets.length === 0) {
       await this.request(
         `${this.policiesUrl}/${encodeURIComponent(policy.id)}`,
         "DELETE",
         undefined,
-        assertCurrent,
+        assertPolicyCurrent,
       );
-      return emails;
+      assertPolicyCurrent();
+      return targets;
     }
 
     const payload: Record<string, unknown> = { ...policy };
@@ -83,14 +133,52 @@ export class VisitorPolicyClient {
     }
     payload.name = this.config.policyName;
     payload.decision = "allow";
-    payload.include = emails.map((email) => ({ email: { email } }));
+    payload.include = targets.map((target) => {
+      if (typeof target === "string") {
+        return { email: { email: target } };
+      }
+      const provider = requireGithubProvider(githubProvider);
+      return {
+        oidc: {
+          identity_provider_id: provider.providerId,
+          claim_name: provider.githubAccountIdClaim,
+          claim_value: String(target),
+        },
+      };
+    });
     const url = policy ? `${this.policiesUrl}/${encodeURIComponent(policy.id)}` : this.policiesUrl;
-    await this.request(url, policy ? "PUT" : "POST", payload, assertCurrent);
-    return emails;
+    await this.request(url, policy ? "PUT" : "POST", payload, assertPolicyCurrent);
+    assertPolicyCurrent();
+    return targets;
   }
 
-  private policyEmails(policy: ManagedPolicy): string[] {
-    return [...new Set(policy.include.map((rule) => rule.email.email.toLowerCase()))];
+  assertGithubConfigured() {
+    return requireGithubProvider(this.readGithubProvider?.());
+  }
+
+  private policyTargets(
+    policy: ManagedPolicy,
+    githubProvider = this.readGithubProvider?.(),
+  ): VisitorTarget[] {
+    return [
+      ...new Set(
+        policy.include.map((rule) => {
+          if ("email" in rule) {
+            return rule.email.email.toLowerCase();
+          }
+          const provider = requireGithubProvider(githubProvider);
+          if (
+            rule.oidc.identity_provider_id !== provider.providerId ||
+            rule.oidc.claim_name !== provider.githubAccountIdClaim
+          ) {
+            throw new VisitorAccessError(
+              "The visitor policy has an OIDC rule outside the configured GitHub account-ID mapping; inspect the policy before retrying.",
+            );
+          }
+          return Number(rule.oidc.claim_value);
+        }),
+      ),
+    ];
   }
 
   private async readPolicy(assertCurrent?: () => void): Promise<ManagedPolicy | undefined> {
@@ -142,7 +230,7 @@ export class VisitorPolicyClient {
           parsed.data.name !== this.config.policyName
         ) {
           throw new VisitorAccessError(
-            "The visitor policy changed or is not an email-only allow policy. Inspect its name, decision, include, require, and exclude rules before retrying.",
+            "The visitor policy changed or is not a supported email/GitHub-account allow policy. Inspect its name, decision, include, require, and exclude rules before retrying.",
           );
         }
         return parsed.data;

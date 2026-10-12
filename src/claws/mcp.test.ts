@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import {
   deleteClawMcpServerRef,
@@ -13,8 +13,12 @@ import {
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawStateDatabaseForTest());
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  });
+});
 
 function configuredServers() {
   return {
@@ -60,7 +64,7 @@ async function fixture(agentId = "worker", root?: string) {
 }
 
 function listedMcpServers(mcpServers: Record<string, Record<string, unknown>> = {}) {
-  return { ok: true as const, path: "config", config: {}, mcpServers };
+  return { ok: true as const, path: "config", config: {}, mcpServers, runtimeConfig: {} };
 }
 
 describe("installClawMcpServers", () => {
@@ -305,8 +309,12 @@ describe("installClawMcpServers", () => {
       listMcpServers: vi.fn().mockResolvedValue(listedMcpServers()),
     });
 
-    expect(markClawMcpServerIndependentlyOwned("docs", { env: current.env, nowMs: 50 })).toBe(1);
-    expect(markClawMcpServerIndependentlyOwned("docs", { env: current.env, nowMs: 60 })).toBe(0);
+    expect(await markClawMcpServerIndependentlyOwned("docs", { env: current.env, nowMs: 50 })).toBe(
+      1,
+    );
+    expect(await markClawMcpServerIndependentlyOwned("docs", { env: current.env, nowMs: 60 })).toBe(
+      0,
+    );
     const refs = readClawMcpServerRefs("worker", { env: current.env });
     expect(refs).toMatchObject([
       { name: "docs", independentOwner: true, updatedAtMs: 50 },

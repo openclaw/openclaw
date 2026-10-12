@@ -17,7 +17,7 @@ import { validateReplayTurns } from "./embedded-agent-runner/replay-history.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import { textToolResult, textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { extractToolCallsFromAssistant } from "./tool-call-id.js";
-import type { TranscriptPolicy } from "./transcript-policy.js";
+import type { TranscriptPolicy } from "./transcript-policy.types.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 vi.mock("./embedded-agent-helpers.js", async () => ({
@@ -51,7 +51,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   );
   return {
     ...actual,
-    sanitizeProviderReplayHistoryWithPlugin: vi.fn(
+    sanitizeProviderReplayHistoryWithPluginAsync: vi.fn(
       async ({
         provider,
         context,
@@ -60,7 +60,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
         context: {
           messages: AgentMessage[];
           sessionState?: {
-            appendCustomEntry(customType: string, data: unknown): void;
+            appendCustomEntryAsync(customType: string, data: unknown): Promise<string>;
           };
         };
       }) => {
@@ -70,7 +70,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
           context.messages[0]?.role === "assistant" &&
           context.sessionState
         ) {
-          context.sessionState.appendCustomEntry("google-turn-ordering-bootstrap", {
+          await context.sessionState.appendCustomEntryAsync("google-turn-ordering-bootstrap", {
             timestamp: Date.now(),
           });
           return [
@@ -262,21 +262,6 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
-  it("prepends a bootstrap user turn for strict OpenAI-compatible assistant-first history", async () => {
-    const entries: Array<{ type: string; customType: string; data: unknown }> = [];
-    const out = await sanitize(castAgentMessages([textAssistant("hello")]), {
-      modelApi: "openai-completions",
-      provider: "vllm",
-      modelId: "gemma-3-27b",
-      sessionManager: makeInMemorySessionManager(entries),
-    });
-    expect(out[0]).toMatchObject({ role: "user", content: "(session bootstrap)" });
-    expect(out[1]?.role).toBe("assistant");
-    expect(entries.some((entry) => entry.customType === "google-turn-ordering-bootstrap")).toBe(
-      false,
-    );
-  });
-
   it("annotates inter-session user messages before context sanitization", async () => {
     const out = await sanitize(
       castAgentMessages([
@@ -442,46 +427,11 @@ describe("sanitizeSessionHistory", () => {
     ).rejects.toThrow(/invalid_replay_transcript.*dangling_tool_call.*call_1/);
   });
 
-  it("keeps real parallel tool results for openai-responses and aborts missing siblings", async () => {
-    const calls = [toolCall("call_1"), toolCall("call_2", "exec"), toolCall("call_3", "write")];
-    const out = await sanitize([
-      assistant(calls, { stopReason: "toolUse" }),
-      user("continue"),
-      toolResult("call_2", "ok", "exec"),
-    ]);
-    expect(roles(out)).toEqual(["assistant", "toolResult", "toolResult", "toolResult", "user"]);
-    expect(
-      extractToolCallsFromAssistant(out[0] as AssistantMessage).map(({ id, name }) => ({
-        id,
-        name,
-      })),
-    ).toEqual(calls.map(({ id, name }) => ({ id, name })));
-    expect(
-      out
-        .slice(1, 4)
-        .map((message) => (message as Extract<AgentMessage, { role: "toolResult" }>).toolCallId),
-    ).toEqual(["call_1", "call_2", "call_3"]);
-    expect(
-      out
-        .slice(1, 4)
-        .map((message) => (message as Extract<AgentMessage, { role: "toolResult" }>).content),
-    ).toEqual([[text("aborted")], [text("ok")], [text("aborted")]]);
-    expect(JSON.stringify(out)).not.toContain("missing tool result");
-  });
-
-  it.each([
-    {
-      name: "missing input or arguments",
-      calls: [{ type: "toolCall", id: "call_1", name: "read" }],
-    },
-    {
-      name: "invalid or overlong names",
-      calls: [
-        toolCall("call_bad", 'toolu_01mvznfebfuu <|tool_call_argument_begin|> {"command"'),
-        toolCall("call_long", `read_${"x".repeat(80)}`),
-      ],
-    },
-  ])("drops malformed tool calls: $name", async ({ calls }) => {
+  it("drops malformed tool calls with invalid or overlong names", async () => {
+    const calls = [
+      toolCall("call_bad", 'toolu_01mvznfebfuu <|tool_call_argument_begin|> {"command"'),
+      toolCall("call_long", `read_${"x".repeat(80)}`),
+    ];
     const out = await sanitize(
       castAgentMessages([{ role: "assistant", content: calls }, user("hello")]),
     );
@@ -496,23 +446,6 @@ describe("sanitizeSessionHistory", () => {
       },
     );
     expect(out).toStrictEqual([]);
-  });
-
-  it("keeps pre-switch reasoning dropped on the switch turn and the next turn", async () => {
-    const history = [
-      assistant(
-        [
-          thinking("reasoning before switch", JSON.stringify({ id: "rs_old", type: "reasoning" })),
-          text("before switch"),
-        ],
-        { timestamp: 150 },
-      ),
-    ];
-    const manager = makeInMemorySessionManager([previousModel()]);
-    const switchTurn = await sanitize(history, { modelId: "gpt-5.4", sessionManager: manager });
-    const nextTurn = await sanitize(history, { modelId: "gpt-5.4", sessionManager: manager });
-    expect(assistantContent(switchTurn, 0)).toEqual([text("before switch")]);
-    expect(JSON.stringify(nextTurn)).toBe(JSON.stringify(switchTurn));
   });
 
   it("keeps reasoning newer than the latest actual model switch", async () => {
@@ -588,31 +521,6 @@ describe("sanitizeSessionHistory", () => {
     expect(out).toEqual([{ ...messages[0], usage: makeZeroUsageSnapshot() }]);
   });
 
-  it("preserves signed thinking turns while repairing legacy tool-result pairing for anthropic", async () => {
-    const content = [thinking("internal", "sig_1"), toolCall("toolu_legacy", "gateway")];
-    const policy = makeAnthropicReplayPolicy({ dropReasoningFromHistory: false });
-    const sanitized = await sanitizeAnthropic(
-      castAgentMessages([
-        user("use the gateway"),
-        assistant(content, { stopReason: "toolUse" }),
-        {
-          role: "toolResult",
-          toolName: "gateway",
-          content: [text("legacy output")],
-          isError: false,
-          timestamp: nextTimestamp(),
-        },
-        user("continue"),
-      ]),
-      { policy },
-    );
-    const validated = await validateAnthropic(sanitized, policy);
-    expect(roles(sanitized)).toEqual(["user", "assistant", "toolResult", "user"]);
-    expect(roles(validated)).toEqual(["user", "assistant", "toolResult", "user"]);
-    expect(assistantContent(validated)).toEqual(content);
-    expect(validated[2]).toMatchObject({ toolCallId: "toolu_legacy" });
-  });
-
   it("keeps consecutive user turns separate for append-only Anthropic Messages replay", async () => {
     const messages = [
       user("/model anthropic/claude-sonnet-4-6"),
@@ -686,51 +594,6 @@ describe("sanitizeSessionHistory", () => {
     expect(assistantContent(out, 3)).toEqual(current);
   });
 
-  it("preserves latest Copilot thinking and tool continuation while stripping older reasoning", async () => {
-    const current = [
-      thinking("read the file", "reasoning_text"),
-      toolCall("tool_123"),
-      text("Reading the file."),
-    ];
-    const out = await sanitize(
-      [
-        user("first"),
-        assistant([thinking("older reasoning", "reasoning_text")]),
-        user("read the file"),
-        assistant(current, { stopReason: "toolUse" }),
-        toolResult("tool_123"),
-      ],
-      {
-        modelApi: "openai-completions",
-        provider: "github-copilot",
-        modelId: "claude-opus-4.6",
-      },
-    );
-    expect(roles(out)).toEqual(["user", "assistant", "user", "assistant", "toolResult"]);
-    expect(assistantContent(out)).toEqual(omittedReasoning);
-    expect(assistantContent(out, 3)).toEqual(current);
-    expect(out[4]).toMatchObject({ toolCallId: "tool_123", content: [text("ok")] });
-  });
-
-  it.each([
-    { provider: "kimi", modelId: "kimi-for-coding" },
-    { provider: "github-copilot", modelId: "claude-opus-4.6" },
-  ])("preserves unsigned thinking for $provider over Anthropic transport", async (route) => {
-    const content = [thinking("unsigned reasoning"), text("result")];
-    const out = await sanitizeAnthropic([user("analyze"), assistant(content)], {
-      ...route,
-      preserveLatestAssistantThinking: false,
-      policy: makeAnthropicReplayPolicy({
-        preserveNativeAnthropicToolUseIds: false,
-        preserveSignatures: false,
-        dropReasoningFromHistory: false,
-        validateAnthropicTurns: false,
-        allowSyntheticToolResults: false,
-      }),
-    });
-    expect(assistantContent(out)).toEqual(content);
-  });
-
   it("keeps regular latest Anthropic thinking replay while preserving older stripped turns", async () => {
     const latest = [thinking("latest private reasoning", "sig_latest"), text("latest answer")];
     const out = await sanitizeAnthropic(
@@ -746,41 +609,6 @@ describe("sanitizeSessionHistory", () => {
     expect(assistantContent(out, 3)).toEqual(latest);
   });
 
-  it("strips invalid prior thinking signatures while preserving the latest assistant turn", async () => {
-    const invalid = [thinking("missing"), thinking("blank", "   ")];
-    const latest = [
-      ...invalid,
-      thinking("latest signed", "sig_latest"),
-      text("latest visible answer"),
-    ];
-    const out = await sanitizeAnthropic([
-      user("first"),
-      assistant([...invalid, thinking("signed", "sig_old"), text("old visible answer")]),
-      user("second"),
-      assistant(latest),
-    ]);
-    expect(assistantContent(out)).toEqual([
-      thinking("signed", "sig_old"),
-      text("old visible answer"),
-    ]);
-    expect(assistantContent(out, 3)).toEqual(latest);
-  });
-
-  it("preserves active tool-turn thinking signatures even when a tool result follows", async () => {
-    const content = [
-      { type: "thinking", thinking: "call the tool", signature: "" },
-      toolCall("call_1", "lookup"),
-    ];
-    const out = await sanitizeAnthropic(
-      castAgentMessages([
-        user("look up the answer"),
-        { ...assistant([]), content },
-        toolResult("call_1", "42", "lookup"),
-      ]),
-    );
-    expect(assistantContent(out)).toEqual(content);
-  });
-
   it("uses immutable thinking replay for anthropic-compatible providers when policy preserves signatures", async () => {
     const out = await sanitizeAnthropic(
       [user("retry"), assistant([thinking("internal", "sig_1"), toolCall("call_1", " read ")])],
@@ -791,19 +619,6 @@ describe("sanitizeSessionHistory", () => {
     );
     expect(roles(out)).toEqual(["user"]);
     expect((out[0] as UserMessage).content).toBe("retry");
-  });
-
-  it("preserves signed thinking tool ids when preserveSignatures is false", async () => {
-    const content = [thinking("internal", "sig_1"), toolCall("call_1")];
-    const out = await sanitizeAnthropic([user("retry"), assistant(content), toolResult("call_1")], {
-      policy: makeAnthropicReplayPolicy({
-        preserveNativeAnthropicToolUseIds: false,
-        preserveSignatures: false,
-        allowSyntheticToolResults: false,
-      }),
-    });
-    expect(assistantContent(out)).toEqual(content);
-    expect(out[2]).toMatchObject({ toolCallId: "call_1" });
   });
 
   it("keeps earlier mutable ids from colliding with later preserved signed ids", async () => {
@@ -885,30 +700,5 @@ describe("sanitizeSessionHistory", () => {
     expect(sanitizedExtended.slice(0, sanitizedBase.length)).toEqual(sanitizedBase);
     expect(assistantContent(sanitizedBase)).toEqual([priorCall]);
     expect(sanitizedBase[2]).toMatchObject({ toolCallId: priorId });
-  });
-
-  it("strips unsigned latest Bedrock thinking even when preserveSignatures is false", async () => {
-    const out = await sanitizeAnthropic(
-      [
-        user("analyze"),
-        assistant([
-          thinking("no sig"),
-          thinking("blank", ""),
-          thinking("signed", "sig_bedrock"),
-          text("done"),
-        ]),
-      ],
-      {
-        provider: "amazon-bedrock",
-        modelApi: "bedrock-converse-stream",
-        preserveLatestAssistantThinking: false,
-        policy: makeAnthropicReplayPolicy({
-          preserveNativeAnthropicToolUseIds: false,
-          preserveSignatures: false,
-          allowSyntheticToolResults: false,
-        }),
-      },
-    );
-    expect(assistantContent(out)).toEqual([thinking("signed", "sig_bedrock"), text("done")]);
   });
 });

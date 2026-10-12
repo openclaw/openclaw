@@ -10,6 +10,19 @@ title: "Rollback and recovery"
 
 Downgrades, automatic rollback, verified pre-update backups, and triage when an update leaves you stuck. Part of the [Updating](/install/updating) guide.
 
+## Before you upgrade
+
+- Create a [verified backup](#before-updating-create-a-verified-backup) and keep the same service account, profile, and state/configuration paths.
+- Compare `openclaw --version` with `openclaw status` and `openclaw gateway status --deep`. The first reports the CLI version; status reports a Gateway service targeting a different installation. In `openclaw status --json`, compare `update.root` with `gatewayService.layout.packageRootReal`; `gatewayService.layout.entrypointReal` identifies the service binary, and `gatewayService.installationDrift` explains a mismatch.
+- Check the actual Node executable and version with `node -p "process.execPath + ' ' + process.version"`. Compare them with the updater's detected runtime and required range, since the service can select a different Node than your shell. See [supported Node versions](/install/node).
+- Run `openclaw update --dry-run` and inspect any named preflight check. Restore service-manager access as the owning account when requested. An unavailable manager produces a warning and skips automatic service restart; an ownership refusal requires resolving the reported mismatch before retrying.
+- If installation paths differ, align entry points before considering a reinstall. On Windows, use `Get-Command openclaw -All` and `Get-Command node -All`; on macOS/Linux, use `type -a openclaw node`. Retry through the intended installation's absolute launcher and follow the updater's recovery command. Changing the shell's Node alone does not update the service definition.
+
+Preflight diagnostics identify the update installation and binary, the detected
+runtime, and the service installation when inspected. An unresolved service path
+means it could not be verified, not that no Gateway is running. Older installed
+updaters keep their original messages for the first upgrade hop.
+
 ## Downgrade
 
 Verify the upgrade and your session history before retiring recovery originals
@@ -18,6 +31,16 @@ or database migrations. Once state has migrated beyond the older release's
 supported format, the supported recovery is to restore a verified pre-update
 backup with its matching OpenClaw release.
 
+<Warning>
+Fresh shared-state databases created after tenant-container management was retired
+omit `fleet_cells`. Older revisions that require this table can reject them even
+when the numeric schema version matches. Existing databases retain the old table
+and rows, but that alone does not establish downgrade compatibility. Do not
+reconstruct the retired table or alter schema markers to bypass validation.
+Continue with the current release, or restore a complete verified backup with its
+matching older release using the recovery procedure below.
+</Warning>
+
 Prefer `openclaw update` for upgrades and recovery. It validates the target,
 runs required Doctor migrations, and verifies the activated Gateway. A raw
 `npm i -g` replacement does not retain the previous package or run this recovery
@@ -25,7 +48,8 @@ workflow; use `openclaw update` or [create a backup first](#before-updating-crea
 
 The updater retains the previous package during activation and keeps it when
 failed recovery cannot prove a working installation. Migration recovery originals
-remain until explicit [update cleanup](/cli/update#update-cleanup). These are
+and original-state update captures remain until explicit
+[update cleanup](/cli/update#update-cleanup). These are
 separate recovery mechanisms: cleanup does not manage package or Git runtime
 backups, and retained migration originals are not a full pre-update backup.
 Preserve every recovery location named in the update report until you have
@@ -85,6 +109,16 @@ A complete recovery point must cover these together:
   including databases at configured paths outside the default layout.
 - The workspaces, credentials, and retained originals needed by that installation.
 
+Restore that set from one backup generation. Do not combine a pre-update config
+or shared database with a post-update per-agent database, or the reverse. Model
+auth profiles and their state are authoritative in each
+`openclaw-agent.sqlite`. Files named
+`auth-profiles.json.sqlite-import.<id>.bak` or
+`auth-state.json.sqlite-import.<id>.bak` are preserved migration inputs or
+recovery artifacts, not the live credential store. Restoring those JSON files
+without the matching per-agent database does not restore that generation's auth
+state.
+
 Use `openclaw backup create --verify` for a verified, WAL-aware archive. Never copy only the
 main `.sqlite` file from a live WAL database: committed data can still be in
 `-wal`. Restore the verified consolidated database offline; do not mix it with
@@ -135,9 +169,13 @@ capture and Doctor admission, during Doctor, or after Doctor finishes preserves 
 databases and reports `state-migrated-no-rollback` with the snapshot location and
 Doctor recovery guidance. Without Doctor write evidence, rollback requires the
 last verified database generations to remain unchanged.
+Snapshot capture first settles local SQLite writers under maintenance ownership,
+so later writer shutdown is not mistaken for intervening writes. The installed
+updater owns this ordering; staging a newer candidate cannot change an
+already-running older updater.
 On Windows, an eligible capture first runs the same native SQLite exclusion check
 used by rollback. This settles any retained WAL before recording write fingerprints,
-so later probe cleanup is not mistaken for another writer. If another connection
+so later check cleanup is not mistaken for another writer. If another connection
 prevents exclusion, snapshots remain available for manual recovery.
 Snapshots taken while a Gateway may still be writing are available for
 manual recovery only until verified successful activation, even if it exits later.
@@ -249,6 +287,30 @@ can run after update ownership and service compensation settle, including after
 failed rollback. Use the printed diagnostics and installation-specific repair
 command before considering an older version. Triage does not rewrite that
 failed update as successful.
+
+On macOS and Linux, if Doctor times out after migration, the updater stops its tracked process groups
+and waits for each group to disappear before attempting recovery. Once settlement
+is proven, it can start the installed candidate on the preserved migrated state
+and verify Gateway health. The report retains the Doctor failure, records a
+maintenance warning, and recommends `openclaw update repair`; recovery does not
+claim that unfinished Doctor repairs completed. If any writer remains or cannot
+be accounted for, the report names the known PIDs and keeps the Gateway stopped
+because concurrent writes put data at risk. Later update attempts retain this
+block even if the original updater has exited. Preserve the recovery snapshots
+and follow the reported process-inspection guidance before retrying repair.
+The installed updater owns this process supervision: a first update driven by
+2026.9.5 remains limited by that older parent's settlement checks.
+
+Before starting a preserved candidate, the updater checks shared and existing
+agent database schemas against the candidate's contract. If migrations remain
+pending after the failed Doctor has stopped, it runs the candidate Doctor again
+under Doctor's maintenance and backup safeguards, then checks completion before
+restarting the Gateway. A refused or incomplete repair stays in the update report
+with the reason and the commands `openclaw doctor --fix` followed by
+`openclaw gateway start`. Newer database schemas are never downgraded by this repair.
+The original update failure remains recorded even when recovery restores service.
+Its durable restart notice is delivered when the Gateway starts again.
+
 Automatic rollback restores code and captured config, and restores pre-migration
 database snapshots only when the Gateway was confirmed stopped during capture
 and the candidate was never allowed to start, with matching write fingerprints

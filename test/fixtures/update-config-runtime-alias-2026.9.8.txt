@@ -1,0 +1,87 @@
+// Published updater config reads run in the candidate's dependency tree.
+import { spawn, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+const target = new URL("./io.runtime-BNEtkwm5.mjs", import.meta.url).href;
+const root = fileURLToPath(new URL("../", import.meta.url));
+const worker = "\nconst fs = require(\"node:fs\");\n// Reserve stdout for the response; config diagnostics must not corrupt its frame.\nglobalThis.console = new (require(\"node:console\").Console)(process.stderr, process.stderr);\nprocess.stdout.write = process.stderr.write.bind(process.stderr);\nfunction send(result) {\n  const payload = JSON.stringify(result);\n  fs.writeFileSync(1, Buffer.byteLength(payload) + \"\\n\" + payload);\n}\n(async () => {\n  try {\n    const request = JSON.parse(fs.readFileSync(0, \"utf8\"));\n    const runtime = await import(request.target);\n    const logs = [];\n    const options = request.options ?? {};\n    if (request.captureLogs) options.logger = Object.fromEntries([\"debug\", \"info\", \"warn\", \"error\"].map(level => [level, (...args) => logs.push({ level, args })]));\n    const owner = request.factory ? runtime.createConfigIO(options) : runtime;\n    const value = await owner[request.operation](...request.args);\n    send({ ok: true, value, logs });\n  } catch (error) {\n    send({ ok: false, message: String(error) });\n    process.exitCode = 1;\n  }\n})().catch(() => { process.exitCode = 1; });\n";
+const updating = process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && process.env.OPENCLAW_CONFIG_READ_CHILD !== "1";
+const runtime = updating ? undefined : await import(target);
+const spawnOptions = {
+    cwd: root,
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+    timeout: 20 * 60_000,
+    killSignal: "SIGKILL",
+    maxBuffer: 16 * 1024 * 1024,
+};
+function childEnv(operation, args, options) {
+  if (process.env.OPENCLAW_CONFIG_READ_CHILD === "1") {
+    const error = new Error("A config reader child cannot launch another reader.");
+    error.code = "candidate-config-read-recursion";
+    console.error("[update:warning:" + error.code + "] " + error.message);
+    throw error;
+  }
+  const selected = options?.env ?? (operation === "readCurrentConfigForPolicyCheck" ? args[0]?.env : undefined) ?? process.env;
+  return { ...selected, NODE_DISABLE_COMPILE_CACHE: "1", OPENCLAW_CONFIG_READ_CHILD: "1" };
+}
+function input(operation, args, options, factory) {
+  // A rollback replaces the alias too; never retain the removed candidate's hashed target.
+  return JSON.stringify({ target: import.meta.url, operation, args, factory, options: options ? { ...options, logger: undefined } : undefined, captureLogs: Boolean(options?.logger) });
+}
+function finish(code, output, logger) {
+  let result;
+  const frame = /^(\d+)\n([\s\S]*)$/.exec(output ?? "");
+  try { if (frame && Number(frame[1]) === Buffer.byteLength(frame[2])) result = JSON.parse(frame[2]); } catch {}
+  for (const entry of result?.logs ?? []) logger?.[entry.level]?.(...entry.args);
+  if (code === 0 && result?.ok === true) return result.value;
+  const error = new Error("Candidate config read failed; the existing service definition was left unchanged. Retry with the updated CLI.");
+  error.code = "candidate-config-read-failed";
+  console.error("[update:warning:" + error.code + "] " + error.message);
+  throw error;
+}
+function readSync(operation, args = [], options, factory = false) {
+  const child = spawnSync(process.execPath, ["--eval", worker], {
+    ...spawnOptions,
+    env: childEnv(operation, args, options),
+    input: input(operation, args, options, factory),
+  });
+  return finish(child.status, child.stdout, options?.logger);
+}
+async function read(operation, args = [], options, factory = false) {
+  const request = input(operation, args, options, factory);
+  const child = spawn(process.execPath, ["--eval", worker], { ...spawnOptions, env: childEnv(operation, args, options) });
+  let output = "";
+  let outputBytes = 0;
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", chunk => {
+    outputBytes += Buffer.byteLength(chunk);
+    if (outputBytes > spawnOptions.maxBuffer) child.kill("SIGKILL");
+    else output += chunk;
+  });
+  child.stderr.resume();
+  child.stdin.on("error", () => {});
+  child.stdin.end(request);
+  let failed = false;
+  const code = await new Promise(resolve => {
+    child.once("error", () => { failed = true; });
+    child.once("close", resolve);
+  });
+  return finish(failed || outputBytes > spawnOptions.maxBuffer ? null : code, output, options?.logger);
+}
+const readers = {
+  createConfigIO: (options) => ({
+    readBestEffortConfig: (...args) => read("readBestEffortConfig", args, options, true),
+    readConfigFileSnapshot: (...args) => read("readConfigFileSnapshot", args, options, true),
+    loadConfig: (...args) => readSync("loadConfig", args, options, true),
+  }),
+  readConfigFileSnapshot: (...args) => read("readConfigFileSnapshot", args),
+  readCurrentConfigForPolicyCheck: (...args) => readSync("readCurrentConfigForPolicyCheck", args),
+};
+function select(name) {
+  if (!updating) return runtime[name];
+  if (readers[name]) return readers[name];
+  return () => { throw new Error("Run config operation " + name + " in the updated CLI after this update finishes."); };
+}
+const binding0 = select("createConfigIO"); export { binding0 as createConfigIO };
+const binding1 = select("readConfigFileSnapshot"); export { binding1 as readConfigFileSnapshot };
+const binding2 = select("readSourceConfigBestEffort"); export { binding2 as readSourceConfigBestEffort };

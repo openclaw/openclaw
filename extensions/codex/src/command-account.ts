@@ -1,5 +1,5 @@
 import {
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   resolveAuthProfileEligibility,
   resolveProfileUnusableUntilForDisplay,
   type AuthProfileCredential,
@@ -60,7 +60,7 @@ export async function readCodexAccountAuthOverview(params: {
   }
   const config = params.ctx.config;
   const agentDir = params.agentDir;
-  const store = ensureAuthProfileStore(agentDir, {
+  const store = await ensureAuthProfileStoreAsync(agentDir, {
     allowKeychainPrompt: false,
     config,
   });
@@ -81,30 +81,42 @@ export async function readCodexAccountAuthOverview(params: {
     : activeProfileId
       ? order.find((profileId) => isChatGptSubscriptionProfile(store.profiles[profileId]))
       : undefined;
-  const activeUsage =
+  let subscriptionUsage =
     activeIsSubscription && params.limits.ok
       ? summarizeCodexAccountUsage(params.limits.value, now)
       : undefined;
-  const subscriptionUsage =
-    subscriptionProfileId && !activeIsSubscription
-      ? await readSubscriptionUsage({
-          ...params,
-          agentDir,
-          config,
-          subscriptionProfileId,
-          now,
-        })
-      : activeUsage;
-  const rows = order.map((profileId) =>
-    buildProfileRow({
-      store,
-      config,
+  if (subscriptionProfileId && !activeIsSubscription) {
+    const limits = await params.safeCodexControlRequest(
+      params.pluginConfig,
+      CODEX_CONTROL_METHODS.rateLimits,
+      undefined,
+      { config, agentDir, authProfileId: subscriptionProfileId, isolated: true },
+    );
+    subscriptionUsage = limits.ok ? summarizeCodexAccountUsage(limits.value, now) : undefined;
+  }
+  const rows = order.map((profileId) => {
+    const credential = store.profiles[profileId];
+    const label = formatProfileLabel(profileId, credential);
+    const kind = formatProfileKind(credential);
+    const active = profileId === activeProfileId;
+    const usage = profileId === subscriptionProfileId ? subscriptionUsage : undefined;
+    const status = active
+      ? "active now"
+      : usage?.blocked
+        ? "rate-limited"
+        : describeInactiveProfileStatus({ store, config, profileId, credential, now });
+    const row: CodexAccountAuthRow = {
       profileId,
-      activeProfileId,
-      now,
-      usage: profileId === subscriptionProfileId ? subscriptionUsage : undefined,
-    }),
-  );
+      label,
+      kind,
+      status,
+      active,
+    };
+    if (credential?.type === "api_key" && active) {
+      row.billingNote = "billed per token";
+    }
+    return row;
+  });
   const activeRow = rows.find((row) => row.active);
   if (!activeRow) {
     return {
@@ -142,64 +154,6 @@ function resolveDisplayAuthOrder(params: {
     store: params.store,
     provider: OPENAI_PROVIDER_ID,
   });
-}
-
-async function readSubscriptionUsage(params: {
-  pluginConfig: unknown;
-  safeCodexControlRequest: SafeCodexControlRequest;
-  agentDir: string;
-  config: AuthProfileOrderConfig;
-  subscriptionProfileId: string;
-  now: number;
-}): Promise<CodexAccountUsageSummary | undefined> {
-  const limits = await params.safeCodexControlRequest(
-    params.pluginConfig,
-    CODEX_CONTROL_METHODS.rateLimits,
-    undefined,
-    {
-      config: params.config,
-      agentDir: params.agentDir,
-      authProfileId: params.subscriptionProfileId,
-      isolated: true,
-    },
-  );
-  if (!limits.ok) {
-    return undefined;
-  }
-  return summarizeCodexAccountUsage(limits.value, params.now);
-}
-
-function buildProfileRow(params: {
-  store: AuthProfileStore;
-  config: AuthProfileOrderConfig;
-  profileId: string;
-  activeProfileId?: string;
-  now: number;
-  usage?: CodexAccountUsageSummary;
-}): CodexAccountAuthRow {
-  const credential = params.store.profiles[params.profileId];
-  const label = formatProfileLabel(params.profileId, credential);
-  const kind = formatProfileKind(credential);
-  const active = params.profileId === params.activeProfileId;
-  const status = active
-    ? "active now"
-    : params.usage?.blocked
-      ? "rate-limited"
-      : describeInactiveProfileStatus({
-          store: params.store,
-          config: params.config,
-          profileId: params.profileId,
-          credential,
-          now: params.now,
-        });
-  return {
-    profileId: params.profileId,
-    label,
-    kind,
-    status,
-    active,
-    ...(credential?.type === "api_key" && active ? { billingNote: "billed per token" } : {}),
-  };
 }
 
 function describeInactiveProfileStatus(params: {
@@ -269,13 +223,7 @@ function formatProfileKind(credential: AuthProfileCredential | undefined): strin
   if (!credential) {
     return "credential";
   }
-  if (isChatGptSubscriptionProfile(credential)) {
-    return "ChatGPT subscription";
-  }
-  if (credential.type === "api_key") {
-    return "API key";
-  }
-  return "credential";
+  return credential.type === "api_key" ? "API key" : "ChatGPT subscription";
 }
 
 function formatProfileLabel(
@@ -348,6 +296,14 @@ function describeFailureStatus(
   return "temporarily unavailable";
 }
 
+const ELIGIBILITY_STATUS = new Map([
+  ["expired", "sign-in expired"],
+  ["invalid_expires", "sign-in expired"],
+  ["unresolved_ref", "credential unavailable"],
+  ["provider_mismatch", "wrong provider"],
+  ["mode_mismatch", "wrong credential type"],
+]);
+
 function describeEligibilityStatus(
   reason: string,
   credential: AuthProfileCredential | undefined,
@@ -355,19 +311,7 @@ function describeEligibilityStatus(
   if (reason === "profile_missing" || reason === "missing_credential") {
     return credential?.type === "api_key" ? "not configured" : "sign-in required";
   }
-  if (reason === "expired" || reason === "invalid_expires") {
-    return "sign-in expired";
-  }
-  if (reason === "unresolved_ref") {
-    return "credential unavailable";
-  }
-  if (reason === "provider_mismatch") {
-    return "wrong provider";
-  }
-  if (reason === "mode_mismatch") {
-    return "wrong credential type";
-  }
-  return "unavailable";
+  return ELIGIBILITY_STATUS.get(reason) ?? "unavailable";
 }
 
 function isActiveUntil(value: number | undefined, now: number): value is number {

@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { createSessionStoreSummaryReaderStub } from "../config/sessions/session-store-summary.test-support.js";

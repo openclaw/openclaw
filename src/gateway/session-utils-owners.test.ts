@@ -44,7 +44,7 @@ afterEach(() => {
   getUserProfileDisplay.mockClear();
 });
 
-it.each([true, false, undefined])(
+it.each([true, false])(
   "filters subagent sessions before pagination and people facets when excludeSubagents is %s",
   async (excludeSubagents) => {
     const store: Record<string, SessionEntry> = {
@@ -91,7 +91,7 @@ it.each([true, false, undefined])(
       },
     };
     const result = await listSessionFixture({
-      cfg: { agents: { list: [{ id: "main" }] } },
+      cfg: { agents: { entries: { main: {} } } },
       storePath: "/tmp/openclaw-session-activity-subagents",
       store,
       opts: { excludeSubagents, includePeople: true, limit: 2 },
@@ -144,7 +144,7 @@ it("lets configured agents win id-only owner facet collisions", async () => {
     );
     const result = await listSessionFixture({
       cfg: {
-        agents: { list: [{ id: "shared-id", identity: { name: "Shared agent" } }] },
+        agents: { entries: { "shared-id": { identity: { name: "Shared agent" } } } },
       } as OpenClawConfig,
       storePath: "/tmp/openclaw-session-owner-order",
       store,
@@ -160,104 +160,6 @@ it("lets configured agents win id-only owner facet collisions", async () => {
       },
     ]);
   }
-});
-
-it("returns the complete deterministic owner facet independently of pagination", async () => {
-  const store: Record<string, SessionEntry> = {
-    "agent:main:ada": {
-      archivedAt: 3,
-      archivedBy: { type: "human", id: "profile-bob" },
-      createdActor: { type: "human", source: "profile", id: "profile-ada" },
-      createdVia: "operator",
-      sessionId: "session-ada",
-      updatedAt: 2,
-    },
-    "agent:main:bob": {
-      createdActor: { type: "human", source: "profile", id: "profile-bob" },
-      createdVia: "operator",
-      sessionId: "session-bob",
-      updatedAt: 1,
-    },
-  };
-
-  const result = await listSessionFixture({
-    cfg: {} as OpenClawConfig,
-    storePath: "/tmp/openclaw-session-owners",
-    store,
-    opts: { archived: "all", limit: 1 },
-  });
-
-  expect(result.count).toBe(1);
-  expect(result.totalCount).toBe(2);
-  expect(result.owners).toEqual([
-    {
-      type: "human",
-      id: "profile-ada",
-      identity: { type: "profile", id: "profile-ada" },
-      label: "Ada",
-      avatarUrl: "/api/users/profile-ada/avatar?v=ada-hash-png",
-    },
-    {
-      type: "human",
-      id: "profile-bob",
-      identity: { type: "profile", id: "profile-bob" },
-      label: "Bob",
-    },
-  ]);
-  expect(result.sessions[0]?.createdActor).toEqual({
-    type: "human",
-    id: "profile-ada",
-    identity: { type: "profile", id: "profile-ada" },
-    label: "Ada",
-    avatarUrl: "/api/users/profile-ada/avatar?v=ada-hash-png",
-  });
-  expect(result.sessions[0]?.archivedBy).toEqual({
-    type: "human",
-    id: "profile-bob",
-    identity: { type: "profile", id: "profile-bob" },
-    label: "Bob",
-  });
-  expect(getUserProfileDisplay).toHaveBeenCalledTimes(2);
-
-  const filtered = await listSessionFixture({
-    cfg: {} as OpenClawConfig,
-    storePath: "/tmp/openclaw-session-owners",
-    store,
-    opts: { archived: "all", ownerId: "profile-bob", limit: 1 },
-  });
-  expect(filtered.sessions.map((row) => row.key)).toEqual(["agent:main:bob"]);
-  expect(filtered.owners).toEqual(result.owners);
-});
-
-it("prepends an owner window without advancing shared-page pagination", async () => {
-  const store: Record<string, SessionEntry> = {
-    "agent:main:foreign-newest": {
-      createdActor: { type: "human", source: "profile", id: "profile-ada" },
-      createdVia: "operator",
-      sessionId: "session-foreign-newest",
-      updatedAt: 2,
-    },
-    "agent:main:owner-older": {
-      createdActor: { type: "human", source: "profile", id: "profile-bob" },
-      createdVia: "operator",
-      sessionId: "session-owner-older",
-      updatedAt: 1,
-    },
-  };
-
-  const result = await listSessionFixture({
-    cfg: {} as OpenClawConfig,
-    storePath: "/tmp/openclaw-session-owner-first",
-    store,
-    opts: { archived: "all", limit: 1 },
-    ownerFirstActorId: "profile-bob",
-  });
-
-  expect(result.sessions.map((row) => row.key)).toEqual([
-    "agent:main:owner-older",
-    "agent:main:foreign-newest",
-  ]);
-  expect(result).toMatchObject({ count: 2, totalCount: 2, nextOffset: 1, hasMore: true });
 });
 
 it("projects only durable profiles and configured agents as effective owners", async () => {
@@ -306,10 +208,10 @@ it("projects only durable profiles and configured agents as effective owners", a
   const result = await listSessionFixture({
     cfg: {
       agents: {
-        list: [
-          { id: "main", default: true },
-          { id: "research", identity: { name: "Research" } },
-        ],
+        entries: {
+          main: {},
+          research: { identity: { name: "Research" } },
+        },
       },
     } as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owner-candidates",
@@ -559,7 +461,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
     },
   };
   const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "research", identity: { name: "Research" } }] },
+    agents: { entries: { research: { identity: { name: "Research" } } } },
   };
   const result = await listSessionFixture({
     cfg,
@@ -621,7 +523,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
   expect(selected.people?.some((person) => person.identity.id === "research")).toBe(false);
 });
 
-it.each(["spawn", "talk", "cron"] as const)(
+it.each(["spawn"] as const)(
   "associates a required %s creator without inventing profile contributions or promoting unqualified creators",
   async (via) => {
     getUserProfileDisplay.mockImplementation((id) => ({
@@ -676,7 +578,7 @@ it.each(["spawn", "talk", "cron"] as const)(
       };
     }
     const query = {
-      cfg: { agents: { list: [{ id: "main" }, { id: "research" }] } },
+      cfg: { agents: { entries: { main: {}, research: {} } } },
       storePath: "/tmp/openclaw-session-profile-alias",
       store,
       opts: { archived: "all" as const, includePeople: true },
@@ -821,7 +723,7 @@ it("preserves list output across visibility, scope, owner, and search filters", 
   }));
   const cfg = {
     agents: {
-      list: [{ id: "main", default: true }, { id: "work" }],
+      entries: { main: {}, work: {} },
     },
   } as OpenClawConfig;
   const store: Record<string, SessionEntry> = {

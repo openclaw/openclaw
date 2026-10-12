@@ -40,12 +40,16 @@ export function resolveGatewayUrl(urlRaw: string): URL {
 
 export function createGatewayWsClient(params: {
   url: string;
+  origin?: string;
   handshakeTimeoutMs?: number;
   openTimeoutMs?: number;
   openTimeoutMessage?: string;
   onEvent?: (evt: GatewayEventFrame) => void;
 }) {
-  const ws = new WebSocket(params.url, { handshakeTimeout: params.handshakeTimeoutMs ?? 8000 });
+  const ws = new WebSocket(params.url, {
+    handshakeTimeout: params.handshakeTimeoutMs ?? 8000,
+    ...(params.origin ? { origin: params.origin } : {}),
+  });
   ws.binaryType = "nodebuffer";
   const pending = new Map<
     string,

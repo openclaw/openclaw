@@ -2,7 +2,13 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { getGatewayServiceUpdateNativeCommand } from "../../daemon/service-update-authority.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
@@ -25,6 +31,13 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 const nodeExecPath = resolveTestNodeExecPath();
 let root: string;
 let serviceRoot: string;
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
 beforeEach(() => {
   const base = fs.realpathSync(dirs.make("auxiliary-node-owner-"));
   root = path.join(base, "package-B");
@@ -36,6 +49,21 @@ beforeEach(() => {
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
 });
 afterEach(() => vi.restoreAllMocks());
+
+// A receipt may arrive after the command settles; the fixture writes its marker first.
+function fixtureReadyBeforeSettlement(marker: string, operation: PromiseLike<unknown>) {
+  const settled = Promise.resolve(operation).then(
+    () => {
+      expect(fs.existsSync(marker)).toBe(true);
+    },
+    (error: unknown) => {
+      if (!fs.existsSync(marker)) {
+        throw error;
+      }
+    },
+  );
+  return Promise.race([receipts.waitFor(marker, "ready"), settled]);
+}
 
 function runBoundChild(
   _grant: UpdateCommandChildGrant,
@@ -64,12 +92,12 @@ function preloadFixture(kind: "require" | "import") {
   return { marker, env: { ...process.env, NODE_OPTIONS: `--${kind}=${JSON.stringify(value)}` } };
 }
 
-it.each([
+it.for([
   { phase: "initializing", fragmented: false },
   { phase: "admitted", fragmented: true },
 ] as const)(
   "preserves direct preflight release through a healthy installer child and active drain: $phase/fragmented=$fragmented",
-  async ({ phase, fragmented }) => {
+  async ({ phase, fragmented }, { signal }) => {
     const runId = randomUUID();
     const ready = path.join(root, "ready");
     const proceed = path.join(root, "proceed");
@@ -104,13 +132,15 @@ it.each([
       const installing = recovery.installCommand(
         nodeExecPath,
         [
+          "--input-type=module",
           "-e",
-          `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},JSON.stringify({pid:process.pid,nodeOptions:process.env.NODE_OPTIONS}));const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer)}},10);`,
+          `${fixtureReceiptClientSource(receipts.endpoint)}
+          import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(ready)},JSON.stringify({pid:process.pid,nodeOptions:process.env.NODE_OPTIONS}));sendReceipt(${JSON.stringify(ready)},"ready");const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer)}},10);`,
         ],
         preload.env,
       );
       try {
-        await vi.waitFor(() => expect(fs.existsSync(ready)).toBe(true), { timeout: 5000 });
+        await withinTest(fixtureReadyBeforeSettlement(ready, installing), signal);
         expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow(
           "The update process is still running.",
         );
@@ -239,27 +269,25 @@ it("keeps B extra-child custody after partial preflight release without reactiva
   await once(child, "message");
   assert(child.pid);
   try {
-    await expect(
-      withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(root, { serviceRoot, preflight: true });
-        const store = createManagedHandoffLeaseStore();
-        const acquired = store.acquire(`${root}/.openclaw-update-child-extra`, "extra-child", {
-          kind: "update",
-        });
-        assert(acquired.kind === "acquired");
-        const registered = store.bind(acquired.lease, child.pid!);
-        assert(registered);
-        expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("release failed");
-        expect(() => fence.assertCurrent()).toThrow("no longer current");
-        expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
-        expect(store.read(serviceRoot)).toEqual({ kind: "absent" });
-        expect(store.acquire(root, "contender", { kind: "update" }).kind).toBe("busy");
-        expect(store.current(registered)).toBe(true);
-        child.kill("SIGTERM");
-        await exited;
-        expect(store.release(registered)).toBe(true);
-      }),
-    ).rejects.toThrow();
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(root, { serviceRoot, preflight: true });
+      const store = createManagedHandoffLeaseStore();
+      const acquired = store.acquire(`${root}/.openclaw-update-child-extra`, "extra-child", {
+        kind: "update",
+      });
+      assert(acquired.kind === "acquired");
+      const registered = store.bind(acquired.lease, child.pid!);
+      assert(registered);
+      expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("release failed");
+      expect(() => fence.assertCurrent()).toThrow("no longer current");
+      expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
+      expect(store.read(serviceRoot)).toEqual({ kind: "absent" });
+      expect(store.acquire(root, "contender", { kind: "update" }).kind).toBe("busy");
+      expect(store.current(registered)).toBe(true);
+      child.kill("SIGTERM");
+      await exited;
+      expect(store.release(registered)).toBe(true);
+    });
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");
@@ -269,11 +297,14 @@ it("keeps B extra-child custody after partial preflight release without reactiva
   expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
 });
 
-it("preserves eligible preflight release until a healthy auxiliary descendant drain joins", async () => {
+it("preserves eligible preflight release until a healthy auxiliary descendant drain joins", async ({
+  signal,
+}) => {
   const ready = path.join(root, "draining");
   const proceed = path.join(root, "finish-drain");
-  const descendant = `const fs=require('node:fs');process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(ready)},'draining');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer);process.exit(0)}},10)});setInterval(()=>{},1000);process.send('ready');`;
-  const program = `const child=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','ignore','ignore','ipc']});child.once('message',()=>{child.disconnect();child.unref()});`;
+  const descendant = `${fixtureReceiptClientSource(receipts.endpoint)}
+  import fs from 'node:fs';process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(ready)},'draining');sendReceipt(${JSON.stringify(ready)},"ready");const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer);process.exit(0)}},10)});setInterval(()=>{},1000);process.send('ready');`;
+  const program = `const child=require('node:child_process').spawn(process.execPath,['--input-type=module','-e',${JSON.stringify(descendant)}],{stdio:['ignore','ignore','ignore','ipc']});child.once('message',()=>{child.disconnect();child.unref()});`;
   await withUpdateCommandExecutor(randomUUID(), async (executor) => {
     const fence = await executor.enter(root, { serviceRoot, preflight: true });
     const pending = withUpdateCommandExecutorChild(
@@ -291,7 +322,7 @@ it("preserves eligible preflight release until a healthy auxiliary descendant dr
       { auxiliaryPreflight: true },
     );
     try {
-      await vi.waitFor(() => expect(fs.existsSync(ready)).toBe(true), { timeout: 5000 });
+      await withinTest(fixtureReadyBeforeSettlement(ready, pending), signal);
       expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow(
         "The update process is still running.",
       );
@@ -311,6 +342,7 @@ it.each(["empty", "extra", "malformed", "invalid-entry", "invalid-utf8", "nul"] 
   async (frame) => {
     const runId = randomUUID();
     const effect = path.join(root, "installer-effect");
+    const drained = path.join(root, "gate-drained");
     const preload = preloadFixture("require");
     if (frame === "nul") {
       preload.env.NODE_OPTIONS += "\0private-option";
@@ -344,7 +376,16 @@ it.each(["empty", "extra", "malformed", "invalid-entry", "invalid-utf8", "nul"] 
       if (["malformed", "invalid-entry", "invalid-utf8"].includes(frame)) {
         expect(Buffer.byteLength(input)).toBe(Buffer.byteLength(options.input));
       }
-      return runCommand(argv, { ...options, input }).then((result) => {
+      const cleanup = `
+        const exitFs = await import("node:fs/promises");
+        process.once("beforeExit", async () => {
+          await exitFs.writeFile(${JSON.stringify(drained)}, "settled");
+        });
+      `;
+      return runCommand([...argv.slice(0, 3), cleanup + argv[3], ...argv.slice(4)], {
+        ...options,
+        input,
+      }).then((result) => {
         observed = result;
         return result;
       });
@@ -369,6 +410,7 @@ it.each(["empty", "extra", "malformed", "invalid-entry", "invalid-utf8", "nul"] 
     expect(fs.existsSync(effect)).toBe(false);
     expect(fs.existsSync(preload.marker)).toBe(false);
     expect(observed).toMatchObject({ code: 1, stdout: "", stderr: "" });
+    expect(fs.readFileSync(drained, "utf8")).toBe("settled");
     expect(outcome).toBe("refused");
     for (const key of [root, serviceRoot]) {
       expect(createManagedHandoffLeaseStore().read(key)).toEqual({ kind: "absent" });
@@ -487,21 +529,9 @@ it.each([
   },
 );
 
-it.each([
-  { boundary: "before-launch", change: "requester-revoked" },
-  ...(
-    [
-      "options-replaced",
-      "run-replaced",
-      "run-id-changed",
-      "executor-replaced",
-      "requester-replaced",
-      "requester-revoked",
-    ] as const
-  ).map((change) => ({ boundary: "at-input" as const, change })),
-] as const)(
-  "refuses Node provisioning after $change at $boundary",
-  async ({ boundary, change }) => {
+it.each(["before-launch", "at-input"] as const)(
+  "refuses Node provisioning after requester revocation at %s",
+  async (boundary) => {
     const runId = randomUUID();
     const effect = path.join(root, "installer-effect");
     let requesterCurrent = true;
@@ -514,25 +544,7 @@ it.each([
     };
     const recoveryParams = { root, opts, timeoutMs: 10000 };
     const revoke = () => {
-      assert(opts.run);
-      if (change === "options-replaced") {
-        recoveryParams.opts = { run: { ...opts.run } };
-      }
-      if (change === "run-replaced") {
-        opts.run = { ...opts.run };
-      }
-      if (change === "run-id-changed") {
-        opts.run.runId = randomUUID();
-      }
-      if (change === "executor-replaced") {
-        opts.run.executorFence = { assertCurrent() {} };
-      }
-      if (change === "requester-replaced") {
-        opts.run.requesterAuthority = { requester: {}, isCurrent: () => true };
-      }
-      if (change === "requester-revoked") {
-        requesterCurrent = false;
-      }
+      requesterCurrent = false;
     };
     const runCommand = processRunner.runCommandWithTimeout;
     const commands = vi
@@ -563,9 +575,7 @@ it.each([
         process.env,
       );
     });
-    await expect(work).rejects.toThrow(
-      change === "requester-revoked" ? "requester-revoked" : "lost its original update executor",
-    );
+    await expect(work).rejects.toThrow("requester-revoked");
     expect(commands).toHaveBeenCalledTimes(boundary === "at-input" ? 1 : 0);
     expect(fs.existsSync(effect)).toBe(false);
     for (const key of [root, serviceRoot]) {

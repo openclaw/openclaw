@@ -1,4 +1,7 @@
-import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type {
+  CompactionAccountingFact,
+  CompactionAccountingTarget,
+} from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
@@ -49,28 +52,10 @@ type AbortedAgentTurn = {
   compaction?: AgentTurnCompaction;
 };
 
-/** Internal fallback-cycle result before caller-facing settlement projection. */
+/** Internal execution may reject before producing a settled turn. */
 export type AgentTurnInternalResult =
   | AbortedAgentTurn
-  | {
-      kind: "completed";
-      maintenanceAuthProfile?: CompletedAgentAuthSelection;
-      compactionRequestBudget?: CompactionRequestBudget;
-      result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
-      fallbackProvider?: string;
-      fallbackModel?: string;
-      fallbackExhausted?: true;
-      fallbackAttempts: RuntimeFallbackAttempt[];
-      didLogHeartbeatStrip: boolean;
-      autoCompactionCount: number;
-      /** Captured before cleanup; late settlements remain in the live receipts below. */
-      hasDirectlySentBlockReply?: true;
-      /** Delivery receipts for direct tool-flush payloads, including retry custody. */
-      directBlockDeliveries?: DirectBlockDelivery[];
-      /** Prepared terminal failure, appended only after delivery evidence settles. */
-      terminalFailurePayload?: ReplyPayload;
-      postCompactionModelFailure?: true;
-    }
+  | SettledAgentTurn
   | {
       kind: "final";
       payload: ReplyPayload;
@@ -80,6 +65,8 @@ export type AgentTurnInternalResult =
 
 type SettledAgentTurnBase = {
   kind: "settled";
+  /** The runtime's claimed writer, independent of whether it compacted. */
+  sessionWriter?: CompactionAccountingTarget;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   compactionRequestBudget?: CompactionRequestBudget;
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
@@ -88,7 +75,9 @@ type SettledAgentTurnBase = {
   autoCompactionCount: number;
   compaction?: AgentTurnCompaction;
   didLogHeartbeatStrip: boolean;
+  /** Captured before cleanup; late settlements remain in the live receipts below. */
   hasDirectlySentBlockReply?: true;
+  /** Delivery receipts for direct tool-flush payloads, including retry custody. */
   directBlockDeliveries?: DirectBlockDelivery[];
 };
 
@@ -121,35 +110,39 @@ export type AgentTurnExecutionResult = {
       };
 };
 
-/** Inputs shared by direct and queued agent-turn execution. */
-export type AgentTurnParams = {
-  /** The admitted queued delivery owner settles every terminal outcome. */
-  completionSource?: "reply-dispatch";
+/** Reply inputs shared by admission and runtime execution. */
+export type ReplyAgentTurnContext = {
   commandBody: string;
   transcriptCommandBody?: string;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
-  replyThreading?: TemplateContext["ReplyThreading"];
   replyOperation?: ReplyOperation;
   opts?: InternalGetReplyOptions;
-  resolveVisibleReplyDelivery?: () => Promise<boolean>;
-  typingSignals: TypingSignaler;
-  blockReplyPipeline: BlockReplyPipeline | null;
   blockStreamingEnabled: boolean;
   blockReplyChunking?: ReturnType<typeof resolveBlockStreamingChunking>;
   resolvedBlockStreamingBreak: "text_end" | "message_end";
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+  storePath?: string;
+  resolvedVerboseLevel: VerboseLevel;
+  toolProgressDetail?: "explain" | "raw";
+};
+
+/** Inputs shared by direct and queued agent-turn execution. */
+export type AgentTurnParams = ReplyAgentTurnContext & {
+  /** The admitted queued delivery owner settles every terminal outcome. */
+  completionSource?: "reply-dispatch";
+  replyThreading?: TemplateContext["ReplyThreading"];
+  resolveVisibleReplyDelivery?: () => Promise<boolean>;
+  typingSignals: TypingSignaler;
+  blockReplyPipeline: BlockReplyPipeline | null;
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   pendingToolTasks: Set<Promise<void>>;
   isHeartbeat: boolean;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
   getActiveSessionEntry: () => SessionEntry | undefined;
   activeSessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  resolvedVerboseLevel: VerboseLevel;
-  toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
   isRestartRecoveryArmed?: () => Promise<boolean>;

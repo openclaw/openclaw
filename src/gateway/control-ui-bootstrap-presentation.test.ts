@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 
 describe("Control UI model defaults bootstrap", () => {
-  it.each([undefined, "last-used", "configured"] as const)(
+  it.each([undefined, "configured"] as const)(
     "projects %s without model restrictions",
     (newSessionModelDefaults) => {
       const result = resolveControlUiBootstrapPresentation({
@@ -13,3 +13,14 @@ describe("Control UI model defaults bootstrap", () => {
     },
   );
 });
+
+it.each([undefined, false, true])(
+  "projects the bubble lab only when enabled: %s",
+  (chatBubbles) => {
+    expect(
+      resolveControlUiBootstrapPresentation({
+        gateway: { controlUi: { experimental: { chatBubbles } } },
+      }).chatBubblesEnabled,
+    ).toBe(chatBubbles === true);
+  },
+);

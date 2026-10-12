@@ -116,37 +116,26 @@ export function deliveryStatusFromDurableSend(send: DurableSendResult): AgentCom
   } as const;
   switch (send.status) {
     case "sent":
-      return {
-        ...status,
-        succeeded: true,
-        resultCount: send.results.length,
-        ...(payloadOutcomes ? { payloadOutcomes } : {}),
-      };
     case "suppressed":
       return {
         ...status,
         succeeded: true,
-        reason: send.reason,
-        resultCount: 0,
+        ...(send.status === "suppressed" ? { reason: send.reason } : {}),
+        resultCount: send.status === "sent" ? send.results.length : 0,
         ...(payloadOutcomes ? { payloadOutcomes } : {}),
       };
     case "partial_failed":
-      return {
-        ...status,
-        succeeded: "partial",
-        error: true,
-        errorMessage: formatErrorMessage(send.error),
-        resultCount: send.results.length,
-        sentBeforeError: true,
-        ...(payloadOutcomes ? { payloadOutcomes } : {}),
-      };
     case "failed":
       return {
         ...status,
-        succeeded: false,
+        succeeded: send.status === "partial_failed" ? "partial" : false,
         error: true,
         errorMessage: formatErrorMessage(send.error),
-        ...(send.stage ? { reason: send.stage } : {}),
+        ...(send.status === "partial_failed"
+          ? { resultCount: send.results.length, sentBeforeError: true as const }
+          : send.stage
+            ? { reason: send.stage }
+            : {}),
         ...(payloadOutcomes ? { payloadOutcomes } : {}),
       };
   }
@@ -178,15 +167,24 @@ export function noVisiblePayloadStatus(
   };
 }
 
-/** Payloads a tool-only source may still receive: only host-granted ones (diagnostics, media). */
+/**
+ * Payloads the source may receive. A tool-only source gets only host-granted ones
+ * (diagnostics, media); a host-owned turn may also keep runtime error payloads out of it.
+ */
 export function selectSourceDeliverablePayloads<T extends ReplyPayload>(
   payloads: T[],
-  mode: SourceReplyDeliveryMode | undefined,
+  opts: {
+    sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    internalDeliverySuppressErrors?: boolean;
+  },
 ): T[] {
-  return mode === "message_tool_only"
-    ? payloads.filter(
+  const deliverable = opts.internalDeliverySuppressErrors
+    ? payloads.filter((payload) => payload.isError !== true)
+    : payloads;
+  return opts.sourceReplyDeliveryMode === "message_tool_only"
+    ? deliverable.filter(
         (payload) =>
           getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
       )
-    : payloads;
+    : deliverable;
 }

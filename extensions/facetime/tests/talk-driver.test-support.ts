@@ -20,12 +20,10 @@ const mocks = vi.hoisted(() => ({
     sessionId: "facetime-consult-session",
   })),
   resolveAgentContext: vi.fn(),
-  resolveDefaultAgentId: vi.fn(
-    (config: { agents?: { list?: Array<{ id: string; default?: boolean }> } }) => {
-      const agents = config.agents?.list ?? [];
-      return agents.find((agent) => agent.default)?.id ?? agents[0]?.id ?? "main";
-    },
-  ),
+  resolveDefaultAgentId: vi.fn((config: { agents?: { entries?: Record<string, unknown> } }) => {
+    const agentIds = Object.keys(config.agents?.entries ?? {});
+    return agentIds[0] ?? "main";
+  }),
   resolveProvider: vi.fn(() => ({ provider: { id: "openai" }, providerConfig: {} })),
   hangupRequested: vi.fn(async () => {}),
   senderAuthVersion: 1 as number | undefined,
@@ -83,6 +81,7 @@ const mocks = vi.hoisted(() => ({
       },
 }));
 
+// mock-isolation: The driver fixture owns synthetic Talk sessions, consult callbacks, and observations; no host runtime is started.
 vi.mock("openclaw/plugin-sdk/realtime-voice", () => ({
   REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES: ["safe-read-only", "owner", "none"],
   isRealtimeVoiceAgentConsultToolPolicy: (value: unknown) =>
@@ -123,7 +122,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", () => ({
     transcript.splice(0, Math.max(0, transcript.length - maxEntries));
     return entry;
   }),
-  resolveConfiguredRealtimeVoiceProvider: mocks.resolveProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveProvider,
   resolveRealtimeVoiceAgentConsultTools: vi.fn(
     (policy: string, customTools: Array<{ name: string }> = []) => [
       ...(policy === "none" ? [] : [{ name: "openclaw_agent_consult" }]),

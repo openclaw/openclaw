@@ -9,7 +9,7 @@ import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.
 import {
   createMessageActionDiscoveryContext,
   listMessageActionDiscoveryChannels,
-  resolveMessageActionDiscoveryForPlugin,
+  type MessageActionDiscoverySteps,
   resolveMessageActionDiscoveryChannelId,
   resolveCurrentChannelMessageToolDiscoveryAdapter,
   type PreparedMessageToolCatalog,
@@ -47,11 +47,9 @@ type ChannelMessageActionDiscoveryParams = {
  * Get the list of supported message actions for a specific channel.
  * Returns an empty array if channel is not found or has no actions configured.
  */
-export function listChannelSupportedActions(
-  params: ChannelMessageActionDiscoveryParams & {
-    channel?: string;
-  },
-): ChannelMessageActionName[] {
+export function* listChannelSupportedActionsSteps(
+  params: ChannelMessageActionDiscoveryParams & { channel?: string },
+): MessageActionDiscoverySteps<ChannelMessageActionName[]> {
   const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
   if (!channelId) {
     return [];
@@ -63,24 +61,25 @@ export function listChannelSupportedActions(
   if (!pluginActions?.actions) {
     return [];
   }
-  return resolveMessageActionDiscoveryForPlugin({
+  const discovered = yield {
     pluginId: pluginActions.pluginId,
     actions: pluginActions.actions,
     context: createMessageActionDiscoveryContext(params),
     includeActions: true,
-  }).actions;
+  };
+  return discovered.actions;
 }
 
 /**
  * Get the list of all supported message actions across all configured channels.
  */
-export function listAllChannelSupportedActions(
+export function* listAllChannelSupportedActionsSteps(
   params: ChannelMessageActionDiscoveryParams,
-): ChannelMessageActionName[] {
+): MessageActionDiscoverySteps<ChannelMessageActionName[]> {
   const actions = new Set<ChannelMessageActionName>();
   const channels = listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog);
   for (const plugin of channels) {
-    const channelActions = resolveMessageActionDiscoveryForPlugin({
+    const discovered = yield {
       pluginId: plugin.id,
       actions: plugin.actions,
       context: createMessageActionDiscoveryContext({
@@ -88,8 +87,8 @@ export function listAllChannelSupportedActions(
         currentChannelProvider: plugin.id,
       }),
       includeActions: true,
-    }).actions;
-    for (const action of channelActions) {
+    };
+    for (const action of discovered.actions) {
       actions.add(action);
     }
   }

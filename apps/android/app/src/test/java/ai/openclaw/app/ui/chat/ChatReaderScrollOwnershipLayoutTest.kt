@@ -1036,7 +1036,7 @@ class ChatReaderScrollOwnershipLayoutTest {
         LaunchedEffect(Unit) { observedScale = currentCoroutineContext()[MotionDurationScale]?.scaleFactor }
         CompositionLocalProvider(
           LocalChatReaderNavigation provides current.navigation,
-          LocalBase64ImageDecodeDispatcher provides imageDecodeDispatcher,
+          LocalChatImageDecodeDispatcher provides imageDecodeDispatcher,
         ) {
           val navigation = checkNotNull(LocalChatReaderNavigation.current)
           Column(Modifier.size(360.dp, 700.dp).clipToBounds()) {

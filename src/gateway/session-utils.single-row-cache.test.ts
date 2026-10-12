@@ -46,7 +46,7 @@ async function withSingleRowCacheStore(
   await withStateDirEnv("openclaw-single-row-", async () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: MAIN_AGENT_ID, default: true, workspace: "/tmp/openclaw-single-row" }],
+        entries: { [MAIN_AGENT_ID]: { workspace: "/tmp/openclaw-single-row" } },
         defaults: { model: { primary: TEST_MODEL } },
       },
     };
@@ -79,16 +79,11 @@ function parentSession(sessionId: string, now: number): SessionEntry {
   return { sessionId, updatedAt: now };
 }
 
-function runningChildSession(
-  sessionId: string,
-  parentSessionKey: string,
-  now: number,
-): SessionEntry {
+function childSession(sessionId: string, parentSessionKey: string, now: number): SessionEntry {
   return {
     sessionId,
     parentSessionKey,
     updatedAt: now,
-    status: "running",
   };
 }
 
@@ -101,12 +96,12 @@ async function seedSessionEntries(
   }
 }
 
-function setSubagentControllerRun(
+async function setSubagentControllerRun(
   childSessionKey: string,
   controllerSessionKey: string,
   createdAt: number,
-): void {
-  addSubagentRunForTests({
+): Promise<void> {
+  await addSubagentRunForTests({
     runId: childSessionKey,
     childSessionKey,
     controllerSessionKey,
@@ -121,10 +116,10 @@ function setSubagentControllerRun(
 }
 
 describe("single gateway session row child projections", () => {
-  afterEach(() => {
+  afterEach(async () => {
     resetConfigRuntimeState();
     resetPluginRuntimeStateForTest();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     vi.clearAllMocks();
   });
 
@@ -134,7 +129,7 @@ describe("single gateway session row child projections", () => {
         session: { scope: "global" },
         agents: {
           entries: {
-            main: { default: true, model: { primary: "openai/gpt-5.4" } },
+            main: { model: { primary: "openai/gpt-5.4" } },
             research: { model: { primary: "openai/gpt-5.5" } },
           },
         },
@@ -252,7 +247,7 @@ describe("single gateway session row child projections", () => {
           toolOverrides: { mcpToolsDeny: { synthetic: ["blocked"] } },
         },
         [childA]: {
-          ...runningChildSession("child-a", parentA, now),
+          ...childSession("child-a", parentA, now),
           ...retainedDetails(now, "child saved skill prompt"),
           systemPromptReport: {
             ...retainedDetails(now, "child saved skill prompt").systemPromptReport!,
@@ -264,7 +259,7 @@ describe("single gateway session row child projections", () => {
           },
         },
         [parentB]: parentSession("parent-b", now),
-        [childB]: runningChildSession("child-b", parentB, now),
+        [childB]: childSession("child-b", parentB, now),
       };
       await seedSessionEntries(storePath, store);
 
@@ -298,7 +293,6 @@ describe("single gateway session row child projections", () => {
           expect(loaded.store[childA]).toMatchObject({
             sessionId: "child-a",
             parentSessionKey: parentA,
-            status: "running",
           });
           expect(loaded.store[childA]?.skillsSnapshot).toBeUndefined();
           expect(loaded.store[childA]?.systemPromptReport).toBeUndefined();
@@ -355,11 +349,11 @@ describe("single gateway session row child projections", () => {
         [oldParent]: parentSession("old-parent", now),
         [newParent]: parentSession("new-parent", now),
         [navigation]: parentSession("navigation", now),
-        [child]: { ...runningChildSession("child", navigation, now), spawnedBy: oldParent },
+        [child]: { ...childSession("child", navigation, now), spawnedBy: oldParent },
       });
-      setSubagentControllerRun(child, oldParent, now);
+      await setSubagentControllerRun(child, oldParent, now);
       expect((await rowReader.row(navigation, { now }))?.childSessions).toEqual([child]);
-      setSubagentControllerRun(child, newParent, now + 25);
+      await setSubagentControllerRun(child, newParent, now + 25);
       expect((await rowReader.row(navigation, { now: now + 50 }))?.childSessions).toEqual([child]);
       expect((await rowReader.row(oldParent, { now: now + 50 }))?.childSessions).toBeUndefined();
       expect((await rowReader.row(newParent, { now: now + 50 }))?.childSessions).toEqual([child]);
@@ -383,7 +377,7 @@ describe("single gateway session row child projections", () => {
             ...retainedDetails(now, childPrompt),
           },
         );
-        setSubagentControllerRun(childKey, parentKey, now);
+        await setSubagentControllerRun(childKey, parentKey, now);
         const parsed = vi.spyOn(JSON, "parse");
         try {
           const loaded = loadGatewaySessionEntryReadOnly(parentKey, {

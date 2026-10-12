@@ -85,6 +85,9 @@ function projectOpenAIToolDescriptors(
   const diagnostics: OpenAIToolProjectionDiagnostic[] = [];
   for (let toolIndex = 0; toolIndex < inputToolCount; toolIndex += 1) {
     let tool: OpenAIToolDescriptor;
+    let name: string | undefined;
+    let parameters: unknown;
+    let readPath = `tool[${toolIndex}]`;
     try {
       const candidate = tools[toolIndex];
       if (!candidate) {
@@ -92,45 +95,29 @@ function projectOpenAIToolDescriptors(
         continue;
       }
       tool = candidate;
-    } catch {
-      diagnostics.push(unreadableToolDiagnostic(toolIndex));
-      continue;
-    }
-
-    let name: unknown;
-    try {
-      name = tool.name;
-    } catch {
-      diagnostics.push({
-        toolIndex,
-        violations: [`tool[${toolIndex}].name is unreadable`],
-      });
-      continue;
-    }
-    if (typeof name !== "string" || !name) {
-      diagnostics.push({
-        toolIndex,
-        violations: [`tool[${toolIndex}].name is empty`],
-      });
-      continue;
-    }
-
-    let parameters: unknown;
-    try {
+      readPath += ".name";
+      const nameValue = tool.name;
+      if (typeof nameValue !== "string" || !nameValue) {
+        diagnostics.push({ toolIndex, violations: [`${readPath} is empty`] });
+        continue;
+      }
+      name = nameValue;
+      readPath = `${name}.parameters`;
       parameters = tool.parameters;
     } catch {
       diagnostics.push({
         toolIndex,
-        toolName: name,
-        violations: [`${name}.parameters is unreadable`],
+        ...(name ? { toolName: name } : {}),
+        violations: [`${readPath} is unreadable`],
       });
       continue;
     }
     const prepared = schemas
-      ? prepareRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`)
+      ? prepareRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`, name)
       : undefined;
     const schemaProjection =
-      prepared?.projection ?? projectRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`);
+      prepared?.projection ??
+      projectRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`, name);
     if (!isRecord(schemaProjection.schema) || schemaProjection.violations.length > 0) {
       diagnostics.push({
         toolIndex,
@@ -282,4 +269,22 @@ export function reconcileOpenAICompletionsToolChoice(
   projection: OpenAIToolProjection,
 ): OpenAICompletionsSdkToolChoice | undefined {
   return reconcileToolChoice(choice, projection, false);
+}
+
+/** Re-expresses an object Chat Completions tool choice in the Responses wire shape. */
+export function toOpenAIResponsesToolChoice(
+  choice: Exclude<NonNullable<OpenAICompletionsToolChoice>, string>,
+): OpenAIResponsesToolChoice {
+  if (choice.type === "function") {
+    return { type: "function", name: choice.function.name };
+  }
+  return {
+    type: "allowed_tools",
+    mode: choice.allowed_tools.mode,
+    tools: choice.allowed_tools.tools.map((tool) =>
+      tool.type === "function" && isRecord(tool.function) && typeof tool.function.name === "string"
+        ? { type: "function", name: tool.function.name }
+        : tool,
+    ),
+  };
 }

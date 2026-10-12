@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForGatewayDispatch } from "../../gateway/server-in-process-dispatch.js";
 import {
   claimAgentRunDelegatedAuthority,
   clearAgentRunContext,
@@ -21,6 +22,7 @@ import {
   revokeRequesterCronAuthority,
 } from "../subagents/requester-cron-authority.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 
@@ -28,9 +30,14 @@ const fixture = vi.hoisted(() => ({
   assertCustody: vi.fn(),
   release: vi.fn(),
   log: vi.fn(),
+  dispatch: vi.fn(),
+  wait: vi.fn(),
+  gatewayContext: {},
 }));
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
+  getInProcessGatewayRequestContext: () => fixture.gatewayContext,
+  dispatchGatewayMethodInProcess: (...args: unknown[]) => fixture.dispatch(...args),
   captureOperatorToolGatewayContinuationContext: async () => ({
     signal: new AbortController().signal,
     assertCurrent: fixture.assertCustody,
@@ -73,7 +80,7 @@ vi.mock("../prepared-model-runtime-generation-scope.js", () => ({
   runOutsidePreparedModelRuntimePluginGenerationScope: (work: () => unknown) => work(),
 }));
 vi.mock("../run-wait.js", () => ({
-  waitForAgentRunReply: async () => ({ status: "ok", replyText: "continued" }),
+  waitForAgentRunReply: fixture.wait,
   isTerminalAgentWaitTimeout: () => false,
 }));
 vi.mock("../../logging/subsystem.js", () => {
@@ -126,10 +133,105 @@ async function inRun<T>(runId: string, work: () => Promise<T>) {
 }
 afterEach(() => {
   revokeRequesterCronAuthority(SESSION);
+  fixture.dispatch.mockReset();
+  fixture.wait.mockReset();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
 describe("child followup requester continuation", () => {
+  it("retains one timed-out inline result through busy parent admission and execution", async () => {
+    vi.useFakeTimers();
+    const request = await inRun("original", () =>
+      prepareSessionsSendFollowup({
+        runId: "child-followup",
+        requesterTurnRunId: "original",
+        requesterAgentId: "main",
+        requesterSessionKey: SESSION,
+        targetAgentId: "main",
+        targetSessionKey: CHILD,
+      }),
+    );
+    expect(request).toBeDefined();
+    const completion = SessionFollowupCompletion.bind(request!);
+    completion.markAccepted(request!.runId);
+    const inline = completion.take(10);
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(inline).resolves.toBeUndefined();
+
+    const entered = createDeferredCore();
+    const admit = createDeferredCore();
+    const finish = createDeferredCore();
+    const released = createDeferredCore();
+    fixture.release.mockImplementation(() => released.resolve());
+    const callGateway = vi.fn(async (rpc) => {
+      expect(rpc.method).toBe("agent");
+      entered.resolve();
+      const execution = (async () => {
+        await admit.promise;
+        rpc.assertDispatchCurrent?.();
+        rpc.onAccepted?.({ status: "accepted", runId: rpc.params.idempotencyKey });
+        await finish.promise;
+        return { status: "ok", runId: rpc.params.idempotencyKey, inputProcessingCompleted: true };
+      })();
+      return await waitForGatewayDispatch("agent", execution, rpc.timeoutMs, rpc.signal);
+    });
+    fixture.dispatch.mockImplementation(async (method, params, options) =>
+      callGateway({
+        method,
+        params,
+        timeoutMs: options?.timeoutMs,
+        signal: options?.signal,
+        onAccepted: options?.onAccepted,
+        assertDispatchCurrent: options?.sessionMutationCommitGuard,
+      }),
+    );
+    try {
+      await startSessionsSendReplyFlow({
+        completion,
+        callGateway: callAgentToolGatewayRequest,
+        runId: request!.runId,
+        skip: false,
+        notifyRequesterOnWaitFailure: true,
+        targetSessionKey: CHILD,
+        targetAgentId: "main",
+        displayKey: CHILD,
+        requesterSessionKey: SESSION,
+        requesterAgentId: "main",
+        requesterSession: { sessionId: SESSION_ID, lifecycleRevision: "one" },
+        replyTimeoutMs: 1_000,
+        replyMode: "one-way",
+      });
+      await completion.settle(request!.runId, { status: "ok", replyText: "Child result" });
+      completion.finishExecution(request!.runId);
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(fixture.release).not.toHaveBeenCalled();
+      expect(fixture.log).not.toHaveBeenCalled();
+      admit.resolve();
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(fixture.release).not.toHaveBeenCalled();
+      expect(fixture.log).not.toHaveBeenCalled();
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(callGateway.mock.calls[0]?.[0].params).toMatchObject({
+        sessionKey: SESSION,
+        expectedExistingSessionId: SESSION_ID,
+        expectedExistingSessionLifecycleRevision: "one",
+        deliver: false,
+        sourceReplyDeliveryMode: "message_tool_only",
+        message: expect.stringContaining("Child result"),
+      });
+      finish.resolve();
+      await released.promise;
+      expect(fixture.log).not.toHaveBeenCalled();
+    } finally {
+      admit.resolve();
+      finish.resolve();
+      completion.close();
+      await released.promise;
+    }
+  });
+
   it.each([
     "success",
     "child error",
@@ -137,6 +239,8 @@ describe("child followup requester continuation", () => {
     "custody revoked",
     "new user turn",
     "observer closed",
+    "receipt replay",
+    "requester failed while pending",
   ])("returns the original owner's plugin authority after %s", async (outcome) => {
     let ownerCurrent = true;
     const owner = {
@@ -185,12 +289,21 @@ describe("child followup requester continuation", () => {
     }
     const invoked = vi.fn();
     const callGateway = vi.fn();
+    fixture.wait.mockResolvedValue(
+      outcome === "requester failed while pending"
+        ? { status: "error", error: "requester processing failed" }
+        : { status: "ok", replyText: "continued" },
+    );
     callGateway.mockImplementation(async (rpc) => {
       if (rpc.method !== "agent") {
         throw new Error("unexpected RPC");
       }
       rpc.assertDispatchCurrent?.();
       const input = rpc.params;
+      if (outcome === "receipt replay" && callGateway.mock.calls.length > 1) {
+        expect(input).toEqual(callGateway.mock.calls[0]?.[0].params);
+        return { runId: input.idempotencyKey, status: "ok", inputProcessingCompleted: true };
+      }
       const admission = consumeRequesterCronAuthorityAdmission({
         runId: input.idempotencyKey,
         sessionKey: input.sessionKey,
@@ -224,8 +337,17 @@ describe("child followup requester continuation", () => {
           invoked();
         }),
       );
-      return { runId: admission!.runId, status: "accepted" };
+      return outcome === "receipt replay" || outcome === "requester failed while pending"
+        ? { runId: admission!.runId, status: "in_flight" }
+        : { runId: admission!.runId, status: "ok", inputProcessingCompleted: true };
     });
+    fixture.dispatch.mockImplementation(async (method, params, options) =>
+      callGateway({
+        method,
+        params,
+        assertDispatchCurrent: options?.sessionMutationCommitGuard,
+      }),
+    );
     await startSessionsSendReplyFlow({
       completion,
       callGateway,
@@ -241,18 +363,34 @@ describe("child followup requester continuation", () => {
       displayKey: CHILD,
       requesterSessionKey: SESSION,
       requesterAgentId: "main",
-      message: "finish authorized task",
-      announceTimeoutMs: 1000,
-      maxPingPongTurns: 0,
+      replyTimeoutMs: 1000,
       replyMode: "one-way",
     });
     await released.promise;
-    if (outcome === "success" || outcome === "child error" || outcome === "observer closed") {
+    if (
+      outcome === "success" ||
+      outcome === "child error" ||
+      outcome === "observer closed" ||
+      outcome === "receipt replay"
+    ) {
       expect(invoked).toHaveBeenCalledTimes(1);
       expect(fixture.log).not.toHaveBeenCalled();
+    } else if (outcome === "requester failed while pending") {
+      expect(invoked).toHaveBeenCalledOnce();
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(fixture.log).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ error: "requester processing failed" }),
+      );
     } else {
       expect(invoked).not.toHaveBeenCalled();
       expect(fixture.log).toHaveBeenCalled();
+    }
+    if (outcome === "receipt replay") {
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      expect(fixture.wait).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: callGateway.mock.calls[0]?.[0].params.idempotencyKey }),
+      );
     }
     fixture.assertCustody.mockReset();
   });

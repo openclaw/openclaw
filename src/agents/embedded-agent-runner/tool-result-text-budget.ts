@@ -63,8 +63,7 @@ function sliceToolResultTextBudget(
   let low = 0;
   // Every UTF-16 unit costs at least one budget unit, so longer candidates cannot fit.
   let high = Math.min(text.length, budget);
-  const minimumRawWeight = Math.max(1, options.minimumRawWeight ?? 1);
-  const additive = minimumRawWeight === 1 || minimumRawWeight === 2;
+  const additive = [1, 2].includes(Math.max(1, options.minimumRawWeight ?? 1));
   let measuredLength = 0;
   let measuredChars = 0;
   while (low <= high) {

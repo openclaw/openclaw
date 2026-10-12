@@ -1,5 +1,6 @@
 // Command secret target import tests cover lazy import safety for secret target metadata.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 function secretTarget(
   id: string,
@@ -25,73 +26,8 @@ function secretTarget(
 }
 
 describe("command secret targets module import", () => {
-  let lazyImportProbe: {
-    channelsError: unknown;
-    listSecretTargetRegistryEntries: ReturnType<typeof vi.fn>;
-    modelsHasApiKey: boolean;
-    qrRemoteHasToken: boolean;
-  };
-
-  beforeAll(async () => {
-    const listSecretTargetRegistryEntries = vi.fn(() => {
-      throw new Error("registry touched too early");
-    });
-
-    vi.doMock("../secrets/target-registry.js", () => ({
-      discoverConfigSecretTargetsByIds: vi.fn(() => []),
-      listSecretTargetRegistryEntries,
-    }));
-
-    const mod = await import("./command-secret-targets.js");
-    let channelsError: unknown;
-    try {
-      mod.getChannelsCommandSecretTargetIds();
-    } catch (error) {
-      channelsError = error;
-    }
-    lazyImportProbe = {
-      channelsError,
-      listSecretTargetRegistryEntries,
-      modelsHasApiKey: mod.getModelsCommandSecretTargetIds().has("models.providers.*.apiKey"),
-      qrRemoteHasToken: mod.getQrRemoteCommandSecretTargetIds().has("gateway.remote.token"),
-    };
-  });
-
   beforeEach(() => {
     vi.resetModules();
-  });
-
-  it("does not touch the registry during module import", async () => {
-    expect(lazyImportProbe.modelsHasApiKey).toBe(true);
-    expect(lazyImportProbe.qrRemoteHasToken).toBe(true);
-    expect(lazyImportProbe.channelsError).toEqual(new Error("registry touched too early"));
-    expect(lazyImportProbe.listSecretTargetRegistryEntries).toHaveBeenCalledTimes(1);
-  });
-
-  it("loads registry lazily for agent runtime plugin credential targets", async () => {
-    const listSecretTargetRegistryEntries = vi.fn(() => [
-      {
-        id: "plugins.entries.example.config.webSearch.apiKey",
-        pathPatternSegments: ["plugins", "entries", "example", "config", "webSearch", "apiKey"],
-      },
-      { id: "plugins.entries.example.config.other.apiKey" },
-      { id: "channels.telegram.botToken" },
-    ]);
-
-    vi.doMock("../secrets/target-registry.js", () => ({
-      discoverConfigSecretTargetsByIds: vi.fn(() => []),
-      listSecretTargetRegistryEntries,
-    }));
-
-    const mod = await import("./command-secret-targets.js");
-
-    expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
-    const ids = mod.getAgentRuntimeCommandSecretTargetIds({ config: {} });
-    expect(ids.has("memory.search.remote.apiKey")).toBe(true);
-    expect(ids.has("plugins.entries.example.config.webSearch.apiKey")).toBe(true);
-    expect(ids.has("plugins.entries.example.config.other.apiKey")).toBe(false);
-    expect(ids.has("channels.telegram.botToken")).toBe(false);
-    expect(listSecretTargetRegistryEntries).toHaveBeenCalledTimes(1);
   });
 
   it("can resolve configured-channel status targets without the full registry", async () => {

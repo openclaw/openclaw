@@ -14,11 +14,8 @@ import {
   resolveLlamaCppModelCacheDir,
 } from "./defaults.js";
 import { detectLlamaCppHardware, formatLlamaCppMemory } from "./hardware.js";
+import { resolveManagedLlamaServerPaths, selectLlamaServerAsset } from "./llama-server-assets.js";
 import { ensureLlamaServerInstalled } from "./llama-server-install.js";
-import {
-  resolveManagedLlamaServerPaths,
-  selectLlamaServerAsset,
-} from "./llama-server-assets.js";
 import type { ManagedLlamaModel } from "./llama-server-preset.js";
 import {
   ensureLlamaCppModel,
@@ -103,7 +100,7 @@ export async function runLlamaCppMediaSetup(
   const hardware = await detectLlamaCppHardware({ cacheDir, signal: ctx.signal });
   if (hardware.platform !== "linux" || hardware.arch !== "x64") {
     await ctx.prompter.note(
-      `Automatic local OCR and vision setup currently supports Linux x64 with CPU execution only; this Gateway is ${hardware.platform}/${hardware.arch}. Existing llama.cpp chat and embedding setup is unchanged.`,
+      `Automatic local OCR and vision setup currently supports Linux x64 with CPU execution only; this Gateway is ${hardware.platform}/${hardware.arch}. Use this command on a Linux x64 Gateway, or configure another image provider. Existing llama.cpp chat and embedding setup is unchanged.`,
       "Local media unavailable",
     );
     return { profiles: [] };
@@ -134,18 +131,12 @@ export async function runLlamaCppMediaSetup(
     .stat(resolveManagedLlamaServerPaths(asset).command)
     .then((stat) => stat.isFile())
     .catch(() => false);
-  const recommendation = recommendLlamaCppMedia(hardware, asset.backend, {
+  const recommendation = recommendLlamaCppMedia(hardware, {
     artifactSha256: new Set(cached.keys()),
     runtime: runtimeCached,
   });
   if (recommendation.kind === "unavailable") {
-    await ctx.prompter.note(
-      [
-        recommendation.reason,
-        ...recommendation.rejections.map((item) => `${item.id}: ${item.reasons.join(" ")}`),
-      ].join("\n"),
-      "Local media unavailable",
-    );
+    await ctx.prompter.note(recommendation.reason, "Local media unavailable");
     return { profiles: [] };
   }
   const recipes = [recommendation.ocr, recommendation.vision];
@@ -156,10 +147,7 @@ export async function runLlamaCppMediaSetup(
         .map((artifact) => [artifact.expectedSha256, artifact]),
     ).values(),
   ];
-  const runtimeBytes = [asset, ...(asset.dependencies ?? [])].reduce(
-    (total, archive) => total + (archive.sizeBytes ?? 0),
-    0,
-  );
+  const runtimeBytes = asset.sizeBytes ?? 0;
   const downloads = artifacts.filter((artifact) => !cached.has(artifact.expectedSha256));
   const consent = await ctx.prompter.confirm({
     initialValue: false,
@@ -180,7 +168,6 @@ export async function runLlamaCppMediaSetup(
       ),
       `llama.cpp runtime: ${runtimeBytes.toLocaleString()} bytes${runtimeCached ? " (cached; version will be verified)" : " download"}.`,
       `Total download: ${formatLlamaCppMemory(downloads.reduce((total, artifact) => total + artifact.expectedSize, 0) + (runtimeCached ? 0 : runtimeBytes))}; required free disk including runtime staging: ${formatLlamaCppMemory(recommendation.requiredDiskBytes)}.`,
-      ...recommendation.rejections.map((item) => `Rejected ${item.id}: ${item.reasons.join(" ")}`),
       "Load one model at a time; switching between chat, embeddings, OCR and vision may add latency. Existing chat defaults, inventory and embeddings are preserved.",
       "Replace image-understanding routes and the image tool default with local vision, without remote fallbacks. OCR is selected explicitly with local_image task=ocr; ambiguous tasks use vision.",
       "These image inference routes stay local. Original images remain available; an existing cloud chat model can still receive them under its normal native-vision policy.",
@@ -234,6 +221,10 @@ export async function runLlamaCppMediaSetup(
     const managed = await prepareManagedLlamaServer({
       chatModel: { mode: "preserve" },
       mediaModels,
+      configuredChatModelIds: [
+        ...(existing?.models.map((model) => model.id) ?? []),
+        ...recipes.map((recipe) => recipe.id),
+      ],
       modelsMax: 1,
       localService: existing?.localService,
       asset,

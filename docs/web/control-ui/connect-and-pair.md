@@ -27,7 +27,14 @@ After gateway auth succeeds, connecting from a new browser or device usually req
   </Step>
 </Steps>
 
-Keep the page open while approval is pending. It retries automatically and connects on its own once the request is approved; **Check now** lets you retry immediately.
+Keep the page open while approval is pending. It waits for the decision and connects on its own once the request is approved; **Check now** lets you retry immediately.
+
+If the operator rejects this browser's request from the CLI or **Devices**, the
+waiting page shows **Access request declined** and stops automatic retries.
+Choose **Request again** to file another request. An unanswered request shows
+**Access request expired**, not declined. These outcomes belong to the live
+connection, not stored denial history: reloading the page may request approval
+again. Rejecting one browser does not affect another browser's pending request.
 
 If the login screen says **Pairing link is no longer valid**, the one-time dashboard
 link may have expired or already been used. Run `openclaw dashboard` on the Gateway
@@ -40,6 +47,10 @@ If the browser retries pairing with changed auth details (role/scopes/public key
 Switching an already-paired browser from read access to write/admin access through ordinary stored or shared credentials is treated as an approval upgrade, not a silent reconnect: OpenClaw keeps the old approval active, blocks the broader reconnect, and asks you to approve the new scope set explicitly. The narrow exception is a fresh owner handoff issued on the Gateway host by `openclaw dashboard` or graphical onboarding; it can upgrade only the same signed browser that redeems that one-time handoff.
 
 When the connected Control UI reports limited access, open **Inbox > System > Limited access**, then click **Request admin**. On mobile, open the sidebar to reach Inbox. The browser files the pending device scope-upgrade request over its existing connection; run the displayed `openclaw devices approve <requestId>` command on the Gateway host or approve from **Devices** in another admin-capable browser that also has `operator.pairing`. Keep the requesting tab connected while approval completes so it can receive and store the freshly rotated device token before reconnecting. **Retry** reattaches to the pending request. **Cancel** stops the local wait but does not reject the device request; if you cancel or disconnect before approval, use the normal pairing repair path on the next connection.
+
+If the device was previously approved for admin access but its token was later narrowed, approving the request preserves that token limit. The UI explains that pairing was approved without restoring the requested access, rather than reporting rejection or offering a retry that cannot lift the limit. Run `openclaw dashboard --json` on the Gateway host and open its fresh one-time `browserUrl` in the same browser to restore administrator access through the owner handoff.
+
+For a LAN or remote browser, keep the same Control UI origin and Gateway URL so the handoff repairs the existing browser identity. If `browserUrl` uses loopback, replace its base address with the current Control UI address and its `gatewayUrl` fragment parameter with the current Gateway WebSocket URL. Preserve the remaining one-time pairing fragment values, and open the link within ten minutes. Only use addresses for the same Gateway; do not send the pairing link to another host.
 
 Once approved, the device is remembered and won't require re-approval unless you revoke it with `openclaw devices revoke --device <id> --role <role>`. See [Devices CLI](/cli/devices) for token rotation, revocation, and the Paperclip / `openclaw_gateway` first-run approval flow.
 

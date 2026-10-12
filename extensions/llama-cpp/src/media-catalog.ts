@@ -1,13 +1,8 @@
 import { formatLlamaCppMemory, type LlamaCppHardware } from "./hardware.js";
-import {
-  LLAMA_SERVER_BUILD,
-  selectLlamaServerAsset,
-  type LlamaServerAsset,
-} from "./llama-server-assets.js";
-import { resolveLlamaCppModelCandidates } from "./model-catalog.js";
+import { LLAMA_SERVER_BUILD } from "./llama-server-assets.js";
+import { resolveLlamaCppDiskBudget, resolveLlamaCppMemoryBudget } from "./model-catalog.js";
 
 const GIB = 1024 ** 3;
-type MediaBackend = LlamaServerAsset["backend"];
 
 export type LlamaCppMediaArtifact = {
   repository: string;
@@ -26,8 +21,6 @@ export type LlamaCppMediaRecipe = {
   capability: "ocr" | "vision";
   model: LlamaCppMediaArtifact;
   projector: LlamaCppMediaArtifact;
-  supportedBackends: readonly MediaBackend[];
-  supportedRuntimeBuild: number;
   minimumSystemMemoryBytes: number;
   memoryBytes: number;
   contextSize: number;
@@ -65,7 +58,7 @@ const SMOL_VLM2_REVISION = "1bc3c9f74ceafd4c8d4411cc9cf188bba3798f91";
 // still needs real inference verification on the Gateway before activation.
 // Memory includes both GGUFs, KV/compute buffers and bounded image encoding. The
 // router must load one model at a time; these budgets do not permit co-residency.
-export const LLAMA_CPP_MEDIA_RECIPES: readonly LlamaCppMediaRecipe[] = [
+export const LLAMA_CPP_MEDIA_RECIPES: readonly [LlamaCppMediaRecipe, LlamaCppMediaRecipe] = [
   {
     id: "glm-ocr-q8_0",
     name: "GLM-OCR (Q8_0)",
@@ -84,8 +77,6 @@ export const LLAMA_CPP_MEDIA_RECIPES: readonly LlamaCppMediaRecipe[] = [
       484_403_648,
       "9c4b58e33e316ed142eb5dcb41abec3844d3e6e5dc361ffb782c3fa9d175141f",
     ),
-    supportedBackends: ["cpu"],
-    supportedRuntimeBuild: 10_809,
     minimumSystemMemoryBytes: 6 * GIB,
     memoryBytes: 4 * GIB,
     contextSize: 8192,
@@ -116,8 +107,6 @@ export const LLAMA_CPP_MEDIA_RECIPES: readonly LlamaCppMediaRecipe[] = [
       592_523_200,
       "ae07ea1facd07dd3230c4483b63e8cda96c6944ad2481f33d531f79e892dd024",
     ),
-    supportedBackends: ["cpu"],
-    supportedRuntimeBuild: 10_809,
     minimumSystemMemoryBytes: 6 * GIB,
     memoryBytes: 5 * GIB,
     contextSize: 8192,
@@ -140,153 +129,70 @@ export function resolveLlamaCppMediaArtifact(source: string): LlamaCppMediaArtif
   return undefined;
 }
 
-type MediaRejection = {
-  id: string;
-  capability: LlamaCppMediaRecipe["capability"];
-  reasons: string[];
-};
-
 type MediaRecommendation =
-  | { kind: "unavailable"; reason: string; rejections: MediaRejection[] }
+  | { kind: "unavailable"; reason: string }
   | {
       kind: "recommended";
       ocr: LlamaCppMediaRecipe;
       vision: LlamaCppMediaRecipe;
-      asset: LlamaServerAsset;
-      memoryBudgetBytes: number;
-      modelDiskBytes: number;
-      runtimeDiskBytes: number;
       requiredDiskBytes: number;
-      modelsMax: 1;
       reason: string;
-      rejections: MediaRejection[];
     };
 
 export function recommendLlamaCppMedia(
   hardware: LlamaCppHardware,
-  backend: MediaBackend,
   // The download owner supplies only artifacts whose size, checksum and format passed.
   cached: { artifactSha256?: ReadonlySet<string>; runtime?: boolean } = {},
 ): MediaRecommendation {
-  const rejections: MediaRejection[] = [];
   const unavailable = (reason: string): MediaRecommendation => ({
     kind: "unavailable",
     reason,
-    rejections,
   });
-  if (backend !== "cpu" && hardware.accelerator.kind !== backend) {
+  if (LLAMA_SERVER_BUILD !== 10_809) {
     return unavailable(
-      `The Gateway did not detect a usable ${backend} backend. Choose CPU setup or check the accelerator.`,
+      `Local media requires verified llama.cpp build 10809; available build is ${LLAMA_SERVER_BUILD}. Use another image provider until these recipes are verified with the new runtime.`,
     );
   }
-  let asset: LlamaServerAsset;
-  try {
-    asset = selectLlamaServerAsset(
-      hardware.platform,
-      hardware.arch,
-      backend === "cuda" ? hardware.accelerator : { kind: backend },
-    );
-  } catch (error) {
-    return unavailable(
-      error instanceof Error
-        ? error.message
-        : "No verified llama.cpp runtime is available for this host.",
-    );
-  }
-  const memoryBudgetBytes = Math.max(
-    0,
-    resolveLlamaCppModelCandidates(hardware, backend).memoryBudgetBytes,
-  );
-  const candidates = LLAMA_CPP_MEDIA_RECIPES.filter((recipe) => {
-    const reasons: string[] = [];
-    if (!recipe.supportedBackends.includes(backend)) {
-      reasons.push(`Does not support the ${backend} backend.`);
-    }
-    if (recipe.supportedRuntimeBuild !== LLAMA_SERVER_BUILD) {
-      reasons.push(
-        `Requires verified llama.cpp build ${recipe.supportedRuntimeBuild}; available build is ${LLAMA_SERVER_BUILD}.`,
-      );
-    }
+  const memoryBudgetBytes = resolveLlamaCppMemoryBudget(hardware, "cpu");
+  const rejections: string[] = [];
+  for (const recipe of LLAMA_CPP_MEDIA_RECIPES) {
     if (hardware.totalMemoryBytes < recipe.minimumSystemMemoryBytes) {
-      reasons.push(
-        `Requires ${formatLlamaCppMemory(recipe.minimumSystemMemoryBytes)} total RAM; host has ${formatLlamaCppMemory(hardware.totalMemoryBytes)}.`,
+      rejections.push(
+        `${recipe.name} requires ${formatLlamaCppMemory(recipe.minimumSystemMemoryBytes)} total RAM; host has ${formatLlamaCppMemory(hardware.totalMemoryBytes)}.`,
       );
     }
     if (memoryBudgetBytes < recipe.memoryBytes) {
-      reasons.push(
-        `Requires ${formatLlamaCppMemory(recipe.memoryBytes)} memory; the ${backend === "cuda" ? "single GPU and system" : backend === "metal" ? "unified" : "system"} memory budget is ${formatLlamaCppMemory(memoryBudgetBytes)} after host headroom and current memory pressure.`,
+      rejections.push(
+        `${recipe.name} requires ${formatLlamaCppMemory(recipe.memoryBytes)} memory; the system memory budget is ${formatLlamaCppMemory(memoryBudgetBytes)} after host headroom and current memory pressure.`,
       );
     }
-    if (reasons.length > 0) {
-      rejections.push({ id: recipe.id, capability: recipe.capability, reasons });
-    }
-    return reasons.length === 0;
-  });
-  if (
-    !candidates.some((recipe) => recipe.capability === "ocr") ||
-    !candidates.some((recipe) => recipe.capability === "vision")
-  ) {
+  }
+  if (rejections.length > 0) {
     return unavailable(
-      "No complete OCR and vision pair fits this Gateway. Close other applications or use a host with more memory; see candidate rejections.",
+      `${rejections.join(" ")} Close other applications or use a host with more memory and retry setup.`,
     );
   }
-  if (
-    hardware.availableDiskBytes === undefined ||
-    hardware.availableRuntimeDiskBytes === undefined
-  ) {
-    return unavailable(
-      "Cannot measure free space in the model cache or runtime directory. Check their permissions and retry setup.",
-    );
+  const disk = resolveLlamaCppDiskBudget(hardware, "cpu", cached.runtime);
+  if (disk.kind === "unavailable") {
+    return unavailable(disk.reason);
   }
-  // Reuse the managed install reserve: archive, extraction and interrupted work.
-  const runtimeDiskBytes = cached.runtime ? 0 : (backend === "cuda" ? 3 : 2) * GIB;
-  if (!hardware.sharedDisk && hardware.availableRuntimeDiskBytes < runtimeDiskBytes) {
-    return unavailable(
-      `The runtime volume needs ${formatLlamaCppMemory(runtimeDiskBytes)} free; only ${formatLlamaCppMemory(hardware.availableRuntimeDiskBytes)} is available.`,
-    );
-  }
-  const modelDiskBudget = hardware.sharedDisk
-    ? Math.min(hardware.availableDiskBytes, hardware.availableRuntimeDiskBytes) - runtimeDiskBytes
-    : hardware.availableDiskBytes;
-  for (const ocr of candidates.filter((recipe) => recipe.capability === "ocr")) {
-    for (const vision of candidates.filter((recipe) => recipe.capability === "vision")) {
-      const artifacts = new Map(
-        [ocr.model, ocr.projector, vision.model, vision.projector].map((value) => [
-          value.expectedSha256,
-          value,
-        ]),
-      );
-      const modelDiskBytes = [...artifacts.values()].reduce(
-        (bytes, value) =>
-          bytes + (cached.artifactSha256?.has(value.expectedSha256) ? 0 : value.expectedSize),
-        0,
-      );
-      if (modelDiskBytes > modelDiskBudget) {
-        rejections.push({
-          id: vision.id,
-          capability: vision.capability,
-          reasons: [
-            `Together with ${ocr.name}, missing models and projectors need ${formatLlamaCppMemory(modelDiskBytes)} disk space; ${formatLlamaCppMemory(Math.max(0, modelDiskBudget))} remains after the runtime reserve.`,
-          ],
-        });
-        continue;
-      }
-      return {
-        kind: "recommended",
-        ocr,
-        vision,
-        asset,
-        memoryBudgetBytes,
-        modelDiskBytes,
-        runtimeDiskBytes,
-        requiredDiskBytes: modelDiskBytes + runtimeDiskBytes,
-        modelsMax: 1,
-        reason: `${ocr.name} (OCR, ${formatLlamaCppMemory(ocr.memoryBytes)}) and ${vision.name} (vision, ${formatLlamaCppMemory(vision.memoryBytes)}) fit the ${formatLlamaCppMemory(memoryBudgetBytes)} ${backend === "metal" ? "Metal unified memory" : backend === "cuda" ? "single NVIDIA GPU and system memory" : "CPU memory"} budget. Load one model at a time, preserving the chat and embedding inventory. Images stay local; runtime verification must pass before activation.`,
-        rejections,
-      };
-    }
-  }
-  return unavailable(
-    "There is not enough disk space for a complete OCR and vision pair and the managed runtime. Free space in the model cache and retry setup.",
+  const { modelDiskBudget, runtimeDiskBytes } = disk;
+  const [ocr, vision] = LLAMA_CPP_MEDIA_RECIPES;
+  const modelDiskBytes = [ocr.model, ocr.projector, vision.model, vision.projector].reduce(
+    (bytes, artifact) =>
+      bytes + (cached.artifactSha256?.has(artifact.expectedSha256) ? 0 : artifact.expectedSize),
+    0,
   );
+  if (modelDiskBytes > modelDiskBudget) {
+    return unavailable(
+      `Missing OCR and vision models and projectors need ${formatLlamaCppMemory(modelDiskBytes)} disk space; ${formatLlamaCppMemory(Math.max(0, modelDiskBudget))} remains after the runtime reserve. Free space in the model cache and retry setup.`,
+    );
+  }
+  return {
+    kind: "recommended",
+    ocr,
+    vision,
+    requiredDiskBytes: modelDiskBytes + runtimeDiskBytes,
+    reason: `${ocr.name} (OCR, ${formatLlamaCppMemory(ocr.memoryBytes)}) and ${vision.name} (vision, ${formatLlamaCppMemory(vision.memoryBytes)}) fit the ${formatLlamaCppMemory(memoryBudgetBytes)} CPU memory budget. Load one model at a time, preserving the chat and embedding inventory. Images stay local; runtime verification must pass before activation.`,
+  };
 }

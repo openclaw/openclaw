@@ -26,7 +26,6 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       await import("../shared/device-bootstrap-profile.js");
     const { resolveSharedGatewaySessionGeneration } =
       await import("./server/ws-shared-generation.js");
-    const { prepareSessionWorkspaceIcon } = await import("./workspace-icon-http.js");
     const { mutateConfigFile } = await import("../config/config.js");
     const stateDir = process.env.OPENCLAW_STATE_DIR;
     if (!stateDir) {
@@ -101,7 +100,6 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       expect((await rpcReq(wsBootstrap, "set-heartbeats", { enabled: false })).ok).toBe(true);
       wsBootstrap.close();
 
-      await prepareSessionWorkspaceIcon({ sessionKey });
       const iconResponse = await fetch(
         `http://127.0.0.1:${port}/__openclaw__/workspace-icon/${encodeURIComponent(sessionKey)}`,
         { headers: { Authorization: `Bearer ${deviceToken}` } },

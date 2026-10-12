@@ -223,11 +223,8 @@ export function registerNodeInvokeUploadTests({
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { label: "default-enabled", enabled: undefined, synthetic: false },
-    { label: "internal-service", enabled: false, synthetic: true },
-  ])("preserves terminal upload dispatch for $label", async ({ enabled, synthetic }) => {
-    mocks.getRuntimeConfig.mockReturnValue({ gateway: { uploads: { enabled } } });
+  it("preserves terminal upload dispatch for internal services", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({ gateway: { uploads: { enabled: false } } });
     mocks.resolveNodeCommandAllowlist.mockReturnValue(new Set(["terminal.upload"]));
     const nodeRegistry = {
       get: vi.fn(() => ({ nodeId: "upload-node", commands: ["terminal.upload"] })),
@@ -236,7 +233,7 @@ export function registerNodeInvokeUploadTests({
     const client = createOperatorClient({ scopes: ["operator.admin"] });
     const respond = await invokeNode({
       nodeRegistry,
-      client: synthetic ? { ...client, internal: { syntheticClient: true } } : client,
+      client: { ...client, internal: { syntheticClient: true } },
       requestParams: {
         nodeId: "upload-node",
         command: "terminal.upload",

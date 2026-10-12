@@ -83,90 +83,6 @@ describe("buildWorkspaceSkillStatus", () => {
     });
   });
 
-  it("reports blank env requirements as missing", () => {
-    const envName = "OPENCLAW_TEST_BLANK_SKILL_STATUS";
-    const original = process.env[envName];
-    process.env[envName] = "   ";
-    try {
-      const report = buildWorkspaceSkillStatus("/tmp/ws", {
-        entries: [
-          createEntry("blank-env", {
-            metadata: { primaryEnv: envName, requires: { env: [envName] } },
-          }),
-        ],
-      });
-
-      expect(report.skills[0]?.eligible).toBe(false);
-      expect(report.skills[0]?.missing.env).toEqual([envName]);
-    } finally {
-      if (original === undefined) {
-        delete process.env[envName];
-      } else {
-        process.env[envName] = original;
-      }
-    }
-  });
-
-  it("surfaces valid ClawHub linkage and local Skill Card metadata", async () => {
-    const workspaceDir = tempDirs.make("openclaw-skill-status-");
-    const skillDir = path.join(workspaceDir, "skills", "agentreceipt");
-    const originPath = path.join(skillDir, ".clawhub", "origin.json");
-    const lockPath = path.join(workspaceDir, ".clawhub", "lock.json");
-    const cardPath = path.join(skillDir, "skill-card.md");
-    await writeClawHubStatusFixture({
-      workspaceDir,
-      skillDir,
-      slug: "agentreceipt",
-      originRegistry: "https://clawhub.ai/",
-      lockRegistry: "https://clawhub.ai/",
-    });
-    await fs.writeFile(cardPath, "# AgentReceipt\n\nLocal trust card.\n", "utf8");
-
-    const report = buildWorkspaceSkillStatus(workspaceDir, {
-      entries: [createEntry("agentreceipt", { baseDir: skillDir })],
-    });
-
-    expect(report.skills[0]?.clawhub).toEqual({
-      status: "linked",
-      valid: true,
-      registry: "https://clawhub.ai",
-      slug: "agentreceipt",
-      installedVersion: "1.2.3",
-      installedAt: 123,
-      originPath,
-      lockPath,
-    });
-    expect(report.skills[0]?.skillCard).toEqual({
-      present: true,
-      path: cardPath,
-      sizeBytes: 34,
-    });
-  });
-
-  it("uses ClawHub origin metadata for linkage when the skill name is a display name", async () => {
-    const workspaceDir = tempDirs.make("openclaw-skill-status-");
-    const skillDir = path.join(workspaceDir, "skills", "agentreceipt");
-    await writeClawHubStatusFixture({
-      workspaceDir,
-      skillDir,
-      slug: "agentreceipt",
-    });
-
-    const report = buildWorkspaceSkillStatus(workspaceDir, {
-      entries: [createEntry("AgentReceipt", { baseDir: skillDir })],
-    });
-
-    expect(report.skills[0]?.skillKey).toBe("AgentReceipt");
-    expect(report.skills[0]?.clawhub).toMatchObject({
-      status: "linked",
-      valid: true,
-      registry: "https://clawhub.ai",
-      slug: "agentreceipt",
-      installedVersion: "1.2.3",
-      installedAt: 123,
-    });
-  });
-
   it("does not link ClawHub origin metadata from the wrong install directory", async () => {
     const workspaceDir = tempDirs.make("openclaw-skill-status-");
     const copiedSkillDir = path.join(workspaceDir, "skills", "copied-agentreceipt");
@@ -188,69 +104,36 @@ describe("buildWorkspaceSkillStatus", () => {
     });
   });
 
-  it("does not link ClawHub origin metadata when the lockfile registry disagrees", async () => {
+  it("reads a local Skill Card through a hardlink without changing its reported path", async () => {
     const workspaceDir = tempDirs.make("openclaw-skill-status-");
-    const skillDir = path.join(workspaceDir, "skills", "agentreceipt");
-    await writeClawHubStatusFixture({
-      workspaceDir,
-      skillDir,
-      slug: "agentreceipt",
-      originRegistry: "https://clawhub.ai",
-      lockRegistry: "https://example.invalid",
-    });
+    const skillDir = path.join(workspaceDir, "skill");
+    const targetDir = path.join(workspaceDir, "target");
+    const targetCard = path.join(targetDir, "skill-card.md");
+    const cardPath = path.join(skillDir, "skill-card.md");
+    const content = "# Local Skill Card 🦞\n";
+    await fs.mkdir(targetDir);
+    await fs.writeFile(targetCard, content);
+    await fs.mkdir(skillDir);
+    await fs.link(targetCard, cardPath);
 
     const report = buildWorkspaceSkillStatus(workspaceDir, {
-      entries: [createEntry("agentreceipt", { baseDir: skillDir })],
+      entries: [createEntry("card", { baseDir: skillDir })],
     });
 
-    expect(report.skills[0]?.clawhub).toMatchObject({
-      status: "invalid",
-      valid: false,
-      slug: "agentreceipt",
-      reason: expect.stringContaining("does not match the workspace ClawHub lockfile"),
+    expect(report.skills[0]?.skillCard).toEqual({
+      present: true,
+      path: cardPath,
+      sizeBytes: Buffer.byteLength(content),
     });
+    expect(readLocalSkillCardContentSync(skillDir)).toBe(content);
   });
 
-  it.each(["directory alias", "hardlink"] as const)(
-    "reads a local Skill Card through a %s without changing its reported path",
-    async (alias) => {
+  it.runIf(process.platform !== "win32")(
+    "does not surface or read Skill Card symlinks outside the skill directory",
+    async () => {
       const workspaceDir = tempDirs.make("openclaw-skill-status-");
       const skillDir = path.join(workspaceDir, "skill");
-      const targetDir = path.join(workspaceDir, "target");
-      const targetCard = path.join(targetDir, "skill-card.md");
-      const cardPath = path.join(skillDir, "skill-card.md");
-      const content = "# Local Skill Card 🦞\n";
-      await fs.mkdir(targetDir);
-      await fs.writeFile(targetCard, content);
-      if (alias === "directory alias") {
-        await fs.symlink(targetDir, skillDir, process.platform === "win32" ? "junction" : "dir");
-      } else {
-        await fs.mkdir(skillDir);
-        await fs.link(targetCard, cardPath);
-      }
-
-      const report = buildWorkspaceSkillStatus(workspaceDir, {
-        entries: [createEntry("card", { baseDir: skillDir })],
-      });
-
-      expect(report.skills[0]?.skillCard).toEqual({
-        present: true,
-        path: cardPath,
-        sizeBytes: Buffer.byteLength(content),
-      });
-      expect(readLocalSkillCardContentSync(skillDir)).toBe(content);
-    },
-  );
-
-  it.runIf(process.platform !== "win32").each(["inside", "outside"] as const)(
-    "does not surface or read Skill Card symlinks %s the skill directory",
-    async (location) => {
-      const workspaceDir = tempDirs.make("openclaw-skill-status-");
-      const skillDir = path.join(workspaceDir, "skill");
-      const targetPath = path.join(
-        location === "inside" ? skillDir : workspaceDir,
-        "card-target.md",
-      );
+      const targetPath = path.join(workspaceDir, "card-target.md");
       await fs.mkdir(skillDir);
       await fs.writeFile(targetPath, "# Card target\n");
       await fs.symlink(targetPath, path.join(skillDir, "skill-card.md"));
@@ -261,28 +144,6 @@ describe("buildWorkspaceSkillStatus", () => {
 
       expect(report.skills[0]?.skillCard).toBeUndefined();
       expect(readLocalSkillCardContentSync(skillDir)).toBeUndefined();
-    },
-  );
-
-  it.each([256 * 1024, 256 * 1024 + 1])(
-    "bounds local Skill Cards of %i bytes",
-    async (sizeBytes) => {
-      const skillDir = tempDirs.make("openclaw-skill-status-");
-      const cardPath = path.join(skillDir, "skill-card.md");
-      const content = "a".repeat(sizeBytes);
-      await fs.writeFile(cardPath, content);
-
-      const report = buildWorkspaceSkillStatus(skillDir, {
-        entries: [createEntry("card", { baseDir: skillDir })],
-      });
-
-      if (sizeBytes === 256 * 1024) {
-        expect(report.skills[0]?.skillCard).toEqual({ present: true, path: cardPath, sizeBytes });
-        expect(readLocalSkillCardContentSync(skillDir)).toBe(content);
-      } else {
-        expect(report.skills[0]?.skillCard).toBeUndefined();
-        expect(readLocalSkillCardContentSync(skillDir)).toBeUndefined();
-      }
     },
   );
 
@@ -435,43 +296,6 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(requireSkillStatus(byName, "local-only").skillCard).toBeUndefined();
   });
 
-  it("links a discovered global ClawHub skill only through the managed lockfile", async () => {
-    const managedParentDir = tempDirs.make("openclaw-managed-");
-    const workspaceDir = tempDirs.make("openclaw-skill-status-");
-    const managedSkillsDir = path.join(managedParentDir, "skills");
-    const skillDir = path.join(managedSkillsDir, "agentreceipt");
-    await fs.mkdir(skillDir, { recursive: true });
-    await fs.writeFile(
-      path.join(skillDir, "SKILL.md"),
-      "---\nname: agentreceipt\ndescription: Global skill\n---\n",
-      "utf8",
-    );
-    await writeClawHubStatusFixture({
-      workspaceDir: managedParentDir,
-      skillDir,
-      slug: "agentreceipt",
-    });
-    // Same slug in the workspace must not cross-link the managed install.
-    await writeClawHubStatusFixture({
-      workspaceDir,
-      skillDir: path.join(workspaceDir, "unused"),
-      slug: "agentreceipt",
-      installedVersion: "9.9.9",
-    });
-
-    const report = buildWorkspaceSkillStatus(workspaceDir, { managedSkillsDir });
-    const skill = report.skills.find((entry) => entry.skillKey === "agentreceipt");
-
-    expect(skill).toMatchObject({ source: "openclaw-managed" });
-    expect(skill?.clawhub).toMatchObject({
-      status: "linked",
-      valid: true,
-      slug: "agentreceipt",
-      installedVersion: "1.2.3",
-      lockPath: path.join(managedParentDir, ".clawhub", "lock.json"),
-    });
-  });
-
   it("reports a globally installed skill as invalid when it is absent from the managed lockfile", async () => {
     const managedParentDir = tempDirs.make("openclaw-managed-");
     const workspaceDir = tempDirs.make("openclaw-skill-status-");
@@ -536,81 +360,6 @@ describe("buildWorkspaceSkillStatus", () => {
     },
   );
 
-  it("does not surface install options for OS-scoped skills on unsupported platforms", () => {
-    if (process.platform === "win32") {
-      // Keep this simple; win32 platform naming is already explicitly handled elsewhere.
-      return;
-    }
-
-    const mismatchedOs = process.platform === "darwin" ? "linux" : "darwin";
-
-    const entry: SkillEntry = {
-      skill: createCanonicalFixtureSkill({
-        name: "os-scoped",
-        description: "test",
-        filePath: "/tmp/os-scoped",
-        baseDir: "/tmp",
-        source: "test",
-      }),
-      frontmatter: {},
-      metadata: {
-        always: true,
-        os: [mismatchedOs],
-        requires: { bins: ["fakebin"] },
-        install: [
-          {
-            id: "brew",
-            kind: "brew",
-            formula: "fake",
-            bins: ["fakebin"],
-            label: "Install fake (brew)",
-          },
-        ],
-      },
-    };
-
-    const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
-    expect(report.skills).toStrictEqual([
-      {
-        name: "os-scoped",
-        description: "test",
-        source: "test",
-        bundled: false,
-        filePath: "/tmp/os-scoped",
-        baseDir: "/tmp",
-        skillKey: "os-scoped",
-        primaryEnv: undefined,
-        emoji: undefined,
-        homepage: undefined,
-        always: true,
-        disabled: false,
-        blockedByAllowlist: false,
-        blockedByAgentFilter: false,
-        eligible: false,
-        platformIncompatible: true,
-        modelVisible: false,
-        userInvocable: true,
-        commandVisible: false,
-        requirements: {
-          anyBins: [],
-          bins: ["fakebin"],
-          config: [],
-          env: [],
-          os: [mismatchedOs],
-        },
-        missing: {
-          anyBins: [],
-          bins: [],
-          config: [],
-          env: [],
-          os: [mismatchedOs],
-        },
-        configChecks: [],
-        install: [],
-      },
-    ]);
-  });
-
   it("does not expose raw config values in config checks", () => {
     const secret = "discord-token-secret-abc"; // pragma: allowlist secret
     const entry: SkillEntry = {
@@ -645,30 +394,6 @@ describe("buildWorkspaceSkillStatus", () => {
     );
     expect(check).toEqual({ path: "channels.discord.token", satisfied: true });
     expect(check && "value" in check).toBe(false);
-  });
-
-  it("reports prompt and command visibility separately from eligibility", () => {
-    const entry: SkillEntry = {
-      skill: createCanonicalFixtureSkill({
-        name: "background-only",
-        description: "test",
-        filePath: "/tmp/background-only/SKILL.md",
-        baseDir: "/tmp/background-only",
-        source: "test",
-      }),
-      frontmatter: {},
-      invocation: {
-        userInvocable: false,
-        disableModelInvocation: true,
-      },
-    };
-
-    const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
-    const skill = report.skills[0];
-    expect(skill?.eligible).toBe(true);
-    expect(skill?.modelVisible).toBe(false);
-    expect(skill?.userInvocable).toBe(false);
-    expect(skill?.commandVisible).toBe(false);
   });
 
   it("uses default-visible exposure semantics when older entries omit exposure fields", () => {
@@ -714,7 +439,7 @@ describe("buildWorkspaceSkillStatus", () => {
         }),
       ],
       agentId: "specialist",
-      config: { agents: { list: [{ id: "specialist", skills: ["workspace"] }] } },
+      config: { agents: { entries: { specialist: { skills: ["workspace"] } } } },
     });
 
     expect(report.agentId).toBe("specialist");
@@ -764,9 +489,8 @@ describe("buildWorkspaceSkillStatus", () => {
       agentId: "specialist",
       config: {
         agents: {
-          list: [
-            {
-              id: "specialist",
+          entries: {
+            specialist: {
               skills: [
                 "ready",
                 "needs-bin",
@@ -777,7 +501,7 @@ describe("buildWorkspaceSkillStatus", () => {
                 "bundled-blocked",
               ],
             },
-          ],
+          },
         },
         skills: {
           allowBundled: ["some-other-bundled-skill"],

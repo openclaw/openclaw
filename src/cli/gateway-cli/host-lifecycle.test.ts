@@ -20,11 +20,12 @@ describe("Gateway host lifecycle authority", () => {
   const execute = vi.fn<HostedGatewayStop["execute"]>();
   const dispose = vi.fn<HostedGatewayStop["dispose"]>();
   const owners: ReturnType<typeof createGatewayHostLifecycle>[] = [];
-  const owner = () => {
+  const owner = (commitExternalStop?: () => void) => {
     const host = createGatewayHostLifecycle({
       isCurrent: () => current,
       isServing: () => serving,
       acceptStop,
+      commitExternalStop,
       processOwner: { ownsProcessLifecycle: true, supervisor: null },
     });
     owners.push(host);
@@ -65,6 +66,44 @@ describe("Gateway host lifecycle authority", () => {
     });
     expect(guard).toHaveBeenCalledTimes(2);
   });
+
+  it("exposes committed external stop only when its live process host supplies it", () => {
+    const legacy = owner();
+    expect(legacy.capability.externalRestart?.commitStop).toBeUndefined();
+    const commit = vi.fn(() => {
+      serving = false;
+    });
+    const host = owner(commit);
+    const capability = host.capability.externalRestart;
+    if (!capability?.commitStop) {
+      throw new Error("Missing committed stop capability");
+    }
+    capability.commitStop();
+    expect(commit).toHaveBeenCalledOnce();
+    expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
+    expect(() => capability.commitStop!()).toThrow("retired or non-serving");
+  });
+
+  it.each(["retired", "replaced", "closed"])(
+    "refuses committed stop from a %s host",
+    async (change) => {
+      const commit = vi.fn();
+      const host = owner(commit);
+      if (change === "retired") {
+        await host.retire();
+      }
+      if (change === "replaced") {
+        current = false;
+      }
+      if (change === "closed") {
+        serving = false;
+      }
+      expect(() => host.capability.externalRestart!.commitStop!()).toThrow(
+        "retired or non-serving",
+      );
+      expect(commit).not.toHaveBeenCalled();
+    },
+  );
 
   it("transfers only the accepted stop across teardown, without awaiting native completion", async () => {
     const host = owner();

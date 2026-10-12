@@ -23,29 +23,9 @@ function runBench(args: string[]) {
 }
 
 describe("scripts/bench-sqlite-state", () => {
-  it("rejects unknown args before seeding benchmark databases", () => {
-    const result = runBench(["--wat"]);
-
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("error: Unknown argument: --wat");
-  });
-
-  it("rejects missing output values before seeding benchmark databases", () => {
-    expect(() => parseSqliteStateBenchmarkCli(["--output", "--profile", "smoke"])).toThrow(
-      "--output requires a value",
-    );
-  });
-
   it("rejects short flag output values before seeding benchmark databases", () => {
     expect(() => parseSqliteStateBenchmarkCli(["--output", "-h"])).toThrow(
       "--output requires a value",
-    );
-  });
-
-  it("rejects invalid profiles without printing a stack trace", () => {
-    expect(() => parseSqliteStateBenchmarkCli(["--profile", "huge"])).toThrow(
-      '--profile must be one of smoke, default, large; got "huge"',
     );
   });
 

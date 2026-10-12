@@ -101,7 +101,6 @@ describe("extension executable test plans", () => {
     vi.spyOn(extensionTestPlan, "listExtensionTestFilesForRoots").mockReturnValue(files);
     const shards = createChangedExtensionConfigShards(["extensions/telegram"], {
       targets: new Set(files),
-      includeReleaseOnlyRuntimeTests: true,
     });
     expect(shards).toHaveLength(1);
     expect(shards[0]).toMatchObject({

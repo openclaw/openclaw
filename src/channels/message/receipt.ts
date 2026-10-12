@@ -2,6 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeUniqueStringEntries,
+  normalizeUniqueTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import type {
@@ -13,9 +14,6 @@ import type {
 type MessageReceiptInputResult = MessageReceiptSourceResult & {
   receipt?: MessageReceipt;
 };
-
-const normalizeIdentity = (value: string | undefined): string | undefined =>
-  value?.trim() || undefined;
 
 /** Reads reported recipients, including every physical part of an aggregate receipt. */
 export function listMessageReceiptSourceTargets(value: unknown): string[] {
@@ -38,15 +36,11 @@ export function listMessageReceiptSourceTargets(value: unknown): string[] {
     const target = asOptionalRecord(record.target);
     const ids = [
       target?.id,
-      ...(
-        [
-          "chatId",
-          "channelId",
-          "roomId",
-          "conversationId",
-          "toJid",
-        ] as const satisfies readonly (keyof MessageReceiptSourceResult)[]
-      ).map((key) => record[key]),
+      record.chatId,
+      record.channelId,
+      record.roomId,
+      record.conversationId,
+      record.toJid,
     ];
     for (const id of ids) {
       const normalized = normalizeOptionalString(id);
@@ -64,9 +58,9 @@ export function resolveReceiptSourceId(result: MessageReceiptInputResult): strin
     return undefined;
   }
   return (
-    normalizeIdentity(result.messageId) ??
+    normalizeOptionalString(result.messageId) ??
     (result.receipt ? resolveMessageReceiptPrimaryId(result.receipt) : undefined) ??
-    normalizeIdentity(result.pollId)
+    normalizeOptionalString(result.pollId)
   );
 }
 
@@ -79,72 +73,62 @@ export function createMessageReceiptFromOutboundResults(params: {
   sentAt?: number;
 }): MessageReceipt {
   const sentResults = params.results.filter((result) => result.outcome !== "not_sent");
-  const requestedThreadId = normalizeIdentity(params.threadId);
-  const providerThreadIds = normalizeUniqueStringEntries(
+  const requestedThreadId = normalizeOptionalString(params.threadId);
+  const providerThreadIds = uniqueStrings(
     sentResults.flatMap(({ receipt }) =>
       receipt?.parts.length
         ? receipt.parts.flatMap(
-            (part) => normalizeIdentity(part.threadId) ?? normalizeIdentity(receipt.threadId) ?? [],
+            (part) =>
+              normalizeOptionalString(part.threadId) ??
+              normalizeOptionalString(receipt.threadId) ??
+              [],
           )
-        : (normalizeIdentity(receipt?.threadId) ?? []),
+        : (normalizeOptionalString(receipt?.threadId) ?? []),
     ),
   );
   const aggregateThreadId =
     providerThreadIds.length > 1 ? undefined : (providerThreadIds[0] ?? requestedThreadId);
   const parts = sentResults.flatMap((result, resultIndex) => {
-    if (result.receipt) {
-      const receiptThreadId = normalizeIdentity(result.receipt.threadId) ?? requestedThreadId;
-      if (result.receipt.parts.length === 0) {
-        return result.receipt.platformMessageIds.map((platformMessageId, partIndex) => ({
-          platformMessageId,
-          kind: params.kind ?? "unknown",
-          index: partIndex,
-          ...(receiptThreadId ? { threadId: receiptThreadId } : {}),
-          ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-        }));
-      }
+    const receipt = result.receipt;
+    const threadId = normalizeOptionalString(receipt?.threadId) ?? requestedThreadId;
+    if (receipt?.parts.length) {
       // Mixed adapter-supplied reply metadata is authoritative: missing entries mean
       // those physical messages were not native replies and must not inherit the route reply.
-      const hasPartReplyMetadata = result.receipt.parts.some((part) => part.replyToId);
-      return result.receipt.parts.map((part, partIndex) => ({
+      const hasPartReplyMetadata = receipt.parts.some((part) => part.replyToId);
+      return receipt.parts.map((part, partIndex) => ({
         ...part,
         index: part.index ?? partIndex,
-        ...(normalizeIdentity(part.threadId) || !receiptThreadId
-          ? {}
-          : { threadId: receiptThreadId }),
+        ...(normalizeOptionalString(part.threadId) || !threadId ? {} : { threadId }),
         ...(part.replyToId || !params.replyToId || hasPartReplyMetadata
           ? {}
           : { replyToId: params.replyToId }),
       }));
     }
-    const platformMessageId = resolveReceiptSourceId(result);
-    if (!platformMessageId) {
-      return [];
-    }
-    return [
-      {
-        platformMessageId,
-        kind: params.kind ?? "unknown",
-        index: resultIndex,
-        ...(requestedThreadId ? { threadId: requestedThreadId } : {}),
-        ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-        raw: result,
-      },
-    ];
+    const sourceId = receipt ? undefined : resolveReceiptSourceId(result);
+    const ids = receipt ? receipt.platformMessageIds : sourceId ? [sourceId] : [];
+    return ids.map((platformMessageId, partIndex) =>
+      Object.assign(
+        {
+          platformMessageId,
+          kind: params.kind ?? "unknown",
+          index: receipt ? partIndex : resultIndex,
+        },
+        threadId ? { threadId } : {},
+        params.replyToId ? { replyToId: params.replyToId } : {},
+        receipt ? {} : { raw: result },
+      ),
+    );
   });
-  const platformMessageIds = uniqueStrings(
-    sentResults
-      .flatMap((result) =>
-        result.receipt
-          ? [
-              result.receipt.primaryPlatformMessageId,
-              ...result.receipt.platformMessageIds,
-              ...result.receipt.parts.map((part) => part.platformMessageId),
-            ]
-          : [resolveReceiptSourceId(result)],
-      )
-      .map(normalizeIdentity)
-      .filter((id): id is string => Boolean(id)),
+  const platformMessageIds = normalizeUniqueTrimmedStringList(
+    sentResults.flatMap((result) =>
+      result.receipt
+        ? [
+            result.receipt.primaryPlatformMessageId,
+            ...result.receipt.platformMessageIds,
+            ...result.receipt.parts.map((part) => part.platformMessageId),
+          ]
+        : [resolveReceiptSourceId(result)],
+    ),
   );
   const firstNestedReceipt = sentResults.find((result) => result.receipt)?.receipt;
   return {
@@ -167,13 +151,10 @@ export function listMessageReceiptPlatformIds(receipt: MessageReceipt): string[]
 
 /** Resolves the explicit primary platform id, falling back to the first unique receipt id. */
 export function resolveMessageReceiptPrimaryId(receipt: MessageReceipt): string | undefined {
-  const primary = normalizeIdentity(receipt.primaryPlatformMessageId);
-  if (primary) {
-    return primary;
-  }
   return (
+    normalizeOptionalString(receipt.primaryPlatformMessageId) ??
     listMessageReceiptPlatformIds(receipt)[0] ??
-    receipt.parts.map((part) => normalizeIdentity(part.platformMessageId)).find(Boolean)
+    receipt.parts.map((part) => normalizeOptionalString(part.platformMessageId)).find(Boolean)
   );
 }
 
@@ -182,13 +163,15 @@ export function resolveMessageReceiptThreadId(
   receipt: MessageReceipt,
   requestedThreadId?: string,
 ): string | undefined {
-  const partThreadIds = normalizeUniqueStringEntries(
-    receipt.parts.flatMap((part) => normalizeIdentity(part.threadId) ?? []),
+  const partThreadIds = uniqueStrings(
+    receipt.parts.flatMap((part) => normalizeOptionalString(part.threadId) ?? []),
   );
   if (partThreadIds.length > 1) {
     return undefined;
   }
   return (
-    partThreadIds[0] ?? normalizeIdentity(receipt.threadId) ?? normalizeIdentity(requestedThreadId)
+    partThreadIds[0] ??
+    normalizeOptionalString(receipt.threadId) ??
+    normalizeOptionalString(requestedThreadId)
   );
 }

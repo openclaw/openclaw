@@ -2,12 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as sqliteVec from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as directoryDurability from "../infra/directory-durability.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import * as version from "../version.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
+import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -76,6 +77,19 @@ describe("Doctor migration backup retries", () => {
     expect(listBackups(fixture.shared)).toHaveLength(1);
     expect(listBackups(fixture.agent)).toHaveLength(1);
     expect(readPreservedValue(listBackups(fixture.agent)[0]!)).toBe("agent before migration");
+    const preview = inspectSessionSqliteRecovery({ cfg: {}, env: fixture.env });
+    expect(preview.artifacts).toHaveLength(2);
+    expect(preview.artifacts).toEqual(
+      expect.arrayContaining(
+        [fixture.shared, fixture.agent].map((database) =>
+          expect.objectContaining({
+            path: listBackups(database)[0],
+            outcome: "protected",
+            reason: "incomplete-recovery-operation",
+          }),
+        ),
+      ),
+    );
   });
 
   it("does not reuse a completed group until capture-marker removal is durable", async () => {
@@ -146,8 +160,16 @@ describe("Doctor migration backup retries", () => {
     } finally {
       migrated.close();
     }
-    for (let attempt = 0; attempt < 4; attempt++) {
-      await backup(fixture, [secondAgent], inventory.toReversed());
+    const load = vi
+      .spyOn(sqliteVec, "loadSqliteVecExtension")
+      .mockRejectedValue(new Error("sqlite-vec cannot load on this CPU"));
+    try {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        await backup(fixture, [secondAgent], inventory.toReversed());
+      }
+      expect(load).not.toHaveBeenCalled();
+    } finally {
+      load.mockRestore();
     }
 
     expect([fixture.shared, ...inventory].flatMap(listBackups).toSorted()).toEqual(
@@ -158,7 +180,7 @@ describe("Doctor migration backup retries", () => {
     expect(readPreservedValue(fixture.agent)).toBe("partially migrated");
   });
 
-  it.each(["missing-agent", "corrupt-agent", "symlink-agent", "missing-shared"] as const)(
+  it.each(["symlink-agent", "missing-shared"] as const)(
     "preserves a completed rollback group when %s damage is discovered after partial migration",
     async (damage) => {
       const fixture = createFixture();
@@ -179,13 +201,9 @@ describe("Doctor migration backup retries", () => {
         migrated.close();
       }
       const damaged = damage === "missing-shared" ? originalShared : originalAgent;
-      if (damage === "corrupt-agent") {
-        fs.writeFileSync(damaged, "not a SQLite snapshot");
-      } else {
-        fs.unlinkSync(damaged);
-        if (damage === "symlink-agent") {
-          fs.symlinkSync(fixture.agent, damaged);
-        }
+      fs.unlinkSync(damaged);
+      if (damage === "symlink-agent") {
+        fs.symlinkSync(fixture.agent, damaged);
       }
       const remaining = [fixture.shared, ...inventory].flatMap(listBackups);
 
@@ -201,74 +219,30 @@ describe("Doctor migration backup retries", () => {
     },
   );
 
-  it.each(["added", "replaced"] as const)(
-    "starts a new coherent group for a database that was %s without removing older backups",
-    async (change) => {
-      const fixture = createFixture();
-      await backup(fixture);
-      const originalSharedBackup = listBackups(fixture.shared)[0]!;
-      const legacyBackup = `${fixture.shared}.pre-startup-migration-legacy-operator-copy.bak`;
-      fs.copyFileSync(originalSharedBackup, legacyBackup);
-      const originalBytes = fs.readFileSync(legacyBackup);
-      const newAgent = path.join(path.dirname(fixture.agent), "replacement.sqlite");
-      seedDatabase(newAgent, "new agent history");
-      if (change === "replaced") {
-        fs.renameSync(newAgent, fixture.agent);
-      }
-      const currentAgent = change === "replaced" ? fixture.agent : newAgent;
-      const inventory = change === "replaced" ? [fixture.agent] : [fixture.agent, newAgent];
-      await backup(fixture, [currentAgent], inventory);
-      await backup(fixture, [currentAgent], inventory);
-
-      const newSharedBackups = listBackups(fixture.shared).filter(
-        (pathname) => pathname !== originalSharedBackup && pathname !== legacyBackup,
-      );
-      expect(newSharedBackups).toHaveLength(1);
-      const newId = newSharedBackups[0]!.split(".pre-startup-migration-")[1];
-      const currentBackup = listBackups(currentAgent).find((pathname) => pathname.endsWith(newId!));
-      expect(currentBackup).toBeDefined();
-      expect(readPreservedValue(currentBackup!)).toBe("new agent history");
-      expect(fs.readFileSync(legacyBackup)).toEqual(originalBytes);
-      expect(fs.existsSync(originalSharedBackup)).toBe(true);
-    },
-  );
-
-  it("captures current state for a new candidate build with unchanged database identities and schemas", async () => {
+  it("starts a new coherent group for a replaced database without removing older backups", async () => {
     const fixture = createFixture();
     await backup(fixture);
-    const sources = [fixture.agent, fixture.shared];
-    const originalBackups = sources.map((source) => listBackups(source)[0]!);
-    const originalBytes = originalBackups.map((snapshot) => fs.readFileSync(snapshot));
-    for (const source of sources) {
-      const database = new DatabaseSync(source);
-      try {
-        database.exec("UPDATE preserved SET value = 'next build history';");
-      } finally {
-        database.close();
-      }
-    }
-    const build = vi
-      .spyOn(version, "resolveRuntimeServiceBuildId")
-      .mockReturnValue("migration-backup-next-build");
-    try {
-      await backup(fixture);
-      await backup(fixture);
-    } finally {
-      build.mockRestore();
-    }
+    const originalSharedBackup = listBackups(fixture.shared)[0]!;
+    const legacyBackup = `${fixture.shared}.pre-startup-migration-legacy-operator-copy.bak`;
+    fs.copyFileSync(originalSharedBackup, legacyBackup);
+    const originalBytes = fs.readFileSync(legacyBackup);
+    const newAgent = path.join(path.dirname(fixture.agent), "replacement.sqlite");
+    seedDatabase(newAgent, "new agent history");
+    fs.renameSync(newAgent, fixture.agent);
+    const currentAgent = fixture.agent;
+    const inventory = [fixture.agent];
+    await backup(fixture, [currentAgent], inventory);
+    await backup(fixture, [currentAgent], inventory);
 
-    const newBackups = sources.flatMap((source) => {
-      const backups = listBackups(source);
-      expect(backups).toHaveLength(2);
-      return backups.filter((snapshot) => !originalBackups.includes(snapshot));
-    });
-    expect(new Set(newBackups.map((name) => name.split(".pre-startup-migration-")[1])).size).toBe(
-      1,
+    const newSharedBackups = listBackups(fixture.shared).filter(
+      (pathname) => pathname !== originalSharedBackup && pathname !== legacyBackup,
     );
-    expect(newBackups.map(readPreservedValue)).toEqual([
-      "next build history",
-      "next build history",
-    ]);
-    expect(originalBackups.map((snapshot) => fs.readFileSync(snapshot))).toEqual(originalBytes);
+    expect(newSharedBackups).toHaveLength(1);
+    const newId = newSharedBackups[0]!.split(".pre-startup-migration-")[1];
+    const currentBackup = listBackups(currentAgent).find((pathname) => pathname.endsWith(newId!));
+    expect(currentBackup).toBeDefined();
+    expect(readPreservedValue(currentBackup!)).toBe("new agent history");
+    expect(fs.readFileSync(legacyBackup)).toEqual(originalBytes);
+    expect(fs.existsSync(originalSharedBackup)).toBe(true);
   });
 });

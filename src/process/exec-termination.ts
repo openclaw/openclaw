@@ -3,6 +3,7 @@ import { constants as osConstants } from "node:os";
 import process from "node:process";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { sleep } from "../utils/sleep.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
 import {
   COMMAND_PROCESS_TREE_KILL_GRACE_MS,
@@ -67,9 +68,7 @@ export function createCommandTerminationController(params: {
       if (graceful) {
         taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T"]));
         // Awaited cleanup stays live after both the child and taskkill handles close.
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, params.killGraceMs);
-        });
+        await sleep(params.killGraceMs);
         if (isDirectChildAlive()) {
           taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T", "/F"]));
         }
@@ -135,9 +134,7 @@ export function createCommandTerminationController(params: {
             cleanup = groupAlive() ? "uncertain" : "forced";
             return;
           }
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, Math.min(25, remaining));
-          });
+          await sleep(Math.min(25, remaining));
         }
       };
       // A timeout signal is policy, not evidence of forced cleanup. Once the

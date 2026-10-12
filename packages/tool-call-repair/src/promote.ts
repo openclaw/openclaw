@@ -44,7 +44,6 @@ export function createPromotedPlainTextToolCallBlock(
     id: `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
     name,
     arguments: block.arguments,
-    partialArgs: JSON.stringify(block.arguments),
   };
 }
 
@@ -58,13 +57,18 @@ export function createPromotedPlainTextToolCallEvents(
     if (toolCall?.type !== "toolCall") {
       return [];
     }
+    const partialJson = JSON.stringify(toolCall.arguments ?? {});
+    const streamingCall = { ...toolCall, partialJson };
     return [
       { type: "toolcall_start", contentIndex, partial: message },
       {
         type: "toolcall_delta",
         contentIndex,
-        delta: typeof toolCall.partialArgs === "string" ? toolCall.partialArgs : "{}",
-        partial: message,
+        delta: partialJson,
+        partial: {
+          ...message,
+          content: content.map((item, index) => (index === contentIndex ? streamingCall : item)),
+        },
       },
       { type: "toolcall_end", contentIndex, toolCall, partial: message },
     ];
@@ -103,25 +107,6 @@ function createPromotedToolCallBlocks(
     toolCalls.push(options.createToolCallBlock(block, resolvedName));
   }
   return toolCalls;
-}
-
-function createPromotedToolCallBlocksFromTextParts(
-  textParts: readonly string[],
-  options: PlainTextToolCallPromotionOptions,
-): Record<string, unknown>[] | undefined {
-  const text = textParts.join("");
-  if (!text.trim()) {
-    return [];
-  }
-  let offset = 0;
-  const lineBreakOffsets = new Set(
-    textParts.slice(0, -1).map((part) => {
-      offset += part.length;
-      return offset;
-    }),
-  );
-  lineBreakOffsets.delete(text.length);
-  return createPromotedToolCallBlocks(text, options, lineBreakOffsets);
 }
 
 /** Promotes text calls and maps source blocks retained in the projected message. */
@@ -163,7 +148,18 @@ export function projectStandalonePlainTextToolCallMessage(
   let promotedTextBlock = false;
   let textParts: string[] = [];
   const flushTextParts = (): boolean => {
-    const toolCalls = createPromotedToolCallBlocksFromTextParts(textParts, options);
+    const text = textParts.join("");
+    let offset = 0;
+    const lineBreakOffsets = new Set(
+      textParts.slice(0, -1).map((part) => {
+        offset += part.length;
+        return offset;
+      }),
+    );
+    lineBreakOffsets.delete(text.length);
+    const toolCalls = text.trim()
+      ? createPromotedToolCallBlocks(text, options, lineBreakOffsets)
+      : [];
     textParts = [];
     if (!toolCalls) {
       return false;

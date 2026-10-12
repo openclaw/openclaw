@@ -1,6 +1,30 @@
 import Foundation
 
 extension GatewayProcessManager {
+    struct LaunchAgentReadinessFailure: Equatable {
+        let port: Int
+        let pid: Int32
+    }
+
+    struct LaunchAgentReadinessCandidate: Equatable {
+        let failure: LaunchAgentReadinessFailure
+        let generation: UInt64
+    }
+
+    struct GatewayReadinessContext {
+        let purpose: GatewayReadinessPurpose
+        let port: Int
+        let generation: UInt64
+        let readinessPID: Int32?
+        let readinessRevision: UInt64
+        let readinessCandidate: LaunchAgentReadinessCandidate?
+        let readinessFailure: LaunchAgentReadinessFailure?
+        let endpointPIDBeforeProbe: Int32?
+        let launchAgentInstalled: Bool
+        let inspectionFailure: String?
+        let migrationDrain: Bool
+    }
+
     enum Installation {
         case managed, external, unreadable
 
@@ -26,18 +50,37 @@ extension GatewayProcessManager {
         return whenMissing
     }
 
+    struct ServiceRestoration: Sendable, Equatable {
+        let retained: GatewayLaunchAgentManager.InstalledServiceCLI
+        let installer: BundledRuntime
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.retained == rhs.retained && lhs.installer.root == rhs.installer.root
+        }
+    }
+
     struct LaunchAgentEnableRequest: Sendable {
         let port: Int
         let allowUnconfigured: Bool
         let generation: UInt64
         let runtimeForUpdate: BundledRuntime?
+        let runtimeEnvironment: [String: String]?
+        let nodeMigration: ManagedNodeGatewayMigration.Candidate?
+        let serviceForRestoration: ServiceRestoration?
+        let expectedServiceAuthority: GatewayLaunchAgentManager.ServiceAuthority?
+        let mutationCheck: (@MainActor @Sendable () async throws -> Void)?
         var invocationIDs: [UInt64]
 
         func hasSameConfiguration(as other: LaunchAgentEnableRequest) -> Bool {
             self.port == other.port &&
                 self.allowUnconfigured == other.allowUnconfigured &&
                 self.generation == other.generation &&
-                self.runtimeForUpdate?.root == other.runtimeForUpdate?.root
+                self.runtimeForUpdate?.root == other.runtimeForUpdate?.root &&
+                self.runtimeEnvironment == other.runtimeEnvironment &&
+                self.nodeMigration == other.nodeMigration &&
+                self.serviceForRestoration == other.serviceForRestoration &&
+                self.expectedServiceAuthority == other.expectedServiceAuthority &&
+                (self.mutationCheck == nil) == (other.mutationCheck == nil)
         }
     }
 
@@ -117,20 +160,38 @@ extension GatewayProcessManager {
             homeDirectory: LaunchAgentPlist.homeDirectoryURL)
     }
 
-    func serviceCLIForResume() throws -> GatewayLaunchAgentManager.InstalledServiceCLI? {
-        if let retainedServiceCLI {
-            return try GatewayLaunchAgentManager.resumedServiceCLI(retainedServiceCLI)
-        }
+    func retainedServiceIntent() throws -> GatewayLaunchAgentManager.InstalledServiceCLI? {
+        if let retainedServiceCLI { return retainedServiceCLI }
         guard let stored = AppDefaults.standard.object(forKey: GatewayLaunchAgentManager.resumeCommandKey) else {
-            guard !AppDefaults.standard.bool(forKey: pauseDefaultsKey),
-                  try self.hasUnrecordedLegacyManagedService() else { return nil }
-            return try GatewayLaunchAgentManager.legacyManagedNodeCLI(homeDirectory: LaunchAgentPlist.homeDirectoryURL)
+            return nil
         }
         guard let data = stored as? Data else {
             throw GatewayHostingError(message: "The retained Gateway command could not be read.")
         }
-        return try GatewayLaunchAgentManager.resumeCLI(
+        return try GatewayLaunchAgentManager.retainedServiceIntent(
             from: data, stateDirectory: AppProfile.current.stateDirectoryURL())
+    }
+
+    func nodeMigrationRetainedCLI() throws -> GatewayLaunchAgentManager.InstalledServiceCLI? {
+        // A restored service needs the saved command only to identify its rollback target.
+        // The migration owner captures execution authority from the actual installed service.
+        if GatewayLaunchAgentManager.launchdProgramArguments()?.isEmpty == true {
+            return try self.serviceCLIForResume()
+        }
+        return try self.retainedServiceIntent()
+    }
+
+    func serviceCLIForResume() throws -> GatewayLaunchAgentManager.InstalledServiceCLI? {
+        if let retainedServiceCLI {
+            return try GatewayLaunchAgentManager.resumedServiceCLI(retainedServiceCLI)
+        }
+        guard let cli = try self.retainedServiceIntent() else {
+            guard !AppDefaults.standard.bool(forKey: pauseDefaultsKey),
+                  try self.hasUnrecordedLegacyManagedService() else { return nil }
+            return try GatewayLaunchAgentManager.legacyManagedNodeCLI(homeDirectory: LaunchAgentPlist.homeDirectoryURL)
+        }
+        return try GatewayLaunchAgentManager.resumedServiceCLI(
+            cli, stateDirectory: AppProfile.current.stateDirectoryURL())
     }
 
     func loadRetainedServiceForResume() throws {
@@ -141,8 +202,11 @@ extension GatewayProcessManager {
         if let cli = try self.serviceCLIForResume() { self.retainedServiceCLI = cli }
     }
 
-    func retainManagedServiceForResume() async throws -> GatewayLaunchAgentManager.ServiceAuthority {
-        let custody = try GatewayLaunchAgentManager.gatewayServiceAuthority()
+    func retainManagedServiceForResume(
+        expectedServiceAuthority: GatewayLaunchAgentManager.ServiceAuthority? = nil) async throws
+        -> GatewayLaunchAgentManager.ServiceAuthority
+    {
+        let custody = try expectedServiceAuthority ?? GatewayLaunchAgentManager.gatewayServiceAuthority()
         // A missing plist is a known state; a present record that cannot be captured must survive Pause.
         if custody.definition.plist == nil {
             if let error = custody.currentError() { throw GatewayHostingError(message: error) }

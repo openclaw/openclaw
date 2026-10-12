@@ -1,5 +1,7 @@
 // Zalouser tests cover tool plugin behavior.
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createZalouserSendReceipt } from "./send-receipt.js";
 import { sendImageZalouser, sendMessageZalouser } from "./send.js";
 import { createZalouserTool } from "./tool.js";
 import {
@@ -142,6 +144,31 @@ describe("executeZalouserTool", () => {
       message: "hello",
     });
     expect(extractDetails(result)).toEqual({ error: "blocked" });
+  });
+
+  it("reports accepted receipts when a later send chunk fails", async () => {
+    const deliveryResult = {
+      messageIds: ["mid-accepted"],
+      receipt: createZalouserSendReceipt({ messageId: "mid-accepted", threadId: "t-1" }),
+      visibleReplySent: true as const,
+    };
+    mockSendMessage.mockRejectedValueOnce(
+      createChannelPartialDeliveryError(new Error("later chunk refused"), deliveryResult),
+    );
+
+    const result = await executeZalouserTool("tool-1", {
+      action: "send",
+      threadId: "t-1",
+      message: "long message",
+    });
+
+    expect(extractDetails(result)).toEqual({
+      ok: false,
+      deliveryStatus: "partial_failed",
+      sentBeforeError: true,
+      error: "later chunk refused",
+      result: deliveryResult,
+    });
   });
 
   it("routes image and link actions to correct helpers", async () => {

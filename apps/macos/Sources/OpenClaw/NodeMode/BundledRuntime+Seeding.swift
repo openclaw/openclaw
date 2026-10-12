@@ -58,8 +58,7 @@ extension BundledRuntime {
         if !fileManager.fileExists(atPath: target.path) {
             let partial = directory.appendingPathComponent("\(buildID).partial-\(UUID().uuidString)")
             defer { try? fileManager.removeItem(at: partial) }
-            // copyItem uses clone-on-write on APFS; publication stays on the same volume.
-            try fileManager.copyItem(at: source.root, to: partial)
+            try self.cloneRuntimeTree(from: source.root, to: partial)
             let staged = try self.resolve(root: partial, bundle: bundle)
             let result = await ShellExecutor.runDetailed(
                 command: [staged.bun.path, "--version"],
@@ -94,6 +93,20 @@ extension BundledRuntime {
         return runtime
     }
 
+    static func cloneRuntimeTree(
+        from source: URL,
+        to destination: URL,
+        clone: (String, String, UInt32) -> Int32 = { clonefile($0, $1, $2) }) throws
+    {
+        // Clone the directory in one syscall; copyItem clones each file separately.
+        guard clone(source.path, destination.path, UInt32(CLONE_NOFOLLOW)) != 0 else { return }
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: destination.path) {
+            try fileManager.removeItem(at: destination)
+        }
+        try fileManager.copyItem(at: source, to: destination)
+    }
+
     /// Call only after readiness confirms the replacement Gateway is healthy.
     @concurrent
     static func garbageCollectAfterHealthy(
@@ -112,7 +125,6 @@ extension BundledRuntime {
         {
             let name = entry.lastPathComponent
             guard self.isBuildDirectoryName(name), !retained.contains(name),
-                  name != "current", name != "previous", !name.contains(".partial-"),
                   let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
                   values.isDirectory == true, values.isSymbolicLink != true,
                   let data = try? Data(contentsOf: entry

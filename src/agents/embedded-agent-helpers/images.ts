@@ -1,6 +1,3 @@
-/**
- * Sanitizes historical embedded-agent message images and empty content blocks.
- */
 import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentMessage, AgentToolResult } from "../runtime/index.js";
@@ -25,14 +22,6 @@ function dropEmptyTextBlocks<T>(content: T[]): T[] {
   });
 }
 
-function ensureNonEmptyContent<T>(content: T[]): T[] {
-  if (content.length > 0) {
-    return content;
-  }
-  return [{ type: "text", text: EMPTY_CONTENT_PLACEHOLDER }] as T[];
-}
-
-/** Resize/remove unsafe image payloads while keeping transcript turns valid. */
 export async function sanitizeSessionMessagesImages(
   messages: AgentMessage[],
   label: string,
@@ -57,16 +46,18 @@ export async function sanitizeSessionMessagesImages(
   const imageSanitization = {
     maxDimensionPx: options?.maxDimensionPx,
     maxBytes: options?.maxBytes,
+    // Replay does not rewrite stored images, even after a successful reply.
+    verifyDecodability: true,
   };
-  const shouldSanitizeToolCallIds = options?.sanitizeToolCallIds === true;
-  // We sanitize historical session messages because Anthropic can reject a request
-  // if the transcript contains oversized base64 images (default max side 1200px).
-  const sanitizedIds = shouldSanitizeToolCallIds
-    ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode, {
-        preserveNativeAnthropicToolUseIds: options?.preserveNativeAnthropicToolUseIds,
-        duplicateToolCallIdStyle: options?.duplicateToolCallIdStyle,
-      })
-    : messages;
+  const sanitizeImages = (content: ContentBlock[]) =>
+    sanitizeContentBlocksImages(content, label, imageSanitization);
+  const sanitizedIds =
+    options?.sanitizeToolCallIds === true
+      ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode, {
+          preserveNativeAnthropicToolUseIds: options?.preserveNativeAnthropicToolUseIds,
+          duplicateToolCallIdStyle: options?.duplicateToolCallIdStyle,
+        })
+      : messages;
   const out: AgentMessage[] = [];
   for (const msg of sanitizedIds) {
     if (!msg || typeof msg !== "object") {
@@ -79,14 +70,14 @@ export async function sanitizeSessionMessagesImages(
       const contentMsg = msg as Extract<AgentMessage, { role: "toolResult" | "user" }>;
       const content = contentMsg.content;
       if (Array.isArray(content) || role === "toolResult") {
-        const nextContent = await sanitizeContentBlocksImages(
-          Array.isArray(content) ? content : [],
-          label,
-          imageSanitization,
+        const nextContent = dropEmptyTextBlocks(
+          await sanitizeImages(Array.isArray(content) ? content : []),
         );
         out.push({
           ...contentMsg,
-          content: ensureNonEmptyContent(dropEmptyTextBlocks(nextContent)),
+          content: nextContent.length
+            ? nextContent
+            : [{ type: "text", text: EMPTY_CONTENT_PLACEHOLDER }],
         });
         continue;
       }
@@ -100,10 +91,8 @@ export async function sanitizeSessionMessagesImages(
           assistantMsg.stopReason === "error" || options?.preserveSignatures
             ? content // Keep signatures for Antigravity Claude
             : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
-        const finalContent = (await sanitizeContentBlocksImages(
+        const finalContent = (await sanitizeImages(
           dropEmptyTextBlocks(strippedContent) as unknown as ContentBlock[],
-          label,
-          imageSanitization,
         )) as unknown as typeof assistantMsg.content;
         if (finalContent.length > 0 || assistantMsg.providerReplay) {
           out.push(replaceCompactionReplayOwnerContent(assistantMsg, finalContent));

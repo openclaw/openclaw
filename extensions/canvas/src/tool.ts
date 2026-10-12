@@ -17,21 +17,17 @@ type CanvasToolOptions = {
 const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
 const CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS = 10_000;
 
-function readGatewayCallOptions(params: Record<string, unknown>) {
-  return {
-    gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
-    gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
-    timeoutMs: readPositiveIntegerParam(params, "timeoutMs"),
-  };
-}
-
 export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
   return {
     ...canvasToolDefinition,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const gatewayOpts = readGatewayCallOptions(params);
+      const gatewayOpts = {
+        gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
+        gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
+        timeoutMs: readPositiveIntegerParam(params, "timeoutMs"),
+      };
       const nodeQuery = readStringParam(params, "node", { trim: true });
 
       const invoke = async (command: string, invokeParams?: Record<string, unknown>) => {

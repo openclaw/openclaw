@@ -263,7 +263,18 @@ export function resolveParentForkSourceTranscript(
     branchEntries,
     cwd: typeof header?.cwd === "string" ? header.cwd : undefined,
     version: header?.version ?? MIN_READABLE_SESSION_VERSION,
-    labelsToWrite: collectBranchLabels({ allEntries: entries, pathEntryIds }),
+    labelsToWrite: entries.flatMap((entry) =>
+      isRecord(entry) &&
+      entry.type === "label" &&
+      typeof entry.label === "string" &&
+      typeof entry.targetId === "string" &&
+      typeof entry.id === "string" &&
+      !pathEntryIds.has(entry.id) &&
+      pathEntryIds.has(entry.targetId) &&
+      typeof entry.timestamp === "string"
+        ? [{ targetId: entry.targetId, label: entry.label, timestamp: entry.timestamp }]
+        : [],
+    ),
     leafId: forkFrom === "last-completed" ? lastBranchEntryId : tree.leafId,
     preserveLeafControl:
       forkFrom !== "last-completed" && isSessionTranscriptLeafControl(lastLeafUpdateNode?.entry),
@@ -279,24 +290,6 @@ function findLastCompletedAssistantIndex(entries: readonly TranscriptEvent[]): n
   });
 }
 
-function collectBranchLabels(params: {
-  allEntries: readonly TranscriptEvent[];
-  pathEntryIds: Set<string>;
-}): Array<{ targetId: string; label: string; timestamp: string }> {
-  return params.allEntries.flatMap((entry) =>
-    isRecord(entry) &&
-    entry.type === "label" &&
-    typeof entry.label === "string" &&
-    typeof entry.targetId === "string" &&
-    typeof entry.id === "string" &&
-    !params.pathEntryIds.has(entry.id) &&
-    params.pathEntryIds.has(entry.targetId) &&
-    typeof entry.timestamp === "string"
-      ? [{ targetId: entry.targetId, label: entry.label, timestamp: entry.timestamp }]
-      : [],
-  );
-}
-
 function generateEntryId(existingIds: Set<string>): string {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const id = randomUUID().slice(0, 8);
@@ -310,43 +303,20 @@ function generateEntryId(existingIds: Set<string>): string {
   return id;
 }
 
-function buildLabelEntries(params: {
-  labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }>;
-  pathEntryIds: Set<string>;
-  lastEntryId: string | null;
-}) {
-  let parentId = params.lastEntryId;
-  return params.labelsToWrite.map(({ targetId, label, timestamp }) => {
-    const entry = {
-      type: "label",
-      id: generateEntryId(params.pathEntryIds),
-      parentId,
-      timestamp,
-      targetId,
-      label,
-    };
-    parentId = entry.id;
-    return entry;
-  });
-}
-
-function hasAssistantEntry(entries: readonly TranscriptEvent[]): boolean {
-  return entries.some(
-    (entry) =>
-      isRecord(entry) &&
-      entry.type === "message" &&
-      isRecord(entry.message) &&
-      entry.message.role === "assistant",
-  );
-}
-
 export function buildForkedChildTranscriptEvents(params: {
   parentSessionFile: string;
   source: ParentForkSourceTranscript;
   targetSessionId: string;
 }): TranscriptEvent[] {
   const keepHistory =
-    params.source.preserveLeafControl || hasAssistantEntry(params.source.branchEntries);
+    params.source.preserveLeafControl ||
+    params.source.branchEntries.some(
+      (entry) =>
+        isRecord(entry) &&
+        entry.type === "message" &&
+        isRecord(entry.message) &&
+        entry.message.role === "assistant",
+    );
   const header = {
     ...createSessionTranscriptHeader({
       cwd: params.source.cwd,
@@ -367,16 +337,24 @@ export function buildForkedChildTranscriptEvents(params: {
   const lastPathEntry = params.source.branchEntries.at(-1);
   const lastPathEntryId =
     isRecord(lastPathEntry) && typeof lastPathEntry.id === "string" ? lastPathEntry.id : null;
-  const labelEntries = buildLabelEntries({
-    labelsToWrite: params.source.labelsToWrite,
-    pathEntryIds,
-    lastEntryId: lastPathEntryId,
+  let parentId = lastPathEntryId;
+  const labelEntries = params.source.labelsToWrite.map(({ targetId, label, timestamp }) => {
+    const entry = {
+      type: "label",
+      id: generateEntryId(pathEntryIds),
+      parentId,
+      timestamp,
+      targetId,
+      label,
+    };
+    parentId = entry.id;
+    return entry;
   });
   const leafEntry = params.source.preserveLeafControl
     ? {
         type: "leaf",
         id: generateEntryId(pathEntryIds),
-        parentId: labelEntries.at(-1)?.id ?? lastPathEntryId,
+        parentId,
         timestamp: new Date().toISOString(),
         targetId: params.source.leafId,
         appendParentId: params.source.appendParentId,

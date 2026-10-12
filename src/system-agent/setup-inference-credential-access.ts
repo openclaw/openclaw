@@ -11,6 +11,7 @@ import {
 } from "../agents/auth-profiles/setup-access.js";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
 } from "../agents/auth-profiles/store-runtime.js";
 import {
@@ -19,7 +20,7 @@ import {
   restoreAuthProfileStorePersistenceSnapshot,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { isMissingSecretRefResolutionError } from "../secrets/resolve-errors.js";
 import {
   SetupInferenceOwnerDriftError,
@@ -44,7 +45,7 @@ export async function withPreparedSetupCredentialAccess(
   const access = { profileId, agentDir: ctx.agentDir, signal: params.signal };
   return await withSetupCredentialAccess(access, async () => {
     const credentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
-    const store = loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir);
+    const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir);
     const credential = store.profiles[profileId];
     const refInput =
       credential?.type === "api_key"
@@ -52,7 +53,7 @@ export async function withPreparedSetupCredentialAccess(
         : credential?.type === "token"
           ? (credential.tokenRef ?? credential.token)
           : undefined;
-    const ref = coerceSecretRef(refInput, staged.config.secrets?.defaults);
+    const ref = parseSecretRef(refInput, staged.config.secrets?.defaults);
     if (!credential || !ref) {
       return await verify();
     }
@@ -60,14 +61,14 @@ export async function withPreparedSetupCredentialAccess(
     // publish a candidate config or replace the live Gateway's auth snapshot.
     const source = structuredClone(credential);
     const { prepareSecretsRuntimeSnapshot } = await import("../secrets/runtime.js");
-    const assertOriginalGeneration = () => {
-      if (credentialsRevision !== getRuntimeAuthProfileStoreCredentialsRevision()) {
+    const assertOriginalGeneration = (revision: number) => {
+      if (credentialsRevision !== revision) {
         throw new SetupInferenceOwnerDriftError(
           "The saved credential changed during preparation. Retry this sign-in in Model Setup.",
         );
       }
     };
-    assertOriginalGeneration();
+    assertOriginalGeneration(getRuntimeAuthProfileStoreCredentialsRevision());
     let prepared: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>;
     try {
       prepared = await prepareSecretsRuntimeSnapshot({
@@ -81,7 +82,7 @@ export async function withPreparedSetupCredentialAccess(
         throw error;
       }
       throwIfSetupInferenceCancelled(params);
-      assertOriginalGeneration();
+      assertOriginalGeneration(getRuntimeAuthProfileStoreCredentialsRevision());
       return failure({
         ok: false,
         status: "unknown",
@@ -90,12 +91,8 @@ export async function withPreparedSetupCredentialAccess(
       });
     }
     throwIfSetupInferenceCancelled(params);
-    assertOriginalGeneration();
-    if (prepared.authStoreCredentialsRevision !== credentialsRevision) {
-      throw new SetupInferenceOwnerDriftError(
-        "The saved credential changed during preparation. Retry this sign-in in Model Setup.",
-      );
-    }
+    assertOriginalGeneration(getRuntimeAuthProfileStoreCredentialsRevision());
+    assertOriginalGeneration(prepared.authStoreCredentialsRevision);
     const materialized = prepared.authStores[0]?.store.profiles[profileId];
     if (!materialized) {
       return failure({
@@ -145,6 +142,10 @@ export async function activateSavedSetupCredential(params: {
     databasePath: committed.owned.owner.databasePath,
     sharedDatabasePath: committed.owned.owner.sharedDatabasePath,
   };
+  const readMutationToken = () =>
+    getRuntimeAuthProfileStoreCredentialMutationToken(agentDir, params.profileId, {
+      owner: credentialOwner,
+    });
   let mutationToken: RuntimeAuthProfileStoreMutationToken;
   const rollback = () => {
     restoreAuthProfileStorePersistenceSnapshot(before, committed.owned, agentDir, {
@@ -160,9 +161,7 @@ export async function activateSavedSetupCredential(params: {
         "A newer credential update superseded this activation. Review Model Setup.",
       );
     }
-    mutationToken = getRuntimeAuthProfileStoreCredentialMutationToken(agentDir, params.profileId, {
-      owner: credentialOwner,
-    });
+    mutationToken = readMutationToken();
   };
   try {
     if (!committed.publishRuntimeSnapshots()) {
@@ -172,17 +171,11 @@ export async function activateSavedSetupCredential(params: {
     rollback();
     throw error;
   }
-  mutationToken = getRuntimeAuthProfileStoreCredentialMutationToken(agentDir, params.profileId, {
-    owner: credentialOwner,
-  });
+  mutationToken = readMutationToken();
   return {
     rollback,
     assertCurrent: () => {
-      const currentToken = getRuntimeAuthProfileStoreCredentialMutationToken(
-        agentDir,
-        params.profileId,
-        { owner: credentialOwner },
-      );
+      const currentToken = readMutationToken();
       if (
         !mutationToken.known ||
         !currentToken.known ||

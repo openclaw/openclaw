@@ -9,11 +9,10 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import { resolveChatAttachmentFrameBudgetBytes } from "../../shared/chat-attachment-frame-budget.js";
+import { canCreateArtifactDownload, createArtifactDownload } from "../artifact-download-grants.js";
 import type { PreparedArtifactDownload } from "../artifact-download-projection.js";
-import { canCreateArtifactDownload, createArtifactDownload } from "../artifact-downloads.js";
 import {
   parseManagedOutgoingArtifactId,
   resolveManagedOutgoingMediaArtifactDownload,
@@ -22,7 +21,6 @@ import {
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import type { SessionRowProjection } from "../session-row-projection.js";
 import { readSessionArtifacts } from "../session-transcript-readers.js";
 import { parseTranscriptImageArtifactId } from "../transcript-image-artifacts.js";
 import {
@@ -36,23 +34,22 @@ import {
   ArtifactSessionResolutionError,
   artifactResponseIsCurrent,
   type ArtifactQuery,
+  type ArtifactSessionAccess,
+  createArtifactSessionAccess,
   prepareArtifactSessionResolution,
 } from "./artifacts-session-resolution.js";
 import { findTranscriptImageArtifact } from "./artifacts-transcript-images.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type {
-  GatewayClient,
-  GatewayRequestHandlerOptions,
-  GatewayRequestHandlers,
-  RespondFn,
-} from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ArtifactCollectionOptions = {
-  projection?: SessionRowProjection;
   includeDownloadData?: boolean;
   downloadArtifactId?: string;
 };
+
+type ArtifactDownloadLookup = ArtifactLookup &
+  ({ download: PreparedArtifactDownload; release: () => void } | { download?: undefined });
 
 const queuedArtifactDownloads = new Map<
   string,
@@ -66,18 +63,23 @@ function createArtifactRequestAccess(request: GatewayRequestHandlerOptions) {
   const { assertCurrent } = readGatewayRequestMutationAuthority(request);
   const { context, respond } = request;
   assertCurrent();
-  return {
-    assertCurrent,
-    projection: getSessionRowProjection(context),
-    getRuntimeConfig: () => {
-      assertCurrent();
-      return context.getRuntimeConfig?.();
+  return Object.assign(
+    createArtifactSessionAccess({
+      client: request.client,
+      projection: getSessionRowProjection(context),
+      getRuntimeConfig: () => {
+        assertCurrent();
+        return context.getRuntimeConfig();
+      },
+    }),
+    {
+      assertCurrent,
+      respond: (...args: Parameters<RespondFn>) => {
+        assertCurrent();
+        respond(...args);
+      },
     },
-    respond: (...args: Parameters<RespondFn>) => {
-      assertCurrent();
-      respond(...args);
-    },
-  };
+  );
 }
 
 function artifactError(type: string, message: string, details?: Record<string, unknown>) {
@@ -91,9 +93,8 @@ function artifactError(type: string, message: string, details?: Record<string, u
 
 async function loadArtifacts(
   query: ArtifactsListParams,
-  getRuntimeConfig: () => OpenClawConfig | undefined,
-  opts: ArtifactCollectionOptions = {},
-  client: GatewayClient | null = null,
+  access: ArtifactSessionAccess,
+  opts: ArtifactCollectionOptions,
 ): Promise<{
   artifacts: ArtifactRecord[];
   sessionKey?: string;
@@ -101,12 +102,7 @@ async function loadArtifacts(
   omittedOversized?: boolean;
   assertCurrent?: () => void;
 }> {
-  const selected = await prepareArtifactSessionRead(
-    query,
-    getRuntimeConfig,
-    client,
-    opts.projection,
-  );
+  const selected = await prepareArtifactSessionRead(query, access);
   if (!selected?.scope) {
     return { sessionKey: selected?.sessionKey, artifacts: [] };
   }
@@ -122,7 +118,7 @@ async function loadArtifacts(
         query.runId,
         query.messageRole,
       ]),
-      client,
+      client: access.client,
       cursor: query.cursor,
       limit: query.limit ?? 4,
       sessionKey,
@@ -221,20 +217,13 @@ async function runArtifactSessionOperation<T>(
 
 async function findArtifact(
   params: ArtifactsGetParams,
-  getRuntimeConfig: () => OpenClawConfig | undefined,
-  opts: ArtifactCollectionOptions = {},
-  client: GatewayClient | null = null,
+  access: ArtifactSessionAccess,
+  opts: ArtifactCollectionOptions,
 ): Promise<ArtifactLookup> {
   if (parseTranscriptImageArtifactId(params.artifactId)) {
-    return findTranscriptImageArtifact(
-      params,
-      getRuntimeConfig,
-      opts.includeDownloadData !== false,
-      client,
-      opts.projection,
-    );
+    return findTranscriptImageArtifact(params, access, opts.includeDownloadData !== false);
   }
-  const loaded = await loadArtifacts(params, getRuntimeConfig, opts, client);
+  const loaded = await loadArtifacts(params, access, opts);
   return {
     sessionKey: loaded.sessionKey,
     artifact: loaded.artifacts.find((artifact) => artifact.id === params.artifactId),
@@ -244,11 +233,9 @@ async function findArtifact(
 
 async function prepareDownload(
   query: ArtifactsGetParams,
-  getRuntimeConfig: () => OpenClawConfig | undefined,
-  client: GatewayClient | null,
-  projection?: SessionRowProjection,
-): Promise<ArtifactLookup & { download?: PreparedArtifactDownload }> {
-  const selected = await prepareArtifactSessionRead(query, getRuntimeConfig, client, projection);
+  access: ArtifactSessionAccess,
+): Promise<ArtifactDownloadLookup> {
+  const selected = await prepareArtifactSessionRead(query, access);
   if (!selected?.scope) {
     return { sessionKey: selected?.sessionKey };
   }
@@ -258,29 +245,28 @@ async function prepareDownload(
     sessionKey: selected.sessionKey,
   });
   selected.assertCurrent();
-  return {
+  const result = {
     sessionKey: selected.sessionKey,
     assertCurrent: selected.assertCurrent,
-    ...(selection?.kind === "prepared"
-      ? { artifact: selection.download.artifact, download: selection.download }
-      : { artifact: selection?.artifact }),
+    release: selected.release,
   };
+  return selection?.kind === "prepared"
+    ? { ...result, artifact: selection.download.artifact, download: selection.download }
+    : { ...result, artifact: selection?.artifact };
 }
 
 async function respondManagedArtifactDownload(
   query: ArtifactsGetParams,
-  getRuntimeConfig: () => OpenClawConfig | undefined,
-  client: GatewayClient | null,
+  access: ArtifactSessionAccess,
   respond: RespondFn,
-  projection?: SessionRowProjection,
   matched?: ArtifactRecord,
 ): Promise<void> {
   await runArtifactSessionOperation(respond, async () => {
-    const resolveSession = await prepareArtifactSessionResolution(query, projection);
-    const cfg = getRuntimeConfig();
-    const resolved = resolveSession(cfg, client);
+    const resolveSession = await prepareArtifactSessionResolution(query, access.projection);
+    const resolved = await resolveSession(access);
+    const cfg = access.getRuntimeConfig();
     const defaultAgentId = resolved
-      ? tryResolveSessionCompatibilityOwnerAgentId(cfg ?? {}, resolved.sessionKey)
+      ? tryResolveSessionCompatibilityOwnerAgentId(cfg, resolved.sessionKey)
       : undefined;
     const managed =
       resolved && (!matched || matched.sessionKey === resolved.sessionKey)
@@ -291,6 +277,7 @@ async function respondManagedArtifactDownload(
             artifactId: query.artifactId,
           })
         : null;
+    resolved?.readCurrent();
     if (!managed) {
       respondArtifactNotFound(respond, query.artifactId);
       return;
@@ -316,8 +303,9 @@ async function respondManagedArtifactDownload(
 
 export const artifactsHandlers: GatewayRequestHandlers = {
   "artifacts.list": async (request) => {
-    const { params, client } = request;
-    const { getRuntimeConfig, respond, projection } = createArtifactRequestAccess(request);
+    const { params } = request;
+    using access = createArtifactRequestAccess(request);
+    const { respond } = access;
     if (!assertValidParams(params, validateArtifactsListParams, "artifacts.list", respond)) {
       return;
     }
@@ -334,7 +322,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     const query = { ...params };
     const loaded = await runArtifactSessionOperation(respond, () =>
-      loadArtifacts(query, getRuntimeConfig, { includeDownloadData: false, projection }, client),
+      loadArtifacts(query, access, { includeDownloadData: false }),
     );
     if (!loaded.ok) {
       return;
@@ -348,15 +336,18 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    respond(true, {
-      artifacts: artifacts.map(toArtifactSummary),
-      ...(nextCursor ? { nextCursor } : {}),
-      ...(omittedOversized ? { omittedOversized: true } : {}),
-    });
+    if (artifactResponseIsCurrent(loaded.value, respond)) {
+      respond(true, {
+        artifacts: artifacts.map(toArtifactSummary),
+        ...(nextCursor ? { nextCursor } : {}),
+        ...(omittedOversized ? { omittedOversized: true } : {}),
+      });
+    }
   },
   "artifacts.get": async (request) => {
-    const { params, client } = request;
-    const { getRuntimeConfig, respond, projection } = createArtifactRequestAccess(request);
+    const { params } = request;
+    using access = createArtifactRequestAccess(request);
+    const { respond } = access;
     if (!assertValidParams(params, validateArtifactsGetParams, "artifacts.get", respond)) {
       return;
     }
@@ -365,7 +356,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     const query = { ...params };
     const found = await runArtifactSessionOperation(respond, () =>
-      findArtifact(query, getRuntimeConfig, { includeDownloadData: false, projection }, client),
+      findArtifact(query, access, { includeDownloadData: false }),
     );
     if (!found.ok) {
       return;
@@ -381,8 +372,8 @@ export const artifactsHandlers: GatewayRequestHandlers = {
   },
   "artifacts.download": async (request) => {
     const { params, client } = request;
-    const { getRuntimeConfig, respond, assertCurrent, projection } =
-      createArtifactRequestAccess(request);
+    using access = createArtifactRequestAccess(request);
+    const { respond, assertCurrent } = access;
     if (
       !assertValidParams(params, validateArtifactsDownloadParams, "artifacts.download", respond)
     ) {
@@ -398,30 +389,18 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       !query.messageRole &&
       parseManagedOutgoingArtifactId(query.artifactId)
     ) {
-      await respondManagedArtifactDownload(query, getRuntimeConfig, client, respond, projection);
+      await respondManagedArtifactDownload(query, access, respond);
       return;
     }
-    let found = await runArtifactSessionOperation<
-      ArtifactLookup & { download?: PreparedArtifactDownload }
-    >(respond, () =>
+    let found = await runArtifactSessionOperation<ArtifactDownloadLookup>(respond, () =>
       query.transport === "http" && canCreateArtifactDownload(client)
-        ? prepareDownload(query, getRuntimeConfig, client, projection)
-        : findArtifact(
-            query,
-            getRuntimeConfig,
-            { downloadArtifactId: query.artifactId, projection },
-            client,
-          ),
+        ? prepareDownload(query, access)
+        : findArtifact(query, access, { downloadArtifactId: query.artifactId }),
     );
     assertCurrent();
     if (found.ok && found.value.download && !canCreateArtifactDownload(client)) {
       found = await runArtifactSessionOperation(respond, () =>
-        findArtifact(
-          query,
-          getRuntimeConfig,
-          { downloadArtifactId: query.artifactId, projection },
-          client,
-        ),
+        findArtifact(query, access, { downloadArtifactId: query.artifactId }),
       );
       assertCurrent();
     }
@@ -436,14 +415,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (parseManagedOutgoingArtifactId(artifact.id)) {
       // Filters prove transcript membership; the managed ID still owns the bytes.
       // Never retarget a stale ID through inline data or another block URL.
-      await respondManagedArtifactDownload(
-        query,
-        getRuntimeConfig,
-        client,
-        respond,
-        projection,
-        artifact,
-      );
+      await respondManagedArtifactDownload(query, access, respond, artifact);
       return;
     }
     if (artifact.download.mode === "unsupported") {
@@ -461,17 +433,18 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       const download = createArtifactDownload({
         client,
         prepared: found.value.download,
+        release: found.value.release,
         assertCurrent: () => {
           assertCurrent();
           assertArtifactCurrent?.();
         },
         read: async (response) => {
-          const selected = await prepareArtifactSessionRead(
-            query,
-            getRuntimeConfig,
+          using reader = createArtifactSessionAccess({
+            getRuntimeConfig: access.getRuntimeConfig,
             client,
-            projection,
-          );
+            projection: access.projection,
+          });
+          const selected = await prepareArtifactSessionRead(query, reader);
           if (!selected?.scope) {
             return undefined;
           }
@@ -485,6 +458,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
           return current.response;
         },
       });
+      access.detach(found.value.release);
       respond(true, {
         artifact: { ...toArtifactSummary(artifact), download: { mode: "url" as const } },
         ...download,

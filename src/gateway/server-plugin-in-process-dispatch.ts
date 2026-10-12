@@ -1,7 +1,21 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import { readQuestionDispatchCapability } from "../agents/harness/host-private-capabilities.js";
 import { captureGatewayToolCallerAssertion } from "../agents/tools/gateway-caller-context.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
+import { isGatewayWorkerApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
+import {
+  hasPreparedGatewayDeviceAuthority,
+  readGatewayDeviceRevocationGuard,
+} from "./device-revocation.js";
+import {
+  isInternalApprovalCommitGuard,
+  retainInternalApprovalCommitGuard,
+} from "./internal-approval-authority.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
@@ -90,8 +104,11 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
     assertCurrent,
     async authorize() {
       assertLifetime();
-      const { authorizeGatewayRequestPreDispatch, createRequestGatewayMethodRegistry } =
-        await import("./server-methods.js");
+      const [{ authorizeGatewayRequestPreDispatch }, { createRequestGatewayMethodRegistry }] =
+        await Promise.all([
+          import("./server-methods/request-authorization.js"),
+          import("./server-methods.js"),
+        ]);
       assertLifetime();
       const { error } = await authorizeGatewayRequestPreDispatch({
         method: "agent",
@@ -141,10 +158,8 @@ async function withInProcessGatewayDispatch<T>(
       resolved.client = mergePluginRuntimeClientInternal(resolved.client, {
         operatorRunAuthority: captured.authority,
       });
-      const withCapturedAuthority = (assertCurrent: () => void) => () => {
-        assertCurrent();
-        captured.authority.assertCurrent();
-      };
+      const withCapturedAuthority = (assertCurrent: () => void) =>
+        composeSessionSourceAssertion([assertCurrent, captured.authority.assertCurrent]);
       resolved.assertContextCurrent = withCapturedAuthority(resolved.assertContextCurrent);
       resolved.assertSourceCurrent = withCapturedAuthority(resolved.assertSourceCurrent);
       const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
@@ -196,8 +211,11 @@ export function withInProcessGatewayRead<T>(
           throw new Error(params.callerAuthorityError);
         }
       };
-      const { authorizeGatewayRequestPreDispatch, createRequestGatewayMethodRegistry } =
-        await import("./server-methods.js");
+      const [{ authorizeGatewayRequestPreDispatch }, { createRequestGatewayMethodRegistry }] =
+        await Promise.all([
+          import("./server-methods/request-authorization.js"),
+          import("./server-methods.js"),
+        ]);
       assertLifetime();
       const authorization = await authorizeGatewayRequestPreDispatch({
         method,
@@ -227,28 +245,34 @@ export function withInProcessGatewayRead<T>(
   );
 }
 
-/** Local session input uses the same authorization and commit fences as an agent RPC. */
+/** Local session input retains its operation's authorization and commit fences. */
 export async function runWithInProcessGatewaySessionMutation<T>(
+  method: "agent" | "sessions.send",
   params: { sessionKey: string; agentId?: string },
   run: (assertCurrent: () => void) => Promise<T> | T,
 ): Promise<T> {
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const requestParams =
+    method === "sessions.send" ? { key: params.sessionKey, agentId: params.agentId } : params;
   return await withInProcessGatewayDispatch(
-    "agent",
-    params,
+    method,
+    requestParams,
     { forceSyntheticClient: true, syntheticScopeMode: "minimum" },
     async (resolved) => {
-      const { authorizeGatewayRequestPreDispatch, createRequestGatewayMethodRegistry } =
-        await import("./server-methods.js");
+      const [{ authorizeGatewayRequestPreDispatch }, { createRequestGatewayMethodRegistry }] =
+        await Promise.all([
+          import("./server-methods/request-authorization.js"),
+          import("./server-methods.js"),
+        ]);
       const assertInvocationCurrent = () => {
-        assertCallerCurrent?.("agent");
+        assertCallerCurrent?.(method);
         resolved.assertContextCurrent();
         resolved.assertInvocationCurrent();
       };
       assertInvocationCurrent();
       const authorization = await authorizeGatewayRequestPreDispatch({
-        method: "agent",
-        requestParams: params,
+        method,
+        requestParams,
         client: resolved.client,
         context: resolved.context,
         methodRegistry:
@@ -260,10 +284,17 @@ export async function runWithInProcessGatewaySessionMutation<T>(
         const assertCurrent = () => {
           assertInvocationCurrent();
           if (authorization.error) {
-            unwrapGatewayMethodDispatchResponse("agent", {
+            unwrapGatewayMethodDispatchResponse(method, {
               ok: false,
               error: authorization.error,
             });
+          }
+          // Unlike the public send RPC, local notifications cannot create a session.
+          if (
+            method === "sessions.send" &&
+            !authorization.sessionMutationAuthorization?.admittedTarget
+          ) {
+            throw new Error("Session target is unavailable for notification.");
           }
           authorization.sessionMutationAuthorization?.assertCurrent();
           authorization.sessionAccessAuthority?.assertCurrent();
@@ -283,14 +314,42 @@ export async function dispatchGatewayMethodInProcessRaw(
   options?: DispatchGatewayMethodInProcessOptions,
 ): Promise<GatewayMethodDispatchResponse> {
   return await withInProcessGatewayDispatch(method, params, options, async (resolved) => {
-    const assertExplicitRequestCurrent = () => {
-      throwIfGatewayDispatchAborted(method, options?.signal);
-      if (resolved.hasCurrentClientAuthority?.() === false) {
-        throw new Error(`Gateway client authority closed before dispatching ${method}.`);
-      }
-      options?.sessionMutationCommitGuard?.();
-    };
+    const assertExplicitRequestCurrent = composeSessionSourceAssertion(
+      [captureExternalSessionCommitGuard(options?.sessionMutationCommitGuard)],
+      (assertSource) => {
+        throwIfGatewayDispatchAborted(method, options?.signal);
+        if (resolved.hasCurrentClientAuthority?.() === false) {
+          throw new Error(`Gateway client authority closed before dispatching ${method}.`);
+        }
+        assertSource();
+      },
+      {
+        preparedCheck: (assertSource) => {
+          throwIfGatewayDispatchAborted(method, options?.signal);
+          if (
+            !hasPreparedGatewayDeviceAuthority(resolved.client, resolved.hasCurrentClientAuthority)
+          ) {
+            throw new Error(`Gateway client authority closed before dispatching ${method}.`);
+          }
+          assertSource();
+        },
+      },
+    );
     const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
+    const sessionMutationCommitGuard = composeSessionSourceAssertion([
+      resolved.assertContextCurrent,
+      resolved.assertInvocationCurrent,
+      assertExplicitRequestCurrent,
+    ]);
+    if (
+      isGatewayWorkerApprovalMethod(method) &&
+      (!options?.sessionMutationCommitGuard ||
+        isInternalApprovalCommitGuard(options.sessionMutationCommitGuard)) &&
+      (!resolved.hasCurrentClientAuthority ||
+        readGatewayDeviceRevocationGuard(resolved.hasCurrentClientAuthority))
+    ) {
+      retainInternalApprovalCommitGuard(sessionMutationCommitGuard);
+    }
     return await dispatchGatewayRequestInProcessRaw(method, params, {
       client: resolved.client,
       context: resolved.context,
@@ -303,18 +362,19 @@ export async function dispatchGatewayMethodInProcessRaw(
       onSignalAbort: options?.onSignalAbort,
       requestIdPrefix: "plugin-subagent",
       prepareDispatchCurrent: options?.prepareDispatchCurrent,
-      sessionMutationCommitGuard: () => {
-        resolved.assertContextCurrent();
-        resolved.assertInvocationCurrent();
-        // Nested RPCs keep the original request owner through preparation and final I/O.
-        assertExplicitRequestCurrent();
-      },
+      assertPreparationCurrent: composeSessionSourceAssertion([
+        resolved.assertContextCurrent,
+        resolved.assertInvocationCurrent,
+      ]),
+      sessionMutationCommitGuard,
+      questionCallerRead: readQuestionDispatchCapability(options?.prepareDispatchCurrent)
+        ?.callerRead,
       ...(assertCreatedInputSourceCurrent
         ? {
-            assertCreatedInputSourceCurrent: () => {
-              assertCreatedInputSourceCurrent();
-              assertExplicitRequestCurrent();
-            },
+            assertCreatedInputSourceCurrent: composeSessionSourceAssertion([
+              assertCreatedInputSourceCurrent,
+              assertExplicitRequestCurrent,
+            ]),
           }
         : {}),
       timeoutMs: options?.timeoutMs,
@@ -347,10 +407,10 @@ export async function dispatchGatewayMethodInProcess<T>(
       return method === "agent"
         ? await facade.dispatch<T>(params as AgentRunRequest, {
             prepareDispatchCurrent: options?.prepareDispatchCurrent,
-            assertAdmissionCurrent: () => {
-              resolved.assertInvocationCurrent();
-              options?.sessionMutationCommitGuard?.();
-            },
+            assertAdmissionCurrent: composeSessionSourceAssertion([
+              resolved.assertInvocationCurrent,
+              captureExternalSessionCommitGuard(options?.sessionMutationCommitGuard),
+            ]),
             privateCompletion: options?.privateCompletion,
             settleWakeReplay: options?.settleWakeReplay,
             cancelOnDeadline: options?.cancelOnDeadline,

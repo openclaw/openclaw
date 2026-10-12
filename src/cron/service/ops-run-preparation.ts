@@ -1,21 +1,15 @@
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
-import { resolveCronCompletionStatus } from "../completion-status.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
-import type { CronRunHistorySource } from "../store/run-history.js";
+import { assertCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import { ownsStreamSource } from "../stream-schedule.js";
-import type {
-  CronFailureNotificationDetail,
-  CronJob,
-  CronPayload,
-  CronRunErrorClassification,
-} from "../types.js";
+import type { CronJob, CronPayload } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { findJobOrThrow, hasActiveCronRun, isJobDue, isJobEnabled } from "./jobs-scheduling.js";
+import { findJobOrThrow, hasActiveCronRun, isJobEnabled } from "./jobs-scheduling.js";
 import { assertSupportedJobSpec } from "./jobs-validation.js";
 import { locked } from "./locked.js";
 import { markManualCronJobActive } from "./ops-shared.js";
@@ -29,19 +23,21 @@ import {
   releaseQueuedCronRun,
   reserveQueuedCronRun,
 } from "./run-admission.js";
-import { createCronRunHandle, finishCronRun } from "./run-history.js";
+import { createCronRunHandle } from "./run-history.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { recordSkippedCronRuns } from "./scheduler-mutations.js";
-import type { CronEvent, CronRunMode, CronServiceState } from "./state.js";
-import { cronFailureNotificationEventContext, emit, isImmediateCronRunMode } from "./state.js";
+import type { CronRunMode, CronServiceState } from "./state.js";
+import { emit, isImmediateCronRunMode } from "./state.js";
 import {
   captureCronServiceMutationSource,
   ensureLoaded,
   runPostPersistCronNotifications,
   warnIfDisabled,
 } from "./store.js";
-import { armTimer, type CronTriggerEvalOutcome } from "./timer.js";
+import { emitCronRunFinished, type ManualRunTerminalTracker } from "./timer-outcome-events.js";
+import { isRunnableJob } from "./timer-runnable.js";
+import { armTimer } from "./timer.js";
 
 export type PreparedManualRun =
   | {
@@ -93,43 +89,6 @@ export type ManualRunOptions = {
   streamSourceIdentity?: string;
   onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
 };
-
-export type ManualRunTerminalTracker = { emitted: boolean };
-
-export async function emitCronRunFinished(
-  state: CronServiceState,
-  evt: CronEvent & { action: "finished" },
-  tracker?: ManualRunTerminalTracker,
-  taskRunId?: string,
-  details?: {
-    triggerEval?: CronTriggerEvalOutcome;
-    scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
-    errorClassification?: CronRunErrorClassification;
-    failureNotificationDetail?: CronFailureNotificationDetail;
-    historySource?: CronRunHistorySource;
-  },
-): Promise<void> {
-  const event = {
-    ...evt,
-    completionStatus:
-      evt.completionStatus ??
-      resolveCronCompletionStatus({ status: evt.status, deliveryStatus: evt.deliveryStatus }),
-  };
-  await finishCronRun(state, {
-    taskRunId,
-    job: evt.job,
-    event,
-    historySource: details?.historySource,
-    errorClassification: details?.errorClassification,
-    ...(details?.scriptResult ? { scriptResult: details.scriptResult } : {}),
-    ...(details?.triggerEval ? { triggerEval: details.triggerEval } : {}),
-  });
-  details?.historySource?.assertCurrent();
-  emit(state, event, cronFailureNotificationEventContext(details?.failureNotificationDetail));
-  if (tracker) {
-    tracker.emitted = true;
-  }
-}
 
 type ManualRunDisposition =
   | Extract<PreparedManualRun, { ran: false }>
@@ -222,7 +181,7 @@ async function skipInvalidPersistedManualRun(params: {
       );
       for (const notification of outcome.notifications) {
         historySource.assertCurrent();
-        runPostPersistCronNotifications(params.state, [notification]);
+        await runPostPersistCronNotifications(params.state, [notification]);
       }
       historySource.assertCurrent();
       armTimer(params.state);
@@ -273,6 +232,7 @@ async function inspectManualRunPreflight(
   if (!job || (opts?.onExit && !matchesOnExitSchedule(job, opts.onExit.schedule))) {
     return { ok: true, ran: false, reason: "not-due" };
   }
+  assertCanonicalCronDeliveryMode(job.delivery);
   if (opts?.onExit && (!isJobEnabled(job) || job.state.autoDisabled)) {
     return { ok: true, ran: false, reason: "disabled" };
   }
@@ -301,7 +261,13 @@ async function inspectManualRunPreflight(
     return { ok: true, ran: false, reason: "already-running" };
   }
   const now = state.deps.nowMs();
-  if (!isJobDue(job, now, { forced: isImmediateCronRunMode(mode) })) {
+  if (
+    !isRunnableJob({
+      job,
+      nowMs: now,
+      forced: isImmediateCronRunMode(mode),
+    })
+  ) {
     return { ok: true, ran: false, reason: "not-due" };
   }
   return { ok: true, runnable: true, job };
@@ -349,7 +315,13 @@ export async function prepareManualRun(
     // reservation worker transfers ownership to its durable receipt.
     opts?.commitGuard?.();
     const reservationAt = state.deps.nowMs();
-    if (!isJobDue(job, reservationAt, { forced: isImmediateCronRunMode(mode) })) {
+    if (
+      !isRunnableJob({
+        job,
+        nowMs: reservationAt,
+        forced: isImmediateCronRunMode(mode),
+      })
+    ) {
       return { ok: true, ran: false, reason: "not-due" as const };
     }
     // Direct run() callers also need to distinguish an ownerless result from a busy job.
@@ -509,7 +481,11 @@ export async function activatePreparedManualRun(
     delete dueProbe.state.queuedAtMs;
     if (
       (prepared.wasEnabled && !isJobEnabled(job)) ||
-      !isJobDue(dueProbe, state.deps.nowMs(), { forced: isImmediateCronRunMode(mode) })
+      !isRunnableJob({
+        job: dueProbe,
+        nowMs: state.deps.nowMs(),
+        forced: isImmediateCronRunMode(mode),
+      })
     ) {
       await releasePreparedManualReservationWithRetry(state, prepared);
       return { ok: true, ran: false, reason: "not-due" } as const;

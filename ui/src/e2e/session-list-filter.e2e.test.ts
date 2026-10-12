@@ -74,9 +74,12 @@ suite.define(() => {
       .evaluate((item) => (item as HTMLElement).click());
     const allAgentsQuery = {
       configuredAgentsOnly: true,
+      excludeDock: true,
       includeGlobal: true,
       includeUnknown: false,
       limit: 50,
+      rowMode: "compact",
+      source: "sessions-page",
     };
     await expect
       .poll(async () =>
@@ -124,9 +127,12 @@ suite.define(() => {
     const pageQueryParams = {
       agentId: "main",
       configuredAgentsOnly: true,
+      excludeDock: true,
       includeGlobal: true,
       includeUnknown: false,
       limit: 50,
+      rowMode: "compact",
+      source: "sessions-page",
     };
     const visibleResponse = {
       count: 1,
@@ -206,11 +212,14 @@ suite.define(() => {
     expect(startupAndPageRequests[0]?.params).toEqual({
       agentId: "main",
       configuredAgentsOnly: true,
+      excludeDock: true,
       includeDerivedTitles: true,
       includeGlobal: true,
       includeLastMessage: true,
       includeUnknown: true,
       limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+      rowMode: "compact",
+      source: "sidebar",
     });
     expect
       .soft((await exactPageQueries()).map((request) => request.params))

@@ -8,7 +8,7 @@ import type {
   ClawSourceIdentity,
 } from "./types.js";
 import { applyClawUpdatePlan } from "./update-apply.js";
-import { install, manifest, source } from "./update-apply.test-helpers.js";
+import { install, manifest, plan, source } from "./update-apply.test-helpers.js";
 import type { ClawUpdateAction, ClawUpdatePlan } from "./update-plan.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -18,37 +18,6 @@ const weatherPackage: ClawPackage = {
   ref: "@acme/weather",
   version: "1.0.0",
 };
-
-function plan(actions: ClawUpdateAction[]): ClawUpdatePlan {
-  return {
-    schemaVersion: "openclaw.clawUpdatePlan.v1",
-    stability: "experimental",
-    dryRun: true,
-    mutationAllowed: false,
-    planIntegrity: "sha256:update-plan",
-    found: true,
-    agentId: "worker",
-    currentClaw: { name: source.name, version: "1.0.0", integrity: "sha256:current" },
-    targetClaw: { name: source.name, version: source.version, integrity: source.integrity },
-    summary: {
-      totalActions: actions.length,
-      added: actions.filter((action) => action.action === "add").length,
-      changed: 0,
-      removed: 0,
-      released: 0,
-      unchanged: actions.filter((action) => action.action === "unchanged").length,
-      manual: 0,
-      blocked: 0,
-      capabilityChanges: 0,
-      capabilityEscalations: 0,
-    },
-    actions,
-    capabilityChanges: [],
-    readiness: { ready: true, requirements: [] },
-    blockers: [],
-    diagnostics: [],
-  };
-}
 
 function unchanged(id = "skill:@acme/weather"): ClawUpdateAction {
   return {

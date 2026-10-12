@@ -13,6 +13,10 @@ import {
   resolveGitHubActionsRequest,
 } from "../boards/github-actions-capability.js";
 import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
+import {
   capturePluginRegistryLifecycleEpoch,
   isPluginRegistryLifecycleEpochActive,
 } from "../plugins/registry-lifecycle.js";
@@ -34,8 +38,7 @@ import { healthHandlers } from "./server-methods/health.js";
 import { sessionReadHandlers } from "./server-methods/sessions-read.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { usageHandlers } from "./server-methods/usage.js";
-import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
-import { resolveSessionStoreKey } from "./session-store-key.js";
+import { resolveRequestedSessionStoreTarget } from "./session-store-key.js";
 
 type BoardDataBindingId = (typeof CORE_BOARD_DATA_BINDING_IDS)[number];
 type GatewayHandlerInvocation = Parameters<GatewayRequestHandlers[string]>[0];
@@ -89,21 +92,14 @@ export function captureBoardCapabilityAuthority(
   const resolveSession = (target: BoardSessionTarget) => {
     authority.assertActive();
     const cfg = invocation.context.getRuntimeConfig();
-    const selected = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
-    if (
-      !selected.ok ||
-      resolveSessionStoreKey({
-        cfg,
-        sessionKey: target.sessionKey,
-        storeAgentId: selected.agentId,
-      }) !== target.sessionKey
-    ) {
+    const selected = resolveRequestedSessionStoreTarget(cfg, target.sessionKey, target.agentId);
+    if (!selected.ok || selected.value.sessionKey !== target.sessionKey) {
       throw new BoardValidationError(
         "invalid_operation",
         "board widget session identity changed; reload the dashboard",
       );
     }
-    return { sessionKey: target.sessionKey, agentId: selected.agentId };
+    return selected.value;
   };
   const boardSession = resolveSession(claims);
   return {
@@ -153,30 +149,35 @@ export function captureBoardRequestAuthority(
   const pluginRegistryEpoch = pluginRegistry
     ? capturePluginRegistryLifecycleEpoch(pluginRegistry)
     : undefined;
-  const assertActive = () => {
-    try {
-      // Retained board work also belongs to the requesting caller and session authorization.
-      invocation.signal?.throwIfAborted();
-      invocation.sessionMutationCommitGuard?.();
-      invocation.sessionMutationAuthorization?.assertCurrent();
-      if (
-        isGatewaySubordinateWorkAdmissionClosed() ||
-        resolveGatewayContext() !== context ||
-        context.resolveGatewayContext !== resolveGatewayContext ||
-        (methodRegistry && context.getGatewayMethodRegistry?.() !== methodRegistry) ||
-        (pluginRegistry &&
-          (!pluginRegistryEpoch ||
-            !isPluginRegistryLifecycleEpochActive(pluginRegistry, pluginRegistryEpoch)))
-      ) {
+  const assertActive = composeSessionSourceAssertion(
+    [
+      captureExternalSessionCommitGuard(invocation.sessionMutationCommitGuard),
+      captureExternalSessionCommitGuard(invocation.sessionMutationAuthorization?.assertCurrent),
+    ],
+    (assertSources) => {
+      try {
+        // Retained board work also belongs to the requesting caller and session authorization.
+        invocation.signal?.throwIfAborted();
+        assertSources();
+        if (
+          isGatewaySubordinateWorkAdmissionClosed() ||
+          resolveGatewayContext() !== context ||
+          context.resolveGatewayContext !== resolveGatewayContext ||
+          (methodRegistry && context.getGatewayMethodRegistry?.() !== methodRegistry) ||
+          (pluginRegistry &&
+            (!pluginRegistryEpoch ||
+              !isPluginRegistryLifecycleEpochActive(pluginRegistry, pluginRegistryEpoch)))
+        ) {
+          throw new BoardGatewayUnavailableError();
+        }
+      } catch (error) {
+        if (error instanceof BoardGatewayUnavailableError) {
+          throw error;
+        }
         throw new BoardGatewayUnavailableError();
       }
-    } catch (error) {
-      if (error instanceof BoardGatewayUnavailableError) {
-        throw error;
-      }
-      throw new BoardGatewayUnavailableError();
-    }
-  };
+    },
+  );
   assertActive();
   return {
     assertActive,

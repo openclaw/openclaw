@@ -1,4 +1,3 @@
-// Check No Monolithic Plugin Sdk Entry Imports script supports OpenClaw repository automation.
 import fs from "node:fs";
 import path from "node:path";
 import { discoverOpenClawPlugins } from "../src/plugins/discovery.js";
@@ -32,10 +31,6 @@ function collectPluginSourceFiles(rootDir: string): string[] {
   });
 }
 
-function collectSharedExtensionSourceFiles(): string[] {
-  return collectPluginSourceFiles(path.join(process.cwd(), "extensions", "shared"));
-}
-
 function collectBundledExtensionSourceFiles(): string[] {
   const extensionsDir = path.join(process.cwd(), "extensions");
   let entries: fs.Dirent[];
@@ -67,7 +62,9 @@ function main() {
       filesToCheck.add(srcFile);
     }
   }
-  for (const sharedFile of collectSharedExtensionSourceFiles()) {
+  for (const sharedFile of collectPluginSourceFiles(
+    path.join(process.cwd(), "extensions", "shared"),
+  )) {
     filesToCheck.add(sharedFile);
   }
   for (const extensionFile of collectBundledExtensionSourceFiles()) {

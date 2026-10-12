@@ -33,7 +33,7 @@ const retryingCompactionEnd = () =>
   }) as const;
 
 type StreamUsage = AssistantMessage["usage"] & { reasoningTokens?: number };
-type UsageCall = {
+type UsageCall = Pick<AssistantMessage, "responseId" | "turnId"> & {
   usage: StreamUsage;
   streamedUsage?: StreamUsage;
   text?: string;
@@ -132,6 +132,8 @@ async function runUsageCalls(
         api: model.api,
         provider: model.provider,
         model: model.id,
+        responseId: call.responseId,
+        turnId: call.turnId,
         usage: call.usage,
         stopReason: call.stopReason ?? "stop",
         ...(call.stopReason && call.stopReason !== "stop"
@@ -215,26 +217,32 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         onContextAccountingEvent: (event) => recovery.observeContextAccounting(event),
       });
       const controller = createEmbeddedRunFailoverRetryController({
-        runParams: {
-          sessionId: "async-progress",
-          sessionFile: "unused",
-          runId: "async-progress",
-          workspaceDir: "/tmp/async-progress",
-          prompt: "Continue",
-          timeoutMs: 300_000,
+        runInput: {
+          runParams: {
+            sessionId: "async-progress",
+            sessionFile: "unused",
+            runId: "async-progress",
+            workspaceDir: "/tmp/async-progress",
+            prompt: "Continue",
+            timeoutMs: 300_000,
+          },
+          globalLane: "test",
+          agentDir: "/tmp/async-progress",
+          fallbackConfigured: false,
         },
-        provider: "test-provider",
-        modelId: "usage-model",
-        globalLane: "test",
-        agentDir: "/tmp/async-progress",
-        fallbackConfigured: false,
-        profileFailureStore: { version: 1, profiles: {} },
-        getLastProfileId: () => undefined,
+        preparedRuntime: {
+          provider: "test-provider",
+          modelId: "usage-model",
+          profileFailureStore: { version: 1, profiles: {} },
+          snapshot: () => ({
+            lastProfileId: undefined,
+            pluginHarnessOwnsTransport: false,
+            agentHarness: { id: "embedded" },
+          }),
+          getApiKeyInfo: () => null,
+          advanceAttemptAuthProfile: async () => false,
+        },
         getSessionId: () => "async-progress",
-        harnessOwnsTransport: () => false,
-        getRuntimeAuthOwnerId: () => "embedded",
-        getApiKeyInfo: () => null,
-        advanceAuthProfile: async () => false,
       });
       const messages: string[] = [];
       try {
@@ -296,11 +304,13 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       [
         {
           text: "First reply.",
+          responseId: "first-provider-response",
           streamedUsage: makeUsage({ input: 100, output: 12, cost: 0.125, billed: true }),
           usage: makeUsage(),
         },
         {
           text: "Second reply.",
+          turnId: "second-runtime-turn",
           streamedUsage: makeUsage({ input: 200, output: 8, cost: 0.5, billed: true }),
           usage: makeUsage(),
         },
@@ -328,8 +338,11 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         { input: 200, output: 8, totalTokens: 208, cost: { total: 0.5 } },
       ]);
       expect(onModelUsage.mock.calls).toMatchObject([
-        [{ input: 100, output: 12, cacheRead: 0, cacheWrite: 0 }],
-        [{ input: 200, output: 8, cacheRead: 0, cacheWrite: 0 }],
+        [
+          { input: 100, output: 12, cacheRead: 0, cacheWrite: 0 },
+          { responseId: "first-provider-response" },
+        ],
+        [{ input: 200, output: 8, cacheRead: 0, cacheWrite: 0 }, { turnId: "second-runtime-turn" }],
       ]);
       expect(subscription.getUsageTotals()).toMatchObject({
         input: 300,
@@ -417,6 +430,18 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       },
       contextTokens: 11,
     },
+    {
+      name: "explicitly unknown context",
+      call: { usage: makeUsage({ contextUsage: { state: "unavailable" } }) },
+      expected: {
+        input: 0,
+        output: 0,
+        total: 0,
+        contextUsage: { state: "unavailable" },
+        cost: { total: 0 },
+      },
+      contextTokens: undefined,
+    },
   ])(
     "settles $name through the core event producer",
     async ({ name, call, expected, contextTokens }) => {
@@ -429,7 +454,11 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         onContextAccountingEvent,
       });
       const { subscription } = harness;
+      let terminal: AssistantMessage | undefined;
       const [completed] = await runUsageCalls(harness, [call], (event) => {
+        if (event.type === "message_end" && event.message.role === "assistant") {
+          terminal = event.message;
+        }
         if (event.type === "message_update" && event.assistantMessageEvent.type === "text_end") {
           expect(subscription.getUsageTotals()).toBeUndefined();
           expect(onAgentEvent.mock.calls.some(([emitted]) => emitted.stream === "usage")).toBe(
@@ -439,11 +468,13 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       });
       const { total, cost, ...tokens } = expected;
       expect(completed?.usage).toMatchObject({ ...tokens, totalTokens: total, cost });
-      expect(subscription.getUsageTotals()).toMatchObject({
-        ...tokens,
-        total,
-        cost: { total: cost.total },
-      });
+      if (contextTokens !== undefined) {
+        expect(subscription.getUsageTotals()).toMatchObject({
+          ...tokens,
+          total,
+          cost: { total: cost.total },
+        });
+      }
       expect(subscription.getLastAssistantUsage()).toMatchObject(expected);
       expect(subscription.getCurrentAttemptAssistant()).toEqual(completed);
       expect(subscription.hasSuccessfulModelResponse()).toBe(completed?.stopReason === "stop");
@@ -455,7 +486,17 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       ]);
       expect(
         onAgentEvent.mock.calls.map(([event]) => event).filter((event) => event.stream === "usage"),
-      ).toEqual([{ stream: "usage", data: { outputTokens: expected.output } }]);
+      ).toEqual(
+        expected.output ? [{ stream: "usage", data: { outputTokens: expected.output } }] : [],
+      );
+      expectDefined(terminal, "Expected assistant completion").usage.input = 999;
+      const snapshot = expectDefined(
+        subscription.getCurrentAttemptAssistant(),
+        "Expected owned snapshot",
+      );
+      expect(snapshot.usage.input).toBe(expected.input);
+      snapshot.usage.input = 500;
+      expect(subscription.getCurrentAttemptAssistant()?.usage.input).toBe(expected.input);
     },
   );
 
@@ -550,48 +591,5 @@ describe("subscribeEmbeddedAgentSession model state", () => {
     expect(subscription.getUsageTotals()).toMatchObject(
       retryUsage ? { input: 340, output: 50, total: 390 } : { input: 100, output: 20, total: 120 },
     );
-  });
-
-  it("retains explicitly unknown context and owns its completion snapshot", async () => {
-    const onAgentEvent = vi.fn();
-    const onContextAccountingEvent = vi.fn();
-    const harness = createSubscribedSessionHarness({
-      runId: "run-unknown-usage",
-      lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
-      onAgentEvent,
-      onContextAccountingEvent,
-    });
-    const { subscription } = harness;
-    let terminal: AssistantMessage | undefined;
-    await runUsageCalls(
-      harness,
-      [
-        {
-          usage: makeUsage({ contextUsage: { state: "unavailable" } }),
-        },
-      ],
-      (event) => {
-        if (event.type === "message_end" && event.message.role === "assistant") {
-          terminal = event.message;
-        }
-      },
-    );
-    expect(onContextAccountingEvent.mock.calls).toEqual([
-      [{ kind: "model", contextTokens: undefined, successful: false }],
-      [{ kind: "model", contextTokens: undefined, successful: true }],
-    ]);
-    const usageEvents = onAgentEvent.mock.calls
-      .map(([event]) => event)
-      .filter((event) => event.stream === "usage");
-    expect(subscription.getLastAssistantUsage()?.contextUsage).toEqual({ state: "unavailable" });
-    expect(usageEvents).toEqual([]);
-    expectDefined(terminal, "Expected assistant completion").usage.input = 999;
-    const snapshot = expectDefined(
-      subscription.getCurrentAttemptAssistant(),
-      "Expected the owned assistant snapshot",
-    );
-    expect(snapshot.usage.input).toBe(0);
-    snapshot.usage.input = 500;
-    expect(subscription.getCurrentAttemptAssistant()?.usage.input).toBe(0);
   });
 });

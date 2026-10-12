@@ -1,11 +1,14 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 // Zalo tests cover outbound media plugin behavior.
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 
@@ -22,11 +25,16 @@ import {
 } from "./outbound-media.js";
 import { setZaloRuntime } from "./runtime.js";
 
+const testStateDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+    cleanup();
+  });
+});
 const testStateEnv: NodeJS.ProcessEnv = {
   ...process.env,
-  OPENCLAW_STATE_DIR: fs.mkdtempSync(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-zalo-media-"),
-  ),
+  OPENCLAW_STATE_DIR: testStateDirs.make("openclaw-zalo-media-", resolvePreferredOpenClawTmpDir()),
 };
 
 function openTestStore<T>(options: OpenKeyedStoreOptions) {
@@ -47,10 +55,11 @@ function createMockResponse() {
   };
 }
 
-function installZaloRuntimeForTest(): void {
+function installZaloRuntimeForTest(env = testStateEnv): void {
   setZaloRuntime({
     state: {
-      openKeyedStore: <T>(options: OpenKeyedStoreOptions) => openTestStore<T>(options),
+      openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreForTests<T>("zalo", { ...options, env }),
     },
   } as unknown as PluginRuntime);
 }
@@ -194,6 +203,35 @@ describe("zalo outbound hosted media", () => {
     );
     expect(getResponse.res.statusCode).toBe(200);
     expect(getResponse.res.end).toHaveBeenCalledWith(Buffer.from("image-bytes"));
+  });
+
+  it("uses the current runtime's state after runtime replacement", async () => {
+    const hostedUrl = new URL(await prepareMedia());
+    const replacementStateDir = testStateDirs.make(
+      "openclaw-zalo-media-replacement-",
+      resolvePreferredOpenClawTmpDir(),
+    );
+    try {
+      installZaloRuntimeForTest({ ...testStateEnv, OPENCLAW_STATE_DIR: replacementStateDir });
+      const response = createMockResponse();
+      await tryHandleHostedZaloMediaRequest(
+        { method: "HEAD", url: `${hostedUrl.pathname}${hostedUrl.search}` } as never,
+        response.res as never,
+      );
+      expect(response.res.statusCode).toBe(404);
+      expect(response.res.end).toHaveBeenCalledWith("Not Found");
+
+      installZaloRuntimeForTest();
+      const original = createMockResponse();
+      await tryHandleHostedZaloMediaRequest(
+        { method: "GET", url: `${hostedUrl.pathname}${hostedUrl.search}` } as never,
+        original.res as never,
+      );
+      expect(original.res.statusCode).toBe(200);
+      expect(original.res.end).toHaveBeenCalledWith(Buffer.from("image-bytes"));
+    } finally {
+      installZaloRuntimeForTest();
+    }
   });
 
   it("rejects hosted media preparation when the expiry would exceed a valid Date", async () => {

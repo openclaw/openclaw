@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronJobState, CronStoredJob, CronStoreFile } from "../types.js";
+import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import {
   deleteCronQuarantinedJobsFromDatabase,
   prepareCronQuarantineRegistration,
@@ -166,8 +167,10 @@ export function saveCronStoreChangesInDatabase(
       merged,
       rowsById.get(jobId)?.sort_order ?? nextSortOrder++,
     );
-    replaceCronRuntimeAuthorityRows({ db, storeKey, jobs: [persisted] });
-    currentById.set(jobId, persisted);
+    if (hasCanonicalCronDeliveryMode(persisted.delivery)) {
+      replaceCronRuntimeAuthorityRows({ db, storeKey, jobs: [persisted] });
+      currentById.set(jobId, persisted);
+    }
   }
   hooks?.hooks.afterWrite?.(db, hooks.receiptSchema);
   return { version: 1, jobs: [...currentById.values()] } satisfies CronStoreFile;
@@ -183,7 +186,7 @@ function replaceCronStoreRowsInDatabase(
   replaceCronRuntimeAuthorityRows({
     db,
     storeKey,
-    jobs: replaced.jobs,
+    jobs: replaced.jobs.filter((job) => hasCanonicalCronDeliveryMode(job.delivery)),
     preserveExistingForJobIds: preserveRuntimeState ? replaced.existingJobIds : undefined,
     writeMissingForJobIds: preserveRuntimeState ? replaced.legacyAuthorityJobIds : undefined,
   });

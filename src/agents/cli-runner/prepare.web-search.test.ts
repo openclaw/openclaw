@@ -46,14 +46,18 @@ function executionTool(defaults: { host?: string; node?: string } = {}) {
     },
   };
 }
+// mock-isolation: Exercise CLI search authority with inert host tools.
 vi.mock("../openclaw-tools.js", () => ({
-  createOpenClawTools: ({ config }: { config: OpenClawConfig }) =>
+  createOpenClawToolsAsync: async ({ config }: { config: OpenClawConfig }) =>
     config.tools?.web?.search?.enabled === false ? [messageTool] : [searchTool, messageTool],
 }));
+// mock-isolation: Observe node-only execution without assembling unrelated coding tools.
 vi.mock("../agent-tools.js", () => ({
-  createOpenClawCodingTools: ({ exec }: { exec?: { host?: string; node?: string } }) => [
-    executionTool(exec),
-  ],
+  createOpenClawCodingToolsInternalAsync: async ({
+    exec,
+  }: {
+    exec?: { host?: string; node?: string };
+  }) => [executionTool(exec)],
 }));
 vi.mock("../bash-tools.js", () => ({ createExecTool: executionTool }));
 vi.mock("../tools/gateway.js", () => ({
@@ -149,7 +153,8 @@ describe("registered Claude CLI search preparation", () => {
         tools: {
           ...config.tools,
           allow: ["exec", "web_search", "message"],
-          exec: { host: "auto", mode: "full" },
+          // Keep this node-only proof explicit now that ordinary local shell is managed.
+          exec: { host: openClaw ? "auto" : "node", mode: "full" },
         },
       };
       const context = await fixture.prepare({

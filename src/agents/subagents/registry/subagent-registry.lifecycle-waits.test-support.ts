@@ -93,7 +93,7 @@ export function createLifecycleWaits(requesterSessionKey: string) {
         reached.resolve(run);
       }
     };
-    const stop = subscribeSubagentRunChanges(observe);
+    const stop = subscribeSubagentRunChanges("projection", observe);
     onTestFinished(stop);
     try {
       observe();
@@ -130,6 +130,7 @@ export function createLifecycleWaits(requesterSessionKey: string) {
 
   return {
     flushAsync,
+    waitForRun,
     waitForDeliveredCleanup,
     waitForFrozenResult,
     waitForFrozenResultText,

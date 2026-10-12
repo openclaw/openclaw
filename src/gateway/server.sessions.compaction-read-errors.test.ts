@@ -5,7 +5,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 // Install the mocked reader before the Gateway loads its accessor graph.
-import "../config/sessions/session-accessor.sqlite-read.js";
+import "../config/sessions/session-transcript-stats.js";
 import { rpcReq } from "./test-helpers.js";
 import {
   sessionStoreEntry,
@@ -17,32 +17,32 @@ vi.hoisted(() => {
   vi.resetModules();
 });
 
-type ReadTranscriptStatsSync =
-  (typeof import("../config/sessions/session-accessor.sqlite-read.js"))["readTranscriptStatsSync"];
+type ReadTranscriptStatsAsync =
+  (typeof import("../config/sessions/session-transcript-stats.js"))["readTranscriptStatsAsync"];
 
 const transcriptReads = vi.hoisted(() => ({
-  stats: vi.fn<ReadTranscriptStatsSync>(),
+  stats: vi.fn<ReadTranscriptStatsAsync>(),
 }));
 
-vi.mock("../config/sessions/session-accessor.sqlite-read.js", async (importOriginal) => {
+vi.mock("../config/sessions/session-transcript-stats.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../config/sessions/session-accessor.sqlite-read.js")>();
+    await importOriginal<typeof import("../config/sessions/session-transcript-stats.js")>();
   return {
     ...actual,
-    readTranscriptStatsSync: transcriptReads.stats,
+    readTranscriptStatsAsync: transcriptReads.stats,
   };
 });
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-let realTranscriptStatsReader: ReadTranscriptStatsSync;
+let realTranscriptStatsReader: ReadTranscriptStatsAsync;
 
 beforeEach(async () => {
   transcriptReads.stats.mockReset();
   const actual = await vi.importActual<
-    typeof import("../config/sessions/session-accessor.sqlite-read.js")
-  >("../config/sessions/session-accessor.sqlite-read.js");
-  realTranscriptStatsReader = actual.readTranscriptStatsSync;
+    typeof import("../config/sessions/session-transcript-stats.js")
+  >("../config/sessions/session-transcript-stats.js");
+  realTranscriptStatsReader = actual.readTranscriptStatsAsync;
   transcriptReads.stats.mockImplementation(realTranscriptStatsReader);
 });
 
@@ -95,10 +95,10 @@ const transcriptReadError = () =>
 // Background reads must not consume the failure intended for the compaction RPC.
 function failTranscriptStatsForSession(
   sessionId: string,
-  options?: { succeedFirstWith: ReturnType<ReadTranscriptStatsSync> },
+  options?: { succeedFirstWith: Awaited<ReturnType<ReadTranscriptStatsAsync>> },
 ): void {
   let sessionReads = 0;
-  transcriptReads.stats.mockImplementation((scope) => {
+  transcriptReads.stats.mockImplementation(async (scope) => {
     if (scope.sessionId !== sessionId) {
       return realTranscriptStatsReader(scope);
     }
@@ -125,7 +125,7 @@ test.each([
     const scope = await seedCompactionSession({ sessionId, storePath, nativeHarness });
     failTranscriptStatsForSession(
       sessionId,
-      nativeHarness ? { succeedFirstWith: realTranscriptStatsReader(scope) } : undefined,
+      nativeHarness ? { succeedFirstWith: await realTranscriptStatsReader(scope) } : undefined,
     );
 
     const { ws } = await openClient();

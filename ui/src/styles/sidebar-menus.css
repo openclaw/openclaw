@@ -124,9 +124,13 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
-  /* One typography for every row label, value, and choice in the panel. */
   font-size: calc((var(--control-ui-text-sm) + var(--control-ui-text-md)) / 2);
   line-height: 1.55;
+}
+
+/* People has text-only submenu rows, not the wider Sessions form controls. */
+.sidebar-people-filter-menu .sidebar-session-filter-panel {
+  width: max-content;
 }
 
 .sidebar-session-menu-section {
@@ -414,16 +418,18 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   }
 }
 
-/* Long choice lists fade at an edge they scroll past. */
-.sidebar-session-filter-panel .picker-select__options[data-fade-start] {
+:is(.sidebar-session-filter-panel, .sidebar-session-owner-filter)
+  .picker-select__options[data-fade-start] {
   mask-image: linear-gradient(to bottom, transparent, black 16px);
 }
 
-.sidebar-session-filter-panel .picker-select__options[data-fade-end] {
+:is(.sidebar-session-filter-panel, .sidebar-session-owner-filter)
+  .picker-select__options[data-fade-end] {
   mask-image: linear-gradient(to top, transparent, black 16px);
 }
 
-.sidebar-session-filter-panel .picker-select__options[data-fade-start][data-fade-end] {
+:is(.sidebar-session-filter-panel, .sidebar-session-owner-filter)
+  .picker-select__options[data-fade-start][data-fade-end] {
   mask-image: linear-gradient(transparent, black 16px, black calc(100% - 16px), transparent);
 }
 

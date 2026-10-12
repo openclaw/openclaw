@@ -8,9 +8,6 @@ const InstallSourceSchema = z.union([
   z.literal("git"),
 ]);
 
-const PluginInstallSourceSchema = z.union([InstallSourceSchema, z.literal("marketplace")]);
-
-/** Zod object shape for persisted generic install records. */
 const InstallRecordShape = {
   source: InstallSourceSchema,
   spec: z.string().optional(),
@@ -62,9 +59,9 @@ const InstallRecordShape = {
 const InstallRecordSchema = z.object(InstallRecordShape);
 export type InstallRecordBase = z.infer<typeof InstallRecordSchema>;
 
-const PluginInstallRecordShape = {
+export const StrictPluginInstallRecordSchema = z.object({
   ...InstallRecordShape,
-  source: PluginInstallSourceSchema,
+  source: z.union([InstallSourceSchema, z.literal("marketplace")]),
   marketplaceName: z.string().optional(),
   marketplaceSource: z.string().optional(),
   marketplacePlugin: z.string().optional(),
@@ -85,8 +82,6 @@ const PluginInstallRecordShape = {
   acceptedSurfaceHash: z.string().optional(),
   acceptedSurfaceAt: z.string().optional(),
   acceptedSurfaceIntegrity: z.string().optional(),
-} as const;
-
-export const StrictPluginInstallRecordSchema = z.object(PluginInstallRecordShape);
+} as const);
 export type PluginInstallRecord = z.infer<typeof StrictPluginInstallRecordSchema>;
 export type PluginAcceptedDeclaredSurface = NonNullable<PluginInstallRecord["acceptedSurface"]>;

@@ -18,13 +18,6 @@ import type {
 } from "./workspace-reconcile.js";
 import { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
 
-export function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
-
 type WorkerSshProcessExit = Awaited<WorkerSshProcess["exited"]>;
 
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
@@ -364,7 +357,7 @@ export async function git(root: string, ...args: string[]): Promise<string> {
 export const resolveIdentity = async () => ({ kind: "path", path: "/keys/worker" }) as const;
 
 export async function waitForStarts(starts: unknown[], count: number) {
-  await waitForFast(() => expect(starts).toHaveLength(count));
+  await vi.waitFor(() => expect(starts).toHaveLength(count), { interval: 1 });
 }
 
 type TunnelTestFake = Pick<ReturnType<typeof fakeRunner>, "runner">;

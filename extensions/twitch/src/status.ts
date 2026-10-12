@@ -45,13 +45,7 @@ export function collectTwitchStatusIssues(
       });
     }
 
-    if (
-      entry.configured &&
-      !entry.running &&
-      !entry.lastStartAt &&
-      !entry.lastInboundAt &&
-      !entry.lastOutboundAt
-    ) {
+    if (!entry.running && !entry.lastStartAt && !entry.lastInboundAt && !entry.lastOutboundAt) {
       issues.push({
         channel: "twitch",
         accountId,

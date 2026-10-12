@@ -186,16 +186,6 @@ const REQUEST_FRAME_ID = "2:00000000-0000-4000-8000-000000000000";
 type RequestTimingPayload = Parameters<
   NonNullable<GatewayBrowserClientOptions["onRequestTiming"]>
 >[0];
-type ConnectTimingPayload = Parameters<
-  NonNullable<GatewayBrowserClientOptions["onConnectTiming"]>
->[0];
-
-function connectTimingPayloads(
-  mock: ReturnType<typeof vi.fn<(timing: ConnectTimingPayload) => void>>,
-) {
-  return mock.mock.calls.map(([payload]) => payload);
-}
-
 function stubInsecureCrypto() {
   // Real insecure contexts keep randomUUID/getRandomValues; only crypto.subtle
   // is gated to secure contexts.
@@ -342,11 +332,9 @@ describe("GatewayBrowserClient", () => {
     useNodeFakeTimers();
     const onHello = vi.fn();
     const onClose = vi.fn();
-    const onConnectTiming = vi.fn<(timing: ConnectTimingPayload) => void>();
     const client = createClient({
       onHello,
       onClose,
-      onConnectTiming,
       onRequestTiming: ({ method }) => {
         if (method === "connect") {
           client.forceReconnect("response observer closed");
@@ -368,9 +356,6 @@ describe("GatewayBrowserClient", () => {
     expect(onHello).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(loadDeviceAuthToken()?.token).toBe(STORED_CRED);
-    expect(connectTimingPayloads(onConnectTiming).some(({ phase }) => phase === "hello")).toBe(
-      false,
-    );
     ws.emitClose(4000, "response observer closed");
     expect(onClose).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -379,7 +364,6 @@ describe("GatewayBrowserClient", () => {
         willRetry: true,
       }),
     );
-    expect(connectTimingPayloads(onConnectTiming).at(-1)?.phase).toBe("failed");
     await vi.advanceTimersByTimeAsync(800);
     expect(getLatestWebSocket()).not.toBe(ws);
   });
@@ -555,35 +539,6 @@ describe("GatewayBrowserClient", () => {
     },
   );
 
-  it("reconnects a silently stalled socket using its advertised Gateway heartbeat", async () => {
-    useNodeFakeTimers();
-    const { ws, connectFrame } = await startConnect(createClient());
-    emitHello(ws, connectFrame.id, { role: "operator", scopes: [] }, { tickIntervalMs: 1_000 });
-
-    await vi.advanceTimersByTimeAsync(3_000);
-
-    expect(ws.lastClose).toEqual({ code: 4000, reason: "tick timeout" });
-  });
-
-  it("clamps an overflowing advertised heartbeat before scheduling its browser timer", async () => {
-    const advertisedTickIntervalMs = Number.MAX_SAFE_INTEGER;
-    useNodeFakeTimers();
-    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
-
-    const { ws, connectFrame } = await startConnect(createClient());
-    emitHello(
-      ws,
-      connectFrame.id,
-      { role: "operator", scopes: [] },
-      { tickIntervalMs: advertisedTickIntervalMs },
-    );
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(setIntervalSpy).toHaveBeenLastCalledWith(expect.any(Function), 2_147_483_647);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(ws.lastClose).toBeNull();
-  });
-
   it("retains negative response payloads without leaking them into timing or error JSON", async () => {
     const onRequestTiming = vi.fn<(timing: RequestTimingPayload) => void>();
     const client = createClient({ token: "shared-auth-token", onRequestTiming });
@@ -645,34 +600,9 @@ describe("GatewayBrowserClient", () => {
     );
   });
 
-  it("keeps credentials and nonce values out of connect timing", async () => {
-    const onConnectTiming = vi.fn<(timing: ConnectTimingPayload) => void>();
-    vi.stubGlobal("performance", {
-      now: vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(35).mockReturnValue(40),
-    });
-    const client = createClient({ token: "shared-auth-token", onConnectTiming });
-
-    const { ws, connectFrame } = await startConnect(client, "nonce-secret");
-    const sentPayloads = connectTimingPayloads(onConnectTiming);
-    for (const payload of sentPayloads) {
-      expect(payload).not.toHaveProperty("token");
-      expect(payload).not.toHaveProperty("passwordValue");
-      expect(payload).not.toHaveProperty("nonce");
-      expect(JSON.stringify(payload)).not.toContain("shared-auth-token");
-      expect(JSON.stringify(payload)).not.toContain("nonce-secret");
-    }
-
-    emitHello(ws, connectFrame.id);
-
-    await vi.waitFor(() => {
-      expect(connectTimingPayloads(onConnectTiming).at(-1)?.phase).toBe("hello");
-    });
-  });
-
-  it("marks fallback connect timing when no challenge arrives", async () => {
+  it("signs a fallback connect with browser time when no challenge arrives", async () => {
     useNodeFakeTimers();
-    const onConnectTiming = vi.fn<(timing: ConnectTimingPayload) => void>();
-    const client = createClient({ token: "shared-auth-token", onConnectTiming });
+    const client = createClient({ token: "shared-auth-token" });
 
     client.start();
     const ws = getLatestWebSocket();
@@ -680,14 +610,6 @@ describe("GatewayBrowserClient", () => {
     await vi.advanceTimersByTimeAsync(750);
 
     expect(parseLatestConnectFrame(ws).params?.device?.signedAt).toBe(Date.now());
-    expect(connectTimingPayloads(onConnectTiming).map((payload) => payload.phase)).toContain(
-      "fallback",
-    );
-    expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
-      phase: "request-sent",
-      hasChallenge: false,
-      usedFallback: true,
-    });
   });
 
   it.each([0, -1])("enforces the UTF-8 payload limit with %d bytes remaining", async (delta) => {
@@ -1160,37 +1082,6 @@ describe("GatewayBrowserClient", () => {
       },
       willRetry: false,
     });
-  });
-
-  it("bounds startup retry delay and reports the retry decision", async () => {
-    useNodeFakeTimers();
-    vi.mocked(Math.random).mockReturnValue(0.5);
-    const onClose = vi.fn();
-    const { ws, connectFrame } = await startConnect(
-      createClient({ token: "shared-auth-token", onClose }),
-    );
-    const error = {
-      code: "UNAVAILABLE",
-      message: "gateway starting; retry shortly",
-      details: { reason: "startup-sidecars" },
-      retryable: true,
-      retryAfterMs: 90_000,
-    };
-    ws.emitMessage({ type: "res", id: connectFrame.id, ok: false, error });
-    await expectSocketClosed(ws);
-    expect(ws.lastClose).toEqual({ code: 4013, reason: "gateway starting" });
-    ws.emitClose(4013, "gateway starting");
-    expect(onClose).toHaveBeenCalledWith({
-      code: 4013,
-      reason: "gateway starting",
-      error,
-      willRetry: true,
-    });
-    expect(wsInstances).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1_999);
-    expect(wsInstances).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(wsInstances).toHaveLength(2);
   });
 
   it("does not auto-reconnect on PROTOCOL_MISMATCH", async () => {

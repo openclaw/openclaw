@@ -41,14 +41,11 @@ type GatewayReloadLog = {
   error?: (msg: string) => void;
 };
 
-export type GatewayGmailRestartAbortController = {
-  abort: () => void;
-  signal: AbortSignal;
-};
-
 export type GatewayHotReloadPublication = {
   publish: (commit: () => Promise<void>, isCommitted: () => boolean) => Promise<void>;
   isCurrent: () => boolean;
+  /** A queued successor can finish model preparation without revoking this transaction. */
+  hasNewerConfig?: () => boolean;
   checkpoint?: () => Promise<void>;
   assertInvokerOwned?: () => void;
   sourceConfig: OpenClawConfig;
@@ -192,8 +189,8 @@ export type GatewayReloadHandlerParams = {
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;
   cronReconciliation: GatewayCronReconciliation;
-  createGmailRestartAbortController?: () => GatewayGmailRestartAbortController;
-  clearGmailRestartAbortController?: (controller: GatewayGmailRestartAbortController) => void;
+  createGmailRestartAbortController?: () => AbortController;
+  clearGmailRestartAbortController?: (controller: AbortController) => void;
   onCronRestart?: () => void;
   requestRecoveryRestart?: GatewayRestartEmitter;
   restartRecoveryAvailable?: boolean;

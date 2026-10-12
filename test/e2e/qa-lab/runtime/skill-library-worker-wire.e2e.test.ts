@@ -363,6 +363,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             ),
           ).resolves.toMatchObject({ status: "ok" });
           const authorOutput = provider.authorOutputs.get("bob-worker");
+          expect(authorOutput?.describedId).toEqual(expect.stringContaining("skill_workshop"));
           if (!authorOutput?.created || !authorOutput.read || !authorOutput.updated) {
             throw new Error("Worker did not return real Workshop create, read and update results");
           }

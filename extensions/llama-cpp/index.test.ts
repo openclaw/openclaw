@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   discoverServer: vi.fn(),
   ensureModel: vi.fn(),
+  ensureRuntime: vi.fn(),
   ensureChat: vi.fn(),
   prepareServer: vi.fn(),
   reconcileServer: vi.fn(),
@@ -37,6 +38,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./src/hardware.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./src/hardware.js")>()),
   detectLlamaCppHardware: mocks.detectHardware,
+}));
+
+vi.mock("./src/llama-server-install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/llama-server-install.js")>()),
+  ensureLlamaServerInstalled: mocks.ensureRuntime,
 }));
 
 vi.mock("openclaw/plugin-sdk/embedding-providers", async (importOriginal) => ({
@@ -75,6 +81,7 @@ beforeEach(() => {
   mocks.detectHardware.mockReset();
   mocks.discoverServer.mockReset();
   mocks.ensureModel.mockResolvedValue("/models/model.gguf");
+  mocks.ensureRuntime.mockResolvedValue({ command: "/runtime/llama-server" });
   mocks.ensureChat.mockResolvedValue(undefined);
   mocks.prepareServer.mockResolvedValue({});
   mocks.inspectRuntime.mockResolvedValue({
@@ -361,6 +368,7 @@ describe("llama.cpp provider plugin", () => {
   it("routes embeddings through the managed server and reports endpoint facts", async () => {
     const result = await llamaCppEmbeddingProviderAdapter.create(configuredOptions());
     const provider = expectDefined(result.provider, "local embedding provider");
+    expect(provider.maxInputTokens).toBe(2044);
 
     await expect(provider.embed("hello")).resolves.toEqual([0.6, 0.8]);
     expect(mocks.genericCreate).toHaveBeenCalledWith(
@@ -393,7 +401,7 @@ describe("llama.cpp provider plugin", () => {
     expect(mocks.prepareServer).toHaveBeenCalledWith(
       expect.objectContaining({
         chatModel: { mode: "preserve" },
-        configuredChatModelIds: undefined,
+        configuredChatModelIds: expect.arrayContaining(["gemma-4-e4b-it-q4_k_m"]),
         mediaModels: [],
         localService: provider.localService,
       }),

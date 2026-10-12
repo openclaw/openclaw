@@ -4,11 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  openOpenClawStateDatabase,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hasAnyMatrixAuth } from "../../auth-presence.js";
+import { hasAnyMatrixAuthAsync } from "../../auth-presence.js";
 import { getMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import { resolveConfiguredMatrixBotUserIds } from "./accounts.js";
@@ -121,11 +124,11 @@ describe("matrix credentials storage", () => {
       vi.spyOn(runtime.state, "resolveStateDir").mockImplementation((input) =>
         input?.OPENCLAW_STATE_DIR ? resolveStateDir(input) : stateDir,
       );
-      const openStore = runtime.state.openKeyedStore.bind(runtime.state);
+      const openStore = runtime.state.openKeyedStoreV2.bind(runtime.state);
       const observedSources: Array<{ root: string | undefined; supervisor: string | undefined }> =
         [];
-      vi.spyOn(runtime.state, "openKeyedStore").mockImplementation(
-        <T>(options: Parameters<typeof runtime.state.openKeyedStore>[0]) => {
+      vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation(
+        <T>(options: Parameters<typeof runtime.state.openKeyedStoreV2>[0]) => {
           observedSources.push({
             root: options.env?.OPENCLAW_STATE_DIR,
             supervisor: options.env?.OPENCLAW_SUPERVISOR_MODE,
@@ -219,12 +222,12 @@ describe("matrix credentials storage", () => {
         "default",
       );
       if (timing === "before") {
-        clearMatrixCredentials({}, "default");
+        await clearMatrixCredentials({}, "default");
       } else {
         const runtime = getMatrixRuntime();
-        const openStore = runtime.state.openKeyedStore.bind(runtime.state);
+        const openStore = runtime.state.openKeyedStoreV2.bind(runtime.state);
         let revoked = false;
-        vi.spyOn(runtime.state, "openKeyedStore").mockImplementation(
+        vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation(
           <T>(options: OpenAsyncKeyedStoreOptions) => {
             const store = openStore<T>(options);
             if (store.compareAndApply) {
@@ -232,7 +235,7 @@ describe("matrix credentials storage", () => {
               store.compareAndApply = async (...args) => {
                 if (!revoked) {
                   revoked = true;
-                  clearMatrixCredentials({}, "default");
+                  await clearMatrixCredentials({}, "default");
                 }
                 return await compare(...args);
               };
@@ -263,7 +266,7 @@ describe("matrix credentials storage", () => {
     },
   );
 
-  it("does not read or remove legacy credential files at runtime", () => {
+  it("does not read or remove legacy credential files at runtime", async () => {
     const legacyPath = path.join(stateDir, "credentials", "matrix", "credentials.json");
     fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
     fs.writeFileSync(
@@ -277,7 +280,7 @@ describe("matrix credentials storage", () => {
     );
 
     expect(loadMatrixCredentials({}, "default")).toBeNull();
-    clearMatrixCredentials({}, "default");
+    await clearMatrixCredentials({}, "default");
     expect(fs.existsSync(legacyPath)).toBe(true);
   });
 
@@ -285,7 +288,7 @@ describe("matrix credentials storage", () => {
     await saveMatrixCredentials(auth, {}, "default");
     await saveMatrixCredentials(auth, {}, "ops");
 
-    clearMatrixCredentials({}, "ops");
+    await clearMatrixCredentials({}, "ops");
 
     expect(loadMatrixCredentials({}, "ops")).toBeNull();
     expect(openMatrixCredentialsStore({}).lookup("account:ops")).toMatchObject({
@@ -297,14 +300,14 @@ describe("matrix credentials storage", () => {
 
   it("reports persisted auth from SQLite for package-state probes", async () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(false);
+    expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(false);
 
     await saveMatrixCredentials(auth, env, "default");
 
-    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(true);
+    expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(true);
   });
 
-  it("keeps persisted-auth presence scoped to valid live records and the supplied environment", () => {
+  it("keeps persisted-auth presence scoped to valid live records and the supplied environment", async () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const store = createPluginStateSyncKeyedStore<unknown>("matrix", {
       namespace: "credentials",
@@ -312,20 +315,18 @@ describe("matrix credentials storage", () => {
       overflowPolicy: "reject-new",
       env,
     });
-    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(false);
+    expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(false);
     store.register("account:default", {
       accountId: "default",
       homeserver: "https://matrix.example.org",
     });
-    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(false);
+    expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(false);
     store.register("account:default", {
       kind: "revoked",
       accountId: "default",
       revokedAt: "2026-01-01",
     });
-    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(false);
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(false);
     store.register(
       "account:default",
       {
@@ -335,14 +336,20 @@ describe("matrix credentials storage", () => {
         accessToken: "synthetic-fixture-token",
         createdAt: "2026-01-01",
       },
-      { ttlMs: 1 },
+      { ttlMs: 60_000 },
     );
-    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(true);
+    expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(true);
     expect(
-      hasAnyMatrixAuth({ cfg: {}, env: { OPENCLAW_STATE_DIR: path.join(stateDir, "other") } }),
+      await hasAnyMatrixAuthAsync({
+        cfg: {},
+        env: { OPENCLAW_STATE_DIR: path.join(stateDir, "other") },
+      }),
     ).toBe(false);
-    clock.mockReturnValue(now + 2);
-    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(false);
+    const { db } = openOpenClawStateDatabase({ env });
+    db.prepare(
+      "UPDATE plugin_state_entries SET expires_at = 1 WHERE plugin_id = 'matrix' AND namespace = 'credentials' AND entry_key = 'account:default'",
+    ).run();
+    expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(false);
   });
 
   it("requires a token match when userId is absent", () => {

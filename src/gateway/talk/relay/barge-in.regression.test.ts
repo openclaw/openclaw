@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
-import { resolveRealtimeVoiceProviderCapabilities } from "../../../talk/provider-resolver.js";
+import { resolveRealtimeVoiceProviderCapabilitiesAsync } from "../../../talk/provider-resolver.js";
 import type {
-  RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderConfig,
 } from "../../../talk/provider-types.js";
@@ -11,33 +10,17 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
-import { createTalkRealtimeRelaySession } from "./index.js";
+import { makeRelayTransport } from "./index.test-support.js";
 import { closeRelaySession } from "./operations.js";
+import { createTalkRealtimeRelaySession } from "./session-create.js";
 import { relaySessions } from "./state.js";
 
-const cfg = { agents: { entries: { main: { default: true } } } };
+const cfg = { agents: { entries: { main: {} } } };
 
-function makeRelayTransport(): RealtimeVoiceBridge {
-  return {
-    connect: vi.fn(async () => undefined),
-    sendAudio: vi.fn(),
-    setMediaTimestamp: vi.fn(),
-    handleBargeIn: vi.fn(),
-    submitToolResult: vi.fn(),
-    acknowledgeMark: vi.fn(),
-    close: vi.fn(),
-    isConnected: vi.fn(() => true),
-  };
-}
-
-/**
- * Creates a relay session and returns the bridge request the provider received,
- * which carries the audio-turn and interruption flags the bridge gates on.
- */
-function captureBridgeRequest(params: {
+async function captureBridgeRequest(params: {
   providerConfig: RealtimeVoiceProviderConfig;
   forceAgentConsultOnFinalTranscript: boolean;
-}): { request: RealtimeVoiceBridgeCreateRequest | undefined; relaySessionId: string } {
+}): Promise<{ request: RealtimeVoiceBridgeCreateRequest | undefined; relaySessionId: string }> {
   let request: RealtimeVoiceBridgeCreateRequest | undefined;
   const provider: RealtimeVoiceProviderPlugin = {
     id: "relay-test",
@@ -48,7 +31,7 @@ function captureBridgeRequest(params: {
       return makeRelayTransport();
     },
   };
-  const capabilities = resolveRealtimeVoiceProviderCapabilities({
+  const capabilities = await resolveRealtimeVoiceProviderCapabilitiesAsync({
     provider,
     providerConfig: params.providerConfig,
     cfg,
@@ -91,44 +74,29 @@ describe("Talk relay barge-in under forced agent consults", () => {
     await state.cleanup();
   });
 
-  function capture(params: Parameters<typeof captureBridgeRequest>[0]) {
-    const captured = captureBridgeRequest(params);
+  async function capture(params: Parameters<typeof captureBridgeRequest>[0]) {
+    const captured = await captureBridgeRequest(params);
     opened.push(captured.relaySessionId);
     return captured.request;
   }
 
   // Regression for #139278: forced consults suppress automatic audio turns, but
   // must not disable interruption. Both flags were derived from the same boolean.
-  it("keeps speech interruption armed while forced consults suppress audio turns", () => {
-    const request = capture({
-      providerConfig: {},
-      forceAgentConsultOnFinalTranscript: true,
-    });
-
-    expect(request?.autoRespondToAudio).toBe(false);
-    expect(request?.interruptResponseOnInputAudio).toBe(true);
-  });
-
-  it("leaves both enabled without forced consult routing", () => {
-    const request = capture({
-      providerConfig: {},
-      forceAgentConsultOnFinalTranscript: false,
-    });
-
-    expect(request?.autoRespondToAudio).toBe(true);
-    expect(request?.interruptResponseOnInputAudio).toBe(true);
-  });
-
-  it.each([false, true])(
-    "honors an explicit provider opt-out with forced consult routing %s",
-    (forceAgentConsultOnFinalTranscript) => {
-      const request = capture({
-        providerConfig: { interruptResponseOnInputAudio: false },
-        forceAgentConsultOnFinalTranscript,
+  it.each([
+    { forced: true, interrupt: undefined, expectedInterrupt: true },
+    { forced: false, interrupt: undefined, expectedInterrupt: true },
+    { forced: false, interrupt: false, expectedInterrupt: false },
+    { forced: true, interrupt: false, expectedInterrupt: false },
+  ])(
+    "resolves forced audio routing $forced independently of interruption $interrupt",
+    async ({ forced, interrupt, expectedInterrupt }) => {
+      const request = await capture({
+        providerConfig: interrupt === undefined ? {} : { interruptResponseOnInputAudio: interrupt },
+        forceAgentConsultOnFinalTranscript: forced,
       });
 
-      expect(request?.autoRespondToAudio).toBe(!forceAgentConsultOnFinalTranscript);
-      expect(request?.interruptResponseOnInputAudio).toBe(false);
+      expect(request?.autoRespondToAudio).toBe(!forced);
+      expect(request?.interruptResponseOnInputAudio).toBe(expectedInterrupt);
     },
   );
 });

@@ -1,4 +1,4 @@
-import { resolveClientVoiceAgentSessionId } from "../../talk/client-voice-session.js";
+import { resolveClientVoiceAgentSessionId } from "../../talk/client-voice-session-read.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "../session-transcript-preview.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
@@ -18,7 +18,7 @@ export async function readTalkRealtimeInitialItems(
     sessionKey: target.canonicalKey,
     storePath: target.storePath,
   };
-  const sessionId = resolveClientVoiceAgentSessionId(sessionTarget);
+  const sessionId = await resolveClientVoiceAgentSessionId(sessionTarget);
   if (!sessionId) {
     return [];
   }

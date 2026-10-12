@@ -75,13 +75,8 @@ async function runRemoteProbe<T>(params: {
 }
 
 function addTailscaleHint(account: ResolvedSmsAccount, hints: string[]): void {
-  let host;
-  try {
-    host = new URL(account.publicWebhookUrl).hostname;
-  } catch {
-    return;
-  }
-  if (!host.endsWith(".ts.net")) {
+  const host = URL.parse(account.publicWebhookUrl)?.hostname;
+  if (!host?.endsWith(".ts.net")) {
     return;
   }
   hints.push(
@@ -132,7 +127,7 @@ function compareTwilioMessagingService(
     return {
       status: "unavailable",
       reason:
-        "Twilio Messaging Service defers inbound webhooks to sender phone numbers; configure fromNumber or disable defer-to-sender before probing.",
+        "Twilio Messaging Service defers inbound webhooks to sender phone numbers; configure fromNumber or disable defer-to-sender before checking.",
     } as const;
   }
   const summary = {
@@ -228,61 +223,56 @@ export async function probeSmsAccount(params: {
   if (remoteTimeoutMs === 0) {
     webhook = {
       status: "unavailable",
-      reason: "Twilio webhook probe skipped because the probe timeout is too short.",
+      reason: "Twilio webhook check skipped because the check timeout is too short.",
     };
   } else {
-    const webhookTask: Promise<RemoteProbeOutcome<SmsTwilioWebhookProbe>> = params.account
-      .fromNumber
-      ? runRemoteProbe({
-          label: "Twilio webhook probe",
-          timeoutMs: remoteTimeoutMs,
-          run: async () =>
-            compareTwilioWebhook(
-              params.account,
-              (
-                await listTwilioIncomingPhoneNumbers({
-                  account: params.account,
-                  phoneNumber: params.account.fromNumber,
-                  fetchImpl: params.options?.fetchImpl,
-                  timeoutMs: remoteTimeoutMs,
-                })
-              )[0],
-            ),
-        })
-      : params.account.messagingServiceSid
-        ? runRemoteProbe({
-            label: "Twilio webhook probe",
+    const requestOptions = () => ({
+      account: params.account,
+      fetchImpl: params.options?.fetchImpl,
+      timeoutMs: remoteTimeoutMs,
+    });
+    const webhookTask: Promise<RemoteProbeOutcome<SmsTwilioWebhookProbe>> =
+      params.account.fromNumber || params.account.messagingServiceSid
+        ? runRemoteProbe<SmsTwilioWebhookProbe>({
+            label: "Twilio webhook check",
             timeoutMs: remoteTimeoutMs,
-            run: async () =>
-              compareTwilioMessagingService(
-                params.account,
-                await retrieveTwilioMessagingService({
-                  account: params.account,
-                  serviceSid: params.account.messagingServiceSid,
-                  fetchImpl: params.options?.fetchImpl,
-                  timeoutMs: remoteTimeoutMs,
-                }),
-              ),
+            run: params.account.fromNumber
+              ? async () =>
+                  compareTwilioWebhook(
+                    params.account,
+                    (
+                      await listTwilioIncomingPhoneNumbers({
+                        ...requestOptions(),
+                        phoneNumber: params.account.fromNumber,
+                      })
+                    )[0],
+                  )
+              : async () =>
+                  compareTwilioMessagingService(
+                    params.account,
+                    await retrieveTwilioMessagingService({
+                      ...requestOptions(),
+                      serviceSid: params.account.messagingServiceSid,
+                    }),
+                  ),
           })
         : Promise.resolve({
             kind: "value",
             value: {
               status: "unavailable",
-              reason: "Twilio SMS probe requires fromNumber or messagingServiceSid.",
+              reason: "Twilio SMS check requires fromNumber or messagingServiceSid.",
             },
           });
     const messageTask: Promise<RemoteProbeOutcome<TwilioMessageLogEntry[]>> = params.account
       .fromNumber
       ? runRemoteProbe({
-          label: "Twilio message history probe",
+          label: "Twilio message history check",
           timeoutMs: remoteTimeoutMs,
           run: async () =>
             await listTwilioMessages({
-              account: params.account,
+              ...requestOptions(),
               to: params.account.fromNumber,
               pageSize: 3,
-              fetchImpl: params.options?.fetchImpl,
-              timeoutMs: remoteTimeoutMs,
             }),
         })
       : Promise.resolve({ kind: "value", value: [] });
@@ -329,10 +319,10 @@ export function formatSmsProbeLines(probe: unknown): ChannelCapabilitiesDisplayL
   const smsProbe = probe as Partial<SmsProbe>;
   const lines: ChannelCapabilitiesDisplayLine[] = [];
   if (smsProbe.ok === true) {
-    lines.push({ text: "Probe: ok", tone: "success" });
+    lines.push({ text: "Check: ok", tone: "success" });
   } else if (smsProbe.ok === false) {
     lines.push({
-      text: `Probe: failed${smsProbe.error ? ` (${smsProbe.error})` : ""}`,
+      text: `Check: failed${smsProbe.error ? ` (${smsProbe.error})` : ""}`,
       tone: "error",
     });
   }

@@ -23,6 +23,7 @@ import {
 import type { TerminalUploadResult as ProtocolTerminalUploadResult } from "../../packages/gateway-protocol/src/schema/terminal.js";
 import { logWarn } from "../logger.js";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { hasErrnoCode } from "./errno.js";
@@ -95,13 +96,6 @@ function validateTerminalUpload(contentBase64: string): number {
   return terminalUploadDecodedSize(contentBase64);
 }
 
-function stagingLimitError(): Error {
-  return new Error(
-    "terminal upload staging limit reached (256 MiB or 64 files). " +
-      "Move or remove staged files, then retry, or wait for the 24-hour cleanup.",
-  );
-}
-
 function cleanupState(root: string, retentionMs?: number): CleanupState {
   let state = cleanupRoots.get(root);
   if (!state) {
@@ -121,13 +115,15 @@ function scheduleCleanup(root: string, state: CleanupState, at: number): void {
     clearTimeout(state.timer);
   }
   state.nextAt = at;
-  state.timer = setTimeout(
-    () => {
-      state.timer = undefined;
-      state.nextAt = undefined;
-      void ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: state.retentionMs });
-    },
-    Math.max(0, at - Date.now()),
+  state.timer = runInDetachedAsyncContext(() =>
+    setTimeout(
+      () => {
+        state.timer = undefined;
+        state.nextAt = undefined;
+        void ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: state.retentionMs });
+      },
+      Math.max(0, at - Date.now()),
+    ),
   );
   state.timer.unref?.();
 }
@@ -348,11 +344,9 @@ async function scanUploads(
   return { bytes, directories };
 }
 
-async function runTerminalUploadCleanupRecovery(options?: {
-  tempRoot?: string;
-  retentionMs?: number;
-  nowMs?: number;
-}): Promise<void> {
+async function runTerminalUploadCleanupRecovery(
+  options: Parameters<typeof ensureTerminalUploadCleanup>[0],
+): Promise<void> {
   const requestedRoot = options?.tempRoot ?? resolveTerminalUploadRoot();
   let root = path.resolve(requestedRoot);
   try {
@@ -414,7 +408,10 @@ export async function stageTerminalUpload(
           retained.directories >= MAX_RETAINED_DIRECTORIES ||
           retained.bytes + size > MAX_RETAINED_BYTES
         ) {
-          throw stagingLimitError();
+          throw new Error(
+            "terminal upload staging limit reached (256 MiB or 64 files). " +
+              "Move or remove staged files, then retry, or wait for the 24-hour cleanup.",
+          );
         }
         await assertHeld();
         assertCommitAllowed?.();

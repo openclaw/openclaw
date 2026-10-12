@@ -1,5 +1,6 @@
 import { reasoningTagTextPolicy } from "../provider-options.js";
 import { modelRequestBodyState } from "../transports/model-request-body.js";
+import { responsesServiceTierObserver } from "../transports/openai-responses-contracts.js";
 import { copyProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 // Simple provider option helpers normalize lightweight provider configuration.
 import type {
@@ -44,6 +45,7 @@ export function buildBaseOptions(
     metadata: options?.metadata,
   };
   reasoningTagTextPolicy.copy(options, baseOptions);
+  responsesServiceTierObserver.copy(options, baseOptions);
   modelRequestBodyState(baseOptions, options);
   return copyProviderAcceptanceObserver(options, baseOptions);
 }

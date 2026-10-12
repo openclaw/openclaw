@@ -178,7 +178,7 @@ Backend adapters retain protocol validation and special-mode handling.
     replace aliases with an adapter id: separate aliases can point at separate
     local GPU hosts. The host rejects endpoints that do not match the configured
     provider base URL, apart from the `/v1` normalization used by Ollama and LM
-    Studio adapters. The host owns startup serialization, readiness probes,
+    Studio adapters. The host owns startup serialization, readiness checks,
     request leases, abort handling, and idle shutdown.
 
     The helper uses the same simple-completion preparation path as OpenClaw's
@@ -199,6 +199,12 @@ Backend adapters retain protocol validation and special-mode handling.
     `requiredAuthMode: "oauth"`; the host then rejects a selected non-OAuth
     credential before dispatch. Isolated agent-runtime completions reject these
     direct-provider controls before dispatch.
+
+    OpenAI and Azure Responses accept a raw JSON Schema as `responseFormat` and
+    wrap it in `text.format` with `type: "json_schema"` and the name
+    `openclaw_response`. Native `json_schema`, `json_object`, and `text` formats
+    are preserved; Chat Completions-style nested `json_schema` descriptors are
+    flattened for Responses, including any supplied `strict` value.
 
     Set `reasoning` to request a reasoning effort for the selected model. The
     host accepts the canonical thinking levels (`off`, `minimal`, `low`,

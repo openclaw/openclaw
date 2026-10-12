@@ -10,8 +10,11 @@ import { resolveProviderRequestCapabilities } from "../agents/provider-attributi
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { recordLiveCatalogExpiry } from "../plugins/provider-catalog-expiry.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import {
+  consumeLiveCatalogRefresh,
+  recordLiveCatalogExpiry,
+} from "../plugins/provider-catalog-expiry.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
 export { normalizeOpenRouterModelReasoning } from "@openclaw/model-catalog-core/model-catalog-normalize";
@@ -27,13 +30,11 @@ export { resolveMergedModelProviderConfig } from "../config/model-provider-confi
 export {
   buildManifestModelProviderConfig,
   buildManifestProviderCatalogFamily,
-  buildPairedProviderApiKeyCatalog,
   buildSingleProviderApiKeyCatalog,
   findCatalogTemplate,
   readManifestProviderDefaultModelRef,
   resolveFirstProviderCatalogAuth,
   type ManifestProviderCatalogEntry,
-  type ManifestProviderCatalogSurface,
 } from "../plugins/provider-catalog.js";
 
 /**
@@ -61,21 +62,29 @@ type LiveCatalogCacheEntry<T> = {
   consumers: number;
   settled: boolean;
   retained: boolean;
+  waiters?: Set<Deferred<T>>;
 };
 
 const LIVE_CATALOG_CACHE_MAX_ENTRIES = 100;
-const liveCatalogCache = new Map<string, LiveCatalogCacheEntry<unknown>>();
+const liveCatalogCache = new Map<string, unknown>();
 
 async function consumeLiveCatalog<T>(entry: LiveCatalogCacheEntry<T>, signal?: AbortSignal) {
   signal?.throwIfAborted();
   entry.controller.signal.throwIfAborted();
   entry.consumers += 1;
+  const pending = signal && !entry.settled ? createDeferredCore<T>() : undefined;
+  if (pending) {
+    (entry.waiters ??= new Set()).add(pending);
+  }
   let released = false;
   const release = () => {
     if (released) {
       return;
     }
     released = true;
+    if (pending) {
+      entry.waiters?.delete(pending);
+    }
     entry.consumers -= 1;
     // A shared load belongs to all its callers, never the first caller's deadline.
     if (!entry.settled && entry.consumers === 0) {
@@ -84,18 +93,17 @@ async function consumeLiveCatalog<T>(entry: LiveCatalogCacheEntry<T>, signal?: A
   };
   let listener: Disposable | undefined;
   try {
-    const cancelled = signal ? createDeferredCore<never>() : undefined;
-    if (signal && cancelled) {
+    if (signal && pending) {
       // Match throwIfAborted(): cancellation preserves arbitrary caller-owned reasons.
       listener = addAbortListener(signal, () => {
         // Release before a same-turn completion can retain an abandoned load.
         release();
-        cancelled.reject(signal.reason);
+        pending.reject(signal.reason);
       });
     }
-    const value = cancelled
-      ? await Promise.race([entry.value, cancelled.promise])
-      : await entry.value;
+    // Promise.race keeps a canceled caller's reactions until the shared load settles.
+    // Removable waiters release its reason and async context while other callers wait.
+    const value = await (pending?.promise ?? entry.value);
     if (entry.retained) {
       recordLiveCatalogExpiry(entry.expiresAt);
     }
@@ -136,11 +144,13 @@ export async function getCachedLiveCatalogValue<T>(params: {
     return await params.load(params.signal);
   }
   const key = buildLiveCatalogCacheKey(params.keyParts);
+  const refresh = consumeLiveCatalogRefresh(key);
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
   if (existing) {
     // An abandoned load may ignore abort; a new caller must not inherit its cancellation.
     if (
       !existing.controller.signal.aborted &&
+      (!refresh || !existing.settled) &&
       isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })
     ) {
       return await consumeLiveCatalog(existing, params.signal);
@@ -148,6 +158,8 @@ export async function getCachedLiveCatalogValue<T>(params: {
     liveCatalogCache.delete(key);
   }
   const completion = createDeferredCore<T>();
+  // Signaled callers observe their own waiter; an abandoned shared rejection still needs an owner.
+  void completion.promise.catch(() => undefined);
   const entry: LiveCatalogCacheEntry<T> = {
     expiresAt,
     controller: new AbortController(),
@@ -178,9 +190,16 @@ export async function getCachedLiveCatalogValue<T>(params: {
         }
       }
       completion.resolve(resolved);
+      for (const waiter of entry.waiters ?? []) {
+        waiter.resolve(resolved);
+      }
     } catch (error) {
       completion.reject(error);
+      for (const waiter of entry.waiters ?? []) {
+        waiter.reject(error);
+      }
     } finally {
+      entry.waiters = undefined;
       entry.retained = retain;
       entry.settled = true;
       if (!retain && liveCatalogCache.get(key) === entry) {

@@ -1,9 +1,10 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
@@ -22,7 +23,7 @@ import {
 import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
 import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
 import {
-  choiceMatchesCredential,
+  findSetupCredentialChoice,
   listSetupInferenceAuthOptions,
   listSetupInferenceEnableOptions,
   listSetupInferenceInstallOptions,
@@ -56,7 +57,7 @@ async function listSavedSetupInferenceCandidates(params: {
 }): Promise<SetupInferenceCandidate[]> {
   const { withSetupProviderAuthMethod } = await import("./setup-provider-method.js");
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
-  const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
   const candidates: SetupInferenceCandidate[] = [];
   for (const [profileId, credential] of Object.entries(store.profiles)) {
     params.signal.throwIfAborted();
@@ -64,11 +65,7 @@ async function listSavedSetupInferenceCandidates(params: {
     if (!saved && params.cfg.auth?.profiles?.[profileId]) {
       continue;
     }
-    const choice = saved?.authChoice
-      ? params.choices.find(
-          (entry) => entry.choiceId === saved.authChoice && entry.pluginId === saved.pluginId,
-        )
-      : params.choices.find((entry) => choiceMatchesCredential(entry, credential));
+    const choice = findSetupCredentialChoice(params.choices, credential);
     let modelRef = saved?.modelRef;
     if (!modelRef && choice) {
       const loaded = await withSetupProviderAuthMethod({ ...params, choice }, ({ method }) => ({
@@ -271,28 +268,23 @@ export async function detectSetupInference(
   // Preserve the shipped 30s discovery allowance.
   // This bounds asynchronous discovery; synchronous plugin loading shares the event loop.
   const timeoutMs = 30_000;
-  return await new Promise<SetupInferenceDetection>((resolve, reject) => {
-    const timer = setTimeout(() => {
+  return await raceWithTimeout(
+    () =>
+      discoverSetupInference(prepared, deps, controller.signal, (detection) => {
+        partial = detection;
+        deps.onPartial?.(detection);
+      }).catch((error: unknown) => {
+        throw toErrorObject(error, "Setup inference discovery failed");
+      }),
+    timeoutMs,
+    () => {
       controller.abort(new Error("Setup inference discovery timed out"));
       setupInferenceLog.warn(
         `Setup inference detection timed out after ${timeoutMs}ms; returning partial detection.`,
       );
-      resolve(partial);
-    }, timeoutMs);
-    void discoverSetupInference(prepared, deps, controller.signal, (detection) => {
-      partial = detection;
-      deps.onPartial?.(detection);
-    }).then(
-      (detection) => {
-        clearTimeout(timer);
-        resolve(detection);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(toErrorObject(error, "Setup inference discovery failed"));
-      },
-    );
-  });
+      return partial;
+    },
+  );
 }
 
 async function discoverSetupInference(

@@ -157,9 +157,9 @@ describe("NewSessionDraftPersistence restore race", () => {
     }
   });
 
-  it.each(["read", "attachments"] as const)(
-    "never flushes model-only edits after failed %s restoration",
-    async (failure) => {
+  it.each(["pending", "canceled", "read", "attachments"] as const)(
+    "reconciles stored content before persisting a model-only edit (%s restore)",
+    async (restoration) => {
       const flow = createFlow();
       const selection = { agentId: "main", model: "openai/retry", thinkingLevel: "high" };
       flow.draftPersistence.modelSelection = {
@@ -169,24 +169,32 @@ describe("NewSessionDraftPersistence restore race", () => {
       };
       flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
       flow.draftPersistence.activateRoute("failed-restoration");
-      flow.draftPersistence.captureSubmission();
+      if (restoration !== "pending") {
+        flow.draftPersistence.captureSubmission();
+      }
       flow.draftPersistence.noteModelSelectionMutation();
       const saved = {
         status: "found" as const,
         draft: { revision: 10, text: "Keep saved content", attachments: [], writeId: "saved" },
       };
-      await resolvePendingRead(saved);
-      if (failure === "attachments") {
-        store.hydrateDurableComposerAttachments.mockRejectedValueOnce(
-          new Error("Attachment unavailable"),
-        );
+      if (restoration !== "pending") {
+        await resolvePendingRead(saved);
+        await settle();
+        flow.draftPersistence.persistNow();
+        expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
       }
-      await resolvePendingRead(failure === "read" ? { status: "storage-failed" } : saved);
-      await settle();
-      flow.draftPersistence.persistNow();
-      expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
-      // A later deliberate retry can rehydrate and commit the retained model intent.
-      flow.draftPersistence.noteModelSelectionMutation();
+      if (restoration === "read" || restoration === "attachments") {
+        if (restoration === "attachments") {
+          store.hydrateDurableComposerAttachments.mockRejectedValueOnce(
+            new Error("Attachment unavailable"),
+          );
+        }
+        await resolvePendingRead(restoration === "read" ? { status: "storage-failed" } : saved);
+        await settle();
+        flow.draftPersistence.persistNow();
+        expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
+        flow.draftPersistence.noteModelSelectionMutation();
+      }
       await resolvePendingRead(saved);
       await vi.waitFor(() => expect(flow.message).toBe("Keep saved content"));
       flow.draftPersistence.persistNow();
@@ -198,40 +206,6 @@ describe("NewSessionDraftPersistence restore race", () => {
       flow.disconnect();
     },
   );
-
-  it("rehydrates a canceled pristine read before persisting a model-only retry", async () => {
-    const flow = createFlow();
-    const selection = { agentId: "main", model: "openai/retry", thinkingLevel: "high" };
-    flow.draftPersistence.modelSelection = {
-      read: () => selection,
-      restore: vi.fn(),
-      retire: vi.fn(),
-    };
-    flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
-    flow.draftPersistence.activateRoute("canceled-pristine");
-    flow.draftPersistence.captureSubmission();
-    flow.draftPersistence.noteModelSelectionMutation();
-    // The canceled read may publish lineage, but must not authorize writing empty content.
-    await resolvePendingRead({
-      status: "found",
-      draft: { revision: 10, text: "Saved unsent message", attachments: [], writeId: "saved" },
-    });
-    await settle();
-    flow.draftPersistence.persistNow();
-    expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
-    await resolvePendingRead({
-      status: "found",
-      draft: { revision: 10, text: "Saved unsent message", attachments: [], writeId: "saved" },
-    });
-    await vi.waitFor(() => expect(flow.message).toBe("Saved unsent message"));
-    flow.draftPersistence.persistNow();
-    await vi.waitFor(() =>
-      expect(store.writeDurableComposerSnapshot).toHaveBeenLastCalledWith(
-        expect.objectContaining({ text: "Saved unsent message", modelSelection: selection }),
-      ),
-    );
-    flow.disconnect();
-  });
 
   it("persists a model-only edit after a submission capture fails without consuming the draft", async () => {
     const flow = createFlow();
@@ -274,32 +248,6 @@ describe("NewSessionDraftPersistence restore race", () => {
     flow.setMessage("Newer draft");
     await flow.draftPersistence.clearSubmittedDraft(previous);
     expect(retire).toHaveBeenCalledTimes(1);
-    flow.disconnect();
-  });
-
-  it("merges a model-only edit with a message whose durable restore is still pending", async () => {
-    const flow = createFlow();
-    const selection = { agentId: "main", model: "openai/other", thinkingLevel: "low" };
-    const restoreSelection = vi.fn();
-    flow.draftPersistence.modelSelection = {
-      read: () => selection,
-      restore: restoreSelection,
-      retire: vi.fn(),
-    };
-    flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
-    flow.draftPersistence.activateRoute("model-choice");
-    flow.draftPersistence.noteModelSelectionMutation();
-    await resolvePendingRead({
-      status: "found",
-      draft: { revision: 10, text: "Keep this unsent message", attachments: [], writeId: "stored" },
-    });
-    await vi.waitFor(() => expect(flow.message).toBe("Keep this unsent message"));
-    flow.draftPersistence.persistNow();
-    await vi.waitFor(() =>
-      expect(store.writeDurableComposerSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({ text: "Keep this unsent message", modelSelection: selection }),
-      ),
-    );
     flow.disconnect();
   });
 
@@ -625,79 +573,56 @@ describe("NewSessionDraftPersistence restore race", () => {
     persistence.disconnect();
   });
 
-  it("never applies a stored draft over text typed before the restore resolves", async () => {
-    const flow = createFlow();
-    // Reload flow: the composer renders and the user types before the gateway
-    // recovery scope arrives, so the route activates after the mutation.
-    flow.setMessage("typed before restore");
-    flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
-    flow.draftPersistence.activateRoute("agent:main");
-    await resolvePendingRead({
-      status: "found",
-      draft: { revision: 7, text: "stored draft", attachments: [], writeId: "w-1" },
-    });
-    await settle();
-    expect(flow.message).toBe("typed before restore");
-    // The typed text also wins persistence: local-wins writes it above the
-    // stored revision instead of leaving the stale draft in place.
-    const write = store.writeDurableComposerSnapshot.mock.calls.at(-1)?.[0] as
-      | { revision: number; text: string }
-      | undefined;
-    expect(write?.text).toBe("typed before restore");
-    expect(write?.revision).toBeGreaterThan(7);
-  });
-
-  it("persists text typed before activation even when no stored draft exists", async () => {
-    const flow = createFlow();
-    flow.setMessage("typed before restore");
-    flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
-    flow.draftPersistence.activateRoute("agent:main");
-    await resolvePendingRead({ status: "not-found" });
-    await settle();
-    expect(flow.message).toBe("typed before restore");
-    const write = store.writeDurableComposerSnapshot.mock.calls.at(-1)?.[0] as
-      | { text: string }
-      | undefined;
-    expect(write?.text).toBe("typed before restore");
-  });
-
-  it("restores stored text and selected recipients into a pristine composer", async () => {
-    const flow = createFlow();
-    const mentions = [{ profileId: "alex", start: 0, end: 5 }];
-    flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
-    flow.draftPersistence.activateRoute("agent:main");
-    await resolvePendingRead({
-      status: "found",
-      draft: { revision: 7, text: "@Alex", mentions, attachments: [], writeId: "w-1" },
-    });
-    await settle();
-    expect(flow.message).toBe("@Alex");
-    expect(flow.mentions).toEqual(mentions);
-  });
-
-  it("preserves a same-name recipient selected before stored draft restoration completes", async () => {
-    const flow = createFlow();
-    const mentions = [{ profileId: "new-alex", start: 0, end: 5 }];
-    flow.setMessage("@Alex", mentions);
-    flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
-    flow.draftPersistence.activateRoute("agent:main");
-    await resolvePendingRead({
-      status: "found",
-      draft: {
-        revision: 7,
-        text: "@Alex",
-        mentions: [{ profileId: "old-alex", start: 0, end: 5 }],
-        attachments: [],
-        writeId: "w-1",
-      },
-    });
-    await settle();
-    expect(flow.mentions).toEqual(mentions);
-    expect(store.writeDurableComposerSnapshot.mock.calls.at(-1)?.[0]).toMatchObject({
-      text: "@Alex",
-      mentions,
-    });
-  });
+  it.each(["newer text", "missing", "pristine", "recipient"] as const)(
+    "reconciles the initial stored draft with the composer (%s)",
+    async (state) => {
+      const flow = createFlow();
+      const mentions = [{ profileId: "new-alex", start: 0, end: 5 }];
+      const expectedText =
+        state === "pristine" || state === "recipient" ? "@Alex" : "typed before restore";
+      if (state !== "pristine") {
+        flow.setMessage(expectedText, state === "recipient" ? mentions : undefined);
+      }
+      flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
+      flow.draftPersistence.activateRoute("agent:main");
+      await resolvePendingRead(
+        state === "missing"
+          ? { status: "not-found" }
+          : {
+              status: "found",
+              draft: {
+                revision: 7,
+                text: state === "newer text" ? "stored draft" : "@Alex",
+                ...(state === "pristine" || state === "recipient"
+                  ? {
+                      mentions:
+                        state === "pristine"
+                          ? mentions
+                          : [{ profileId: "old-alex", start: 0, end: 5 }],
+                    }
+                  : {}),
+                attachments: [],
+                writeId: "w-1",
+              },
+            },
+      );
+      await settle();
+      expect(flow.message).toBe(expectedText);
+      if (state === "pristine" || state === "recipient") {
+        expect(flow.mentions).toEqual(mentions);
+      }
+      if (state !== "pristine") {
+        const write = store.writeDurableComposerSnapshot.mock.calls.at(-1)?.[0];
+        expect(write?.text).toBe(expectedText);
+        if (state === "newer text") {
+          expect(write?.revision).toBeGreaterThan(7);
+        } else if (state === "recipient") {
+          expect(write).toMatchObject({ text: "@Alex", mentions });
+        }
+      }
+      flow.disconnect();
+    },
+  );
 
   it("re-arms restore for the next route once the page resets the draft", async () => {
     const flow = createFlow();

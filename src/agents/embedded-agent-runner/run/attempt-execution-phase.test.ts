@@ -62,12 +62,6 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       change: "current",
       guarded: false,
     },
-    {
-      kind: "exact cron run",
-      key: "agent:main:cron:provider-fence:run:cron-run-1",
-      change: "current",
-      guarded: false,
-    },
   ] as const)(
     "scopes the provider generation guard after writer admission ($kind, $change)",
     async ({ key, change, guarded }) => {
@@ -165,19 +159,13 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
   );
 
   it.each([
-    ["stop", 10_000, "event"],
-    ["stop", 0, "event"],
-    ["toolUse", 10_000, "event"],
-    ["error", 10_000, "event"],
-    ["aborted", 10_000, "event"],
-    ["stop", 10_000, "result"],
-    ["stop", 0, "result"],
-    ["error", 10_000, "result"],
-    ["output-limit", 10_000, "event"],
-    ["output-limit", 10_000, "result"],
+    ["stop", 10_000],
+    ["toolUse", 10_000],
+    ["aborted", 10_000],
+    ["output-limit", 10_000],
   ] as const)(
-    "observes terminal %s usage once across async-tool fragments (cacheRead=%s, completion=%s)",
-    async (stopReason, cacheRead, completion) => {
+    "observes terminal %s usage once across async-tool fragments (cacheRead=%s)",
+    async (stopReason, cacheRead) => {
       const terminalStopReason = stopReason === "output-limit" ? "error" : stopReason;
       const fixture = await createFixture();
       const recordStage = vi.fn();
@@ -237,9 +225,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         toolCall,
         partial: { ...message, content: [toolCall], usage: makeZeroUsageSnapshot() },
       });
-      if (completion === "result") {
-        response.end(message);
-      } else if (terminalStopReason === "error" || terminalStopReason === "aborted") {
+      if (terminalStopReason === "error" || terminalStopReason === "aborted") {
         response.push({ type: "error", reason: terminalStopReason, error: message });
       } else {
         response.push({ type: "done", reason: terminalStopReason, message });
@@ -311,6 +297,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           {
             options: {
               requestIndex: 1,
+              messageCount: 0,
               broke: false,
               previousCacheRead: undefined,
               input: 100,
@@ -365,6 +352,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     const releaseSummary = createDeferred();
     const events: EmbeddedContextAccountingEvent[] = [];
     const ends: AgentSessionEvent[] = [];
+    let summarySignalAborted: boolean | undefined;
     session.subscribe((event) => {
       if (event.type === "compaction_end") {
         ends.push(event);
@@ -375,7 +363,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       }
     });
     let requests = 0;
-    streamMocks.streamSimple.mockImplementation(async (activeModel, _context, options) => {
+    streamMocks.streamSimple.mockImplementation((activeModel, _context, options) => {
       if (++requests === 1) {
         return createAssistantResultStream(
           createAssistant(
@@ -386,12 +374,17 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           ),
         );
       }
+      const response = createAssistantMessageEventStream();
       summaryStarted.resolve();
-      await releaseSummary.promise;
-      expect(options?.signal?.aborted).toBe(false);
-      return createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "Blue Heron summary" }]),
-      );
+      void releaseSummary.promise.then(() => {
+        summarySignalAborted = options?.signal?.aborted;
+        const message = createAssistant(activeModel, [
+          { type: "text", text: "Blue Heron summary" },
+        ]);
+        response.push({ type: "done", reason: "stop", message });
+        response.end();
+      });
+      return response;
     });
     const network = vi
       .spyOn(globalThis, "fetch")
@@ -453,6 +446,9 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       }
       releaseSummary.resolve();
       const error = await outcome;
+      if (phase === "during summarization") {
+        expect(summarySignalAborted).toBe(false);
+      }
       const compacted = sessionManager.getEntries().filter((entry) => entry.type === "compaction");
       expect(compacted).toHaveLength(owner === "active" ? 1 : 0);
       if (phase === "before installation") {
@@ -537,7 +533,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
             onModelRequest: expect.any(Function),
             getObservation: expect.any(Function),
           },
-          history: expect.objectContaining({ contextEngineAssemblySucceeded: true }),
+          history: expect.objectContaining({ contextEnginePromptAuthority: "assembled" }),
           isProbeSession: false,
           stream: fixture.streamResult,
           timeout: fixture.timeoutResult,

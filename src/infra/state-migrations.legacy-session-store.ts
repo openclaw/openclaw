@@ -3,30 +3,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  migrateLegacySessionEntryState,
+  normalizePersistedSessionEntryShape,
+} from "../commands/doctor/shared/session-entry-shape.js";
 import { normalizeRestartRecoveryEntryFields } from "../config/sessions/restart-recovery-state.js";
+import { hasLegacySessionProviderState } from "../config/sessions/session-entry-state-format.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
   hydrateSessionStoreSkillPromptRefs,
   projectSessionStoreForPersistence,
 } from "../config/sessions/skill-prompt-blobs.js";
-import {
-  normalizePersistedSessionEntryShape,
-  stripRuntimeOnlySessionSkillsFields,
-} from "../config/sessions/store-entry-shape.js";
-import {
-  applyFileBackedSessionStoreMaintenance,
-  type SessionMaintenanceApplyReport,
-} from "../config/sessions/store-maintenance-operations.js";
-import { planSessionEntryMaintenance } from "../config/sessions/store-maintenance-plan.js";
-import { collectSessionMaintenancePreserveKeysForStore } from "../config/sessions/store-maintenance-preserve.js";
-import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
-import {
-  countUnarchivedSessionEntries,
-  type ResolvedSessionMaintenanceConfig,
-  type SessionMaintenanceWarning,
-} from "../config/sessions/store-maintenance.js";
-import { applySessionStoreMigrations } from "../config/sessions/store-migrations.js";
+import { stripRuntimeOnlySessionSkillsFields } from "../config/sessions/store-entry-shape.js";
+import { applyFileBackedSessionStoreMaintenance } from "../config/sessions/store-maintenance-operations.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
+import { assertSupportedSessionStoreEntry } from "../config/sessions/supported-session-store.js";
 import {
   normalizeSessionRuntimeModelFields,
   type SessionEntry,
@@ -59,37 +50,13 @@ import {
 import { writeTextAtomic } from "./json-files.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 
-type LegacySessionStoreLoadOptions = {
-  skipCache?: boolean;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
-  runMaintenance?: boolean;
-  clone?: boolean;
-  hydrateSkillPromptRefs?: boolean;
-};
-
-export type LegacySessionStoreSaveOptions = {
+type LegacySessionStoreSaveOptions = {
   skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-  activeSessionKey?: string;
-  onWarn?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
-  onMaintenanceApplied?: (report: SessionMaintenanceApplyReport) => void | Promise<void>;
-  maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
-  singleEntryPersistence?: { sessionKey: string; entry: SessionEntry };
-  requireWriteSuccess?: boolean;
-};
-
-type LegacySessionStoreUpdateOptions<T> = LegacySessionStoreSaveOptions & {
-  reentrant?: boolean;
-  skipSaveWhenResult?: (result: T) => boolean;
 };
 
 const log = createSubsystemLogger("sessions/legacy-importer");
 const loadSessionArchiveRuntime = createLazyRuntimeModule(
   () => import("../gateway/session-archive.runtime.js"),
-);
-const loadTrajectoryCleanupRuntime = createLazyRuntimeModule(
-  () => import("../trajectory/cleanup.js"),
 );
 
 function normalizeOptionalDeliveryContext(value: unknown): DeliveryContext | undefined {
@@ -196,22 +163,9 @@ function normalizeLegacyPluginState(
   return next;
 }
 
-function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
-  return normalizeLegacyPluginState(entry, "pluginExtensions", (value) =>
-    isPluginJsonValue(value) ? value : undefined,
-  );
-}
-
-function normalizePluginExtensionSlotKeys(entry: SessionEntry): SessionEntry {
-  return normalizeLegacyPluginState(entry, "pluginExtensionSlotKeys", (value) => {
-    const slotKey = normalizeSessionEntrySlotKey(value);
-    return slotKey.ok ? slotKey.key : undefined;
-  });
-}
-
 function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void {
-  applySessionStoreMigrations(store);
   for (const [key, entry] of Object.entries(store)) {
+    assertSupportedSessionStoreEntry(entry);
     const modelSelectionLocked = isRecord(entry) && entry.modelSelectionLocked === true;
     const shaped = normalizePersistedSessionEntryShape(entry, { sessionKey: key });
     if (!shaped) {
@@ -225,17 +179,19 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
     if (modelSelectionLocked && runtimeFields !== shaped) {
       throw new Error(`Invalid model-selection-locked session entry: ${key}`);
     }
-    store[key] = stripRuntimeOnlySessionSkillsFields(
-      normalizePluginExtensionSlotKeys(
-        normalizePluginExtensions(
-          normalizeRestartRecoveryFields(
-            normalizeLegacySessionEntryDelivery(
-              migrateLegacySessionCreator(modelSelectionLocked ? shaped : runtimeFields),
-            ),
-          ),
-        ),
+    let normalized = normalizeRestartRecoveryFields(
+      normalizeLegacySessionEntryDelivery(
+        migrateLegacySessionCreator(modelSelectionLocked ? shaped : runtimeFields),
       ),
     );
+    normalized = normalizeLegacyPluginState(normalized, "pluginExtensions", (value) =>
+      isPluginJsonValue(value) ? value : undefined,
+    );
+    normalized = normalizeLegacyPluginState(normalized, "pluginExtensionSlotKeys", (value) => {
+      const slotKey = normalizeSessionEntrySlotKey(value);
+      return slotKey.ok ? slotKey.key : undefined;
+    });
+    store[key] = stripRuntimeOnlySessionSkillsFields(normalized);
   }
   const harnessError = resolveAgentHarnessSessionStoreError(store);
   if (harnessError) {
@@ -243,35 +199,11 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
   }
 }
 
-export function loadLegacySessionStore(
-  storePath: string,
-  options: LegacySessionStoreLoadOptions = {},
-): Record<string, SessionEntry> {
+export function loadLegacySessionStore(storePath: string): Record<string, SessionEntry> {
   const { store } = readSessionStoreJson5(storePath);
-  if (options.hydrateSkillPromptRefs !== false) {
-    hydrateSessionStoreSkillPromptRefs({ storePath, store });
-  }
+  hydrateSessionStoreSkillPromptRefs({ storePath, store });
   const sessionStore = store as Record<string, SessionEntry>;
   normalizeLegacySessionStore(sessionStore);
-  if (options.runMaintenance) {
-    const maintenance = options.maintenanceConfig ?? resolveMaintenanceConfig();
-    const beforeCount = countUnarchivedSessionEntries(sessionStore);
-    if (maintenance.mode === "enforce") {
-      const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
-        storePath,
-        store: sessionStore,
-      });
-      planSessionEntryMaintenance({
-        profile: "legacy-read",
-        maintenance,
-        initialUnarchivedCount: beforeCount,
-        readPreserveKeys: () => preserveSessionKeys,
-        log: false,
-        readAgeCandidates: () => sessionStore,
-        readCapCandidates: () => ({ store: sessionStore, maxEntries: maintenance.maxEntries }),
-      });
-    }
-  }
   return sessionStore;
 }
 
@@ -311,20 +243,20 @@ async function archiveRemovedSessionTranscripts(params: {
   reason: "deleted";
   restrictToStoreDir: true;
 }): Promise<Set<string>> {
-  const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
+  const { archiveSessionTranscriptsDetailed } = await loadSessionArchiveRuntime();
   const archivedDirs = new Set<string>();
   for (const [sessionId, sessionFile] of params.removedSessionFiles) {
     if (params.referencedSessionIds.has(sessionId)) {
       continue;
     }
-    const archived = archiveSessionTranscripts({
+    const archived = archiveSessionTranscriptsDetailed({
       sessionId,
       storePath: params.storePath,
       sessionFile,
       reason: params.reason,
       restrictToStoreDir: params.restrictToStoreDir,
     });
-    for (const archivedPath of archived) {
+    for (const { archivedPath } of archived) {
       archivedDirs.add(path.dirname(archivedPath));
     }
   }
@@ -366,19 +298,10 @@ async function writeLegacySessionStoreUnlocked(
     await applyFileBackedSessionStoreMaintenance({
       storePath,
       store,
-      activeSessionKey: options.activeSessionKey,
-      onWarn: options.onWarn,
-      onMaintenanceApplied: options.onMaintenanceApplied,
-      maintenanceOverride: options.maintenanceOverride,
-      maintenanceConfig: options.maintenanceConfig,
       log,
       commitReducedStore: () => persistLegacySessionStore(storePath, store),
       artifacts: {
         archiveRemovedSessionTranscripts,
-        removeRemovedSessionTrajectoryArtifacts: async (params) => {
-          const { removeRemovedSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
-          await removeRemovedSessionTrajectoryArtifacts(params);
-        },
         cleanupArchivedSessionTranscripts: async (params) => {
           const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
           await cleanupArchivedSessionTranscripts(params);
@@ -409,21 +332,15 @@ export async function saveLegacySessionStore(
 export async function updateLegacySessionStore<T>(
   storePath: string,
   mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
-  options: LegacySessionStoreUpdateOptions<T> = {},
+  options: LegacySessionStoreSaveOptions = {},
 ): Promise<T> {
-  return await runExclusiveSessionStoreWrite(
-    storePath,
-    async () => {
-      const store = loadLegacySessionStore(storePath);
-      const lockedEntriesBefore = snapshotLockedEntries(store);
-      const result = await mutator(store);
-      if (!options.skipSaveWhenResult?.(result)) {
-        await writeLegacySessionStoreUnlocked(storePath, store, lockedEntriesBefore, options);
-      }
-      return result;
-    },
-    { reentrant: options.reentrant },
-  );
+  return await runExclusiveSessionStoreWrite(storePath, async () => {
+    const store = loadLegacySessionStore(storePath);
+    const lockedEntriesBefore = snapshotLockedEntries(store);
+    const result = await mutator(store);
+    await writeLegacySessionStoreUnlocked(storePath, store, lockedEntriesBefore, options);
+    return result;
+  });
 }
 
 type LegacySessionDeliveryEntry = SessionEntry & {
@@ -456,12 +373,7 @@ function isInternalContext(context?: DeliveryContext): boolean {
 }
 
 function hasExternalTarget(context?: DeliveryContext): boolean {
-  return Boolean(
-    context?.channel &&
-    context.channel !== INTERNAL_MESSAGE_CHANNEL &&
-    !isInternalNonDeliveryChannel(context.channel) &&
-    context.to,
-  );
+  return Boolean(context?.channel && !isInternalContext(context) && context.to);
 }
 
 function mergeExternalOverInternal(
@@ -477,7 +389,16 @@ function mergeExternalOverInternal(
 }
 
 /** Canonicalizes file-era delivery fields before doctor imports a row into SQLite. */
-export function normalizeLegacySessionEntryDelivery(entry: SessionEntry): SessionEntry {
+export function normalizeLegacySessionEntryDelivery(entry: SessionEntry): SessionEntry;
+export function normalizeLegacySessionEntryDelivery(
+  entry: Record<string, unknown>,
+): Record<string, unknown>;
+export function normalizeLegacySessionEntryDelivery(value: SessionEntry | Record<string, unknown>) {
+  assertSupportedSessionStoreEntry(value);
+  const entry =
+    isRecord(value) && hasLegacySessionProviderState(value)
+      ? migrateLegacySessionEntryState(value)
+      : value;
   const legacy = entry as LegacySessionDeliveryEntry;
   const hasLegacyFields = LEGACY_SESSION_DELIVERY_KEYS.some((key) => key in legacy);
   if (isCanonicalSessionDeliveryState(entry.delivery) && !hasLegacyFields) {

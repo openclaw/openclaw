@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { SnapshotSchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -20,7 +21,7 @@ let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePlu
 let setActiveDegradedPlugins: typeof import("../plugins/runtime-degraded-state.js").setActiveDegradedPlugins;
 let createTestRegistry: typeof import("../test-utils/channel-plugins.js").createTestRegistry;
 let collectGatewayHealthSnapshot: typeof import("../gateway/health/collector.js").collectGatewayHealthSnapshot;
-let startPluginServices: typeof import("../plugins/services.js").startPluginServices;
+let startPluginServices: typeof import("../plugins/services.test-support.js").startPluginServices;
 let pluginServicesHandle: PluginServicesHandle | undefined;
 let inventoryPlugins: ChannelPlugin[] = [];
 
@@ -46,7 +47,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         import("../plugins/runtime-degraded-state.js"),
         import("../test-utils/channel-plugins.js"),
         import("../gateway/health/collector.js"),
-        import("../plugins/services.js"),
+        import("../plugins/services.test-support.js"),
       ]);
     setActivePluginRegistry = pluginsRuntime.setActivePluginRegistry;
     setActiveDegradedPlugins = degradedState.setActiveDegradedPlugins;

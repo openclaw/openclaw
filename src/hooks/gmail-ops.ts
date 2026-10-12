@@ -36,7 +36,6 @@ import {
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
   type GmailHookOverrides,
-  type GmailHookRuntimeConfig,
   generateHookToken,
   mergeHookPresets,
   normalizeHooksPath,
@@ -46,22 +45,14 @@ import {
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
 
-type GmailCommonOptions = {
-  topic?: string;
-  subscription?: string;
-  label?: string;
-  hookToken?: string;
-  pushToken?: string;
-  hookUrl?: string;
+type GmailCommonOptions = Omit<
+  GmailHookOverrides,
+  "account" | "serveBind" | "servePort" | "servePath" | "tailscaleMode"
+> & {
   bind?: string;
   port?: number;
   path?: string;
-  includeBody?: boolean;
-  maxBytes?: number;
-  renewEveryMinutes?: number;
-  tailscale?: "off" | "serve" | "funnel";
-  tailscalePath?: string;
-  tailscaleTarget?: string;
+  tailscale?: GmailHookOverrides["tailscaleMode"];
 };
 
 export type GmailSetupOptions = GmailCommonOptions & {
@@ -185,7 +176,16 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
   await ensureSubscription(projectId, subscription, topicName, pushEndpoint);
 
-  await startGmailWatch({ account: opts.account, label, topic: topicPath });
+  const watch = await runCommandWithTimeout(
+    [
+      resolveGogExecutable(),
+      ...buildGogWatchStartArgs({ account: opts.account, label, topic: topicPath }),
+    ],
+    { timeoutMs: 120_000 },
+  );
+  if (watch.code !== 0) {
+    throw new Error(formatCommandResult("gog gmail watch start", watch));
+  }
 
   const nextConfig: OpenClawConfig = {
     ...baseConfig,
@@ -340,13 +340,5 @@ export async function runGmailService(opts: GmailRunOptions) {
     if (controller.signal.aborted) {
       await shutdownTask;
     }
-  }
-}
-
-async function startGmailWatch(cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "topic">) {
-  const args = [resolveGogExecutable(), ...buildGogWatchStartArgs(cfg)];
-  const result = await runCommandWithTimeout(args, { timeoutMs: 120_000 });
-  if (result.code !== 0) {
-    throw new Error(formatCommandResult("gog gmail watch start", result));
   }
 }

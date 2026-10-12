@@ -447,7 +447,10 @@ export function createAsyncQuestionPresentation(
       [...resolved].map(([itemId, draft]) => [
         itemId,
         draft.unparsedText,
-        [...draft.answers].map(([questionId, answer]) => [questionId, questionDraftValues(answer)]),
+        [...draft.answers].map(([questionId, answer]) => [
+          questionId,
+          questionDraftValues(answer, {}),
+        ]),
       ]),
       [...delivery].map(([itemId, item]) => [
         itemId,

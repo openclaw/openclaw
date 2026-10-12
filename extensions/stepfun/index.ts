@@ -56,16 +56,12 @@ function inferRegionFromBaseUrl(baseUrl: string | undefined): StepFunRegion | un
   if (!baseUrl) {
     return undefined;
   }
-  try {
-    const host = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
-    if (host === "api.stepfun.com") {
-      return "cn";
-    }
-    if (host === "api.stepfun.ai") {
-      return "intl";
-    }
-  } catch {
-    return undefined;
+  const host = normalizeLowercaseStringOrEmpty(URL.parse(baseUrl)?.hostname);
+  if (host === "api.stepfun.com") {
+    return "cn";
+  }
+  if (host === "api.stepfun.ai") {
+    return "intl";
   }
   return undefined;
 }

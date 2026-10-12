@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   normalizeDatabasePath,
   readDatabasePathIdentitySync,
+  type DatabaseFileIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -74,24 +75,32 @@ export function isOpenClawAgentDatabasePathCurrent(
   return current !== undefined && identity === `${current.dev}:${current.ino}`;
 }
 
-export type OpenClawAgentDatabaseClaim = {
-  identity: OpenClawAgentDatabaseIdentity;
-  /** Changes on reopen even when the underlying file is unchanged. */
-  incarnation: string;
-  isCurrent: () => boolean;
-  assertCurrent: () => void;
-  release: () => void;
-};
+export function assertOpenClawAgentDatabaseIdentity(
+  database: AgentDatabaseOwner & { path: string },
+  expected: DatabaseFileIdentity,
+): void {
+  const identity = readOpenClawAgentDatabaseIdentity(database);
+  if (
+    `file:${String(identity.identity)}` !== expected.key ||
+    (expected.birthtime !== undefined && identity.birthtime !== expected.birthtime) ||
+    !isOpenClawAgentDatabasePathCurrent(database)
+  ) {
+    throw new Error("Agent database changed during repair admission");
+  }
+}
+
+export type OpenClawAgentDatabaseClaim = ReturnType<typeof createOpenClawAgentDatabaseClaim>;
 
 export function createOpenClawAgentDatabaseClaim(
   database: AgentDatabaseOwner,
   release: () => void,
-): OpenClawAgentDatabaseClaim {
+) {
   let released = false;
   const isCurrent = () => !released && database.db.isOpen;
   const { identity, incarnation } = readOpenClawAgentDatabaseIdentity(database);
   return {
     identity,
+    // Changes on reopen even when the underlying file is unchanged.
     incarnation,
     isCurrent,
     assertCurrent: () => {

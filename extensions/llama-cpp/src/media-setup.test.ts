@@ -186,7 +186,7 @@ describe("registered local media setup transaction", () => {
       provider.localService.args?.push("--threads", "2");
       const customSection =
         "[operator-model]\n; keep operator settings\nmodel = /models/operator.gguf\n";
-      await fs.appendFile(currentPreset, `\n${customSection}`);
+      await fs.appendFile(currentPreset, `\n[*]\nthreads = 2\n\n${customSection}`);
       if (mode === "chat") {
         const chat = provider.models.find((model) => !model.input.includes("image"));
         if (!chat) {
@@ -237,7 +237,8 @@ describe("registered local media setup transaction", () => {
       expect(nextPreset).not.toBe(currentPreset);
       expect(await fs.readFile(currentPreset, "utf8")).toBe(activePreset);
       const rewritten = await fs.readFile(nextPreset, "utf8");
-      expect(rewritten).toContain(customSection);
+      expect(rewritten).not.toContain(customSection);
+      expect(rewritten).toContain("threads = 2");
       expect(rewritten).toContain("[embeddinggemma-300m-qat-q8_0]");
       ctx.config = { ...ctx.config, ...result.configPatch };
       for (const recipe of LLAMA_CPP_MEDIA_RECIPES) {

@@ -206,12 +206,12 @@ export function createUpdateCliFixture() {
     ffree: 0,
   });
 
-  const reportCandidateSteps = <T extends { steps: UpdateRunResult["steps"] }>(
-    options: { onStep?: (step: UpdateRunResult["steps"][number]) => void },
+  const reportCandidateSteps = async <T extends { steps: UpdateRunResult["steps"] }>(
+    options: { onStep?: (step: UpdateRunResult["steps"][number]) => void | Promise<void> },
     result: T,
-  ): T => {
+  ): Promise<T> => {
     for (const step of result.steps) {
-      options.onStep?.(step);
+      await options.onStep?.(step);
     }
     return result;
   };

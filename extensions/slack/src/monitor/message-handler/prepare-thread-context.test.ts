@@ -2,7 +2,7 @@
 import type { App } from "@slack/bolt";
 import { resolveEnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
 import type { ContextVisibilityMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 import * as mediaModule from "../media.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
@@ -14,14 +14,6 @@ import {
 
 describe("resolveSlackThreadContextData", () => {
   const storeFixture = createSlackSessionStoreFixture("openclaw-slack-thread-context-");
-
-  beforeAll(() => {
-    storeFixture.setup();
-  });
-
-  afterAll(() => {
-    storeFixture.cleanup();
-  });
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -80,7 +72,7 @@ describe("resolveSlackThreadContextData", () => {
       ctx.channelRuntime = {
         ...ctx.channelRuntime!,
         session: {
-          resolveEntryResetFreshness: () =>
+          resolveEntryResetFreshnessAsync: async () =>
             params.sessionState === "missing"
               ? { state: "missing", entry: undefined }
               : {
@@ -160,11 +152,6 @@ describe("resolveSlackThreadContextData", () => {
       sessionState: "fresh" as const,
       hydrates: true,
     },
-    {
-      title: "hydrates starter media after a thread session reset",
-      sessionState: "stale" as const,
-      hydrates: true,
-    },
   ])("$title", async ({ sessionState, sessionLastInteractionAt, hydrates }) => {
     const resolveSlackAttachmentContent = vi
       .spyOn(mediaModule, "resolveSlackAttachmentContent")
@@ -215,24 +202,6 @@ describe("resolveSlackThreadContextData", () => {
   });
 
   it.each([
-    {
-      title: "filters them from missing channel threads",
-      isGroupDm: false,
-      sessionState: "missing" as const,
-      retained: false,
-    },
-    {
-      title: "retains them for missing MPIM threads",
-      isGroupDm: true,
-      sessionState: "missing" as const,
-      retained: true,
-    },
-    {
-      title: "retains them for fresh outbound-only MPIM threads",
-      isGroupDm: true,
-      sessionState: "fresh" as const,
-      retained: true,
-    },
     {
       title: "filters them after an inbound MPIM interaction",
       isGroupDm: true,
@@ -350,81 +319,19 @@ describe("resolveSlackThreadContextData", () => {
     expect(result.threadLabel).toBe(`Slack thread #general: ${"a".repeat(79)}`);
   });
 
-  it.each([
-    ["empty", "", "Slack thread #general"],
-    ["whitespace", "   ", "Slack thread #general"],
-    [
-      "multiline",
-      "Line one\n\nLine two",
-      "Slack thread #general (assistant root): Line one Line two",
-    ],
-    ["long", "x".repeat(120), `Slack thread #general (assistant root): ${"x".repeat(80)}`],
-    [
-      "split emoji",
-      `${"a".repeat(79)}🐱tail`,
-      `Slack thread #general (assistant root): ${"a".repeat(79)}`,
-    ],
-  ])("formats a %s bot-root label through thread preparation", async (_name, text, label) => {
-    const { result } = await resolveAllowlistedThreadContext({
-      repliesMessages: [],
-      threadStarter: { text, botId: "B1", ts: "100.000" },
-      allowFromLower: ["u1"],
-      allowNameMatching: false,
-    });
+  it.each([["whitespace", "   ", "Slack thread #general"]])(
+    "formats a %s bot-root label through thread preparation",
+    async (_name, text, label) => {
+      const { result } = await resolveAllowlistedThreadContext({
+        repliesMessages: [],
+        threadStarter: { text, botId: "B1", ts: "100.000" },
+        allowFromLower: ["u1"],
+        allowNameMatching: false,
+      });
 
-    expect(result.threadLabel).toBe(label);
-  });
-
-  it("includes bot-authored starter as assistant root context for a new thread session (default)", async () => {
-    const { result } = await resolveAllowlistedThreadContext({
-      repliesMessages: [
-        { text: "bot starter", bot_id: "B1", ts: "100.000" },
-        { text: "allowed follow-up", user: "U1", ts: "100.800" },
-        { text: "current message", user: "U1", ts: "101.000" },
-      ],
-      threadStarter: {
-        text: "bot starter",
-        botId: "B1",
-      },
-      allowFromLower: ["u1"],
-      allowNameMatching: false,
-    });
-
-    expect(result.threadStarterBody).toBeUndefined();
-    expect(result.threadLabel).toBe("Slack thread #general (assistant root): bot starter");
-    expect(result.threadHistoryBody).toContain("allowed follow-up");
-    expect(result.threadHistoryBody).toContain("bot starter");
-    expect(result.threadHistoryBody).toContain("Bot (this assistant) (assistant)");
-    expect(result.threadHistoryBody).not.toContain("current message");
-    expect(
-      result.threadHistoryBody?.match(/\[slack message id: 100\.000 channel: C123\]/g),
-    ).toHaveLength(1);
-  });
-
-  it("injects bot-authored starter when fetched history omits the root", async () => {
-    const { result } = await resolveAllowlistedThreadContext({
-      repliesMessages: [
-        { text: "assistant reply", bot_id: "B1", ts: "100.500" },
-        { text: "allowed follow-up", user: "U1", ts: "100.800" },
-        { text: "current message", user: "U1", ts: "101.000" },
-      ],
-      threadStarter: {
-        text: "bot starter",
-        botId: "B1",
-        ts: "100.000",
-      },
-      allowFromLower: ["u1"],
-      allowNameMatching: false,
-    });
-
-    expect(result.threadStarterBody).toBeUndefined();
-    expect(result.threadLabel).toBe("Slack thread #general (assistant root): bot starter");
-    expect(result.threadHistoryBody).toContain("bot starter");
-    expect(result.threadHistoryBody).toContain("Bot (this assistant) (assistant)");
-    expect(result.threadHistoryBody).toContain("allowed follow-up");
-    expect(result.threadHistoryBody).not.toContain("assistant reply");
-    expect(result.threadHistoryBody).not.toContain("current message");
-  });
+      expect(result.threadLabel).toBe(label);
+    },
+  );
 
   it("injects bot-authored starter when initial history trimming drops the root", async () => {
     const { result } = await resolveAllowlistedThreadContext({

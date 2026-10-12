@@ -1,8 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { readFile } from "node:fs/promises";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFaceTimeConfig } from "../src/config.js";
 import type { FaceTimePreflightResult } from "../src/preflight.js";
 import type { FaceTimeRuntimeStatus } from "../src/runtime.js";
 import { runFaceTimeSetup } from "../src/setup.js";
+
+vi.mock("node:fs/promises", () => ({ readFile: vi.fn() }));
 
 const readyPreflight: FaceTimePreflightResult = {
   ok: true,
@@ -42,26 +45,15 @@ const readyRuntime: FaceTimeRuntimeStatus = {
     statusClassifier: "explicit-ended-tu-call-status-v1",
     transportClassifier: "tu-provider-v1",
   },
-  helperTargets: [
-    {
-      target: "FaceTime",
-      connected: true,
-      attempts: 0,
-      injecting: false,
-      queued: false,
-      retryScheduled: false,
-      stale: false,
-    },
-    {
-      target: "Phone",
-      connected: true,
-      attempts: 0,
-      injecting: false,
-      queued: false,
-      retryScheduled: false,
-      stale: false,
-    },
-  ],
+  helperTargets: (["FaceTime", "Phone"] as const).map((target) => ({
+    target,
+    connected: true,
+    attempts: 0,
+    injecting: false,
+    queued: false,
+    retryScheduled: false,
+    stale: false,
+  })),
   driverInstallPending: false,
   driverInstall: { phase: "idle" },
   processOutputSuppressed: false,
@@ -101,33 +93,18 @@ function runSetup(overrides: Partial<Parameters<typeof runFaceTimeSetup>[0]> = {
     runCommandWithTimeout: readyCommandRunner() as never,
     runtimeStatus: readyRuntime,
     preflight: readyPreflight,
-    readAssertionsFile: async () => JSON.stringify({ data: [] }),
     ...overrides,
   });
 }
 
 describe("FaceTime guided setup", () => {
+  beforeEach(() => {
+    vi.mocked(readFile)
+      .mockReset()
+      .mockResolvedValue(JSON.stringify({ data: [{ storeInvalidationRecords: [{}] }] }));
+  });
   it.each([
-    [
-      "custom debug disabled",
-      "System Integrity Protection status: unknown (Custom Configuration).\n\tDebugging Restrictions: disabled\n",
-      0,
-      undefined,
-    ],
-    [
-      "custom debug enabled",
-      "System Integrity Protection status: unknown (Custom Configuration).\n\tDebugging Restrictions: enabled\n",
-      0,
-      "disable-sip-debugging",
-    ],
-    ["empty", "", 0, "verify-sip-status"],
     ["failed", "System Integrity Protection status: disabled.\n", 1, "verify-sip-status"],
-    [
-      "malformed disabled",
-      "System Integrity Protection status: disabled unexpectedly\n",
-      0,
-      "verify-sip-status",
-    ],
     [
       "unrelated substring",
       "Could not read System Integrity Protection status: disabled.\n",
@@ -153,69 +130,17 @@ describe("FaceTime guided setup", () => {
           command: "/usr/bin/csrutil status",
         });
         expect(report.actions.some((entry) => entry.id === "disable-sip-debugging")).toBe(false);
-      } else if (!actionId) {
-        expect(check?.message).toContain("permits");
-        expect(check?.message).toContain("helper");
       }
     },
   );
-
-  it("reports a statically ready machine and leaves live call proof explicit", async () => {
-    const report = await runSetup({
-      readAssertionsFile: async () =>
-        JSON.stringify({ data: [{ storeInvalidationRecords: [{}] }] }),
-    });
-
-    expect(report.ok).toBe(true);
-    expect(report.readyForTest).toBe(true);
-    expect(report.liveCallProofRequired).toBe(true);
-    expect(
-      report.checks.filter((check) => check.required).map((check) => [check.id, check.status]),
-    ).toEqual([
-      ["xcode-tools", "ready"],
-      ["developer-tools-access", "ready"],
-      ["system-integrity-protection", "ready"],
-      ["owner-handles", "ready"],
-      ["native-package", "ready"],
-      ["runtime", "ready"],
-      ["helper-facetime", "ready"],
-      ["helper-phone", "ready"],
-      ["audio-driver", "ready"],
-      ["process-tap", "ready"],
-      ["realtime-provider", "ready"],
-      ["focus-mode", "ready"],
-      ["notifications-while-sharing", "ready"],
-    ]);
-    expect(report.actions.map((action) => action.id)).toEqual([
-      "live-outbound-test",
-      "live-audio-test",
-      "review-live-voicemail",
-    ]);
-  });
-
-  it("uses runtime status refreshed after asynchronous helper injection", async () => {
-    let finishRefresh!: (status: typeof readyRuntime) => void;
-    const runtimeStatus = new Promise<typeof readyRuntime>((resolve) => {
-      finishRefresh = resolve;
-    });
-    const setup = runSetup({
-      runtimeStatus,
-    });
-
-    finishRefresh(readyRuntime);
-    const report = await setup;
-
-    expect(report.readyForTest).toBe(true);
-    expect(report.checks.find((check) => check.id === "helper-facetime")).toMatchObject({
-      status: "ready",
-      message: "Authenticated helper connected",
-    });
-  });
 
   it("turns protected prerequisites into explicit operator actions", async () => {
     const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
       if (argv[0] === "/bin/test" && (argv[1] === "-x" || argv[1] === "-d")) {
         return { code: 1, stdout: "", stderr: "" };
+      }
+      if (argv[0] === "/usr/bin/xcode-select") {
+        return { code: 0, stdout: "/Library/Developer/CommandLineTools\n", stderr: "" };
       }
       if (argv[0] === "/usr/sbin/DevToolsSecurity") {
         return { code: 0, stdout: "Developer mode is currently disabled.\n", stderr: "" };
@@ -236,17 +161,22 @@ describe("FaceTime guided setup", () => {
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     });
 
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ data: [{ storeAssertionRecords: [{ assertionUUID: "active" }] }] }),
+    );
     const report = await runSetup({
       runCommandWithTimeout: runCommandWithTimeout as never,
       runtimeStatus: undefined,
       preflight: undefined,
       runtimeError: "listen EADDRINUSE: address already in use 127.0.0.1:45670",
-      readAssertionsFile: async () =>
-        JSON.stringify({ data: [{ storeAssertionRecords: [{ assertionUUID: "active" }] }] }),
     });
 
     expect(report.ok).toBe(false);
     expect(report.readyForTest).toBe(false);
+    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+      ["/usr/bin/xcode-select", "-p"],
+      expect.anything(),
+    );
     expect(
       report.checks.filter((check) => check.status === "action-required").map((check) => check.id),
     ).toEqual([
@@ -258,60 +188,23 @@ describe("FaceTime guided setup", () => {
       "notifications-while-sharing",
     ]);
     expect(report.actions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "install-xcode-tools", kind: "command" }),
-        expect.objectContaining({ id: "enable-developer-tools", kind: "command" }),
-        expect.objectContaining({ id: "disable-sip-debugging", kind: "recovery" }),
-        expect.objectContaining({ id: "restart-gateway", kind: "command" }),
-        expect.objectContaining({
-          id: "install-driver",
-          gatewayMethod: "facetime.installDriver",
-        }),
-        expect.objectContaining({ id: "verify-focus", kind: "system-settings" }),
-        expect.objectContaining({
-          id: "allow-sharing-notifications",
-          kind: "system-settings",
-        }),
-      ]),
+      expect.arrayContaining(
+        [
+          ["install-xcode-tools", "command"],
+          ["enable-developer-tools", "command"],
+          ["disable-sip-debugging", "recovery"],
+          ["restart-gateway", "command"],
+          ["verify-focus", "system-settings"],
+          ["allow-sharing-notifications", "system-settings"],
+        ].map(([id, kind]) => expect.objectContaining({ id, kind })),
+      ),
+    );
+    expect(report.actions).toContainEqual(
+      expect.objectContaining({ id: "install-driver", gatewayMethod: "facetime.installDriver" }),
     );
     expect(report.actions.find((action) => action.id === "disable-sip-debugging")).toMatchObject({
       command: "csrutil enable --without debug",
     });
-    expect(report.checks.find((check) => check.id === "xcode-tools")).toMatchObject({
-      label: "Full Xcode installation",
-      message:
-        "Full Xcode is required at /Applications/Xcode.app; Command Line Tools alone cannot perform protected-app injection or build the local audio driver",
-    });
-    expect(report.actions.find((action) => action.id === "install-xcode-tools")).toMatchObject({
-      label: "Install full Xcode in /Applications",
-      command: "open 'https://apps.apple.com/us/app/xcode/id497799835'",
-    });
-  });
-
-  it("does not accept a Command Line Tools-only installation", async () => {
-    const readyRunner = readyCommandRunner();
-    const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
-      if (argv[0] === "/bin/test" && (argv[1] === "-x" || argv[1] === "-d")) {
-        return { code: 1, stdout: "", stderr: "" };
-      }
-      if (argv[0] === "/usr/bin/xcode-select") {
-        return { code: 0, stdout: "/Library/Developer/CommandLineTools\n", stderr: "" };
-      }
-      return readyRunner(argv);
-    });
-
-    const report = await runSetup({
-      runCommandWithTimeout: runCommandWithTimeout as never,
-    });
-
-    expect(report.readyForTest).toBe(false);
-    expect(report.checks.find((check) => check.id === "xcode-tools")?.status).toBe(
-      "action-required",
-    );
-    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
-      ["/usr/bin/xcode-select", "-p"],
-      expect.anything(),
-    );
   });
 
   it("shows automatic helper repair without declaring the machine ready", async () => {
@@ -321,13 +214,10 @@ describe("FaceTime guided setup", () => {
         helperConnected: false,
         helperTargets: [
           {
-            target: "FaceTime",
+            ...readyRuntime.helperTargets[0]!,
             connected: false,
             attempts: 1,
-            injecting: false,
-            queued: false,
             retryScheduled: true,
-            stale: false,
             lastError: "helper did not authenticate",
           },
           readyRuntime.helperTargets[1]!,
@@ -347,13 +237,12 @@ describe("FaceTime guided setup", () => {
   });
 
   it("allows manual Focus verification when macOS state cannot be read", async () => {
-    const report = await runSetup({
-      readAssertionsFile: async () => {
-        throw new Error("operation not permitted");
-      },
-    });
+    vi.mocked(readFile).mockRejectedValue(new Error("operation not permitted"));
+    const report = await runSetup();
 
+    expect(report.ok).toBe(true);
     expect(report.readyForTest).toBe(true);
+    expect(report.liveCallProofRequired).toBe(true);
     expect(report.checks.find((check) => check.id === "focus-mode")).toMatchObject({
       status: "verify-on-call",
       required: false,

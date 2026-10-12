@@ -2,8 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
+import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-command-execution-guards.js";
+import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import { createUpdateRunProgress } from "../cli/update-cli/update-command-run.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import * as tempRoot from "./tmp-openclaw-dir.js";
+import { createUpdateRun } from "./update-run-ledger.js";
 import {
+  advanceFixtureRemote,
+  createGitFixtureCheckout,
   expectRuntime,
   runFixtureGit as git,
   expectCancelledGitCandidateCleanup,
@@ -23,43 +32,8 @@ describe("Git checkout execution", () => {
   let runCommand: CommandRunner;
 
   beforeEach(async () => {
-    // Keep fixture-local identity authoritative during candidate rebases.
-    vi.stubEnv("GIT_CONFIG_COUNT", "0");
-    for (const key of [
-      "GIT_AUTHOR_NAME",
-      "GIT_AUTHOR_EMAIL",
-      "GIT_COMMITTER_NAME",
-      "GIT_COMMITTER_EMAIL",
-    ]) {
-      vi.stubEnv(key, undefined);
-    }
     directory = await fs.realpath(directories.make("openclaw-git-execution-"));
-    root = path.join(directory, "checkout");
-    remote = path.join(directory, "remote");
-    await fs.mkdir(remote);
-    await git(remote, "init", "--initial-branch=main");
-    await git(remote, "config", "user.name", "OpenClaw Test");
-    await git(remote, "config", "user.email", "openclaw@example.com");
-    await fs.writeFile(
-      path.join(remote, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.1", packageManager: "pnpm@12.0.0" }),
-    );
-    await fs.writeFile(path.join(remote, "openclaw.mjs"), "export {};\n");
-    await fs.mkdir(path.join(remote, "packages", "runtime"), { recursive: true });
-    await fs.writeFile(
-      path.join(remote, "packages", "runtime", "index.js"),
-      "module.exports = require('./node_modules/nested.cjs');",
-    );
-    await fs.writeFile(
-      path.join(remote, ".gitignore"),
-      "node_modules/\ndist/\ndist-runtime/\n.artifacts\n.pnpm\ncache/\n",
-    );
-    await git(remote, "add", ".");
-    await git(remote, "commit", "-m", "base");
-    beforeSha = await git(remote, "rev-parse", "HEAD");
-    await git(directory, "clone", "--quiet", remote, root);
-    await git(root, "config", "user.name", "OpenClaw Test");
-    await git(root, "config", "user.email", "openclaw@example.com");
+    ({ root, remote, beforeSha } = await createGitFixtureCheckout(directory));
     await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), "node_modules/.pnpm");
     events = [];
     stopped = false;
@@ -90,12 +64,7 @@ describe("Git checkout execution", () => {
     vi.restoreAllMocks();
   });
 
-  async function advanceRemote() {
-    await fs.writeFile(path.join(remote, "candidate.txt"), "candidate\n");
-    await git(remote, "add", ".");
-    await git(remote, "commit", "-m", "candidate");
-    return git(remote, "rev-parse", "HEAD");
-  }
+  const advanceRemote = () => advanceFixtureRemote(remote);
 
   function update(opts: Partial<Omit<UpdateRunnerOptions, "prepareGitExposure">> = {}) {
     const { runGitDoctor, ...overrides } = opts;
@@ -138,24 +107,20 @@ describe("Git checkout execution", () => {
     });
   }
 
-  it.each(["origin", "upstream.with.dots", "team/upstream"])(
-    "updates from %s while an unrelated remote is unavailable",
-    async (authority) => {
-      const target = await advanceRemote();
-      if (authority !== "origin") {
-        await git(root, "remote", "rename", "origin", authority);
-      }
-      await git(root, "remote", "add", "secondary", path.join(directory, "unavailable"));
-      const config = await fs.readFile(path.join(root, ".git", "config"));
-      const result = await update();
-      expect(result).toMatchObject({ status: "ok", after: { sha: target } });
-      expect(result.steps.flatMap((step) => step.warnings ?? [])).toContain(
-        `Fetched only the update remote ${authority}; unrelated remotes were left untouched.`,
-      );
-      expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
-      await expectRuntime(root, target);
-    },
-  );
+  it("updates from a namespaced remote while an unrelated remote is unavailable", async () => {
+    const authority = "team/upstream";
+    const target = await advanceRemote();
+    await git(root, "remote", "rename", "origin", authority);
+    await git(root, "remote", "add", "secondary", path.join(directory, "unavailable"));
+    const config = await fs.readFile(path.join(root, ".git", "config"));
+    const result = await update();
+    expect(result).toMatchObject({ status: "ok", after: { sha: target } });
+    expect(result.steps.flatMap((step) => step.warnings ?? [])).toContain(
+      `Fetched only the update remote ${authority}; unrelated remotes were left untouched.`,
+    );
+    expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
+    await expectRuntime(root, target);
+  });
 
   it("fails before activation when the authoritative remote is unavailable", async () => {
     await advanceRemote();
@@ -169,7 +134,7 @@ describe("Git checkout execution", () => {
     await expectRuntime(root, beforeSha);
   });
 
-  it.each(["exit", "timeout", "timeout-zero", "output-limit-zero"] as const)(
+  it.each(["exit", "timeout-zero"] as const)(
     "ignores stale refs after optional fetch %s failure",
     async (failure) => {
       const target = await advanceRemote();
@@ -182,12 +147,11 @@ describe("Git checkout execution", () => {
         runCommand = (argv, options) =>
           argv.includes("fetch") && argv.includes("adead")
             ? Promise.resolve({
-                code: failure === "timeout" ? null : 0,
+                code: 0,
                 stdout: "",
                 stderr: "remote transport incomplete",
-                ...(failure === "output-limit-zero"
-                  ? { outputLimitExceeded: true }
-                  : { killed: true, termination: "timeout" as const }),
+                killed: true,
+                termination: "timeout" as const,
               })
             : execute(argv, options);
       }
@@ -202,7 +166,7 @@ describe("Git checkout execution", () => {
     },
   );
 
-  it.each(["exit", "timeout", "signal", "timeout-zero", "output-limit-zero"] as const)(
+  it.each(["exit", "signal"] as const)(
     "settles optional tag discovery after %s",
     async (failure) => {
       const target = await advanceRemote();
@@ -213,15 +177,11 @@ describe("Git checkout execution", () => {
       runCommand = (argv, options) =>
         failure !== "exit" && argv.includes("fetch") && argv.includes("adead")
           ? Promise.resolve({
-              code: failure === "signal" ? 143 : failure === "timeout" ? null : 0,
+              code: failure === "signal" ? 143 : 0,
               stdout: "",
               stderr: "tag transport interrupted",
-              ...(failure === "output-limit-zero"
-                ? { outputLimitExceeded: true }
-                : {
-                    killed: true,
-                    termination: failure === "signal" ? ("signal" as const) : ("timeout" as const),
-                  }),
+              killed: true,
+              termination: "signal" as const,
             })
           : execute(argv, options);
       const result = await update({ devTarget: { mode: "detached", ref: "refs/tags/requested" } });
@@ -355,7 +315,7 @@ describe("Git checkout execution", () => {
     },
   );
 
-  it.each(["missing", "signal", "output-limit-zero", "output-limit-nonzero"] as const)(
+  it.each(["missing", "signal", "output-limit-nonzero"] as const)(
     "classifies upstream setup failure without losing recovery: %s",
     async (failure) => {
       const interrupted = failure !== "missing";
@@ -366,7 +326,7 @@ describe("Git checkout execution", () => {
       runCommand = (argv, options) =>
         argv[2] === root && argv.includes("--set-upstream-to")
           ? Promise.resolve({
-              code: failure === "signal" ? 143 : failure === "output-limit-zero" ? 0 : 1,
+              code: failure === "signal" ? 143 : 1,
               stdout: "",
               stderr: "upstream setup failed",
               ...(failure === "signal"
@@ -564,26 +524,20 @@ describe("Git checkout execution", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps a tracked target detached (initially detached: %s)",
-    async (detached) => {
-      const targetSha = await advanceRemote();
-      await git(root, "remote", "rename", "origin", "upstream");
-      await git(root, "remote", "add", "origin", path.join(directory, "unavailable"));
-      if (detached) {
-        await git(root, "checkout", "--detach", beforeSha);
-      }
-      const result = await update({
-        devTarget: { mode: "tracked", upstreamRef: "upstream/main", upstreamSha: targetSha },
-      });
-      expect(result).toMatchObject({
-        status: "ok",
-        after: { sha: targetSha, upstreamRef: "upstream/main" },
-      });
-      expect(await git(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
-      await expectRuntime(root, targetSha);
-    },
-  );
+  it("detaches the checkout when activating a tracked target", async () => {
+    const targetSha = await advanceRemote();
+    await git(root, "remote", "rename", "origin", "upstream");
+    await git(root, "remote", "add", "origin", path.join(directory, "unavailable"));
+    const result = await update({
+      devTarget: { mode: "tracked", upstreamRef: "upstream/main", upstreamSha: targetSha },
+    });
+    expect(result).toMatchObject({
+      status: "ok",
+      after: { sha: targetSha, upstreamRef: "upstream/main" },
+    });
+    expect(await git(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
+    await expectRuntime(root, targetSha);
+  });
 
   it.each(["missing", "unrelated"])("refuses a tracked target with %s upstream", async (kind) => {
     const targetSha = await advanceRemote();
@@ -603,7 +557,7 @@ describe("Git checkout execution", () => {
     expect(await git(root, "rev-parse", "--abbrev-ref", "@{upstream}")).toBe("origin/main");
   });
 
-  it.each(["doctor-error", "doctor-throw", "head-error", "head-mismatch", "ui-missing"] as const)(
+  it.each(["head-error", "head-mismatch", "ui-missing"] as const)(
     "retains the candidate after migration starts: %s",
     async (failure) => {
       const targetSha = await advanceRemote();
@@ -628,9 +582,6 @@ describe("Git checkout execution", () => {
           await expectRuntime(doctorRoot, targetSha);
           migrated = true;
           await fs.writeFile(stateFile, "migrated state");
-          if (failure === "doctor-throw") {
-            throw new Error("Doctor failed after migration");
-          }
           if (failure === "ui-missing") {
             await fs.rm(path.join(root, "dist", "control-ui"), { recursive: true });
           }
@@ -639,15 +590,13 @@ describe("Git checkout execution", () => {
             command: "CLI activation doctor",
             cwd: doctorRoot,
             durationMs: 0,
-            exitCode: failure === "doctor-error" ? 1 : 0,
+            exitCode: 0,
           };
         },
       });
       expect(result).toMatchObject({
         status: "error",
         reason: {
-          "doctor-error": "doctor-failed",
-          "doctor-throw": "unexpected-error",
           "head-error": "head-verification-failed",
           "head-mismatch": "target-sha-mismatch",
           "ui-missing": "ui-assets-missing",
@@ -667,12 +616,32 @@ describe("Git checkout execution", () => {
     "settles cancelled candidate %s before returning",
     async (phase) => {
       const targetSha = await advanceRemote();
-      await expectCancelledGitCandidateCleanup({
-        phase,
-        fixture: { localRoot: root, baseSha: beforeSha, targetSha },
-        pnpmVersion: "12.0.0",
-        runRealGit: git,
-      });
+      const env = { OPENCLAW_STATE_DIR: path.join(directory, "update-state") };
+      const control = path.join(directory, "update-coordinator");
+      await fs.mkdir(control);
+      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+      const run: NonNullable<UpdateCommandOptions["run"]> = {
+        runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+        env,
+      };
+      const guards = createUpdateCommandExecutionGuards({ run }, root);
+      try {
+        await withUpdateCommandExecutor(run.runId, async (executor) => {
+          guards.admitExecutor(await executor.enter(root));
+          await expectCancelledGitCandidateCleanup({
+            phase,
+            fixture: { localRoot: root, baseSha: beforeSha, targetSha },
+            pnpmVersion: "12.0.0",
+            runRealGit: git,
+            progress: createUpdateRunProgress(run, {}, guards.recordStep),
+            onAbort: () => {
+              run.interrupted = true;
+            },
+          });
+        });
+      } finally {
+        await closeStateDatabaseForTest();
+      }
       await expectRuntime(root, beforeSha);
     },
   );

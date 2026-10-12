@@ -73,11 +73,9 @@ export function readBundledDiscoveryMode(
 // interleaved isolated scopes (agent execution, doctor lint) from inheriting
 // another root's cached mode; the reads honor the active install-root context.
 const discoveryState = resolveGlobalSingleton<{
-  generation: object;
   memoized?: { key: string; value: BundledDiscoveryMode };
   snapshotModes: WeakMap<object, { value: BundledDiscoveryMode }>;
 }>(Symbol.for("openclaw.bundledDiscoveryMode"), () => ({
-  generation: {},
   snapshotModes: new WeakMap(),
 }));
 
@@ -125,11 +123,7 @@ export function readBundledDiscoveryModeMemoized(
   if (discoveryState.memoized?.key !== key) {
     const owner = getPluginCache();
     const prepared = owner.preparedBundledDiscoveryModes.get(key);
-    if (
-      prepared &&
-      "value" in prepared &&
-      prepared.value.generation === discoveryState.generation
-    ) {
+    if (prepared && "value" in prepared) {
       getPluginCacheRetirementSignal(owner).throwIfAborted();
       discoveryState.memoized = { key, value: prepared.value.value };
     } else {
@@ -147,6 +141,7 @@ export function readBundledDiscoveryModeMemoized(
 /** Prepare the same machine-owned fact for synchronous metadata derivation. */
 export async function prepareBundledDiscoveryMode(
   env: NodeJS.ProcessEnv = process.env,
+  readPreparedRow?: (databasePath: string) => Promise<{ value_json: string } | undefined>,
 ): Promise<() => void> {
   const owner = getPluginCache();
   const options = resolveBundledDiscoveryOptions({ env });
@@ -154,17 +149,13 @@ export async function prepareBundledDiscoveryMode(
     ? readBundledDiscoveryFact(() => getActiveOpenClawStateDatabaseReadSnapshot(options))
     : undefined;
   if (snapshot) {
-    const metadata = owner.metadata;
-    const generation = discoveryState.generation;
     const signal = getPluginCacheRetirementSignal(owner);
     // Private policy needs no global activation, but its caller must retain this exact scope.
     const assertCurrent = () => {
       signal.throwIfAborted();
       if (
-        owner.metadata !== metadata ||
-        discoveryState.generation !== generation ||
         readBundledDiscoveryFact(() => getActiveOpenClawStateDatabaseReadSnapshot(options)) !==
-          snapshot
+        snapshot
       ) {
         throw new PluginCacheFactInvalidatedError(
           "Plugin discovery snapshot changed during preparation; retry the operation.",
@@ -176,36 +167,24 @@ export async function prepareBundledDiscoveryMode(
   }
   const cache = owner.preparedBundledDiscoveryModes;
   const key = resolveBundledDiscoveryMemoKey(env);
-  const generation = discoveryState.generation;
-  const current = cache.get(key);
-  if (current && "value" in current && current.value.generation !== generation) {
-    cache.delete(key);
-  }
   const prepared = await preparePluginCacheFact(owner, cache, key, async () => {
     let value: BundledDiscoveryMode;
     if (discoveryState.memoized?.key === key) {
       value = discoveryState.memoized.value;
     } else {
-      const row = await readPluginMetadataStateRow(
-        "bundled-discovery",
-        resolveBundledDiscoveryOptions({ env }),
-      );
+      const row = readPreparedRow
+        ? await readPreparedRow(key)
+        : await readPluginMetadataStateRow(
+            "bundled-discovery",
+            resolveBundledDiscoveryOptions({ env }),
+          );
       value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
     }
-    if (discoveryState.generation !== generation) {
-      throw new PluginCacheFactInvalidatedError(
-        "Plugin discovery state changed during preparation; retry the operation.",
-      );
-    }
-    return { value, generation };
+    // Keep the SDK-reachable fact shape without a separate invalidation generation.
+    return { value, generation: owner };
   });
   const activate = () => {
     prepared.assertCurrent();
-    if (discoveryState.generation !== generation) {
-      throw new PluginCacheFactInvalidatedError(
-        "Plugin discovery state changed during preparation; retry the operation.",
-      );
-    }
     // Another root may use the single-slot memo while preparation awaits its row.
     // Reuse this operation's captured fact for the following synchronous derivation.
     discoveryState.memoized = { key, value: prepared.value.value };
@@ -222,7 +201,6 @@ export async function prepareBundledDiscoveryMode(
 export function clearBundledDiscoveryModeMemo(): void {
   discoveryState.memoized = undefined;
   discoveryState.snapshotModes = new WeakMap();
-  discoveryState.generation = {};
   for (const cache of new Set([getPluginCache(), getProcessPluginCache()])) {
     cache.preparedBundledDiscoveryModes.clear();
   }

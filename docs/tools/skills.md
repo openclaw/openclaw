@@ -19,7 +19,7 @@ binary presence.
     Build and test a custom skill from scratch.
   </Card>
   <Card title="Skill Workshop" href="/tools/skill-workshop" icon="flask">
-    Review and approve agent-drafted skill proposals.
+    Skills your agent learns on its own, with change history and undo.
   </Card>
   <Card title="Skills config" href="/tools/skills-config" icon="gear">
     Full `skills.*` config schema and agent allowlists.
@@ -54,8 +54,14 @@ workspace, `skills/` wins over `.agents/skills/`. Both directories participate i
 snapshot refresh and sandbox synchronization. Sandboxed runs read the
 materialized copies, not the original host paths.
 
-Managed worktree sessions keep their recorded canonical workspace as the skill
-source. The configured agent workspace remains the primary skill source even when
+Managed worktree sessions keep their recorded source workspace as the skill
+source. That source is read and watched on the Gateway, even when a File Transfer
+plugin serves the agent workspace from a paired node. The node reads its configured
+agent skill roots; it does not receive Gateway source paths. Selected skill files
+and supporting resources are delivered from their owning host. Model-facing
+workspace-hosted entries use `workspace-skill://` read locations, so an identical
+Gateway path cannot redirect the read to the node.
+The configured agent workspace remains the primary skill source even when
 the session executes in a worktree; only selecting that worktree as the agent's
 workspace gives its skills primary precedence. A selected nested workspace stays
 nested: discovery does not walk up to its parent repository. Installing OpenClaw
@@ -67,7 +73,7 @@ source kind, with the skill count and up to three example names. Workspace or
 project skills overriding bundled skills, and managed-worktree skills overriding
 project checkout skills, are warnings; other collisions are informational.
 Worktree provenance uses the configured `worktreeRoot` (the state directory's
-`worktrees/` by default), without probing Git. Identical content stays silent.
+`worktrees/` by default), without checking Git. Identical content stays silent.
 Unchanged root-pair summaries are not repeated on refresh; changes to content,
 declared metadata, or collision membership update the summary. Precedence is unchanged.
 
@@ -102,7 +108,7 @@ A connected headless node can publish skills installed in its active OpenClaw
 skills directory (`~/.openclaw/skills` by default; profile environment overrides
 apply). They appear in the normal agent skill list while the node is connected
 and disappear when it disconnects. A local or Gateway skill keeps its name on
-collision; the node skill receives a deterministic node-prefixed name.
+collision; the node skill receives a stable node-prefixed name.
 Node-hosted v1 requires the directory name to match the skill's `name`
 frontmatter field. The published name, description, and instructions come from
 the same captured file content.
@@ -146,7 +152,7 @@ The ordinary single-admin setup stays unchanged: workspace authoring still
 uses `<workspace>/skills`, and existing file-backed skills are not moved into
 the library. A shared token does not identify a person. Personal library
 operations require an authenticated [Gateway profile](/concepts/user-model).
-The team-specific interface and agent guidance use distinct canonical Gateway
+The team-specific interface and agent guidance use distinct Gateway
 profiles, not channel senders, contacts, accounts, agents, devices, or browser
 connections. Linked and merged login identities count as one profile.
 
@@ -198,7 +204,7 @@ Worker resource delivery also has an 8 MiB aggregate limit; narrow the session
 selection if its complete bundles exceed that limit. Published revisions are
 retained, including revisions still selected by older sessions.
 
-ZIP imports allow up to 16 unfinished uploads per canonical profile and 32
+ZIP imports allow up to 16 unfinished uploads per Gateway profile and 32
 across the Gateway. Linked or merged identities share the profile limit.
 Completed imports do not count toward either limit, and uploads expire one
 hour after they begin. If a profile merge or upgrade leaves more uploads than
@@ -224,15 +230,20 @@ regardless of where they are loaded from.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       skills: ["github", "weather"], // shared baseline
+      heartbeat: { agentId: "writer" },
+      systemAgent: { agentId: "writer" },
+      authInheritance: { agentId: "writer" },
     },
     entries: {
-      writer: { default: true }, // inherits github, weather
+      writer: { workspace: "~/.openclaw/workspace" }, // inherits github, weather
       docs: { skills: ["docs-search"] }, // replaces defaults entirely
       "locked-down": { skills: [] }, // no skills
     },
   },
+  talk: { agentId: "writer" },
 }
 ```
 
@@ -303,22 +314,22 @@ skill from model-initiated selection.
 
 ## Skill Workshop
 
-[Skill Workshop](/tools/skill-workshop) is a proposal queue between the agent
-and its `<state-dir>/agents/<agentId>/agent/workshop-skills` directory. When the agent spots
-reusable work, it drafts a proposal instead of writing directly to `SKILL.md`.
-The scheduled weekly collection review is the scoped exception: its normal
-isolated turn may edit `SKILL.md` files directly inside the Workshop directory.
-Operators edit skills outside that directory through their owning tools or files.
+[Skill Workshop](/tools/skill-workshop) lets an agent save and update its own
+skills in `<state-dir>/agents/<agentId>/agent/workshop-skills`. Every change
+applies immediately, is announced, and saves the previous version so it can be
+undone. Learned skills are always visible to their agent; archive one to hide
+it. Operators edit skills outside that directory through their owning tools or
+files.
 
 ```bash
 openclaw skills workshop list
-openclaw skills workshop inspect <proposal-id>
-openclaw skills workshop evaluate <proposal-id>
-openclaw skills workshop apply <proposal-id>
+openclaw skills workshop changes
+openclaw skills workshop archive <name>
+openclaw skills workshop restore <name>
 ```
 
-See [Skill Workshop](/tools/skill-workshop) for the full lifecycle, CLI
-reference, and configuration.
+See [Skill Workshop](/tools/skill-workshop) for how agents learn skills and
+[`openclaw skills workshop`](/cli/skills#skill-workshop) for the CLI reference.
 
 ## Installing from ClawHub
 
@@ -355,6 +366,12 @@ publish and sync.
     directory or repository name. Use `--as <slug>` to override.
     `openclaw skills update` tracks ClawHub installs only — reinstall Git or
     local sources to refresh them.
+
+    ClawHub tracking uses `.clawhub/lock.json` in the workspace and
+    `.clawhub/origin.json` in each installed skill. The pre-July 2026
+    `.clawdhub` directory is no longer read. For older installs, rename those
+    metadata directories to `.clawhub` before updating or verifying skills;
+    preserve and reconcile any existing `.clawhub` metadata instead of overwriting it.
 
   </Accordion>
   <Accordion title="Verification and security scanning">
@@ -405,7 +422,7 @@ publish and sync.
     Configure `security.installPolicy` to run a trusted local policy command
     before skill installs continue. The policy receives metadata and the staged
     source path, applies to ClawHub, uploaded, Git, local, update, and
-    dependency-installer paths, and fails closed when the command cannot return
+    dependency-installer paths, and blocks the install when the command cannot return
     a valid decision.
   </Accordion>
   <Accordion title="Secret injection scope">
@@ -559,10 +576,12 @@ Fresh dependency checks detect binaries installed into directories already on
 </ParamField>
 
 <Note>
-  Legacy `metadata.clawdbot` blocks are still accepted when
-  `metadata.openclaw` is absent, so older installed skills keep their
-  dependency gates and installer hints. New skills should use
-  `metadata.openclaw`.
+  The pre-July 2026 `metadata.clawdbot` format is no longer read. To update an
+  older skill, edit its `SKILL.md` frontmatter and rename that block to
+  `metadata.openclaw`, preserving its requirements and installer fields. If
+  both blocks exist, keep the current block and merge only the legacy fields
+  you still want. OpenClaw does not rewrite the file; the old block's dependency
+  gates and installer hints are ignored until you update it.
 </Note>
 
 ### Installer specs
@@ -667,7 +686,7 @@ Toggle and configure bundled or managed skills under `skills.entries` in
 <ParamField path="enabled" type="boolean">
   `false` disables the skill even when bundled or installed. The `coding-agent`
   bundled skill is opt-in — set `skills.entries.coding-agent.enabled: true`
-  and ensure one of `claude`, `codex`, `opencode`, or another supported CLI
+  and check that one of `claude`, `codex`, `opencode`, or another supported CLI
   is installed and authenticated.
 </ParamField>
 
@@ -735,7 +754,11 @@ command identities. Other CLI backends use the prompt catalog only.
 ## Snapshots and refresh
 
 OpenClaw snapshots eligible skills **when a session starts** and reuses that
-list until a refresh trigger below applies.
+list until a refresh trigger below applies. New sessions recheck skill
+prerequisites, including binaries installed into an existing `PATH` directory,
+even when the skill files have not changed.
+Existing snapshots keep their selected skill sources: a newly eligible skill
+with the same name does not replace another source's implementation during hydration.
 
 Managed library selections keep their exact revisions until an explicit
 attach or refresh, including across Gateway restarts. The refresh triggers
@@ -759,8 +782,9 @@ skills through the existing snapshot preparation. Restart the Gateway after
 restoring watch capacity to enable native watching again.
 
 When native events are unavailable, skills polling runs every 30 seconds by
-default. This is also the minimum interval for explicitly requested polling;
-larger `CHOKIDAR_INTERVAL` values remain supported. Native event hints still
+default. A valid `CHOKIDAR_INTERVAL` overrides this default for automatic fallback
+and explicitly requested polling, with a 20 ms minimum. Shorter intervals increase
+background scanning cost, especially for large skill trees. Native event hints still
 trigger prompt refreshes with the normal debounce. Each watcher logs one warning
 when automatic selection falls back to polling, including the reported reason
 when available.
@@ -801,6 +825,18 @@ the total number of operating-system file watches.
     keys, sources, precedence winners, and `SKILL.md` content
     keep the same snapshot version and do not notify chat metadata consumers.
     Idle worktree watcher cleanup does not invalidate other workspaces.
+    Unchanged roots reuse discovery records only while every watcher they depend on
+    is verified and unchanged: the root's own watch targets, plus the watched paths
+    holding every symlink discovery followed and every discovered skill directory.
+    Remote-node changes and events in other roots do not rescan them. A root whose
+    links pass through unwatched paths, or that contains a dangling link, is rescanned
+    whenever discovery runs, as are roots without verified watch coverage. Manual,
+    Workshop, and configuration refreshes still invalidate discovery. Changes the
+    watcher cannot observe are picked up on the next observed change, configuration
+    refresh, or restart. That includes skills created inside ignored build-output
+    directories (`build`, `dist`, `node_modules`, `.venv`, `.cache`) and directories
+    outside every configured root and allowed symlink target, such as the
+    destination of an escaped symlink.
     Copies with identical `SKILL.md` content and declared metadata do not produce
     precedence collision logs. Different content is summarized per ordered
     winner/loser discovery root and source kind. During a Gateway process,
@@ -812,6 +848,10 @@ the total number of operating-system file watches.
     root symlink points outside the configured root, for example
     `<workspace>/skills/manager -> ~/path/to/skills`.
     Skill Workshop does not use these configured symlink targets.
+    Escaped paths are skipped on every scan, but each source/root/path warning is
+    logged once per process unless its resolved target changes. The warning cache
+    retains up to 1,024 paths; evicted paths can warn again. Audit diagnostics are
+    still reported on every scan.
 
   </Accordion>
   <Accordion title="Remote macOS nodes (Linux gateway)">
@@ -821,10 +861,10 @@ the total number of operating-system file watches.
     skills via the `exec` tool with `host=node`.
 
     Offline nodes do **not** make remote-only skills visible. If a node stops
-    answering bin probes, OpenClaw clears its cached bin matches.
+    answering bin checks, OpenClaw clears its cached bin matches.
 
-    Connect-time bin probes wait briefly for the node's command handlers.
-    Gateway shutdown cancels this readiness wait and still joins probes that
+    Connect-time bin checks wait briefly for the node's command handlers.
+    Gateway shutdown cancels this readiness wait and still joins checks that
     have already started.
 
   </Accordion>
@@ -836,10 +876,18 @@ The prompt contains a bounded skill directory. Skills omitted by the prompt
 budget remain discoverable through `skills_search` when that tool is enabled.
 Small catalogs continue to appear in full.
 
-- `skills_search({ query, limit? })` searches eligible installed names and
-  descriptions. The default limit is 5; the maximum is 20. Queries must contain
-  1-1,000 characters. Results contain names, locations, and shortened descriptions, not
-  instructions. `hasMore` indicates that additional matches exist.
+When search is available, the agent is instructed to check for a relevant skill
+before work involving files, specialized tools, or a reusable workflow.
+An omitted directory is identified explicitly; the agent searches by task goal
+instead of trying to scan a list that is not present. Known names and clear
+directory matches can go directly to a complete skill read. Simple conversation
+and self-contained answers do not require discovery.
+
+- `skills_search({ query, limit? })` searches eligible installed names,
+  descriptions, and bounded instruction text. The default limit is 5; the maximum
+  is 20. Queries must contain 1-1,000 characters. Results contain names, locations,
+  and shortened descriptions, not instructions. `hasMore` indicates that additional
+  matches exist.
 - `skills_read({ name })` loads the complete `SKILL.md` for an exact name.
   Search is not required when the name is already known. Instructions omitted
   from the prompt directory are limited to 256 KiB and rejected if larger, not
@@ -850,6 +898,11 @@ Both tools use the current session's eligible catalog. Disabled, filtered,
 ineligible, and model-hidden skills are not added by search. Existing explicit
 user references remain separate. Search does not query ClawHub, install a
 skill, or grant permission to execute its commands.
+
+Instruction-body indexing requires the effective native `skills_read` tool.
+When reads are denied or shadowed, search uses metadata only and performs no
+instruction-body reads. Revocation also excludes cached body matches and rejects
+in-flight indexing started under the previous grant.
 
 In OpenClaw Code Mode, use `await skills.search(query, limit)` and
 `await skills.read(name)`. These calls dispatch through the same tools and
@@ -864,6 +917,25 @@ An existing `read` policy grant also permits `skills_read`. An explicit
 Search uses an in-memory lexical index of the prepared catalog. It follows the
 existing [snapshot and refresh rules](/tools/skills#snapshots-and-refresh), with
 no embedding service or persistent search index.
+The first search reads bodies through the admitted filesystem owner.
+Concurrent first searches share one build; cancelling a waiter does not cancel
+its owner. Later searches reuse the completed index for that prepared catalog
+and still check current run authority. Names and descriptions have twice the lexical
+weight of body text; exact names rank first.
+
+Body indexing reads at most 1,024 skills in name order, four at a time. Each body
+contributes at most 16 KiB, reduced equally across the selected skills
+to keep their total at most 4 MiB. Local files contribute a bounded prefix, with
+one extra byte read to detect truncation. Owners that reject oversized bounded
+reads or do not support bounded search reads retain metadata only.
+Remote workspace owners with whole-skill reads only do not use their document
+bridge for indexing. Already-delivered inline bodies can contribute a bounded
+prefix. Metadata remains searchable for the full eligible catalog.
+If bodies are unreadable, omitted, or shortened,
+`coverage` reports `bodyIndexed`, `metadataOnly`, and `truncatedBodies`.
+An empty result with partial coverage does not prove that no applicable skill exists.
+Indexing never executes skill content, and index limits do not truncate `skills_read`.
+
 Sandbox search includes only readable, delivered skills. Discovery does not
 expand the existing worker transfer selection or its 8 MiB total resource limit.
 Dedicated remote workers retain their existing tool protocol; the new search
@@ -873,7 +945,7 @@ eligible catalog.
 ## Token impact
 
 When skills are eligible, OpenClaw injects a compact XML block into the system
-prompt. The cost is deterministic and scales linearly per skill:
+prompt. The cost follows a fixed formula and scales linearly per skill:
 
 - **Base overhead** (only when 1+ skills are eligible): a fixed block of intro
   prose plus the `<available_skills>` wrapper.
@@ -906,7 +978,7 @@ read every admitted skill. Native harnesses retain their own prompt policy.
     Step-by-step guide to authoring a custom skill.
   </Card>
   <Card title="Skill Workshop" href="/tools/skill-workshop" icon="flask">
-    Proposal queue for agent-drafted skills.
+    Skills your agent saves and updates on its own, with undo.
   </Card>
   <Card title="Skills config" href="/tools/skills-config" icon="gear">
     Full `skills.*` config schema and agent allowlists.

@@ -1,10 +1,9 @@
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export function extractQaMessageText(
-  message: Record<string, unknown>,
-  acceptsNestedType: (type: unknown) => boolean,
+export function extractQaContentText(
+  rawContent: unknown,
+  readBlockText: (block: Record<string, unknown>) => string | undefined,
 ) {
-  const rawContent = message.content;
   if (typeof rawContent === "string") {
     return rawContent.trim();
   }
@@ -13,26 +12,27 @@ export function extractQaMessageText(
   }
   const parts: string[] = [];
   for (const block of rawContent) {
-    if (typeof block === "string") {
-      if (block.trim()) {
-        parts.push(block.trim());
-      }
-      continue;
-    }
-    if (!isRecord(block)) {
-      continue;
-    }
-    const text = normalizeOptionalString(block.text);
+    const text =
+      typeof block === "string" ? block.trim() : isRecord(block) ? readBlockText(block) : undefined;
     if (text) {
       parts.push(text);
-      continue;
-    }
-    const nestedText = normalizeOptionalString(block.content);
-    if (nestedText && acceptsNestedType(block.type)) {
-      parts.push(nestedText);
     }
   }
   return parts.join("\n").trim();
+}
+
+export function extractQaMessageText(
+  message: Record<string, unknown>,
+  acceptsNestedType: (type: unknown) => boolean,
+) {
+  return extractQaContentText(message.content, (block) => {
+    const text = normalizeOptionalString(block.text);
+    if (text) {
+      return text;
+    }
+    const nestedText = normalizeOptionalString(block.content);
+    return nestedText && acceptsNestedType(block.type) ? nestedText : undefined;
+  });
 }
 
 export function* readQaTranscriptMessages(transcriptBytes: string) {

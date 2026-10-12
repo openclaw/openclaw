@@ -1,8 +1,3 @@
-/**
- * Voice call response generator - uses the embedded OpenClaw agent for tool support.
- * Routes voice responses through the same agent infrastructure as messaging.
- */
-
 import crypto from "node:crypto";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
@@ -14,8 +9,6 @@ import {
 } from "openclaw/plugin-sdk/model-session-runtime";
 import { isValidAgentHarnessSessionStoreEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
-  isRecord,
-  filterStringEntries,
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -28,7 +21,6 @@ import { resolveVoiceResponseModel } from "./response-model.js";
 type VoiceResponseParams = {
   voiceConfig: VoiceCallConfig;
   coreConfig: OpenClawConfig;
-  /** Injected host agent runtime */
   agentRuntime: OpenClawPluginApi["runtime"]["agent"];
   /** Call ID for session tracking */
   callId: string;
@@ -39,7 +31,7 @@ type VoiceResponseParams = {
   /** Caller ownership prepared by the call boundary. */
   senderIsOwner: boolean | undefined;
   /** Agent frozen on the call record. */
-  agentId?: string;
+  agentId: string;
   /** Audible call transcript, used only for bounded first-turn opening context. */
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
   userMessage: string;
@@ -60,26 +52,6 @@ type VoiceResponsePayload = {
   isReasoning?: boolean;
 };
 
-function readExplicitToolsAllow(value: unknown): string[] | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-
-  const allow = value.allow;
-  if (!Array.isArray(allow)) {
-    return undefined;
-  }
-
-  return filterStringEntries(allow);
-}
-
-function resolveVoiceAgentToolsAllow(
-  config: OpenClawConfig,
-  agentId: string,
-): string[] | undefined {
-  return readExplicitToolsAllow(resolveAgentConfig(config, agentId)?.tools);
-}
-
 const VOICE_SPOKEN_OUTPUT_CONTRACT = [
   "Output format requirements:",
   '- Return only valid JSON in this exact shape: {"spoken":"..."}',
@@ -96,10 +68,9 @@ const VOICE_OPENING_CONTEXT_HEADER = "[Audible call-opening context]";
 const VOICE_OPENING_CONTEXT_FOOTER = "[End audible call-opening context]";
 const VOICE_OPENING_TRUNCATION_MARKER = " [truncated]";
 
-function buildVoiceTurnPrompt(params: {
-  transcript: Array<{ speaker: "user" | "bot"; text: string }>;
-  userMessage: string;
-}): string {
+function buildVoiceTurnPrompt(
+  params: Pick<VoiceResponseParams, "transcript" | "userMessage">,
+): string {
   const lastEntry = params.transcript.at(-1);
   const history =
     lastEntry?.speaker === "user" && lastEntry.text === params.userMessage
@@ -201,30 +172,15 @@ function tryParseSpokenJson(text: string): string | null {
 
 function isLikelyMetaReasoningParagraph(paragraph: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(paragraph);
-  if (!lower) {
-    return false;
-  }
-
-  if (lower.startsWith("thinking process")) {
-    return true;
-  }
-  if (lower.startsWith("reasoning:") || lower.startsWith("analysis:")) {
-    return true;
-  }
-  if (
-    lower.startsWith("the user ") &&
-    (lower.includes("i should") || lower.includes("i need to") || lower.includes("i will"))
-  ) {
-    return true;
-  }
-  if (
+  return (
+    lower.startsWith("thinking process") ||
+    lower.startsWith("reasoning:") ||
+    lower.startsWith("analysis:") ||
+    (lower.startsWith("the user ") &&
+      (lower.includes("i should") || lower.includes("i need to") || lower.includes("i will"))) ||
     lower.includes("this is a natural continuation of the conversation") ||
     lower.includes("keep the conversation flowing")
-  ) {
-    return true;
-  }
-
-  return false;
+  );
 }
 
 function sanitizePlainSpokenText(text: string): string | null {
@@ -259,33 +215,13 @@ function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string
       continue;
     }
 
-    const structured = tryParseSpokenJson(rawText);
-    if (structured !== null) {
-      if (structured.length > 0) {
-        spokenSegments.push(structured);
-      }
-      continue;
-    }
-
-    const plain = sanitizePlainSpokenText(rawText);
-    if (plain) {
-      spokenSegments.push(plain);
+    const spoken = tryParseSpokenJson(rawText) ?? sanitizePlainSpokenText(rawText);
+    if (spoken) {
+      spokenSegments.push(spoken);
     }
   }
 
-  return spokenSegments.length > 0 ? spokenSegments.join(" ").trim() : null;
-}
-
-async function deliverEarlyText(
-  callback: (text: string) => Promise<boolean>,
-  text: string,
-): Promise<boolean> {
-  try {
-    return await callback(text);
-  } catch (error) {
-    console.error("[voice-call] Early TTS delivery failed:", error);
-    return false;
-  }
+  return spokenSegments.join(" ") || null;
 }
 
 function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): string {
@@ -296,10 +232,6 @@ function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): str
   return `agent:${agentId}:${trimmed}`;
 }
 
-/**
- * Generate a voice response using the embedded OpenClaw agent with full tool support.
- * Uses the same agent infrastructure as messaging for consistent behavior.
- */
 export async function generateVoiceResponse(
   params: VoiceResponseParams,
 ): Promise<VoiceResponseResult> {
@@ -311,29 +243,21 @@ export async function generateVoiceResponse(
     senderIsOwner,
     transcript,
     userMessage,
-    coreConfig,
+    coreConfig: cfg,
     agentRuntime,
     onEarlyText,
   } = params;
 
-  if (!coreConfig) {
-    return {
-      text: null,
-      deliveredEarly: false,
-      error: "Core config unavailable for voice response",
-    };
-  }
-  const cfg = coreConfig;
-  const agentId = resolveCallAgentId({ agentId: params.agentId }, voiceConfig);
+  const agentId = resolveCallAgentId(params);
 
   const resolvedSessionKey = resolveVoiceCallSessionKey({
     config: { ...voiceConfig, agentId },
     callId,
     phone: from,
     explicitSessionKey: sessionKey,
-    coreSession: coreConfig.session,
+    coreSession: cfg.session,
   });
-  const toolsAllow = resolveVoiceAgentToolsAllow(cfg, agentId);
+  const toolsAllow = resolveAgentConfig(cfg, agentId)?.tools?.allow;
 
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
   try {
@@ -346,7 +270,7 @@ export async function generateVoiceResponse(
         await agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
         const now = Date.now();
-        const existingSessionEntry = agentRuntime.session.getSessionEntry({
+        let sessionEntry = await agentRuntime.session.getSessionEntryAsync({
           storePath,
           sessionKey: resolvedSessionKey,
         });
@@ -354,13 +278,12 @@ export async function generateVoiceResponse(
         const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
         const configuredModel = resolveDefaultModelForAgent({ cfg, agentId });
 
-        let sessionEntry = existingSessionEntry;
         if (sessionEntry?.modelSelectionLocked === true && voiceConfig.responseModel) {
           throw new ModelSelectionLockedError();
         }
         if (!sessionEntry?.sessionId || voiceConfig.responseModel) {
           sessionEntry =
-            (await agentRuntime.session.patchSessionEntry({
+            (await agentRuntime.session.prepareSessionEntryPatch({
               storePath,
               sessionKey: resolvedSessionKey,
               replaceEntry: true,
@@ -368,7 +291,7 @@ export async function generateVoiceResponse(
                 sessionId: crypto.randomUUID(),
                 updatedAt: now,
               },
-              update: (entry) => {
+              prepare: (entry) => {
                 const next = entry.sessionId
                   ? { ...entry }
                   : {
@@ -516,12 +439,17 @@ export async function generateVoiceResponse(
               return;
             }
             lastFlushedText = text;
-            deliveredEarly = await deliverEarlyText(onEarlyText, text);
+            try {
+              deliveredEarly = await onEarlyText(text);
+            } catch (error) {
+              console.error("[voice-call] Early TTS delivery failed:", error);
+              deliveredEarly = false;
+            }
           },
         });
 
         const text =
-          extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]) ??
+          extractSpokenTextFromPayloads(result.payloads ?? []) ??
           lastFlushedText ??
           extractSpokenTextFromPayloads(blockReplyPayloads);
 

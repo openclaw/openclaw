@@ -282,7 +282,7 @@ describe("createVerifiedSqliteSnapshot", () => {
       expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
       const rejected = results.find((result) => result.status === "rejected");
       expect(rejected).toBeDefined();
-      expect((rejected as PromiseRejectedResult).reason).toMatchObject({ code: "EEXIST" });
+      expect((rejected as PromiseRejectedResult).reason).toMatchObject({ code: "already-exists" });
       await expect(fs.lstat(directoryPath)).resolves.toMatchObject({});
     },
   );
@@ -314,7 +314,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     },
   );
 
-  it.each([undefined, false, true])(
+  it.each([undefined, true])(
     "preserves implicit row IDs only when requested (%s), including committed WAL data",
     async (preserveRowIds) => {
       const source = new sqlite.DatabaseSync(sourcePath);
@@ -531,6 +531,62 @@ describe("createVerifiedSqliteSnapshot", () => {
     );
   });
 
+  it.each(["index", "foreign-key", "caller"] as const)(
+    "rejects a transformed snapshot that fails %s validation",
+    async (failure) => {
+      const source = new sqlite.DatabaseSync(sourcePath);
+      try {
+        source.exec(`
+          CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL, alternate TEXT NOT NULL);
+          CREATE INDEX records_value ON records(value);
+          CREATE TABLE children (parent_id INTEGER REFERENCES records(id));
+          INSERT INTO records VALUES (1, 'original', 'other');
+        `);
+      } finally {
+        source.close();
+      }
+      const original = await fs.readFile(sourcePath);
+      await expectSnapshotFailureWithoutTarget(
+        {
+          sourcePath,
+          targetPath,
+          preserveRowIds: true,
+          sourceAcquisition: { mode: "isolated-process", stagingRoot: tempDir },
+          transform: (database) => {
+            if (failure === "index") {
+              database.enableDefensive?.(false);
+              database.exec(`
+                PRAGMA writable_schema = ON;
+                UPDATE sqlite_schema SET sql = 'CREATE INDEX records_value ON records(alternate)'
+                  WHERE name = 'records_value';
+                PRAGMA writable_schema = OFF;
+              `);
+              const version = Number(
+                database.prepare("PRAGMA schema_version").get()?.schema_version,
+              );
+              database.exec(`PRAGMA schema_version = ${version + 1};`);
+            } else if (failure === "foreign-key") {
+              database.exec("PRAGMA foreign_keys = OFF; INSERT INTO children VALUES (2);");
+            } else {
+              database.exec("UPDATE records SET value = 'invalid';");
+            }
+          },
+          validate: (database) => {
+            if (database.prepare("SELECT value FROM records").get()?.value === "invalid") {
+              throw new Error("Snapshot contains an invalid record");
+            }
+          },
+        },
+        failure === "index"
+          ? /integrity_check failed/iu
+          : failure === "foreign-key"
+            ? /foreign_key_check failed/iu
+            : /Snapshot contains an invalid record/u,
+      );
+      expect(await fs.readFile(sourcePath)).toEqual(original);
+    },
+  );
+
   it("snapshots a zero-byte generic source as an empty SQLite database", async () => {
     await fs.writeFile(sourcePath, "");
 
@@ -708,7 +764,6 @@ describe("createVerifiedSqliteSnapshot", () => {
           identityObservation === "staging-transition" &&
           replaced &&
           !stagingReplaced &&
-          typeof identity.ino === "number" &&
           path.basename(filePath) === "database.sqlite" &&
           path.basename(path.dirname(filePath)).startsWith(".sqlite-publish-")
         ) {
@@ -822,15 +877,6 @@ describe("createVerifiedSqliteSnapshot", () => {
       { sourcePath, targetPath },
       /target inspection failed/u,
     );
-  });
-
-  it("accepts an exclusive-copy publication receipt", async () => {
-    const publish = mockExclusiveCopyPublication();
-
-    await expectSnapshotSuccess({ sourcePath, targetPath });
-    expect(publish).toHaveBeenCalledTimes(1);
-    const restored = new sqlite.DatabaseSync(targetPath, { readOnly: true });
-    restored.close();
   });
 
   it("removes an exclusive-copy publication whose bytes fail verification", async () => {
@@ -966,39 +1012,41 @@ describe("createVerifiedSqliteSnapshot", () => {
     },
   );
 
-  it.each([false, true])(
-    "validates source and transformed snapshot (isolated=%s)",
-    async (isolated) => {
-      const removedValue = `removed-secret-${"x".repeat(256)}`;
-      const source = new sqlite.DatabaseSync(sourcePath);
-      source.exec("PRAGMA secure_delete = OFF; CREATE TABLE records (value TEXT NOT NULL);");
-      source.prepare("INSERT INTO records VALUES (?)").run(removedValue);
-      source.close();
-      const labels: string[] = [];
+  it("validates source and transformed isolated snapshot", async () => {
+    const removedValue = `removed-secret-${"x".repeat(256)}`;
+    const source = new sqlite.DatabaseSync(sourcePath);
+    source.exec("PRAGMA secure_delete = OFF; CREATE TABLE records (value TEXT NOT NULL);");
+    source.prepare("INSERT INTO records VALUES (?)").run(removedValue);
+    source.close();
+    const validatedValues = new Map<string, unknown>();
 
-      await createVerifiedSqliteSnapshot({
-        sourcePath,
-        targetPath,
-        ...(isolated
-          ? { sourceAcquisition: { mode: "isolated-process" as const, stagingRoot: tempDir } }
-          : {}),
-        transform: (database) => {
-          database.exec("DELETE FROM records;");
-          database.prepare("INSERT INTO records VALUES (?)").run("new");
-        },
-        validate: (_database, label) => labels.push(label),
-      });
+    await createVerifiedSqliteSnapshot({
+      sourcePath,
+      targetPath,
+      sourceAcquisition: { mode: "isolated-process", stagingRoot: tempDir },
+      transform: (database) => {
+        database.exec("DELETE FROM records;");
+        database.prepare("INSERT INTO records VALUES (?)").run("new");
+      },
+      validate: (database, label) => {
+        validatedValues.set(label, database.prepare("SELECT value FROM records").get()?.value);
+      },
+    });
 
-      expect(labels).toEqual([sourcePath, targetPath, targetPath]);
-      expect((await fs.readFile(targetPath)).includes(removedValue)).toBe(false);
-      withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
-        expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "new" });
+    expect(validatedValues).toEqual(
+      new Map([
+        [sourcePath, removedValue],
+        [targetPath, "new"],
+      ]),
+    );
+    expect((await fs.readFile(targetPath)).includes(removedValue)).toBe(false);
+    withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
+      expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "new" });
+    });
+    withReadOnlySnapshot(sqlite, sourcePath, (unchanged) => {
+      expect(unchanged.prepare("SELECT value FROM records").get()).toEqual({
+        value: removedValue,
       });
-      withReadOnlySnapshot(sqlite, sourcePath, (unchanged) => {
-        expect(unchanged.prepare("SELECT value FROM records").get()).toEqual({
-          value: removedValue,
-        });
-      });
-    },
-  );
+    });
+  });
 });

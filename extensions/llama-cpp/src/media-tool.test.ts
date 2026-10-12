@@ -25,6 +25,8 @@ import { registerLlamaCppMediaTool } from "./media-tool.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const IMAGE = encodePngRgba(Buffer.from([255, 0, 0, 255]), 1, 1);
 
+afterEach(() => vi.unstubAllEnvs());
+
 function configured(): OpenClawConfig {
   return {
     models: {
@@ -130,6 +132,7 @@ describe("registered local_image tool", () => {
         requestInit: { signal: controller.signal },
       });
       expect(result.content).toEqual([{ type: "text", text: "local result" }]);
+      expect(result.details).toMatchObject({ text: "local result", task: task ?? "vision", model });
       expect(IMAGE).toEqual(fixture.describeImage.mock.calls[0]?.[0].buffer);
     },
   );
@@ -276,6 +279,7 @@ describe("registered local_image tool", () => {
       expect.objectContaining({ timeoutMs: 7000 }),
     );
     expect(result.content).toEqual([{ type: "text", text: "local" }]);
+    expect(result.details).toMatchObject({ text: "local" });
   });
 
   it("cancels before input, after input, and during the registered provider inference", async () => {
@@ -339,5 +343,35 @@ describe("registered local_image tool", () => {
     oversized.api.runtime.media.loadWebMedia = loadWebMedia;
     await expect(requireTool(oversized).execute("test", { path: "fixture.png" })).rejects.toThrow();
     expect(oversized.describeImage).not.toHaveBeenCalled();
+  });
+
+  it("reads inbound media and host-approved read-only paths under workspace-only policy", async () => {
+    const { loadWebMedia } = await import("openclaw/plugin-sdk/web-media");
+    const root = tempDirs.make("llama-media-tool-roots-");
+    const workspace = path.join(root, "workspace");
+    const inbound = path.join(root, "media", "inbound");
+    const approved = path.join(root, "approved");
+    for (const directory of [workspace, inbound, approved]) {
+      await fs.mkdir(directory, { recursive: true });
+    }
+    await fs.writeFile(path.join(inbound, "fixture.png"), IMAGE);
+    const approvedFile = path.join(approved, "fixture.png");
+    await fs.writeFile(approvedFile, IMAGE);
+    const outside = path.join(root, "private.png");
+    await fs.writeFile(outside, IMAGE);
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    vi.stubEnv("OPENCLAW_HOME", root);
+    const fixture = capture({
+      workspaceDir: workspace,
+      fsPolicy: { workspaceOnly: true, readOnlyRoots: [approved] },
+    });
+    fixture.api.runtime.media.loadWebMedia = loadWebMedia;
+    const tool = requireTool(fixture);
+    for (const source of ["media://inbound/fixture.png", approvedFile, "~/approved/fixture.png"]) {
+      await expect.soft(tool.execute("test", { path: source })).resolves.toMatchObject({
+        content: [{ type: "text", text: "local result" }],
+      });
+    }
+    await expect(tool.execute("test", { path: outside })).rejects.toThrow();
   });
 });

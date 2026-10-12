@@ -245,10 +245,7 @@ const CronPayloadSchema = Type.Union([
 
 /** Reported payloads include the Gateway-owned heartbeat monitor. */
 const CronReportedPayloadSchema = Type.Union([
-  CronSystemEventPayloadSchema,
-  CronAgentTurnPayloadSchema,
-  CronCommandPayloadSchema,
-  CronScriptPayloadSchema,
+  ...CronPayloadSchema.anyOf,
   closedObject({ kind: Type.Literal("heartbeat") }),
 ]);
 
@@ -583,9 +580,7 @@ export const CronScratchSetParamsSchema = cronIdOrJobIdParams({
 export const CronScratchSetResultSchema = Type.Union([
   closedObject({
     ok: Type.Literal(true),
-    scratch: Type.Union([CronScratchSchema, Type.Null()]),
-    currentRevision: Type.Integer({ minimum: 0 }),
-    maxBytes: Type.Integer({ minimum: 1 }),
+    ...CronScratchGetResultSchema.properties,
   }),
   closedObject({
     ok: Type.Literal(false),

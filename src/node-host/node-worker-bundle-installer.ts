@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import type { Dirent } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream, type Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import {
@@ -12,11 +14,13 @@ import {
   type WorkerAdmissionHandshake,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
-import { hasErrnoCode } from "../infra/errors.js";
+import { extractErrorCode, hasErrnoCode } from "../infra/errors.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
@@ -40,6 +44,7 @@ import {
   NodeWorkerTransferHttpError,
   withNodeWorkerTransferHttpRequest,
 } from "./node-worker-transfer-http.js";
+import { replaceNodeWorkerDirectory } from "./node-worker-workspace-replacement.js";
 
 const INSTALL_RECEIPT = "bootstrap-receipt.json";
 const INSTALL_IGNORED_TOP_LEVEL = new Set([INSTALL_RECEIPT]);
@@ -48,32 +53,61 @@ const STAGING_PATTERN = /^\.staging-[a-f0-9]{64}-/u;
 const PREVIOUS_PATTERN = /^[a-f0-9]{64}\.previous-/u;
 const BUNDLE_DELETE_BATCH = 16;
 const WORKER_PREWARM_TIMEOUT_MS = 10 * 60_000;
+const DOWNLOAD_TRANSIENT_CODES = new Set([
+  "ARTIFACT_RANGE_MISMATCH",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ECONNABORTED",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "ENETDOWN",
+  "EPIPE",
+  "ERR_STREAM_PREMATURE_CLOSE",
+  "ABORT_ERR",
+  "ETIMEDOUT",
+  "ESOCKETTIMEDOUT",
+  "EAI_AGAIN",
+  "HTTP_502",
+  "HTTP_503",
+  "HTTP_504",
+]);
 const execFileAsync = promisify(execFile);
+const log = createSubsystemLogger("node/worker-bundle");
 
-async function responseBody(response: IncomingMessage, maxBytes = 64 * 1024): Promise<string> {
-  const chunks: Buffer[] = [];
+async function readErrorResponseCode(response: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] | undefined = response.statusCode === 503 ? [] : undefined;
   let total = 0;
   for await (const value of response) {
     const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
     total += chunk.byteLength;
-    if (total > maxBytes) {
+    if (total > 64 * 1024) {
       response.destroy(new Error("worker bundle transfer response exceeded its byte limit"));
       throw new Error("worker bundle transfer response exceeded its byte limit");
     }
-    chunks.push(chunk);
+    chunks?.push(chunk);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  if (chunks) {
+    try {
+      const details: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      if (isRecord(details) && details.error === "transfer_in_progress") {
+        return "TRANSFER_IN_PROGRESS";
+      }
+    } catch {
+      // Proxy errors need not carry the Gateway's structured busy response.
+    }
+  }
+  return `HTTP_${response.statusCode ?? 0}`;
 }
 
 async function writeBundleArchive(params: {
   source: AsyncIterable<Uint8Array>;
   archive: NodeWorkerBundleInstallInput["archive"];
   destination: string;
+  offset?: number;
   signal?: AbortSignal;
 }): Promise<void> {
-  const output = await fsp.open(params.destination, "wx", 0o600);
-  const hash = createHash("sha256");
-  let bytes = 0;
+  const output = await fsp.open(params.destination, params.offset ? "a" : "wx", 0o600);
+  let bytes = params.offset ?? 0;
   try {
     params.signal?.throwIfAborted();
     for await (const chunk of params.source) {
@@ -82,15 +116,31 @@ async function writeBundleArchive(params: {
       if (bytes > params.archive.bytes || bytes > MAX_WORKER_BUNDLE_ARCHIVE_BYTES) {
         throw new Error("worker bundle archive exceeded its byte limit");
       }
-      hash.update(chunk);
       await output.writeFile(chunk);
     }
     params.signal?.throwIfAborted();
-    if (bytes !== params.archive.bytes || hash.digest("hex") !== params.archive.sha256) {
-      throw new Error("worker bundle archive failed integrity validation");
-    }
   } finally {
     await output.close();
+  }
+}
+
+async function verifyBundleArchive(params: {
+  destination: string;
+  archive: NodeWorkerBundleInstallInput["archive"];
+  signal?: AbortSignal;
+}): Promise<void> {
+  const hash = createHash("sha256");
+  let bytes = 0;
+  for await (const chunk of createReadStream(params.destination, { signal: params.signal })) {
+    bytes += chunk.byteLength;
+    if (bytes > params.archive.bytes || bytes > MAX_WORKER_BUNDLE_ARCHIVE_BYTES) {
+      throw new Error("worker bundle archive exceeded its byte limit");
+    }
+    hash.update(chunk);
+  }
+  params.signal?.throwIfAborted();
+  if (bytes !== params.archive.bytes || hash.digest("hex") !== params.archive.sha256) {
+    throw new Error("worker bundle archive failed integrity validation");
   }
 }
 
@@ -132,32 +182,101 @@ async function acquireBundle(params: {
       } finally {
         await opened.handle.close();
       }
+      log.info(`Worker bundle already prepared locally: ${params.input.archive.sha256}`);
       return;
     }
   }
-  params.signal?.throwIfAborted();
-  await withNodeWorkerTransferHttpRequest(
-    {
-      gatewayUrl: params.gatewayUrl,
-      tlsFingerprint: params.gatewayTlsFingerprint,
-      cloudflareAccess: params.gatewayCloudflareAccess,
-      routePath: nodeWorkerBundleTransferPath(params.input.build.bundleHash),
-      method: "GET",
-      token: params.input.archive.token,
-      signal: params.signal,
-    },
-    async (response) => {
-      if (response.statusCode !== 200) {
-        await responseBody(response);
-        throw new Error(`gateway returned ${response.statusCode ?? 0}`);
+  const archive = params.input.archive;
+  let offset = 0;
+  let retries = 0;
+  let noProgressFailures = 0;
+  for (;;) {
+    params.signal?.throwIfAborted();
+    // A reset after the final bytes needs whole-file verification, not a Range past EOF.
+    if (offset === archive.bytes) {
+      return;
+    }
+    try {
+      if (retries > 0) {
+        await delay(
+          Math.round(250 * 2 ** Math.min(retries - 1, 3) * (0.5 + Math.random())),
+          undefined,
+          { signal: params.signal },
+        );
       }
-      const contentLength = Number(response.headers["content-length"]);
-      if (contentLength !== params.input.archive.bytes) {
-        throw new Error("gateway returned an unexpected worker bundle length");
+      params.signal?.throwIfAborted();
+      await withNodeWorkerTransferHttpRequest(
+        {
+          gatewayUrl: params.gatewayUrl,
+          tlsFingerprint: params.gatewayTlsFingerprint,
+          cloudflareAccess: params.gatewayCloudflareAccess,
+          routePath: nodeWorkerBundleTransferPath(params.input.build.bundleHash),
+          method: "GET",
+          token: archive.token,
+          headers: offset ? { range: `bytes=${offset}-` } : undefined,
+          signal: params.signal,
+        },
+        async (response) => {
+          const status = response.statusCode;
+          if (
+            (status === 416 && offset > 0) ||
+            (status === 206 &&
+              response.headers["content-range"] !==
+                `bytes ${offset}-${archive.bytes - 1}/${archive.bytes}`)
+          ) {
+            await fsp.rm(params.destination, { force: true });
+            throw Object.assign(new Error("gateway returned an unexpected worker bundle range"), {
+              code: "ARTIFACT_RANGE_MISMATCH",
+            });
+          }
+          if (status !== 200 && status !== 206) {
+            const code = await readErrorResponseCode(response);
+            throw Object.assign(new Error(`gateway returned ${status ?? 0}`), { code });
+          }
+          const start = status === 200 ? 0 : offset;
+          if (status === 200) {
+            // A proxy may ignore Range. Never append a full response to the retained prefix.
+            await fsp.rm(params.destination, { force: true });
+          }
+          if (Number(response.headers["content-length"]) !== archive.bytes - start) {
+            await fsp.rm(params.destination, { force: true });
+            throw Object.assign(new Error("gateway returned an unexpected worker bundle length"), {
+              code: status === 206 ? "ARTIFACT_RANGE_MISMATCH" : undefined,
+            });
+          }
+          await writeBundleArchive({ ...params, source: response, archive, offset: start });
+        },
+      );
+      return;
+    } catch (error) {
+      params.signal?.throwIfAborted();
+      const code = extractErrorCode(error);
+      const busy = code === "TRANSFER_IN_PROGRESS";
+      if (!busy && !DOWNLOAD_TRANSIENT_CODES.has(code ?? "")) {
+        throw error;
       }
-      await writeBundleArchive({ ...params, source: response, archive: params.input.archive });
-    },
-  );
+      if (!busy) {
+        const retainedBytes = await fsp.stat(params.destination).then(
+          (stat) => stat.size,
+          (statError: unknown) => {
+            if (hasErrnoCode(statError, "ENOENT")) {
+              return 0;
+            }
+            throw statError;
+          },
+        );
+        // Replayed bytes from a proxy ignoring Range do not count as retained progress.
+        noProgressFailures = retainedBytes > offset ? 0 : noProgressFailures + 1;
+        offset = retainedBytes;
+      }
+      if (noProgressFailures === 3) {
+        throw new Error("worker bundle download stopped after 3 consecutive no-progress failures", {
+          cause: error,
+        });
+      }
+      retries++;
+    }
+  }
 }
 
 async function readReceipt(bundleDir: string): Promise<WorkerAdmissionHandshake | undefined> {
@@ -211,42 +330,10 @@ async function removeStaleInstallStaging(bundlesRoot: string): Promise<void> {
   );
 }
 
-async function publishBundle(
-  destination: string,
-  staging: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  const prior = `${destination}.previous-${process.pid}-${randomUUID()}`;
-  let movedPrior = false;
-  signal?.throwIfAborted();
-  try {
-    await fsp.rename(destination, prior);
-    movedPrior = true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-  try {
-    // Cancellation after moving the old install must restore it through the same rollback path.
-    signal?.throwIfAborted();
-    await fsp.rename(staging, destination);
-  } catch (error) {
-    if (movedPrior) {
-      await fsp.rename(prior, destination).catch(() => undefined);
-    }
-    throw error;
-  }
-  if (movedPrior) {
-    await fsp.rm(prior, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
 export class NodeWorkerBundleInstaller {
   readonly #root: string;
   readonly #packageRoot: string | null;
   readonly #operations = new KeyedAsyncQueue();
-  readonly #bundleGenerationsByNamespace = new Map<string, Map<string, number>>();
   readonly #currentGenerationByNamespace = new Map<string, number>();
   readonly #prewarmedBundles = new Set<string>();
   readonly #workerEnv: NodeJS.ProcessEnv;
@@ -258,13 +345,9 @@ export class NodeWorkerBundleInstaller {
     this.#workerEnv = snapshotNodeWorkerEnv(env);
   }
 
-  #markPendingRetention(gatewayNamespace: string, bundleHash: string): void {
+  #recordInstall(gatewayNamespace: string): void {
     const generation = (this.#currentGenerationByNamespace.get(gatewayNamespace) ?? 0) + 1;
     this.#currentGenerationByNamespace.set(gatewayNamespace, generation);
-    const generations =
-      this.#bundleGenerationsByNamespace.get(gatewayNamespace) ?? new Map<string, number>();
-    generations.set(bundleHash, generation);
-    this.#bundleGenerationsByNamespace.set(gatewayNamespace, generations);
   }
 
   async #prewarmBundle(bundleDir: string, signal?: AbortSignal): Promise<void> {
@@ -274,7 +357,11 @@ export class NodeWorkerBundleInstaller {
     try {
       await execFileAsync(
         process.execPath,
-        [path.join(bundleDir, WORKER_BUNDLE_ENTRY_PATH), "--internal-worker-prewarm"],
+        [
+          ...resolveRuntimeArgs(),
+          path.join(bundleDir, WORKER_BUNDLE_ENTRY_PATH),
+          "--internal-worker-prewarm",
+        ],
         {
           cwd: bundleDir,
           env: this.#workerEnv,
@@ -329,6 +416,11 @@ export class NodeWorkerBundleInstaller {
               signal: params.signal,
             });
             params.signal?.throwIfAborted();
+            await verifyBundleArchive({
+              destination: archivePath,
+              archive: input.archive,
+              signal: params.signal,
+            });
             await extractWorkerBundleArchive({
               tarballPath: archivePath,
               destination: staging,
@@ -344,7 +436,7 @@ export class NodeWorkerBundleInstaller {
             } finally {
               await receipt.close();
             }
-            await publishBundle(destination, staging, params.signal);
+            await replaceNodeWorkerDirectory(destination, staging, "bundle", params.signal);
             if (!(await validateInstalledBundle(destination, input.build))) {
               throw new Error("published worker bundle failed validation");
             }
@@ -357,7 +449,7 @@ export class NodeWorkerBundleInstaller {
           await this.#prewarmBundle(destination, params.signal);
         }
         params.signal?.throwIfAborted();
-        this.#markPendingRetention(input.gatewayNamespace, input.build.bundleHash);
+        this.#recordInstall(input.gatewayNamespace);
         return structuredClone(input.build);
       } catch (error) {
         if (error instanceof NodeWorkerBundleInstallError) {
@@ -425,22 +517,6 @@ export class NodeWorkerBundleInstaller {
         throw error;
       }
       const protectedHashes = new Set(params.bundleHashes);
-      const generations =
-        this.#bundleGenerationsByNamespace.get(params.gatewayNamespace) ??
-        new Map<string, number>();
-      const acknowledgedGeneration = params.acknowledgedGeneration ?? 0;
-      for (const [bundleHash, generation] of generations) {
-        if (generation > acknowledgedGeneration) {
-          protectedHashes.add(bundleHash);
-        } else {
-          generations.delete(bundleHash);
-        }
-      }
-      if (generations.size > 0) {
-        this.#bundleGenerationsByNamespace.set(params.gatewayNamespace, generations);
-      } else {
-        this.#bundleGenerationsByNamespace.delete(params.gatewayNamespace);
-      }
       const candidates = entries
         .filter(
           (entry) =>

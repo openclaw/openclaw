@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "../../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { createSubagentSweeperHarness as createHarness } from "./subagent-registry-sweeper.test-support.js";
 
@@ -29,6 +38,49 @@ describe("subagent suspended delivery pressure", () => {
   afterEach(() => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
+  });
+
+  it("keeps pressure and empty sweeps memory-only while state read admission closes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      openOpenClawStateDatabase();
+      const context = captureOpenClawStateWorkerContext();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const unregister = registerOpenClawStateDatabaseAsyncResource({
+        close: () => {
+          entered.resolve();
+          return release.promise;
+        },
+      });
+      const { runs, sweeper, warn, completeCleanupBookkeeping } = createSuspendedBacklog(25);
+      const closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
+      try {
+        await entered.promise;
+        expect(() => captureOpenClawStateWorkerContext()).toThrow("read admission is closed");
+        const sql = observeMainThreadSql();
+        try {
+          await sweeper.sweepOnce();
+          expect(runs.size).toBe(25);
+          expect(warn).toHaveBeenCalledExactlyOnceWith(
+            "subagent suspended delivery backlog reached warning threshold",
+            { suspendedCount: 25, warningThreshold: 25 },
+          );
+          runs.clear();
+          await sweeper.sweepOnce();
+          expect(runs.size).toBe(0);
+          expect(warn).toHaveBeenCalledOnce();
+          expect(completeCleanupBookkeeping).not.toHaveBeenCalled();
+          sql.expectIdle();
+        } finally {
+          sql.restore();
+        }
+      } finally {
+        release.resolve();
+        await closing;
+        unregister();
+        await sweeper.reset();
+      }
+    });
   });
 
   it("warns on suspended pressure changes, recovery, and reset without repeating unchanged counts", async () => {
@@ -63,6 +115,7 @@ describe("subagent suspended delivery pressure", () => {
       status: "suspended",
       suspendedAt: Date.now() - 7 * 24 * 60 * 60_000,
       suspendedReason: "expiry",
+      lastError: "requester unavailable",
     };
     discardTerminalDelivery.mockImplementation((discarded) => {
       discarded.delivery = { status: "discarded" };
@@ -70,11 +123,25 @@ describe("subagent suspended delivery pressure", () => {
 
     await sweeper.sweepOnce();
 
-    expect(discardTerminalDelivery).toHaveBeenCalledExactlyOnceWith(entry, Date.now(), "expired");
+    expect(discardTerminalDelivery).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ runId: entry.runId, childSessionKey: entry.childSessionKey }),
+      Date.now(),
+      "expired",
+    );
+    expect(entry.delivery?.status).toBe("suspended");
+    expect(runs.get(entry.runId)?.delivery?.status).toBe("discarded");
     expect(completeCleanupBookkeeping).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       "subagent suspended delivery discarded",
-      expect.objectContaining({ runId: entry.runId, reason: "expired" }),
+      expect.objectContaining({
+        runId: entry.runId,
+        reason: "expired",
+        suspendedAt: entry.delivery?.suspendedAt,
+        suspendedReason: "expiry",
+        lastError: "requester unavailable",
+        recovery:
+          "Inspect retained results with /subagents info <runId>; session history depends on cleanup and retention.",
+      }),
     );
     expect(runs.size).toBe(25);
   });

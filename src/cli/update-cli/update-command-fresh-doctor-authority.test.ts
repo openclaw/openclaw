@@ -2,8 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { afterEach, expect, it, vi } from "vitest";
-import { waitForFixtureFile } from "../../../test/helpers/process-wait.js";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
@@ -17,7 +23,22 @@ import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { runUpdateFinalizationDoctorInFreshProcess } from "./update-command-fresh-doctor.js";
 import { formatUpdateFinalizationError } from "./update-command-result.js";
 
-afterEach(() => vi.restoreAllMocks());
+const testFixture = createFixtureLifetime();
+afterEach(async () => {
+  // Join the whole state scope before restoring mocks, including after a test timeout.
+  try {
+    await testFixture.cleanup();
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 const source = (name: string, distWorkerPath: string) =>
   resolveRuntimeWorkerUrl({
@@ -36,10 +57,11 @@ const runtime = source("../../runtime", "runtime.js");
 const database = source("../../state/openclaw-state-db", "state/openclaw-state-db.js");
 const doctorResult = source("../../infra/update-doctor-result", "infra/update-doctor-result.js");
 
-it.each(["healthy", "original-owner-replaced"] as const)(
+it.for(["healthy", "original-owner-replaced"] as const)(
   "fresh Doctor retains update authority at final config I/O: %s",
-  async (fault) => {
-    await withOpenClawTestState(
+  { timeout: 60_000 },
+  async (fault, { signal }) => {
+    const stateWork = withOpenClawTestState(
       {
         scenario: "minimal",
         env: {
@@ -103,6 +125,7 @@ it.each(["healthy", "original-owner-replaced"] as const)(
         import fsp from "node:fs/promises";
         import {setTimeout} from "node:timers/promises";
         import {registerHooks} from "node:module";
+        ${fixtureReceiptClientSource(receipts.endpoint)}
         ${doctor.pathname.endsWith(".ts") ? `process.chdir(${JSON.stringify(path.resolve("."))});` : ""}
         const mark=(stage)=>fs.appendFileSync(${JSON.stringify(progressPath)},JSON.stringify({stage,at:Date.now(),pid:process.pid})+"\\n");
         mark("fixture-entry");
@@ -135,6 +158,7 @@ it.each(["healthy", "original-owner-replaced"] as const)(
             reached=true;
             fs.writeFileSync(${JSON.stringify(`${readyPath}.tmp`)},JSON.stringify({pid:process.pid,authority:!!getUpdateDoctorConfigWriteAuthority(process.env.OPENCLAW_CONFIG_PATH)}));
             fs.renameSync(${JSON.stringify(`${readyPath}.tmp`)},${JSON.stringify(readyPath)});
+            sendReceipt(${JSON.stringify(readyPath)},"config-backup");
             while(!fs.existsSync(${JSON.stringify(proceed)})) await setTimeout(10);
           }
           return handle;
@@ -188,19 +212,21 @@ it.each(["healthy", "original-owner-replaced"] as const)(
         );
         let binding: { pid: number; authority: boolean };
         try {
-          binding = await Promise.race([
-            waitForFixtureFile(readyPath, pending).then(() => {
-              const receipt: { pid: number; authority: boolean } = JSON.parse(
-                fs.readFileSync(readyPath, "utf8"),
-              );
-              return receipt;
-            }),
-            pending.then((outcome) => {
-              throw new Error(
-                `Doctor exited before config I/O: ${JSON.stringify(outcome)} ${diagnostics} ${fs.existsSync(progressPath) ? fs.readFileSync(progressPath, "utf8") : "no child entry"}`,
-              );
-            }),
-          ]);
+          // The atomic record also covers settlement beating delivery on the receipt socket.
+          await withinTest(
+            Promise.race([
+              receipts.waitFor(readyPath, "config-backup"),
+              pending.then((outcome) => {
+                if (!fs.existsSync(readyPath)) {
+                  throw new Error(
+                    `Doctor exited before config I/O: ${JSON.stringify(outcome)} ${diagnostics} ${fs.existsSync(progressPath) ? fs.readFileSync(progressPath, "utf8") : "no child entry"}`,
+                  );
+                }
+              }),
+            ]),
+            signal,
+          );
+          binding = JSON.parse(fs.readFileSync(readyPath, "utf8"));
           expect(binding.pid).not.toBe(process.pid);
           expect(fs.readFileSync(state.configPath, "utf8")).toBe(original);
           if (fault === "original-owner-replaced") {
@@ -249,6 +275,6 @@ it.each(["healthy", "original-owner-replaced"] as const)(
         }
       },
     );
+    await testFixture.track(stateWork);
   },
-  60_000,
 );

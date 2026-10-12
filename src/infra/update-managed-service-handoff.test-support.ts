@@ -4,11 +4,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Writable } from "node:stream";
-import { beforeAll, expect, it, vi, type Mock } from "vitest";
+import { afterAll, beforeAll, expect, it, vi, type Mock } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { readManagedHandoffArtifacts } from "./update-managed-service-handoff-artifacts.test-support.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
+const EXECUTOR_CLEANUP_GUARD_MS = 15_000;
 
 export function registerPreparedCoordinatorAdmissionTest(params: {
   spawnMock: Mock;
@@ -16,17 +24,22 @@ export function registerPreparedCoordinatorAdmissionTest(params: {
   setCoordinator: (directory: string) => void;
 }): void {
   let handoff: typeof import("./update-managed-service-handoff.js");
+  let receipts: FixtureReceiptChannel;
   beforeAll(async () => {
     // Compile the child runtime before the case deadline starts.
     handoff = await import("./update-managed-service-handoff.js");
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts?.close();
   });
   it.runIf(process.platform !== "win32")(
     "keeps the prepared coordinator authoritative across replacement admission",
-    async () => {
+    async ({ signal }) => {
       vi.restoreAllMocks();
       const { spawn } =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
-      const { waitForPidFile, waitForDead } = await import("../../test/helpers/process-wait.js");
+      const { waitForDead } = await import("../../test/helpers/process-wait.js");
       const { withTimeout } = await import("./fs-safe.js");
       const { createManagedServiceBoundaryCleanup } =
         await import("./update-managed-service-handoff-process.test-support.js");
@@ -50,12 +63,14 @@ export function registerPreparedCoordinatorAdmissionTest(params: {
       const displaced = `${coordinator}-unavailable`;
       const releasePath = path.join(root, "release-updater");
       const pidPath = path.join(root, "updater-pid");
-      const updaterPath = path.join(root, "updater.cjs");
+      const updaterPath = path.join(root, "updater.mjs");
       await fs.promises.writeFile(
         updaterPath,
         `
-        const fs=require("node:fs");
+        import fs from "node:fs";
+        ${fixtureReceiptClientSource(receipts.endpoint)}
         fs.writeFileSync(${JSON.stringify(pidPath)},String(process.pid));
+        sendReceipt(${JSON.stringify(pidPath)}, "ready");
         const held=setInterval(() => {
           if (!fs.existsSync(${JSON.stringify(releasePath)})) return;
           clearInterval(held);
@@ -87,10 +102,10 @@ export function registerPreparedCoordinatorAdmissionTest(params: {
           throw new Error("original helper did not start");
         }
         const originalHelper = helpers[0];
-        const paramsPath = originalHelper?.child.spawnargs.at(-1);
-        if (!originalHelper || !paramsPath) {
+        if (!originalHelper) {
           throw new Error("missing original helper handle");
         }
+        const { paramsPath } = readManagedHandoffArtifacts(originalHelper.child.spawnargs);
         const prepared = JSON.parse(await fs.promises.readFile(paramsPath, "utf8")) as {
           updateLeaseDatabasePath: string;
           updateLeaseDatabaseIdentity: import("./update-managed-service-handoff-database.js").ManagedUpdateLeaseDatabaseIdentity;
@@ -106,7 +121,20 @@ export function registerPreparedCoordinatorAdmissionTest(params: {
             ...original,
           }),
         ).resolves.toBe(true);
-        executorPid = await waitForPidFile(pidPath, 15000);
+        await withinTest(
+          Promise.race([
+            receipts.waitFor(pidPath, "ready"),
+            originalHelper.closed.then(async () => {
+              // The updater persists its identity before any reply or exit. A helper
+              // closing before the side-channel delivery must consult that record.
+              await fs.promises.access(pidPath).catch((error: unknown) => {
+                throw new Error(`timeout waiting for pid in ${pidPath}`, { cause: error });
+              });
+            }),
+          ]),
+          signal,
+        );
+        executorPid = Number(await fs.promises.readFile(pidPath, "utf8"));
         const bound = originalStore.read(root);
         if (bound.kind !== "current") {
           throw new Error("original executor lease was not published");
@@ -145,7 +173,7 @@ export function registerPreparedCoordinatorAdmissionTest(params: {
         expect(originalStore.read(root)).toEqual(bound);
 
         await fs.promises.writeFile(releasePath, "settle original updater");
-        await waitForDead(executorPid, 15000);
+        await waitForDead(executorPid, signal);
         expect(originalStore.read(root)).toEqual(bound);
         expect(originalStore.hasUnsettledChildren(bound.lease)).toBe(false);
         latest = await start();
@@ -155,10 +183,9 @@ export function registerPreparedCoordinatorAdmissionTest(params: {
         }
         expect(helpers).toHaveLength(2);
         const replacement = helpers[1]!;
-        const replacementParamsPath = replacement.child.spawnargs.at(-1);
-        if (!replacementParamsPath) {
-          throw new Error("replacement helper did not retain its prepared store");
-        }
+        const { paramsPath: replacementParamsPath } = readManagedHandoffArtifacts(
+          replacement.child.spawnargs,
+        );
         const replacementPrepared = JSON.parse(
           await fs.promises.readFile(replacementParamsPath, "utf8"),
         ) as typeof prepared;
@@ -207,7 +234,8 @@ export function registerPreparedCoordinatorAdmissionTest(params: {
       await cleanup(() => fs.promises.writeFile(releasePath, "fixture cleanup"));
       await cleanup(async () => {
         if (executorPid) {
-          await waitForDead(executorPid, 15000);
+          // Cleanup hang guard after the owner released the updater, not a readiness race.
+          await waitForDead(executorPid, AbortSignal.timeout(EXECUTOR_CLEANUP_GUARD_MS));
         }
       });
       await cleanup(async () => {

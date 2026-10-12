@@ -1,8 +1,5 @@
 import type { z } from "zod";
-import type {
-  ModelDataImageInputConfig,
-  ModelDataMediaInputConfig,
-} from "../../packages/llm-core/src/model-data.js";
+import type { ModelDataMediaInputConfig } from "../../packages/llm-core/src/model-data.js";
 import type { OpenAICompletionsCompat, RawModelCostConfig } from "../llm/types.js";
 import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
@@ -29,8 +26,6 @@ export type ModelCompatConfig = Omit<
   "openRouterRouting" | "vercelGatewayRouting"
 > &
   Pick<OpenAICompletionsCompat, "openRouterRouting" | "vercelGatewayRouting">;
-
-export type ModelImageInputConfig = ModelDataImageInputConfig;
 
 export type ModelMediaInputConfig = ModelDataMediaInputConfig;
 
@@ -63,7 +58,6 @@ export type ModelProviderConfig = Omit<
   ModelProviderSchemaInput,
   "baseUrl" | "models" | "apiKey" | "headers" | "request" | "agentRuntime"
 > & {
-  /** Provider API base URL. */
   baseUrl: string;
   /** API key or secret reference for this provider. */
   apiKey?: SecretInput;
@@ -81,16 +75,11 @@ export type ModelProviderConfig = Omit<
 export type ModelProviderDeclarationConfig = ModelProviderConfig;
 
 /** User config input shape before provider defaults/models are materialized. */
-export type ModelProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
-  models?: ModelDefinitionConfig[];
-};
+export type ModelProviderConfigInput = Partial<ModelProviderConfig>;
 
 export type BedrockDiscoveryConfig = {
-  /** Enable AWS Bedrock model discovery. */
   enabled?: boolean;
-  /** AWS region to query for models. */
   region?: string;
-  /** Optional provider id filters for discovery. */
   providerFilter?: string[];
   /** Discovery cache refresh interval in seconds. */
   refreshInterval?: number;
@@ -99,8 +88,6 @@ export type BedrockDiscoveryConfig = {
   /** Max output tokens applied when discovery cannot infer one. */
   defaultMaxTokens?: number;
 };
-
-export type ModelCatalogRefreshConfig = NonNullable<ModelsSchemaInput["catalogRefresh"]>;
 
 export type ModelsConfig = Omit<ModelsSchemaInput, "providers"> & {
   /** Configured provider catalog keyed by provider id. */

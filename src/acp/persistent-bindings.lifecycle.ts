@@ -163,6 +163,6 @@ export async function ensureConfiguredAcpBindingReadyCore(params: {
   }
   return {
     ok: false,
-    error: ensured.error ?? "unknown error",
+    error: ensured.error,
   };
 }

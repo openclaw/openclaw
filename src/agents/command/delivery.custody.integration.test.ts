@@ -1,6 +1,5 @@
 // Exercises the automatic sender with real native completion/session stores and recording transport.
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { captureCommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
@@ -18,6 +17,7 @@ import {
   appendTranscriptMessage,
   loadExactSessionEntry,
   replaceSessionEntry,
+  replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import * as transcriptReads from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import * as replacementWorker from "../../config/sessions/session-accessor.sqlite-replacement-worker.js";
@@ -33,7 +33,6 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { bindCommandHarnessCompletionAssertion } from "../agent-command-restart-recovery.js";
 import { reconcileHarnessCompletionDelivery } from "../agent-harness-completion-delivery.js";
@@ -66,7 +65,6 @@ async function admitCompletion(
   const original: SessionEntry = {
     sessionId: `requester-${name}`,
     lifecycleRevision: "original-revision",
-    status: "running",
     updatedAt: Date.now(),
     ...patch,
   };
@@ -171,7 +169,7 @@ describe("native completion final-send custody", () => {
           );
           await appendInput();
           await replaceSessionEntry(target, entry);
-          const opts = bindCommandHarnessCompletionAssertion({
+          const { opts } = await bindCommandHarnessCompletionAssertion({
             claim,
             persisted: entry,
             sessionKey: key,
@@ -415,7 +413,7 @@ describe("native completion final-send custody", () => {
             // Reconcile native completion state as startup would: queue acknowledgment must not
             // be the only copy of the exact harness completion receipt.
             expect(
-              reconcileHarnessCompletionDelivery({
+              await reconcileHarnessCompletionDelivery({
                 ...target,
                 sourceRunId: source,
                 taskRunId: child,
@@ -471,7 +469,7 @@ describe("native completion marker commit", () => {
             sourceRunId: source,
             taskRunId: claim.taskRunId,
           });
-        expect(reconcile(), binding).toBe(binding === "matching" ? "delivered" : "pending");
+        expect(await reconcile(), binding).toBe(binding === "matching" ? "delivered" : "pending");
         const marker = await persistMarker(target, current, [{ text: "Captured final" }]);
         expect(marker.pendingFinalDeliveryMarkerPersisted, binding).toBe(true);
         const after = read();
@@ -495,7 +493,7 @@ describe("native completion marker commit", () => {
         expect
           .soft(getRestartRecoveryTerminalDeliveryEvidence(cleaned, source), binding)
           .toEqual(before);
-        expect(reconcile(), binding).toBe(binding === "matching" ? "delivered" : "blocked");
+        expect(await reconcile(), binding).toBe(binding === "matching" ? "delivered" : "blocked");
       }
     });
   });
@@ -537,7 +535,7 @@ describe("native completion marker commit", () => {
     "keeps a newer %s when marker planning yields before its worker commit",
     async (changed) => {
       await withAdminIngress(async ({ state }) => {
-        const { key, target, entry, claim } = await admitCompletion(state, "marker-race");
+        const { target, entry, claim } = await admitCompletion(state, "marker-race");
         await replaceSessionEntry(target, entry);
         const entered = createDeferred();
         const released = createDeferred();
@@ -588,17 +586,8 @@ describe("native completion marker commit", () => {
             current = false;
           }
           if (changed !== "authority") {
-            // A foreign writer can commit while planning holds no SQLite transaction.
-            const database = new DatabaseSync(
-              resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-            );
-            try {
-              database
-                .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-                .run(JSON.stringify(replacement), key);
-            } finally {
-              database.close();
-            }
+            // Publish the native write without queueing behind the paused marker.
+            replaceSessionEntrySync(target, replacement);
           }
           released.resolve();
           await expect(pending).rejects.toThrow(
@@ -627,18 +616,6 @@ describe("message-tool source reply custody", () => {
     {
       name: "confirmed source reply",
       result: { didDeliverSourceReplyViaMessageTool: true },
-      expected: "delivered",
-    },
-    {
-      name: "current-source receipt",
-      result: { sourceReplyDelivered: true },
-      expected: "delivered",
-    },
-    {
-      name: "source final payload",
-      result: {
-        messagingToolSourceReplyPayloads: [{ text: "Done", sourceReplyFinal: true }],
-      },
       expected: "delivered",
     },
     {

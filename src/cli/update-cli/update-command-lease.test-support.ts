@@ -14,6 +14,7 @@ export type LeaseScenario = {
   invalidConfig?: boolean;
   failDoctor?: "pre" | "post";
   doctorWarnings?: string[];
+  completeDeferredPluginMigration?: string;
   readinessFailure?: "finding" | "execution";
   hostVersion?: string;
   writerConfig?: OpenClawConfig;
@@ -158,7 +159,8 @@ export async function runUpdateLeaseChild(): Promise<void> {
     if (scenario.verifyRepairOwner) {
       const runId = process.env.OPENCLAW_UPDATE_RUN_ID;
       assert.ok(runId, "Doctor did not inherit its invoking repair run ID");
-      const { DatabaseSync } = await import("node:sqlite");
+      const { requireNodeSqlite } = await import("../../infra/node-sqlite.js");
+      const { DatabaseSync } = requireNodeSqlite();
       const { readUpdateRunRecord } = await import("../../infra/update-run-read.kernel.js");
       const { resolveOpenClawStateSqlitePath } =
         await import("../../state/openclaw-state-db.paths.js");
@@ -212,7 +214,7 @@ export async function runUpdateLeaseChild(): Promise<void> {
       const { defaultRuntime: runtime } = await import("../../runtime.js");
       const options = { repair: true, nonInteractive: true, workspaceSuggestions: false };
       const prompter = createDoctorPrompter({ runtime, options });
-      const configResult = await loadAndMaybeMigrateDoctorConfig({
+      await using configResult = await loadAndMaybeMigrateDoctorConfig({
         options,
         prompter,
         runtime,
@@ -258,6 +260,14 @@ export async function runUpdateLeaseChild(): Promise<void> {
       await writeUpdatePostInstallDoctorResult({
         resultPath,
         result: { status: "ok", warnings: scenario.doctorWarnings },
+      });
+    }
+    if (phase === "pre" && scenario.completeDeferredPluginMigration) {
+      const { recordDeferredPluginMigrations } =
+        await import("../../infra/deferred-plugin-migrations.js");
+      await recordDeferredPluginMigrations({
+        pending: [],
+        resolvedPluginIds: [scenario.completeDeferredPluginMigration],
       });
     }
     return;

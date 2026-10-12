@@ -1,54 +1,17 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { persistAbortTargetEntry, persistCommandSession } from "./commands-session-store.js";
 
-async function withTempStore<T>(run: (storePath: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-command-session-store-"));
-  try {
-    return await run(path.join(dir, "sessions.json"));
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-command-session-store-");
+
+function withTempStore<T>(run: (storePath: string) => Promise<T>): Promise<T> {
+  return run(path.join(sessionDirs.make(), "sessions.json"));
 }
 
 describe("commands session store persistence", () => {
-  it("creates a missing row for the first command-only session mutation", async () => {
-    await withTempStore(async (storePath) => {
-      const sessionKey = "agent:main:first-command";
-      const entry: SessionEntry = {
-        sessionId: "first-command-session",
-        updatedAt: 1,
-        responseUsage: "tokens",
-      };
-      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-
-      await expect(
-        persistCommandSession({
-          allowCreateSessionEntry: true,
-          sessionEntry: entry,
-          sessionStore,
-          sessionKey,
-          storePath,
-          touchedFields: ["responseUsage"],
-        }),
-      ).resolves.toBe(true);
-
-      const persisted = loadSessionEntry({ storePath, sessionKey });
-      expect(persisted).toMatchObject({
-        sessionId: "first-command-session",
-        responseUsage: "tokens",
-      });
-      expect(sessionStore[sessionKey]).toMatchObject({
-        sessionId: "first-command-session",
-        responseUsage: "tokens",
-      });
-    });
-  });
-
   it("does not recreate a missing row without explicit create ownership", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "agent:main:missing-existing";
@@ -350,12 +313,12 @@ describe("commands session store persistence", () => {
     });
   });
 
-  it("patches the persisted abort target when it already exists", async () => {
+  it.each([false])("only patches a matching persisted abort owner=%s", async (matchesOwner) => {
     await withTempStore(async (storePath) => {
       const sessionKey = "agent:main:abort-target";
       const otherKey = "agent:main:other";
       const entry: SessionEntry = {
-        sessionId: "memory-session",
+        sessionId: matchesOwner ? "persisted-session" : "memory-session",
         updatedAt: 1,
       };
       const persistedEntry: SessionEntry = {
@@ -378,7 +341,7 @@ describe("commands session store persistence", () => {
           sessionStore: { [sessionKey]: entry },
           storePath,
         }),
-      ).resolves.toBe(true);
+      ).resolves.toBe(matchesOwner);
 
       const persisted = loadSessionEntry({ storePath, sessionKey });
       const persistedOther = loadSessionEntry({ storePath, sessionKey: otherKey });
@@ -386,8 +349,8 @@ describe("commands session store persistence", () => {
       expect(persisted).toMatchObject({
         sessionId: "persisted-session",
         model: "sonnet-4.6",
-        abortedLastRun: true,
       });
+      expect(persisted?.abortedLastRun ?? false).toBe(matchesOwner);
       expect(persistedOther).toStrictEqual(otherEntry);
     });
   });

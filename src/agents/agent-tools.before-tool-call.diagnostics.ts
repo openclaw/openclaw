@@ -37,11 +37,18 @@ import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import type { Skill } from "../skills/loading/skill-contract.js";
 import {
   resolveSkillTelemetrySource,
   resolveSkillTelemetrySourceValue,
 } from "../skills/loading/source.js";
+import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
+import { resolveSkillFileHost } from "../skills/skill-file-host.js";
 import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
+import {
+  isWorkspaceSkillReadPath,
+  resolveSkillReadPath,
+} from "../skills/workspace-skill-read-path.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import { buildAdjustedParamsKey } from "./agent-tools.before-tool-call.state.js";
 import type {
@@ -291,7 +298,7 @@ export function resolveToolDiagnosticIdentity(tool: AnyAgentTool): ToolDiagnosti
   return { toolSource: "core" };
 }
 
-type SkillUsageMatch = {
+export type SkillUsageMatch = {
   skillFile?: string;
   skillName: string;
   skillSource: SkillTelemetrySource;
@@ -307,7 +314,7 @@ function canonicalSkillFile(value: string | undefined): string | undefined {
 
 function resolvedSkillUsageMatch(params: {
   activation: SkillUsageMatch["activation"];
-  skill: NonNullable<SkillSnapshot["resolvedSkills"]>[number];
+  skill: Pick<Skill, "name" | "filePath"> & Partial<Pick<Skill, "source" | "sourceInfo">>;
 }): SkillUsageMatch {
   const skillFile = canonicalSkillFile(params.skill.filePath);
   return {
@@ -339,7 +346,7 @@ function resolveRelativeToolPath(candidate: string, ctx?: HookContext): string |
   if (!trimmed) {
     return undefined;
   }
-  if (trimmed.startsWith("node://")) {
+  if (trimmed.startsWith("node://") || isWorkspaceSkillReadPath(trimmed)) {
     return trimmed;
   }
   if (trimmed === "~") {
@@ -371,6 +378,12 @@ function findSkillInstructionMatch(
     }
     const filePath = typeof entry.filePath === "string" ? entry.filePath.trim() : "";
     const baseDir = typeof entry.baseDir === "string" ? entry.baseDir.trim() : "";
+    if (filePath && resolveSkillReadPath(entry) === candidate) {
+      return true;
+    }
+    if (resolveSkillFileHost(entry) === "workspace") {
+      return false;
+    }
     return (
       (filePath &&
         (filePath.startsWith("node://")
@@ -455,12 +468,23 @@ export function findSkillUsageMatch(params: {
     : undefined;
 }
 
-export function emitSkillUsedDiagnostic(params: {
-  ctx?: HookContext;
+/**
+ * Records one demonstrated skill use: this run's usage receipt (review trigger) and the
+ * trusted skill.used event (skill_usage rows, unused-skill archive clock).
+ */
+export function recordSkillUsed(params: {
+  ctx?: Pick<HookContext, "runId" | "sessionKey" | "sessionId" | "agentId" | "trace">;
   match: SkillUsageMatch;
   toolName: string;
   toolCallId?: string;
 }): void {
+  recordRunSkillUsage({
+    runId: params.ctx?.runId,
+    name: params.match.skillName,
+    source: params.match.skillSource,
+    activation: params.match.activation,
+    ...(params.match.skillFile ? { skillFile: params.match.skillFile } : {}),
+  });
   const trace = params.ctx?.trace
     ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace))
     : undefined;
@@ -492,30 +516,12 @@ export function emitToolBlockedSecurityEvent(params: {
   trace?: DiagnosticTraceContext;
   paramsSummary?: DiagnosticToolParamsSummary;
 }): void {
-  const control =
-    params.deniedReason === "client-voice-confirmation"
-      ? ({
-          policyId: "talk-client-voice-confirmation",
-          controlId: "talk-client-voice-confirmation",
-          family: "approval",
-        } as const)
-      : params.deniedReason === "tool-loop"
-        ? ({
-            policyId: "tool-loop-detection",
-            controlId: "tool-loop-detection",
-            family: "authorization",
-          } as const)
-        : params.deniedReason === "plugin-approval"
-          ? ({
-              policyId: "plugin-tool-approval",
-              controlId: "plugin-tool-approval",
-              family: "approval",
-            } as const)
-          : ({
-              policyId: "plugin-before-tool-call",
-              controlId: "before-tool-call",
-              family: "approval",
-            } as const);
+  const policyId =
+    params.deniedReason === "tool-loop"
+      ? "tool-loop-detection"
+      : params.deniedReason === "plugin-approval"
+        ? "plugin-tool-approval"
+        : "plugin-before-tool-call";
   emitTrustedSecurityEvent({
     category: "tool",
     action: "tool.execution.blocked",
@@ -532,13 +538,13 @@ export function emitToolBlockedSecurityEvent(params: {
       ...(params.toolIdentity.toolOwner ? { owner: params.toolIdentity.toolOwner } : {}),
     },
     policy: {
-      id: control.policyId,
+      id: policyId,
       decision: "deny",
       reason: params.deniedReason,
     },
     control: {
-      id: control.controlId,
-      family: control.family,
+      id: policyId === "plugin-before-tool-call" ? "before-tool-call" : policyId,
+      family: policyId === "tool-loop-detection" ? "authorization" : "approval",
     },
     attributes: {
       tool_source: params.toolIdentity.toolSource,
@@ -680,7 +686,6 @@ export async function recordLoopOutcome(args: {
       toolCallId: args.toolCallId,
       result: args.result,
       error: args.error,
-      config: args.ctx.loopDetection,
       ...(args.ctx.runId && { runId: args.ctx.runId }),
     });
     const churnContinues =

@@ -10,6 +10,10 @@ import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
 import { resolveOpenAICodexAuthIdentity } from "../../plugin-sdk/provider-openai-chatgpt-auth.js";
 import { captureEnv } from "../../test-utils/env.js";
 import "./oauth-external-auth-passthrough.test-support.js";
+import {
+  withCanonicalAuthProfileCredentialObserver,
+  type CanonicalAuthProfileCredentialObservation,
+} from "./credential-observation.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
 import { isOAuthRefreshFence, isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import {
@@ -23,7 +27,7 @@ import {
 } from "./oauth-test-utils.js";
 import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
-import { writePersistedAuthProfileStoreRaw } from "./sqlite.js";
+import { resolveAuthProfileDatabasePath, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
@@ -120,22 +124,27 @@ describe("createOAuthManager settlement credential validation", () => {
           accountId: "workspace-a",
         } as never);
         const validatedWorkspaceIds: Array<string | undefined> = [];
+        const observations: CanonicalAuthProfileCredentialObservation[] = [];
 
         await expect(
-          resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-            store: ensureAuthProfileStore(localAgentDir),
-            profileId,
-            agentDir: localAgentDir,
-            validateOAuthCredential: (credential) => {
-              const accountId = resolveOpenAICodexAuthIdentity({
-                access: credential.access,
-              }).accountId;
-              validatedWorkspaceIds.push(accountId);
-              if (accountId !== "workspace-a") {
-                throw new Error("credential owner mismatch");
-              }
-            },
-          }),
+          withCanonicalAuthProfileCredentialObserver(
+            (value) => observations.push(value),
+            () =>
+              resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+                store: ensureAuthProfileStore(localAgentDir),
+                profileId,
+                agentDir: localAgentDir,
+                validateOAuthCredential: (credential) => {
+                  const accountId = resolveOpenAICodexAuthIdentity({
+                    access: credential.access,
+                  }).accountId;
+                  validatedWorkspaceIds.push(accountId);
+                  if (accountId !== "workspace-a") {
+                    throw new Error("credential owner mismatch");
+                  }
+                },
+              }),
+          ),
         ).resolves.toEqual(
           expect.objectContaining({
             apiKey: createWorkspaceAccessToken("workspace-a", "rotated"),
@@ -145,6 +154,19 @@ describe("createOAuthManager settlement credential validation", () => {
         expect(
           validatedWorkspaceIds.filter((accountId) => accountId === "workspace-b"),
         ).toHaveLength(0);
+        expect(observations).toEqual(
+          expect.arrayContaining([
+            {
+              databasePath: resolveAuthProfileDatabasePath(localAgentDir),
+              profiles: {
+                [profileId]: expect.objectContaining({
+                  access: createWorkspaceAccessToken("workspace-a", "rotated"),
+                  refresh: "workspace-a-rotated-refresh",
+                }),
+              },
+            },
+          ]),
+        );
         expect(loadPersistedAuthProfileStore(localAgentDir)?.profiles[profileId]).toMatchObject({
           access: createWorkspaceAccessToken("workspace-a", "rotated"),
           refresh: "workspace-a-rotated-refresh",

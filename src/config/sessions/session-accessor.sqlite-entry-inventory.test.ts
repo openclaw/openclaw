@@ -1,26 +1,21 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, expect, it, vi } from "vitest";
+import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import { readSessionEntryCount } from "./session-accessor.sqlite-entry-inventory.js";
+import { bindSqliteWorkerBackend } from "./session-lifecycle-projection.worker.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-entry-count-");
 
 it("counts mixed validated and raw entries with the same archive filter", async () => {
   const scope = {
     agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-entry-count-") },
+    env: { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() },
   };
   const database = openOpenClawAgentDatabase(scope);
   expect(readSessionEntryCount(database)).toBe(0);
@@ -46,10 +41,23 @@ it("counts mixed validated and raw entries with the same archive filter", async 
       "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
     )
     .run("agent:main:invalid", "invalid", "{");
-  expect(readSessionEntryCount(database)).toBe(4);
+  const planner = runWithSqliteWorkerStateContext({ environment: scope.env }, () =>
+    bindSqliteWorkerBackend(
+      { agentId: scope.agentId },
+      { database: database.db, databasePath: database.path },
+    ),
+  );
+  try {
+    using transactionSql = vi.spyOn(database.db, "exec");
+    expect(planner.execute({ type: "count", input: undefined })).toBe(4);
+    expect(transactionSql).not.toHaveBeenCalled();
+    planner.assertSettled?.();
+  } finally {
+    await planner.close();
+  }
   expect(readSessionEntryCount(database, { includeArchived: false })).toBe(2);
   database.db
-    .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+    .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?")
     .run("{}", "agent:main:validated-false");
   expect(readSessionEntryCount(database)).toBe(3);
   expect(readSessionEntryCount(database, { includeArchived: false })).toBe(1);

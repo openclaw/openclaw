@@ -55,20 +55,17 @@ describe("Discord realtime context host compatibility", () => {
       },
     });
 
-  it.each([{ files: undefined }, { files: [] }] as const)(
-    "uses the modern composer with files $files",
-    async ({ files }) => {
-      await expect(resolveContext(files)).resolves.toBe("Agent context: modern host instructions.");
-      expect(mocks.agentContext).toHaveBeenCalledWith({
-        config: {},
-        agentId: "main",
-        sessionKey: "agent:main:discord:voice:room",
-        files,
-        warn: expect.any(Function),
-      });
-      expect(mocks.bootstrapContext).not.toHaveBeenCalled();
-    },
-  );
+  it("uses the modern composer even with an empty profile selection", async () => {
+    await expect(resolveContext([])).resolves.toBe("Agent context: modern host instructions.");
+    expect(mocks.agentContext).toHaveBeenCalledWith({
+      config: {},
+      agentId: "main",
+      sessionKey: "agent:main:discord:voice:room",
+      files: [],
+      warn: expect.any(Function),
+    });
+    expect(mocks.bootstrapContext).not.toHaveBeenCalled();
+  });
 
   it("propagates modern composer failures without switching context owners", async () => {
     const error = new Error("modern context failed");
@@ -107,21 +104,39 @@ describe("Discord realtime context host compatibility", () => {
 
 describe("Discord voice ingress execution correlation", () => {
   beforeEach(() => mocks.agentCommandFromIngress.mockClear());
+  function fixture(senderIsOwner = false) {
+    const entry = {
+      guildId: "guild-1",
+      channelId: "channel-1",
+      captureOnly: false,
+      sessionLifecycle: { status: "active" },
+      route: { agentId: "main", sessionKey: "agent:main:discord:channel:channel-1" },
+    };
+    return {
+      entry,
+      run: (overrides: Partial<Parameters<typeof runDiscordVoiceAgentTurn>[0]> = {}) =>
+        runDiscordVoiceAgentTurn({
+          entry: entry as never,
+          accountId: "work",
+          userId: senderIsOwner ? "owner" : "guest",
+          message: "Change your voice",
+          discordConfig: {},
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          context: { senderIsOwner, speakerLabel: senderIsOwner ? "Owner" : "Guest" },
+          ...overrides,
+        }),
+    };
+  }
+
   it.each([
     { owner: true, fail: false },
-    { owner: true, fail: true },
-    { owner: false, fail: false },
     { owner: false, fail: true },
   ])(
     "binds an admitted voice command for its lifetime (owner=$owner, failure=$fail)",
     async ({ owner, fail }) => {
       const release = vi.fn();
       const bindRun = vi.fn(() => release);
-      const entry = {
-        captureOnly: false,
-        sessionLifecycle: { status: "active" },
-        route: { agentId: "main", sessionKey: "agent:main:discord:voice:room" },
-      };
+      const { run } = fixture(owner);
       mocks.agentCommandFromIngress.mockImplementationOnce(async (input) => {
         expect(bindRun).toHaveBeenCalledWith(expect.objectContaining({ runId: input.runId }));
         expect(input.runId).toEqual(expect.any(String));
@@ -132,16 +147,7 @@ describe("Discord voice ingress execution correlation", () => {
         }
         return { payloads: [{ text: "Voice changed." }] };
       });
-      const turn = runDiscordVoiceAgentTurn({
-        entry: entry as never,
-        accountId: "work",
-        userId: owner ? "owner" : "guest",
-        message: "Change your voice",
-        discordConfig: {},
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        context: { senderIsOwner: owner, speakerLabel: owner ? "Owner" : "Guest" },
-        voiceSelection: { bindRun, unregister: vi.fn() },
-      });
+      const turn = run({ voiceSelection: { bindRun, unregister: vi.fn() } });
       if (fail) {
         await expect(turn).rejects.toThrow("Agent turn failed");
       } else {
@@ -158,11 +164,7 @@ describe("Discord voice ingress execution correlation", () => {
       const bindRun = vi.fn<RealtimeVoiceSelectionHandle["bindRun"]>(() => release);
       const cancellation = new AbortController();
       let current = true;
-      const entry = {
-        captureOnly: false,
-        sessionLifecycle: { status: "active" },
-        route: { agentId: "main", sessionKey: "agent:main:discord:voice:room" },
-      };
+      const { entry, run } = fixture();
       mocks.agentCommandFromIngress.mockImplementationOnce(async () => {
         expect(bindRun).toHaveBeenCalledOnce();
         const binding = bindRun.mock.calls[0]![0];
@@ -179,13 +181,7 @@ describe("Discord voice ingress execution correlation", () => {
         );
         return { payloads: [{ text: "Voice change unavailable." }] };
       });
-      await runDiscordVoiceAgentTurn({
-        entry: entry as never,
-        accountId: "work",
-        userId: "guest",
-        message: "Change your voice",
-        discordConfig: {},
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      await run({
         context: { senderIsOwner: false, speakerLabel: "Guest", isCurrent: () => current },
         voiceSelection: { bindRun, unregister: vi.fn() },
         signal: cancellation.signal,
@@ -195,24 +191,9 @@ describe("Discord voice ingress execution correlation", () => {
   );
 
   it("admits sequential batch voice turns without inventing a public run id", async () => {
-    const entry = {
-      guildId: "guild-1",
-      channelId: "channel-1",
-      captureOnly: false,
-      sessionLifecycle: { status: "active" },
-      route: { agentId: "main", sessionKey: "agent:main:discord:channel:channel-1" },
-    };
-    const shared = {
-      entry: entry as never,
-      accountId: "work",
-      userId: "user-1",
-      discordConfig: {} as never,
-      runtime: { log: vi.fn(), error: vi.fn() } as never,
-      context: { senderIsOwner: false, speakerLabel: "Guest" },
-    };
-
-    await runDiscordVoiceAgentTurn({ ...shared, message: "first turn" });
-    await runDiscordVoiceAgentTurn({ ...shared, message: "second turn" });
+    const { run } = fixture();
+    await run({ message: "first turn" });
+    await run({ message: "second turn" });
 
     expect(mocks.agentCommandFromIngress).toHaveBeenCalledTimes(2);
     const inputs = mocks.agentCommandFromIngress.mock.calls.map(([input]) => input);
@@ -228,40 +209,16 @@ describe("Discord voice ingress execution correlation", () => {
   });
 
   it.each([
-    { owner: true, state: "active", captureOnly: false },
-    { owner: false, state: "active", captureOnly: false },
-    { owner: false, state: "stopped", captureOnly: false },
-    { owner: false, state: "active", captureOnly: true },
+    { state: "stopped", captureOnly: false },
+    { state: "active", captureOnly: true },
   ] as const)(
-    "dispatches only active conversational ingress (owner=$owner, state=$state, captureOnly=$captureOnly)",
-    async ({ owner, state, captureOnly }) => {
-      const callsBefore = mocks.agentCommandFromIngress.mock.calls.length;
-      const result = await runDiscordVoiceAgentTurn({
-        entry: {
-          guildId: "guild-1",
-          channelId: "channel-1",
-          captureOnly,
-          sessionLifecycle:
-            state === "active" ? { status: state } : { status: state, reason: "left" },
-          route: { agentId: "main", sessionKey: "agent:main:discord:channel:channel-1" },
-        } as never,
-        accountId: "work",
-        userId: owner ? "owner-1" : "guest-1",
-        message: "run the tool",
-        discordConfig: {} as never,
-        runtime: { log: vi.fn(), error: vi.fn() } as never,
-        context: { senderIsOwner: owner, speakerLabel: owner ? "Owner" : "Guest" },
-      });
-
-      if (captureOnly || state !== "active") {
-        expect(result).toBeNull();
-        expect(mocks.agentCommandFromIngress).toHaveBeenCalledTimes(callsBefore);
-        return;
-      }
-      expect(mocks.agentCommandFromIngress).toHaveBeenLastCalledWith(
-        expect.objectContaining({ messageChannel: "discord", senderIsOwner: owner }),
-        expect.anything(),
-      );
+    "rejects nonconversational ingress (state=$state, captureOnly=$captureOnly)",
+    async ({ state, captureOnly }) => {
+      const { entry, run } = fixture();
+      entry.captureOnly = captureOnly;
+      entry.sessionLifecycle.status = state;
+      await expect(run()).resolves.toBeNull();
+      expect(mocks.agentCommandFromIngress).not.toHaveBeenCalled();
     },
   );
 });

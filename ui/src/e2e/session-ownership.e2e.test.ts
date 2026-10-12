@@ -180,6 +180,8 @@ suite.define(() => {
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    await chooseSidebarOwner(currentPage, "all");
+    await closeSidebarMenu(currentPage);
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
@@ -197,15 +199,17 @@ suite.define(() => {
       ownerMenu.getByRole("option", { name: "Owners", exact: true }),
     ).toBeVisible();
     await currentPage.keyboard.press("Escape");
-    const ownerSelect = ownerMenu.locator("#sidebar-sessions-owner");
+    const ownerSelect = currentPage.locator("#sidebar-session-owner-title");
     await ownerSelect.click();
-    const ownerRows = ownerMenu.locator('[role="option"][data-value^="owner:"]');
+    const ownerRows = currentPage.locator(
+      '.sidebar-session-owner-filter [role="option"][data-value^="owner:"]',
+    );
     await expectBrowser(ownerRows).toHaveCount(3);
     await expectBrowser(ownerRows.first()).toHaveAttribute("data-value", "owner:profile-patrick");
-    await expectBrowser(ownerRows.first()).toContainText("Patrick (You)");
+    await expectBrowser(ownerRows.first()).toContainText("My sessions");
     await captureUiProof(
       suite,
-      ownerMenu.locator(".sidebar-session-filter-panel"),
+      currentPage.locator("openclaw-app-sidebar"),
       "00-people-controls-from-session-owners.png",
       [ownerSelect],
     );
@@ -276,25 +280,21 @@ suite.define(() => {
       .poll(async () => (await gateway.getRequests("connect")).length)
       .toBeGreaterThan(initialConnections);
     await expectOwnerFilter(beforeReconnect);
-    const reconnectedMenu = await openSidebarSortMenu(currentPage);
-    await openSidebarMenu(currentPage);
-    await expectBrowser(reconnectedMenu.locator("#sidebar-sessions-owner")).toHaveAccessibleName(
+    await expectBrowser(currentPage.locator("#sidebar-session-owner-title")).toHaveAccessibleName(
       "Owners: Ada",
     );
 
     await currentPage.reload();
     // Reload starts a new in-page request log, so no earlier traffic can satisfy this.
     await expectOwnerFilter(0);
-    const reloadedMenu = await openSidebarSortMenu(currentPage);
-    await openSidebarMenu(currentPage);
-    await expectBrowser(reloadedMenu.locator("#sidebar-sessions-owner")).toHaveAccessibleName(
+    await expectBrowser(currentPage.locator("#sidebar-session-owner-title")).toHaveAccessibleName(
       "Owners: Ada",
     );
     await captureSessionOwnerPageProof(
       suite,
-      reloadedMenu.locator(".sidebar-session-filter-panel"),
+      currentPage.locator("openclaw-app-sidebar"),
       "05-owner-filter-restored-after-reload.png",
-      [reloadedMenu.locator("#sidebar-sessions-owner")],
+      [currentPage.locator("#sidebar-session-owner-title")],
     );
   });
 
@@ -309,6 +309,7 @@ suite.define(() => {
       presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: {
+        "config.get": { config: {}, hash: "owner-filter-fixture" },
         "sessions.list": {
           cases: [
             {
@@ -328,6 +329,8 @@ suite.define(() => {
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    await chooseSidebarOwner(currentPage, "all");
+    await closeSidebarMenu(currentPage);
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await chooseSidebarOwner(currentPage, "involving-me");
     await closeSidebarMenu(currentPage);
@@ -361,8 +364,7 @@ suite.define(() => {
       .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
       .toBe(0);
     await expectBrowser(currentPage.locator('[data-session-key="agent:main:ada"]')).toBeVisible();
-    const filteredMenu = await openSidebarSortMenu(currentPage);
-    await expectBrowser(filteredMenu.locator("#sidebar-sessions-owner")).toHaveAccessibleName(
+    await expectBrowser(currentPage.locator("#sidebar-session-owner-title")).toHaveAccessibleName(
       "Owners: Involving me",
     );
     await captureSessionOwnerProof(suite, currentPage, "03-involving-me-after-active-event.png");
@@ -377,8 +379,7 @@ suite.define(() => {
       )
       .toBe(true);
     await expectBrowser(currentPage.locator('[data-session-key="agent:main:bob"]')).toHaveCount(0);
-    const restoredMenu = await openSidebarSortMenu(currentPage);
-    await expectBrowser(restoredMenu.locator("#sidebar-sessions-owner")).toHaveAccessibleName(
+    await expectBrowser(currentPage.locator("#sidebar-session-owner-title")).toHaveAccessibleName(
       "Owners: Involving me",
     );
   });
@@ -412,6 +413,8 @@ suite.define(() => {
     });
     await currentPage.clock.install();
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    await chooseSidebarOwner(currentPage, "all");
+    await closeSidebarMenu(currentPage);
     const row = currentPage.locator('[data-session-key="agent:main:ada"]');
     await expectBrowser(row).toBeVisible();
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
@@ -490,7 +493,7 @@ suite.define(() => {
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
 
-    const filterAndSort = currentPage.getByRole("button", { name: "Filter & sort" });
+    const filterAndSort = currentPage.getByRole("button", { name: "Filter & sort", exact: true });
     await filterAndSort.focus();
     await currentPage.keyboard.press("Enter");
 
@@ -525,6 +528,8 @@ suite.define(() => {
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    await chooseSidebarOwner(currentPage, "all");
+    await closeSidebarMenu(currentPage);
     const ownDraft = currentPage.locator('[data-session-key="agent:main:ada"]');
     const otherDraft = currentPage.locator('[data-session-key="agent:main:bob"]');
     await ownDraft.waitFor();
@@ -750,7 +755,7 @@ suite.define(() => {
     expect(await gateway.getRequests("session.members.add")).toHaveLength(0);
   });
 
-  it("scrolls and pages high-volume sharing through one compact menu", async () => {
+  it("scrolls the complete sharing directory through one compact menu", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1280 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -936,7 +941,7 @@ suite.define(() => {
     expect(afterScroll.firstMemberTop).toBeLessThan(beforeScroll.firstMemberTop);
     await expectBrowser(
       dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
-    ).toHaveCount(20);
+    ).toHaveCount(30);
     await expect
       .poll(() => tooltipTitleText(longNameItem.locator(".chat-pane__sharing-member-label")))
       .toBe(longMemberLabel);
@@ -945,13 +950,12 @@ suite.define(() => {
       .toBe(longMemberId);
     await expectBrowser(selectedIndicator).toHaveCount(1);
     expect(await selectedIndicator.getAttribute("aria-label")).not.toBeNull();
-    await dropdown.getByRole("button", { name: "Next", exact: true }).click();
-    await expectBrowser(
-      dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
-    ).toHaveCount(10);
-    // The final page retains both non-human icons; owner-chip presentation is human-only.
+    // All identities share one list; owner-chip presentation remains human-only.
     await expectBrowser(dropdown.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
-    await expectBrowser(dropdown.getByRole("button", { name: "Next", exact: true })).toBeDisabled();
+    await expectBrowser(dropdown.getByRole("button", { name: "Next", exact: true })).toHaveCount(0);
+    await expectBrowser(
+      dropdown.getByRole("button", { name: "Previous", exact: true }),
+    ).toHaveCount(0);
   });
 
   it("clears a selected draft mode when sharing policy becomes unavailable", async () => {

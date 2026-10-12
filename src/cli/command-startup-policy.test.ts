@@ -1,6 +1,6 @@
 // Command startup policy tests cover which CLI commands require startup side effects.
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { cliCommandCatalog } from "./command-catalog.js";
 import { resolveCliStartupPolicy } from "./command-startup-policy.js";
 
@@ -17,6 +17,18 @@ function resolvePolicy(params: {
 }
 
 describe("command-startup-policy", () => {
+  it.each(["gateway", "daemon"])("defers only %s installs with a runtime expectation", (parent) => {
+    const commandPath = [parent, "install"];
+    expect(resolvePolicy({ commandPath }).skipConfigGuard).toBe(false);
+    expect(
+      resolveCliStartupPolicy({
+        commandPath,
+        options: { expectedRuntimePin: "{}" },
+        jsonOutputMode: true,
+      }).skipConfigGuard,
+    ).toBe(true);
+  });
+
   it("resolves config guard policy for Commander and invocation-aware commands", () => {
     for (const commandPath of [
       ["backup", "create"],
@@ -25,6 +37,9 @@ describe("command-startup-policy", () => {
       ["config", "file"],
       ["config", "validate"],
       ["config", "schema"],
+      ["config", "set"],
+      ["config", "patch"],
+      ["config", "unset"],
       ["docs"],
       ["reset"],
       ["uninstall"],
@@ -32,6 +47,8 @@ describe("command-startup-policy", () => {
       ["status"],
       ["triage"],
       ["agents", "bindings"],
+      ["agents", "add"],
+      ["agents", "team", "create"],
       ["approvals", "pending"],
       ["skills"],
       ["skills", "list"],
@@ -45,9 +62,15 @@ describe("command-startup-policy", () => {
       ["memory", "search"],
       ["memory", "status"],
       ["gateway", "stop"],
+      ["gateway", "restart"],
+      ["gateway", "uninstall"],
+      ["daemon", "stop"],
+      ["daemon", "restart"],
+      ["daemon", "uninstall"],
       ["gateway", "diagnostics", "export"],
       ["gateway", "stability"],
       ["gateway", "usage-cost"],
+      ["gateway", "call"],
     ]) {
       expect(resolvePolicy({ commandPath }).skipConfigGuard, commandPath.join(" ")).toBe(true);
     }
@@ -63,7 +86,6 @@ describe("command-startup-policy", () => {
         commandPath: ["agent"],
       }).skipConfigGuard,
     ).toBe(false);
-    expect(resolvePolicy({ commandPath: ["config", "set"] }).skipConfigGuard).toBe(false);
     for (const flag of ["--index", "--fix"]) {
       expect(
         resolvePolicy({
@@ -80,8 +102,6 @@ describe("command-startup-policy", () => {
       ["nodes", "remove"],
       ["devices", "approve"],
       ["devices", "remove"],
-      ["gateway", "call"],
-      ["gateway", "restart"],
       ["gateway", "suspend"],
       ["gateway", "resume"],
     ]) {
@@ -141,44 +161,12 @@ describe("command-startup-policy", () => {
       expect(entry.policy?.configGuard, entry.commandPath.join(" ")).toBeDefined();
       for (const jsonOutputMode of [false, true]) {
         const argv = ["node", "openclaw", ...entry.commandPath];
-        const expectedSkip = entry.commandPath.join(" ") !== "config unset";
         expect(
           resolveCliStartupPolicy({ argv, commandPath: [...entry.commandPath], jsonOutputMode })
             .skipConfigGuard,
           entry.commandPath.join(" "),
-        ).toBe(expectedSkip);
+        ).toBe(true);
       }
-    }
-  });
-
-  it("skips when-suppressed guards only for suppressed output", async () => {
-    vi.resetModules();
-    try {
-      vi.doMock("./command-path-policy.js", () => ({
-        resolveCliCommandPathPolicy: () => ({
-          configGuard: "when-suppressed",
-          loadPlugins: "never",
-          pluginRegistry: { scope: "all" },
-          ownsProtocolStdout: false,
-          hideBanner: false,
-          ensureCliPath: true,
-          networkProxy: "default",
-        }),
-      }));
-      const { resolveCliStartupPolicy: resolveWithSuppressedGuard } = await importFreshModule<
-        typeof import("./command-startup-policy.js")
-      >(import.meta.url, "./command-startup-policy.js?when-suppressed");
-
-      expect(
-        resolveWithSuppressedGuard({ commandPath: ["test"], jsonOutputMode: false })
-          .skipConfigGuard,
-      ).toBe(false);
-      expect(
-        resolveWithSuppressedGuard({ commandPath: ["test"], jsonOutputMode: true }).skipConfigGuard,
-      ).toBe(true);
-    } finally {
-      vi.doUnmock("./command-path-policy.js");
-      vi.resetModules();
     }
   });
 
@@ -216,6 +204,8 @@ describe("command-startup-policy", () => {
       { commandPath: ["agents", "list"] },
       { commandPath: ["agents", "list"], jsonOutputMode: true },
       { commandPath: ["agents", "bind"] },
+      { commandPath: ["agents", "add"] },
+      { commandPath: ["agents", "team", "create"] },
       { commandPath: ["agents", "bindings"], jsonOutputMode: true },
       { commandPath: ["agents", "unbind"] },
       { commandPath: ["agents", "set-identity"] },
@@ -251,7 +241,7 @@ describe("command-startup-policy", () => {
   });
 
   it("uses process env banner suppression when startup env is omitted", () => {
-    const originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
+    const originalEnv = captureEnv(["OPENCLAW_HIDE_BANNER"]);
     try {
       process.env.OPENCLAW_HIDE_BANNER = "1";
 
@@ -269,11 +259,7 @@ describe("command-startup-policy", () => {
         }).hideBanner,
       ).toBe(false);
     } finally {
-      if (originalHideBanner === undefined) {
-        delete process.env.OPENCLAW_HIDE_BANNER;
-      } else {
-        process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
-      }
+      originalEnv.restore();
     }
   });
 

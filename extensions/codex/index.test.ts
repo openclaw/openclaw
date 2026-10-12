@@ -15,7 +15,11 @@ import {
   createPluginRuntimeMock,
   createCapturedPluginRegistration,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { ensureAuthProfileStore, resolveAuthProfileOrder } from "openclaw/plugin-sdk/provider-auth";
+import {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  resolveAuthProfileOrder,
+} from "openclaw/plugin-sdk/provider-auth";
 import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-aliases";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -29,7 +33,6 @@ import plugin from "./index.js";
 import {
   CODEX_MANAGED_THREAD_NAMESPACE,
   CODEX_MANAGED_THREAD_MAX_ENTRIES,
-  markStartedCodexManagedThread,
   type StoredCodexManagedThread,
 } from "./src/app-server/managed-thread-store.js";
 import {
@@ -55,7 +58,12 @@ const explicitAgentConfig = {
   },
 } as OpenClawConfig;
 
-const modelAuth = { ensureAuthProfileStore, resolveAuthProfileOrder, resolveProviderIdForAuth };
+const modelAuth = {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  resolveAuthProfileOrder,
+  resolveProviderIdForAuth,
+};
 
 function createCodexTestRuntime(
   current?: () => unknown,
@@ -66,7 +74,13 @@ function createCodexTestRuntime(
     ...(current ? { config: { current } } : {}),
     state: {
       openSyncKeyedStore: () => stateStore,
-      openKeyedStore: () => stateStore,
+      openKeyedStoreV2: (
+        _options: unknown,
+        authority?: Parameters<typeof stateStore.withCurrent>[0],
+      ) => ({
+        ...stateStore.asyncReads,
+        ...stateStore.withCurrent(authority ?? { assertCurrent() {} }),
+      }),
     },
   } as never;
 }
@@ -115,7 +129,7 @@ describe("codex plugin", () => {
   });
 
   it("does not select an agent or open plugin state while registering", () => {
-    const openKeyedStore = vi.fn(() => {
+    const openKeyedStoreV2 = vi.fn(() => {
       throw new Error("state is unavailable during registration");
     });
     const openSyncKeyedStore = vi.fn(() => {
@@ -126,12 +140,12 @@ describe("codex plugin", () => {
       plugin.register(
         createCodexTestApi({
           config: explicitAgentConfig,
-          runtime: { modelAuth, state: { openSyncKeyedStore, openKeyedStore } } as never,
+          runtime: { modelAuth, state: { openSyncKeyedStore, openKeyedStoreV2 } } as never,
         }),
       ),
     ).not.toThrow();
     expect(openSyncKeyedStore).not.toHaveBeenCalled();
-    expect(openKeyedStore).not.toHaveBeenCalled();
+    expect(openKeyedStoreV2).not.toHaveBeenCalled();
   });
 
   it("persists managed exclusions through the registered harness and catalog without parent SQLite", async () => {
@@ -155,13 +169,17 @@ describe("codex plugin", () => {
       rolloutPath: "/first.jsonl",
     };
     const runtime = createPluginRuntimeMock();
-    runtime.state.openKeyedStore = <T>(
-      storeOptions: Parameters<typeof runtime.state.openKeyedStore>[0],
-    ) => createPluginStateKeyedStoreForTests<T>("codex", { ...storeOptions, env });
+    runtime.state.openKeyedStoreV2 = <T>(
+      storeOptions: Parameters<typeof runtime.state.openKeyedStoreV2>[0],
+      authority?: Parameters<typeof runtime.state.openKeyedStoreV2>[1],
+    ) =>
+      createPluginStateKeyedStoreForTests<T>("codex", { ...storeOptions, env }).withCurrent(
+        authority ?? { assertCurrent() {} },
+      );
     runtime.state.openSyncKeyedStore = <T>(
       storeOptions: Parameters<typeof runtime.state.openSyncKeyedStore>[0],
     ) => createPluginStateSyncKeyedStoreForTests<T>("codex", { ...storeOptions, env });
-    vi.spyOn(runtime.state, "openKeyedStore");
+    vi.spyOn(runtime.state, "openKeyedStoreV2");
     vi.spyOn(runtime.state, "openSyncKeyedStore");
     const registerAgentHarness = vi.fn();
     const observation = observeHostDataSql();
@@ -183,7 +201,7 @@ describe("codex plugin", () => {
         calibration.close();
       }
       plugin.register(createTestPluginApi({ id: "codex", runtime, registerAgentHarness }));
-      expect(runtime.state.openKeyedStore).not.toHaveBeenCalled();
+      expect(runtime.state.openKeyedStoreV2).not.toHaveBeenCalled();
       expect(runtime.state.openSyncKeyedStore).not.toHaveBeenCalled();
       const harness = mockCallArg(registerAgentHarness) as ReturnType<
         typeof createCodexAppServerAgentHarness
@@ -194,7 +212,7 @@ describe("codex plugin", () => {
         bindingStore: CodexAppServerBindingStore;
       };
       const managed = bindingStore.managedThreads!;
-      await markStartedCodexManagedThread(managed, original);
+      await managed.mark(original);
       await expect(managed.mark({ ...original, rolloutPath: "/later.jsonl" })).resolves.toBe(true);
       await expect(managed.has("home", "managed")).resolves.toBe(true);
       const control: CodexSessionCatalogControl = {
@@ -240,7 +258,7 @@ describe("codex plugin", () => {
       for (const operation of sql) {
         expect(operation).not.toHaveBeenCalled();
       }
-      expect(runtime.state.openKeyedStore).toHaveBeenCalledExactlyOnceWith({
+      expect(runtime.state.openKeyedStoreV2).toHaveBeenCalledExactlyOnceWith({
         namespace: CODEX_MANAGED_THREAD_NAMESPACE,
         maxEntries: 20_000,
         overflowPolicy: "evict-oldest",

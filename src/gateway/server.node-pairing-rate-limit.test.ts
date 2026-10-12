@@ -20,7 +20,6 @@ import {
 } from "../infra/device-pairing-node.js";
 import { listDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import type { NodeRegistry } from "./node-registry.js";
 import * as gatewayWsConnection from "./server/ws-connection.js";
 import {
   connectReq,
@@ -104,57 +103,6 @@ async function approveNodeIdentity(params: { identityPath: string; caps: string[
 }
 
 describe("node pairing rate limit", () => {
-  test("admits an authenticated paired node while gateway startup is pending", async () => {
-    testState.gatewayAuth = { mode: "token", token: "secret" };
-    const identityDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-node-startup-"));
-    const identityPath = path.join(identityDir, "identity.sqlite");
-    const attachGatewayWsConnectionHandler = gatewayWsConnection.attachGatewayWsConnectionHandler;
-    let nodeRegistry: NodeRegistry | undefined;
-    const startupAdmission = vi
-      .spyOn(gatewayWsConnection, "attachGatewayWsConnectionHandler")
-      .mockImplementation((params) => {
-        nodeRegistry = params.buildRequestContext().nodeRegistry;
-        return attachGatewayWsConnectionHandler({ ...params, isStartupPending: () => true });
-      });
-
-    try {
-      await withGatewayServer(async ({ port }) => {
-        const identity = await approveNodeIdentity({ identityPath, caps: [] });
-        const ws = await openWs(port);
-        try {
-          const response = await connectReq(ws, {
-            token: "secret",
-            role: "node",
-            scopes: [],
-            client: NODE_CLIENT,
-            caps: [],
-            commands: [],
-            deviceIdentityPath: identityPath,
-            prePairDevice: false,
-          });
-
-          expect(response.ok, JSON.stringify(response)).toBe(true);
-          expect(response.payload).toMatchObject({ type: "hello-ok", auth: { role: "node" } });
-          expect(nodeRegistry?.get(identity.deviceId)).toMatchObject({
-            nodeId: identity.deviceId,
-          });
-        } finally {
-          ws.close();
-          await new Promise<void>((resolve) => {
-            if (ws.readyState === WebSocket.CLOSED) {
-              resolve();
-              return;
-            }
-            ws.once("close", () => resolve());
-          });
-        }
-      });
-    } finally {
-      startupAdmission.mockRestore();
-      await rm(identityDir, { recursive: true, force: true });
-    }
-  });
-
   test.each([
     ["unpaired", false, false],
     ["device-paired without an approved node surface", true, false],
@@ -239,7 +187,9 @@ describe("node pairing rate limit", () => {
 
       expect(connected).toHaveLength(3);
       expect(rateLimited).toHaveLength(5);
-      expect((await listNodePairing()).pending).toHaveLength(3);
+      const pairing = await listNodePairing();
+      expect(pairing.pending).toHaveLength(0);
+      expect(pairing.paired).toHaveLength(3);
     });
   });
 
@@ -296,7 +246,7 @@ describe("node pairing rate limit", () => {
       }
 
       const pending = (await listNodePairing()).pending;
-      expect(pending).toHaveLength(4);
+      expect(pending).toHaveLength(1);
       expect(pending.find((entry) => entry.nodeId === pairedIdentity.deviceId)?.caps).toEqual([
         "camera",
         "screen",

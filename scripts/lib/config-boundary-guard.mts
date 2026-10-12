@@ -74,7 +74,7 @@ function collectTypeScriptFiles(dir: string): string[] {
       files.push(...collectTypeScriptFiles(fullPath));
       continue;
     }
-    if (entry.isFile() && entry.name.endsWith(".ts")) {
+    if (entry.isFile() && /\.tsx?$/u.test(entry.name)) {
       files.push(fullPath);
     }
   }
@@ -89,13 +89,10 @@ function isProductionExtensionFile(relPath: string) {
   if (
     relPath.includes("/test-support/") ||
     relPath.includes(".test.") ||
-    relPath.includes(".live.test.") ||
     relPath.includes(".test-d.") ||
     relPath.includes(".test-harness.") ||
     relPath.includes(".test-shared.") ||
-    relPath.endsWith(".test-support.ts") ||
-    relPath.endsWith("-test-helpers.ts") ||
-    relPath.endsWith("-test-support.ts")
+    /(?:\.test-support|-test-helpers|-test-support)\.tsx?$/u.test(relPath)
   ) {
     return false;
   }
@@ -105,17 +102,12 @@ function isProductionExtensionFile(relPath: string) {
 function isTestOrHarnessFile(relPath: string) {
   return (
     relPath.includes("test-support") ||
-    relPath.includes("/test-support/") ||
     relPath.includes("/test-helpers/") ||
     relPath.includes(".test.") ||
-    relPath.includes(".live.test.") ||
     relPath.includes(".test-d.") ||
     relPath.includes(".test-harness.") ||
     relPath.includes(".test-shared.") ||
-    relPath.endsWith(".test-helpers.ts") ||
-    relPath.endsWith(".test-support.ts") ||
-    relPath.endsWith("-test-helpers.ts") ||
-    relPath.endsWith("-test-support.ts")
+    /[.-]test-helpers\.tsx?$/u.test(relPath)
   );
 }
 
@@ -171,10 +163,12 @@ const DEPRECATED_RUNTIME_API_GUARDS = [
   },
 ];
 
+// Brace bodies must not cross statements: named imports stop at `}`; destructuring
+// allows one nested `{...}` level for defaults such as `x = () => {}`.
 const staticImportPattern =
-  /\b(?:import|export)\s+(?:type\s+)?\{[\s\S]*?\}\s+from\s+["']openclaw\/plugin-sdk\/config-runtime["']/g;
+  /\b(?:import|export)\s+(?:type\s+)?\{[^}]*\}\s+from\s+["']openclaw\/plugin-sdk\/config-runtime["']/g;
 const dynamicImportPattern =
-  /\b(?:const|let|var)\s+\{[\s\S]*?\}\s*=\s*(?:await\s+)?import\(["']openclaw\/plugin-sdk\/config-runtime["']\)/g;
+  /\b(?:const|let|var)\s+\{(?:[^{}]|\{[^{}]*\})*\}\s*=\s*(?:await\s+)?import\(["']openclaw\/plugin-sdk\/config-runtime["']\)/g;
 const typeQueryPattern =
   /\b(?:typeof\s+)?import\(["']openclaw\/plugin-sdk\/config-runtime["']\)\.[A-Za-z_$][\w$]*/g;
 
@@ -285,7 +279,7 @@ export function collectDeprecatedInternalConfigApiViolations({
   scan(nonCompatFiles, [
     {
       pattern:
-        /\b(?:import|export)\s+(?:type\s+)?\{[\s\S]*?\b(?:loadConfig|writeConfigFile)\b[\s\S]*?\}\s+from\s+["']openclaw\/plugin-sdk\/(?:config-runtime|memory-core-host-runtime-core)["']/,
+        /(?<=\b(?:import|export)\s+(?:type\s+)?\{[^}]*)\b(?:loadConfig|writeConfigFile)\b(?=[^}]*\}\s+from\s+["']openclaw\/plugin-sdk\/(?:config-runtime|memory-core-host-runtime-core)["'])/,
       replacement:
         "use getRuntimeConfig(), runtime.config.current(), or mutation helpers with afterWrite",
     },
@@ -301,11 +295,11 @@ export function collectDeprecatedInternalConfigApiViolations({
     [
       {
         pattern:
-          /\bimport\s+\{[\s\S]*?\bwriteConfigFile\b[\s\S]*?\}\s+from\s+["'][^"']*(?:config\/config|config\/io)\.js["']/,
+          /(?<=\bimport\s+\{[^}]*)\bwriteConfigFile\b(?=[^}]*\}\s+from\s+["'][^"']*(?:config\/config|config\/io)\.js["'])/,
       },
       {
         pattern:
-          /\bconst\s+\{[\s\S]*?\bwriteConfigFile\b[\s\S]*?\}\s*=\s*await\s+import\(["'][^"']*(?:config\/config|config\/io)\.js["']\)/,
+          /(?<=\bconst\s+\{(?:[^{}]|\{[^{}]*\})*)\bwriteConfigFile\b(?=(?:[^{}]|\{[^{}]*\})*\}\s*=\s*await\s+import\(["'][^"']*(?:config\/config|config\/io)\.js["']\))/,
       },
       { pattern: /\.\s*writeConfigFile\s*\(/, findLines: findNonCommentLineNumbers },
     ].map(({ pattern, findLines }) => ({
@@ -322,7 +316,7 @@ export function collectDeprecatedInternalConfigApiViolations({
     [
       {
         pattern:
-          /\bimport\s+\{[\s\S]*?\b(?:mutateConfigFile|mutateConfigFileWithRetry|transformConfigFile|transformConfigFileWithRetry|replaceConfigFile)\b[\s\S]*?\}\s+from\s+["'][^"']*(?:config\/config|config\/mutate)\.js["']/,
+          /(?<=\bimport\s+\{[^}]*)\b(?:mutateConfigFile|mutateConfigFileWithRetry|transformConfigFile|transformConfigFileWithRetry|replaceConfigFile)\b(?=[^}]*\}\s+from\s+["'][^"']*(?:config\/config|config\/mutate)\.js["'])/,
         replacement: "use the local domain config mutation helper instead of direct config writes",
       },
     ],
@@ -347,7 +341,7 @@ export function collectDeprecatedInternalConfigApiViolations({
     [
       {
         pattern:
-          /\bimport\s+\{[\s\S]*?\bloadConfig\b[\s\S]*?\}\s+from\s+["'][^"']*(?:config\/config|config\/io)\.js["']/,
+          /(?<=\bimport\s+\{[^}]*)\bloadConfig\b(?=[^}]*\}\s+from\s+["'][^"']*(?:config\/config|config\/io)\.js["'])/,
       },
       { pattern: /(?<!\.)\bloadConfig\s*\(/, findLines: findNonCommentLineNumbers },
     ].map(({ pattern, findLines }) => ({
@@ -397,17 +391,17 @@ const CHANNEL_EXTENSION_IDS = new Set([
 ]);
 
 const RUNTIME_HELPER_BASENAME_PATTERNS = [
-  /^action-runtime\.ts$/,
-  /^actions(?:\..*)?\.ts$/,
-  /^active-listener\.ts$/,
-  /^access-control\.ts$/,
-  /^channel\.ts$/,
-  /^client(?:[-.].*)?\.ts$/,
-  /^recipient-resolution\.ts$/,
-  /^rich-menu\.ts$/,
-  /^send(?:[-.].*)?\.ts$/,
-  /^sent-message-cache\.ts$/,
-  /^thread-bindings\.ts$/,
+  /^action-runtime\.tsx?$/,
+  /^actions(?:\..*)?\.tsx?$/,
+  /^active-listener\.tsx?$/,
+  /^access-control\.tsx?$/,
+  /^channel\.tsx?$/,
+  /^client(?:[-.].*)?\.tsx?$/,
+  /^recipient-resolution\.tsx?$/,
+  /^rich-menu\.tsx?$/,
+  /^send(?:[-.].*)?\.tsx?$/,
+  /^sent-message-cache\.tsx?$/,
+  /^thread-bindings\.tsx?$/,
 ];
 
 const RUNTIME_ACTION_FORBIDDEN_CONFIG_LOAD_PATTERNS = [
@@ -423,11 +417,7 @@ function isRuntimeActionLoadConfigCandidate(relPath: string) {
   if (!CHANNEL_EXTENSION_IDS.has(parts[1]!)) {
     return false;
   }
-  if (
-    relPath.endsWith(".test.ts") ||
-    relPath.endsWith(".test-harness.ts") ||
-    relPath.endsWith(".d.ts")
-  ) {
+  if (/\.(?:test|test-harness)\.tsx?$/u.test(relPath) || relPath.endsWith(".d.ts")) {
     return false;
   }
   if (parts.includes("monitor") || parts.includes("cli")) {

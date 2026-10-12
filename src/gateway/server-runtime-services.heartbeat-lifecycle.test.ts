@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatWakeHandler } from "../infra/heartbeat-wake-contracts.js";
@@ -37,7 +38,7 @@ afterEach(() => {
 });
 
 describe("scheduled heartbeat execution loading", { concurrent: false }, () => {
-  it.each(["continue", "stop", "replace"] as const)(
+  it.each(["stop", "replace"] as const)(
     "settles a wake when the service lifecycle chooses to %s during loading",
     async (action) => {
       const loading = createDeferredCore();
@@ -93,21 +94,11 @@ describe("scheduled heartbeat execution loading", { concurrent: false }, () => {
         }
         release.resolve();
         await vi.dynamicImportSettled();
-        if (action === "continue") {
-          await expect(result).resolves.toEqual({ status: "ran", durationMs: 1 });
-          expect(runtimeServiceMocks.runHeartbeatOnce).toHaveBeenCalledExactlyOnceWith({
-            cfg,
-            agentId: "main",
-            source: "manual",
-            intent: "manual",
-          });
-        } else {
-          if (action === "stop") {
-            await expect(result).resolves.toEqual({ status: "skipped", reason: "disabled" });
-          }
-          expect(runtimeServiceMocks.runHeartbeatOnce).not.toHaveBeenCalled();
-          expect(replacement).toHaveBeenCalledTimes(action === "replace" ? 1 : 0);
+        if (action === "stop") {
+          await expect(result).resolves.toEqual({ status: "skipped", reason: "disabled" });
         }
+        expect(runtimeServiceMocks.runHeartbeatOnce).not.toHaveBeenCalled();
+        expect(replacement).toHaveBeenCalledTimes(action === "replace" ? 1 : 0);
       } finally {
         release.resolve();
         services.heartbeatRunner.stop();

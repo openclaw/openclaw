@@ -20,3 +20,14 @@ export async function collectClawRollbackFailures(
   }
   return failures;
 }
+
+export async function rollbackClawUpdate(
+  steps: Array<() => Promise<void>>,
+  ErrorType: new (message: string, partial: boolean) => Error,
+  partial = false,
+): Promise<void> {
+  const failures = await collectClawRollbackFailures(steps.toReversed());
+  if (failures.length > 0) {
+    throw new ErrorType(failures.join("; "), partial);
+  }
+}

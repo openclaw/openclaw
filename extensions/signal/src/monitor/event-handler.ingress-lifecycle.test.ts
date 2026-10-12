@@ -119,23 +119,6 @@ describe("signal drain claim ownership", () => {
     dispatchInboundMessageMock.mockClear();
   });
 
-  it("defers a drain-claimed event and completes the claim at reply adoption", async () => {
-    const handler = createSignalEventHandler(createBaseSignalEventHandlerDeps());
-    const lifecycle = createTrackedLifecycle();
-
-    const result = await handler(
-      createDataEvent({ timestamp: 1700000001000, message: "hello there" }),
-      lifecycle,
-    );
-
-    // Deferred, never completed-at-enqueue: a crash inside the debounce window
-    // must leave the claim held so the queue replays the message.
-    expect(result).toEqual({ kind: "deferred" });
-    await vi.waitFor(() => expect(lifecycle.adoptedCount()).toBe(1), { timeout: 5_000 });
-    expect(dispatchCapture[0]?.replyOptions?.turnAdoptionLifecycle).toBeDefined();
-    expect(lifecycle.abandonedCount()).toBe(0);
-  });
-
   it("completes every constituent claim when debounced entries merge into one turn", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({

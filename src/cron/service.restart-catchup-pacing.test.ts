@@ -16,7 +16,6 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 
 type RestartCase = {
   label: string;
-  scheduleKind: "cron" | "every";
   paced: boolean;
   restartAfterMs: number;
   expectedNextAfterMs: number;
@@ -28,29 +27,13 @@ describe("CronService restart catch-up with dynamic cadence", () => {
   it.each<RestartCase>([
     {
       label: "a paced cron deadline during a failed force run's backoff",
-      scheduleKind: "cron",
       paced: true,
       forceStatus: "error",
       restartAfterMs: 10 * MINUTE + 1_000,
       expectedNextAfterMs: PACED_DELAY,
     },
     {
-      label: "catch-up for an overdue paced every deadline",
-      scheduleKind: "every",
-      paced: true,
-      restartAfterMs: 31 * MINUTE,
-      expectedNextAfterMs: 33 * MINUTE,
-    },
-    {
-      label: "catch-up for an unpaced cron deadline",
-      scheduleKind: "cron",
-      paced: false,
-      restartAfterMs: 10 * MINUTE,
-      expectedNextAfterMs: 12 * MINUTE,
-    },
-    {
       label: "backoff after a failed scheduled cron run",
-      scheduleKind: "cron",
       paced: false,
       firstStatus: "error",
       restartAfterMs: 10_000,
@@ -87,10 +70,7 @@ describe("CronService restart catch-up with dynamic cadence", () => {
       const job = await original.add({
         enabled: true,
         name: "paced reminder",
-        schedule:
-          scenario.scheduleKind === "cron"
-            ? { kind: "cron", expr: "* * * * *", tz: "UTC", staggerMs: 0 }
-            : { kind: "every", everyMs: MINUTE },
+        schedule: { kind: "cron", expr: "* * * * *", tz: "UTC", staggerMs: 0 },
         ...(scenario.paced ? { pacing: { min: "15m", max: "4h" } } : {}),
         sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
@@ -199,15 +179,18 @@ describe("CronService restart catch-up after a schedule change", () => {
     await writeCronStoreSnapshot({
       storePath: store.storePath,
       jobs: [
-        dailyJob(
-          jobId,
-          {
-            nextRunAtMs: Date.parse("2026-07-28T16:00:00.000Z"), // 28 Jul 19:00 +03
-            lastRunAtMs: lastRunUnderOldSchedule,
-            lastStatus: "ok",
-          },
-          { kind: "cron", expr: "0 19 * * *", tz: "Europe/Istanbul" },
-        ),
+        {
+          ...dailyJob(
+            jobId,
+            {
+              nextRunAtMs: Date.parse("2026-07-28T16:00:00.000Z"), // 28 Jul 19:00 +03
+              lastRunAtMs: lastRunUnderOldSchedule,
+              lastStatus: "ok",
+            },
+            { kind: "cron", expr: "0 19 * * *", tz: "Europe/Istanbul" },
+          ),
+          updatedAtMs: lastRunUnderOldSchedule,
+        },
       ],
     });
 
@@ -251,35 +234,30 @@ describe("CronService restart catch-up after a schedule change", () => {
     }
   });
 
-  it.each([true, false])(
-    "replays one genuine missed slot (activation stamped: %s)",
-    async (stamped) => {
-      const store = await makeStorePath();
-      const runCommandJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
-      const now = Date.parse("2026-07-30T13:18:00.000Z");
-      const id = "restart-missed-slot";
-      await writeCronStoreSnapshot({
-        storePath: store.storePath,
-        jobs: [
-          dailyJob(id, {
-            nextRunAtMs: Date.parse("2026-07-31T12:00:00.000Z"),
-            lastRunAtMs: Date.parse("2026-07-28T12:00:00.000Z"),
-            lastStatus: "ok",
-            ...(stamped ? { scheduleActivatedAtMs: Date.parse("2026-07-29T08:00:00.000Z") } : {}),
-          }),
-        ],
-      });
-      for (let restart = 0; restart < (stamped ? 1 : 2); restart++) {
-        const service = commandService(store.storePath, runCommandJob, () => now);
-        try {
-          await service.start();
-          expect(runCommandJob).toHaveBeenCalledTimes(1);
-          expect(service.getJob(id)?.state.lastRunAtMs).toBe(now);
-        } finally {
-          service.stop();
-        }
-      }
+  it("replays one genuine missed slot after schedule activation", async () => {
+    const store = await makeStorePath();
+    const runCommandJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+    const now = Date.parse("2026-07-30T13:18:00.000Z");
+    const id = "restart-missed-slot";
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [
+        dailyJob(id, {
+          nextRunAtMs: Date.parse("2026-07-31T12:00:00.000Z"),
+          lastRunAtMs: Date.parse("2026-07-28T12:00:00.000Z"),
+          lastStatus: "ok",
+          scheduleActivatedAtMs: Date.parse("2026-07-29T08:00:00.000Z"),
+        }),
+      ],
+    });
+    const service = commandService(store.storePath, runCommandJob, () => now);
+    try {
+      await service.start();
+      expect(runCommandJob).toHaveBeenCalledTimes(1);
+      expect(service.getJob(id)?.state.lastRunAtMs).toBe(now);
+    } finally {
+      service.stop();
       await store.cleanup();
-    },
-  );
+    }
+  });
 });

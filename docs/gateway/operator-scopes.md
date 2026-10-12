@@ -49,6 +49,19 @@ reconnect, or disconnect only their own account. These methods do not expose
 team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
 and per-agent GitHub changes remain `operator.admin`.
 
+Session-scoped readers can read shared GitHub publication options and receipts
+for sessions they can view through `sessions.github.options` and
+`sessions.github.status`. For these narrow callers, the shared publication option
+is available only when the session has a current managed worktree or repository
+workspace with a supported GitHub remote. Positive worktree target discovery reuses
+verified Git metadata for up to 15 seconds; worktree ownership, registry changes,
+and session access are checked on every request. Publication always resolves the
+current Git remote again. Unavailable targets do not hide existing shared receipts.
+Reopen the chat or reconnect after the managed workspace changes to refresh its
+options. Personal account discovery and personal receipts still
+require `operator.read` and the authenticated owner. Identity, role, access grant,
+connection, and session visibility are rechecked before returning awaited reads.
+
 With `operator.sessions.write`, a requester can publish ordinary changes from
 sessions they created through the shared GitHub account. Workflow definition
 changes require the original requester's current full `operator.write`
@@ -62,7 +75,8 @@ already holds `operator.admin`.
 `operator.sessions.write` includes `operator.sessions.read`. Broad
 `operator.read` also includes session reads, and `operator.write` includes both
 session scopes. The session scopes do not grant general diagnostics,
-configuration changes, Gateway-wide tool invocation, or publication.
+configuration changes, Gateway-wide tool invocation, or publication outside
+the own-session shared-account path described above.
 
 Session readers can browse visible conversations and receive their updates.
 The Control UI can copy visible history as Markdown. Session writers can rename,
@@ -71,6 +85,16 @@ sessions remain read-only under these grants, including shared sessions.
 Session grants never authorize deletion or changes to an existing session's
 sharing and visibility.
 Archiving a session does not grant permission to delete it.
+
+Session readers can use `sessions.files.list`, `sessions.files.get`, and
+`sessions.files.assets` for files within a visible session's workspace. Reads
+outside that root also require the session's file tools to allow Gateway-host
+access and the caller to have current permission to start a turn there, including
+ownership, sharing-role, agent, and sandbox checks. Such previews are read-only.
+`canvas.document.preview` also accepts session read access: it returns the
+caller's HTML and isolated sandbox location without reading session data.
+Stored Canvas documents still require broader read access through
+`canvas.document.view`.
 
 In the Control UI, session writers can use **New Session**, send messages in
 their own conversations, and stop their own active runs. Their model, effort,
@@ -85,6 +109,13 @@ do not require administrator access. Session ownership, current authority,
 agent access, and runtime and sandbox requirements still apply. The
 `artifacts.list`, `artifacts.get`, and `artifacts.download` APIs require
 the broader `operator.read` scope.
+
+Hidden native sub-agents started through `sessions_spawn` use the initiating
+person's session-write authority for the exact owned child and its private
+parent completion. The child retains that person's current authority, model
+policy, and required sandbox. Direct `agent` RPC calls keep their existing
+broader scope requirements; copying a child session or run identifier does not
+grant launch permission.
 
 RPCs, events, and background tools use the same scope rules. A continuation with
 `operator.write` can read its GitHub identity and session state without another
@@ -112,6 +143,9 @@ an access policy supplied by a plugin.
   gateway: {
     roles: {
       default: "guest",
+      assignments: {
+        byGithubLogin: { octocat: "maintainer" },
+      },
       definitions: {
         maintainer: {
           sessions: { others: "write" },
@@ -136,10 +170,22 @@ assignment. Assignment changes immediately invalidate and close that profile's
 active Gateway connections. Reconnecting applies the current role and scope
 ceiling. A committed change still retires the previous access if returning the
 result fails. An authorized self-downgrade receives its response before its
-connection closes. `gateway.roles.default` is required whenever roles are configured,
-must name an existing definition, and applies to profiles without a valid
-assigned role. Omitting `gateway.roles` entirely leaves solo and shared-secret
-deployments unchanged.
+connection closes.
+
+Use `gateway.roles.assignments.byGithubLogin` to declare assignments before a
+person's first login or share the same mapping across Gateways. Keys are GitHub
+logins, matched case-insensitively after trimming; malformed logins and duplicate
+normalized logins are rejected. Every mapped role must exist in `definitions`.
+A valid explicit `users.setRole` assignment wins, followed by the mapping for the
+profile's cached verified primary GitHub identity, then `gateway.roles.default`. Profiles without
+a cached GitHub identity never match this mapping. Clearing an explicit assignment
+with `role: null` exposes the configured mapping or default again.
+
+`users.list` keeps `role` as the explicit assignment and reports `effectiveRole`
+with `roleSource` (`"assigned"`, `"githubLogin"`, or `"default"`).
+`gateway.roles.default` is required whenever roles are configured and must name
+an existing definition. Omitting `gateway.roles` entirely leaves solo and
+shared-secret deployments unchanged.
 
 Set a role's optional `accessPolicyPlugin` to the exact plugin ID when that plugin
 must confirm the person's current access. For example, the Visitor Access plugin
@@ -155,7 +201,8 @@ roles without this binding and the Gateway owner retain their existing access.
 Restore the required plugin to admit the bound role. Removing or changing the
 binding applies through the same live role-policy update described below.
 
-With live configuration reload enabled, edits to `gateway.roles` and
+With live configuration reload enabled, edits to `gateway.roles` (including
+GitHub login assignments) and
 `gateway.auth.identityScopes` apply without restarting the Gateway. Existing
 Gateway clients reconnect to receive the current scope ceiling, except for changes
 confined to model policies as described below and identity-scope edits that leave
@@ -307,9 +354,18 @@ A person whose role requires sandboxing cannot start a run in an existing
 host-execution session, even when explicitly invited. Required sessions
 fail if their sandbox backend is unavailable or provisioning fails. They never
 fall back to the Gateway or a node. `/elevated`, `exec` host overrides, and
-configured host targets cannot bypass this restriction. The agent's managed
-GitHub identity is not injected into sandboxed execution: `GH_CONFIG_DIR` is
-absent, and `GH_TOKEN` and `GITHUB_TOKEN` are blanked.
+configured host targets cannot bypass this restriction.
+
+By default, the agent's managed GitHub identity is not injected into sandboxed
+execution: `GH_CONFIG_DIR` is absent, and `GH_TOKEN` and `GITHUB_TOKEN` are blanked.
+An administrator can set `agents.entries.<id>.tools.github.allowInSandbox: true`
+to expose that agent's managed identity to its own Docker or Podman sandbox,
+including role-required sandboxes isolated per creator. The profile is mounted
+read-only at `/openclaw/github`; sandboxed commands receive the managed token and
+Git author. Effective `"shared"` scope refuses this injection and logs a warning
+naming the agent. `openclaw security audit` warns for each opted-in agent. See
+[GitHub identity](/gateway/config-tools/github-identity#sandbox-opt-in) for the
+credential boundary and backend requirements.
 
 The role's `scopes` list caps scopes granted through connection auth, identity
 grants, pairing, scope upgrades, and authenticated trusted-proxy HTTP requests.
