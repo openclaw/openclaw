@@ -2031,7 +2031,6 @@
 ["src/agents/bash-tools.exec-approval-request.test.ts","./tools/gateway.js","422938fe8e7822cbd0ffe23388aa0f608f06cc23f1d19e068d4976a3fec18d6d",1]
 ["src/agents/bash-tools.exec-authorization.integration.test.ts","../process/supervisor/index.js","dcb25bad8c03956a70baf1cf5a6eaff32499c0ad84ea44cb34d4d527d4967c47",1]
 ["src/agents/bash-tools.exec-authorization.integration.test.ts","./tools/gateway.js","88d8fc35c2b800a9c737d433573b120cc7589c5348f10a6e6aead6ecfcf45794",1]
-["src/agents/bash-tools.exec-background-followup.test.ts","../config/sessions/session-entry-read-runtime.js","926f6994a74dc5e3c590c4fa6be06f976d30e3c6c63854d67f8f586944a8ee2a",1]
 ["src/agents/bash-tools.exec-foreground-failures.test.ts","../process/supervisor/index.js","29b0f301c639b9d652b812d38aa427d24fc14d63d3362954a40734709272de64",1]
 ["src/agents/bash-tools.exec-github-credential.test.ts","../process/supervisor/index.js","dcb25bad8c03956a70baf1cf5a6eaff32499c0ad84ea44cb34d4d527d4967c47",1]
 ["src/agents/bash-tools.exec-github-credential.test.ts","./shell-snapshot.js","e2036d1c33eafd3cda2c33d35e2c5320b8454ea69542ee95d390556ba8ec7fb6",1]
