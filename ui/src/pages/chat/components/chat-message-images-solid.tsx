@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup, useContext } from "solid-js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import {
   reserveExternalWindowForDeferredNavigation,
@@ -7,7 +7,7 @@ import {
 } from "../../../lib/open-external-url.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
+import { LitContent, SolidContentPresentation } from "../../../lit/solid-content.tsx";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import { renderChatImageActions } from "./chat-image-actions.ts";
 import {
@@ -622,7 +622,19 @@ export function MessageImages(props: MessageImagesProps): JSX.Element {
   );
 }
 
-function MessageImage(props: { image: ImageBlock; options: ImageRenderOptions }): JSX.Element {
+type MessageImageProps = { image: ImageBlock; options: ImageRenderOptions };
+
+function MessageImage(props: MessageImageProps): JSX.Element {
+  const presented = useContext(SolidContentPresentation);
+  // Parked Lit roots release active image subscriptions.
+  return (
+    <Show when={presented()}>
+      <MessageImageContent image={props.image} options={props.options} />
+    </Show>
+  );
+}
+
+function MessageImageContent(props: MessageImageProps): JSX.Element {
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const presentation = new MessageImagePresentation(() => setRevision((value) => value + 1));
   const model = createMemo(() => {
