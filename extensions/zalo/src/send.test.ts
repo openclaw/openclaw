@@ -123,11 +123,12 @@ describe("zalo send", () => {
     expect(sendPhotoMock).not.toHaveBeenCalled();
   });
 
-  it("keeps outbound text and photo captions UTF-16 safe at the 2000-char limit", async () => {
-    sendMessageMock.mockResolvedValueOnce({
+  it("splits text and photo captions past the 2000-char limit without losing or cutting characters", async () => {
+    let textMessageId = 0;
+    sendMessageMock.mockImplementation(async () => ({
       ok: true,
-      result: { message_id: "z-msg-surrogate" },
-    });
+      result: { message_id: `z-text-${++textMessageId}` },
+    }));
     const api = await vi.importActual<typeof import("./api.js")>("./api.js");
     const ssrf = await import("openclaw/plugin-sdk/ssrf-runtime");
     const pinnedHost = await ssrf.resolvePinnedHostnameWithPolicy("example.com", {
@@ -141,32 +142,80 @@ describe("zalo send", () => {
     );
     sendPhotoMock.mockImplementationOnce(api.sendPhoto);
     resolveZaloProxyFetchMock.mockReturnValue(fetcher);
+    // 2001 UTF-16 units: the emoji cannot fit in the first 2000 and must not be split.
     const boundaryText = `${"a".repeat(1999)}🐱`;
 
     try {
-      await sendMessageZalo("dm-chat-surrogate-text", boundaryText, {
+      const textResult = await sendMessageZalo("dm-chat-surrogate-text", boundaryText, {
         token: "zalo-token",
       });
-      const result = await sendMessageZalo("dm-chat-surrogate-caption", boundaryText, {
+      expect(sendMessageMock.mock.calls.map((call) => call[1]?.text)).toEqual([
+        "a".repeat(1999),
+        "🐱",
+      ]);
+      expect(requireSuccessfulSend(textResult, "z-text-2").receipt.platformMessageIds).toEqual([
+        "z-text-1",
+        "z-text-2",
+      ]);
+
+      sendMessageMock.mockClear();
+      const captionResult = await sendMessageZalo("dm-chat-surrogate-caption", boundaryText, {
         token: "zalo-token",
         mediaUrl: "https://example.com/photo.jpg",
       });
 
-      expect(sendMessageMock.mock.calls[0]?.[1]?.text).toBe("a".repeat(1999));
+      // Zalo would cut the caption, so the photo goes bare and the text follows it whole.
       expect(fetcher).toHaveBeenCalledOnce();
       expect(fetcher.mock.calls[0]?.[1]?.body).toBe(
         JSON.stringify({
           chat_id: "dm-chat-surrogate-caption",
           photo: "https://example.com/photo.jpg",
-          caption: "a".repeat(1999),
         }),
       );
-      expect(requireSuccessfulSend(result, "z-photo-surrogate").receipt.platformMessageIds).toEqual(
-        ["z-photo-surrogate"],
-      );
+      expect(sendMessageMock.mock.calls.map((call) => call[1])).toEqual([
+        { chat_id: "dm-chat-surrogate-caption", text: "a".repeat(1999) },
+        { chat_id: "dm-chat-surrogate-caption", text: "🐱" },
+      ]);
+      expect(requireSuccessfulSend(captionResult, "z-text-4").receipt.platformMessageIds).toEqual([
+        "z-photo-surrogate",
+        "z-text-3",
+        "z-text-4",
+      ]);
     } finally {
       resolvePhotoHost.mockRestore();
     }
+  });
+
+  it("keeps a caption within the limit on the photo", async () => {
+    sendPhotoMock.mockResolvedValueOnce({ ok: true, result: { message_id: "z-photo" } });
+    const caption = "a".repeat(2000);
+
+    const result = await sendMessageZalo("dm-chat", caption, {
+      token: "zalo-token",
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expect(sendPhotoMock.mock.calls[0]?.[1]).toEqual({
+      chat_id: "dm-chat",
+      photo: "https://example.com/photo.jpg",
+      caption,
+    });
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    requireSuccessfulSend(result, "z-photo");
+  });
+
+  it("reports a failed follow-up text with the photo still on the receipt", async () => {
+    sendPhotoMock.mockResolvedValueOnce({ ok: true, result: { message_id: "z-photo" } });
+    sendMessageMock.mockResolvedValueOnce({ ok: false });
+
+    const result = await sendMessageZalo("dm-chat", "word ".repeat(500), {
+      token: "zalo-token",
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("Failed to send message");
+    expect(result.receipt.platformMessageIds).toEqual(["z-photo"]);
   });
 
   it("sends cfg-backed media directly without hosted-media rewrites", async () => {

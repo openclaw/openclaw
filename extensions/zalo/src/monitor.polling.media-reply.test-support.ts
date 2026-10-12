@@ -12,7 +12,10 @@ import {
   createRuntimeEnv,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  chunkMarkdownTextWithMode,
+  createReplyDispatcher,
+} from "openclaw/plugin-sdk/reply-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ZaloFetch } from "./api.js";
@@ -173,9 +176,16 @@ describe("Zalo polling media replies", () => {
   });
 
   it.each([true, false])(
-    "sends bounded photo captions while polling (hosted: %s)",
+    "sends a bare photo then the whole long caption while polling (hosted: %s)",
     async (hosted) => {
+      // Past Zalo's 2000-char caption limit, and the emoji must not be split.
       const caption = `${"a".repeat(1999)}🐱tail`;
+      sendMessageMock.mockResolvedValue({ ok: true, result: { message_id: "zalo-text" } });
+      // The shared runtime mock never splits, so use the real chunker for this caption.
+      const core = getZaloRuntimeMock() as PluginRuntime;
+      vi.mocked(core.channel.text.chunkMarkdownTextWithMode).mockImplementationOnce(
+        chunkMarkdownTextWithMode,
+      );
       dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
         async (params: {
           dispatcherOptions: {
@@ -261,9 +271,17 @@ describe("Zalo polling media replies", () => {
             photo: hosted
               ? "https://example.com/hooks/zalo/media/abc123abc123abc123abc123?token=secret"
               : "https://example.com/reply-image.png",
-            caption: "a".repeat(1999),
           }),
         );
+        const bodies = sendMessageMock.mock.calls.map(
+          (call) => call[1] as { chat_id: string; text: string },
+        );
+        const texts = bodies.map((body) => body.text);
+        expect(texts.length).toBeGreaterThan(1);
+        expect(texts.every((text) => text.length <= 2000)).toBe(true);
+        expect(texts.some((text) => /[\uD800-\uDBFF]$/u.test(text))).toBe(false);
+        expect(texts.join("")).toBe(caption);
+        expect(bodies.every((body) => body.chat_id === "dm-chat-1")).toBe(true);
       } finally {
         abort.abort();
         await run;

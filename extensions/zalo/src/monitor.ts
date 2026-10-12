@@ -685,9 +685,24 @@ async function deliverZaloReply(
                 proxyUrl,
               })
             : mediaUrl;
+        // Zalo cuts a caption past its limit, so send the photo bare and the text after it.
+        const captionFits = !caption || caption.length <= ZALO_TEXT_LIMIT;
         recordAcceptedSend(
-          await sendPhoto(token, { chat_id: chatId, photo: sendableMediaUrl, caption }, fetcher),
+          await sendPhoto(
+            token,
+            { chat_id: chatId, photo: sendableMediaUrl, ...(captionFits ? { caption } : {}) },
+            fetcher,
+          ),
         );
+        if (!captionFits) {
+          for (const chunk of core.channel.text.chunkMarkdownTextWithMode(
+            caption,
+            ZALO_TEXT_LIMIT,
+            chunkMode,
+          )) {
+            recordAcceptedSend(await sendMessage(token, { chat_id: chatId, text: chunk }, fetcher));
+          }
+        }
       },
     });
   } catch (error) {
