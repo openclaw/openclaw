@@ -133,6 +133,7 @@ const webkitTestFiles = [
   "src/pages/chat/chat-composer-context.palette.browser.test.ts",
   "src/pages/chat/chat-composer-overflow.browser.test.tsx",
   "src/pages/chat/components/chat-effort-picker.browser.test.ts",
+  "src/pages/chat/components/chat-details.browser.test.ts",
   "src/pages/chat/components/chat-model-picker.browser.test.ts",
   "src/pages/chat/components/chat-pane-header.browser.test.ts",
   "src/pages/chat/components/chat-pane-versions-menu.browser.test.ts",
