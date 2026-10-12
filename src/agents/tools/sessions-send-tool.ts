@@ -37,8 +37,7 @@ import {
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import { ToolInputError } from "../tool-input-error.js";
-import type { AnyAgentTool } from "./common.js";
-import { readToolStringParam } from "./common.js";
+import { type AnyAgentTool, readToolStringParam } from "./common.js";
 import { wrapGatewayPersonalToolExecution } from "./gateway-caller-context.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import {
@@ -121,7 +120,6 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         sessionVisibility,
         a2aPolicy,
       } = resolveSessionToolContext(opts);
-      const readConfig = createRuntimeConfigReader(cfg);
       let requesterAgentId: string;
       try {
         requesterAgentId = resolveSessionAgentId({
@@ -133,9 +131,8 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         return sendFailure("forbidden", formatErrorMessage(err));
       }
       const { readTarget: readSession, readRequester } = createSessionsSendSessionReaders(cfg);
-
-      const sessionKeyParam = readToolStringParam(params, "sessionKey");
       const labelParam = readToolStringParam(params, "label");
+      const sessionKeyParam = readToolStringParam(params, "sessionKey");
       const labelAgentIdInput = readToolStringParam(params, "agentId");
       const normalizedLabelAgentId =
         labelAgentIdInput === undefined ? null : normalizeAgentIdStrict(labelAgentIdInput);
@@ -145,15 +142,12 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           `Agent "${labelAgentIdInput}" not found. Run openclaw agents list to see configured agents.`,
         );
       }
-      const explicitTargetAgentId = normalizedLabelAgentId?.value;
-
       let sessionKey = sessionKeyParam;
-      let resolvedTargetAgentId: string | undefined;
-      let resolvedLabelKey: string | undefined;
-      if (!sessionKey && !labelParam && explicitTargetAgentId) {
+      let resolvedTargetAgentId: string | undefined, resolvedLabelKey: string | undefined;
+      if (!sessionKey && !labelParam && normalizedLabelAgentId?.value) {
         const agentMainKey = resolveConfiguredAgentMainSessionKey({
           cfg,
-          agentId: explicitTargetAgentId,
+          agentId: normalizedLabelAgentId.value,
           mainKey,
         });
         if (!agentMainKey) {
@@ -165,7 +159,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         sessionKey = agentMainKey;
       }
       if (!sessionKey && labelParam) {
-        const requestedAgentId = explicitTargetAgentId;
+        const requestedAgentId = normalizedLabelAgentId?.value;
 
         if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
           return sendFailure(
@@ -232,7 +226,9 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         resolvedLabelKey = resolvedKey;
       }
 
-      if (!sessionKey) return sendFailure("error", "Either sessionKey or label is required");
+      if (!sessionKey) {
+        return sendFailure("error", "Either sessionKey or label is required");
+      }
       const allowMissingKey = isConfiguredAgentMainSessionKey({
         cfg,
         sessionKey,
@@ -328,7 +324,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       const resolvedTargetOwner =
         visibleSession.agentId ??
         resolvedTargetAgentId ??
-        (labelParam ? explicitTargetAgentId : undefined);
+        (labelParam ? normalizedLabelAgentId?.value : undefined);
       if (
         persistedTargetOwner.kind === "configured" &&
         resolvedTargetOwner &&
@@ -408,7 +404,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       const access = await resolveSessionToolAccess({
         action: "send",
         watch: params.watch === true,
-        readConfig,
+        readConfig: createRuntimeConfigReader(cfg),
         sandboxed: opts?.sandboxed,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,

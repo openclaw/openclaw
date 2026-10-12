@@ -107,7 +107,6 @@ async function resolvePatchTarget(
   key: string;
   requesterAgentId: string;
   requesterSessionKey: string;
-  revalidateCurrent?: () => Promise<void>;
 }> {
   const context = resolveSessionToolContext(opts);
   const rawKey = sessionKey ?? context.effectiveRequesterKey;
@@ -153,7 +152,11 @@ async function resolvePatchTarget(
   });
   const isRequesterSession =
     resolved.key === context.effectiveRequesterKey && agentId === requesterAgentId;
-  let revalidateCurrent: (() => Promise<void>) | undefined;
+  if (!isRequesterSession && context.sessionVisibility === "channel") {
+    throw new ToolAuthorizationError(
+      "Channel visibility authorizes cross-session retrieval, not session changes.",
+    );
+  }
   if (!isRequesterSession) {
     // Session controls require status visibility, never an outbound-only send grant.
     // Owner gating remains separate.
@@ -182,7 +185,6 @@ async function resolvePatchTarget(
         }),
       );
     }
-    revalidateCurrent = access.revalidateCurrent;
   }
   return {
     agentId,
@@ -191,7 +193,6 @@ async function resolvePatchTarget(
     key: resolved.key,
     requesterAgentId,
     requesterSessionKey: context.effectiveRequesterKey,
-    revalidateCurrent,
   };
 }
 
@@ -470,7 +471,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           }),
         );
       }
-      const { agentId, cfg, isRequesterSession, key, revalidateCurrent } = await resolvePatchTarget(
+      const { agentId, cfg, isRequesterSession, key } = await resolvePatchTarget(
         opts,
         readToolStringParam(params, "sessionKey"),
         gatewayRequest,
@@ -510,7 +511,6 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       const callSessionPatch = async (
         sessionPatch: typeof patch & { agentId?: string },
       ): Promise<SessionsPatchResult> => {
-        await revalidateCurrent?.();
         return restrictedRename
           ? await patchGateway({
               method: "sessions.patch",

@@ -182,6 +182,45 @@ describe("sessions tool", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
+  it("keeps channel visibility read-only for sibling session patches", async () => {
+    const requester = "agent:main:slack:channel:c111:thread:100.001";
+    const sibling = "agent:main:slack:channel:c111:thread:100.002";
+    const requests: AgentToolGatewayRequest[] = [];
+    const row = (key: string, sessionId: string) => ({
+      key,
+      agentId: "main",
+      sessionId,
+      chatType: "channel" as const,
+      space: "t111",
+      origin: { provider: "slack", chatType: "channel" as const },
+      deliveryContext: { channel: "slack", accountId: "default", to: "channel:c111" },
+    });
+    const callGateway: AgentToolGatewayRequestCaller = async <T>(
+      request: AgentToolGatewayRequest,
+    ) => {
+      requests.push(request);
+      if (request.method === "sessions.describe") {
+        const key = (request.params as { key: string }).key;
+        return { session: row(key, key === requester ? "requester" : "sibling") } as T;
+      }
+      return { ok: true } as T;
+    };
+    const tool = createSessionsTool({
+      agentSessionKey: requester,
+      config: { tools: { sessions: { visibility: "channel" } } },
+      callGateway,
+    });
+
+    await expect(
+      tool.execute("channel-sibling-patch", {
+        action: "patch",
+        sessionKey: sibling,
+        label: "Do not write",
+      }),
+    ).rejects.toThrow("Channel visibility authorizes cross-session retrieval");
+    expect(requests).toEqual([]);
+  });
+
   it("does not expose direct session creation outside controlled spawning", async () => {
     const callGateway = vi.fn();
     const tool = createSessionsTool({

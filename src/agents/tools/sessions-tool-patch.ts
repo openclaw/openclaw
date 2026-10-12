@@ -93,7 +93,6 @@ type ResolvedPatchTarget = {
   agentId: string;
   key: string;
   isRequesterSession: boolean;
-  revalidateCurrent?: () => Promise<void>;
 };
 
 export async function runSessionsToolPatchMany(params: {
@@ -113,7 +112,6 @@ export async function runSessionsToolPatchMany(params: {
     index: number;
     agentId: string;
     target: SessionsPatchManyTarget;
-    revalidateCurrent?: () => Promise<void>;
   }> = [];
   const failures = new Map<number, string>();
   for (const [index, input] of params.targets.entries()) {
@@ -136,7 +134,6 @@ export async function runSessionsToolPatchMany(params: {
       targets.push({
         index,
         agentId: target.agentId,
-        revalidateCurrent: target.revalidateCurrent,
         target: {
           key: target.key,
           ...(parseAgentSessionKey(target.key) ? {} : { agentId: target.agentId }),
@@ -149,9 +146,6 @@ export async function runSessionsToolPatchMany(params: {
   }
   const succeeded: number[] = [];
   if (targets.length > 0) {
-    for (const target of targets) {
-      await target.revalidateCurrent?.();
-    }
     const result = await params.callGateway<SessionsPatchManyResult>({
       method: "sessions.patchMany",
       params: { targets: targets.map(({ target }) => target), patch: params.patch },

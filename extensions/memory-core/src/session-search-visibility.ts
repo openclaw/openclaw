@@ -22,6 +22,7 @@ import {
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
+  createSessionVisibilityRowChecker,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxSessionToolsVisibility,
   resolveSessionChannelScope,
@@ -199,14 +200,17 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       })
     : [];
   const archivedSessionsByName = new Map(archives.map((archive) => [archive.archiveName, archive]));
-  // Archive discovery yields. Read privacy and channel authority metadata only
-  // afterwards so a route change during that await cannot reuse a stale snapshot.
-  const { store: combinedSessionStore, storePath } = loadCombinedSessionStoreForGateway(
-    params.cfg,
-    scopedAgentId ? { agentId: scopedAgentId } : {},
-  );
-  const channelScopeForSession = (key: string) => {
-    const entry = combinedSessionStore[key];
+  // Channel guard construction gets its own immutable route snapshot. The
+  // post-await store below is loaded separately for final row/privacy decisions.
+  const guardSessionStore =
+    visibility === "channel"
+      ? loadCombinedSessionStoreForGateway(
+          params.cfg,
+          scopedAgentId ? { agentId: scopedAgentId } : {},
+        ).store
+      : undefined;
+  const guardChannelScopeForSession = (key: string) => {
+    const entry = guardSessionStore?.[key];
     return entry
       ? resolveSessionChannelScope({
           key,
@@ -235,12 +239,39 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
         a2aPolicy,
         ...(visibility === "channel"
           ? {
-              requesterChannelScope: channelScopeForSession(params.requesterSessionKey),
-              channelScopeForSession,
+              requesterChannelScope: guardChannelScopeForSession(params.requesterSessionKey),
+              channelScopeForSession: guardChannelScopeForSession,
             }
           : {}),
       })
     : null;
+  const { store: combinedSessionStore, storePath } = loadCombinedSessionStoreForGateway(
+    params.cfg,
+    scopedAgentId ? { agentId: scopedAgentId } : {},
+  );
+  const currentChannelScopeForSession = (key: string) => {
+    const entry = combinedSessionStore[key];
+    return entry
+      ? resolveSessionChannelScope({
+          key,
+          chatType: entry.chatType,
+          space: entry.space,
+          origin: sessionDeliveryOrigin(entry),
+          deliveryContext: deliveryContextFromSession(entry),
+        })
+      : undefined;
+  };
+  const channelRowChecker =
+    visibility === "channel" && params.requesterSessionKey
+      ? createSessionVisibilityRowChecker({
+          action: "history",
+          requesterSessionKey: params.requesterSessionKey,
+          requesterAgentId,
+          visibility,
+          a2aPolicy,
+          requesterChannelScope: currentChannelScopeForSession(params.requesterSessionKey),
+        })
+      : null;
 
   const conversationRecall = params.conversationRecall;
   const trustedAgentScope = Boolean(
@@ -311,7 +342,15 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
         scopedAgentId && isGlobalSessionKeyForSharedScope(params.cfg, key)
           ? `agent:${scopedAgentId}:global`
           : key;
-      return trustedAgentScope || guard?.check(visibilityKey).allowed === true;
+      return (
+        trustedAgentScope ||
+        (channelRowChecker
+          ? channelRowChecker.check({
+              key: visibilityKey,
+              channelScope: currentChannelScopeForSession(key),
+            }).allowed
+          : guard?.check(visibilityKey).allowed === true)
+      );
     }
     const candidateEntry = combinedSessionStore[key];
     // Canonical and legacy alias keys can identify one transcript. Exclude the
