@@ -46,10 +46,7 @@ export function maintainCronRunHistoryInWorker(
       ? readActiveCronRunReceiptsInDatabase(database.db, undefined, jobIds)
       : [];
   const { nowMs, protectedJobIds } = input.snapshot;
-  const protectedJobs = new Set([
-    ...protectedJobIds,
-    ...receipts.map((receipt) => receipt.jobId),
-  ]);
+  const protectedJobs = new Set([...protectedJobIds, ...receipts.map((receipt) => receipt.jobId)]);
   const plan = planCronRunHistoryMaintenance(records, nowMs, protectedJobs);
   if (plan.reconciliations.length === 0 && !plan.prune) {
     return { outcome: { reconciled: 0, pruned: 0 } };
