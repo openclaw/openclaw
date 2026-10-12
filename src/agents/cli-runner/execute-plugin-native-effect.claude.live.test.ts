@@ -18,9 +18,16 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import type { PluginHookHandlerMap } from "../../plugins/hook-types.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -41,6 +48,7 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
+  resetGlobalHookRunner();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -172,6 +180,8 @@ async function runNativeWriteTurn(params: {
   sessionEntry?: SessionEntry;
   targetRoot: "workspace" | "outside";
   expectAllowed: boolean;
+  /** Revoke the admitted run from inside a blocking before_tool_call hook. */
+  revokeDuringPolicyHook?: boolean;
 }): Promise<{ fileExists: boolean; fileBytes: string; stdout: string }> {
   const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-live-proof-"));
   roots.push(root);
@@ -201,6 +211,7 @@ async function runNativeWriteTurn(params: {
     finalTextEvents(),
   ]);
 
+
   const backend = resolveCliBackendConfig("claude-cli");
   expect(backend, "claude-cli backend must be registered").not.toBeNull();
   const prepared = await backend!.prepareExecution?.({
@@ -229,6 +240,24 @@ async function runNativeWriteTurn(params: {
   });
   context.params.admittedRunContext = await admission.admit("plugin-harness");
 
+  if (params.revokeDuringPolicyHook) {
+    // A blocking before_tool_call hook revokes the admitted run while the
+    // permission decision is pending; the host must re-check authority and
+    // deny before any native I/O.
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          matcher: ["write"],
+          handler: async () => {
+            admission.close();
+            return undefined;
+          },
+        },
+      ]),
+    );
+  }
+
   const stdoutChunks: string[] = [];
   try {
     const exit = await executePluginOwnedProcess({
@@ -254,7 +283,14 @@ async function runNativeWriteTurn(params: {
       noOutputTimeoutMs: 120_000,
       consumeStdout: (chunk) => stdoutChunks.push(chunk),
     });
-    expect(exit.reason).toBe("exit");
+    if (!params.revokeDuringPolicyHook) {
+      expect(exit.reason).toBe("exit");
+    }
+  } catch (error) {
+    if (!params.revokeDuringPolicyHook) {
+      throw error;
+    }
+    // Revocation closes the admitted run; an aborted run is the expected outcome.
   } finally {
     admission.close();
   }
@@ -337,6 +373,65 @@ describe.skipIf(!LIVE)("claude cli native final-effect permission chain", () => 
       });
       expect(proof.fileExists).toBe(true);
       expect(proof.fileBytes).toBe("native effect\n");
+    },
+  );
+
+  it(
+    "denies the native Write when the admitted run is revoked during awaited policy work",
+    { timeout: 300_000 },
+    async () => {
+      const proof = await runNativeWriteTurn({
+        name: "revoked-during-policy",
+        config: {
+          tools: {
+            allow: ["write"],
+            profile: "full",
+            exec: { security: "full", ask: "off" },
+          },
+        },
+        targetRoot: "workspace",
+        expectAllowed: false,
+        revokeDuringPolicyHook: true,
+      });
+      // The write target sits inside the permitted workspace, but the run is
+      // revoked while the permission decision is pending: authority must be
+      // re-checked and the request denied before any native I/O.
+      expect(proof.fileExists).toBe(false);
+      expect(proof.stdout).toMatch(/no longer active|closed during policy/);
+    },
+  );
+
+  it(
+    "contains a stored bounded session at its recorded root even when config disables workspaceOnly",
+    { timeout: 300_000 },
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-live-proof-"));
+      roots.push(root);
+      const sessionRoot = path.join(root, "recorded-session-root");
+      await mkdir(sessionRoot, { recursive: true });
+      const proof = await runNativeWriteTurn({
+        name: "bounded-session-recorded-root",
+        config: {
+          tools: {
+            allow: ["write"],
+            profile: "full",
+            // Config disables containment; the stored bounded session must win.
+            exec: { security: "full", ask: "off" },
+          },
+        },
+        sessionEntry: {
+          sessionId: "native-live-proof-bounded-session",
+          updatedAt: 1,
+          permissionMode: "workspace",
+          sessionRoot,
+        } as unknown as SessionEntry,
+        // The target root directory is provided by the helper's outside dir;
+        // containment at the recorded root must reject it with config off.
+        targetRoot: "outside",
+        expectAllowed: false,
+      });
+      expect(proof.fileExists).toBe(false);
+      expect(proof.stdout).toContain("Path escapes sandbox root");
     },
   );
 });
