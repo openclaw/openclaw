@@ -1,6 +1,7 @@
 import { setImmediate } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import {
   beginConversationDeliveryOperation,
   markConversationDeliveryQueued,
@@ -15,8 +16,17 @@ import {
   prepareConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
 import * as conversationRegistry from "../config/sessions/conversation-registry.js";
+import {
+  installDeliveryQueueTmpDirHooks,
+  loadPendingDeliveries,
+} from "../infra/outbound/delivery-queue.test-helpers.js";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import * as messageActionRunner from "../infra/outbound/message-action-runner.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { buildConversationRef } from "../routing/conversation-ref.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   conversation,
   createConversationDeliveryTestStore,
@@ -71,6 +81,86 @@ async function createDeps(agentId = "main") {
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("conversation send through an accepted channel response", () => {
+  const fixtures = installDeliveryQueueTmpDirHooks();
+
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+    vi.unstubAllEnvs();
+  });
+
+  it("reports the same unknown outcome initially and on replay when an accepted response lacks identity", async () => {
+    const { clickClackPlugin } = await loadBundledPluginFacade<{ clickClackPlugin: ChannelPlugin }>(
+      {
+        pluginId: "clickclack",
+        artifactBasename: "channel-plugin-api.ts",
+      },
+    );
+    const stateDir = fixtures.tmpDir();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const config = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://clickclack.example",
+          workspace: "wsp_synthetic",
+          token: "synthetic-token",
+        },
+      },
+    };
+    const address = {
+      channel: "clickclack",
+      accountId: "default",
+      kind: "channel" as const,
+      peerId: "chn_synthetic",
+    };
+    const conversationRef = buildConversationRef(address);
+    const scope = await prepareConversationRegistryScope({ agentId: "main", config });
+    onTestFinished(async () => {
+      await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
+    });
+    await registerConversationAddresses(scope, [
+      { ...address, conversationRef, deliveryTarget: "channel:chn_synthetic" },
+    ]);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "clickclack", source: "test", plugin: clickClackPlugin }]),
+    );
+    const message = "accepted channel message";
+    const transport = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("unexpected transport retry"))
+      .mockResolvedValueOnce(Response.json({ message: { body: message } }, { status: 201 }));
+    const input = {
+      config,
+      agentId: "main",
+      senderIsOwner: true,
+      operationId: "accepted-without-identity",
+      conversationRef,
+      message,
+    };
+
+    const initial = await runGatewayConversationSend(input);
+    const persisted = await deliveryStore.getConversationDeliveryOperation(
+      scope,
+      input.operationId,
+    );
+    const replay = await runGatewayConversationSend(input);
+
+    expect(transport).toHaveBeenCalledOnce();
+    expect(transport.mock.calls[0]).toMatchObject([
+      "https://clickclack.example/api/channels/chn_synthetic/messages",
+      { method: "POST" },
+    ]);
+    expect(persisted).toMatchObject({ status: "unknown", queueId: initial.queueId });
+    expect(await loadPendingDeliveries(stateDir)).toMatchObject([
+      { recoveryState: "unknown_after_send" },
+    ]);
+    expect({ initial: initial.status, replay: replay.status }).toEqual({
+      initial: "unknown",
+      replay: "unknown",
+    });
+  });
+});
 
 describe("runGatewayConversationSend", () => {
   it.each([false, true])(
