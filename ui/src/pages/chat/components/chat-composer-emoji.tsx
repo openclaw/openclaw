@@ -1,14 +1,14 @@
 import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { createEffect, For, onCleanup, Show, untrack } from "solid-js";
 import { TextareaTokenAnchor } from "../../../components/textarea-token-anchor.ts";
-import { t } from "../../../i18n/index.ts";
-import "../../../styles/chat/emoji-menu.css";
 import {
   emojiForShortcode,
   EmojiTargetResolver,
   suggestEmoji,
   type EmojiTarget,
 } from "../../../lib/chat/emoji.ts";
+import "../../../styles/chat/emoji-menu.css";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { solidTemplate } from "./chat-composer-controls.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import {

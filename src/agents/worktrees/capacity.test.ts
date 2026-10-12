@@ -76,6 +76,9 @@ describe("worktree Git size estimates", () => {
 
   it("hydrates a partial-clone default before advancing the local branch", async () => {
     const { clone, commit } = await partialClone();
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const objects = vi.spyOn(commandExec, "runCommandBuffered");
     const selected = await resolveWorktreeBase(
       clone,
       undefined,
@@ -86,6 +89,11 @@ describe("worktree Git size estimates", () => {
     expect(selected.commit).toBe(commit);
     expect(await git(clone, "rev-parse", "main")).toBe(commit);
     expect(await fs.readFile(path.join(clone, "large.txt"), "utf8")).toBe("x".repeat(5000));
+    const scans = () => objects.mock.calls.filter(([argv]) => argv.includes("--missing=print"));
+    expect(scans()).toHaveLength(1);
+    clock.mockReturnValue(now + 30_000);
+    expect((await resolveWorktreeBase(clone)).commit).toBe(commit);
+    expect(scans()).toHaveLength(1);
   });
 
   it("preserves admitted caller ownership config through text and buffered sizing without changing defaults", async () => {

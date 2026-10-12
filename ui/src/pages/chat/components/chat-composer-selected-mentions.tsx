@@ -1,7 +1,7 @@
 import { createEffect, createMemo, For, onCleanup, Show, type Accessor } from "solid-js";
 import { icons } from "../../../components/icons.ts";
-import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import "../../../styles/chat/composer-context-strip.css";
 import { solidTemplate } from "./chat-composer-controls.ts";

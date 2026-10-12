@@ -175,6 +175,8 @@ let originalTitle: string;
 let originalListeners: ReturnType<typeof process.listeners>;
 
 beforeEach(async () => {
+  // Keep both executable entrypoints in this process; cache respawn has separate coverage.
+  vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", "1");
   vi.resetModules();
   registryApi = await import("../agents/harness/registry.js");
   runtime = await import("../plugins/runtime.js");
@@ -194,6 +196,7 @@ beforeEach(async () => {
   installUnhandledRejectionHandlerMock.mockClear();
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   process.argv = originalArgv;
   process.title = originalTitle;
   runtime.restoreActivePluginRegistrySnapshot(originalRegistrySnapshot);

@@ -17,48 +17,17 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     if (!base) {
       throw new Error("SQLite worker ratchet requires a Git base commit.");
     }
-    const counts = (rows: ReturnType<typeof inventory>, normalizeForwarding = false) =>
-      new Map(
-        rows
-          .filter((row) => row.tier === "T1")
-          .map((row) => {
-            const forwarded = new Set<string>();
-            const calls = row.calls.filter((call) => {
-              // These released wrappers warn, then forward the same query once.
-              // Keep raw T1 inventory and charge every additional or altered call.
-              // Remove this allowance with the wrappers at the next Plugin SDK major.
-              if (
-                normalizeForwarding &&
-                row.file === "src/plugin-sdk/sqlite-runtime-legacy.ts" &&
-                ["executeSqliteQuerySync", "executeSqliteQueryTakeFirstSync"].includes(
-                  call.primitive,
-                ) &&
-                (call.operation === call.primitive ||
-                  call.operation === `${call.primitive}Legacy`) &&
-                call.forwarding?.namespace === "queries" &&
-                call.forwarding.module === "../infra/kysely-sync.js" &&
-                call.forwarding.arguments.length === 2 &&
-                call.forwarding.arguments[0] === "database" &&
-                call.forwarding.arguments[1] === "query" &&
-                !forwarded.has(call.primitive)
-              ) {
-                forwarded.add(call.primitive);
-                return false;
-              }
-              return true;
-            });
-            return [row.file, calls.length];
-          }),
-      );
+    const counts = (rows: ReturnType<typeof inventory>, tier = "T1") =>
+      new Map(rows.filter((row) => row.tier === tier).map((row) => [row.file, row.calls.length]));
     const head = inventory(root, "", args.staged);
     const baseline = inventory(root, base);
-    const before = counts(baseline, true);
-    const after = counts(head, true);
+    const before = counts(baseline);
+    const after = counts(head);
     const total = (files: ReadonlyMap<string, number>) =>
       [...files.values()].reduce((sum, count) => sum + count, 0);
     console.log(
-      `SQLite T1 raw calls: ${total(counts(baseline))} -> ${total(counts(head))}; ` +
-        `forwarding-normalized comparison: ${total(before)} -> ${total(after)}.`,
+      `SQLite T1 live calls: ${total(before)} -> ${total(after)}; ` +
+        `T1-compat deprecated-only calls: ${total(counts(baseline, "T1-compat"))} -> ${total(counts(head, "T1-compat"))}.`,
     );
     const { increased } = compareRatchetCounts(after, before);
     if (

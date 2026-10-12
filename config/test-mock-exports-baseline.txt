@@ -518,7 +518,6 @@
 ["extensions/discord/src/send.sends-basic-channel-messages.test.ts","openclaw/plugin-sdk/web-media","7eba0d382039fc4ece9a8993e474f29923e4a450ba16e83d8b78bda9978798bb",1]
 ["extensions/discord/src/send.voice.test.ts","./voice-message.js","3120de20be5028ab9f19e8df02f99a1078e75b49dfc22d1e1faefac30d2200e1",1]
 ["extensions/discord/src/send.voice.test.ts","openclaw/plugin-sdk/web-media","8a3e3c5bb8f6442aa9e0aa8995fb8db35175be5b67a853552cec07d18b4cc823",1]
-["extensions/discord/src/subagent-hooks.test.ts","./monitor/thread-bindings.js","b3a741ed6637f3149fffbab3510bf85a6ed475b3a01b61b7f7230525be47702f",1]
 ["extensions/discord/src/test-support/provider.test-support.ts","../internal/gateway.js","4abb2635e9f8ca55eea72ad3ffe201a56595d587f43de2ed258a8bc60b36b841",1]
 ["extensions/discord/src/test-support/provider.test-support.ts","../internal/voice.js","d0d118a539ed692f3a0d4ce4d3341df386ee864f6af48aa08ba8680c3e96ed23",1]
 ["extensions/discord/src/voice-message.test.ts","openclaw/plugin-sdk/media-runtime","92997bdd5e1c091091eff8ad3b5b4c8a7f93ea30b4b8e6a51e76b1b762236393",1]

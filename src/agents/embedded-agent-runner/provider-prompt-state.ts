@@ -1,5 +1,9 @@
 import { isProxy } from "node:util/types";
-import { modelRequestBodyState, responsesPromptObserver } from "@openclaw/ai/internal/openai";
+import {
+  modelRequestBodyState,
+  responsesPromptObserver,
+  type ResponsesPromptObservation,
+} from "@openclaw/ai/internal/openai";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
@@ -18,6 +22,14 @@ type ProviderPromptSnapshot = {
   digest: string;
   byteWeight: number;
   cachePrefix?: ProviderPromptCachePrefix;
+  wire?: NonNullable<ReturnType<typeof prepareProviderPrompt>["wire"]> & {
+    routeHash?: string;
+    attempts?: number;
+    retried?: boolean;
+    egress?: ResponsesPromptObservation["egress"];
+    payloadVariant?: ResponsesPromptObservation["payloadVariant"];
+    response?: { status: number; headers: Record<string, string | number> };
+  };
 };
 
 export type ProviderPromptState = {
@@ -137,6 +149,7 @@ async function recordProviderPrompt(params: {
     digest: payload.digest,
     byteWeight: payload.byteWeight,
     ...(payload.cachePrefix ? { cachePrefix: payload.cachePrefix } : {}),
+    ...(payload.wire ? { wire: payload.wire } : {}),
   };
   const rejected = params.state.lastRejected;
   if (rejected?.scopeDigest === snapshot.scopeDigest && rejected.digest === snapshot.digest) {
@@ -168,6 +181,8 @@ export function wrapStreamFnWithProviderPromptState(params: {
 }): StreamFn {
   return async (model, context, options) => {
     params.state.lastAttempt = undefined; // Custom transports must not leave a stale candidate.
+    let attempts = 0;
+    let promptObservation: ResponsesPromptObservation | undefined;
     const originalOnPayload = options?.onPayload;
     const observedOptions: NonNullable<Parameters<StreamFn>[2]> = {
       ...options,
@@ -186,6 +201,37 @@ export function wrapStreamFnWithProviderPromptState(params: {
         });
         return finalPayload;
       },
+      onResponse: async (response, responseModel) => {
+        const wire = params.state.lastAttempt?.wire;
+        if (wire) {
+          const headers: Record<string, string | number> = {};
+          // Fixed names only; neither arbitrary header names nor raw values enter logs.
+          for (const name of [
+            "x-request-id",
+            "openai-model",
+            "x-openai-model",
+            "x-openai-route",
+            "x-openai-account",
+            "openai-organization",
+            "openai-project",
+            "x-openai-region",
+            "x-compute-rgn",
+            "x-region",
+            "x-served-by",
+          ]) {
+            const value = response.headers[name];
+            if (value !== undefined) {
+              headers[name] = sha256Hex(value).slice(0, 16);
+            }
+          }
+          const processing = response.headers["openai-processing-ms"];
+          if (processing && /^\d{1,12}(?:\.\d{1,6})?$/.test(processing)) {
+            headers["openai-processing-ms"] = Number(processing);
+          }
+          wire.response = { status: response.status, headers };
+        }
+        await options?.onResponse?.(response, responseModel);
+      },
     };
     modelRequestBodyState(observedOptions).encode = async (payload) => {
       const encoded = await recordProviderPrompt({
@@ -196,13 +242,20 @@ export function wrapStreamFnWithProviderPromptState(params: {
         effectiveContextTokenBudget: params.effectiveContextTokenBudget,
         encode: true,
       });
+      const wire = params.state.lastAttempt?.wire;
+      if (wire) {
+        wire.routeHash = sha256Hex(model.baseUrl).slice(0, 16);
+        wire.attempts = ++attempts;
+        wire.retried = attempts > 1;
+        wire.egress = promptObservation?.egress;
+        wire.payloadVariant = promptObservation?.payloadVariant;
+      }
       return encoded!;
     };
-    if (params.recordEvent) {
-      responsesPromptObserver.set(observedOptions, (observation) =>
-        params.recordEvent?.("provider.prompt.observed", { ...observation }),
-      );
-    }
+    responsesPromptObserver.set(observedOptions, (observation) => {
+      promptObservation = observation;
+      params.recordEvent?.("provider.prompt.observed", { ...observation });
+    });
     return params.streamFn(model, context, observedOptions);
   };
 }

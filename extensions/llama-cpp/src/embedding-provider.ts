@@ -19,12 +19,15 @@ import {
 } from "./defaults.js";
 import { resolveManagedLlamaCppProviderConfig } from "./managed-provider-config.js";
 import {
-  ensureLlamaCppModel,
   inspectLlamaServerRuntime,
+  type LlamaServerRuntimeFacts,
+} from "./managed-server-inspection.js";
+import {
+  ensureLlamaCppModel,
   prepareManagedLlamaServer,
   reconcileManagedLlamaServer as reconcileLocalService,
-  type LlamaServerRuntimeFacts,
 } from "./managed-server.js";
+import { resolveLlamaCppMediaModels } from "./media-config.js";
 
 type AcquireLocalService = OpenClawPluginApi["runtime"]["llm"]["acquireLocalService"];
 type LocalServiceAwareOptions = EmbeddingProviderCreateOptions & {
@@ -88,6 +91,7 @@ async function prepareEmbeddingServer(
   embeddingSource: string,
 ): Promise<void> {
   const provider = resolveManagedLlamaCppProviderConfig(options.config);
+  const mediaModels = resolveLlamaCppMediaModels(provider);
   const cacheDir = resolveLlamaCppModelCacheDir(provider);
   const embeddingModelPath = await ensureLlamaCppModel({
     source: embeddingSource,
@@ -97,6 +101,7 @@ async function prepareEmbeddingServer(
   await prepareManagedLlamaServer({
     chatModel: { mode: "preserve" },
     configuredChatModelIds: provider.models.map((model) => model.id),
+    ...(mediaModels ? { mediaModels: [] } : {}),
     embeddingModelPath,
     port: resolveProviderPort(provider),
     reconcileBaseUrl: provider.baseUrl,
