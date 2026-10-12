@@ -631,9 +631,14 @@ export class MemoryIndexDatabase {
     prepare: () => Promise<boolean>,
   ) {
     return this.withSourceMutation(() =>
-      this.retryPublication(
-        () => this.executePublication({ type: "source.refreshOrigin", input }, assertCurrent),
-        prepare,
+      this.runPublication(
+        (scope) =>
+          // Read live provenance after the writer FIFO admits this refresh.
+          this.retryPublication(
+            () => scope.execute({ type: "source.refreshOrigin", input }),
+            prepare,
+          ),
+        assertCurrent,
       ),
     );
   }
