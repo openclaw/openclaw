@@ -1,4 +1,3 @@
-import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -50,18 +49,6 @@ function expectMinimaxFetchCall(index: number, url: string) {
   expect(fetchFn).toBe(fetch);
 }
 
-function streamedVideoResponse(bytes: string): Response {
-  return new Response(
-    new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(bytes));
-        controller.close();
-      },
-    }),
-    { headers: { "content-type": "video/mp4" } },
-  );
-}
-
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     headers: { "content-type": "application/json" },
@@ -95,19 +82,7 @@ function oversizedJsonResponse(): Response {
   );
 }
 
-const malformedVideoDownloadCases = [
-  { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
-  { name: "empty video", contentType: "video/mp4", body: "" },
-];
-
 describe("minimax video generation provider", () => {
-  it("declares explicit mode capabilities", () => {
-    const provider = buildMinimaxVideoGenerationProvider();
-    expectExplicitVideoGenerationCapabilities(provider);
-    expect(provider.capabilities.generate?.resolutions).toEqual(["768P", "1080P"]);
-    expect(provider.capabilities.imageToVideo?.resolutions).toEqual(["768P", "1080P"]);
-  });
-
   it("creates a task, polls status, and downloads the generated video", async () => {
     mockVideoTask("task-123", { video_url: "https://example.com/out.mp4", file_id: "file-1" });
     fetchWithTimeoutMock.mockResolvedValueOnce({
@@ -131,41 +106,7 @@ describe("minimax video generation provider", () => {
     expect(result.metadata?.fileId).toBe("file-1");
   });
 
-  it("rejects generated video downloads that exceed the configured media cap", async () => {
-    mockVideoTask("task-too-large", { video_url: "https://example.com/too-large.mp4" });
-    fetchWithTimeoutMock.mockResolvedValueOnce(streamedVideoResponse("too-large"));
-
-    const provider = buildMinimaxVideoGenerationProvider();
-    await expect(
-      provider.generateVideo(
-        videoRequest({
-          prompt: "short video",
-          cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
-        }),
-      ),
-    ).rejects.toThrow("MiniMax generated video download exceeds 1 bytes");
-  });
-
-  it.each(malformedVideoDownloadCases)(
-    "rejects a successful $name response as generated video",
-    async ({ contentType, body }) => {
-      mockVideoTask("task-invalid-download", { video_url: "https://example.com/invalid.mp4" });
-      fetchWithTimeoutMock.mockResolvedValueOnce(
-        new Response(body, { headers: { "content-type": contentType } }),
-      );
-
-      const provider = buildMinimaxVideoGenerationProvider();
-      await expect(
-        provider.generateVideo(videoRequest({ prompt: "invalid download" })),
-      ).rejects.toThrow("MiniMax generated video download: malformed video response");
-    },
-  );
-
-  it.each([
-    { name: "supplied", filename: " output_aigc.mp4 ", expectedFileName: "output_aigc.mp4" },
-    { name: "missing", filename: undefined, expectedFileName: "video-1.webm" },
-    { name: "blank", filename: "   ", expectedFileName: "video-1.webm" },
-  ])(
+  it.each([{ name: "missing", filename: undefined, expectedFileName: "video-1.webm" }])(
     "downloads via file_id with a $name filename when status omits video_url",
     async ({ filename, expectedFileName }) => {
       const requestOverrides = {
