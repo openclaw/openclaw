@@ -28,6 +28,9 @@ const RECENT_PROMPT_MAX_ENTRIES = 8;
 const PENDING_RESULT_MAX_ENTRIES = 8;
 const PENDING_RESULT_MAX_CHARS = 2_000;
 
+/** Delivery states that never advance again; `failed` is the give-up terminal state (#154834). */
+const CLOSED_DELIVERY_STATUSES = new Set(["delivered", "discarded", "not_required", "failed"]);
+
 function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   if (
     entry.execution.status !== "terminal" ||
@@ -38,13 +41,18 @@ function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   ) {
     return false;
   }
-  if (entry.requesterSettleWake) {
+  // A retained settle marker alone does not make a child's own result outstanding:
+  // once its delivery is closed, the result already reached the requester (#166267).
+  if (
+    entry.requesterSettleWake &&
+    !CLOSED_DELIVERY_STATUSES.has(entry.delivery?.status ?? "pending")
+  ) {
     return true;
   }
   return (
     entry.completion?.required === true &&
     entry.delivery?.disposition !== "intentional_non_delivery" &&
-    ["pending", "in_progress", "failed", "suspended"].includes(entry.delivery?.status ?? "pending")
+    ["pending", "in_progress", "suspended"].includes(entry.delivery?.status ?? "pending")
   );
 }
 
