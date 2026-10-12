@@ -7,6 +7,7 @@ import * as kyselySync from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import * as stateDb from "../../state/openclaw-state-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -23,6 +24,7 @@ import {
   deleteSecretStoreEntry,
   listHiddenGitHubSecretRecordNames,
   listSecretStoreEntries,
+  purgeExpiredSecretStoreEntries as purgeStoredSecrets,
   readHiddenGitHubSecretRecord,
   readSecretStoreExecEnvironment,
   readSecretStoreValue,
@@ -38,7 +40,7 @@ function purgeExpiredSecretStoreEntries(params: {
   return purgeExpiredSecretStoreEntriesInDatabase(
     captureSecretStoreExpiryCutoffs(),
     params.database,
-  );
+  ).removed;
 }
 
 const roots: string[] = [];
@@ -87,6 +89,49 @@ afterEach(async () => {
 });
 
 describe("secret store", () => {
+  it("purges newly deleted entries only after their retention deadline after an idle pass", async () => {
+    vi.useFakeTimers();
+    const deletedAtMs = Date.UTC(2026, 0, 1);
+    vi.setSystemTime(deletedAtMs);
+    await expect(purgeStoredSecrets({ database })).resolves.toBe(0);
+
+    await write("EXPIRED_AFTER_IDLE", "retired");
+    await deleteSecretStoreEntry({ scope: team, name: "EXPIRED_AFTER_IDLE", database });
+    await expect(purgeStoredSecrets({ database })).resolves.toBe(0);
+
+    vi.setSystemTime(deletedAtMs + 30 * 24 * 60 * 60_000);
+    await expect(purgeStoredSecrets({ database })).resolves.toBe(0);
+    expect(countStoredRows(database, "EXPIRED_AFTER_IDLE")).toBe(1);
+
+    vi.setSystemTime(deletedAtMs + 30 * 24 * 60 * 60_000 + 1);
+    await expect(purgeStoredSecrets({ database })).resolves.toBe(1);
+    expect(countStoredRows(database, "EXPIRED_AFTER_IDLE")).toBe(0);
+  });
+
+  it("retains a transient handoff refreshed before the purge acquires its writer", async () => {
+    vi.useFakeTimers();
+    const createdAtMs = Date.UTC(2026, 0, 1);
+    vi.setSystemTime(createdAtMs);
+    const name = "github-setup-55555555555555555555555555555555";
+    await write(name, "handoff");
+    vi.setSystemTime(createdAtMs + 10 * 60_000 + 1);
+    const runTransaction = stateDb.runOpenClawStateWriteTransaction;
+    const acquire = vi
+      .spyOn(stateDb, "runOpenClawStateWriteTransaction")
+      .mockImplementationOnce((operation, options, transactionOptions) => {
+        openOpenClawStateDatabase(database)
+          .db.prepare("UPDATE secret_store_entries SET created_at_ms = ? WHERE name = ?")
+          .run(Date.now(), name);
+        return runTransaction(operation, options, transactionOptions);
+      });
+    try {
+      expect(purgeExpiredSecretStoreEntries({ database })).toBe(0);
+      expect(countStoredRows(database, name)).toBe(1);
+    } finally {
+      acquire.mockRestore();
+    }
+  });
+
   it.each([
     { kind: "secret", allowedHosts: [], ageMs: 0, accepted: true },
     { kind: "env", allowedHosts: undefined, ageMs: 0, accepted: false },

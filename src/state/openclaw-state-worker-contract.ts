@@ -50,7 +50,10 @@ import type { UpdateRunReconciliationOperations } from "../infra/update-run-reco
 import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
 import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
-import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
+import type {
+  SecretStoreExpiryCutoffs,
+  SecretStoreExpiryResult,
+} from "../secrets/store/secret-store-expiry.kernel.js";
 import type * as secretWrites from "../secrets/store/secret-store-write.js";
 import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker-contract.js";
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
@@ -191,7 +194,7 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       >;
       output: void;
     };
-    "secrets.purge": { input: SecretStoreExpiryCutoffs; output: number };
+    "secrets.purge": { input: SecretStoreExpiryCutoffs; output: SecretStoreExpiryResult };
     "secrets.writeForConfigRef": {
       input: SecretStoreConfigRefWrite;
       output: { name: string };
