@@ -9,7 +9,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
 import "../../components/openclaw-mascot.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
-import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import type { MessageGroup as MessageGroupData } from "../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
@@ -32,7 +32,7 @@ import {
   observeTextareaOverflow,
 } from "../chat/components/chat-composer-dom.ts";
 import { renderChatDivider } from "../chat/components/chat-divider.ts";
-import { renderMessageGroup } from "../chat/components/chat-message.ts";
+import { MessageGroup } from "../chat/components/chat-message-group-view.tsx";
 import { CustodianAlertCard } from "./custodian-alert-card.tsx";
 import { custodianAlertStore } from "./custodian-alert-store.ts";
 import { CustodianChannelOnboardingNudge, CustodianEventNudgeView } from "./custodian-nudge.tsx";
@@ -48,7 +48,7 @@ import type { CustodianMessage } from "./transcript.ts";
 
 registerPluginManagementEnglish();
 
-function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
+function toCustodianMessageGroup(message: CustodianMessage): MessageGroupData {
   const key = `msg-${message.id}`;
   const rawMessage = { role: message.role, content: message.text };
   const normalized = normalizeMessage(rawMessage);
@@ -82,15 +82,14 @@ function TranscriptEntry(props: {
   return (
     <>
       <Show when={props.message.text}>
-        <LitContent
-          render={() =>
-            renderMessageGroup(toCustodianMessageGroup(props.message), {
-              showReasoning: false,
-              showToolCalls: false,
-              assistantName: t("custodian.title"),
-              agentId: SYSTEM_AGENT_ID,
-            })
-          }
+        <MessageGroup
+          group={toCustodianMessageGroup(props.message)}
+          options={{
+            showReasoning: false,
+            showToolCalls: false,
+            assistantName: t("custodian.title"),
+            agentId: SYSTEM_AGENT_ID,
+          }}
         />
       </Show>
       <Show when={props.message.id === props.store().earlierBoundaryAfterId}>

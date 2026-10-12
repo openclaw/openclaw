@@ -791,16 +791,18 @@ describe("mcp-app-view localization", () => {
       await pane.updateComplete;
       expect(pane.querySelector('[role="alert"]')?.textContent).toBeUndefined();
       await initialized.promise;
-      const strip = pane.querySelector<LitElement>("openclaw-mcp-app-context-strip")!;
+      const strip = pane.querySelector<HTMLElement>("openclaw-mcp-app-context-strip")!;
       expect(pane.classList.contains("mcp-app-conversation")).toBe(true);
       expect(strip).not.toBeNull();
       const bridge = bridgeMocks.instances[0] as Awaited<ReturnType<typeof mountBridge>>["bridge"];
       await bridge.updateModelContextHandler!({ content: first.content });
-      await strip.updateComplete;
-      expect(strip.querySelectorAll(".mcp-app-context__item")).toHaveLength(2);
+      await waitForSolid(() =>
+        expect(strip.querySelectorAll(".mcp-app-context__item")).toHaveLength(2),
+      );
       await bridge.updateModelContextHandler!({ content: second.content });
-      await strip.updateComplete;
-      expect(strip.querySelectorAll(".mcp-app-context__item")).toHaveLength(3);
+      await waitForSolid(() =>
+        expect(strip.querySelectorAll(".mcp-app-context__item")).toHaveLength(3),
+      );
       expect(
         request.mock.calls.filter(([method]) => method === "mcp.app.updateModelContext"),
       ).toHaveLength(2);
@@ -810,8 +812,7 @@ describe("mcp-app-view localization", () => {
         modelContext: null,
         updateId: second.updateId,
       });
-      await strip.updateComplete;
-      expect(strip.textContent?.trim()).toBe("");
+      await waitForSolid(() => expect(strip.textContent?.trim()).toBe(""));
       expect(bridge.setHostContext).toHaveBeenLastCalledWith(
         expect.objectContaining({ "openai/modelContext": null }),
       );
