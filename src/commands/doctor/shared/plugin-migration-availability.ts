@@ -136,6 +136,7 @@ export async function inspectPluginMigrationAvailability(params: {
             // config paths stay deferred because their source may be stale during an update.
             const availableWithoutPackageConvergence =
               bundled ||
+              (!unavailable && context.records[pluginId]?.source === "path") ||
               (plugin?.origin === "config" &&
                 rehearsalRoot !== undefined &&
                 isPathInside(rehearsalRoot, plugin.rootDir) &&

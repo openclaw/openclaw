@@ -11,6 +11,7 @@ import {
 } from "../infra/deferred-plugin-migrations.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -277,6 +278,56 @@ describe("configured plugin migration deferral", () => {
           expect(await fs.readFile(configPath, "utf8")).toBe(canonical);
           expect(readDeferredPluginMigrations()).toEqual([]);
         });
+      });
+    },
+  );
+
+  it.each(["linked", "unrecorded"] as const)(
+    "keeps a %s config-path plugin available only when package convergence skips it",
+    async (install) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        const pluginRoot = path.join(home, "linked-plugin");
+        const pluginId = "linked-fixture";
+        const source = path.join(home, "legacy-binding.json");
+        const migrated = path.join(home, "migrated-binding.json");
+        await fs.writeFile(source, '{"binding":"retained"}\n');
+        await installMigrationFixture({ root: pluginRoot, pluginId, source, migrated });
+        const config = createPluginConfig(pluginId, undefined, [pluginRoot]);
+        await writeOpenClawConfig(home, config);
+        if (install === "linked") {
+          await seedInstalledPluginIndex(
+            { [pluginId]: { source: "path", sourcePath: pluginRoot, installPath: pluginRoot } },
+            { config },
+          );
+        }
+
+        await withEnvAsync(
+          {
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+            OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
+          },
+          async () => {
+            await runDoctorConfigPreflight(doctorOptions);
+            expect(readDeferredPluginMigrations()).toEqual(
+              install === "linked"
+                ? []
+                : [
+                    expect.objectContaining({
+                      pluginId,
+                      reason: expect.stringContaining("Package convergence must wait"),
+                    }),
+                  ],
+            );
+            expect(await fs.readFile(install === "linked" ? migrated : source, "utf8")).toBe(
+              '{"binding":"retained"}\n',
+            );
+            await expect(fs.stat(install === "linked" ? source : migrated)).rejects.toMatchObject({
+              code: "ENOENT",
+            });
+          },
+        );
       });
     },
   );
