@@ -227,6 +227,7 @@ async function uploadDirectoryToRemoteCommand(
       name: string;
       process: ChildProcess;
       stderr: Buffer[];
+      stderrBytes: number;
       closed: boolean;
       code: number | null;
       signal: NodeJS.Signals | null;
@@ -235,7 +236,8 @@ async function uploadDirectoryToRemoteCommand(
       { name: "remote", process: remote },
     ].map((child) =>
       Object.assign(child, {
-        stderr: [],
+        stderr: new Array<Buffer>(),
+        stderrBytes: 0,
         closed: false,
         code: 0,
         signal: null,
@@ -269,7 +271,24 @@ async function uploadDirectoryToRemoteCommand(
         maybeResolve();
       });
       // EMFILE/ENFILE can leave streams absent; native error and close still settle the child.
-      child.process.stderr?.on("data", (chunk) => child.stderr.push(Buffer.from(chunk)));
+      child.process.stderr?.on("data", (chunk: Buffer | string) => {
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        const room = SANDBOX_COMMAND_MAX_BUFFER_BYTES - child.stderrBytes;
+        if (room <= 0 || bytes.byteLength > room) {
+          if (room > 0) {
+            child.stderr.push(Buffer.from(bytes.subarray(0, room)));
+            child.stderrBytes += room;
+          }
+          fail(
+            new Error(
+              `Remote shell upload stderr exceeded ${SANDBOX_COMMAND_MAX_BUFFER_BYTES} bytes`,
+            ),
+          );
+          return;
+        }
+        child.stderr.push(Buffer.from(bytes));
+        child.stderrBytes += bytes.byteLength;
+      });
       child.process.stderr?.on("error", fail);
       child.process.stdout?.on("error", fail);
     }

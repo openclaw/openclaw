@@ -1,3 +1,4 @@
+import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -101,4 +102,60 @@ describe.runIf(process.platform !== "win32")("provider-owned remote shell transp
     ).rejects.toThrow("remote exited from signal SIGTERM");
     await session.dispose();
   });
+
+  it("stops an upload after the remote command has started", async () => {
+    const root = await fs.realpath(tempDirs.make("remote-shell-deadline-"));
+    const localDir = path.join(root, "local");
+    const started = path.join(root, "remote-started");
+    await fs.mkdir(localDir);
+    await fs.writeFile(path.join(localDir, "payload"), "payload-bytes");
+    const session = createRemoteShellSandboxSession({
+      buildCommand: () => ({
+        argv: ["/bin/sh", "-c", `touch ${JSON.stringify(started)}; exec sleep 60`],
+        env: { ...process.env },
+        cwd: root,
+      }),
+    });
+    const deadline = new AbortController();
+    const uploading = session.uploadDirectory({
+      localDir,
+      remoteDir: path.join(root, "remote"),
+      remoteRootDir: root,
+      signal: deadline.signal,
+    });
+    await waitForPath(started, root);
+    deadline.abort(new Error("upload deadline"));
+    await expect(uploading).rejects.toThrow(/upload deadline|aborted/i);
+    await session.dispose();
+  });
 });
+
+function waitForPath(file: string, directory: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      watcher.close();
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const timer = setTimeout(() => finish(new Error("remote command did not start")), 10_000);
+    const watcher = watch(directory, () => {
+      void fs.access(file).then(
+        () => finish(),
+        () => undefined,
+      );
+    });
+    void fs.access(file).then(
+      () => finish(),
+      () => undefined,
+    );
+  });
+}
