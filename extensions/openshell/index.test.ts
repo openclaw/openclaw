@@ -6,12 +6,17 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRegistryFixture } from "openclaw/plugin-sdk/plugin-test-contracts";
 import {
   createEmptyPluginRegistry,
+  createHookRunner,
   createPluginRecord,
   disposePluginRegistryInstances,
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   getSandboxBackendFactory,
   getSandboxBackendManager,
@@ -107,6 +112,64 @@ describe("OpenShell plugin registration lifecycle", () => {
       }
     },
   );
+
+  it("routes only the bound agent using the current File Transfer binding", async () => {
+    const { registry } = createPluginRegistryFixture();
+    const record = createPluginRecord({ id: "openshell", origin: "bundled" });
+    registry.registry.plugins.push(record);
+    plugin.register(
+      registry.createApi(record, {
+        config: {},
+        pluginConfig: {
+          worker: {
+            agentWorkspace: { agentId: "main", remoteRoot: "/agent/canonical" },
+            model: {
+              provider: "openai",
+              id: "worker-model",
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              credentialEnv: "OPENAI_API_KEY",
+              contextWindow: 8192,
+              maxTokens: 1024,
+            },
+          },
+        },
+      }),
+    );
+    const hooks = createHookRunner(registry.registry, { catchErrors: false });
+    const prompt = (agentId = "main") =>
+      hooks.runBeforePromptBuild({ prompt: "hello", messages: [] }, { agentId });
+    try {
+      setRuntimeConfigSnapshot({});
+      expect(await prompt()).toBeUndefined();
+      for (const nodeId of ["first-node", "replacement-node"]) {
+        setRuntimeConfigSnapshot({
+          plugins: {
+            entries: {
+              "file-transfer": {
+                enabled: true,
+                config: {
+                  policyVersion: 2,
+                  workspaces: { main: { nodeId, remoteRoot: "/agent/canonical" } },
+                },
+              },
+            },
+          },
+        });
+        expect(await prompt("other")).toBeUndefined();
+        const context = (await prompt())?.appendSystemContext;
+        expect(context).toContain(nodeId);
+        expect(context).toContain("/agent/canonical");
+        expect(context).toContain("file_fetch and file_write");
+        expect(context).toContain("task workspace");
+      }
+      setRuntimeConfigSnapshot({});
+      expect(await prompt()).toBeUndefined();
+    } finally {
+      clearRuntimeConfigSnapshot();
+      await disposePluginRegistryInstances(registry.registry);
+    }
+  });
 
   it("does not register runtime hooks or services in discovery mode", () => {
     const original = readBackend();
