@@ -170,7 +170,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async detectLegacyState(params) {
       const { listMatrixCryptoUnsafeState } =
         await import("./src/matrix/crypto-unsafe-state-doctor.js");
-      const roots = await listMatrixCryptoUnsafeState(params.stateDir);
+      const roots = await listMatrixCryptoUnsafeState(params.stateDir, {
+        openKeyedStoreV2: params.context.openPluginStateKeyedStore,
+      });
       return roots.length > 0
         ? {
             preview: roots.map(
@@ -183,7 +185,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const { listMatrixCryptoUnsafeState } =
         await import("./src/matrix/crypto-unsafe-state-doctor.js");
-      const roots = await listMatrixCryptoUnsafeState(params.stateDir);
+      const roots = await listMatrixCryptoUnsafeState(params.stateDir, {
+        openKeyedStoreV2: params.context.openPluginStateKeyedStore,
+      });
       return {
         changes: [],
         warnings: roots.map(

@@ -1,6 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  OpenKeyedStoreOptions,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  openMatrixSyncCacheStoreOptions,
+  writeMatrixSyncCacheStateToStore,
+} from "./src/matrix/client/sync-cache-state.js";
+import {
+  openMatrixIdbSnapshotStoreOptions,
+  sealMatrixIdbSnapshotOwnerGeneration,
+  writeMatrixIdbSnapshotJson,
+} from "./src/matrix/crypto-state-store.js";
+import { getMatrixRuntime } from "./src/runtime.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 // Exercise real empty-state operations without materializing client runtimes.
@@ -128,3 +147,83 @@ it("completes absent legacy-state checks without loading client runtimes", async
   await expect(credentials.detectLegacyState(params)).resolves.toBeNull();
   expect(openPluginStateKeyedStore).not.toHaveBeenCalled();
 });
+
+it.each([true, false])(
+  "inspects populated canonical state through the Doctor context without initializing Matrix (guard present: %s)",
+  async (guardPresent) => {
+    const stateDir = tempDirs.make("matrix-doctor-canonical-");
+    const root = path.join(
+      stateDir,
+      "matrix",
+      "accounts",
+      "ops",
+      "matrix.example.org__bot",
+      "0123456789abcdef",
+    );
+    const generation = "0123456789abcdef0123456789abcdef";
+    const marker = path.join(root, "crypto-idb-snapshot.json.owner.poisoned");
+    const stateRuntime = {
+      openKeyedStoreV2: <T>(options: OpenAsyncKeyedStoreOptions) =>
+        createPluginStateKeyedStoreV2ForTests<T>("matrix", options, { assertCurrent() {} }),
+    };
+    await writeMatrixIdbSnapshotJson({
+      storageRootDir: root,
+      snapshotJson: '{"databases":[]}',
+      databaseCount: 0,
+      stateRuntime,
+    });
+    await sealMatrixIdbSnapshotOwnerGeneration(root, generation, stateRuntime);
+    const openPluginStateKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+      createPluginStateKeyedStoreForTests<T>("matrix", options);
+    const snapshotStore = openPluginStateKeyedStore(openMatrixIdbSnapshotStoreOptions(root));
+    const syncStore = openPluginStateKeyedStore(openMatrixSyncCacheStoreOptions(root));
+    await writeMatrixSyncCacheStateToStore({
+      storageRootDir: root,
+      store: openPluginStateKeyedStore(openMatrixSyncCacheStoreOptions(root)),
+      payload: {
+        version: 1,
+        cleanShutdown: false,
+        savedSync: {
+          nextBatch: "retained-cursor",
+          accountData: [],
+          roomsData: { join: {}, invite: {}, leave: {}, knock: {} },
+        },
+      },
+    });
+    if (guardPresent) {
+      fs.writeFileSync(marker, `${generation}\n`);
+    }
+    const snapshotBefore = await snapshotStore.entries();
+    const syncBefore = await syncStore.entries();
+    expect(() => getMatrixRuntime()).toThrow("Matrix runtime not initialized");
+    const { stateMigrations } = await import("./doctor-contract-api.js");
+    const migration = stateMigrations.find((entry) => entry.id === "matrix-crypto-unsafe-state")!;
+    const params = {
+      config: {},
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: { openPluginStateKeyedStore },
+    };
+    try {
+      const detected = await migration.detectLegacyState(params);
+      const migrated = await migration.migrateLegacyState(params);
+      if (guardPresent) {
+        expect(detected).toBeNull();
+        expect(migrated).toEqual({ changes: [], warnings: [] });
+      } else {
+        expect(detected?.preview).toEqual([expect.stringContaining(root)]);
+        expect(migrated).toEqual({ changes: [], warnings: [expect.stringContaining(root)] });
+      }
+      expect(await snapshotStore.entries()).toEqual(snapshotBefore);
+      expect(await syncStore.entries()).toEqual(syncBefore);
+      expect(fs.existsSync(marker)).toBe(guardPresent);
+      if (guardPresent) {
+        expect(fs.readFileSync(marker, "utf8")).toBe(`${generation}\n`);
+      }
+      expect(() => getMatrixRuntime()).toThrow("Matrix runtime not initialized");
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
+  },
+);

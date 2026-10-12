@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { asSafeIntegerInRange } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../runtime.js";
 import {
@@ -56,6 +60,10 @@ class MatrixIdbSnapshotInvalidError extends Error {
 }
 
 export type MatrixSnapshotStateRuntime = Pick<PluginRuntime["state"], "openKeyedStoreV2">;
+
+export type MatrixSnapshotStateReader = {
+  openKeyedStoreV2: <T>(options: OpenKeyedStoreOptions) => Pick<PluginStateKeyedStore<T>, "lookup">;
+};
 
 export function openMatrixRecoveryKeyStoreOptions(storageRootDir: string) {
   return {
@@ -154,7 +162,7 @@ export async function readMatrixIdbSnapshotJson(
 
 export async function readMatrixIdbSnapshotOwnerGeneration(
   storageRootDir: string,
-  stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
+  stateRuntime: MatrixSnapshotStateReader = getMatrixRuntime().state,
 ): Promise<string | undefined> {
   const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
     openMatrixIdbSnapshotStoreOptions(storageRootDir),

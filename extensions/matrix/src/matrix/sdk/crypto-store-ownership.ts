@@ -14,6 +14,7 @@ import { getMatrixRuntime } from "../../runtime.js";
 import {
   readMatrixIdbSnapshotOwnerGeneration,
   sealMatrixIdbSnapshotOwnerGeneration,
+  type MatrixSnapshotStateReader,
   type MatrixSnapshotStateRuntime,
 } from "../crypto-state-store.js";
 
@@ -148,7 +149,7 @@ async function writeOwnerGuard(
 /** The caller holds custody. Snapshot checksum and schema validation remain the restore owner's job. */
 export async function isMatrixCryptoStoreUnsafe(
   snapshotPath: string,
-  stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
+  stateRuntime: MatrixSnapshotStateReader = getMatrixRuntime().state,
 ): Promise<boolean> {
   const guard = await readOwnerGuard(snapshotPath);
   if (guard === "") {

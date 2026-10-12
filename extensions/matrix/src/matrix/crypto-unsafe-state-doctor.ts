@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "openclaw/plugin-sdk/file-lock";
 import { getMatrixRuntime } from "../runtime.js";
-import { MATRIX_IDB_SNAPSHOT_FILENAME, readMatrixIdbSnapshotJson } from "./crypto-state-store.js";
+import {
+  MATRIX_IDB_SNAPSHOT_FILENAME,
+  readMatrixIdbSnapshotJson,
+  type MatrixSnapshotStateReader,
+} from "./crypto-state-store.js";
 import {
   isMatrixCryptoStoreUnsafe,
   sealMatrixCryptoStoreRecovery,
@@ -13,7 +17,10 @@ import { walkMatrixStateFiles } from "./state-layout-walk.js";
 
 const MARKER_NAME = `${MATRIX_IDB_SNAPSHOT_FILENAME}.owner.poisoned`;
 
-export async function listMatrixCryptoUnsafeState(stateDir: string): Promise<string[]> {
+export async function listMatrixCryptoUnsafeState(
+  stateDir: string,
+  stateRuntime?: MatrixSnapshotStateReader,
+): Promise<string[]> {
   const { entries, failedDirs } = await walkMatrixStateFiles(
     stateDir,
     (name, depth) =>
@@ -38,7 +45,7 @@ export async function listMatrixCryptoUnsafeState(stateDir: string): Promise<str
       // Retained guards can be clean; missing guards can be unsafe. Inspect the
       // guard and canonical snapshot together under the exclusive recovery lock.
       const unsafe = await withMatrixCryptoStoreRecoveryLock(snapshotPath, () =>
-        isMatrixCryptoStoreUnsafe(snapshotPath, getMatrixRuntime().state),
+        isMatrixCryptoStoreUnsafe(snapshotPath, stateRuntime ?? getMatrixRuntime().state),
       );
       if (unsafe) {
         abandoned.push(root);
