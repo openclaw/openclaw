@@ -277,6 +277,27 @@ final class NodeAppModel {
         let routeGeneration: UInt64
     }
 
+    private struct NodeGatewayLoopContext: Sendable {
+        let url: URL
+        let stableID: String
+        let routeGeneration: UInt64
+        let fallbackConfig: GatewayConnectConfig
+        let initialOptions: GatewayConnectOptions
+        let sessionBox: WebSocketSessionBox?
+        let ingressAuthorization: GatewayIngressAuthorization?
+    }
+
+    private struct NodeGatewayLoopState: Sendable {
+        var attempt = 0
+        var options: GatewayConnectOptions
+    }
+
+    private enum NodeGatewayLoopStep: Sendable {
+        case retry(NodeGatewayLoopState)
+        case stop
+        case stopPreservingStatus
+    }
+
     private enum ExecApprovalPushRouteValidation {
         case validated(GatewaySessionRouteContext)
         case unavailable
@@ -3346,7 +3367,9 @@ extension NodeAppModel {
             bootstrapToken: nextConfig.bootstrapToken,
             password: nextConfig.password,
             deviceAuthGatewayID: nextConfig.nodeOptions.deviceAuthGatewayID ?? effectiveStableID,
-            allowStoredDeviceAuth: nextConfig.nodeOptions.allowStoredDeviceAuth)
+            allowStoredDeviceAuth: nextConfig.nodeOptions.allowStoredDeviceAuth,
+            ingressPrincipal: nextConfig.ingressAuthorization?.principal,
+            deviceIdentityProfile: nextConfig.nodeOptions.deviceIdentityProfile)
         if let activeConfig = activeGatewayConnectConfig,
            activeConfig.hasSameConnectionInputs(as: nextConfig),
            nodeGatewayTask != nil,
@@ -3796,37 +3819,43 @@ extension NodeAppModel {
         bootstrapToken: String?,
         password: String?,
         deviceAuthGatewayID: String,
-        allowStoredDeviceAuth: Bool = true) -> Bool
+        allowStoredDeviceAuth: Bool = true,
+        ingressPrincipal: CloudflareAccessPrincipal? = nil,
+        deviceIdentityProfile: GatewayDeviceIdentityProfile = .primary) -> Bool
     {
-        Self.shouldStartOperatorGatewayLoop(
+        let bindingStore = GatewayAccessDeviceAuthBindingStore.shared
+        let storedOperatorAuth = bindingStore.storedDeviceAuth(
+            role: "operator",
+            gatewayID: deviceAuthGatewayID,
+            profile: deviceIdentityProfile)
+        let canUseStoredOperatorAuth = bindingStore.allowsStoredDeviceAuth(
+            entry: storedOperatorAuth,
+            principal: ingressPrincipal,
+            gatewayID: deviceAuthGatewayID,
+            role: "operator",
+            profile: deviceIdentityProfile,
+            fallbackAllowed: allowStoredDeviceAuth)
+        return Self.shouldStartOperatorGatewayLoop(
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
-            hasStoredOperatorToken: allowStoredDeviceAuth && self.storedGatewayRoleToken(
-                "operator",
-                gatewayID: deviceAuthGatewayID) != nil)
-    }
-
-    private func storedGatewayRoleToken(_ role: String, gatewayID: String) -> DeviceAuthEntry? {
-        guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else { return nil }
-        return DeviceAuthStore.loadToken(
-            deviceId: identity.deviceId,
-            role: role,
-            gatewayID: gatewayID)
+            hasStoredOperatorToken: canUseStoredOperatorAuth && storedOperatorAuth != nil,
+            hasVerifiedIngressPrincipal: ingressPrincipal != nil)
     }
 
     nonisolated static func shouldStartOperatorGatewayLoop(
         token: String?,
         bootstrapToken: String?,
         password: String?,
-        hasStoredOperatorToken: Bool) -> Bool
+        hasStoredOperatorToken: Bool,
+        hasVerifiedIngressPrincipal: Bool = false) -> Bool
     {
         if self.hasSharedGatewayCredential(token: token, password: password) { return true }
         let trimmedBootstrapToken = bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedBootstrapToken.isEmpty {
             return false
         }
-        return hasStoredOperatorToken
+        return hasStoredOperatorToken || hasVerifiedIngressPrincipal
     }
 
     private nonisolated static func hasSharedGatewayCredential(token: String?, password: String?) -> Bool {
@@ -3891,6 +3920,21 @@ extension NodeAppModel {
             else { return nil }
             let instanceID = GatewaySettingsStore.currentInstanceID()
             let deviceAuthGatewayID = nodeOptions.deviceAuthGatewayID ?? stableID
+            if let principal = config.ingressAuthorization?.principal {
+                guard GatewayAccessDeviceAuthBindingStore.shared.bindGatewayIssuedToken(
+                    principal: principal,
+                    gatewayID: deviceAuthGatewayID,
+                    role: "operator",
+                    profile: nodeOptions.deviceIdentityProfile,
+                    persistedRoles: authRoles.persisted),
+                    GatewayAccessDeviceAuthBindingStore.shared.bindGatewayIssuedToken(
+                        principal: principal,
+                        gatewayID: deviceAuthGatewayID,
+                        role: "node",
+                        profile: nodeOptions.deviceIdentityProfile,
+                        persistedRoles: authRoles.persisted)
+                else { throw GatewayCredentialHandoffError.persistenceFailed }
+            }
             if let metadata = GatewaySettingsStore.loadGatewayCredentialMetadata(
                 instanceId: instanceID,
                 gatewayStableID: deviceAuthGatewayID),
@@ -3920,7 +3964,9 @@ extension NodeAppModel {
                    bootstrapToken: nil,
                    password: config.password,
                    deviceAuthGatewayID: deviceAuthGatewayID,
-                   allowStoredDeviceAuth: true)
+                   allowStoredDeviceAuth: true,
+                   ingressPrincipal: config.ingressAuthorization?.principal,
+                   deviceIdentityProfile: reconnectOptions.deviceIdentityProfile)
             {
                 let sessionBox = config.webSocketSessionBox()
                 self.startOperatorGatewayLoop(
@@ -3941,22 +3987,31 @@ extension NodeAppModel {
         _ nodeOptions: GatewayConnectOptions,
         stableID: String,
         routeGeneration: UInt64,
-        auth: GatewayNodeSessionCredentials) async -> GatewayConnectOptions?
+        auth: GatewayNodeSessionCredentials,
+        previousTokenVersion: GatewayAccessDeviceAuthBindingStore.TokenVersion?) async -> GatewayConnectOptions?
     {
-        guard !nodeOptions.allowStoredDeviceAuth else { return nodeOptions }
-        guard Self.usesBootstrapCredential(
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return nil }
+        if !nodeOptions.allowStoredDeviceAuth, Self.usesBootstrapCredential(
             token: auth.token,
             bootstrapToken: auth.bootstrapToken,
             password: auth.password)
-        else {
-            return nodeOptions
+        {
+            let authRoles = await nodeGateway.currentDeviceAuthRoles()
+            return await self.completeSuccessfulGatewayAuthHandoff(
+                stableID: stableID,
+                routeGeneration: routeGeneration,
+                authRoles: authRoles,
+                nodeOptions: nodeOptions)
         }
-        let authRoles = await nodeGateway.currentDeviceAuthRoles()
-        return await self.completeSuccessfulGatewayAuthHandoff(
-            stableID: stableID,
-            routeGeneration: routeGeneration,
-            authRoles: authRoles,
-            nodeOptions: nodeOptions)
+        guard let config = self.activeGatewayConnectConfig,
+              GatewayStableIdentifier.matches(config.effectiveStableID, stableID)
+        else { return nil }
+        return Self.nodeOptionsAfterSuccessfulDeviceAuthHandshake(
+            nodeOptions,
+            principal: config.ingressAuthorization?.principal,
+            gatewayID: nodeOptions.deviceAuthGatewayID ?? stableID,
+            profile: nodeOptions.deviceIdentityProfile,
+            previousTokenVersion: previousTokenVersion)
     }
 
     private func handleGatewayCredentialHandoffFailure(
@@ -4237,22 +4292,20 @@ extension NodeAppModel {
                     fallback: config.nodeOptions)
                 let talkPermissionUpgradeRequest = self.forceOperatorTalkPermissionUpgradeRequest
                 let deviceAuthGatewayID = reconnectOptions.deviceAuthGatewayID ?? stableID
-                let operatorOptions = self.makeOperatorConnectOptions(
+                let principal = ingressAuthorization?.principal
+                let operatorAuthState = self.operatorDeviceAuthState(
+                    gatewayID: deviceAuthGatewayID,
+                    principal: principal,
+                    profile: reconnectOptions.deviceIdentityProfile,
+                    fallbackAllowed: reconnectOptions.allowStoredDeviceAuth)
+                let operatorOptions = self.reconnectOperatorOptions(
                     clientId: reconnectOptions.clientId,
-                    displayName: reconnectOptions.clientDisplayName,
-                    deviceAuthGatewayID: deviceAuthGatewayID,
-                    includeAdminScope: self.shouldRequestOperatorAdminScope(
-                        gatewayID: deviceAuthGatewayID,
-                        token: reconnectAuth.token,
-                        password: reconnectAuth.password,
-                        forceTalkPermissionUpgradeRequest: talkPermissionUpgradeRequest),
-                    includeApprovalScope: self.shouldRequestOperatorApprovalScope(
-                        gatewayID: deviceAuthGatewayID,
-                        token: reconnectAuth.token,
-                        password: reconnectAuth.password,
-                        forceTalkPermissionUpgradeRequest: talkPermissionUpgradeRequest),
-                    forceExplicitScopes: talkPermissionUpgradeRequest,
-                    allowStoredDeviceAuth: reconnectOptions.allowStoredDeviceAuth)
+                    reconnectOptions: reconnectOptions,
+                    gatewayID: deviceAuthGatewayID,
+                    credentials: reconnectAuth,
+                    principal: principal,
+                    forceTalkPermissionUpgradeRequest: talkPermissionUpgradeRequest,
+                    allowStoredDeviceAuth: operatorAuthState.allowStoredDeviceAuth)
 
                 do {
                     try await self.operatorGateway.connect(
@@ -4267,10 +4320,14 @@ extension NodeAppModel {
                             return GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: stableID)
                         },
                         onConnected: { [weak self] in
-                            await self?.handleOperatorGatewayConnected(
+                            await self?.handleOperatorGatewayConnectedAfterDeviceAuthHandshake(
                                 url: config.url,
                                 stableID: stableID,
-                                routeGeneration: routeGeneration)
+                                routeGeneration: routeGeneration,
+                                principal: principal,
+                                gatewayID: deviceAuthGatewayID,
+                                profile: reconnectOptions.deviceIdentityProfile,
+                                previousTokenVersion: operatorAuthState.tokenVersion)
                         },
                         onDisconnected: { [weak self] reason in
                             guard let self else { return }
@@ -4346,6 +4403,125 @@ extension NodeAppModel {
                 }
             }
         }
+    }
+
+    private static func nodeDeviceAuthState(
+        gatewayID: String,
+        principal: CloudflareAccessPrincipal?,
+        profile: GatewayDeviceIdentityProfile,
+        fallbackAllowed: Bool,
+        bindingStore: GatewayAccessDeviceAuthBindingStore = .shared) -> (
+        allowStoredDeviceAuth: Bool,
+        tokenVersion: GatewayAccessDeviceAuthBindingStore.TokenVersion?)
+    {
+        let stored = bindingStore.storedDeviceAuth(
+            role: "node",
+            gatewayID: gatewayID,
+            profile: profile)
+        return (
+            allowStoredDeviceAuth: bindingStore.allowsStoredDeviceAuth(
+                entry: stored,
+                principal: principal,
+                gatewayID: gatewayID,
+                role: "node",
+                profile: profile,
+                fallbackAllowed: fallbackAllowed),
+            tokenVersion: bindingStore.tokenVersion(for: stored))
+    }
+
+    private static func nodeOptionsAfterSuccessfulDeviceAuthHandshake(
+        _ options: GatewayConnectOptions,
+        principal: CloudflareAccessPrincipal?,
+        gatewayID: String,
+        profile: GatewayDeviceIdentityProfile,
+        previousTokenVersion: GatewayAccessDeviceAuthBindingStore.TokenVersion?,
+        bindingStore: GatewayAccessDeviceAuthBindingStore = .shared) -> GatewayConnectOptions
+    {
+        guard let principal,
+              bindingStore.bindCurrentTokenAfterHandshake(
+                  principal: principal,
+                  gatewayID: gatewayID,
+                  role: "node",
+                  profile: profile,
+                  previousVersion: previousTokenVersion)
+        else { return options }
+        var next = options
+        next.allowStoredDeviceAuth = true
+        return next
+    }
+
+    private func operatorDeviceAuthState(
+        gatewayID: String,
+        principal: CloudflareAccessPrincipal?,
+        profile: GatewayDeviceIdentityProfile,
+        fallbackAllowed: Bool) -> (
+        allowStoredDeviceAuth: Bool,
+        tokenVersion: GatewayAccessDeviceAuthBindingStore.TokenVersion?)
+    {
+        let bindingStore = GatewayAccessDeviceAuthBindingStore.shared
+        let stored = bindingStore.storedDeviceAuth(
+            role: "operator",
+            gatewayID: gatewayID,
+            profile: profile)
+        return (
+            allowStoredDeviceAuth: bindingStore.allowsStoredDeviceAuth(
+                entry: stored,
+                principal: principal,
+                gatewayID: gatewayID,
+                role: "operator",
+                profile: profile,
+                fallbackAllowed: fallbackAllowed),
+            tokenVersion: bindingStore.tokenVersion(for: stored))
+    }
+
+    private func reconnectOperatorOptions(
+        clientId: String,
+        reconnectOptions: GatewayConnectOptions,
+        gatewayID: String,
+        credentials: GatewayNodeSessionCredentials,
+        principal: CloudflareAccessPrincipal?,
+        forceTalkPermissionUpgradeRequest: Bool,
+        allowStoredDeviceAuth: Bool) -> GatewayConnectOptions
+    {
+        self.makeOperatorConnectOptions(
+            clientId: clientId,
+            displayName: reconnectOptions.clientDisplayName,
+            deviceAuthGatewayID: gatewayID,
+            includeAdminScope: self.shouldRequestOperatorAdminScope(
+                gatewayID: gatewayID,
+                token: credentials.token,
+                password: credentials.password,
+                forceTalkPermissionUpgradeRequest: forceTalkPermissionUpgradeRequest,
+                ingressPrincipal: principal,
+                deviceIdentityProfile: reconnectOptions.deviceIdentityProfile),
+            includeApprovalScope: self.shouldRequestOperatorApprovalScope(
+                gatewayID: gatewayID,
+                token: credentials.token,
+                password: credentials.password,
+                forceTalkPermissionUpgradeRequest: forceTalkPermissionUpgradeRequest,
+                ingressPrincipal: principal,
+                deviceIdentityProfile: reconnectOptions.deviceIdentityProfile),
+            forceExplicitScopes: forceTalkPermissionUpgradeRequest,
+            allowStoredDeviceAuth: allowStoredDeviceAuth)
+    }
+
+    private func handleOperatorGatewayConnectedAfterDeviceAuthHandshake(
+        url: URL,
+        stableID: String,
+        routeGeneration: UInt64,
+        principal: CloudflareAccessPrincipal?,
+        gatewayID: String,
+        profile: GatewayDeviceIdentityProfile,
+        previousTokenVersion: GatewayAccessDeviceAuthBindingStore.TokenVersion?) async
+    {
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
+        _ = GatewayAccessDeviceAuthBindingStore.shared.bindCurrentTokenAfterHandshake(
+            principal: principal,
+            gatewayID: gatewayID,
+            role: "operator",
+            profile: profile,
+            previousVersion: previousTokenVersion)
+        await self.handleOperatorGatewayConnected(url: url, stableID: stableID, routeGeneration: routeGeneration)
     }
 
     private func handleOperatorGatewayRouteInvalidated(routeGeneration: UInt64, stableID: String) {
@@ -4424,122 +4600,204 @@ extension NodeAppModel {
         let stableID = config.effectiveStableID
         let routeGeneration = self.gatewayRouteGeneration
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
+        let context = NodeGatewayLoopContext(
+            url: config.url,
+            stableID: stableID,
+            routeGeneration: routeGeneration,
+            fallbackConfig: config,
+            initialOptions: config.nodeOptions,
+            sessionBox: sessionBox,
+            ingressAuthorization: config.ingressAuthorization)
         self.nodeGatewayTask = Task { [weak self] in
-            guard let self else { return }
-            var attempt = 0
-            var options = config.nodeOptions
-            while !Task.isCancelled,
-                  self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
-            {
-                if let delay = self.gatewayReconnectLoopDelay(owner: .node) {
-                    try? await Task.sleep(nanoseconds: delay)
-                    continue
-                }
-                if !self.isLocalGatewayFixtureEnabled {
-                    self.setGatewayConnectionProgress(reconnecting: attempt != 0)
-                    self.gatewayServerName = nil
-                    self.gatewayRemoteAddress = nil
-                    LiveActivityManager.shared.showConnecting(
-                        statusText: attempt == 0
-                            ? String(localized: "Connecting...")
-                            : String(localized: "Reconnecting..."),
-                        agentName: self.activeAgentName,
-                        sessionKey: self.mainSessionKey)
-                }
-                let epochMs = Int(Date().timeIntervalSince1970 * 1000)
-                let reconnectAuth = self.currentGatewayReconnectAuth(fallback: config)
-                let connectedOptions = options
-                GatewayDiagnostics.log("connect attempt epochMs=\(epochMs) url=\(config.url.absoluteString)")
-                do {
-                    try await self.nodeGateway.connect(
-                        url: config.url,
-                        credentials: reconnectAuth,
-                        connectOptions: connectedOptions,
-                        sessionBox: sessionBox,
-                        extraHeadersProvider: {
-                            if let ingressAuthorization = config.ingressAuthorization {
-                                return try await ingressAuthorization.headers(config.url)
-                            }
-                            return GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: stableID)
-                        },
-                        onConnected: { [weak self] in
-                            await self?.handleNodeGatewayConnected(
-                                url: config.url,
-                                stableID: stableID,
-                                routeGeneration: routeGeneration,
-                                nodeOptions: connectedOptions,
-                                auth: reconnectAuth)
-                        },
-                        onDisconnected: { [weak self] reason in
-                            guard let self else { return }
-                            await MainActor.run {
-                                guard !self.isLocalGatewayFixtureEnabled,
-                                      self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
-                                else { return }
-                                if let problem = self.currentGatewayProblemToKeep(forDisconnectReason: reason) {
-                                    self.gatewayStatusText = problem.statusText
-                                } else {
-                                    self.gatewayStatusText = "Disconnected: \(reason)"
-                                }
-                                self.gatewayServerName = nil
-                                self.gatewayRemoteAddress = nil
-                                self.gatewayConnected = false
-                            }
-                            GatewayDiagnostics.log("gateway disconnected reason: \(reason)")
-                        },
-                        onInvoke: { [weak self] req in
-                            guard let self else {
-                                return BridgeInvokeResponse(
-                                    id: req.id,
-                                    ok: false,
-                                    error: OpenClawNodeError(
-                                        code: .unavailable,
-                                        message: "UNAVAILABLE: node not ready"))
-                            }
-                            return await self.handleInvoke(req, gatewayStableID: stableID)
-                        },
-                        onRouteInvalidated: { [weak self] in
-                            await MainActor.run {
-                                self?.handleNodeGatewayRouteInvalidated(
-                                    routeGeneration: routeGeneration,
-                                    stableID: stableID)
-                            }
-                        })
-                    guard let reconnectOptions = await self.gatewayOptionsAfterSuccessfulConnection(
-                        connectedOptions,
-                        stableID: stableID,
-                        routeGeneration: routeGeneration,
-                        auth: reconnectAuth)
-                    else { break }
-                    options = reconnectOptions
-                    attempt = 0
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                } catch {
-                    guard !Task.isCancelled,
-                          self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
-                    else { break }
-                    attempt += 1
-                    let mappedProblem = self.mapNodeGatewayConnectionError(error)
-                    let problem = self.isLocalGatewayFixtureEnabled ? nil : mappedProblem
-                    if !self.isLocalGatewayFixtureEnabled {
-                        self.recordNodeGatewayConnectionError(problem, error: error)
-                    }
-                    GatewayDiagnostics.log("gateway connect error: \(error.localizedDescription)")
-                    if problem?.needsPairingApproval == true {
-                        // Pairing owns its status until explicit recovery; stop both watchdogs.
-                        self.operatorGatewayTask?.cancel()
-                        self.operatorGatewayTask = nil
-                        await self.operatorGateway.disconnect()
-                        await self.nodeGateway.disconnect()
-                        return
-                    }
-                    if problem?.pauseReconnect == true { continue }
-                    let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
-                    try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
-                }
-            }
-            self.resetNodeGatewayLoopStatusIfCurrent(routeGeneration: routeGeneration, stableID: stableID)
+            await self?.runNodeGatewayLoop(context)
         }
+    }
+
+    private func runNodeGatewayLoop(_ context: NodeGatewayLoopContext) async {
+        var state = NodeGatewayLoopState(options: context.initialOptions)
+
+        gatewayLoop: while !Task.isCancelled,
+                           self.isCurrentGatewayRoute(
+                               generation: context.routeGeneration,
+                               stableID: context.stableID)
+        {
+            if await self.shouldDelayNodeGatewayConnectionAttempt() {
+                continue
+            }
+            self.showNodeGatewayConnectingStatus(
+                attempt: state.attempt,
+                context: context)
+
+            switch await self.performNodeGatewayConnectionAttempt(context: context, state: state) {
+            case let .retry(nextState):
+                state = nextState
+            case .stop:
+                break gatewayLoop
+            case .stopPreservingStatus:
+                // Pairing owns its status until explicit recovery.
+                return
+            }
+        }
+
+        self.resetNodeGatewayLoopStatusIfCurrent(
+            routeGeneration: context.routeGeneration,
+            stableID: context.stableID)
+    }
+
+    private func shouldDelayNodeGatewayConnectionAttempt() async -> Bool {
+        if let delay = self.gatewayReconnectLoopDelay(owner: .node) {
+            try? await Task.sleep(nanoseconds: delay)
+            return true
+        }
+        return false
+    }
+
+    private func showNodeGatewayConnectingStatus(
+        attempt: Int,
+        context: NodeGatewayLoopContext)
+    {
+        guard !self.isLocalGatewayFixtureEnabled,
+              self.isCurrentGatewayRoute(
+                  generation: context.routeGeneration,
+                  stableID: context.stableID)
+        else { return }
+        self.setGatewayConnectionProgress(reconnecting: attempt != 0)
+        self.gatewayServerName = nil
+        self.gatewayRemoteAddress = nil
+        LiveActivityManager.shared.showConnecting(
+            statusText: (attempt == 0)
+                ? String(localized: "Connecting...")
+                : String(localized: "Reconnecting..."),
+            agentName: self.activeAgentName,
+            sessionKey: self.mainSessionKey)
+    }
+
+    private func performNodeGatewayConnectionAttempt(
+        context: NodeGatewayLoopContext,
+        state: NodeGatewayLoopState) async -> NodeGatewayLoopStep
+    {
+        let epochMs = Int(Date().timeIntervalSince1970 * 1000)
+        let reconnectAuth = self.currentGatewayReconnectAuth(fallback: context.fallbackConfig)
+        let deviceAuthGatewayID = state.options.deviceAuthGatewayID ?? context.stableID
+        let nodeAuthState = Self.nodeDeviceAuthState(
+            gatewayID: deviceAuthGatewayID,
+            principal: context.ingressAuthorization?.principal,
+            profile: state.options.deviceIdentityProfile,
+            fallbackAllowed: state.options.allowStoredDeviceAuth)
+        var candidateOptions = state.options
+        candidateOptions.allowStoredDeviceAuth = nodeAuthState.allowStoredDeviceAuth
+        let connectedOptions = candidateOptions
+        GatewayDiagnostics.log("connect attempt epochMs=\(epochMs) url=\(context.url.absoluteString)")
+
+        do {
+            try await self.nodeGateway.connect(
+                url: context.url,
+                credentials: reconnectAuth,
+                connectOptions: connectedOptions,
+                sessionBox: context.sessionBox,
+                extraHeadersProvider: {
+                    if let ingress = context.ingressAuthorization {
+                        return try await ingress.headers(context.url)
+                    }
+                    return GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: context.stableID)
+                },
+                onConnected: { [weak self] in
+                    await self?.handleNodeGatewayConnected(
+                        url: context.url,
+                        stableID: context.stableID,
+                        routeGeneration: context.routeGeneration,
+                        nodeOptions: connectedOptions,
+                        auth: reconnectAuth)
+                },
+                onDisconnected: { [weak self] reason in
+                    guard let self else { return }
+                    await MainActor.run {
+                        guard !self.isLocalGatewayFixtureEnabled,
+                              self.isCurrentGatewayRoute(
+                                  generation: context.routeGeneration,
+                                  stableID: context.stableID)
+                        else { return }
+                        if let problem = self.currentGatewayProblemToKeep(forDisconnectReason: reason) {
+                            self.gatewayStatusText = problem.statusText
+                        } else {
+                            self.gatewayStatusText = "Disconnected: \(reason)"
+                        }
+                        self.gatewayServerName = nil
+                        self.gatewayRemoteAddress = nil
+                        self.gatewayConnected = false
+                    }
+                    GatewayDiagnostics.log("gateway disconnected reason: \(reason)")
+                },
+                onInvoke: { [weak self] req in
+                    guard let self else {
+                        return BridgeInvokeResponse(
+                            id: req.id,
+                            ok: false,
+                            error: OpenClawNodeError(
+                                code: .unavailable,
+                                message: "UNAVAILABLE: node not ready"))
+                    }
+                    return await self.handleInvoke(req, gatewayStableID: context.stableID)
+                },
+                onRouteInvalidated: { [weak self] in
+                    await MainActor.run {
+                        self?.handleNodeGatewayRouteInvalidated(
+                            routeGeneration: context.routeGeneration,
+                            stableID: context.stableID)
+                    }
+                })
+
+            guard let reconnectOptions = await self.gatewayOptionsAfterSuccessfulConnection(
+                connectedOptions,
+                stableID: context.stableID,
+                routeGeneration: context.routeGeneration,
+                auth: reconnectAuth,
+                previousTokenVersion: nodeAuthState.tokenVersion)
+            else { return .stop }
+
+            var nextState = state
+            nextState.options = reconnectOptions
+            nextState.attempt = 0
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            return .retry(nextState)
+        } catch {
+            return await self.handleNodeGatewayConnectionError(
+                error,
+                context: context,
+                state: state)
+        }
+    }
+
+    private func handleNodeGatewayConnectionError(
+        _ error: Error,
+        context: NodeGatewayLoopContext,
+        state: NodeGatewayLoopState) async -> NodeGatewayLoopStep
+    {
+        guard !Task.isCancelled,
+              self.isCurrentGatewayRoute(
+                  generation: context.routeGeneration,
+                  stableID: context.stableID)
+        else { return .stop }
+        var nextState = state
+        nextState.attempt += 1
+        let mappedProblem = self.mapNodeGatewayConnectionError(error)
+        let problem = self.isLocalGatewayFixtureEnabled ? nil : mappedProblem
+        if !self.isLocalGatewayFixtureEnabled {
+            self.recordNodeGatewayConnectionError(problem, error: error)
+        }
+        GatewayDiagnostics.log("gateway connect error: \(error.localizedDescription)")
+        if problem?.needsPairingApproval == true {
+            // Pairing owns its status until explicit recovery; stop both watchdogs.
+            self.operatorGatewayTask?.cancel()
+            self.operatorGatewayTask = nil
+            await self.operatorGateway.disconnect()
+            await self.nodeGateway.disconnect()
+            return .stopPreservingStatus
+        }
+        if problem?.pauseReconnect == true { return .retry(nextState) }
+        let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(nextState.attempt)))
+        try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
+        return .retry(nextState)
     }
 
     private func recordNodeGatewayConnectionError(
@@ -4606,12 +4864,25 @@ extension NodeAppModel {
         gatewayID: String,
         token: String?,
         password: String?,
-        forceTalkPermissionUpgradeRequest: Bool = false) -> Bool
+        forceTalkPermissionUpgradeRequest: Bool = false,
+        ingressPrincipal: CloudflareAccessPrincipal? = nil,
+        deviceIdentityProfile: GatewayDeviceIdentityProfile = .primary) -> Bool
     {
-        Self.shouldRequestOperatorApprovalScope(
+        let bindingStore = GatewayAccessDeviceAuthBindingStore.shared
+        let storedOperatorAuth = bindingStore.storedDeviceAuth(
+            role: "operator",
+            gatewayID: gatewayID,
+            profile: deviceIdentityProfile)
+        let storedOperatorScopes = bindingStore.authorizedScopes(
+            entry: storedOperatorAuth,
+            principal: ingressPrincipal,
+            gatewayID: gatewayID,
+            role: "operator",
+            profile: deviceIdentityProfile)
+        return Self.shouldRequestOperatorApprovalScope(
             token: token,
             password: password,
-            storedOperatorScopes: self.storedGatewayRoleToken("operator", gatewayID: gatewayID)?.scopes ?? [],
+            storedOperatorScopes: storedOperatorScopes,
             forceTalkPermissionUpgradeRequest: forceTalkPermissionUpgradeRequest)
     }
 
@@ -4632,12 +4903,25 @@ extension NodeAppModel {
         gatewayID: String,
         token: String?,
         password: String?,
-        forceTalkPermissionUpgradeRequest: Bool = false) -> Bool
+        forceTalkPermissionUpgradeRequest: Bool = false,
+        ingressPrincipal: CloudflareAccessPrincipal? = nil,
+        deviceIdentityProfile: GatewayDeviceIdentityProfile = .primary) -> Bool
     {
-        Self.shouldRequestOperatorAdminScope(
+        let bindingStore = GatewayAccessDeviceAuthBindingStore.shared
+        let storedOperatorAuth = bindingStore.storedDeviceAuth(
+            role: "operator",
+            gatewayID: gatewayID,
+            profile: deviceIdentityProfile)
+        let storedOperatorScopes = bindingStore.authorizedScopes(
+            entry: storedOperatorAuth,
+            principal: ingressPrincipal,
+            gatewayID: gatewayID,
+            role: "operator",
+            profile: deviceIdentityProfile)
+        return Self.shouldRequestOperatorAdminScope(
             token: token,
             password: password,
-            storedOperatorScopes: self.storedGatewayRoleToken("operator", gatewayID: gatewayID)?.scopes ?? [],
+            storedOperatorScopes: storedOperatorScopes,
             forceTalkPermissionUpgradeRequest: forceTalkPermissionUpgradeRequest)
     }
 
@@ -4747,9 +5031,25 @@ extension NodeAppModel {
             self.hasOperatorAdminScope = false
             return
         }
+        guard config.ingressAuthorization?.isCurrent() ?? true else {
+            self.hasOperatorAdminScope = false
+            return
+        }
+        let profile = config.nodeOptions.deviceIdentityProfile
         let gatewayID = config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID
-        self.hasOperatorAdminScope = self.storedGatewayRoleToken("operator", gatewayID: gatewayID)?
-            .scopes.contains("operator.admin") == true
+        let bindingStore = GatewayAccessDeviceAuthBindingStore.shared
+        let stored = bindingStore.storedDeviceAuth(
+            role: "operator",
+            gatewayID: gatewayID,
+            profile: profile)
+        let scopes = bindingStore.authorizedScopes(
+            entry: stored,
+            principal: config.ingressAuthorization?.principal,
+            gatewayID: gatewayID,
+            role: "operator",
+            profile: profile)
+        self.hasOperatorAdminScope = config.nodeOptions.allowStoredDeviceAuth &&
+            scopes.contains("operator.admin")
     }
 }
 
@@ -8759,7 +9059,9 @@ extension NodeAppModel {
             bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
             deviceAuthGatewayID: cfg.nodeOptions.deviceAuthGatewayID ?? cfg.effectiveStableID,
-            allowStoredDeviceAuth: cfg.nodeOptions.allowStoredDeviceAuth)
+            allowStoredDeviceAuth: cfg.nodeOptions.allowStoredDeviceAuth,
+            ingressPrincipal: cfg.ingressAuthorization?.principal,
+            deviceIdentityProfile: cfg.nodeOptions.deviceIdentityProfile)
         guard canStartReconnectLoop else {
             GatewayDiagnostics.log(
                 "watch exec approval: watch_request_reconnect_timeout "
@@ -9685,6 +9987,40 @@ extension NodeAppModel {
 
     func _test_shouldRequestStoredOperatorAdminScope(gatewayID: String) -> Bool {
         self.shouldRequestOperatorAdminScope(gatewayID: gatewayID, token: nil, password: nil)
+    }
+
+    static func _test_nodeDeviceAuthState(
+        gatewayID: String,
+        principal: CloudflareAccessPrincipal?,
+        profile: GatewayDeviceIdentityProfile,
+        fallbackAllowed: Bool,
+        bindingStore: GatewayAccessDeviceAuthBindingStore) -> (
+        allowStoredDeviceAuth: Bool,
+        tokenVersion: GatewayAccessDeviceAuthBindingStore.TokenVersion?)
+    {
+        self.nodeDeviceAuthState(
+            gatewayID: gatewayID,
+            principal: principal,
+            profile: profile,
+            fallbackAllowed: fallbackAllowed,
+            bindingStore: bindingStore)
+    }
+
+    static func _test_nodeOptionsAfterSuccessfulDeviceAuthHandshake(
+        _ options: GatewayConnectOptions,
+        principal: CloudflareAccessPrincipal?,
+        gatewayID: String,
+        profile: GatewayDeviceIdentityProfile,
+        previousTokenVersion: GatewayAccessDeviceAuthBindingStore.TokenVersion?,
+        bindingStore: GatewayAccessDeviceAuthBindingStore) -> GatewayConnectOptions
+    {
+        self.nodeOptionsAfterSuccessfulDeviceAuthHandshake(
+            options,
+            principal: principal,
+            gatewayID: gatewayID,
+            profile: profile,
+            previousTokenVersion: previousTokenVersion,
+            bindingStore: bindingStore)
     }
 
     func _test_completeSuccessfulGatewayAuthHandoff(

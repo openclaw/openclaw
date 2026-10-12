@@ -6,10 +6,12 @@ import os
 struct GatewayIngressAuthorization: Sendable {
     typealias Request = @Sendable (URLRequest) async throws -> (Data, URLResponse)
     let origin: CloudflareAccessOrigin
+    let principal: CloudflareAccessPrincipal
     let revision: UInt64
     let registrationID: UUID
     let headers: @Sendable (URL) async throws -> [String: String]
     let isCurrent: @MainActor @Sendable () -> Bool
+    let dashboardCookie: @MainActor @Sendable (URL) -> HTTPCookie?
     let checkResponse: @Sendable (HTTPURLResponse) async throws -> Void
     let load: @Sendable (URLRequest, @escaping Request) async throws -> (Data, URLResponse)
 }
@@ -266,12 +268,12 @@ final class GatewayIngressController {
         if GatewayStableIdentifier.matches(self.attention?.stableID, route.stableID) {
             self.attention = nil
         }
-        return self.authorization(registration: registration, origin: origin, snapshot: snapshot)
+        return try self.authorization(registration: registration, origin: origin, snapshot: snapshot)
     }
 
     func signIn(for attention: Attention, admissionCheckpoint: UInt64) async throws {
         guard let current = self.attention, current.id == attention.id, current.canSignIn,
-              let route = routes[GatewayStableIdentifier.Key(current.stableID)]?.route
+              let route = self.route(stableID: current.stableID, origin: current.origin)
         else {
             throw CancellationError()
         }
@@ -352,8 +354,8 @@ final class GatewayIngressController {
         try Task.checkCancellation()
         guard try isCurrent() else { return false }
         var retirements: [CloudflareAccessOrigin: CloudflareAccessSessionStore.Retirement] = [:]
-        // Revoke last-owner admissions before draining this profile. Keep its durable
-        // association until acknowledged deletion so failure remains recoverable.
+        // Reserve this departure before draining. Keep its durable association until
+        // acknowledged deletion; passive completion below follows the latest receipt.
         for origin in origins where !hasSibling(origin) {
             retirements[origin] = self.sessions.forget(origin)
         }
@@ -441,6 +443,52 @@ final class GatewayIngressController {
         // Capture before cancellation or presentation can publish a successor.
         pending.forEach { $0.cancel() }
         return pending
+    }
+
+    private func route(stableID: String, origin: CloudflareAccessOrigin) -> Route? {
+        let key = GatewayStableIdentifier.Key(stableID)
+        if let route = self.routes[key]?.route {
+            return route
+        }
+
+        guard let profile = self.profiles().first(where: { $0.id == key }),
+              profile.accessOrigin == origin
+        else { return nil }
+
+        let host: String
+        let port: Int
+        let contextPath: String?
+        let tlsRequired: Bool
+        switch profile.kind {
+        case .manual:
+            guard let savedHost = profile.host, let savedPort = profile.port else { return nil }
+            host = savedHost
+            port = savedPort
+            contextPath = profile.contextPath
+            tlsRequired = GatewayConnectionController.manualTransportPresentation(
+                host: savedHost,
+                requestedTLS: profile.useTLS).effectiveTLS
+        case .discovered:
+            guard let savedHost = origin.url.host else { return nil }
+            host = savedHost
+            port = origin.url.port ?? 443
+            contextPath = nil
+            tlsRequired = true
+        }
+
+        let fingerprint = GatewayTLSStore.loadFingerprint(stableID: profile.stableID)
+        let tls = tlsRequired || fingerprint != nil
+            ? GatewayTLSParams(
+                required: true,
+                expectedFingerprint: fingerprint,
+                allowTOFU: false,
+                storeKey: profile.stableID)
+            : nil
+        guard let url = GatewayConnectEndpoint(
+            host: host, port: port, tls: tls?.required == true, contextPath: contextPath).websocketURL,
+            (try? CloudflareAccessOrigin(url)) == origin
+        else { return nil }
+        return Route(url: url, stableID: profile.stableID, tls: tls)
     }
 
     private func origin(stableID: String) -> CloudflareAccessOrigin? {
@@ -673,11 +721,13 @@ final class GatewayIngressController {
     private func authorization(
         registration: Registration,
         origin: CloudflareAccessOrigin,
-        snapshot: CloudflareAccessSessionStore.Snapshot) -> GatewayIngressAuthorization
+        snapshot: CloudflareAccessSessionStore.Snapshot) throws -> GatewayIngressAuthorization
     {
         let revision = snapshot.revision
+        let principal = try CloudflareAccessPrincipal.verified(from: snapshot.session, now: self.now())
         return GatewayIngressAuthorization(
             origin: origin,
+            principal: principal,
             revision: revision,
             registrationID: registration.id,
             headers: { [weak self] url in
@@ -686,6 +736,10 @@ final class GatewayIngressController {
             },
             isCurrent: { [weak self] in
                 self?.isCurrent(registration: registration, origin: origin, revision: revision) == true
+            },
+            dashboardCookie: { [weak self] url in
+                guard let self else { return nil }
+                return self.dashboardCookie(for: url, registration: registration, origin: origin, revision: revision)
             },
             checkResponse: { [weak self] response in
                 guard let self else { throw CancellationError() }
@@ -779,6 +833,22 @@ final class GatewayIngressController {
     private func isCurrent(origin: CloudflareAccessOrigin, revision: UInt64) -> Bool {
         let current = self.sessions.snapshot(for: origin)?.revision ?? 0
         return current == revision && self.blockedRevisions[origin] != revision
+    }
+
+    private func dashboardCookie(
+        for url: URL,
+        registration: Registration,
+        origin: CloudflareAccessOrigin,
+        revision: UInt64) -> HTTPCookie?
+    {
+        guard self.isCurrent(registration: registration, origin: origin, revision: revision),
+              let snapshot = self.sessions.snapshot(for: origin),
+              snapshot.revision == revision,
+              let cookie = snapshot.session.dashboardCookie(for: url, now: self.now()),
+              self.isCurrent(registration: registration, origin: origin, revision: revision),
+              self.sessions.snapshot(for: origin)?.revision == revision
+        else { return nil }
+        return cookie
     }
 
     private func headers(

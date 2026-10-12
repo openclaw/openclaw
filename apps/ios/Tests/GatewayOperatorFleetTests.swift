@@ -33,12 +33,20 @@ struct GatewayOperatorFleetTests {
             try await self.waitUntil { fixture.activeConnectionCount == 1 }
             let originURL = try #require(URL(string: "https://gateway.example.test"))
             let origin = try CloudflareAccessOrigin(originURL)
+            let tokens = try CloudflareAccessTestTokens()
+            let baseApplication = try CloudflareAccessTestTokens.application()
+            let application = CloudflareAccessApplication(
+                origin: origin, issuer: baseApplication.issuer, audience: baseApplication.audience)
+            let session = try tokens.session(application: application)
+            let principal = try CloudflareAccessPrincipal.verified(from: session)
             let authorization = GatewayIngressAuthorization(
                 origin: origin,
+                principal: principal,
                 revision: 1,
                 registrationID: UUID(),
                 headers: { _ in [:] },
                 isCurrent: { false },
+                dashboardCookie: { _ in nil },
                 checkResponse: { _ in },
                 load: { request, operation in try await operation(request) })
             let managed = GatewayConnectConfig(

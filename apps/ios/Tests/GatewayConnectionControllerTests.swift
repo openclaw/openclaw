@@ -172,6 +172,31 @@ private let preconnectTimeoutProblem = GatewayConnectionProblem(
     retryable: true,
     pauseReconnect: false)
 
+@MainActor
+private func makeTestGatewayIngressController() -> GatewayIngressController {
+    GatewayIngressController(
+        persistence: .init(
+            load: { _ in nil },
+            save: { _, _ in true },
+            delete: { _ in true }),
+        requestFactory: { _ in
+            { request, _ in
+                guard let url = request.url,
+                      let response = HTTPURLResponse(
+                          url: url,
+                          statusCode: 200,
+                          httpVersion: nil,
+                          headerFields: nil)
+                else { throw URLError(.badURL) }
+                return (Data(), response)
+            }
+        },
+        customHeaders: { _ in [:] },
+        profiles: { [] },
+        saveProfileOrigin: { _, _ in true },
+        retireTransports: { _ in })
+}
+
 private struct ControllableTLSProbe {
     let started = AsyncStream<Void>.makeStream()
     let results = AsyncStream<GatewayTLSFingerprintProbeResult>.makeStream()
@@ -2291,6 +2316,36 @@ private func pendingHandoffDiagnostic(
         }
     }
 
+    @Test @MainActor func `legacy manual auto connect registers route before Access admission`() async {
+        let registryIsolation = await GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let host = "legacy-access-\(UUID().uuidString).example.invalid"
+        let stableID = "manual|\(host.lowercased())|443"
+        await withUserDefaults([
+            "gateway.autoconnect": false,
+            "gateway.manual.enabled": true,
+            "gateway.manual.host": host,
+            "gateway.manual.port": 443,
+            "gateway.manual.tls": true,
+            "node.instanceId": "ios-test",
+        ]) {
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            #expect(GatewaySettingsStore.loadGatewayRegistry().entries.isEmpty)
+
+            UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
+            controller._test_triggerAutoConnect()
+
+            let entry = GatewaySettingsStore.loadGatewayRegistry().entries.first {
+                GatewayStableIdentifier.matches($0.stableID, stableID)
+            }
+            #expect(entry?.kind == .manual)
+            #expect(entry?.host == host)
+            #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == stableID)
+        }
+    }
+
     @Test @MainActor func `active manual TLS auto connect uses system trust before legacy defaults`() async {
         let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
@@ -3062,7 +3117,8 @@ private func pendingHandoffDiagnostic(
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            forceReconnectReset: { _ in })
+            forceReconnectReset: { _ in },
+            ingress: makeTestGatewayIngressController())
 
         appModel.isGatewayPickerRequestInFlight = true
         let result = await controller.switchToGateway(stableID: targetID)

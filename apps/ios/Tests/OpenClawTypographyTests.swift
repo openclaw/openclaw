@@ -31,9 +31,11 @@ struct OpenClawTypographyTests {
         #expect(settings.contains("Text(verbatim: target.origin.url.absoluteString)"))
         #expect(settings.contains(".fixedSize(horizontal: false, vertical: true)"))
         #expect(settings.contains(".textSelection(.enabled)"))
-        let dashboard = try String(contentsOf: Self.sourceURL("Settings/DashboardPageScreen.swift"), encoding: .utf8)
-        #expect(dashboard.contains("Text(\"Open Gateway settings\")"))
-        #expect(dashboard.contains(".font(OpenClawType.body)"))
+        let embeddedDashboard = try String(
+            contentsOf: Self.sourceURL("Settings/SettingsHubScreen.swift"),
+            encoding: .utf8)
+        #expect(embeddedDashboard.contains("Text(\"Open Gateway settings\")"))
+        #expect(embeddedDashboard.contains(".font(OpenClawType.subheadSemiBold)"))
     }
 
     @Test(arguments: ["ChatFileAttachment.swift", "ChatMessageReactions.swift"])

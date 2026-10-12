@@ -475,8 +475,11 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
       "-only-testing:OpenClawTests/ChatTypingFocusTests",
       "-only-testing:OpenClawTests/ChatSendHydrationTests",
+      "-only-testing:OpenClawTests/SettingsHubTests",
+      "-only-testing:OpenClawTests/SettingsHubVisualProofTests/testIngressAuthorizedDashboardEntryPointsLoadTheSelectedGatewayPage",
       "-only-testing:OpenClawTests/GatewayIngressControllerTests",
       "-only-testing:OpenClawTests/GatewayIngressLoginPreparationTests",
+      "-only-testing:OpenClawTests/GatewayAccessDeviceAuthBindingTests",
       "-only-testing:OpenClawTests/GatewayConnectionControllerTests",
       "-only-testing:OpenClawTests/LegacyManualGatewayMigrationTests",
       "-only-testing:OpenClawTests/GatewayOperatorFleetTests",
@@ -494,7 +497,9 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     expect(readFileSync("apps/ios/Tests/GatewayConnectionControllerTests.swift", "utf8")).toContain(
       "struct LegacyManualGatewayMigrationTests",
     );
-    expect(commands.filter((command) => command.tool === "python3")).toHaveLength(1);
+    expect(
+      commands.filter((command) => command.tool === "python3").map((command) => command.args),
+    ).toEqual([["scripts/ios-access-restart-proof.py", "watch-fixture"]]);
     if (phase === "smoke") {
       expect(commands.at(-1)).toEqual({
         tool: "python3",
@@ -505,6 +510,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       expect(tests[0]?.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual(
         authSelectors,
       );
+      expect(commands.at(-1)?.tool).toBe("python3");
       return;
     }
     expect(tests[0]?.args).toEqual(
@@ -512,7 +518,6 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
         ...authSelectors,
         "-only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests",
         "-only-testing:OpenClawTests/NodeAppModelInvokeTests",
-        "-only-testing:OpenClawTests/OpenClawTypographyTests",
       ]),
     );
     expect(tests[1]?.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual([
@@ -766,6 +771,8 @@ def run(args, capture=False, env=None, timeout=None):
         return json.dumps([{"target": "OpenClaw", "buildSettings": {
             "BUILD_DIR": str(products), "TARGET_BUILD_DIR": str(app.parent), "FULL_PRODUCT_NAME": app.name}}])
     if "test-without-building" in args:
+        result_bundle = pathlib.Path(args[args.index("-resultBundlePath") + 1])
+        result_bundle.mkdir()
         booted = mode == "already-booted"
         config = plistlib.loads(pathlib.Path(args[args.index("-xctestrun") + 1]).read_bytes())
         runs.append({"config": config, "environment": {key: value for key, value in env.items()
@@ -773,7 +780,7 @@ def run(args, capture=False, env=None, timeout=None):
         nonce = env["TEST_RUNNER_OPENCLAW_ACCESS_RESTART_NONCE"]
         receipt = data / "Library/Application Support" / ("access-restart-" + nonce + ".plist")
         if mode != "missing-handoff":
-            receipt.parent.mkdir(parents=True)
+            receipt.parent.mkdir(parents=True, exist_ok=True)
             handoff = {"phase": "verified", "nonce": nonce, "source": source, "simulator": "simulator-fixture",
                 "installation": proof.installation_identity(app, tests, data), "seedPID": 2147483647,
                 "verifyPID": 2147483646, "seedProcessExited": True,
@@ -860,6 +867,8 @@ error = None
 with contextlib.redirect_stdout(io.StringIO()):
     try:
         proof.main("simulator-fixture")
+        if mode == "rerun":
+            proof.main("simulator-fixture")
     except Exception as failure:
         error = str(failure)
 print(json.dumps({"error": error, "commands": commands, "runs": runs, "bootTimeouts": boot_timeouts,
@@ -955,6 +964,15 @@ describe("iOS Access process restart proof", () => {
     },
   );
 
+  it("retains separate result bundles when repeated in the same checkout", () => {
+    const { error, commands, runs } = runRestartProof("rerun");
+    expect(error).toBeNull();
+    expect(runs).toHaveLength(2);
+    const resultPaths = commands
+      .filter((args) => args.includes("test-without-building"))
+      .map((args) => args[args.indexOf("-resultBundlePath") + 1]);
+    expect(new Set(resultPaths).size).toBe(2);
+  });
   it("rejects xcodebuild failure even when the result records and final receipt would pass", () => {
     const { error, commands, receiptRetained } = runRestartProof("xcodebuild-failed");
     expect(error).toContain("exit status 65");

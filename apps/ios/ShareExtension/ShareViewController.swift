@@ -141,6 +141,14 @@ final class ShareViewController: UIViewController {
                     "This gateway uses Cloudflare Access. Open OpenClaw and send from the app; your share stays here.",
                     comment: "Share extension foreground browser sign-in requirement")])
         }
+        guard config.requiresForegroundSignIn != true else {
+            throw NSError(
+                domain: "OpenClawShare",
+                code: 12,
+                userInfo: [NSLocalizedDescriptionKey: NSLocalizedString(
+                    "This gateway uses Cloudflare Access. Open OpenClaw and send from the app; your share stays here.",
+                    comment: "Share extension foreground browser sign-in requirement")])
+        }
         guard let url = URL(string: config.gatewayURLString) else {
             throw Self.gatewayError(11, message: NSLocalizedString(
                 "Invalid saved gateway URL.",

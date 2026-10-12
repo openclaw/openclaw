@@ -8059,6 +8059,20 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 token: nil,
                 bootstrapToken: nil,
                 password: nil,
+                hasStoredOperatorToken: false,
+                hasVerifiedIngressPrincipal: true))
+        #expect(
+            !NodeAppModel.shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: "fresh-bootstrap-token",
+                password: nil,
+                hasStoredOperatorToken: false,
+                hasVerifiedIngressPrincipal: true))
+        #expect(
+            NodeAppModel.shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
                 hasStoredOperatorToken: true))
         #expect(
             NodeAppModel.shouldStartOperatorGatewayLoop(

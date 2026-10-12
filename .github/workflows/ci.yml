@@ -5393,9 +5393,7 @@ jobs:
             -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawVoiceCleanupTests.xcresult \
             -parallel-testing-enabled NO \
             -collect-test-diagnostics "$diagnostic_collection" \
-            -only-testing:OpenClawTests/TalkRealtimeVoiceSessionCleanupTests \
-            -only-testing:OpenClawTests/TalkRealtimeConsultCancellationTests \
-            -only-testing:OpenClawTests/TalkRealtimeTranscriptWriteQueueTests \
+            -only-testing:OpenClawTests/TalkRealtime{VoiceSessionCleanup,ConsultCancellation,TranscriptWriteQueue}Tests \
             -only-testing:OpenClawTests/TalkModeManagerTests \
             -only-testing:OpenClawTests/ManagedDocumentEnvelopeTests \
             -only-testing:OpenClawTests/IOSMediaArtifactLoaderTests \
@@ -5417,8 +5415,11 @@ jobs:
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
+            -only-testing:OpenClawTests/SettingsHubTests
+            -only-testing:OpenClawTests/SettingsHubVisualProofTests/testIngressAuthorizedDashboardEntryPointsLoadTheSelectedGatewayPage
             -only-testing:OpenClawTests/GatewayIngressControllerTests
             -only-testing:OpenClawTests/GatewayIngressLoginPreparationTests
+            -only-testing:OpenClawTests/GatewayAccessDeviceAuthBindingTests
             -only-testing:OpenClawTests/GatewayConnectionControllerTests
             -only-testing:OpenClawTests/LegacyManualGatewayMigrationTests
             -only-testing:OpenClawTests/GatewayOperatorFleetTests
@@ -5432,13 +5433,11 @@ jobs:
               -only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests
               -only-testing:OpenClawTests/DelayedActionGateTests
               -only-testing:OpenClawTests/IOSGatewayChatTransportTests
-              -only-testing:OpenClawTests/LocationServiceCallbackTests
-              -only-testing:OpenClawTests/LocationServiceOrderingTests
+              -only-testing:OpenClawTests/LocationService{Callback,Ordering}Tests
               -only-testing:OpenClawTests/NodeAppModelInvokeTests
               -only-testing:OpenClawTests/OpenClawAppDelegateTests
               -only-testing:OpenClawTests/WatchMessagingInboundTransportTests
               -only-testing:OpenClawTests/WatchSessionActivationGateTests
-              -only-testing:OpenClawTests/OpenClawTypographyTests
               -only-testing:OpenClawTests/NotificationServingPreferenceTests
               -only-testing:OpenClawTests/RootTabsSourceGuardTests
               -only-testing:OpenClawTests/TraceHeadingVisualProofTests

@@ -411,7 +411,6 @@ extension GatewayIngressControllerTests {
         #expect(ingress.attention?.id == attention.id)
         #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == activeID)
     }
-
     @Test(arguments: ["renew", "stop", "switch"]) @MainActor
     func `common recovery restores the desired active profile sharing background attention`(
         action: String) async throws

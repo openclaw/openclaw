@@ -186,7 +186,7 @@ def main(simulator):
     run_file = products / "OpenClawAccessRestart.xctestrun"
     with run_file.open("wb") as handle:
         plistlib.dump(document, handle)
-    result = results / "AccessRestart.xcresult"
+    result = results / f"AccessRestart-{nonce}.xcresult"
     environment = dict(os.environ)
     for key, value in {"NONCE": nonce, "SOURCE": source, "DEVICE": simulator}.items():
         environment[f"TEST_RUNNER_OPENCLAW_ACCESS_RESTART_{key}"] = value

@@ -155,11 +155,14 @@ expires while you are signing in, scan a fresh code. An
 invalid or used setup code is a Gateway pairing error and does not require a new
 Access login.
 
-Native pairing, chat, and authenticated media use the Access session. Embedded
-Dashboard pages and widgets display an explanation with native Gateway settings
-available; browser-session support for those surfaces is separate. The share
-extension asks you to send from OpenClaw for an Access-protected Gateway. Access
-credentials are not exported to Apple Watch or cloud workers.
+Native pairing, chat, and authenticated media use the Access session. When the
+native Gateway is connected with operator admin access, embedded Dashboard pages
+reuse the current Access session and native Gateway authorization. The Gateway's
+Control UI must support native app sign-in; update the Gateway if the Dashboard
+cannot connect, or open native Gateway settings to recover the connection. Access
+sign-in alone does not grant operator admin access or replace Gateway pairing.
+The share extension asks you to send from OpenClaw for an Access-protected
+Gateway. Access credentials are not exported to Apple Watch or cloud workers.
 
 ## Sessions
 

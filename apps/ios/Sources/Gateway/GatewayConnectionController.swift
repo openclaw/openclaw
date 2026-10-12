@@ -4,11 +4,6 @@ import Observation
 import OpenClawKit
 import SwiftUI
 
-typealias GatewayTCPReachabilityProbe = @Sendable (String, Int, Double, String) async -> Bool
-typealias GatewayServiceEndpointResolver = @Sendable (NWEndpoint) async -> (host: String, port: Int)?
-typealias GatewayForceReconnectReset = @MainActor (NodeAppModel) async -> Void
-typealias GatewayTLSFingerprintPersist = @Sendable (_ fingerprint: String, _ stableID: String) -> Bool
-
 @MainActor
 @Observable
 final class GatewayConnectionController {
@@ -968,12 +963,13 @@ extension GatewayConnectionController {
            GatewayStableIdentifier.matches(cfg.tls?.storeKey ?? cfg.stableID, stableID)
         {
             let currentTLS = cfg.tls
-            var refreshedConfig = cfg
-            refreshedConfig.tls = GatewayTLSParams(
+            let refreshedTLS = GatewayTLSParams(
                 required: currentTLS?.required ?? true,
                 expectedFingerprint: fingerprint,
                 allowTOFU: currentTLS?.allowTOFU ?? false,
                 storeKey: currentTLS?.storeKey ?? stableID)
+            var refreshedConfig = cfg
+            refreshedConfig.tls = refreshedTLS
             let generation = appModel.gatewayConnectGeneration
             guard !Task.isCancelled, !self.hasPendingForgetCleanup(stableID: cfg.stableID) else { return false }
             do {
