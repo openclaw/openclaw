@@ -8,6 +8,9 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getPluginServiceSchedulerBinding } from "../../plugins/service-scheduler-binding.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { getAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
 import { isRecentOutboundMessageIdentity } from "../message/outbound-echo.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
@@ -138,15 +141,6 @@ function dropPreparedChannelTurn<TDispatchResult>(
   };
 }
 
-function resolveBotLoopProtectionDrop<TDispatchResult>(
-  params: PreparedChannelTurn<TDispatchResult>,
-): ChannelTurnResult<TDispatchResult> | undefined {
-  return params.botLoopProtection &&
-    recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection).suppressed
-    ? dropPreparedChannelTurn(params, "bot-loop-protection")
-    : undefined;
-}
-
 function resolveOutboundEchoDrop<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
 ): ChannelTurnResult<TDispatchResult> | undefined {
@@ -211,8 +205,11 @@ async function runPreparedChannelTurnCoreInTrace<
     await params.runDispatchLifecycle?.onDispatchSkipped("outboundEcho");
     return outboundEchoDrop;
   }
-  const botLoopDrop = resolveBotLoopProtectionDrop(params);
-  if (botLoopDrop) {
+  if (
+    params.botLoopProtection &&
+    recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection).suppressed
+  ) {
+    const botLoopDrop = dropPreparedChannelTurn(params, "bot-loop-protection");
     clearPendingHistoryAfterTurn(params.history);
     await params.runDispatchLifecycle?.onDispatchSkipped("botLoopProtection");
     return botLoopDrop;
@@ -223,23 +220,38 @@ async function runPreparedChannelTurnCoreInTrace<
   // path before the next group turn can replay stale context.
   try {
     const recordSessionKey = resolveRecordSessionKey(params);
-    if (params.ctxPayload.SessionTranscriptContext) {
-      const { mergeSessionTranscriptContext } =
-        await import("../inbound-event/session-transcript-context.runtime.js");
-      await mergeSessionTranscriptContext({
-        agentId: params.ctxPayload.AgentId,
-        ctx: params.ctxPayload,
-        sessionKey: recordSessionKey,
-        storePath: params.storePath,
+    const emitStage = (
+      stage: "record" | "dispatch",
+      event: "start" | "done" | "error",
+      error?: unknown,
+    ) =>
+      emit(params, {
+        stage,
+        event,
+        ...(stage === "record" ? { sessionKey: recordSessionKey } : {}),
+        admission: admission.kind,
+        ...(event === "error" ? { error } : {}),
       });
-    }
-    emit(params, {
-      stage: "record",
-      event: "start",
-      sessionKey: recordSessionKey,
-      admission: admission.kind,
-    });
     try {
+      const agentId =
+        params.ctxPayload.AgentId ?? parseAgentSessionKey(params.routeSessionKey)?.agentId;
+      if (agentId) {
+        await getAgentDatabaseStartupAdmission()?.waitForAgentPreparation(agentId, {
+          signal: getPluginServiceSchedulerBinding()?.().signal,
+        });
+      }
+      if (params.ctxPayload.SessionTranscriptContext) {
+        const { mergeSessionTranscriptContext } =
+          await import("../inbound-event/session-transcript-context.runtime.js");
+        await mergeSessionTranscriptContext({
+          agentId: params.ctxPayload.AgentId,
+          ctx: params.ctxPayload,
+          sessionKey: recordSessionKey,
+          storePath: params.storePath,
+        });
+      }
+      emitStage("record", "start");
+      params.assertAuthority?.();
       await params.recordInboundSession({
         storePath: params.storePath,
         sessionKey: recordSessionKey,
@@ -249,23 +261,13 @@ async function runPreparedChannelTurnCoreInTrace<
         updateLastRoute: params.record?.updateLastRoute,
         onRecordError: params.record?.onRecordError ?? (() => undefined),
         trackSessionMetaTask: params.record?.trackSessionMetaTask,
+        assertAuthority: params.assertAuthority,
       });
-      emit(params, {
-        stage: "record",
-        event: "done",
-        sessionKey: recordSessionKey,
-        admission: admission.kind,
-      });
+      emitStage("record", "done");
       await params.afterRecord?.();
       await deliverPendingDeliveryNotice(recordSessionKey, params.storePath);
     } catch (err) {
-      emit(params, {
-        stage: "record",
-        event: "error",
-        sessionKey: recordSessionKey,
-        admission: admission.kind,
-        error: err,
-      });
+      emitStage("record", "error", err);
       try {
         await params.onPreDispatchFailure?.(err);
       } catch {
@@ -274,13 +276,10 @@ async function runPreparedChannelTurnCoreInTrace<
       throw err;
     }
 
-    emit(params, {
-      stage: "dispatch",
-      event: "start",
-      admission: admission.kind,
-    });
+    emitStage("dispatch", "start");
     let dispatchResult: TDispatchResult;
     try {
+      params.assertAuthority?.();
       let processedOutcome: DispatchProcessedNote | undefined;
       if (admission.kind === "observeOnly") {
         if (options.suppressObserveOnlyDispatch) {
@@ -306,19 +305,10 @@ async function runPreparedChannelTurnCoreInTrace<
         processedOutcome,
       });
     } catch (err) {
-      emit(params, {
-        stage: "dispatch",
-        event: "error",
-        admission: admission.kind,
-        error: err,
-      });
+      emitStage("dispatch", "error", err);
       throw err;
     }
-    emit(params, {
-      stage: "dispatch",
-      event: "done",
-      admission: admission.kind,
-    });
+    emitStage("dispatch", "done");
 
     return {
       admission,

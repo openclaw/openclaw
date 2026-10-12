@@ -112,11 +112,7 @@ function formatSessionParseWarnings(
   }));
 }
 
-function collectSessionEntries(rows: readonly unknown[]): {
-  entries: FileEntry[];
-  warnings: JsonlParseWarning[];
-  rowByEntry: Map<FileEntry, number>;
-} {
+function collectSessionEntries(rows: readonly unknown[]) {
   const entries: FileEntry[] = [];
   const warnings: JsonlParseWarning[] = [];
   const rowByEntry = new Map<FileEntry, number>();
@@ -141,11 +137,7 @@ async function readSessionEntries(params: {
   sessionTarget?: SessionTranscriptRuntimeTarget;
   sessionId: string;
   sessionKey?: string;
-}): Promise<{
-  entries: FileEntry[];
-  warnings: JsonlParseWarning[];
-  rowByEntry: Map<FileEntry, number>;
-}> {
+}) {
   const completeTarget = normalizeCompleteSessionTarget(params.sessionTarget);
   if (completeTarget) {
     const targetKeyAgentId = parseAgentSessionKey(completeTarget.sessionKey)?.agentId;
@@ -254,17 +246,7 @@ async function readSessionEntries(params: {
   );
 }
 
-async function readSessionBranch(params: {
-  sessionFile?: string;
-  sessionTarget?: SessionTranscriptRuntimeTarget;
-  sessionId: string;
-  sessionKey?: string;
-}): Promise<{
-  header: SessionHeader | null;
-  leafId: string | null;
-  branchEntries: SessionEntry[];
-  warnings: JsonlParseWarning[];
-}> {
+async function readSessionBranch(params: Parameters<typeof readSessionEntries>[0]) {
   const { entries: fileEntries, warnings, rowByEntry } = await readSessionEntries(params);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
@@ -983,14 +965,7 @@ export function resolveDefaultTrajectoryExportDir(params: {
 
 // Public export API used by CLI/tests. The bundle is intentionally sanitized
 // before writing so sharing it should not expose credentials or local paths.
-export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): Promise<{
-  manifest: TrajectoryBundleManifest;
-  outputDir: string;
-  events: TrajectoryEvent[];
-  header: SessionHeader | null;
-  supplementalFiles: string[];
-  files: string[];
-}> {
+export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams) {
   const env = process.env;
   const redaction: TrajectoryExportRedaction = {
     env,

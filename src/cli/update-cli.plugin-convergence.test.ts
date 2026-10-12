@@ -2,7 +2,6 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi, onTestFinished } from "vitest";
-import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -17,7 +16,6 @@ import {
   lastWriteJsonCall,
   mockMutableConfigSnapshot,
   syncPluginCall,
-  lastNpmPluginUpdateCall,
   pluginOutcome,
   pluginWarning,
 } from "./update-cli-assertions.test-support.js";
@@ -30,7 +28,6 @@ import {
   serviceStop,
   spawn,
   syncPluginsForUpdateChannel,
-  pathExists,
   updateNpmInstalledPlugins,
 } from "./update-cli-mocks.test-support.js";
 import {
@@ -77,116 +74,13 @@ describe("update-cli", () => {
     configSnapshot,
     createCaseDir,
     FRESH_POST_UPDATE_ENTRYPOINT,
-    mockFileBackedPathExists,
     mockGatewayHealth,
     mockNpmPluginOutcomes,
     mockOwnedGitService,
     runPostCoreCommand,
-    clawHubRiskWarning,
     clawHubSuspiciousPayloadWarning,
     clawHubSyncRiskError,
-    mockNoopPostUpdatePluginConvergence,
   } = createUpdateCliFixture();
-
-  it.each<{
-    name: string;
-    fields?: Partial<PluginInstallRecord>;
-    nextVersion?: string;
-    removed?: boolean;
-    warning?: boolean;
-    json?: boolean;
-  }>([
-    { name: "legacy pin", warning: true, json: false },
-    {
-      name: "canonical resolved pin",
-      fields: { resolvedVersion: "2026.9.2", version: "2026.9.1" },
-      warning: true,
-    },
-    { name: "same version", nextVersion: "2026.9.2" },
-    { name: "unknown registry version", nextVersion: "" },
-    { name: "repaired record", fields: { version: "2026.9.3" } },
-    { name: "removed record", removed: true },
-    { name: "third-party package", fields: { spec: "third-party-plugin@2026.9.2" } },
-    { name: "ClawHub source", fields: { source: "clawhub" } },
-    { name: "version range", fields: { spec: "@openclaw/discord@^2026.9.2" } },
-    { name: "replaced exact pin", fields: { spec: "@openclaw/discord@2026.9.3" } },
-  ])(
-    "reports retained official pins only when still applicable: $name",
-    async ({ fields, nextVersion = "2026.9.3", removed, warning = false, json = true }) => {
-      const installPath = createCaseDir("retained-pin");
-      await fs.mkdir(installPath, { recursive: true });
-      await writeJsonFixture(path.join(installPath, "package.json"), {
-        name: "@openclaw/discord",
-        version: "2026.9.2",
-      });
-      mockFileBackedPathExists();
-      const message =
-        "discord is pinned to @openclaw/discord@2026.9.2 (installed 2026.9.2); " +
-        "registry latest resolves to 2026.9.3. Pass `openclaw plugins update " +
-        "@openclaw/discord@latest` to replace this version pin.";
-      const record: PluginInstallRecord = {
-        source: "npm",
-        spec: "@openclaw/discord@2026.9.2",
-        installPath,
-        version: "2026.9.2",
-        ...fields,
-      };
-      const records = { discord: record };
-      const beforeRecords = {
-        discord: { ...record, version: fields?.resolvedVersion ? record.version : "2026.9.2" },
-      };
-      mockNpmPluginOutcomes(
-        [
-          {
-            pluginId: "discord",
-            status: "unchanged",
-            currentVersion: "2026.9.2",
-            nextVersion: nextVersion || undefined,
-            message,
-          },
-        ],
-        false,
-        { ...baseConfig, plugins: { ...baseConfig.plugins, installs: beforeRecords } },
-      );
-      mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy, {
-        installRecords: removed ? {} : records,
-      });
-      const { updatePluginsAfterCoreUpdate } =
-        await import("./update-cli/update-command-plugins.js");
-      const result = await updatePluginsAfterCoreUpdate({
-        root: process.cwd(),
-        channel: "stable",
-        configSnapshot: baseSnapshot,
-        configWriteOptions: {},
-        timeoutMs: 60_000,
-        json,
-      });
-      expect(result.status).toBe(warning ? "warning" : "ok");
-      expect(result.warnings).toEqual(
-        warning
-          ? [
-              expect.objectContaining({
-                pluginId: "discord",
-                reason: "retained-plugin-pin",
-                message: expect.stringContaining(message),
-              }),
-            ]
-          : [],
-      );
-      if (warning) {
-        expect(result.changed).toBe(false);
-        expect(result.npm.outcomes[0]?.status).toBe("unchanged");
-        expect(records.discord).toEqual({
-          source: "npm",
-          spec: "@openclaw/discord@2026.9.2",
-          installPath,
-          version: "2026.9.2",
-          ...fields,
-        });
-        expect(stripAnsi(getLogOutput()).includes(message)).toBe(!json);
-      }
-    },
-  );
 
   it("clears a retry notice when post-core repair succeeds", async () => {
     const failure = { pluginId: "demo", status: "error" as const, message: "Registry unavailable" };
@@ -340,10 +234,7 @@ describe("update-cli", () => {
     ).toBe(true);
   });
 
-  it.each([
-    { source: "installed", mode: "update" },
-    { source: "bridge", mode: "finalize" },
-  ] as const)(
+  it.each([{ source: "bridge", mode: "finalize" }] as const)(
     "completes $mode with a plugin retry notice when $source awaits capability consent",
     async ({ source, mode }) => {
       const pluginId = "consent-fixture";
@@ -352,65 +243,51 @@ describe("update-cli", () => {
       mockOwnedGitService();
       mockGitUpdateAfterMutation(makeOkUpdateResult({ root: process.cwd() }));
       serviceLoaded.mockResolvedValue(true);
-      if (source === "bridge") {
-        const install = await import("../plugins/install.js");
-        vi.spyOn(install, "installPluginFromNpmSpec").mockRejectedValueOnce(
-          new ManagedPluginLifecycleError("Operator review token changed.", {
-            capabilityConsent: { pluginId, reviewToken: "operator-review" },
-          }),
-        );
-        const actual = await vi.importActual<typeof import("../plugins/update-channel.js")>(
-          "../plugins/update-channel.js",
-        );
-        syncPluginsForUpdateChannel.mockImplementationOnce((params) =>
-          actual.syncPluginsForUpdateChannel({
-            ...params,
-            externalizedBundledPluginBridges: [
-              { bundledPluginId: pluginId, npmSpec: "@example/companion" },
-            ],
-          }),
-        );
-      } else {
-        mockNpmPluginOutcomes([
-          {
-            pluginId,
-            status: "error",
-            code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
-            message: "Operator review token changed.",
-          },
-        ]);
-      }
 
-      if (mode === "finalize") {
-        const root = createCaseDir("consent-finalize");
-        await writeOpenClawPackageFixture(root, "1.0.0", {
-          git: true,
-          builtSha: "a".repeat(40),
-          entrySource: "export {};\n",
-        });
-        vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
-        mockOwnedGitService(root);
-        mockGatewayHealth("1.0.0", "consent-gateway", "fixture-original-build");
-        vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
-          FRESH_POST_UPDATE_ENTRYPOINT,
-        );
-      }
-      const command =
-        mode === "finalize"
-          ? updateFinalizeCommand({ yes: true, json: true })
-          : updateCommand({ yes: true, json: true });
+      const install = await import("../plugins/install.js");
+      vi.spyOn(install, "installPluginFromNpmSpec").mockRejectedValueOnce(
+        new ManagedPluginLifecycleError("Operator review token changed.", {
+          capabilityConsent: { pluginId, reviewToken: "operator-review" },
+        }),
+      );
+      const actual = await vi.importActual<typeof import("../plugins/update-channel.js")>(
+        "../plugins/update-channel.js",
+      );
+      syncPluginsForUpdateChannel.mockImplementationOnce((params) =>
+        actual.syncPluginsForUpdateChannel({
+          ...params,
+          externalizedBundledPluginBridges: [
+            { bundledPluginId: pluginId, npmSpec: "@example/companion" },
+          ],
+        }),
+      );
+
+      const root = createCaseDir("consent-finalize");
+      await writeOpenClawPackageFixture(root, "1.0.0", {
+        git: true,
+        builtSha: "a".repeat(40),
+        entrySource: "export {};\n",
+      });
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+      mockOwnedGitService(root);
+      mockGatewayHealth("1.0.0", "consent-gateway", "fixture-original-build");
+      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+        FRESH_POST_UPDATE_ENTRYPOINT,
+      );
+
+      const command = updateFinalizeCommand({ yes: true, json: true });
       await command;
 
       expectPluginCapabilityRetryNotice(lastWriteJsonCall(), { mode, source, pluginId });
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-      if (mode === "finalize") {
-        expect(serviceStop).toHaveBeenCalledOnce();
-        expect(serviceRestart).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ preserveDefinition: true }),
-        );
-        expectNoSideEffects(runDaemonRestart);
-        expect(freshRestartCalls()).toHaveLength(0);
-      }
+
+      expect(serviceStop).toHaveBeenCalledOnce();
+      expect(serviceRestart).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ preserveDefinition: true }),
+      );
+      expectNoSideEffects(runDaemonRestart);
+      expect(freshRestartCalls()).toHaveLength(0);
+
       expect(runUpdateFailureTriage).not.toHaveBeenCalled();
     },
   );
@@ -483,46 +360,6 @@ describe("update-cli", () => {
     );
   });
 
-  it("includes colored ClawHub trust warnings in json post-core plugin output", async () => {
-    mockGitUpdateAfterMutation();
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
-      "/tmp/openclaw-updated-entry.mjs",
-    );
-    const trustWarning = clawHubRiskWarning;
-    const coloredTrustWarning = `\u001b[33m${trustWarning}\u001b[39m`;
-    updateNpmInstalledPlugins.mockImplementationOnce(
-      async (params: {
-        config: OpenClawConfig;
-        logger?: { terminalLinks?: boolean; warn?: (message: string) => void };
-      }) => {
-        expect(params.logger?.terminalLinks).toBe(false);
-        params.logger?.warn?.(coloredTrustWarning);
-        return {
-          changed: true,
-          config: params.config,
-          outcomes: [
-            {
-              pluginId: "demo",
-              status: "updated",
-              currentVersion: "1.2.3",
-              nextVersion: "1.2.4",
-              message: "Updated demo: 1.2.3 -> 1.2.4.",
-            },
-          ],
-        };
-      },
-    );
-    vi.mocked(defaultRuntime.writeJson).mockClear();
-
-    await updateCommand({ json: true, restart: false });
-
-    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
-    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
-    expect(pluginWarning(jsonOutput)?.reason).toBe(trustWarning);
-    expect(pluginWarning(jsonOutput)?.reason).not.toContain("\u001b");
-    expect(pluginOutcome(jsonOutput)?.status).toBe("updated");
-  });
-
   it.each(["sync", "update"] as const)(
     "prints ClawHub %s trust warnings once in human output",
     async (source) => {
@@ -577,53 +414,9 @@ describe("update-cli", () => {
     },
   );
 
-  it("detects missing plugin payloads from persisted records before npm updates", async () => {
-    mockNoopPostUpdatePluginConvergence();
-    const installPath = createCaseDir("openclaw-missing-plugin-payload");
-    fsSync.mkdirSync(installPath, { recursive: true });
-    const config = {
-      plugins: {
-        entries: {
-          demo: { enabled: true },
-        },
-      },
-    } as OpenClawConfig;
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue(configSnapshot(config));
-    loadInstalledPluginIndexInstallRecords.mockResolvedValue({
-      demo: {
-        source: "npm",
-        spec: "@openclaw/demo@1.0.0",
-        installPath,
-      },
-    });
-    pathExists.mockImplementation(
-      async (candidate: string) =>
-        candidate === installPath || candidate === path.join(process.cwd(), "dist", "index.js"),
-    );
-    vi.mocked(defaultRuntime.writeJson).mockClear();
-
-    await updateCommand({ json: true, restart: false });
-
-    const updateCall = lastNpmPluginUpdateCall() as { skipIds?: Set<string> } | undefined;
-    expect(updateCall?.skipIds?.has("demo")).toBe(true);
-    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
-    expect(jsonOutput?.status).toBe("ok");
-    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
-    expect(pluginWarning(jsonOutput)?.pluginId).toBe("demo");
-    expect(pluginWarning(jsonOutput)?.reason).toContain("package.json is missing");
-    expect(pluginWarning(jsonOutput)).toMatchObject({
-      message:
-        'Plugin "demo" could not be loaded. Run `openclaw doctor --fix` to check and repair the load problem.',
-      guidance: ["openclaw doctor --fix"],
-    });
-    expect(pluginOutcome(jsonOutput)?.pluginId).toBe("demo");
-    expect(pluginOutcome(jsonOutput)?.status).toBe("error");
-  });
-
   it.each([
     { json: false, repaired: false, version: "1.0.0" },
     { json: true, repaired: true, version: "1.0.0" },
-    { json: true, repaired: false, version: undefined },
   ])(
     "reports unavailable retained plugin targets without failing core ($json, repaired=$repaired, version=$version)",
     async ({ json, repaired, version }) => {

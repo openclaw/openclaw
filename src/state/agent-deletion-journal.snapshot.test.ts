@@ -1,16 +1,26 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  beginAgentDeletionJournal,
+  removeAgentDeletionJournal,
+} from "../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRetainedAgentDatabaseMatcherFromSnapshot } from "./agent-deletion-discovery.js";
 import { reconstructAgentDeletionJournal } from "./agent-deletion-journal-recovery.js";
 import {
-  beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
-  removeAgentDeletionJournal,
+  updateAgentDeletionJournalPathsInDatabase,
 } from "./agent-deletion-journal.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "./agent-deletion-journal.read.js";
+import {
+  registerOpenClawAgentDatabase,
+  unregisterOpenClawAgentDatabase,
+} from "./openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
@@ -33,15 +43,32 @@ it("reads fresh deletion and surviving-owner facts from its captured source with
         agentDir,
         workspaceDir: state.workspaceDir,
         sessionsDir: state.sessionsDir("retired"),
-        databasePaths: [survivor.path],
+        databasePaths: [],
         deleteFiles: false,
       },
       options,
     );
     runOpenClawStateWriteTransaction((database) => {
-      expect(completeAgentDeletionJournalInDatabase(database, "retired", "retained-owner")).toBe(
-        true,
+      expect(
+        updateAgentDeletionJournalPathsInDatabase(
+          database,
+          "retired",
+          "retained-owner",
+          "database_paths_json",
+          [survivor.path],
+        ),
+      ).toBe(true);
+      const reads = trackSqliteStatementExecutions(database.db, ["journal"], (sql) =>
+        /^select\b.*from "agent_deletion_journal"/iu.test(sql) ? "journal" : null,
       );
+      try {
+        expect(completeAgentDeletionJournalInDatabase(database, "retired", "retained-owner")).toBe(
+          true,
+        );
+        expect(reads.counts.journal).toBe(0);
+      } finally {
+        reads.restore();
+      }
     }, options);
     const input = {
       path: resolveOpenClawStateSqlitePath(state.env),
@@ -91,6 +118,53 @@ it("reads fresh deletion and surviving-owner facts from its captured source with
     expect((await prepared.read()).snapshot?.retainedDeletions).toEqual({ status: "empty" });
   });
 });
+
+it.each(["deletion", "registration removal"])(
+  "allows renewed registrations but invalidates an asynchronous snapshot consumer after %s",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const options = { env: state.env };
+      const survivor = openOpenClawAgentDatabase({ agentId: "survivor", ...options });
+      const prepared = prepareAgentDatabaseDeletionSnapshotRead(options);
+      let consumed = 0;
+      await expect(
+        prepared.withCurrentSnapshot(async (snapshot, assertCurrent) => {
+          consumed += 1;
+          expect(snapshot?.retainedDeletions).toEqual({ status: "empty" });
+          assertCurrent();
+          await Promise.resolve();
+          registerOpenClawAgentDatabase({ agentId: "survivor", path: survivor.path, ...options });
+          assertCurrent();
+          if (change === "registration removal") {
+            unregisterOpenClawAgentDatabase({
+              agentId: "survivor",
+              path: survivor.path,
+              ...options,
+            });
+          } else {
+            beginAgentDeletionJournal(
+              {
+                agentId: "retired",
+                operationId: "during-consumption",
+                agentDir: state.agentDir("retired"),
+                workspaceDir: state.workspaceDir,
+                sessionsDir: state.sessionsDir("retired"),
+                deleteFiles: false,
+              },
+              options,
+            );
+          }
+          assertCurrent();
+        }),
+      ).rejects.toThrow(
+        change === "deletion"
+          ? "Agent database deletion snapshot changed during consumption"
+          : "Agent database registry changed during discovery",
+      );
+      expect(consumed).toBe(1);
+    });
+  },
+);
 
 it.each(["source", "maintenance", "existing-schema"] as const)(
   "does not reacquire a captured deletion snapshot after its %s lifetime ends",

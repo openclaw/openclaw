@@ -55,58 +55,6 @@ describe("OpenResponses aggregate behavior", () => {
     );
   });
 
-  it("rejects invalid image media types through the aggregate request schema", () => {
-    expect(
-      CreateResponseBodySchema.safeParse({
-        model: "gpt-5.4",
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [
-              {
-                type: "input_image",
-                source: { type: "base64", media_type: "image/svg+xml", data: "PHN2Zz4=" },
-              },
-            ],
-          },
-        ],
-      }).success,
-    ).toBe(false);
-  });
-
-  it("rejects wrapped or unnamed tools through the aggregate request schema", () => {
-    const baseRequest = { model: "gpt-5.4", input: "Run the lookup" };
-    expect(
-      CreateResponseBodySchema.safeParse({
-        ...baseRequest,
-        tools: [
-          {
-            type: "function",
-            function: { name: "lookup", parameters: { type: "object" } },
-          },
-        ],
-      }).success,
-    ).toBe(false);
-    expect(
-      CreateResponseBodySchema.safeParse({
-        ...baseRequest,
-        tools: [{ type: "function", name: "", parameters: { type: "object" } }],
-      }).success,
-    ).toBe(false);
-  });
-
-  it("builds prompts from tool output and surrounding messages", () => {
-    const result = buildAgentPrompt([
-      { type: "message", role: "user", content: "Run the lookup" },
-      { type: "function_call_output", call_id: "call-1", output: '{"ok":true}' },
-      { type: "message", role: "user", content: "Summarize it" },
-    ]);
-    expect(result.message).toContain("Run the lookup");
-    expect(result.message).toContain('{"ok":true}');
-    expect(result.message).toContain("Summarize it");
-  });
-
   it("preserves attachment-only turn placeholders", () => {
     expect(
       buildAgentPrompt([

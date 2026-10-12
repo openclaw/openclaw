@@ -47,9 +47,10 @@ import { stageActivePluginRegistry } from "../../plugins/runtime.js";
 import { readConfigMachineState } from "../../state/config-machine-state.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import {
-  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   linkUserChannelIdentity,
   unlinkUserChannelIdentity,
@@ -243,13 +244,15 @@ it("exposes a verified linked requester in trusted metadata without widening own
           });
           expect(transcript.entries[0]?.origin).toBe("operator");
         }
-        const tools = resolveGatewayScopedTools({
-          cfg,
-          sessionKey: ctx.SessionKey!,
-          messageProvider: "discord",
-          senderIsOwner,
-          surface: "loopback",
-        }).tools;
+        const tools = (
+          await resolveGatewayScopedTools({
+            cfg,
+            sessionKey: ctx.SessionKey!,
+            messageProvider: "discord",
+            senderIsOwner,
+            surface: "loopback",
+          })
+        ).tools;
         expect(tools.some((tool) => tool.name === "sessions")).toBe(owner);
       }
     } finally {
@@ -424,7 +427,7 @@ it.each([
   "never recovers the original owner after %s retires its durable reference",
   async (change) => {
     await withAdminIngress(
-      async ({ cfg, admins, activatePolicy, context }) => {
+      async ({ cfg, state, admins, activatePolicy, context }) => {
         const admin = admins[0]!;
         if (change === "default") {
           setUserProfileRole(admin.profile.id, null);
@@ -476,7 +479,7 @@ it.each([
           expect(assertCurrent).toThrow();
         }
         expect(admitted?.isCurrent(cfg)).toBe(false);
-        await closeOpenClawStateDatabaseAsync();
+        await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
         await expect(prepareChannelOperatorAdmin(cfg, reference)).resolves.toBeUndefined();
         await expect(prepareChannelOperatorAdmin(cfg, reference)).resolves.toBeUndefined();
       },
@@ -488,7 +491,7 @@ it.each([
 it.each(["allowed", "revoked", "replaced", "unavailable"] as const)(
   "resumes only the original plugin grant when it is %s",
   async (change) => {
-    await withAdminIngress(async ({ cfg, admins, activatePolicy, context }) => {
+    await withAdminIngress(async ({ cfg, state, admins, activatePolicy, context }) => {
       const pluginId = "channel-owner-access";
       const originalId = "86633673-b1dd-4500-85e2-b6e6e490810f";
       let grantId: string | undefined = originalId;
@@ -557,7 +560,7 @@ it.each(["allowed", "revoked", "replaced", "unavailable"] as const)(
         }
       }
       unavailable = change === "unavailable";
-      await closeOpenClawStateDatabaseAsync();
+      await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
       if (change === "unavailable") {
         await expect(prepareChannelOperatorAdmin(cfg, reference)).rejects.toMatchObject({
           name: "GatewayOperatorAccessUnavailableError",
@@ -578,7 +581,7 @@ it.each(["allowed", "revoked", "replaced", "unavailable"] as const)(
 );
 
 it("keeps the active policy and its reference when durable policy retirement rolls back", async () => {
-  await withAdminIngress(async ({ cfg, admins, activatePolicy }) => {
+  await withAdminIngress(async ({ cfg, state, admins, activatePolicy }) => {
     const original = await prepareChannelOperatorAdmin(cfg, admins[0]!.identity);
     const activeRoles = structuredClone(cfg.gateway!.roles!);
     const changed = structuredClone(activeRoles);
@@ -590,7 +593,7 @@ it("keeps the active policy and its reference when durable policy retirement rol
     await expect(activatePolicy({ roles: changed })).rejects.toThrow("fixture policy write failed");
     expect(cfg.gateway!.roles).toEqual(activeRoles);
     db.exec("DROP TRIGGER fail_policy_publication");
-    await closeOpenClawStateDatabaseAsync();
+    await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
     expect(
       (await prepareChannelOperatorAdmin(cfg, original!.recoveryReference!))?.isCurrent(cfg),
     ).toBe(true);
@@ -601,7 +604,7 @@ it.each(["role", "identity-grant", "missing", "malformed", "version", "extra", "
   "resumes only an exact, live JSON recovery reference: %s",
   async (damage) => {
     await withAdminIngress(
-      async ({ cfg, admins }) => {
+      async ({ cfg, state, admins }) => {
         const admitted = await prepareChannelOperatorAdmin(cfg, admins[0]!.identity);
         const reference = { ...admitted!.recoveryReference! };
         expect(reference.id).toBeTypeOf("string");
@@ -628,7 +631,7 @@ it.each(["role", "identity-grant", "missing", "malformed", "version", "extra", "
         if (damage === "role" || damage === "identity-grant") {
           expect(admitted?.isCurrent(cfg)).toBe(true);
           expect(admitted?.recoveryReference).toEqual({ version: 1, id: expect.any(String) });
-          await closeOpenClawStateDatabaseAsync();
+          await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
           expect(admitted?.isCurrent(cfg)).toBe(false);
           const decoded = JSON.parse(encoded);
           const resumed = await prepareChannelOperatorAdmin(cfg, decoded);
@@ -783,7 +786,7 @@ it("carries native Slack requester authority through preparation and keeps repla
       { cfg, runtime, stateDir: state.stateDir },
       async ({ contexts, receiveSocket, receiveHttp }) => {
         expect(contexts).toHaveLength(1);
-        const check = (index: number, linked: boolean, isOwner: boolean) => {
+        const check = async (index: number, linked: boolean, isOwner: boolean) => {
           const turn = contexts[index]!;
           const prompt = buildInboundUserContextPrefix(turn);
           const metadata = JSON.parse(prompt.match(/```json\n([\s\S]*?)\n```/)![1]!);
@@ -796,7 +799,7 @@ it("carries native Slack requester authority through preparation and keeps repla
             commandAuthorized: true,
           });
           expect.soft(senderIsOwner).toBe(isOwner);
-          const { tools } = resolveGatewayScopedTools({
+          const { tools } = await resolveGatewayScopedTools({
             cfg,
             sessionKey: turn.SessionKey!,
             messageProvider: "slack",
@@ -805,7 +808,7 @@ it("carries native Slack requester authority through preparation and keeps repla
           });
           expect.soft(tools.some((tool) => tool.name === "sessions")).toBe(isOwner);
         };
-        check(0, false, false);
+        await check(0, false, false);
         for (const [index, user, role, linked, isOwner] of [
           [1, "U123", "admin", true, true],
           [2, "U_UNLINKED", "admin", false, false],
@@ -814,14 +817,14 @@ it("carries native Slack requester authority through preparation and keeps repla
           setUserProfileRole(profile.id, role);
           await receiveSocket(user);
           expect(contexts).toHaveLength(index + 1);
-          check(index, linked, isOwner);
+          await check(index, linked, isOwner);
         }
         setUserProfileRole(profile.id, "admin");
         expect(await receiveHttp(false)).toBe(401);
         expect(contexts).toHaveLength(4);
         expect(await receiveHttp(true)).toBe(200);
         expect(contexts).toHaveLength(5);
-        check(4, true, true);
+        await check(4, true, true);
       },
     );
   });

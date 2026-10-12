@@ -325,6 +325,8 @@ export class ImapAccountWatcher {
   private async processMessage(message: FetchMessageObject, uidValidity: string): Promise<boolean> {
     const { accountId, account, state } = this.options;
     const key = `${accountId}:${uidValidity}:${message.uid}`;
+    const claim = () =>
+      state.claims.registerIfAbsent(key, { accountId, uid: message.uid, recordedAt: Date.now() });
     if (!message.source) {
       await this.recordSkip(message.uid, undefined, "message-source-missing");
       return true;
@@ -348,11 +350,7 @@ export class ImapAccountWatcher {
         );
         return false;
       }
-      await state.claims.registerIfAbsent(key, {
-        accountId,
-        uid: message.uid,
-        recordedAt: Date.now(),
-      });
+      await claim();
       await this.recordSkip(message.uid, verdict.sender, verdict.reason);
       return true;
     }
@@ -361,13 +359,7 @@ export class ImapAccountWatcher {
       await this.recordSkip(message.uid, verdict.sender, "duplicate-message-id");
       return true;
     }
-    if (
-      !(await state.claims.registerIfAbsent(key, {
-        accountId,
-        uid: message.uid,
-        recordedAt: Date.now(),
-      }))
-    ) {
+    if (!(await claim())) {
       await this.recordSkip(message.uid, verdict.sender, "duplicate-uid");
       return true;
     }
@@ -410,11 +402,7 @@ export class ImapAccountWatcher {
       );
       return false;
     }
-    await state.claims.registerIfAbsent(key, {
-      accountId,
-      uid: message.uid,
-      recordedAt: Date.now(),
-    });
+    await claim();
     await this.recordSkip(message.uid, verdict.sender, "dispatch-rejected");
     return true;
   }

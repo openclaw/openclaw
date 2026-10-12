@@ -5,6 +5,7 @@ import type {
   WorktreeEvictionCandidate,
   WorktreeEvictionReason,
 } from "./git-worktree-operations.js";
+import { readWorktreeSlotCount } from "./pending-slots.js";
 import { readLiveRegistryWorktreeIds, readRegistryWorktrees } from "./registry-read.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
@@ -32,11 +33,11 @@ export async function enforceWorktreeCleanupLimits(
   const records = await readRegistryWorktrees(params.env, { liveOnly: true });
   const refresh = async () => {
     const liveIds = new Set(await readLiveRegistryWorktreeIds(params.env));
-    return { liveIds, exceeded: liveIds.size > maxCount };
+    return { liveIds, exceeded: (await readWorktreeSlotCount(params.env)) > maxCount };
   };
   let state = await refresh();
   if (!state.exceeded) {
-    progress.recordLimitState(true);
+    progress.result.limitsSatisfied = true;
     return [];
   }
   const idle: ManagedWorktreeRecord[] = [];
@@ -98,6 +99,7 @@ export async function enforceWorktreeCleanupLimits(
       try {
         // Selection is advisory. The host claims removal atomically against run
         // admission, then revalidates its claim immediately before worker writes.
+        progress.result.eligibleCount += 1;
         await params.evict(record, reasons.get(record.id) ?? "idle-age");
         removed.push(record.id);
         const containers = [...(sourceContainers.get(record.id) ?? [])].filter((id) =>
@@ -114,7 +116,7 @@ export async function enforceWorktreeCleanupLimits(
     }
     state = await refresh();
   }
-  progress.recordLimitState(!state.exceeded);
+  progress.result.limitsSatisfied = !state.exceeded;
   return removed;
 }
 

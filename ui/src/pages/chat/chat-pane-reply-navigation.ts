@@ -5,7 +5,6 @@ import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { ChatPaneSession } from "./chat-pane-session.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import { persistedMessageEntryId } from "./chat-thread.ts";
 import type { ReplyMessageStatus } from "./components/chat-reply-preview.ts";
 
@@ -60,24 +59,6 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     return cached?.message ? undefined : (cached?.status ?? "pending");
   };
 
-  protected readonly openReplyMessage = (messageId: string): void => {
-    void this.navigateToReplyMessage(messageId);
-  };
-
-  private replyNavigationIsCurrent(
-    navigation: symbol,
-    state: ChatPageHost,
-    sessionKey: string,
-    sessionId: string,
-  ): boolean {
-    return (
-      this.activeReplyNavigation === navigation &&
-      this.state === state &&
-      areUiSessionKeysEquivalent(state.sessionKey, sessionKey) &&
-      (!sessionId || state.currentSessionId === sessionId)
-    );
-  }
-
   protected currentReplyNavigationId(sessionKey: string): string | null {
     return this.replyNavigationSessionKey &&
       areUiSessionKeysEquivalent(this.replyNavigationSessionKey, sessionKey)
@@ -107,7 +88,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     this.replyNavigationId = null;
   }
 
-  private async navigateToReplyMessage(messageId: string): Promise<void> {
+  protected readonly openReplyMessage = async (messageId: string): Promise<void> => {
     const state = this.state;
     if (!state || parseCatalogSessionKey(state.sessionKey)) {
       return;
@@ -115,6 +96,11 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     const sessionKey = state.sessionKey;
     const sessionId = state.currentSessionId?.trim() ?? "";
     const navigation = Symbol("reply-navigation");
+    const isCurrent = () =>
+      this.activeReplyNavigation === navigation &&
+      this.state === state &&
+      areUiSessionKeysEquivalent(state.sessionKey, sessionKey) &&
+      (!sessionId || state.currentSessionId === sessionId);
     this.activeReplyNavigation = navigation;
     this.replyNavigationSessionKey = sessionKey;
     this.replyNavigationId = messageId;
@@ -123,7 +109,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
       while (
         !state.chatMessages.some((message) => persistedMessageEntryId(message) === messageId)
       ) {
-        if (!this.replyNavigationIsCurrent(navigation, state, sessionKey, sessionId)) {
+        if (!isCurrent()) {
           return;
         }
         if (!state.chatHistoryPagination.hasMore) {
@@ -132,7 +118,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
           return;
         }
         const loaded = await this.loadOlderMessages();
-        if (!this.replyNavigationIsCurrent(navigation, state, sessionKey, sessionId)) {
+        if (!isCurrent()) {
           return;
         }
         if (!loaded) {
@@ -143,12 +129,12 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
           return;
         }
       }
-      if (!this.replyNavigationIsCurrent(navigation, state, sessionKey, sessionId)) {
+      if (!isCurrent()) {
         return;
       }
       this.requestUpdate();
       await this.updateComplete;
-      if (this.replyNavigationIsCurrent(navigation, state, sessionKey, sessionId)) {
+      if (isCurrent()) {
         this.transcript.revealMessage(messageId);
       }
     } finally {
@@ -157,5 +143,5 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
         this.requestUpdate();
       }
     }
-  }
+  };
 }

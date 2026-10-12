@@ -12,28 +12,8 @@ type BenchmarkCase = {
   run: () => Promise<void> | void;
 };
 
-type Options = {
-  cases: BenchmarkCaseId[];
-  json: boolean;
-  output?: string;
-  runs: number;
-  warmup: number;
-};
-
-type SummaryStats = {
-  avg: number;
-  max: number;
-  min: number;
-  p50: number;
-  p95: number;
-};
-
-type CaseReport = {
-  id: BenchmarkCaseId;
-  label: string;
-  samplesMs: number[];
-  summaryMs: SummaryStats;
-};
+type Options = ReturnType<typeof parseOptions>;
+type CaseReport = Awaited<ReturnType<typeof measureCase>>;
 
 type BenchmarkReport = {
   cases: CaseReport[];
@@ -133,7 +113,7 @@ function parseBenchmarkCount(raw: string, flag: string, minimum: 0 | 1): number 
   throw new CliArgumentError(`${flag} must be a ${kind} integer`);
 }
 
-function parseOptions(args = process.argv.slice(2)): Options {
+function parseOptions(args = process.argv.slice(2)) {
   const normalizedArgs = cliArgs.stripLeadingPackageManagerSeparator(args);
   try {
     const parsed = cliArgs.parseFlagArgs(
@@ -204,7 +184,7 @@ function percentile(values: number[], p: number): number {
   return round(sorted[index] ?? 0);
 }
 
-function stats(values: number[]): SummaryStats {
+function stats(values: number[]) {
   if (values.length === 0) {
     return { avg: 0, max: 0, min: 0, p50: 0, p95: 0 };
   }
@@ -332,11 +312,7 @@ async function loadCaseFactory(): Promise<() => Record<BenchmarkCaseId, Benchmar
   });
 }
 
-async function measureCase(
-  id: BenchmarkCaseId,
-  testCase: BenchmarkCase,
-  options: Options,
-): Promise<CaseReport> {
+async function measureCase(id: BenchmarkCaseId, testCase: BenchmarkCase, options: Options) {
   for (let index = 0; index < options.warmup; index += 1) {
     await testCase.run();
   }

@@ -135,6 +135,7 @@ export type SkillSnapshot = {
   /** Complete eligible sync identities, including skills hidden from the model prompt. */
   skills: Array<{
     name: string;
+    source?: Pick<Skill, "filePath" | "fileHost">;
     /** Gateway-admitted path for explicit reads of hidden, Gateway-owned skills. */
     gatewayFilePath?: string;
     /** Config key can differ from the prompt-facing skill name. */

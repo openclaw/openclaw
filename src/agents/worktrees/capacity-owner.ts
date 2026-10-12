@@ -2,6 +2,7 @@ import path from "node:path";
 import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { withWorktreeAllocationLease, type WorktreeAllocationGuard } from "./allocation.js";
+import { WorktreePendingContentionError } from "./errors.js";
 import { evictManagedWorktree } from "./eviction.js";
 import { enforceWorktreeCleanupLimits, worktreeCapacityError } from "./gc-limits.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
@@ -9,7 +10,8 @@ import type {
   GitWorktreeOperations,
   WorktreeEvictionCandidate,
 } from "./git-worktree-operations.js";
-import { readRegistryWorktrees, readWorktreeCleanupState } from "./registry-read.js";
+import { readPendingWorktrees, readWorktreeSlotCount } from "./pending-slots.js";
+import { readWorktreeCleanupState } from "./registry-read.js";
 import { worktreeGcRevision } from "./registry-read.kernel.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
 import type { CreateManagedWorktreeParams, ManagedWorktreeRecord } from "./types.js";
@@ -32,10 +34,10 @@ export function createWorktreeCapacityOwner({
   const configuredMaxCount = () => getConfig().worktreeMaxCount ?? DEFAULT_WORKTREE_MAX_COUNT;
   // The creation/restore owner retains source custody through native settlement.
   async function admit(guard: WorktreeAllocationGuard): Promise<void> {
-    const records = await readRegistryWorktrees(env, { liveOnly: true });
+    const occupied = await readWorktreeSlotCount(env);
     guard.commitGuard();
     const maxCount = configuredMaxCount();
-    if (records.length < maxCount) {
+    if (occupied < maxCount) {
       return;
     }
     const progress = new WorktreeGcProgress();
@@ -46,6 +48,10 @@ export function createWorktreeCapacityOwner({
       ({ more } = await enforce(maxCount - 1, progress, guard, ranked, repositories));
     } while (progress.result.limitsSatisfied !== true && more);
     if (progress.result.limitsSatisfied !== true) {
+      const pending = (await readPendingWorktrees(env)).find(({ state }) => state === "pending");
+      if (pending) {
+        throw new WorktreePendingContentionError(pending.record.id);
+      }
       const { records: remainingRecords, leases } = await readWorktreeCleanupState(env);
       const live = new Set(leases.liveScopes);
       throw worktreeCapacityError(
@@ -61,37 +67,35 @@ export function createWorktreeCapacityOwner({
     maxCount: number,
     progress: WorktreeGcProgress,
     guard: WorktreeAllocationGuard,
-    ranked = new Map<string, WorktreeEvictionCandidate>(),
-    repositories = new Map<string, RepositoryInventory>(),
+    ranked: Map<string, WorktreeEvictionCandidate>,
+    repositories: Map<string, RepositoryInventory>,
   ): Promise<{ removed: string[]; attempted: number; more: boolean }> {
     const started = performance.now();
     let attempted = 0;
     let yielded = false;
     const { leases } = await readWorktreeCleanupState(env);
     const live = new Set(leases.liveScopes);
+    const cached =
+      <T>(
+        cache: Map<string, T>,
+        prepare: (records: ManagedWorktreeRecord[]) => Promise<Map<string, T>>,
+      ) =>
+      async (records: ManagedWorktreeRecord[]) => {
+        const missing = records.filter(
+          (record) => !cache.has(record.id + worktreeGcRevision(record)),
+        );
+        for (const [key, value] of await prepare(missing)) {
+          cache.set(key, value);
+        }
+        return records.map((record) => cache.get(record.id + worktreeGcRevision(record))!);
+      };
     const removed = await enforceWorktreeCleanupLimits({
       env,
       maxCount,
       progress,
       hasLiveLease: (record) => live.has(worktreeRunLeaseScope(record.id)),
-      repositories: async (records) => {
-        const missing = records.filter(
-          (record) => !repositories.has(record.id + worktreeGcRevision(record)),
-        );
-        for (const [key, directory] of await prepareRepositories(missing, guard)) {
-          repositories.set(key, directory);
-        }
-        return records.map((record) => repositories.get(record.id + worktreeGcRevision(record))!);
-      },
-      classify: async (records) => {
-        const missing = records.filter(
-          (record) => !ranked.has(record.id + worktreeGcRevision(record)),
-        );
-        for (const [revision, candidate] of await classify(missing, guard, repositories)) {
-          ranked.set(revision, candidate);
-        }
-        return records.map((record) => ranked.get(record.id + worktreeGcRevision(record))!);
-      },
+      repositories: cached(repositories, (records) => prepareRepositories(records, guard)),
+      classify: cached(ranked, (records) => classify(records, guard, repositories)),
       shouldYield: () =>
         (yielded = attempted > 0 && (attempted >= 8 || performance.now() - started >= 5_000)),
       evict: async (record, reason) => {
@@ -189,17 +193,16 @@ export function createWorktreeCapacityOwner({
 
   async function cleanup(params: {
     records: ManagedWorktreeRecord[];
-    liveCount: number;
     hasLiveLease: (id: string) => boolean;
     progress: WorktreeGcProgress;
     guard: WorktreeCapacityGuard;
-    checkpoint?: () => Promise<void>;
+    checkpoint: () => Promise<void>;
   }): Promise<void> {
     const { records, progress, guard, checkpoint } = params;
     const result = progress.result;
     const maxCount = configuredMaxCount();
-    if (params.liveCount <= maxCount) {
-      progress.recordLimitState(true);
+    if ((await readWorktreeSlotCount(env)) <= maxCount) {
+      result.limitsSatisfied = true;
       return;
     }
     // Rank off the allocation lane; foreground creates may proceed between batches.
@@ -220,7 +223,7 @@ export function createWorktreeCapacityOwner({
       );
       result.removed.push(...batch.removed);
       for (let count = 0; count < Math.max(1, batch.attempted); count += 1) {
-        await checkpoint?.();
+        await checkpoint();
       }
       if (!batch.more) {
         break;

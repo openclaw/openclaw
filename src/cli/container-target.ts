@@ -2,8 +2,8 @@ import { spawnSync } from "node:child_process";
 import { isIP } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { rewriteUpdateFlagArgv } from "./argv.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 import { resolveSubprocessExitCode } from "./subprocess-exit-code.js";
@@ -77,38 +77,35 @@ function resolveRunningContainer(containerName: string): ContainerRuntime | null
   return expectDefined(matches[0], "matches capture group 0");
 }
 
-function buildContainerExecArgs(params: {
-  runtime: ContainerRuntime;
-  containerName: string;
-  argv: string[];
-  env: NodeJS.ProcessEnv;
-  stdinIsTTY: boolean;
-  stdoutIsTTY: boolean;
-}): string[] {
+function buildContainerExecArgs(
+  runtime: ContainerRuntime,
+  containerName: string,
+  argv: string[],
+): string[] {
   // Preserve proxy env only after loopback validation; localhost would point inside the container.
-  const envFlag = params.runtime === "docker" ? "-e" : "--env";
-  const proxyUrl = normalizeOptionalString(params.env.OPENCLAW_PROXY_URL);
+  const envFlag = runtime === "docker" ? "-e" : "--env";
+  const proxyUrl = normalizeOptionalString(process.env.OPENCLAW_PROXY_URL);
   if (proxyUrl) {
-    assertContainerProxyUrlIsReachable(proxyUrl, params.env);
+    assertContainerProxyUrlIsReachable(proxyUrl);
   }
   const proxyEnvArgs = proxyUrl ? [envFlag, `OPENCLAW_PROXY_URL=${proxyUrl}`] : [];
-  const interactiveFlags = ["-i", ...(params.stdinIsTTY && params.stdoutIsTTY ? ["-t"] : [])];
   return [
     "exec",
-    ...interactiveFlags,
+    "-i",
+    ...(process.stdin.isTTY && process.stdout.isTTY ? ["-t"] : []),
     envFlag,
-    `OPENCLAW_CONTAINER_HINT=${params.containerName}`,
+    `OPENCLAW_CONTAINER_HINT=${containerName}`,
     envFlag,
     "OPENCLAW_CLI_CONTAINER_BYPASS=1",
     ...proxyEnvArgs,
-    params.containerName,
+    containerName,
     "openclaw",
-    ...params.argv,
+    ...argv,
   ];
 }
 
-function assertContainerProxyUrlIsReachable(proxyUrl: string, env: NodeJS.ProcessEnv): void {
-  if (env[CONTAINER_ALLOW_LOOPBACK_PROXY_URL_ENV] === "1") {
+function assertContainerProxyUrlIsReachable(proxyUrl: string): void {
+  if (process.env[CONTAINER_ALLOW_LOOPBACK_PROXY_URL_ENV] === "1") {
     return;
   }
   const parsed = URL.parse(proxyUrl);
@@ -175,27 +172,12 @@ function buildContainerExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 function isBlockedContainerCommand(argv: string[]): boolean {
-  if (resolveCliArgvInvocation(["node", "openclaw", ...argv]).primary === "update") {
-    return true;
-  }
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (!arg || arg === FLAG_TERMINATOR) {
-      return false;
-    }
-    if (arg === "--update") {
-      return true;
-    }
-    const consumedRootOption = consumeRootOptionToken(argv, i);
-    if (consumedRootOption > 0) {
-      i += consumedRootOption - 1;
-      continue;
-    }
-    if (!arg.startsWith("-")) {
-      return false;
-    }
-  }
-  return false;
+  const invocationArgv = ["node", "openclaw", ...argv];
+  return (
+    resolveCliArgvInvocation(invocationArgv).primary === "update" ||
+    // A shorthand is blocked even when malformed root options hide the rewritten primary.
+    rewriteUpdateFlagArgv(invocationArgv) !== invocationArgv
+  );
 }
 
 export function maybeRunCliInContainer(argv: string[]): CliContainerTargetResult {
@@ -224,14 +206,7 @@ export function maybeRunCliInContainer(argv: string[]): CliContainerTargetResult
 
   const result = spawnSync(
     runningContainer,
-    buildContainerExecArgs({
-      runtime: runningContainer,
-      containerName,
-      argv: parsed.argv.slice(2),
-      env: process.env,
-      stdinIsTTY: process.stdin.isTTY,
-      stdoutIsTTY: process.stdout.isTTY,
-    }),
+    buildContainerExecArgs(runningContainer, containerName, parsed.argv.slice(2)),
     {
       stdio: "inherit",
       env: buildContainerExecEnv(process.env),

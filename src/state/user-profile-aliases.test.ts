@@ -14,7 +14,7 @@ import {
   readUserProfileVersion,
 } from "./user-profile-events.js";
 import {
-  listUserProfilesSync,
+  readUserProfileSnapshotSync,
   readUserProfileEmailBindings,
 } from "./user-profile-identity.read.js";
 import {
@@ -163,7 +163,7 @@ describe("profile alias reader lifecycle", () => {
         expect(readUserProfileVersion()).toBe(profileVersion + 1);
         expect(read()).toEqual(new Set([source.id, target.id]));
         expect(readUserProfileAliases(source.id, options)).toEqual(new Set([source.id, target.id]));
-        expect(listUserProfilesSync(options)).toEqual(
+        expect(readUserProfileSnapshotSync(options).profiles).toEqual(
           expect.arrayContaining([
             expect.objectContaining({ id: source.id, mergedInto: target.id, emails: [] }),
             expect.objectContaining({ id: target.id, mergedInto: null }),
@@ -288,7 +288,7 @@ describe("profile alias reader lifecycle", () => {
 
     expect(setDisplayName(a.id, "Durable A", options)).toMatchObject({ id: c.id });
     expect(resolveUserProfileId(a.id, options)).toBe(c.id);
-    expect(listUserProfilesSync(options)).toEqual(
+    expect(readUserProfileSnapshotSync(options).profiles).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: a.id, mergedInto: c.id }),
         expect.objectContaining({ id: b.id, mergedInto: c.id }),

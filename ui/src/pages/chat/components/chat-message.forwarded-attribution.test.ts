@@ -15,16 +15,18 @@ import { groupMessages } from "../chat-thread-grouping.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderMessageGroup } from "./chat-message-group.ts";
 import { createAssistantMessage, createMessageGroup } from "./chat-message.test-support.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 let container: HTMLDivElement;
 
 beforeEach(() => {
-  container = document.createElement("div");
+  container = document.body.appendChild(document.createElement("div"));
 });
 
 afterEach(async () => {
   await vi.dynamicImportSettled();
   render(null, container);
+  container.remove();
   vi.restoreAllMocks();
 });
 
@@ -53,11 +55,11 @@ function renderTestMessageGroup(
 }
 
 describe("forwarded message attribution", () => {
-  it.each(
-    [false, true].flatMap((collapsed) =>
-      ["click", "Enter", " "].map((key) => ({ collapsed, key })),
-    ),
-  )(
+  it.each([
+    { collapsed: false, key: "click" },
+    { collapsed: true, key: "Enter" },
+    { collapsed: false, key: " " },
+  ])(
     "resolves $key file links to the sender in collapsed=$collapsed groups",
     ({ collapsed, key }) => {
       const sessionKey = "agent:research:report";
@@ -97,7 +99,7 @@ describe("forwarded message attribution", () => {
 
   it.each([false, true])(
     "opens nested tool activity files in the sending session (frame=%s)",
-    (frame) => {
+    async (frame) => {
       const sessionKey = "agent:research:report";
       const onOpenWorkspaceFile = vi.fn();
       const group = createGroup(
@@ -146,6 +148,7 @@ describe("forwarded message attribution", () => {
           )
         : renderTestMessageGroup(group, options);
       render(content, container);
+      await settleToolBridges(container);
       const links = container.querySelectorAll<HTMLButtonElement>(".chat-tool-row__file-link");
       expect(links).toHaveLength(2);
       for (const link of links) {

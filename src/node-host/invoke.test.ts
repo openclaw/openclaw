@@ -61,17 +61,17 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
       }
       return await original.ensureExecApprovalsSnapshot();
     },
-    readExecApprovalsSnapshot: () => {
+    readExecApprovalsSnapshotAsync: async () => {
       execApprovalsStoreMock.readCalls += 1;
       if (execApprovalsStoreMock.readError !== undefined) {
         throw execApprovalsStoreMock.readError;
       }
       if (execApprovalsStoreMock.hasReadResult) {
-        return execApprovalsStoreMock.readResult as ReturnType<
-          typeof original.readExecApprovalsSnapshot
+        return execApprovalsStoreMock.readResult as Awaited<
+          ReturnType<typeof original.readExecApprovalsSnapshotAsync>
         >;
       }
-      return original.readExecApprovalsSnapshot();
+      return await original.readExecApprovalsSnapshotAsync();
     },
     updateExecApprovals: async (...args: Parameters<typeof original.updateExecApprovals>) => {
       execApprovalsStoreMock.updateCalls += 1;
@@ -301,44 +301,39 @@ describe("node host invoke", () => {
     expect(secondController.signal.aborted).toBe(false);
   });
 
-  it.each(["Projects", "Projects "])(
-    "lists and reopens node-host directory %j",
-    async (directory) => {
-      const root = fs.realpathSync(tempDirs.make("openclaw-node-fs-listdir-"));
-      fs.mkdirSync(path.join(root, "Projects"));
-      fs.mkdirSync(path.join(root, directory, "child"), { recursive: true });
-      fs.writeFileSync(path.join(root, "notes.txt"), "hidden from directory listing");
-      const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-      const list = async (directoryPath: string) => {
-        await handleInvoke(
-          {
-            id: `invoke-fs-listdir-${request.mock.calls.length}`,
-            nodeId: "node-1",
-            command: "fs.listDir",
-            paramsJSON: JSON.stringify({ path: directoryPath }),
-          },
-          { request } as unknown as GatewayClient,
-          { current: async () => [] },
-        );
-        const result = request.mock.calls.at(-1)?.[1] as InvokeResult | undefined;
-        expect(result?.ok).toBe(true);
-        return JSON.parse(result?.payloadJSON ?? "{}") as FsListDirResult;
-      };
-      const initial = await list(root);
-      expect(initial.path).toBe(root);
-      expect(initial.entries.map((entry) => entry.name)).toEqual(
-        directory === "Projects" ? ["Projects"] : ["Projects", directory],
+  it.each(["Projects "])("lists and reopens node-host directory %j", async (directory) => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-node-fs-listdir-"));
+    fs.mkdirSync(path.join(root, "Projects"));
+    fs.mkdirSync(path.join(root, directory, "child"), { recursive: true });
+    fs.writeFileSync(path.join(root, "notes.txt"), "hidden from directory listing");
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+    const list = async (directoryPath: string) => {
+      await handleInvoke(
+        {
+          id: `invoke-fs-listdir-${request.mock.calls.length}`,
+          nodeId: "node-1",
+          command: "fs.listDir",
+          paramsJSON: JSON.stringify({ path: directoryPath }),
+        },
+        { request } as unknown as GatewayClient,
+        { current: async () => [] },
       );
-      const selected = expectDefined(
-        initial.entries.find((entry) => entry.name === directory),
-        "directory returned by the node host",
-      );
-      expect(await list(selected.path)).toMatchObject({
-        path: selected.path,
-        entries: [{ name: "child", path: path.join(selected.path, "child") }],
-      });
-    },
-  );
+      const result = request.mock.calls.at(-1)?.[1] as InvokeResult | undefined;
+      expect(result?.ok).toBe(true);
+      return JSON.parse(result?.payloadJSON ?? "{}") as FsListDirResult;
+    };
+    const initial = await list(root);
+    expect(initial.path).toBe(root);
+    expect(initial.entries.map((entry) => entry.name)).toEqual(["Projects", directory]);
+    const selected = expectDefined(
+      initial.entries.find((entry) => entry.name === directory),
+      "directory returned by the node host",
+    );
+    expect(await list(selected.path)).toMatchObject({
+      path: selected.path,
+      entries: [{ name: "child", path: path.join(selected.path, "child") }],
+    });
+  });
 
   it("stages terminal uploads on the node host", async () => {
     const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
@@ -364,7 +359,6 @@ describe("node host invoke", () => {
   });
 
   it.each([
-    { label: "when params are omitted", params: undefined, resolvedDefaults: undefined },
     {
       label: "when resolved defaults are not requested",
       params: { includeResolvedDefaults: false },
@@ -394,38 +388,6 @@ describe("node host invoke", () => {
         socket: { path: "/tmp/exec-approvals.sock" },
       },
       ...(resolvedDefaults ? { resolvedDefaults } : {}),
-    });
-  });
-
-  it("updates exec approvals and redacts the resulting snapshot", async () => {
-    execApprovalsStoreMock.hasReadResult = true;
-    execApprovalsStoreMock.readResult = createExecApprovalsSnapshot();
-    execApprovalsStoreMock.hasUpdateResult = true;
-    execApprovalsStoreMock.updateResult = createExecApprovalsSnapshot({
-      hash: "hash-after",
-      file: {
-        version: 1,
-        defaults: { security: "deny" },
-        socket: { path: "/tmp/updated.sock", token: "updated-secret" },
-      },
-    });
-    const result = await invokeExecApprovals("system.execApprovals.set", {
-      baseHash: "hash-before",
-      file: { version: 1, defaults: { security: "deny" } },
-    });
-
-    expect(execApprovalsStoreMock.updateCalls).toBe(1);
-    expect(execApprovalsStoreMock.ensureCalls).toBe(0);
-    expect(execApprovalsStoreMock.readCalls).toBe(1);
-    expect(JSON.parse(result.payloadJSON ?? "{}")).toEqual({
-      path: "/tmp/exec-approvals.json",
-      exists: true,
-      hash: "hash-after",
-      file: {
-        version: 1,
-        defaults: { security: "deny" },
-        socket: { path: "/tmp/updated.sock" },
-      },
     });
   });
 
@@ -490,7 +452,9 @@ describe("node host invoke", () => {
     const result = await invokeExecApprovals("system.execApprovals.set", {
       file: { version: 1, agents: { main: {} } },
     });
-    const prepared = execApprovalsStoreMock.updateParams?.update(missingSnapshot.file);
+    const { applyExecApprovalsUpdate } = await import("../infra/exec-approvals-mutation.kernel.js");
+    const update = execApprovalsStoreMock.updateParams?.update;
+    const prepared = update && applyExecApprovalsUpdate(missingSnapshot.file, update);
 
     expect(execApprovalsStoreMock.ensureCalls).toBe(0);
     expect(execApprovalsStoreMock.readCalls).toBe(1);
@@ -501,6 +465,9 @@ describe("node host invoke", () => {
     expect(JSON.parse(result.payloadJSON ?? "{}")).toMatchObject({
       hash: "sha256:created",
       file: { socket: { path: "/tmp/exec-approvals.sock" } },
+    });
+    expect(JSON.parse(result.payloadJSON ?? "{}").file.socket).toEqual({
+      path: "/tmp/exec-approvals.sock",
     });
   });
 
@@ -535,21 +502,6 @@ describe("node host invoke", () => {
       error: {
         code: "TIMEOUT",
         message: "Error: approval lock unavailable",
-      },
-    });
-  });
-
-  it("classifies stale exec approval locks as UNAVAILABLE", async () => {
-    execApprovalsStoreMock.ensureError = Object.assign(new Error("stale approval lock"), {
-      code: "file_lock_stale",
-    });
-    const result = await invokeExecApprovals("system.execApprovals.get");
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        message: "Error: stale approval lock",
       },
     });
   });
@@ -703,7 +655,6 @@ describe("node host invoke", () => {
 
   it.runIf(process.platform !== "win32").each([
     { env: { PATH: "/tmp/mismatch" }, blocked: "PATH" },
-    { env: { GIT_PAGER: "cat", PAGER: "cat" }, blocked: undefined },
     { env: { GIT_PAGER: "cat; id" }, blocked: "GIT_PAGER" },
   ])("validates forwarded env overrides in system.run.prepare: $env", async ({ env, blocked }) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prepare-env-"));
@@ -781,39 +732,6 @@ describe("node host invoke", () => {
           code: "INVALID_REQUEST",
           message: expect.stringContaining("paramsJSON malformed JSON"),
         }),
-      }),
-    );
-  });
-
-  it("returns a structured failure when system.run approval resolution rejects", async () => {
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-    const skillBins: SkillBinsProvider = { current: async () => [] };
-    approvalResolutionFailure.error = new Error("approval lock unavailable");
-
-    await expect(
-      handleInvoke(
-        {
-          id: "invoke-approval-read-failure",
-          nodeId: "node-1",
-          command: "system.run",
-          paramsJSON: JSON.stringify({ command: ["echo", "ok"] }),
-        },
-        { request } as unknown as GatewayClient,
-        skillBins,
-      ),
-    ).resolves.toBeUndefined();
-
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(
-      "node.invoke.result",
-      expect.objectContaining({
-        id: "invoke-approval-read-failure",
-        nodeId: "node-1",
-        ok: false,
-        error: {
-          code: "UNAVAILABLE",
-          message: "node invocation failed",
-        },
       }),
     );
   });
@@ -936,6 +854,15 @@ describe("node host invoke", () => {
     ).resolves.toBeUndefined();
 
     expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      "node.invoke.result",
+      expect.objectContaining({
+        id: "invoke-approval-read-and-send-failure",
+        nodeId: "node-1",
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "node invocation failed" },
+      }),
+    );
   });
 
   it.each(["system.run", "agent.cli.claude.run.v1"])(

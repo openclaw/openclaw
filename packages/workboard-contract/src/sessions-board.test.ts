@@ -1,5 +1,20 @@
-import { describe, expect, it } from "vitest";
-import { normalizeWorkboardSessionsBoardSpec } from "./sessions-board.js";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import {
+  normalizeWorkboardSessionsBoardSpec,
+  type WorkboardSessionFacts,
+} from "./sessions-board.js";
+
+it("exposes optional PR card details and rate-limit status without requiring enrichment", () => {
+  expectTypeOf<WorkboardSessionFacts["pullRequests"][number]>().toEqualTypeOf<{
+    number: number;
+    state: "open" | "draft" | "merged" | "closed";
+    url?: string;
+    title?: string;
+  }>();
+  expectTypeOf<WorkboardSessionFacts["pullRequestsRateLimited"]>().toEqualTypeOf<
+    true | undefined
+  >();
+});
 
 function specWithMatch(match: unknown) {
   return {
@@ -11,6 +26,22 @@ function specWithMatch(match: unknown) {
 }
 
 describe("Sessions board match normalization", () => {
+  it.each([
+    {},
+    { includeAutomation: true, includeHome: true },
+    { includeAutomation: false, includeHome: false },
+  ])("preserves optional scope opt-ins: %j", (scope) => {
+    expect(normalizeWorkboardSessionsBoardSpec({ ...specWithMatch({}), scope }).scope).toEqual(
+      scope,
+    );
+  });
+
+  it.each(["includeAutomation", "includeHome"])("rejects non-boolean scope.%s", (field) => {
+    expect(() =>
+      normalizeWorkboardSessionsBoardSpec({ ...specWithMatch({}), scope: { [field]: "true" } }),
+    ).toThrow(`scope.${field} must be a boolean`);
+  });
+
   it.each([
     { name: "one rule", match: { run: ["active"] }, expected: { run: ["active"] } },
     { name: "a singleton array", match: [{ run: ["active"] }], expected: { run: ["active"] } },

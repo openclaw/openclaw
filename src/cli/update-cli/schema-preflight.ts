@@ -6,6 +6,7 @@ import { resolveConfigPath } from "../../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessions/targets.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { preflightOpenClawDatabaseSchemaContexts } from "../../state/openclaw-database-preflight-contexts.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -29,6 +30,18 @@ export type TargetDatabaseSchemaContextOptions = {
   /** Candidate admission owns schema validation; the installed process still pins source bytes. */
   configValidation?: "candidate";
 };
+
+export function assertReadableGitMetadata(
+  metadataUnreadable: string | undefined,
+  code: Parameters<typeof createUpdatePreflightFailure>[0] = "target-git-metadata",
+): void {
+  if (metadataUnreadable) {
+    const failure = createUpdatePreflightFailure(code, metadataUnreadable);
+    throw new UpdatePreMutationError("target-metadata-preflight", failure.message, {
+      failureFacts: failure.failureFacts,
+    });
+  }
+}
 
 // Doctor's input hash stays root-only; activation also fences include bytes and targets.
 export function updateConfigSource(snapshot: ConfigFileSnapshot) {
@@ -100,24 +113,17 @@ export async function captureTargetDatabaseSchemaContext(
   let legacyConfigPlan =
     before &&
     isDeepStrictEqual(updateConfigSource(before), updateConfigSource(snapshot)) &&
-    isDeepStrictEqual(
-      planned.includeIdentity.includeFileHashesForWrite ?? {},
-      writeOptions.includeFileHashesForWrite ?? {},
-    ) &&
-    isDeepStrictEqual(
-      planned.includeIdentity.includeFileTargetsForWrite ?? {},
-      writeOptions.includeFileTargetsForWrite ?? {},
+    (["includeFileHashesForWrite", "includeFileTargetsForWrite"] as const).every((key) =>
+      isDeepStrictEqual(planned.includeIdentity[key] ?? {}, writeOptions[key] ?? {}),
     )
       ? planned
       : undefined;
-  if (before?.path === snapshot.path && !legacyConfigPlan) {
+  if (before?.path === snapshot.path && !legacyConfigPlan && !snapshot.valid) {
     // This is read-only admission. A concurrent save needs a fresh projection,
     // never reuse of the old source's plan or refusal merely because it changed.
-    if (!snapshot.valid) {
-      const { planLegacyConfigForUpdateChannel } =
-        await import("../../commands/doctor/legacy-config-repair.js");
-      legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
-    }
+    const { planLegacyConfigForUpdateChannel } =
+      await import("../../commands/doctor/legacy-config-repair.js");
+    legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
   }
   if (
     (!snapshot.valid && !legacyConfigPlan && configValidation !== "candidate") ||

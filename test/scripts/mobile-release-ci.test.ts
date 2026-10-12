@@ -1855,14 +1855,14 @@ fi
     const prepared = runSigningProof();
     expect(prepared.result.status, prepared.result.stderr).toBe(0);
     expect(prepared.events).toEqual([
-      "bundle:_4.0.21_ check",
-      "bundle:_4.0.21_ exec fastlane ios signing_check",
+      "bundle:_4.0.22_ check",
+      "bundle:_4.0.22_ exec fastlane ios signing_check",
       "probe:root-cwd",
     ]);
 
     const failedCheck = runSigningProof({ FIXTURE_FAIL_CHECK: "1" });
     expect(failedCheck.result.status).not.toBe(0);
-    expect(failedCheck.events).toEqual(["bundle:_4.0.21_ check"]);
+    expect(failedCheck.events).toEqual(["bundle:_4.0.22_ check"]);
 
     const action = parse(
       fs.readFileSync(".github/actions/ios-signing-keychain/action.yml", "utf8"),
@@ -2257,13 +2257,14 @@ fi
       }) => {
         const pidFile = path.join(runnerTemp, `${name}.pid`);
         const parentSource = [
+          // A timeout during PID publication must not terminate the fixture before it writes.
+          'process.on("SIGTERM", () => {});',
           'const { spawn } = require("node:child_process");',
           'const fs = require("node:fs");',
           `const child = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildSource)}], {`,
           '  stdio: ["ignore", process.stdout, process.stderr],',
           "});",
           "fs.writeFileSync(process.env.PID_FILE, `${process.pid}\\n${child.pid}\\n`);",
-          'process.on("SIGTERM", () => {});',
           "setInterval(() => {}, 1000);",
         ].join("\n");
         const runnerSource = `

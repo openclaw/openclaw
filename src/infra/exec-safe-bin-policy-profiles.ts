@@ -100,6 +100,11 @@ function compileSafeBinProfiles(
   );
 }
 
+const HEAD_TAIL_PROFILE = {
+  maxPositional: 0,
+  allowedBooleanFlags: ["--quiet", "--silent", "--verbose", "--zero-terminated", "-q", "-v", "-z"],
+};
+
 const SAFE_BIN_PROFILE_FIXTURES: Record<string, BuiltinSafeBinProfileFixture> = {
   jq: {
     maxPositional: 1,
@@ -220,20 +225,11 @@ const SAFE_BIN_PROFILE_FIXTURES: Record<string, BuiltinSafeBinProfileFixture> = 
     ],
   },
   head: {
-    maxPositional: 0,
+    ...HEAD_TAIL_PROFILE,
     allowedValueFlags: ["--lines", "--bytes", "-n", "-c"],
-    allowedBooleanFlags: [
-      "--quiet",
-      "--silent",
-      "--verbose",
-      "--zero-terminated",
-      "-q",
-      "-v",
-      "-z",
-    ],
   },
   tail: {
-    maxPositional: 0,
+    ...HEAD_TAIL_PROFILE,
     allowedValueFlags: [
       "--lines",
       "--bytes",
@@ -242,15 +238,6 @@ const SAFE_BIN_PROFILE_FIXTURES: Record<string, BuiltinSafeBinProfileFixture> = 
       "--pid",
       "-n",
       "-c",
-    ],
-    allowedBooleanFlags: [
-      "--quiet",
-      "--silent",
-      "--verbose",
-      "--zero-terminated",
-      "-q",
-      "-v",
-      "-z",
     ],
     // Follow/retry modes are unbounded and do not belong in auto-approved safe-bin use.
     deniedFlags: ["--follow", "--retry", "-F", "-f"],

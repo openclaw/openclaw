@@ -30,7 +30,7 @@ const streamingAliasMigration = defineChannelAliasMigration({
   streaming: {
     // Runtime mode resolution dropped legacy streamMode reads; the doctor
     // resolver keeps them so migration preserves configured intent.
-    defaultMode: "off",
+    defaultMode: "progress",
     includePreviewChunk: true,
   },
   // Discord's account merge replaces the root streaming object wholesale
@@ -40,8 +40,8 @@ const streamingAliasMigration = defineChannelAliasMigration({
   dm: { root: true, accounts: true },
 });
 
-function hasUnsupportedRealtimeWakeNamesInVoice(value: unknown): boolean {
-  const voice = asObjectRecord(value);
+function hasUnsupportedDiscordRealtimeWakeNames(value: unknown): boolean {
+  const voice = asObjectRecord(asObjectRecord(value)?.voice);
   const realtime = asObjectRecord(voice?.realtime);
   const wakeNames = realtime?.wakeNames;
   return Array.isArray(wakeNames)
@@ -51,10 +51,6 @@ function hasUnsupportedRealtimeWakeNamesInVoice(value: unknown): boolean {
             typeof wakeName === "string" && !isSupportedRealtimeVoiceActivationName(wakeName),
         )
     : false;
-}
-
-function hasUnsupportedDiscordRealtimeWakeNames(value: unknown): boolean {
-  return hasUnsupportedRealtimeWakeNamesInVoice(asObjectRecord(value)?.voice);
 }
 
 function normalizeUnsupportedRealtimeWakeNames(
@@ -157,31 +153,23 @@ export function normalizeCompatibilityConfig({
   if (!rawEntry) {
     return { config: cfg, changes: [] };
   }
-  let updated = rawEntry;
-  let changed = tuningKnobs.config !== cfg;
   if (tuningKnobs.changed) {
     changes.push("Removed retired Discord tuning knobs.");
   }
 
   const accounts = normalizeChannelAccounts({
-    entry: updated,
+    entry: rawEntry,
     pathPrefix: "channels.discord",
     changes,
     normalizeAccount: ({ account, pathPrefix, changes: accountChanges }) =>
       normalizeUnsupportedRealtimeWakeNames(account, pathPrefix, accountChanges),
   });
-  updated = accounts.entry;
-  changed = changed || accounts.changed;
-
   const normalizedWakeNames = normalizeUnsupportedRealtimeWakeNames(
-    updated,
+    accounts.entry,
     "channels.discord",
     changes,
   );
-  updated = normalizedWakeNames.entry;
-  changed = changed || normalizedWakeNames.changed;
-
-  if (!changed) {
+  if (tuningKnobs.config === cfg && !accounts.changed && !normalizedWakeNames.changed) {
     return { config: cfg, changes: [] };
   }
   return {
@@ -189,7 +177,7 @@ export function normalizeCompatibilityConfig({
       ...tuningKnobs.config,
       channels: {
         ...tuningKnobs.config.channels,
-        discord: updated,
+        discord: normalizedWakeNames.entry,
       } as OpenClawConfig["channels"],
     },
     changes,

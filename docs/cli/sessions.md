@@ -39,6 +39,13 @@ session keys.
 Token counts below 1,000 appear as whole numbers; larger counts use compact `k`
 or `m` labels. JSON output retains exact numeric counts.
 
+The context denominator follows the selected model and runtime, using the local
+Gateway's published catalog, saved metadata, configured limits, or a matching
+verified run budget. Reading a session list does not start model discovery.
+Unknown capacity is `?` in the table and `null` in JSON, with no percentage.
+If Gateway inspection or its catalog read fails, the command warns and still lists
+stored sessions using saved or configured capacity.
+
 Flags:
 
 | Flag                 | Description                                                         |
@@ -99,7 +106,7 @@ skipped.
   "hasMore": false,
   "activeMinutes": null,
   "sessions": [
-    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-6-astra" },
+    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-5.6-sol" },
     { "agentId": "work", "key": "agent:work:main", "model": "anthropic/claude-sonnet-4-6" }
   ]
 }
@@ -247,6 +254,10 @@ Gateway lifecycle checks: `global` previews can still show an archive or delete
 action that the Gateway refuses. Explicitly selected non-default global deletion
 remains supported. The real archive or delete request is authoritative.
 
+Agent-qualified aliases keep their selected owner through lookup and mutation.
+For example, `sessions delete agent:work:main --yes` still targets `work` when
+the Gateway describes that session using the resolved key `global`.
+
 Example mixed-result JSON:
 
 ```json
@@ -277,8 +288,13 @@ openclaw sessions --all-agents tail --follow
 ```
 
 `openclaw sessions tail` renders recent runtime trajectory events as compact
-progress lines. Without `--session-key`, it tails running sessions first, then
-the latest stored session. `--tail <count>` controls how many existing events
+progress lines. Without `--session-key`, it asks the configured Gateway for
+running sessions and tails matching local sessions first, then falls back to
+the most recently active stored session. If the Gateway is unreachable, it prints
+`Gateway unreachable: showing the most recently active session`. An explicit
+`--store` skips the Gateway lookup, orders by activity, and prints
+`explicit store: ordered by activity`. An explicit `--session-key` selects only
+that local session without a Gateway lookup. `--tail <count>` controls how many existing events
 print before follow mode; default `80`, and `0` starts at the current end.
 `--follow` keeps watching the selected SQLite-backed sessions. Session keys use
 fixed-width terminal columns, with long keys truncated at whole grapheme boundaries
@@ -313,9 +329,18 @@ the owner approves the exec request. The output directory is always resolved
 inside `.openclaw/trajectory-exports/` under the selected workspace.
 The file list in text and JSON output reports only artifacts written to the bundle.
 
+For stored keys without an agent prefix, such as `global`, export uses the
+configured default or sole agent. Pass `--agent <id>` when multiple agents are
+configured without a default.
+
 ## Cleanup maintenance
 
-Run maintenance now instead of waiting for the next write cycle:
+Run maintenance now instead of waiting for the next write cycle. Without
+`--store`, cleanup delegates to the reachable Gateway. Destructive local cleanup
+requires exclusive offline maintenance ownership; if a Gateway or another live
+owner holds the state, the command names that owner and refuses. Run cleanup
+without `--store` to use the Gateway, or stop the Gateway and other owners first.
+Dry-run previews remain available while the Gateway is running:
 
 ```bash
 openclaw sessions cleanup --dry-run
@@ -340,10 +365,10 @@ openclaw sessions cleanup --json
   `session.maintenance.pruneAfter`; artifacts still referenced by SQLite
   session rows are preserved. Eligible empty files count as removed artifacts
   in both dry-run and applied summaries, even though they free zero bytes.
-- Cleanup reports short-lived Gateway model-run probe cleanup separately as
+- Cleanup reports short-lived Gateway model-run check cleanup separately as
   `modelRunPruned`. This only matches strict explicit keys shaped like
   `agent:*:explicit:model-run-<uuid>`. Retention is a fixed `24h` and is
-  pressure-gated: it only removes stale probe rows when session-entry
+  pressure-gated: it only removes stale check rows when session-entry
   maintenance/cap pressure is reached. When it runs, model-run cleanup
   happens before global stale cleanup and capping.
 - `pruneAfter` archives eligible durable sessions in place, preserving their IDs
@@ -405,7 +430,7 @@ JSON result. Dry runs do not load harness plugins.
 Applied artifact cleanup counts only successful file removals. If a file cannot
 be deleted, it contributes no freed bytes and remains part of disk usage.
 Unreferenced artifact cleanup and legacy disk-budget enforcement continue with
-other eligible files. Canonical SQLite archive pruning stops after a deletion
+other eligible files. SQLite archive pruning stops after a deletion
 error to retain its database recovery copy. If usage stays above the target,
 check filesystem permissions and retry after resolving the deletion failure.
 
@@ -479,14 +504,14 @@ Review the preview, then apply cleanup and compact the copied database:
 )
 ```
 
-Explicit `--store` cleanup stays local. Doctor requires its target inside `OPENCLAW_STATE_DIR`
-and no Gateway using that state directory; the live Gateway can continue using
+Explicit `--store` cleanup stays local. Destructive cleanup and Doctor require their targets inside `OPENCLAW_STATE_DIR`
+and exclusive ownership of that state directory; the live Gateway can continue using
 its separate original state. Set `--session-sqlite-agent` to the copied database's
 owner; an explicit Doctor store selector otherwise defaults to `main`.
 
 `archive-age`, `archive-dashboard`, and `archive-cap` change session metadata
 while retaining transcript rows. Disk-budget cleanup can replace eligible
-history with compressed archives, whose canonical payload remains in SQLite.
+history with compressed archives, whose stored payload remains in SQLite.
 Doctor's `compact` step then reclaims free database pages with `VACUUM` and
 reports before/after database and WAL sizes. It does not choose more history
 to delete. Compare physical sizes and retained history, not only session counts;

@@ -1,11 +1,20 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareQualifiedSessionEntryTarget } from "../config/sessions/session-accessor.entry.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { removeSessionMember as removeSessionMemberSync } from "../config/sessions/session-sharing-store.native.js";
-import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import {
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -14,9 +23,94 @@ import type {
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
+import { prepareSessionSharingSource } from "./session-sharing-source.js";
 import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionEntry } from "./session-utils-store.js";
+
+it.each([
+  { phase: "before", listing: "available" },
+  { phase: "after", listing: "available" },
+  { phase: "after", listing: "denied" },
+] as const)(
+  "refuses a sharing locator retargeted $phase source preparation (listing=$listing)",
+  async ({ phase, listing }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionKey = "agent:main:sharing-locator";
+      const original = state.statePath("original", "store.main.sqlite");
+      const replacement = state.statePath("replacement", "store.main.sqlite");
+      for (const storePath of [original, replacement]) {
+        replaceSessionEntrySync(
+          { agentId: "main", storePath, sessionKey },
+          { sessionId: "identical", updatedAt: 1, visibility: "shared" },
+        );
+      }
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: original });
+      const identity = readOpenClawAgentDatabaseIdentity(database);
+      const alias = state.statePath("selected");
+      fs.symlinkSync(state.statePath("original"), alias, "junction");
+      const retarget = () => {
+        fs.unlinkSync(alias);
+        fs.symlinkSync(state.statePath("replacement"), alias, "junction");
+      };
+      const target = {
+        agentId: "main",
+        canonicalKey: sessionKey,
+        storeKey: sessionKey,
+        storePath: state.statePath("selected", "store.json"),
+        readSource: {
+          agentId: "main",
+          path: database.path,
+          databaseIdentity: identity.identity,
+          databaseBirthtime: identity.birthtime,
+        },
+      };
+      const readDirectory = fs.readdirSync;
+      let listingDenied = false;
+      const directoryRead =
+        listing === "denied"
+          ? vi.spyOn(fs, "readdirSync").mockImplementation((...args) => {
+              if (String(args[0]) === alias) {
+                listingDenied = true;
+                throw Object.assign(new Error("Synthetic directory listing denied"), {
+                  code: "EACCES",
+                });
+              }
+              return readDirectory(...args);
+            })
+          : undefined;
+      if (directoryRead) {
+        syncBuiltinESMExports();
+      }
+      try {
+        if (phase === "before") {
+          retarget();
+          // Join any unexpectedly accepted reader so the negative control cannot leak custody.
+          await expect(
+            prepareSessionSharingSource(target, () => {}).then((prepared) => prepared.release()),
+          ).rejects.toThrow("Session sharing source changed");
+        } else {
+          const prepared = await prepareSessionSharingSource(target, () => {});
+          try {
+            expect(prepared.target?.entry.sessionId).toBe("identical");
+            if (listing === "denied") {
+              expect(listingDenied).toBe(true);
+            }
+            retarget();
+            expect(() => prepared.assertCurrent()).toThrow("Session sharing source changed");
+          } finally {
+            await prepared.release();
+          }
+        }
+      } finally {
+        directoryRead?.mockRestore();
+        if (directoryRead) {
+          syncBuiltinESMExports();
+        }
+      }
+    });
+  },
+);
 
 it.each([
   { kind: "qualified", agentId: "main" },
@@ -105,7 +199,12 @@ it.each([
             );
           },
         });
-        await result.authorization!.withCurrent!(() => result.authorization!.assertCurrent());
+        await result.authorization!.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
+          expect(facts.entry).toBeUndefined();
+          expect(facts.members).toEqual([]);
+          assertCurrent();
+          result.authorization!.assertCurrent();
+        });
         expect(effect).toHaveBeenCalledOnce();
         expect(host.queries).toEqual([]);
       } finally {
@@ -115,6 +214,15 @@ it.each([
     });
   },
 );
+
+// Warm entry receipts answer repeat reads in memory; these cases need the worker read.
+function invalidateSessionReadFacts(scope: { agentId: string; sessionKey: string }) {
+  sessionChanges.invalidate({
+    ...scope,
+    storePath: resolveOpenClawAgentSqlitePath(scope),
+    factsInvalidated: true,
+  });
+}
 
 it("allows unrelated config reloads while worker authorization reads are pending", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -130,9 +238,9 @@ it("allows unrelated config reloads while worker authorization reads are pending
         id: client.authenticatedUserProfile!.profileId,
       },
     });
-    const read = historyLane.pool.run.bind(historyLane.pool);
+    const read = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
     let reloads = 0;
-    const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+    const spy = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
       const reply = await read(...args);
       if (
         reply.ok &&
@@ -156,6 +264,7 @@ it("allows unrelated config reloads while worker authorization reads are pending
       expect(result.error).toBeNull();
       expect(reloads).toBeGreaterThan(0);
       const initialReloads = reloads;
+      invalidateSessionReadFacts(scope);
       const effect = vi.fn(() => result.authorization!.assertCurrent());
       await result.authorization!.withCurrent!(effect);
       expect(reloads).toBeGreaterThan(initialReloads);
@@ -195,85 +304,128 @@ it("does not replay an authorization consumer after its own effect changes the r
         replaceSessionEntrySync(scope, { ...entry, updatedAt: effect.mock.calls.length + 1 });
         result.authorization!.assertCurrent();
       }),
-    ).rejects.toThrow("Session sharing facts changed during read");
+    ).rejects.toThrow(/changed during read/);
     expect(effect).toHaveBeenCalledOnce();
   });
 });
 
-it.each(["before-read", "before-consume"] as const)(
-  "rejects membership revoked %s without retaining an allow decision",
-  async (boundary) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = rolePolicyConfig();
-      const client = roleClient("view", "worker-member");
-      const scope = { agentId: "main", sessionKey: "agent:main:worker-sharing" };
-      replaceSessionEntrySync(scope, {
-        sessionId: "sharing-current",
-        updatedAt: 1,
-        visibility: "read-only",
-        createdActor: { type: "human", source: "profile", id: "another-profile" },
+it.each([
+  "worker-before-read",
+  "reset-before-read",
+  "native-before-consume",
+  "owner-before-consume",
+] as const)("rejects %s authority revocation before disclosure", async (boundary) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = rolePolicyConfig();
+    const client = roleClient("view", "worker-member");
+    const scope = { agentId: "main", sessionKey: "agent:main:worker-sharing" };
+    replaceSessionEntrySync(scope, {
+      sessionId: "sharing-current",
+      updatedAt: 1,
+      visibility: "read-only",
+      createdActor: { type: "human", source: "profile", id: "another-profile" },
+    });
+    await addSessionMember(scope, {
+      identityId: client.authenticatedUserProfile!.profileId,
+      addedBy: "another-profile",
+    });
+    const database = openOpenClawAgentDatabase(scope);
+    const host = observeHostDataSql();
+    let authorization: SessionMutationAuthorization | undefined;
+    try {
+      const result = await resolveSessionMutationAuthorizationAsync({
+        client,
+        method: "chat.send",
+        requestParams: scope,
+        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
       });
-      await addSessionMember(scope, {
-        identityId: client.authenticatedUserProfile!.profileId,
-        addedBy: "another-profile",
-      });
-      const host = observeHostDataSql();
-      let authorization: SessionMutationAuthorization | undefined;
-      try {
-        const result = await resolveSessionMutationAuthorizationAsync({
-          client,
-          method: "chat.send",
-          requestParams: scope,
-          context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-        });
-        expect(result.error).toBeNull();
-        const currentAuthorization = result.authorization;
-        if (!currentAuthorization) {
-          throw new Error("expected session authorization");
-        }
-        authorization = currentAuthorization;
-        await currentAuthorization.withCurrent!(() => currentAuthorization.assertCurrent());
-        expect(host.calls.flatMap((call) => call.mock.calls)).toEqual([]);
-      } finally {
-        host.restore();
-      }
-      if (!authorization) {
+      expect(result.error).toBeNull();
+      const currentAuthorization = result.authorization;
+      if (!currentAuthorization) {
         throw new Error("expected session authorization");
       }
-      const revoke = () => removeSessionMember(scope, client.authenticatedUserProfile!.profileId);
-      const read = historyLane.pool.run.bind(historyLane.pool);
-      let revoked = false;
-      const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
-        const reply = await read(...args);
-        if (
-          boundary === "before-consume" &&
-          !revoked &&
-          reply.ok &&
-          typeof reply.value === "object" &&
-          reply.value !== null &&
-          "kind" in reply.value &&
-          reply.value.kind === "session-exact-entries"
-        ) {
-          revoked = true;
-          await revoke();
-        }
-        return reply;
+      authorization = currentAuthorization;
+      await currentAuthorization.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
+        expect(facts.entry?.sessionId).toBe("sharing-current");
+        expect(facts.members.map((member) => member.identityId)).toEqual([
+          client.authenticatedUserProfile!.profileId,
+        ]);
+        assertCurrent();
+        currentAuthorization.assertCurrent();
       });
-      const effect = vi.fn();
-      try {
-        if (boundary === "before-read") {
-          await revoke();
-        }
-        await expect(authorization.withCurrent!(effect)).rejects.toThrow();
-        expect(effect).not.toHaveBeenCalled();
-      } finally {
-        spy.mockRestore();
+      expect(host.calls.flatMap((call) => call.mock.calls)).toEqual([]);
+    } finally {
+      host.restore();
+    }
+    if (!authorization) {
+      throw new Error("expected session authorization");
+    }
+    const read = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+    let revoked = false;
+    let inventories = 0;
+    let closing: Promise<void> | undefined;
+    const runExternalClose = AsyncLocalStorage.snapshot();
+    const spy = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
+      const reply = await read(...args);
+      if (
+        reply.ok &&
+        typeof reply.value === "object" &&
+        reply.value !== null &&
+        "kind" in reply.value &&
+        reply.value.kind === "session-target-inventory"
+      ) {
+        inventories += 1;
       }
+      if (
+        boundary.endsWith("before-consume") &&
+        !revoked &&
+        reply.ok &&
+        typeof reply.value === "object" &&
+        reply.value !== null &&
+        "kind" in reply.value &&
+        reply.value.kind === "session-exact-entries"
+      ) {
+        revoked = true;
+        if (boundary === "owner-before-consume") {
+          closing = runExternalClose(closeOpenClawAgentDatabasesAsync);
+        } else {
+          // Raw SDK DML has no sessionChanges publication and cannot join the held writer FIFO.
+          database.db
+            .prepare("DELETE FROM session_members WHERE session_key = ? AND identity_id = ?")
+            .run(scope.sessionKey, client.authenticatedUserProfile!.profileId);
+        }
+      }
+      return reply;
     });
-  },
-);
+    const effect = vi.fn();
+    try {
+      if (boundary === "worker-before-read") {
+        await removeSessionMember(scope, client.authenticatedUserProfile!.profileId);
+      } else if (boundary === "reset-before-read") {
+        replaceSessionEntrySync(scope, {
+          sessionId: "sharing-successor",
+          lifecycleRevision: "successor",
+          updatedAt: 2,
+          visibility: "read-only",
+          createdActor: { type: "human", source: "profile", id: "another-profile" },
+        });
+      } else {
+        invalidateSessionReadFacts(scope);
+      }
+      await expect(authorization.admittedInputAuthority!.withCurrent(effect)).rejects.toThrow();
+      expect(effect).not.toHaveBeenCalled();
+      expect(inventories).toBe(0);
+      if (boundary.endsWith("before-consume")) {
+        expect(revoked).toBe(true);
+      }
+    } finally {
+      spy.mockRestore();
+      await closing;
+    }
+  });
+});
 
-it.each(["membership", "owner", "routing", "policy", "unrelated-config"] as const)(
+it.each(["membership", "routing", "policy", "unrelated-config"] as const)(
   "rechecks %s changes within the consuming frame",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -298,14 +450,11 @@ it.each(["membership", "owner", "routing", "policy", "unrelated-config"] as cons
       });
       expect(result.error).toBeNull();
       const authorization = result.authorization!;
-      let closing: Promise<void> | undefined;
       let checked = false;
-      const outcome = authorization.withCurrent!(() => {
+      await authorization.withCurrent!(() => {
         authorization.assertCurrent();
         if (change === "membership") {
           removeSessionMemberSync(scope, client.authenticatedUserProfile!.profileId);
-        } else if (change === "owner") {
-          closing = closeOpenClawAgentDatabasesAsync();
         } else if (change === "policy") {
           const roles = cfg.gateway!.roles!;
           cfg = {
@@ -333,12 +482,6 @@ it.each(["membership", "owner", "routing", "policy", "unrelated-config"] as cons
         }
         checked = true;
       });
-      if (change === "owner") {
-        await expect(outcome).rejects.toThrow();
-      } else {
-        await outcome;
-      }
-      await closing;
       expect(checked).toBe(true);
     });
   },

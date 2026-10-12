@@ -19,11 +19,12 @@ const suite = createControlUiE2eSuite({
 const DASHBOARD_REQUEST_PARAMS = {
   archived: "all",
   configuredAgentsOnly: true,
+  excludeDock: true,
   hasBoard: true,
   includeGlobal: true,
   includeUnknown: true,
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-  rowMode: "compact",
+  rowMode: "dashboard",
   source: "dashboard",
 } as const;
 
@@ -166,6 +167,7 @@ suite.define(() => {
       const page = await context.newPage();
       try {
         const gateway = await installMockGateway(page, {
+          awaitInitialRoster: !suspending,
           gatewaySuspensionPhase: suspending ? "draining" : "accepting",
           methodResponses: {
             "sessions.list": {
@@ -280,6 +282,7 @@ suite.define(() => {
           expect(canonical.params).toEqual({
             agentId: "main",
             configuredAgentsOnly: true,
+            excludeDock: true,
             includeDerivedTitles: true,
             includeGlobal: true,
             includeLastMessage: true,
@@ -342,7 +345,16 @@ suite.define(() => {
             "sessions.list",
             sessionsResult(`agent:main:canonical-${index + 1}`, canonicalLabel, 10 + index),
           );
-          await page.getByText(canonicalLabel, { exact: true }).first().waitFor();
+          const sidebar = page.locator("openclaw-app-sidebar");
+          // The profileless roster has no ownership identities, so its title stays plain.
+          await expect
+            .poll(() =>
+              sidebar
+                .locator(".sidebar-session-toolbar .sidebar-recent-sessions__label-text")
+                .textContent(),
+            )
+            .toBe("Sessions");
+          await sidebar.getByText(canonicalLabel, { exact: true }).waitFor();
         }),
       );
 

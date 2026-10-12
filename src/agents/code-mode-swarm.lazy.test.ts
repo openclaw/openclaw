@@ -117,7 +117,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
         .digest("hex")}`,
       queuedLaunch: { request: {}, timeoutMs: 1, schedulerGroupKey: "group", maxConcurrent: 1 },
     };
-    lookup.mockReturnValue(reservation);
+    lookup.mockResolvedValue(reservation);
 
     function createRun() {
       const catalogRef = createToolSearchCatalogRef();
@@ -151,7 +151,6 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
         owner,
         dispatch: (pendingRequests = requests) =>
           createPendingBridgeStates(pendingRequests, {
-            config: limits,
             inbox: owner.inbox,
             results: owner.results,
             runtime,

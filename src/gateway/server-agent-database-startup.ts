@@ -1,8 +1,8 @@
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -42,67 +42,82 @@ export function activateGatewayAgentDatabaseStartup(params: {
   log: { info: (message: string) => void; warn: (message: string) => void };
 }): void {
   const broker = getSpawnBroker();
+  const createPreparationGuard = (
+    agentId: string,
+    paths: readonly string[],
+    env: NodeJS.ProcessEnv,
+    signal: AbortSignal,
+    assertCurrent: () => void,
+  ) => {
+    let cfg: OpenClawConfig | undefined;
+    return () => {
+      signal.throwIfAborted();
+      assertCurrent();
+      if (!params.isCurrent()) {
+        throw new Error(`Agent ${agentId} startup preparation was superseded`);
+      }
+      const currentConfig = params.getConfig();
+      if (currentConfig !== cfg) {
+        assertAgentDatabaseConfiguration(currentConfig, agentId, paths, env);
+        cfg = currentConfig;
+      }
+    };
+  };
   params.admission?.activate({
     isCurrent: params.isCurrent,
+    preparationReady: params.preparationReady,
     openAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {
-        const [
-          { captureOpenClawAgentDatabaseExecution },
-          { runOpenClawAgentWorkerWrite },
-          { createSqliteWorkerOperationAdmission },
-        ] = await Promise.all([
-          import("../state/openclaw-agent-execution.js"),
-          import("../state/openclaw-agent-write-admission.js"),
-          import("../infra/sqlite-worker-operation-admission.js"),
-        ]);
-        assertCurrent();
-        let cfg = params.getConfig();
-        assertAgentDatabaseConfiguration(cfg, agentId, paths, env);
-        const assertOpenCurrent = () => {
-          signal.throwIfAborted();
-          assertCurrent();
-          const currentConfig = params.getConfig();
-          if (currentConfig !== cfg) {
-            assertAgentDatabaseConfiguration(currentConfig, agentId, paths, env);
-            cfg = currentConfig;
-          }
-        };
+        const { prepareOpenClawAgentDatabaseExecution } =
+          await import("../state/openclaw-agent-execution.js");
+        const assertOpenCurrent = createPreparationGuard(
+          agentId,
+          paths,
+          env,
+          signal,
+          assertCurrent,
+        );
+        assertOpenCurrent();
         for (const pathname of paths) {
-          const options = { agentId, path: pathname, env };
-          const execution = captureOpenClawAgentDatabaseExecution(options);
-          try {
-            await runOpenClawAgentWorkerWrite(
-              options,
-              () =>
-                execution.prepare(
-                  {
-                    assertCurrent: assertOpenCurrent,
-                    createAdmission: (binding) => () => ({
-                      nativeLocations: binding.nativeLocations,
-                      admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                        binding.authorize(request);
-                        assertOpenCurrent();
-                        if (!grant()) {
-                          throw new Error(`Agent ${agentId} startup admission expired`);
-                        }
-                      }, binding.attachment),
-                    }),
-                  },
-                  signal,
-                ),
-              undefined,
-              signal,
-            );
-          } finally {
-            await execution.release();
-          }
+          await prepareOpenClawAgentDatabaseExecution(
+            { agentId, path: pathname, env },
+            assertOpenCurrent,
+            signal,
+          );
         }
       }),
-    prepareAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
+    migrateAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {
-        await racePromiseWithAbortSignal(params.preparationReady, signal);
+        const { prepareGatewayStartupSessions, runGatewaySessionStartupMaintenance } =
+          await import("./server-startup-session-migration.js");
+        const assertMigrationCurrent = createPreparationGuard(
+          agentId,
+          paths,
+          env,
+          signal,
+          assertCurrent,
+        );
+        await withAgentDatabasePreparationGuard(assertMigrationCurrent, async () => {
+          const databases = await prepareGatewayStartupSessions({
+            cfg: params.getConfig(),
+            env,
+            agentIds: new Set([agentId]),
+            assertCurrent: assertMigrationCurrent,
+            log: params.log,
+          });
+          await runGatewaySessionStartupMaintenance({
+            databases,
+            assertCurrent: assertMigrationCurrent,
+            signal,
+            log: params.log,
+          });
+          assertMigrationCurrent();
+        });
+      }),
+    publishAgent: ({ agentId, paths, env, signal, assertCurrent, phase }) =>
+      runWithSpawnBroker(broker, async () => {
+        phase("secrets");
         const [
-          { runStartupSessionMigration },
           { refreshPreparedModelRuntimeSnapshots, getPreparedModelRuntimeSnapshot },
           { listConfiguredOwnerInputs },
           {
@@ -111,7 +126,6 @@ export function activateGatewayAgentDatabaseStartup(params: {
             refreshActiveSecretsRuntimeSnapshotForConfig,
           },
         ] = await Promise.all([
-          import("./server-startup-session-migration.js"),
           import("../agents/prepared-model-runtime.js"),
           import("../agents/prepared-model-runtime.configured.js"),
           import("../secrets/runtime.js"),
@@ -125,6 +139,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
           !previousSecrets ||
           !(await refreshActiveSecretsRuntimeSnapshotForConfig({
             sourceConfig: previousSecrets.sourceConfig,
+            runtimeSourceConfig: getRuntimeConfigSourceSnapshot() ?? undefined,
             includeAuthStoreRefs: true,
             assertCurrent: () => {
               signal.throwIfAborted();
@@ -171,14 +186,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
         const agentIds = new Set([agentId]);
         assertPreparationCurrent();
         await withAgentDatabasePreparationGuard(assertPreparationCurrent, async () => {
-          await runStartupSessionMigration({
-            cfg,
-            env,
-            agentIds,
-            assertCurrent: assertPreparationCurrent,
-            log: params.log,
-          });
-          assertPreparationCurrent();
+          phase("models");
           const pluginMetadataSnapshot = params.getPluginMetadataSnapshot();
           await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
             refreshPreparedModelRuntimeSnapshots(cfg, {

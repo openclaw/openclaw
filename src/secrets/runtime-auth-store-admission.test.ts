@@ -35,7 +35,7 @@ it.each(["matching", "other-state", "other-path"])(
       source: "startup",
     });
     const failure = new AuthProfileStoreUnreadableError(databasePath);
-    const loadAuthStore = vi.fn((agentDir?: string) => {
+    const loadAuthStore = vi.fn(async (agentDir?: string) => {
       if (agentDir === workerDir) {
         throw failure;
       }
@@ -121,7 +121,20 @@ it.each(["other-owner", "pending-authority"])(
       expect(snapshot.degradedOwners).toEqual([]);
     };
     if (scope === "pending-authority") {
+      const loadAuthStore = vi.fn();
+      const pending = await prepareSecretsRuntimeSnapshot({
+        config: {},
+        env,
+        agentDirs: [agentDir],
+        includeConfigRefs: false,
+        loadAuthStore,
+      });
+      expect(pending.authStores).toEqual([]);
+      expect(pending.degradedOwners).toEqual([]);
+      expect(loadAuthStore).not.toHaveBeenCalled();
+      expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBe(refusal);
       await preparePendingAgentDatabase(refusal, { env, assertCurrent: () => {} }, prepare);
+      expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
     } else {
       await prepare();
     }

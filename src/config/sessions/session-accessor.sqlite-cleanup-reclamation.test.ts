@@ -30,7 +30,7 @@ import type {
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const hook = vi.hoisted(() => ({ after: undefined as (() => void) | undefined }));
@@ -264,12 +264,21 @@ describe("SQLite lifecycle cleanup reclamation", () => {
       await replaceSessionEntry(history, {
         sessionId: "marker-scan-current",
         updatedAt: Date.now(),
+        skillsSnapshot: { prompt: "unrelated saved prompt".repeat(1024), skills: [] },
       });
       const before = structuredClone(loadSessionEntry(history));
       await closeOpenClawStateDatabaseAsync();
       const db = database();
       const failure = new Error("late native transcript read failure");
       const observed: unknown[] = [];
+      let snapshotReads = 0;
+      db.db.function("cleanup_snapshot_value", (valueJson) => {
+        snapshotReads += 1;
+        return valueJson;
+      });
+      db.db.exec(`CREATE TEMP VIEW session_entry_snapshots AS
+        SELECT session_key, field, cleanup_snapshot_value(value_json) AS value_json
+        FROM main.session_entry_snapshots`);
       let clock = 0;
       let advanceClock = true;
       vi.spyOn(performance, "now").mockImplementation(() => clock);
@@ -317,6 +326,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
           await expect(run()).resolves.toEqual(empty);
         }
         expect(workersStarted).toBe(0);
+        expect(snapshotReads).toBe(0);
         const records = await readArtifactPreparationLogs(logPath);
         expect(records).toHaveLength(1);
         expect(records[0]?.message).toBe(
@@ -330,7 +340,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
           orphanPlanningMs: 40,
           markerScanMs: 1200,
           nodeRows: 1,
-          windowRows: 2,
+          windowRows: 1,
           referenceIds: 1,
           selectedEntries: 0,
           markerWindows: 1,
@@ -343,10 +353,12 @@ describe("SQLite lifecycle cleanup reclamation", () => {
           advanceClock = false;
           await expect(run()).resolves.toEqual(empty);
           expect(await readArtifactPreparationLogs(logPath)).toEqual(records);
+          expect(snapshotReads).toBe(0);
         }
       } finally {
         channel("worker_threads").unsubscribe(onWorker);
         db.db.exec("DROP VIEW temp.transcript_events");
+        db.db.exec("DROP VIEW temp.session_entry_snapshots");
       }
       expect(workersStarted).toBe(0);
       expect(loadSessionEntry(history)).toEqual(before);

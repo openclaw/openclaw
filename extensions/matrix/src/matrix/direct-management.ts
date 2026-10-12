@@ -103,30 +103,6 @@ async function writeMatrixDirectRoomMappings(params: {
   );
 }
 
-async function classifyDirectRoomCandidate(params: {
-  client: MatrixClient;
-  roomId: string;
-  remoteUserId: string;
-  selfUserId: string | null;
-  source: "account-data" | "joined";
-}): Promise<MatrixDirectRoomCandidate> {
-  const evidence = await inspectMatrixDirectRoomEvidence({
-    client: params.client,
-    roomId: params.roomId,
-    remoteUserId: params.remoteUserId,
-    selfUserId: params.selfUserId,
-  });
-  const strict =
-    evidence.strict && (params.source === "account-data" || evidence.memberStateFlag !== false);
-  return {
-    roomId: params.roomId,
-    joinedMembers: evidence.joinedMembers,
-    strict,
-    explicit: strict && (params.source === "account-data" || evidence.viaMemberState),
-    source: params.source,
-  };
-}
-
 export async function persistMatrixDirectRoomMapping(params: {
   client: MatrixClient;
   remoteUserId: string;
@@ -155,18 +131,11 @@ export async function promoteMatrixDirectRoomCandidate(params: {
     remoteUserId,
     selfUserId: params.selfUserId,
   });
-  if (!evidence.strict) {
+  if (!evidence.strict || evidence.memberStateFlag === false) {
     return {
       classifyAsDirect: false,
       repaired: false,
-      reason: "not-strict",
-    };
-  }
-  if (evidence.memberStateFlag === false) {
-    return {
-      classifyAsDirect: false,
-      repaired: false,
-      reason: "local-explicit-false",
+      reason: evidence.strict ? "local-explicit-false" : "not-strict",
     };
   }
 
@@ -199,45 +168,42 @@ export async function inspectMatrixDirectRooms(params: {
   const remoteUserId = normalizeRemoteUserId(params.remoteUserId);
   const selfUserId =
     normalizeOptionalString(await params.client.getUserId().catch(() => null)) ?? null;
+  const classifyRoom = async (
+    roomId: string,
+    source: MatrixDirectRoomCandidate["source"],
+  ): Promise<MatrixDirectRoomCandidate> => {
+    const evidence = await inspectMatrixDirectRoomEvidence({
+      client: params.client,
+      roomId,
+      remoteUserId,
+      selfUserId,
+    });
+    const strict =
+      evidence.strict && (source === "account-data" || evidence.memberStateFlag !== false);
+    return {
+      roomId,
+      joinedMembers: evidence.joinedMembers,
+      strict,
+      explicit: strict && (source === "account-data" || evidence.viaMemberState),
+      source,
+    };
+  };
   const directContent: MatrixDirectAccountData = await readMatrixDirectAccountData(
     params.client,
   ).catch(() => ({}));
   const mappedRoomIds = normalizeUniqueTrimmedStringList(directContent[remoteUserId]);
   const mappedRooms = await Promise.all(
-    mappedRoomIds.map(
-      async (roomId) =>
-        await classifyDirectRoomCandidate({
-          client: params.client,
-          roomId,
-          remoteUserId,
-          selfUserId,
-          source: "account-data",
-        }),
-    ),
+    mappedRoomIds.map(async (roomId) => await classifyRoom(roomId, "account-data")),
   );
   const mappedStrict = mappedRooms.find((room) => room.strict);
 
-  let joinedRooms: string[] = [];
-  if (typeof params.client.getJoinedRooms === "function") {
-    try {
-      const resolved = await params.client.getJoinedRooms();
-      joinedRooms = Array.isArray(resolved) ? resolved : [];
-    } catch {
-      joinedRooms = [];
-    }
-  }
+  const joinedRooms = await params.client.getJoinedRooms().catch(() => []);
   const discoveredStrictRooms: MatrixDirectRoomCandidate[] = [];
   for (const roomId of normalizeUniqueTrimmedStringList(joinedRooms)) {
     if (mappedRoomIds.includes(roomId)) {
       continue;
     }
-    const candidate = await classifyDirectRoomCandidate({
-      client: params.client,
-      roomId,
-      remoteUserId,
-      selfUserId,
-      source: "joined",
-    });
+    const candidate = await classifyRoom(roomId, "joined");
     if (candidate.strict) {
       discoveredStrictRooms.push(candidate);
     }

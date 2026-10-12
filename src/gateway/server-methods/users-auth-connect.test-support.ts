@@ -24,7 +24,6 @@ const connectUserModelAccount = vi.hoisted(() => vi.fn());
 const listUserProfileAuthLinks = vi.hoisted(() => vi.fn());
 const listUserModelAccounts = vi.hoisted(() => vi.fn());
 const readUserModelAccountSummary = vi.hoisted(() => vi.fn());
-const isUserModelAuthProfileOwner = vi.hoisted(() => vi.fn());
 const readSelectedUserModelAccount = vi.hoisted(() => vi.fn());
 const setUserProfileAuthLink = vi.hoisted(() => vi.fn());
 const clearUserProfileAuthLink = vi.hoisted(() => vi.fn());
@@ -58,10 +57,6 @@ vi.mock("../../state/openclaw-state-worker-context.js", async (importOriginal) =
   ...(await importOriginal<typeof import("../../state/openclaw-state-worker-context.js")>()),
   captureOpenClawStateWorkerContext: () => ({}),
 }));
-vi.mock("../../state/user-model-accounts.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/user-model-accounts.js")>()),
-  isUserModelAuthProfileOwner,
-}));
 vi.mock("../../state/user-model-account-operations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-model-account-operations.js")>()),
   connectUserModelAccountAsync: connectUserModelAccount,
@@ -79,6 +74,8 @@ vi.mock("../../agents/auth-profiles/shared-main-dir.js", async (importOriginal) 
 vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
   ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: async (...args: unknown[]) =>
+    ensureAuthProfileStoreWithoutExternalProfiles(...args),
 }));
 vi.mock("../../logging/secret-redaction-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../logging/secret-redaction-registry.js")>()),
@@ -248,7 +245,6 @@ export function setupModelAccountConnectTest() {
     listUserProfileAuthLinks.mockImplementation((owner: string) => linksByOwner.get(owner) ?? []);
     listUserModelAccounts.mockReset().mockReturnValue({ accounts: [] });
     readUserModelAccountSummary.mockReset();
-    isUserModelAuthProfileOwner.mockReset().mockReturnValue(false);
     readSelectedUserModelAccount.mockReset();
     ensureAuthProfileStoreWithoutExternalProfiles
       .mockReset()

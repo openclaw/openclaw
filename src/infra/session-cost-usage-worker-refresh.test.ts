@@ -1,6 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { createNativeStorageUsageAccess } from "./session-cost-usage-collection.test-support.js";
 import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
 
@@ -52,6 +53,7 @@ async function scan(rows: Row[], previous?: UsageCostRollupEntry) {
     readRows: async (_marker, afterSeq, throughSeq) =>
       rows.filter((row) => row.seq > afterSeq && row.seq <= throughSeq).slice(0, 2),
     access: {
+      ...createNativeStorageUsageAccess(),
       readSqliteStats: async () => [
         { maxSeq, eventCount: rows.length, sizeBytes, lastMutationAtMs: timestamp },
       ],

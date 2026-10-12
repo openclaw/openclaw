@@ -63,13 +63,6 @@ const NextcloudTalkWebhookPayloadSchema = z.object({
 
 export type NextcloudTalkIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
-type NextcloudTalkIngressMonitor = {
-  receive: (rawEvent: string) => Promise<"accepted" | "ignored">;
-  ready: () => Promise<void>;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
-
 function parseClaimedMessage(
   payload: NextcloudTalkIngressPayload,
   claimedId: string,
@@ -134,7 +127,7 @@ export function createNextcloudTalkWebhookSpool(options: {
   adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
   legacyReplayStore?: NextcloudTalkLegacyReplayStore | null;
-}): NextcloudTalkIngressMonitor {
+}) {
   let queue = options.queue;
 
   const getQueue = (): ChannelIngressQueue<NextcloudTalkIngressPayload> => {
@@ -217,7 +210,7 @@ export function createNextcloudTalkWebhookSpool(options: {
 
   return {
     ready: async () => await startAfterMigration,
-    receive: (rawEvent) => {
+    receive: (rawEvent: string) => {
       if (stopping) {
         return Promise.reject(new Error("Nextcloud Talk ingress stopped"));
       }

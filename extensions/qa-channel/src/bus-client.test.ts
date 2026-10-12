@@ -1,5 +1,7 @@
-import { createServer, type Server } from "node:http";
+import http, { createServer, type Server } from "node:http";
 import type { Socket } from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getQaBusState, pollQaBus, resolveQaTargetThread, sendQaBusMessage } from "./bus-client.js";
 
@@ -160,6 +162,69 @@ describe("qa-bus client", () => {
       vi.restoreAllMocks();
     }
   });
+
+  it.each([false, true])(
+    "prepares the outbound POST before handoff (refused=%s)",
+    async (refused) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const arrived = createDeferred<void>();
+      const response = createDeferred<void>();
+      const refusal = new Error("QA message authority ended");
+      const authority = fetchRuntime.captureEffectAuthority();
+      vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+        ...authority,
+        async initiate(effect) {
+          preparing.resolve();
+          await prepared.promise;
+          if (refused) {
+            throw refusal;
+          }
+          return authority.initiate(effect);
+        },
+      });
+      const server = createServer((_req, res) => {
+        arrived.resolve();
+        void response.promise.then(() => {
+          res.end(JSON.stringify({ message: { id: "prepared-message" } }));
+        });
+      });
+      const { port, stop } = await listenLoopbackServer(server);
+      stops.push(stop);
+      const request = vi.spyOn(http, "request");
+      const sending = sendQaBusMessage({
+        baseUrl: `http://127.0.0.1:${port}`,
+        accountId: "acct-a",
+        to: "dm:alice",
+        text: "prepared",
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparing.promise,
+          arrived.promise.then(() => {
+            throw new Error("QA POST bypassed preparation");
+          }),
+        ]);
+        expect(request).not.toHaveBeenCalled();
+        prepared.resolve();
+        if (!refused) {
+          await arrived.promise;
+          response.resolve();
+        }
+        expect(await sending).toEqual(
+          refused ? { error: refusal } : { value: { message: { id: "prepared-message" } } },
+        );
+        expect(request).toHaveBeenCalledTimes(refused ? 0 : 1);
+      } finally {
+        prepared.resolve();
+        response.resolve();
+        await sending;
+      }
+    },
+  );
 
   it("rejects conflicting embedded and explicit thread ids", () => {
     expect(resolveQaTargetThread({ target: "thread:Room/Topic", threadId: "Topic" })).toEqual({

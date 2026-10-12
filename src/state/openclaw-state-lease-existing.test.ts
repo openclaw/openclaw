@@ -39,10 +39,6 @@ function source(holdAgent = false, provenance = true) {
   const db = openNodeSqliteDatabase(pathname);
   try {
     db.exec(`PRAGMA foreign_keys=OFF;
-      DROP TABLE IF EXISTS skill_workshop_proposal_events;
-      DROP TABLE IF EXISTS skill_workshop_proposal_rollbacks;
-      DROP TABLE IF EXISTS skill_workshop_collection_reviews;
-      DROP TABLE IF EXISTS skill_workshop_proposals;
       PRAGMA user_version=15;
       UPDATE schema_meta SET schema_version=15 WHERE meta_key='primary';`);
     if (!provenance) {

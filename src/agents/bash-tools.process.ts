@@ -107,14 +107,6 @@ function retentionCapNote(session: Pick<ProcessSession, "totalOutputChars" | "ag
 
 const MAX_POLL_WAIT_MS = 30_000;
 
-type RunningSessionRuntime = {
-  followUp?: string;
-  stdinWritable: boolean;
-  waitingForInput: boolean;
-  idleMs: number;
-  lastOutputAt: number;
-};
-
 function isWritableStdin(stdin: ManagedRunStdin | undefined): stdin is ManagedRunStdin {
   if (!stdin || stdin.destroyed) {
     return false;
@@ -234,23 +226,19 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
   }
   await new Promise<void>((resolve, reject) => {
     const cleanup = () => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (onAbort) {
-        signal?.removeEventListener("abort", onAbort);
-      }
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
     };
     const onResolve = () => {
       cleanup();
       resolve();
     };
-    const onAbort: (() => void) | undefined = () => {
+    const onAbort = () => {
       cleanup();
       reject(createAbortError(signal?.reason));
     };
     // An active poll must outlive the child's last handle so one-shot callers receive its result.
-    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(onResolve, ms);
+    const timer = setTimeout(onResolve, ms);
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
@@ -277,7 +265,7 @@ export function createProcessTool(
   const isInScope = (session?: { scopeKey?: string } | null) =>
     !scopeKey || session?.scopeKey === scopeKey;
 
-  const describeRunningSession = (session: ProcessSession): RunningSessionRuntime => {
+  const describeRunningSession = (session: ProcessSession) => {
     const lastOutputAt = session.processActivity?.lastOutputAtMs ?? session.startedAt;
     const idleMs = Math.max(0, Date.now() - lastOutputAt);
     const stdinWritable = isWritableStdin(session.stdin);
@@ -290,12 +278,11 @@ export function createProcessTool(
     };
   };
 
-  const buildInputWaitHint = (runtime: RunningSessionRuntime | undefined) => {
-    if (!runtime?.waitingForInput) {
+  const buildInputWaitHint = (waitingForInput: boolean) => {
+    if (!waitingForInput) {
       return "";
     }
-    const idle = formatDurationCompact(runtime.idleMs) ?? `${runtime.idleMs}ms`;
-    return `\n\nNo new output for ${idle}; this session may be waiting for input. Use process write, send-keys, submit, or paste to provide input.`;
+    return "\n\nNo new output; this session may be waiting for input. Use process write, send-keys, submit, or paste to provide input.";
   };
 
   return {
@@ -380,6 +367,12 @@ export function createProcessTool(
       const scopedSession = isInScope(session) ? session : undefined;
       const scopedFinished = isInScope(finished) ? finished : undefined;
 
+      const sessionControlError = (candidate: ProcessSession) =>
+        !candidate.backgrounded
+          ? `Session ${params.sessionId} is not backgrounded.`
+          : candidate.finalizing
+            ? `Session ${params.sessionId} is finalizing.`
+            : undefined;
       const resolveBackgroundedWritableStdin = () => {
         if (!scopedSession) {
           return {
@@ -387,16 +380,11 @@ export function createProcessTool(
             result: failText(`No active session found for ${params.sessionId}`),
           };
         }
-        if (!scopedSession.backgrounded) {
+        const controlError = sessionControlError(scopedSession);
+        if (controlError) {
           return {
             ok: false as const,
-            result: failText(`Session ${params.sessionId} is not backgrounded.`),
-          };
-        }
-        if (scopedSession.finalizing) {
-          return {
-            ok: false as const,
-            result: failText(`Session ${params.sessionId} is finalizing.`),
+            result: failText(controlError),
           };
         }
         const stdin = scopedSession.stdin;
@@ -472,7 +460,7 @@ export function createProcessTool(
             aggregateOutputNote +
             retainedOutputNote +
             (output || "(no new output)") +
-            (buildInputWaitHint(runtime) || "\n\nProcess still running.") +
+            (buildInputWaitHint(runtime.waitingForInput) || "\n\nProcess still running.") +
             (runtime.followUp ? `\n\n${runtime.followUp}` : "");
           return attachInternalToolResultAcknowledgement(
             textResult(text, {
@@ -511,7 +499,7 @@ export function createProcessTool(
               : "");
           const output = runtime
             ? text +
-              buildInputWaitHint(runtime) +
+              buildInputWaitHint(runtime.waitingForInput) +
               (runtime.followUp ? `\n\n${runtime.followUp}` : "")
             : appendExecTimeoutRetryGuidance(text, record.exitReason);
           return textResult(output, {
@@ -576,69 +564,47 @@ export function createProcessTool(
           return runningSessionResult(resolved.session, text);
         }
 
-        case "kill": {
-          if (!scopedSession) {
-            return failText(`No active session found for ${params.sessionId}`);
-          }
-          if (!scopedSession.backgrounded) {
-            return failText(`Session ${params.sessionId} is not backgrounded.`);
-          }
-          if (scopedSession.finalizing) {
-            return failText(`Session ${params.sessionId} is finalizing.`);
-          }
-          if (!cancelBackgroundExecSession(scopedSession.id)) {
-            return failText(
-              `Unable to terminate session ${params.sessionId}: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.`,
-            );
-          }
-          resetPollRetrySuggestion(params.sessionId);
-          // The kill was performed; "failed" here would flag a successful
-          // action as a tool error and invite the model to retry it.
-          return textResult(`Termination requested for session ${params.sessionId}.`, {
-            status: "completed",
-            name: deriveSessionName(scopedSession.command),
-          });
-        }
-
-        case "clear": {
-          if (scopedFinished) {
-            resetPollRetrySuggestion(params.sessionId);
-            deleteSession(params.sessionId);
-            return textResult(`Cleared session ${params.sessionId}.`, { status: "completed" });
-          }
-          return failText(`No finished session found for ${params.sessionId}`);
-        }
-
+        case "kill":
+        case "clear":
         case "remove": {
-          if (scopedSession) {
-            if (!scopedSession.backgrounded) {
-              return failText(`Session ${params.sessionId} is not backgrounded.`);
+          if (params.action !== "clear" && scopedSession) {
+            const controlError = sessionControlError(scopedSession);
+            if (controlError) {
+              return failText(controlError);
             }
-            if (scopedSession.finalizing) {
-              return failText(`Session ${params.sessionId} is finalizing.`);
-            }
+            const removing = params.action === "remove";
             if (!cancelBackgroundExecSession(scopedSession.id)) {
               return failText(
-                `Unable to remove session ${params.sessionId}: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.`,
+                `Unable to ${removing ? "remove" : "terminate"} session ${params.sessionId}: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.`,
               );
             }
-            // Keep remove semantics deterministic: drop from process registry now.
-            scopedSession.backgrounded = false;
-            deleteSession(params.sessionId);
+            if (removing) {
+              // Hide the record now; the supervisor still owns process settlement.
+              scopedSession.backgrounded = false;
+              deleteSession(params.sessionId);
+            }
             resetPollRetrySuggestion(params.sessionId);
-            // Removal succeeded (termination requested + registry row dropped);
-            // match the finished-session remove branch's success shape.
-            return textResult(`Removed session ${params.sessionId} (termination requested).`, {
-              status: "completed",
-              name: deriveSessionName(scopedSession.command),
-            });
+            return textResult(
+              removing
+                ? `Removed session ${params.sessionId} (termination requested).`
+                : `Termination requested for session ${params.sessionId}.`,
+              { status: "completed", name: deriveSessionName(scopedSession.command) },
+            );
+          }
+          if (params.action === "kill") {
+            return failText(`No active session found for ${params.sessionId}`);
           }
           if (scopedFinished) {
             resetPollRetrySuggestion(params.sessionId);
             deleteSession(params.sessionId);
-            return textResult(`Removed session ${params.sessionId}.`, { status: "completed" });
+            return textResult(
+              `${params.action === "clear" ? "Cleared" : "Removed"} session ${params.sessionId}.`,
+              { status: "completed" },
+            );
           }
-          return failText(`No session found for ${params.sessionId}`);
+          return failText(
+            `No ${params.action === "clear" ? "finished session" : "session"} found for ${params.sessionId}`,
+          );
         }
       }
 

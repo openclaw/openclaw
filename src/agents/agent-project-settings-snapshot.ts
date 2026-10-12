@@ -4,11 +4,9 @@ import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readBundleJsonObject } from "../plugins/bundle-config-shared.js";
-import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
-import {
-  normalizePluginsConfigWithResolver,
-  resolvePolicyPluginActivationState,
-} from "../plugins/config-policy.js";
+import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
+import { resolvePluginActivationStateShared } from "../plugins/config-activation-shared.js";
+import { normalizePluginsConfigWithResolverCore } from "../plugins/config-normalization-shared.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
   loadPluginMetadataSnapshot,
@@ -64,7 +62,7 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
       return {};
     }
 
-    const normalizedPlugins = normalizePluginsConfigWithResolver(
+    const normalizedPlugins = normalizePluginsConfigWithResolverCore(
       config.plugins,
       metadataSnapshot.normalizePluginId,
     );
@@ -75,7 +73,7 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
       if (record.format !== "bundle" || settingsFiles.length === 0) {
         continue;
       }
-      const activationState = resolvePolicyPluginActivationState({
+      const activationState = resolvePluginActivationStateShared({
         id: record.id,
         origin: record.origin,
         channelIds: record.channels,

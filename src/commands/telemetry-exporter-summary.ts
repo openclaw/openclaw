@@ -95,7 +95,6 @@ function formatReason(record: ExporterHealthRecord): string | undefined {
     : undefined;
 }
 
-/** Builds the redacted exporter-health text shared by Doctor and status --all. */
 export function formatTelemetryExporterSummary(snapshot: unknown): TelemetryExporterSummary | null {
   if (!isRecord(snapshot) || !Array.isArray(snapshot.events)) {
     return null;

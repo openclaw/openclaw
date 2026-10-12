@@ -1,9 +1,9 @@
-/** Private command reply routing for sensitive owner-only command output. */
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import {
   getLoadedChannelPlugin,
   listChannelPlugins,
@@ -16,7 +16,6 @@ import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { routeReply } from "./route-reply.js";
 
-/** Resolved private delivery target for command replies and approvals. */
 export type PrivateCommandRouteTarget = {
   channel: string;
   to: string;
@@ -58,7 +57,8 @@ export async function resolvePrivateCommandRouteTargets(params: {
   const originChannel = params.commandParams.command.channel;
   const targets: PrivateCommandRouteTarget[] = [];
   for (const candidate of listPrivateCommandRouteCandidateChannels(originChannel)) {
-    const native = resolveChannelApprovalAdapter(candidate.plugin)?.native;
+    const adapter = resolveChannelApprovalAdapter(candidate.plugin);
+    const native = adapter?.nativeAsync ?? adapter?.native;
     if (!native?.resolveApproverDmTargets) {
       continue;
     }
@@ -66,21 +66,17 @@ export async function resolvePrivateCommandRouteTargets(params: {
       candidate.channel === originChannel
         ? (params.commandParams.ctx.AccountId ?? undefined)
         : undefined;
-    const capabilities = native.describeDeliveryCapabilities({
+    const approvalContext = () => ({
       cfg: params.commandParams.cfg,
       accountId,
-      approvalKind: "exec",
+      approvalKind: "exec" as const,
       request,
     });
+    const capabilities = await native.describeDeliveryCapabilities(approvalContext());
     if (!capabilities.enabled || !capabilities.supportsApproverDmSurface) {
       continue;
     }
-    const resolvedTargets = await native.resolveApproverDmTargets({
-      cfg: params.commandParams.cfg,
-      accountId,
-      approvalKind: "exec",
-      request,
-    });
+    const resolvedTargets = await native.resolveApproverDmTargets(approvalContext());
     for (const target of resolvedTargets) {
       targets.push({
         channel: candidate.channel,
@@ -158,7 +154,6 @@ export async function deliverPrivateCommandReply(params: {
   return "failed";
 }
 
-/** Reads the command message thread id from command context. */
 function readCommandMessageThreadId(params: HandleCommandsParams): string | undefined {
   return typeof params.ctx.MessageThreadId === "string" ||
     typeof params.ctx.MessageThreadId === "number"
@@ -166,7 +161,6 @@ function readCommandMessageThreadId(params: HandleCommandsParams): string | unde
     : undefined;
 }
 
-/** Reads the best delivery target for command route resolution. */
 function readCommandDeliveryTarget(params: HandleCommandsParams): string | undefined {
   return (
     normalizeOptionalString(params.ctx.OriginatingTo) ??
@@ -181,31 +175,34 @@ function readCommandDeliveryTarget(params: HandleCommandsParams): string | undef
  * command surface. The originating reviewer device stays separate from a
  * private delivery target so command handlers cannot drop approval custody.
  */
-export function resolveCommandExecApprovalRoute(params: {
-  commandParams: HandleCommandsParams;
-  privateApprovalTarget?: PrivateCommandRouteTarget;
-}): {
-  messageProvider: string;
-  currentChannelId: string | undefined;
-  currentThreadTs: string | undefined;
-  accountId: string | undefined;
-  approvalReviewerDeviceId: string | undefined;
-} {
-  const target = params.privateApprovalTarget;
+export function buildCommandExecApprovalDefaults(
+  commandParams: HandleCommandsParams,
+  privateApprovalTarget?: PrivateCommandRouteTarget,
+): ExecToolDefaults {
   return {
-    messageProvider: target?.channel ?? params.commandParams.command.channel,
-    currentChannelId: target?.to ?? readCommandDeliveryTarget(params.commandParams),
-    currentThreadTs: target
-      ? target.threadId == null
+    host: "gateway",
+    security: "allowlist",
+    ask: "always",
+    allowBackground: true,
+    cwd: commandParams.workspaceDir,
+    sessionKey: commandParams.sessionKey,
+    eventRouting: {
+      mainKey: commandParams.cfg.session?.mainKey,
+      sessionScope: commandParams.cfg.session?.scope,
+    },
+    messageProvider: privateApprovalTarget?.channel ?? commandParams.command.channel,
+    currentChannelId: privateApprovalTarget?.to ?? readCommandDeliveryTarget(commandParams),
+    currentThreadTs: privateApprovalTarget
+      ? privateApprovalTarget.threadId == null
         ? undefined
-        : String(target.threadId)
-      : readCommandMessageThreadId(params.commandParams),
-    accountId: target
-      ? (target.accountId ?? undefined)
-      : (params.commandParams.ctx.AccountId ?? undefined),
-    approvalReviewerDeviceId: normalizeOptionalString(
-      params.commandParams.ctx.ApprovalReviewerDeviceId,
-    ),
+        : String(privateApprovalTarget.threadId)
+      : readCommandMessageThreadId(commandParams),
+    accountId: privateApprovalTarget
+      ? (privateApprovalTarget.accountId ?? undefined)
+      : (commandParams.ctx.AccountId ?? undefined),
+    approvalReviewerDeviceId: normalizeOptionalString(commandParams.ctx.ApprovalReviewerDeviceId),
+    notifyOnExit: commandParams.cfg.tools?.exec?.notifyOnExit,
+    notifyOnExitEmptySuccess: commandParams.cfg.tools?.exec?.notifyOnExitEmptySuccess,
   };
 }
 

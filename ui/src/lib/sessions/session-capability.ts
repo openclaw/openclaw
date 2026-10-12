@@ -10,6 +10,7 @@ import type {
   SessionsPatchManyResult,
   SessionsRecoverResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import type { SchemaContract } from "../../../../packages/gateway-protocol/src/schema-contract.js";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
@@ -35,6 +36,7 @@ import type {
 import type { SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatchRoute } from "./patch.ts";
 import type { SessionReconcileOptions } from "./reconcile.ts";
+import type { BootRoster } from "./session-boot-roster.ts";
 import type { SessionChangedRowResult } from "./session-row-reconcile.ts";
 import type { SessionRunTerminal } from "./session-run-terminal.ts";
 
@@ -64,31 +66,30 @@ type SessionDeletionFact = {
 export type SessionGroupMutationResult = "completed" | "stale";
 export type SessionGroupDefaultsStatus = "idle" | "loading" | "ready" | "unavailable";
 
-export type SessionListOptions = {
+export type SessionListOptions = SchemaContract<
+  Omit<
+    SessionsListParams,
+    | "source"
+    | "activityPulseBoundaries"
+    | "activeOnly"
+    | "requireLastInteraction"
+    | "sortBy"
+    | "includeActivitySummary"
+    | "label"
+    | "projectId"
+    | "workspaceDir"
+    | "group"
+    | "pinned"
+    | "creatorId"
+    | "profileRelation"
+    | "involvingProfileId"
+    | "includePeople"
+    | "archived"
+  >
+> & {
   source?: SessionsListParams["source"];
-  rowMode?: "compact";
-  agentId?: string;
-  spawnedBy?: string;
-  boardFace?: "chat" | "dashboard";
-  hasBoard?: boolean;
-  activeMinutes?: number;
-  search?: string;
-  ownerId?: string;
-  ownerFirst?: boolean;
-  involvingMe?: boolean;
-  offset?: number;
-  limit?: number;
   /** Physical read size for a managed window that needs every page enriched. */
   pageSize?: number;
-  includeGlobal?: boolean;
-  includeUnknown?: boolean;
-  configuredAgentsOnly?: boolean;
-  excludeSubagents?: boolean;
-  excludeCron?: boolean;
-  excludeSystem?: boolean;
-  includeDerivedTitles?: boolean;
-  includeLastMessage?: boolean;
-  includeOwnerSessionCounts?: boolean;
   archivedFilter?: SessionArchivedFilter;
   append?: boolean;
 };
@@ -108,13 +109,19 @@ export type SessionListScope = Readonly<Omit<SessionListOptions, "offset" | "app
 export type SessionListSnapshot = Pick<
   SessionState,
   "result" | "agentId" | "loading" | "error" | "startupPending"
->;
+> & {
+  /** Outcome of the latest settled managed-list read, including suppressed availability errors. */
+  readSucceeded?: boolean;
+  /** Accepted server-window membership before local visibility and generation filters. */
+  pagination?: Pick<SessionsListResult, "totalCount" | "hasMore" | "nextOffset"> & {
+    count: number;
+  };
+};
 
 export type SessionRowTarget = Readonly<{ key: string; agentId: string }>;
 
 type SessionRowReadOutcome =
   | { status: "current"; row: GatewaySessionRow | null }
-  | { status: "invalidated" }
   | { status: "retired" };
 
 export type SessionRowObservation = {
@@ -221,7 +228,10 @@ export type SessionCapability = {
   /** Advances for every publication, including pending facts outside state. */
   readonly revision: number;
   /** Memory-only roster presentation; never authority for mutations or live row observations. */
-  readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached">;
+  readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached"> & {
+    /** Display-only profile admitted with these rows; never live RPC authority. */
+    profileId?: string | null;
+  };
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
   /** Initial routing hints only; cached agent discovery never grants live authority. */
@@ -230,6 +240,7 @@ export type SessionCapability = {
     readonly scope: "per-sender" | "global";
   };
   whenCachedRosterSettled: () => Promise<void>;
+  captureBootRoster: () => BootRoster | null;
   /** Captures the current Gateway connection generation for read-only requests. */
   captureConnectionScope: () => SessionConnectionScope | null;
   /** Whether a captured read-only request still belongs to the active connection. */
@@ -256,7 +267,6 @@ export type SessionCapability = {
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
     options?: SessionReconcileOptions & {
-      sourceCanonicalListRevision?: number;
       sourceListScope?: SessionListScope;
     },
   ) => boolean | "defaults-only";

@@ -245,8 +245,7 @@ extension IOSGatewayChatTransport {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        let route = await self.currentSessionMutationRoute()
-        guard let route,
+        guard let route = await self.currentSessionMutationRoute(),
               let supportsRoutingContract = await gateway.supportsServerCapability(
                   .chatSendRoutingContract,
                   ifCurrentRoute: route)

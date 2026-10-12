@@ -2,7 +2,7 @@ import { containsAsciiControlCharacter } from "@openclaw/normalization-core/stri
 import {
   BOARD_WIDGET_TOOL_MAX_LENGTH,
   type BoardWidgetDeclared,
-} from "../../packages/gateway-protocol/src/index.js";
+} from "../../packages/gateway-protocol/src/schema/board.js";
 import { normalizeSandboxHostCsp } from "../agents/sandbox-host.js";
 import { BoardValidationError } from "./board-layout.js";
 import { normalizeGitHubActionsGrant } from "./github-actions-capability.js";

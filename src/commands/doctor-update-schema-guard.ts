@@ -44,23 +44,14 @@ import {
 } from "./doctor-update-refusal.js";
 import { isUpdatePackageSwapInProgress } from "./doctor/shared/update-phase.js";
 
-type DrivingUpdater = {
-  runId: string;
-  version: string;
-  canDeferStateSchema: boolean;
-  earlyDoctorRunning: boolean;
-  postCoreStarted: boolean;
-  requiresReadableSharedContent?: true;
-};
+type DrivingUpdater = NonNullable<Awaited<ReturnType<typeof readDrivingUpdater>>>;
 
 // Unknown file IDs cannot prove that a recovery image covers the pending live mutation.
 function sameSnapshotFile(left: Pick<Stats, "dev" | "ino">, right: Pick<Stats, "dev" | "ino">) {
   return left.dev !== 0 && left.ino !== 0 && left.dev === right.dev && left.ino === right.ino;
 }
 
-async function readDrivingUpdater(
-  sharedContentUpgrade = false,
-): Promise<DrivingUpdater | undefined> {
+async function readDrivingUpdater(sharedContentUpgrade = false) {
   // The runtime ledger reader consults quarantine state. This diagnostic must
   // not open any live database, including a quarantine store needing recovery.
   const snapshot = await prepareSqliteReadOnlyLocation(resolveOpenClawStateSqlitePath(), {
@@ -117,7 +108,7 @@ async function readDrivingUpdater(
             canDeferStateSchema: false,
             earlyDoctorRunning: false,
             postCoreStarted: false,
-            requiresReadableSharedContent: true,
+            requiresReadableSharedContent: true as const,
           };
         }
       }
@@ -245,7 +236,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     const coverageRefusal = (uncovered: typeof blockedMigrations, detail: string) =>
       new UpdateSchemaRefusalError(uncovered, updater.version, {
         targetVersion: VERSION,
-        cause: new Error(`Missing recoverable canonical backup coverage: ${detail}`),
+        cause: new Error(`Missing recoverable database backup coverage: ${detail}`),
         recovery,
       });
     const authority = options.postCoreSchemaRepair;
@@ -310,7 +301,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
       if (uncovered.length) {
         throw coverageRefusal(
           uncovered.map(({ database }) => database),
-          `the retained archive at ${backup.archivePath} has no captured canonical image for these agent databases.`,
+          `the retained archive at ${backup.archivePath} has no captured database image for these agent databases.`,
         );
       }
       // A mixed fleet's archive also captures disposable agents. Bind every
@@ -386,7 +377,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
       if (uncovered.length) {
         throw coverageRefusal(
           uncovered.map(({ database }) => database),
-          "these pending agent databases have no registered canonical snapshot owner.",
+          "these pending agent databases have no registered snapshot owner.",
         );
       }
       return {

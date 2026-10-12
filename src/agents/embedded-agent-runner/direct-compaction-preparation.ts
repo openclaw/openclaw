@@ -110,7 +110,6 @@ export async function prepareDirectCompactionAttempt(
     workspaceDir: resolvedWorkspace,
     pluginRegistry: params.preparedModelRuntime.pluginRegistry!,
   });
-  const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
     const failureReason = classifyCompactionReason(reason);
     const failure = err ? describeFailoverError(err) : undefined;
@@ -240,11 +239,7 @@ export async function prepareDirectCompactionAttempt(
   const resolvedRuntimeAuthPlan = resolvedAuthAttempt.plan;
   let hasRuntimeAuthExchange = false;
   try {
-    if (!apiKeyInfo.apiKey) {
-      if (apiKeyInfo.mode !== "aws-sdk") {
-        throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
-      }
-    } else {
+    if (apiKeyInfo.apiKey) {
       const runtimeAuth = await prepareProviderRuntimeAuth({
         provider: runtimeModel.provider,
         config: params.config,
@@ -278,10 +273,11 @@ export async function prepareDirectCompactionAttempt(
         throw new Error(`Provider "${runtimeModel.provider}" runtime auth returned no apiKey.`);
       }
       authStorage.setRuntimeApiKey(runtimeModel.provider, runtimeApiKey);
+    } else if (apiKeyInfo.mode !== "aws-sdk") {
+      throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
     }
   } catch (err) {
-    const reason = formatErrorMessage(err);
-    return { ok: false as const, result: fail(reason, err) };
+    return { ok: false as const, result: fail(formatErrorMessage(err), err) };
   }
   const thinkingCompat = projectModelThinkingCompat(runtimeModel.compat);
   const thinkingCatalogEntry = {
@@ -320,14 +316,8 @@ export async function prepareDirectCompactionAttempt(
           workspaceDir: resolvedWorkspace,
         })
       : params.sandbox;
-  if (params.requireWritableSandbox && sandbox?.enabled && sandbox.workspaceAccess !== "rw") {
-    throw new Error("sandbox workspace is not read-write; collection review skipped");
-  }
-  const effectiveWorkspace = sandbox?.enabled
-    ? sandbox.workspaceAccess === "rw"
-      ? resolvedWorkspace
-      : sandbox.workspaceDir
-    : resolvedWorkspace;
+  const effectiveWorkspace =
+    sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
   if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
     throw new Error(
@@ -355,7 +345,7 @@ export async function prepareDirectCompactionAttempt(
       modelId,
       preparedHarnessRuntime,
       thinkLevel,
-      attemptedThinking,
+      attemptedThinking: new Set<ThinkLevel>(),
       fail,
       authStorage,
       modelRegistry,

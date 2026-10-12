@@ -10,6 +10,7 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { pluginStatePublication } from "../../plugin-state/plugin-state-publication.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -19,7 +20,13 @@ import {
 } from "../../state/openclaw-state-worker-error.js";
 import type { captureNativeSessionWorkerDeletion } from "./session-accessor.sqlite-deletion.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
+import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
+import {
+  collectReclamationDeletionEntries,
+  prepareReclamationPublication,
+} from "./session-accessor.sqlite-reclamation-publication.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
+import { publishSessionLifecycleWorkerEffects } from "./session-lifecycle-worker-publication.js";
 import type {
   SessionNativeBindingCandidate,
   SessionNativeBindingDeletion,
@@ -29,7 +36,7 @@ import type {
 import type { SessionEntry } from "./types.js";
 
 type NativeDeletionCapture = NonNullable<ReturnType<typeof captureNativeSessionWorkerDeletion>>;
-// A may be unknown even without an S binding (ACP or initialization-only deletion).
+// A may be unknown even without an S binding (ACP's commit-only finalizer).
 // Keep the exact generation and its cleanup custody until the process owner closes.
 const unresolved = resolveGlobalSingleton(
   Symbol.for("openclaw.nativeSessionDeletionOutcomes"),
@@ -54,19 +61,31 @@ export function deleteSessionWithNativeBindingsInWorker(
   >({
     database: plan.databaseOptions,
     agentId: plan.databaseOptions.agentId,
-    entries: plan.preparedTargetSnapshot,
+    entries: collectReclamationDeletionEntries(plan),
     captured,
     assertCurrent,
     candidateKind: "session-native-binding-deletion",
     execute: (worker, participants) =>
       worker.execute({ type: "session.nativeBindings.delete", input: { ...participants, plan } }),
-    onAcknowledged(candidate) {
-      if (candidate.result.value.deleted) {
-        captured.committed();
+    onCommitted(candidate, published, identity) {
+      try {
+        onResult?.(candidate.result, identity);
+        publishSessionLifecycleWorkerEffects(plan, candidate.result);
+      } finally {
+        if (plan.kind === "lifecycle-projection-commit") {
+          if (published) {
+            publishCommittedSessionIdentity(
+              plan.agentId,
+              identity,
+              published.previous,
+              published.current,
+              published.prepared,
+            );
+          }
+        } else {
+          prepareReclamationPublication(plan, identity, candidate.result)?.();
+        }
       }
-    },
-    onCommitted(candidate, _published, identity) {
-      onResult?.(candidate.result, identity);
       return candidate.result;
     },
   });
@@ -182,6 +201,9 @@ export function runSessionNativeBindingWorkerOperation<
         }
         admitted = { admission, retained };
         assertHeld();
+        if (facts.kind === "native-binding-ready" || facts.phase === "delete") {
+          params.onTransactionFacts?.(facts);
+        }
         if (facts.kind === "native-binding-ready") {
           if (members.some(({ participant }) => participant.renewalPending())) {
             readinessRefused = true;
@@ -205,6 +227,22 @@ export function runSessionNativeBindingWorkerOperation<
       },
       async settle(outcome, acknowledged) {
         const settlement = await admitted?.retained.settled;
+        if (readinessAuthorized) {
+          pluginStatePublication.invalidateEntries(
+            { identity: sharedSource.key, incarnation: operationId },
+            members.flatMap(({ participant }) =>
+              participant.binding
+                ? [
+                    {
+                      plugin_id: participant.binding.pluginId,
+                      namespace: participant.binding.namespace,
+                      entry_key: participant.binding.key,
+                    },
+                  ]
+                : [],
+            ),
+          );
+        }
         const receipt = readReceipt(admitted?.admission.committed?.facts);
         const completed =
           settlement?.kind === "completed" && admitted?.admission.settlement?.kind === "completed";

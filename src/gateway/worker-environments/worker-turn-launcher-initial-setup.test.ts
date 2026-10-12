@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
   closeAdmittedRunDelegatedAuthority,
@@ -8,12 +8,14 @@ import {
 import {
   type SessionPlacementTurnParams,
   installSessionPlacementAdmissionProvider,
+  resolveSessionPlacementRuntimeOverride,
   withSessionPlacementTurnAdmission,
 } from "../../agents/session-placement-admission.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { createCoordinatorTestService } from "./placement-dispatch-coordinator.test-support.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
@@ -34,6 +36,8 @@ import {
   turn,
   unusedEnvironments,
 } from "./worker-turn-launcher.test-support.js";
+
+afterAll(closeStateDatabaseForTest);
 
 // Pause the real placement store/coordinator at the producer's published setup state.
 async function setup(
@@ -130,7 +134,7 @@ function readyEnvironment() {
 
 describe("initial worker setup admission", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.for(["worker-turn", "remote-exec"] as const)(
     "holds %s input during initial sync without agent IO, then claims the intended active placement",
@@ -217,93 +221,152 @@ describe("initial worker setup admission", () => {
     },
   );
 
-  it.for([
-    "failure",
-    "abort",
-    "incarnation",
-    "writer",
-    "runtime",
-    "stop",
-    "move",
-    "replacement",
-  ] as const)("does not execute held input after %s", async (change, { signal }) => {
-    const fixture = await setup(
-      "remote-exec",
-      "syncing",
-      change === "replacement"
-        ? async () => {
-            const current = placements.get(SESSION_ID)!;
-            await placements.transition({
-              sessionId: SESSION_ID,
-              expectedGeneration: current.generation,
-              from: "active",
-              to: "draining",
-            });
-          }
-        : undefined,
+  it("keeps the worker runtime default when setup finishes during its read", async ({ signal }) => {
+    const fixture = await setup("worker-turn");
+    const reading = createDeferredCore();
+    const resumeRead = createDeferredCore();
+    const readProjection = placements.readProjection.bind(placements);
+    const read = vi.spyOn(placements, "readProjection").mockImplementationOnce(async (...args) => {
+      const projection = await readProjection(...args);
+      reading.resolve();
+      await resumeRead.promise;
+      return projection;
+    });
+    const environments = unusedEnvironments();
+    const uninstall = installSessionPlacementAdmissionProvider(
+      createWorkerSessionTurnPlacementProvider({ environments, placements }),
     );
-    const environments = readyEnvironment();
-    const controller = new AbortController();
+    const runtime = resolveSessionPlacementRuntimeOverride(sessionTarget);
+    void runtime.catch(() => undefined);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(reading.promise, runtime, "runtime selection skipped its read"),
+        signal,
+      );
+      fixture.finish.resolve();
+      await fixture.operation;
+      resumeRead.resolve();
+      await expect(runtime).resolves.toBe("openclaw");
+      expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+      expect(environments.startTunnel).not.toHaveBeenCalled();
+    } finally {
+      resumeRead.resolve();
+      fixture.finish.resolve();
+      await Promise.allSettled([runtime, fixture.operation]);
+      uninstall();
+      read.mockRestore();
+    }
+  });
+
+  it("refreshes pending-result facts after waiting for initial setup", async ({ signal }) => {
+    const fixture = await setup("remote-exec", "syncing", async () => {
+      const claim = await placements.claimTurn({
+        ...sessionTarget,
+        claimId: "setup-result-claim",
+        runId: "setup-result-run",
+        owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+      });
+      await placements.markWorkspaceResultPending(claim);
+      placements.clearLocalTurnClaimsAfterRestart();
+    });
+    const claimTurn = vi.spyOn(placements, "claimTurn");
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
     const provider = createWorkerSessionTurnPlacementProvider({
-      environments,
+      environments: unusedEnvironments(),
       placements,
       waitForInitialPlacement: fixture.waitForInitialPlacement,
     });
-    const uninstall = installSessionPlacementAdmissionProvider(provider);
-    const run = withSessionPlacementTurnAdmission(
-      { ...sessionTarget, runId: "obsolete-input" },
-      { ...turn("obsolete-input"), abortSignal: AbortSignal.any([controller.signal, signal]) },
+    const run = provider.executeTurn(
+      { ...sessionTarget, runId: "waiting-input" },
+      { ...turn("waiting-input"), abortSignal: signal },
       runLocal,
     );
     void run.catch(() => undefined);
-    let competing: Promise<unknown> | undefined;
     try {
       await withinTest(
         awaitGateBeforeSettlement(fixture.waiting, run, "turn skipped the setup wait"),
         signal,
       );
-      if (change === "failure") {
-        fixture.fail();
-      }
-      if (change === "abort") {
-        controller.abort(new Error("operator cancelled input"));
-      }
-      if (change === "incarnation") {
-        await patchSessionEntryCore(sessionTarget, () => ({ lifecycleRevision: "replacement" }));
-      }
-      if (change === "writer") {
-        await patchSessionEntryCore(sessionTarget, () => ({ activeWriterRunId: "replacement" }));
-      }
-      if (change === "runtime") {
-        rotateAgentEventLifecycleGeneration();
-      }
-      if (change === "stop") {
-        competing = fixture.dispatch.reclaim(sessionTarget);
-      }
-      if (change === "move") {
-        competing = fixture.dispatch.move({
-          ...sessionTarget,
-          source: { generation: 3, environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
-          target: { kind: "gateway" },
-        });
-      }
-      void competing?.catch(() => undefined);
-      if (["abort", "stop", "move"].includes(change)) {
-        await expect(run).rejects.toThrow(/aborted/);
-      }
       fixture.finish.resolve();
-      await Promise.allSettled([fixture.operation, competing]);
-      await expect(run).rejects.toThrow();
+      await fixture.operation;
+      await expect(run).rejects.toThrow("Workspace recovery is still pending");
+      expect(claimTurn.mock.calls.filter(([claim]) => claim.runId === "waiting-input")).toEqual([]);
       expect(runLocal).not.toHaveBeenCalled();
-      expect(environments.startTunnel).not.toHaveBeenCalled();
-      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
     } finally {
       fixture.finish.resolve();
-      await Promise.allSettled([run, fixture.operation, competing]);
-      uninstall();
+      await Promise.allSettled([run, fixture.operation]);
     }
   });
+
+  it.for(["failure", "abort", "incarnation", "writer", "runtime", "replacement"] as const)(
+    "does not execute held input after %s",
+    async (change, { signal }) => {
+      const fixture = await setup(
+        "remote-exec",
+        "syncing",
+        change === "replacement"
+          ? async () => {
+              const current = placements.get(SESSION_ID)!;
+              await placements.transition({
+                sessionId: SESSION_ID,
+                expectedGeneration: current.generation,
+                from: "active",
+                to: "draining",
+              });
+            }
+          : undefined,
+      );
+      const environments = readyEnvironment();
+      const controller = new AbortController();
+      const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+      const provider = createWorkerSessionTurnPlacementProvider({
+        environments,
+        placements,
+        waitForInitialPlacement: fixture.waitForInitialPlacement,
+      });
+      const uninstall = installSessionPlacementAdmissionProvider(provider);
+      const run = withSessionPlacementTurnAdmission(
+        { ...sessionTarget, runId: "obsolete-input" },
+        { ...turn("obsolete-input"), abortSignal: AbortSignal.any([controller.signal, signal]) },
+        runLocal,
+      );
+      void run.catch(() => undefined);
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(fixture.waiting, run, "turn skipped the setup wait"),
+          signal,
+        );
+        if (change === "failure") {
+          fixture.fail();
+        }
+        if (change === "abort") {
+          controller.abort(new Error("operator cancelled input"));
+        }
+        if (change === "incarnation") {
+          await patchSessionEntryCore(sessionTarget, () => ({ lifecycleRevision: "replacement" }));
+        }
+        if (change === "writer") {
+          await patchSessionEntryCore(sessionTarget, () => ({ activeWriterRunId: "replacement" }));
+        }
+        if (change === "runtime") {
+          rotateAgentEventLifecycleGeneration();
+        }
+        if (change === "abort") {
+          await expect(run).rejects.toThrow(/aborted/);
+        }
+        fixture.finish.resolve();
+        await fixture.operation.catch(() => undefined);
+        await expect(run).rejects.toThrow();
+        expect(runLocal).not.toHaveBeenCalled();
+        expect(environments.startTunnel).not.toHaveBeenCalled();
+        expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      } finally {
+        fixture.finish.resolve();
+        await Promise.allSettled([run, fixture.operation]);
+        uninstall();
+      }
+    },
+  );
 
   it.for(["source", "admitted"] as const)(
     "rejects %s authority revoked during setup before workspace IO",

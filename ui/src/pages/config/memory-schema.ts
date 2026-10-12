@@ -12,16 +12,7 @@ import { memoryTabFromPath, pathForMemoryTab, type MemoryRouteTab } from "../../
 
 export type MemoryTab = MemoryRouteTab;
 
-/**
- * How `plugins.slots.memory` reads today, mirroring resolveSlotSelection in
- * src/plugins/slots.ts. `off` is the explicit `none` sentinel; `auto` is an
- * unset slot, which always resolves to the slot's default owner rather than to
- * whichever memory plugin happens to be enabled.
- */
-export type MemoryEngineSelection =
-  | { kind: "auto"; engineId: string }
-  | { kind: "off" }
-  | { kind: "pinned"; engineId: string };
+export type MemoryEngineSelection = ReturnType<typeof resolveSlotSelection>;
 
 export const DEFAULT_MEMORY_ENGINE_ID = defaultSlotIdForKey("memory");
 
@@ -81,7 +72,6 @@ export function canonicalMemoryRouteLocation(
   params.delete("tab");
   if (hadLegacySection) {
     params.delete("section");
-    params.delete("advanced");
   }
   const search = params.toString();
   const canonical: RouteLocation = {
@@ -96,26 +86,14 @@ export function canonicalMemoryRouteLocation(
 
 /** The plugin that currently owns the slot, or null when nothing does. */
 export function selectedEngineId(selection: MemoryEngineSelection): string | null {
-  return selection.kind === "off" ? null : selection.engineId;
+  return selection.kind === "off" ? null : selection.pluginId;
 }
 
-/**
- * Mirrors the runtime exactly: resolveSlotSelection owns the rule, so an unset
- * slot reports the slot's default owner instead of guessing from the catalog.
- */
 export function resolveMemoryEngineSelection(
   configObject: Record<string, unknown>,
 ): MemoryEngineSelection {
   const slots = asConfigRecord(asConfigRecord(configObject.plugins)?.slots);
-  const selection = resolveSlotSelection("memory", slots?.memory);
-  switch (selection.kind) {
-    case "off":
-      return { kind: "off" };
-    case "pinned":
-      return { kind: "pinned", engineId: selection.pluginId };
-    default:
-      return { kind: "auto", engineId: selection.pluginId };
-  }
+  return resolveSlotSelection("memory", slots?.memory);
 }
 
 export const MEMORY_SETTINGS_KEYS = ["citations", "search"] as const;

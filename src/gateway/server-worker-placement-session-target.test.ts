@@ -1,4 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
   getRuntimeConfig,
@@ -9,8 +10,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import {
   loadExactSessionEntryReadOnly,
+  patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
+import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import * as repositoryPublications from "../state/session-repository-workspaces.publication.js";
@@ -32,6 +36,66 @@ import { createWorkerEnvironmentService } from "./worker-environments/service.js
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
 afterEach(() => resetConfigRuntimeState());
+
+test("prepares an actor workspace and guards exact placement metadata without host session SQL", async () => {
+  await withStateDirEnv("actor-placement-source-", async () => {
+    const identity = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:incognito-placement-source",
+      sessionId: "placement-source",
+    };
+    const worktree = await managedWorktrees.createEmpty({
+      name: "actor-placement",
+      ownerKind: "session",
+      ownerId: identity.sessionKey,
+      runSetupScript: false,
+      provisionIgnoredFiles: false,
+    });
+    const actor = await openIncognitoTestActor(process.env, { assertCurrent() {} });
+    await actor.sessions.create(
+      { assertCurrent() {} },
+      {
+        sessionKey: identity.sessionKey,
+        entry: {
+          sessionId: identity.sessionId,
+          updatedAt: Date.now(),
+          lifecycleRevision: "placement-window",
+          incognito: true,
+          projectId: "full-planning-project",
+          worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
+        },
+      },
+    );
+    const sql = observeHostDataSql();
+    try {
+      await withIncognitoSessionActor(actor, async () => {
+        const resolved = await resolveWorkerPlacementSessionTarget({
+          ...identity,
+          config: {},
+          errorMessage: "placement source changed",
+          sessionRuntime: {
+            managedWorktrees,
+            resolveGatewaySessionStoreTargetWithStore,
+            resolveCanonicalSessionEntryFromStoreKeys,
+          },
+        });
+        expect(resolved.workspace).toEqual({ kind: "local", path: worktree.path });
+        expect(resolved.entry.projectId).toBe("full-planning-project");
+        const scope = { ...identity, storePath: actor.path };
+        await patchSessionEntryCore(scope, () => ({ label: "unrelated title" }));
+        expect(() => resolved.assertCurrent()).not.toThrow();
+        await patchSessionEntryCore(scope, () => ({
+          worktree: { id: "replacement", branch: worktree.branch, repoRoot: worktree.repoRoot },
+        }));
+        expect(() => resolved.assertCurrent()).toThrow("placement source changed");
+      });
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+      await actor.close();
+    }
+  });
+});
 
 test.each([
   { scope: "individual", inherited: false },
@@ -165,7 +229,6 @@ test.each([
         resolveProvider: (id) => (id === provider.id ? provider : undefined),
         prepareInstallation: unexpected,
         bootstrapWorker: unexpected,
-        executeInference: unexpected,
         placementStore: createWorkerSessionPlacementGate(placements),
       });
       try {
@@ -260,7 +323,7 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
     const sessionRuntime = {
       resolveGatewaySessionStoreTargetWithStore,
       resolveCanonicalSessionEntryFromStoreKeys,
-      managedWorktrees: { findLiveByOwner: () => undefined },
+      managedWorktrees: { findLiveByOwner: async () => undefined },
     };
     const select = () =>
       resolveWorkerPlacementSessionTarget({
@@ -405,7 +468,7 @@ test("resolves consecutive placement workspaces without decoding unrelated sessi
             resolveGatewaySessionStoreTargetWithStore,
             resolveCanonicalSessionEntryFromStoreKeys,
             managedWorktrees: {
-              findLiveByOwner: (_kind, ownerId) => ({
+              findLiveByOwner: async (_kind, ownerId) => ({
                 id: ownerId,
                 ownerId,
                 path: `/synthetic/${ownerId}`,

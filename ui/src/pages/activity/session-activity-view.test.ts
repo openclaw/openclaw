@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
@@ -9,14 +9,17 @@ import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts
 import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid as mountDashboards } from "../../test-helpers/mount-solid.ts";
 import { loadChatRoute } from "../chat/route-loader.ts";
-import { renderDashboards } from "../dashboards/view.ts";
-import { props, row } from "./session-activity-view.test-harness.ts";
-import { renderSessionActivityView } from "./session-activity-view.ts";
+import { DashboardsView } from "../dashboards/view.tsx";
+import { mountSolid, props, row } from "./session-activity-view.test-harness.ts";
+import { renderSessionActivityView } from "./session-activity-view.tsx";
+
+const renderSessionActivityViewSolid = mountSolid(renderSessionActivityView);
 
 let container: HTMLDivElement;
 function show(input: Parameters<typeof props>[0] = {}, target = container) {
-  render(renderSessionActivityView(props(input)), target);
+  renderSessionActivityViewSolid(props(input), target);
 }
 
 beforeEach(() => {
@@ -58,6 +61,37 @@ describe("session activity semantics", () => {
     expect(
       container.querySelector(".activity-feed__identity .settings-status")?.textContent?.trim(),
     ).toBe(label);
+  });
+
+  it("refreshes presence age without replacing the selected person's disclosure", () => {
+    const now = Date.UTC(2026, 0, 1, 12);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const person = {
+      id: "person",
+      identity: { type: "profile" as const, id: "person" },
+      name: "Person",
+      watchedSessions: [],
+      entries: [{ ts: now, lastActivityAt: now, host: "Test device" }],
+    };
+    const input = props({
+      filters: { personId: "person", query: "", time: "7d" },
+      presenceViewers: [person],
+      presentationRevision: 1,
+    });
+    show(input);
+    const identity = container.querySelector(".activity-feed__identity");
+    const details = container.querySelector<HTMLDetailsElement>(
+      ".activity-feed__connection-details",
+    )!;
+    details.open = true;
+    expect(identity?.querySelector(".settings-status")?.textContent).toContain("Online · Active");
+
+    vi.mocked(Date.now).mockReturnValue(now + 120_000);
+    show({ ...input, presentationRevision: 2 });
+    expect(container.querySelector(".activity-feed__identity")).toBe(identity);
+    expect(identity?.querySelector(".settings-status")?.textContent).toContain("Online · Idle");
+    expect(container.querySelector(".activity-feed__connection-details")).toBe(details);
+    expect(details.open).toBe(true);
   });
 
   it("leaves the page main landmark to the app shell", () => {
@@ -130,7 +164,7 @@ describe("session activity semantics", () => {
           : { month: "short", day: "numeric" };
       const formatter = new Intl.DateTimeFormat(undefined, options);
       expect(bars[count - 1]?.getAttribute("title")).toBe(
-        `${formatter.format(bucketStart(count - 1))} · ${hourly ? 3 : 1} sessions`,
+        `${formatter.format(bucketStart(count - 1))} · ${hourly ? "3 sessions" : "1 session"}`,
       );
       expect(
         [...pulse.querySelectorAll(".activity-pulse__axis > span > span")].map(
@@ -173,17 +207,36 @@ describe("session activity semantics", () => {
         expect(panel.querySelector('[role="status"]')).toBeNull();
       }
       if (time === "all") {
-        input.result!.activityPulse = {
-          since: since.getTime(),
-          until: bucketStart(count),
-          buckets: buckets.map(() => 0),
-          sessions: 0,
-          running: 0,
-        };
-        show(input);
-        expect(
-          pulse.querySelector(".activity-pulse__stats")?.textContent?.replace(/\s+/g, " ").trim(),
-        ).toBe("0 sessions · 0 running now");
+        const firstPeriod = formatter.format(bucketStart(0));
+        for (const [total, sessions, people, incomplete] of [
+          [0, "0 sessions", "0 people", false],
+          [1, "1 session", "1 person", false],
+          [1, "1 session", "1+ people", true],
+          [2, "2 sessions", "2 people", false],
+        ] as const) {
+          input.result!.peopleIncomplete = incomplete;
+          input.result!.activityPulse = {
+            since: since.getTime(),
+            until: bucketStart(count),
+            buckets: buckets.map((_, index) => (index === 0 ? total : 0)),
+            sessions: total,
+            people: total,
+            running: 0,
+          };
+          show(input);
+          expect(
+            pulse.querySelector(".activity-pulse__stats")?.textContent?.replace(/\s+/g, " ").trim(),
+          ).toBe(`${sessions} · ${people} · 0 running now`);
+          expect(pulse.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+            `All time: ${sessions}; busiest ${firstPeriod}`,
+          );
+          expect(pulse.querySelector(".activity-pulse__bar")?.getAttribute("title")).toBe(
+            `${firstPeriod} · ${sessions}`,
+          );
+          expect(
+            pulse.querySelectorAll(".activity-pulse__stats > span")[1]?.hasAttribute("title"),
+          ).toBe(incomplete);
+        }
         expect(pulse.querySelectorAll(".activity-pulse__bars > span")).toHaveLength(12);
         expect(pulse.querySelector(".activity-pulse__running")).toBeNull();
         show();
@@ -320,11 +373,13 @@ describe("session activity semantics", () => {
       } as unknown as ApplicationContext;
       const surfaceContainer = document.createElement("div");
       document.body.append(surfaceContainer);
-      render(
-        surface === "activity"
-          ? renderSessionActivityView(input)
-          : renderDashboards(
-              {
+      if (surface === "activity") {
+        renderSessionActivityViewSolid(input, surfaceContainer);
+      } else {
+        mountDashboards(
+          () =>
+            createComponent(DashboardsView, {
+              data: {
                 result: input.result!,
                 error: null,
                 basePath: "",
@@ -332,15 +387,12 @@ describe("session activity semantics", () => {
                 mainKey: "main",
                 globalScope,
               },
-              { query: "", ownerId: "", sort: "updated" },
-              {
-                onQueryChange: vi.fn(),
-                onOwnerChange: vi.fn(),
-                onSortChange: vi.fn(),
-              },
-            ),
-        surfaceContainer,
-      );
+              filters: { query: "", ownerId: "", sort: "updated" },
+              handlers: { onFilterChange: vi.fn() },
+            }),
+          { container: surfaceContainer },
+        );
+      }
       const item = surfaceContainer.querySelector<HTMLElement>(
         surface === "activity" ? "[data-activity-session]" : ".dashboard-card__main",
       )!;
@@ -504,6 +556,60 @@ describe("session activity semantics", () => {
 });
 
 describe("session activity people filter", () => {
+  it("groups matching connection facts while retaining network differences and person-scoped disclosure", () => {
+    const entry = {
+      ts: 1,
+      host: "openclaw-control-ui",
+      clientId: "openclaw-control-ui",
+      mode: "webchat",
+      deviceFamily: "Mac",
+      platform: "MacIntel",
+      ip: "203.0.113.7",
+      timeZone: "Europe/Vienna",
+    };
+    const person = {
+      id: "online",
+      identity: { type: "profile" as const, id: "online" },
+      watchedSessions: [],
+      entries: [
+        entry,
+        { ...entry, lastInputSeconds: 30 },
+        { ...entry, lastInputSeconds: 5 },
+        { ...entry, ip: "203.0.113.8" },
+      ],
+    };
+    const input = props({
+      filters: { personId: "online", query: "", time: "7d" },
+      presenceViewers: [person],
+    });
+    show(input);
+    expect(container.querySelector(".activity-feed__connection-summary")?.textContent).toBe(
+      "Mac · Web app",
+    );
+    const details = container.querySelector<HTMLDetailsElement>(
+      ".activity-feed__connection-details",
+    )!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")?.textContent?.trim()).toBe("Connection details · 4");
+    const groups = details.querySelectorAll(".activity-feed__connection");
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.textContent).toContain("3 connections");
+    expect(groups[0]?.textContent).toContain("Last input 5s ago");
+    expect(groups[1]?.textContent).toContain("1 connection");
+    expect(groups[1]?.textContent).toContain("203.0.113.8");
+    details.open = true;
+    show({ ...input, presenceViewers: [{ ...person, entries: [entry] }] });
+    expect(container.querySelector("details")).toBe(details);
+    expect(details.open).toBe(true);
+    expect(details.querySelector("summary")?.textContent?.trim()).toBe("Connection details · 1");
+    show({
+      ...input,
+      filters: { ...input.filters, personId: "other" },
+      presenceViewers: [{ ...person, id: "other", identity: { type: "profile", id: "other" } }],
+    });
+    expect(container.querySelector<HTMLDetailsElement>("details")?.open).toBe(false);
+  });
+
   it.each([false, true])(
     "keeps online identity details and only known watched sessions in recency order (facet present: %s)",
     (hasFacet) => {
@@ -544,11 +650,11 @@ describe("session activity people filter", () => {
       expect(identity?.querySelector("h2")?.textContent).toBe("online@example.test");
       expect(identity?.textContent).toContain("Online");
       expect(
-        [...container.querySelectorAll(".activity-feed__device-name")].map((device) =>
+        [...container.querySelectorAll(".activity-feed__connection strong")].map((device) =>
           device.textContent?.trim(),
         ),
-      ).toEqual(["Alice's Mac", "Alice's phone"]);
-      const device = identity?.querySelector(".activity-feed__device")?.textContent;
+      ).toEqual(["Mac16,6 · Windows", "Alice's phone"]);
+      const device = identity?.querySelector(".activity-feed__connection")?.textContent;
       expect(device).toContain("203.0.113.7");
       expect(device).toContain("Europe/Vienna");
       expect(

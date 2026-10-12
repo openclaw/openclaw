@@ -9,7 +9,6 @@ import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js"
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { pluginDoctorContractRegistryLoaderState } from "../plugins/doctor-contract-registry-loader-state.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import {
@@ -83,7 +82,6 @@ async function makeFixture() {
 }
 
 afterEach(async () => {
-  pluginDoctorContractRegistryLoaderState.moduleLoaderFactory = undefined;
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
@@ -315,9 +313,7 @@ describe("legacy state migration caller storage", () => {
                 "SDK settings",
               );
               expect(detected.agentDir.targetDir).toBe(targetDir);
-              await expect(ensureTool("fd", true)).resolves.toBe(
-                path.join(activeDir, "bin", binary),
-              );
+              await expect(ensureTool("fd")).resolves.toBe(path.join(activeDir, "bin", binary));
               expect(fs.readFileSync(path.join(targetDir, "bin", binary), "utf8")).toBe(
                 targetDir === legacyDir ? "legacy binary" : "current binary",
               );

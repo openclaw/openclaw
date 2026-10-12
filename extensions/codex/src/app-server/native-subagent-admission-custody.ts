@@ -97,19 +97,19 @@ export class CodexNativeSubagentAdmissionCustody {
         evidence.completionCustody ??= (
           evidence.owner ?? evidence.modelOwner
         )?.completionCustody?.retain();
-      }
-      if (evidence.kind === "interaction" && !evidence.modelSourceConsumed) {
-        const owner = evidence.modelOwner ?? evidence.owner;
-        if (owner?.unqualifiedModelExecution && !owner.nativeInputConfiguration) {
-          evidence.modelSourceRequiresInference = evidence.modelSourceTurnId ? undefined : true;
-          evidence.modelSource = retainNativeModelExecution(
-            owner,
-            undefined,
-            evidence.childThreadId,
-            evidence.completionCustody,
-          );
-        } else {
-          evidence.modelSource = retainNativeModelSource(owner);
+        if (!evidence.modelSourceConsumed) {
+          const owner = evidence.modelOwner ?? evidence.owner;
+          if (owner?.unqualifiedModelExecution && !owner.nativeInputConfiguration) {
+            evidence.modelSourceRequiresInference = evidence.modelSourceTurnId ? undefined : true;
+            evidence.modelSource = retainNativeModelExecution(
+              owner,
+              undefined,
+              evidence.childThreadId,
+              evidence.completionCustody,
+            );
+          } else {
+            evidence.modelSource = retainNativeModelSource(owner);
+          }
         }
       }
     } catch (error) {
@@ -161,13 +161,10 @@ export class CodexNativeSubagentAdmissionCustody {
       }
       const state = this.dependencies.parentState(evidence.parentThreadId);
       if (evidence.kind === "interaction" && (evidence.owner || evidence.modelSource)) {
-        if (evidence.modelSource && state && !isRetired(state)) {
-          return true;
-        }
-        if (state && evidence.owner && [...state.owners.values()].includes(evidence.owner)) {
-          return true;
-        }
-        return false;
+        return Boolean(
+          (evidence.modelSource && state && !isRetired(state)) ||
+          (state && evidence.owner && [...state.owners.values()].includes(evidence.owner)),
+        );
       }
       return this.hasUnboundParentOwner(evidence.parentThreadId);
     });

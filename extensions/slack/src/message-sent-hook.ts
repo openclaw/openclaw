@@ -9,20 +9,13 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 
-type EmitSlackMessageSentHookParams = {
+type EmitSlackMessageSentHookParams = Pick<
+  Parameters<typeof buildCanonicalSentMessageHookContext>[0],
+  "to" | "content" | "success" | "error" | "messageId" | "isGroup" | "groupId"
+> & {
   /** Optional canonical session key. When set, the internal `message:sent` hook fires too. */
   sessionKeyForInternalHooks?: string;
-  /** Slack target (channel ID `C…`, DM channel ID `D…`, group `G…`, or user ID `U…`). */
-  to: string;
   accountId?: string | null;
-  /** The outbound content that was sent. Mirrors `MessageSentEvent.content`. */
-  content: string;
-  success: boolean;
-  error?: string;
-  /** Slack message `ts` returned by `chat.postMessage` on success. */
-  messageId?: string;
-  isGroup?: boolean;
-  groupId?: string;
 };
 
 export function emitSlackMessageSentHooks(params: EmitSlackMessageSentHookParams): void {

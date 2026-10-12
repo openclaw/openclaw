@@ -36,7 +36,6 @@ import {
   auditShortTermPromotionArtifacts,
   filterLiveShortTermRecallEntries,
   loadShortTermPromotionDreamingStats,
-  recordGroundedShortTermCandidates,
   rankShortTermPromotionCandidates,
   recordDreamingPhaseSignals,
   recordRemConsideredPhaseSignals,
@@ -66,9 +65,6 @@ type ApplyAllOptions = Omit<
   "workspaceDir" | "candidates" | "minScore" | "minRecallCount" | "minUniqueQueries"
 >;
 type PromotionCandidate = Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>[number];
-type GroundedCandidateFixture = Parameters<
-  typeof recordGroundedShortTermCandidates
->[0]["items"][number];
 type PromotionCandidateFixture = Pick<
   PromotionCandidate,
   "key" | "path" | "startLine" | "endLine" | "source" | "snippet"
@@ -166,10 +162,10 @@ function recallStoreEntryFixture(
 }
 
 function groundedCandidateFixture(
-  params: Pick<GroundedCandidateFixture, "path" | "snippet" | "query"> &
-    Partial<GroundedCandidateFixture>,
-): GroundedCandidateFixture {
+  params: Pick<RecallResult, "path" | "snippet" | "query"> & Partial<RecallResult>,
+): RecallResult {
   return {
+    source: "memory",
     startLine: 1,
     endLine: 1,
     score: 0.9,
@@ -472,10 +468,11 @@ describe("short-term promotion", () => {
     const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
     const longSnippet = `Stable claim identity ${"x".repeat(maxSnippetChars + 100)}`;
 
-    await recordGroundedShortTermCandidates({
+    await recordShortTermRecalls({
       workspaceDir,
       query: "__dreaming_grounded_backfill__",
-      items: [
+      signalType: "grounded",
+      results: [
         groundedCandidateFixture({
           path: "memory/2026-04-03.md",
           snippet: longSnippet,
@@ -939,10 +936,11 @@ describe("short-term promotion", () => {
       'Always use "Happy Together" calendar for flights and reservations.',
     ]);
 
-    await recordGroundedShortTermCandidates({
+    await recordShortTermRecalls({
       workspaceDir,
       query: "__dreaming_grounded_backfill__",
-      items: [
+      signalType: "grounded",
+      results: [
         groundedCandidateFixture({
           path: "memory/2026-04-03.md",
           snippet: 'Always use "Happy Together" calendar for flights and reservations.',
@@ -1007,10 +1005,8 @@ describe("short-term promotion", () => {
       query: "__dreaming_grounded_backfill__:candidate",
     });
 
-    await recordGroundedShortTermCandidates({
-      workspaceDir,
-      query: "__dreaming_grounded_backfill__",
-      items: [groundedItem],
+    await recordMemoryRecalls(workspaceDir, "__dreaming_grounded_backfill__", [groundedItem], {
+      signalType: "grounded",
       nowMs: Date.parse("2026-04-03T09:00:00.000Z"),
     });
     for (const query of ["router backups", "encrypted retention", "glacier storage"]) {
@@ -1026,10 +1022,8 @@ describe("short-term promotion", () => {
     expect(before).toHaveLength(1);
     expect(before[0]?.uniqueQueries).toBe(3);
 
-    await recordGroundedShortTermCandidates({
-      workspaceDir,
-      query: "__dreaming_grounded_backfill__",
-      items: [groundedItem],
+    await recordMemoryRecalls(workspaceDir, "__dreaming_grounded_backfill__", [groundedItem], {
+      signalType: "grounded",
       nowMs: Date.parse("2026-04-03T11:00:00.000Z"),
     });
 
@@ -1046,10 +1040,11 @@ describe("short-term promotion", () => {
       "Live recall-backed rule.",
     ]);
 
-    await recordGroundedShortTermCandidates({
+    await recordShortTermRecalls({
       workspaceDir,
       query: "__dreaming_grounded_backfill__",
-      items: [
+      signalType: "grounded",
+      results: [
         groundedCandidateFixture({
           path: "memory/2026-04-03.md",
           snippet: "Grounded only rule.",

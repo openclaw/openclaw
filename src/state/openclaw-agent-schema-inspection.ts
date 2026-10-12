@@ -44,7 +44,8 @@ export type AgentSchemaInspectionInput = {
 
 export type AgentSchemaInspection = {
   version: number;
-  integrityGateOutcome?: "cached" | "healthy" | "pending";
+  integrityGateOutcome?: "cached" | "healthy";
+  preparationPending?: true;
   writerAppVersion?: string;
   reason?: string;
   failure?: Error;
@@ -94,7 +95,7 @@ export function inspectAgentDatabaseSchema(
         inspection.integrityGateOutcome = "cached";
       } else if (input.deferRuntimeIntegrity && !migrationPending) {
         // The pending Gateway owner claims the live lease and validates before writes.
-        inspection.integrityGateOutcome = "pending";
+        inspection.preparationPending = true;
       } else {
         assertSqliteIntegrity(database, input.pathname);
         inspection.integrityGateOutcome = "healthy";
@@ -112,11 +113,14 @@ export function inspectAgentDatabaseSchema(
       (!input.requireStartupMigrationReadiness || version > 0)
     ) {
       checkingShape = true;
-      assertOpenClawAgentDatabaseForMaintenance(database, {
+      const needsIndexRepair = assertOpenClawAgentDatabaseForMaintenance(database, {
         agentId,
         pathname: input.pathname,
         allowStartupIndexRepair: input.requireStartupMigrationReadiness,
       });
+      if (needsIndexRepair) {
+        inspection.preparationPending = true;
+      }
     }
     return inspection;
   } catch (error) {

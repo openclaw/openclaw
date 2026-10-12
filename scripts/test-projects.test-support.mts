@@ -759,6 +759,24 @@ const MERMAID_RENDERER_TEST_TARGETS = [
   "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
   "ui/src/components/markdown-mermaid-native.browser.test.ts",
 ];
+// Channels reach the render-aware chunker through the Plugin SDK text-chunking
+// facade, deeper than bounded import walks follow; these suites pin chunk output.
+const MARKDOWN_RENDER_CHUNKING_TEST_TARGETS = [
+  "packages/markdown-core/src/ir.test.ts",
+  "packages/markdown-core/src/render-aware-chunking.test.ts",
+  "packages/markdown-core/src/render.annotations.test.ts",
+  "packages/markdown-core/src/render.crossing.test.ts",
+  "src/plugin-sdk/format-capabilities.test.ts",
+  "src/plugin-sdk/text-chunking.test.ts",
+  "extensions/googlechat/src/format.test.ts",
+  "extensions/signal/src/format.test.ts",
+  "extensions/slack/src/format.test.ts",
+  "extensions/sms/src/send.test.ts",
+  "extensions/telegram/src/format.test.ts",
+  "extensions/whatsapp/src/send.delivery-recovery.test.ts",
+  "extensions/whatsapp/src/send.test.ts",
+  "extensions/whatsapp/src/text-runtime.test.ts",
+];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
   [
@@ -798,6 +816,18 @@ const SOURCE_TEST_TARGETS = new Map([
     "packages/normalization-core/package.json",
     ["packages/normalization-core/src/package-exports.test.ts", ...MERMAID_RENDERER_TEST_TARGETS],
   ],
+  ...[
+    "ir",
+    "ir-annotations",
+    "ir-slice",
+    "ir-spans",
+    "render",
+    "render-attributed",
+    "render-aware-chunking",
+  ].map<[string, string[]]>((module) => [
+    `packages/markdown-core/src/${module}.ts`,
+    MARKDOWN_RENDER_CHUNKING_TEST_TARGETS,
+  ]),
   ["extensions/codex/package.json", CODEX_VERSION_CONTRACT_TEST_TARGETS],
   ["extensions/codex/src/app-server/version.ts", CODEX_VERSION_CONTRACT_TEST_TARGETS],
   ...["index", "harness"].map<[string, string[]]>((entry) => [
@@ -3007,7 +3037,6 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [
     "scripts/lib/release-version.mjs",
     [
-      "test/release-version.test.ts",
       "test/npm-publish-plan.test.ts",
       "test/openclaw-npm-release-check.test.ts",
       npmPostpublish,
@@ -3445,7 +3474,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [
     /^scripts\/lib\/guard-inventory-utils\.mjs$/u,
     [
-      "test/extension-import-boundaries.test.ts",
       "test/plugin-extension-import-boundary.test.ts",
       "test/architecture-smells.test.ts",
       "test/test-helper-extension-import-boundary.test.ts",
@@ -4789,10 +4817,7 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   if (relative.endsWith(".e2e.test.ts")) {
     return "e2e";
   }
-  if (
-    relative === "src/gateway/gateway.test.ts" ||
-    relative === "src/gateway/server.startup-matrix-migration.integration.test.ts"
-  ) {
+  if (relative === "src/gateway/gateway.test.ts") {
     return "e2e";
   }
   const channelContractKind = resolveChannelContractTargetKind(relative);

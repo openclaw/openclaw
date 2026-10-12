@@ -1,5 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
+import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS as columns,
@@ -14,7 +19,6 @@ import {
   ensureOperatorApprovalResolutionRefs,
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
-  repairLegacySubagentSuspensionReasons,
 } from "./openclaw-state-db-legacy-backfills.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
@@ -27,29 +31,13 @@ function ensureTable(
   database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table, options)); // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
 }
 
-const repositoryWorkspacePendingSchemas = new WeakSet<DatabaseSync>();
-
-function hasRepositoryWorkspacePendingResultSchema(database: DatabaseSync): boolean {
-  if (repositoryWorkspacePendingSchemas.has(database)) {
-    return true;
-  }
-  const exists = tableHasColumn(
-    database,
-    "worker_workspace_pending_results",
-    "repository_workspace_id",
-  );
-  // Another process can create the column; cache only committed presence.
-  // First-use DDL inside an outer transaction may still roll back.
-  if (exists && !database.isTransaction) {
-    repositoryWorkspacePendingSchemas.add(database);
-  }
-  return exists;
-}
-
 export function ensureRepositoryWorkspacePendingResultSchema(database: DatabaseSync): void {
-  if (!hasRepositoryWorkspacePendingResultSchema(database)) {
-    ensureColumn(database, "worker_workspace_pending_results", "repository_workspace_id TEXT");
+  const table = "worker_workspace_pending_results";
+  const sql = getAdmittedSqliteSchemaFacts(database)?.tableSql.get(table);
+  if (sql && parseSqliteTableDefinition(sql, table).columns.has("repository_workspace_id")) {
+    return;
   }
+  ensureColumn(database, table, "repository_workspace_id TEXT");
 }
 
 export function ensureSessionRepositoryWorkspaceSchema(database: DatabaseSync): void {
@@ -59,6 +47,9 @@ export function ensureSessionRepositoryWorkspaceSchema(database: DatabaseSync): 
 }
 
 export function ensureRepositoryGitHubPublicationSchema(database: DatabaseSync): void {
+  if (tableExists(database, "github_repository_publication_requests")) {
+    return;
+  }
   ensureTable(database, "github_repository_publication_requests", {
     endMarker:
       "ON github_repository_publication_requests(owner_profile_id, session_id, idempotency_key) WHERE owner_profile_id IS NOT NULL;",
@@ -67,6 +58,9 @@ export function ensureRepositoryGitHubPublicationSchema(database: DatabaseSync):
 }
 
 export function ensureGitHubPublicationSessionLifecycleSchema(database: DatabaseSync): void {
+  if (tableExists(database, "github_publication_session_lifecycles")) {
+    return;
+  }
   ensureTable(database, "github_publication_session_lifecycles", {
     errorMessage: "GitHub publication lifecycle schema marker is missing.",
   });
@@ -102,8 +96,22 @@ export function ensureConfigRevisionKeySchema(database: DatabaseSync): void {
   });
 }
 
+const journalAvailability = new WeakMap<SqliteSchemaFacts, boolean>();
+
 export function assertAgentDeletionJournalAvailable(database: DatabaseSync): void {
-  if (!tableHasColumn(database, "agent_deletion_journal", "agent_id")) {
+  const schema = getAdmittedSqliteSchemaFacts(database);
+  let available = schema && journalAvailability.get(schema);
+  if (available === undefined) {
+    const sql = schema?.tableSql.get("agent_deletion_journal");
+    available = schema
+      ? sql !== undefined &&
+        parseSqliteTableDefinition(sql, "agent_deletion_journal").columns.has("agent_id")
+      : tableHasColumn(database, "agent_deletion_journal", "agent_id");
+    if (schema) {
+      journalAvailability.set(schema, available);
+    }
+  }
+  if (!available) {
     throw new Error(
       "Agent deletion journal missing; run openclaw doctor --fix to reconstruct it before restoring or deleting agents.",
     );
@@ -125,6 +133,10 @@ export function reconstructAgentDeletionJournalSchema(
 }
 
 export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
+  const sql = getAdmittedSqliteSchemaFacts(database)?.tableSql.get("agent_database_leases");
+  if (sql && parseSqliteTableDefinition(sql, "agent_database_leases").columns.has("provenance")) {
+    return;
+  }
   ensureTable(database, "agent_database_leases");
   ensureColumn(database, "agent_database_leases", "provenance TEXT");
 }
@@ -168,6 +180,9 @@ function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
 }
 
 export function ensureGitHubPublicationSchema(db: DatabaseSync): void {
+  if (tableExists(db, "github_publication_requests")) {
+    return;
+  }
   ensureTable(db, "github_publication_requests", {
     endMarker: "ON github_publication_requests(status, updated_at_ms, request_id);",
   });
@@ -175,6 +190,9 @@ export function ensureGitHubPublicationSchema(db: DatabaseSync): void {
 
 /** First personal publication write only; status and old readers leave this surface dormant. */
 export function ensurePersonalGitHubPublicationSchema(db: DatabaseSync): void {
+  if (tableExists(db, "github_personal_publication_requests")) {
+    return;
+  }
   ensureTable(db, "github_personal_publication_requests", {
     endMarker: "ON github_personal_publication_requests(status, updated_at_ms, request_id);",
     errorMessage: "Personal GitHub publication schema marker is missing.",
@@ -291,7 +309,6 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
   ensureColumns(db, columns.taskRequester);
   ensureColumns(db, columns.taskRunDetails);
   if (repairHistoricalRows) {
-    repairLegacySubagentSuspensionReasons(db);
     repairLegacySubagentExecutionPayloads(db);
     repairLegacySubagentRetainedResults(db);
   }

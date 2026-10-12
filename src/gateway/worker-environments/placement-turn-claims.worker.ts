@@ -10,6 +10,7 @@ import type {
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
 import { readWorkerPlacementMovesReadOnly } from "./placement-move-intent.js";
 import { createPlacementPendingFailureOps } from "./placement-pending-failure.js";
+import { readWorkerSessionPlacementProjectionInDatabase } from "./placement-read-projection.js";
 import {
   advanceCursor,
   normalizeEpoch,
@@ -34,6 +35,11 @@ import {
   recordStagedWorkerWorkspaceResult,
 } from "./placement-workspace-result.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
+
+type TransitionOps = ReturnType<typeof createPlacementTransitionOps>;
+type TransitionInput<Method extends keyof TransitionOps> = Parameters<TransitionOps[Method]>[0] & {
+  nowMs?: number;
+};
 
 type ClaimInput = {
   claim: WorkerSessionTurnClaim;
@@ -74,12 +80,14 @@ function operation<
         const source = guardedWorkspaceWrite ? input.sessionEntryCurrentSource : undefined;
         const admit = (stage: "transaction" | "commit", facts: unknown) =>
           requestSessionEntryCurrentAdmission(source, { stage, facts }, { lookup: "logical" });
-        admit(
-          "transaction",
-          guardedWorkspaceWrite
-            ? { placement: find(db, sessionId), placementMove: move() }
-            : undefined,
-        );
+        const simpleTurn =
+          type === "placementTurns.claim" ||
+          type === "placementTurns.release" ||
+          type === "placementTurns.releaseIfOwned";
+        admit("transaction", {
+          placement: simpleTurn ? undefined : find(db, sessionId),
+          placementMove: move(),
+        });
         const receipt = execute(
           {
             path: database.path,
@@ -90,8 +98,24 @@ function operation<
           },
           input,
         );
-        receipt.workspaceResult =
-          listPendingWorkerWorkspaceResultsInDatabase(db, sessionId)[0] ?? null;
+        if (
+          receipt.placement?.state === "local" &&
+          (type === "placementTurns.claim" ||
+            type === "placementTurns.release" ||
+            type === "placementTurns.releaseIfOwned")
+        ) {
+          // Replace the existing result read with complete presentation facts in
+          // this transaction, avoiding another projection request after commit.
+          receipt.projection = readWorkerSessionPlacementProjectionInDatabase(
+            db,
+            [sessionId],
+            [],
+          ).projection;
+          receipt.workspaceResult = receipt.projection.pendingResults.get(sessionId) ?? null;
+        } else {
+          receipt.workspaceResult =
+            listPendingWorkerWorkspaceResultsInDatabase(db, sessionId)[0] ?? null;
+        }
         receipt.placementMove = move();
         admit("commit", receipt);
         deferSqliteWorkerCommitReceipt(db, receipt);
@@ -106,39 +130,22 @@ function operation<
 export const placementTurnClaimOperations = {
   "placementTurns.transition": operation(
     "placementTurns.transition",
-    (
-      runtime,
-      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["transition"]>[0] & {
-        nowMs?: number;
-      },
-    ) => createPlacementTransitionOps(runtime).transition(input),
+    (runtime, input: TransitionInput<"transition">) =>
+      createPlacementTransitionOps(runtime).transition(input),
   ),
   "placementTurns.startDrain": operation(
     "placementTurns.startDrain",
-    (
-      runtime,
-      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["startDrain"]>[0] & {
-        nowMs?: number;
-      },
-    ) => createPlacementTransitionOps(runtime).startDrain(input),
+    (runtime, input: TransitionInput<"startDrain">) =>
+      createPlacementTransitionOps(runtime).startDrain(input),
   ),
   "placementTurns.startReconcile": operation(
     "placementTurns.startReconcile",
-    (
-      runtime,
-      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["startReconcile"]>[0] & {
-        nowMs?: number;
-      },
-    ) => createPlacementTransitionOps(runtime).startReconcile(input),
+    (runtime, input: TransitionInput<"startReconcile">) =>
+      createPlacementTransitionOps(runtime).startReconcile(input),
   ),
   "placementTurns.fail": operation(
     "placementTurns.fail",
-    (
-      runtime,
-      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["fail"]>[0] & {
-        nowMs?: number;
-      },
-    ) => createPlacementTransitionOps(runtime).fail(input),
+    (runtime, input: TransitionInput<"fail">) => createPlacementTransitionOps(runtime).fail(input),
   ),
   "placementTurns.failResult": operation(
     "placementTurns.failResult",
@@ -179,25 +186,24 @@ export const placementTurnClaimOperations = {
   ),
   "placementTurns.markResultPending": operation(
     "placementTurns.markResultPending",
-    (runtime, input: ClaimInput & { gatewayInstanceId: string }) => {
-      createPlacementWorkspaceResultOps(runtime).markWorkspaceResultPending(input.claim);
-      return { placement: getRequired(runtime.read(), input.claim.sessionId) };
-    },
+    (runtime, input: ClaimInput & { gatewayInstanceId: string }) => ({
+      placement: createPlacementWorkspaceResultOps(runtime).markWorkspaceResultPending(input.claim),
+    }),
   ),
   "placementTurns.acceptResult": operation(
     "placementTurns.acceptResult",
-    (runtime, input: ClaimInput) => {
-      createPlacementWorkspaceResultOps(runtime).acceptWorkspaceResult(input.claim);
-      return { placement: getRequired(runtime.read(), input.claim.sessionId) };
-    },
+    (runtime, input: ClaimInput) => ({
+      placement: createPlacementWorkspaceResultOps(runtime).acceptWorkspaceResult(input.claim),
+    }),
     true,
   ),
   "placementTurns.handoffResult": operation(
     "placementTurns.handoffResult",
-    (runtime, input: ClaimInput & { gatewayInstanceId: string }) => {
-      createPlacementWorkspaceResultOps(runtime).handoffWorkspaceResultRecovery(input.claim);
-      return { placement: getRequired(runtime.read(), input.claim.sessionId) };
-    },
+    (runtime, input: ClaimInput & { gatewayInstanceId: string }) => ({
+      placement: createPlacementWorkspaceResultOps(runtime).handoffWorkspaceResultRecovery(
+        input.claim,
+      ),
+    }),
   ),
   "placementTurns.abandonResult": operation(
     "placementTurns.abandonResult",
@@ -342,8 +348,7 @@ export const placementTurnClaimOperations = {
   "placementTurns.claim": operation(
     "placementTurns.claim",
     (runtime, input: { claim: WorkerTurnClaimInput; nowMs?: number }) => {
-      const claim = createPlacementTurnClaimOps(runtime).claimTurn(input.claim);
-      return { claim, placement: getRequired(runtime.read(), claim.sessionId) };
+      return createPlacementTurnClaimOps(runtime).claimTurn(input.claim);
     },
   ),
   "placementTurns.updateWorkspaceBaseManifest": operation(
@@ -366,16 +371,14 @@ export const placementTurnClaimOperations = {
         repositoryWorkspaceId?: string;
         sessionEntryCurrentSource?: SessionEntryCurrentSource;
       },
-    ) => {
-      const db = runtime.read();
-      recordStagedWorkerWorkspaceResult(
-        db,
+    ) => ({
+      placement: recordStagedWorkerWorkspaceResult(
+        runtime.read(),
         input.claim,
         input.stagedResultRef,
         input.repositoryWorkspaceId,
-      );
-      return { placement: getRequired(db, input.claim.sessionId) };
-    },
+      ),
+    }),
     true,
   ),
   "placementTurns.recoverWorkspace": operation(
@@ -383,8 +386,7 @@ export const placementTurnClaimOperations = {
     (runtime, input: ClaimInput & { gatewayInstanceId: string }) => {
       const results = createPlacementWorkspaceResultOps(runtime);
       results.markWorkspaceResultPending(input.claim);
-      results.handoffWorkspaceResultRecovery(input.claim);
-      return { placement: getRequired(runtime.read(), input.claim.sessionId) };
+      return { placement: results.handoffWorkspaceResultRecovery(input.claim) };
     },
   ),
   "placementTurns.handoffRuntimeRefreshResult": operation(
@@ -408,10 +410,7 @@ export const placementTurnClaimOperations = {
   "placementTurns.releaseIfOwned": operation(
     "placementTurns.releaseIfOwned",
     (runtime, input: ClaimInput) => {
-      const claims = createPlacementTurnClaimOps(runtime);
-      return claims.validateTurnClaim(input.claim)
-        ? { placement: claims.releaseTurn(input.claim) }
-        : {};
+      return { placement: createPlacementTurnClaimOps(runtime).releaseTurnIfOwned(input.claim) };
     },
   ),
   "placementTurns.release": operation("placementTurns.release", (runtime, input: ClaimInput) => ({

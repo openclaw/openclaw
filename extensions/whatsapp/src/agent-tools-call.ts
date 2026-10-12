@@ -134,11 +134,7 @@ async function resolveRequesterE164(params: {
 }): Promise<string | null> {
   const senderId = params.requesterSenderId.trim();
   if (!senderId.includes("@")) {
-    try {
-      return normalizeE164(senderId.replace(/^whatsapp:/i, ""));
-    } catch {
-      return null;
-    }
+    return normalizeE164(senderId.replace(/^whatsapp:/i, ""));
   }
 
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
@@ -160,7 +156,7 @@ async function resolveLinkedWhatsAppSelfE164(params: {
     return null;
   }
   if (identity.e164) {
-    return normalizeE164(identity.e164);
+    return identity.e164;
   }
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
   const lidLookup = controller.getCurrentSock()?.signalRepository.lidMapping;

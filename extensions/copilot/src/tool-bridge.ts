@@ -19,7 +19,7 @@ import {
   isSubagentSessionKey,
   isToolResultError,
   resolveEmbeddedAttemptToolConstructionPlan,
-  resolveModelAuthMode,
+  resolveModelAuthModeAsync,
   sanitizeToolResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
@@ -29,7 +29,7 @@ import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { isRawCopilotModelRun } from "./attempt-mode.js";
 
 type CreateOpenClawCodingTools =
-  (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
+  (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingToolsAsync"];
 type OpenClawCodingToolsOptions = NonNullable<Parameters<CreateOpenClawCodingTools>[0]>;
 type AgentHarnessToolSurfaceRuntime = ReturnType<typeof createAgentHarnessToolSurfaceRuntime>;
 type CatalogExecuteParams = Parameters<
@@ -157,8 +157,9 @@ export async function createCopilotToolBridge(
     scheduledToolPolicy: attemptParams.scheduledToolPolicy,
     sourceReplyDeliveryMode: attemptParams.sourceReplyDeliveryMode,
     toolsAllow: attemptParams.toolsAllow,
+    trigger: attemptParams.trigger,
   });
-  const toolOptions = buildOpenClawCodingToolsOptions(
+  const toolOptions = await buildOpenClawCodingToolsOptions(
     input,
     {
       ...toolPlan,
@@ -173,11 +174,11 @@ export async function createCopilotToolBridge(
   }
   const bindingCwd = toolOptions.cwd ?? toolOptions.workspaceDir;
   const bindingOptions = bindingCwd ? { cwd: bindingCwd } : undefined;
-  const createToolSurface = hostCapabilities.createToolSurface;
-  if (!createToolSurface) {
+  const createToolSurfaceAsync = hostCapabilities.createToolSurfaceAsync;
+  if (!createToolSurfaceAsync) {
     throw new Error("Copilot tool construction requires a current host capability");
   }
-  const sourceTools = createToolSurface(toolOptions, bindingOptions);
+  const sourceTools = await createToolSurfaceAsync(toolOptions, bindingOptions);
   const boundSourceTools = new Set(sourceTools);
 
   const allowedSourceTools = applyEmbeddedAttemptToolsAllow(
@@ -269,11 +270,11 @@ export async function createCopilotToolBridge(
  * attempt context and prepared sandbox/construction policy to enforce access.
  * Missing fields here silently weaken or misapply the native harness contract.
  */
-function buildOpenClawCodingToolsOptions(
+async function buildOpenClawCodingToolsOptions(
   input: CopilotToolBridgeInput,
   toolPlan: ReturnType<typeof resolveEmbeddedAttemptToolConstructionPlan>,
   toolSurfaceRuntime?: ReturnType<typeof createAgentHarnessToolSurfaceRuntime>,
-): OpenClawCodingToolsOptions {
+): Promise<OpenClawCodingToolsOptions> {
   const a = input.attemptParams;
 
   // Sandbox policy may belong to a different key than the live session.
@@ -347,9 +348,14 @@ function buildOpenClawCodingToolsOptions(
     modelApi: model?.api,
     modelContextWindowTokens: a.contextTokenBudget ?? model?.contextWindow,
     delegationCapability: a.delegationCapability,
-    modelAuthMode: resolveModelAuthMode(input.modelProvider, a.config, undefined, {
-      workspaceDir,
-    }),
+    modelAuthMode: await resolveModelAuthModeAsync(
+      input.modelProvider,
+      a.config,
+      a.toolAuthProfileStore ?? a.authProfileStore,
+      {
+        workspaceDir,
+      },
+    ),
     modelHasVision,
     requireExplicitMessageTarget:
       a.requireExplicitMessageTarget ?? isSubagentSessionKey(liveSessionKey),

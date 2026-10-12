@@ -7,7 +7,10 @@ import {
   leaseQueries,
 } from "./update-managed-service-handoff-database.js";
 import type { ManagedHandoffParent } from "./update-managed-service-handoff-lease-types.js";
-import type { createManagedHandoffLeaseRows } from "./update-managed-service-handoff-rows.js";
+import {
+  managedHandoffLeaseRow,
+  type createManagedHandoffLeaseRows,
+} from "./update-managed-service-handoff-rows.js";
 import { isRetiredManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
 
 type Rows = ReturnType<typeof createManagedHandoffLeaseRows>;
@@ -25,10 +28,7 @@ export function createManagedHandoffMutationReader(
     const value = row(db, lease.key);
     return Boolean(
       value &&
-      sameRow(
-        { owner: lease.owner, payload_json: lease.payload, updated_at: lease.updatedAt },
-        value,
-      ) &&
+      sameRow(managedHandoffLeaseRow(lease), value) &&
       isDeepStrictEqual(handle(lease.key, value), lease),
     );
   }
@@ -37,10 +37,7 @@ export function createManagedHandoffMutationReader(
       return true;
     }
     const original = lease.mutationOriginal;
-    return sameRow(
-      { owner: original.owner, payload_json: original.payload, updated_at: original.updatedAt },
-      row(db, original.key),
-    );
+    return sameRow(managedHandoffLeaseRow(original), row(db, original.key));
   }
   function ancestorsAllowMutation(
     key: string,
@@ -55,10 +52,7 @@ export function createManagedHandoffMutationReader(
         if (!orphanCommand) {
           return false;
         }
-        marker = key.indexOf("/.openclaw-update-child-", marker + 1);
-        continue;
-      }
-      if (!isRetiredManagedHandoffLeasePayload(ancestor.payload_json)) {
+      } else if (!isRetiredManagedHandoffLeasePayload(ancestor.payload_json)) {
         const lease = handle(ancestorKey, ancestor);
         if (lease.version === 4 || !originalAllowsMutation(lease, db)) {
           return false;
@@ -94,14 +88,9 @@ export function createManagedHandoffMutationReader(
     ) {
       return false;
     }
-    if (
-      childAliases(lease.key, db).some(
-        (key) => !ancestorsAllowMutation(key, db, Boolean(managedCommandCustody(lease))),
-      )
-    ) {
-      return false;
-    }
-    return true;
+    return !childAliases(lease.key, db).some(
+      (key) => !ancestorsAllowMutation(key, db, Boolean(managedCommandCustody(lease))),
+    );
   }
   function current(lease: ManagedHandoffParent) {
     try {

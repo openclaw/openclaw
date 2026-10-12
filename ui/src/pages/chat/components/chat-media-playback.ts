@@ -1,5 +1,4 @@
-import { sleepWithAbort } from "@openclaw/retry";
-import { appendAttachmentUrlSearchParam } from "./chat-message-local-media.ts";
+import { raceWithTimeout, sleepWithAbort } from "@openclaw/retry";
 
 export type ChatMediaPlaybackMode = "native" | "transcode";
 
@@ -11,14 +10,19 @@ const CHAT_MEDIA_PLAYBACK_MAX_WAIT_MS = 120_000;
 
 type ChatMediaPlaybackReadiness = "ready" | "unavailable" | "aborted";
 
-function playbackAbortError(signal: AbortSignal): Error {
-  return signal.reason instanceof Error
-    ? signal.reason
-    : new DOMException("playback preparation aborted", "AbortError");
-}
-
 export function appendChatMediaPlaybackParam(source: string): string {
-  return appendAttachmentUrlSearchParam(source, "playback", "1");
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const hashIndex = trimmed.indexOf("#");
+  const hash = hashIndex === -1 ? "" : trimmed.slice(hashIndex);
+  const withoutHash = hashIndex === -1 ? trimmed : trimmed.slice(0, hashIndex);
+  const queryIndex = withoutHash.indexOf("?");
+  const path = queryIndex === -1 ? withoutHash : withoutHash.slice(0, queryIndex);
+  const params = new URLSearchParams(queryIndex === -1 ? "" : withoutHash.slice(queryIndex + 1));
+  params.set("playback", "1");
+  return `${path}?${params.toString()}${hash}`;
 }
 
 export function buildChatMediaFetchHeaders(authToken: string | null | undefined): Headers {
@@ -37,38 +41,32 @@ async function fetchPlaybackHead(params: {
   timeoutMs: number;
 }): Promise<Response> {
   const controller = new AbortController();
-  let rejectDeadline: ((error: Error) => void) | undefined;
-  const deadline = new Promise<never>((_resolve, reject) => {
-    rejectDeadline = reject;
-  });
-  const onAbort = () => {
-    const error = playbackAbortError(params.signal);
-    controller.abort(error);
-    rejectDeadline?.(error);
-  };
-  params.signal.addEventListener("abort", onAbort, { once: true });
-  if (params.signal.aborted) {
-    onAbort();
-  }
-  const timer = setTimeout(() => {
-    const error = new DOMException("playback readiness request timed out", "TimeoutError");
-    controller.abort(error);
-    rejectDeadline?.(error);
-  }, params.timeoutMs);
-  try {
-    return await Promise.race([
+  return await raceWithTimeout(
+    () =>
       fetch(params.source, {
         method: "HEAD",
         headers: params.headers,
         credentials: "same-origin",
         signal: controller.signal,
       }),
-      deadline,
-    ]);
-  } finally {
-    clearTimeout(timer);
-    params.signal.removeEventListener("abort", onAbort);
-  }
+    params.timeoutMs,
+    () => {
+      const error = new DOMException("playback readiness request timed out", "TimeoutError");
+      controller.abort(error);
+      throw error;
+    },
+    {
+      signal: params.signal,
+      onAbort: (signal) => {
+        const error =
+          signal.reason instanceof Error
+            ? signal.reason
+            : new DOMException("playback preparation aborted", "AbortError");
+        controller.abort(error);
+        throw error;
+      },
+    },
+  );
 }
 
 export async function waitForChatMediaPlayback(params: {

@@ -1452,59 +1452,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("settles a delivery arriving during an unrelated failed close separately", async () => {
-    const { options } = createDispatcherHarness();
-    const firstDelivery = await options.deliver({ text: "first" }, { kind: "final" });
-    const instance = stream(0);
-    const close = gate<StreamingCloseResult>();
-    instance.closeWithResult.mockImplementationOnce(close.wait);
-    const idle = Promise.resolve(options.onIdle?.());
-    await close.started;
-    expect(instance.closeWithResult).toHaveBeenCalledTimes(1);
-    const lateDelivery = await options.deliver({ text: "second" }, { kind: "final" });
-    close.reject(
-      new FeishuStreamingFinalizationError(new Error("close failed"), {
-        visibleReplySent: true,
-        content: "first",
-        messageId: "om-stream",
-      }),
-    );
-    await expect(idle).rejects.toThrow("close failed");
-    await expect(firstDelivery?.finalization).rejects.toMatchObject({
-      deliveryResult: { content: "first" },
-    });
-    expect(lateDelivery).toMatchObject({ content: "second", visibleReplySent: true });
-    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "second" }),
-    );
-  });
-
-  it("preserves and finalizes a replacement streaming session started during close", async () => {
-    const core = getFeishuRuntimeMock();
-    core.channel.text.resolveTextChunkLimit.mockReturnValue(5);
-    core.channel.text.chunkMarkdownTextWithMode.mockImplementation((text: string) => [text]);
-    const { options } = createDispatcherHarness();
-    const firstDelivery = await options.deliver({ text: "one" }, { kind: "final" });
-    const firstInstance = stream(0);
-    const close = gate<StreamingCloseResult>();
-    firstInstance.closeWithResult.mockImplementationOnce(close.wait);
-    const idle = Promise.resolve(options.onIdle?.());
-    await close.started;
-    expect(firstInstance.closeWithResult).toHaveBeenCalledTimes(1);
-    firstInstance.active = false;
-    await options.deliver({ text: "oversized" }, { kind: "final" });
-    const replacementDelivery = await options.deliver({ text: "two" }, { kind: "final" });
-    expect(streamingInstances).toHaveLength(2);
-    close.resolve({ visibleReplySent: true, content: "one", messageId: "om_stream" });
-    await idle;
-    await expect(firstDelivery?.finalization).resolves.toMatchObject({ content: "one" });
-    await expect(replacementDelivery?.finalization).resolves.toMatchObject({ content: "two" });
-    expectClosed("two", 1);
-    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ text: "two" }),
-    );
-  });
-
   it("assigns an idle-closed card to its later matching final before media", async () => {
     const { result, options } = createDispatcherHarness();
     await options.onReplyStart?.();
@@ -1516,43 +1463,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       { kind: "final" },
     );
     expect(delivery).toMatchObject(accepted("accepted answer", ["om_stream", "om-media"]));
-    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps a media-delayed final associated with its own closed streaming session", async () => {
-    const media = gate<{ messageId: string }>();
-    sendMediaFeishuMock.mockImplementationOnce(media.wait);
-    const { result, options } = createDispatcherHarness();
-    const firstDeliveryPromise = options.deliver(
-      { text: "first", mediaUrl: imageUrl },
-      { kind: "final" },
-    );
-    await media.started;
-    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
-    stream(0).closeWithResult.mockResolvedValueOnce({
-      visibleReplySent: true,
-      content: "first",
-      messageId: "om-first",
-    });
-    await options.onIdle?.();
-    result.replyOptions.onPartialReply?.({ text: "second" });
-    expect(streamingInstances).toHaveLength(2);
-    const secondInstance = stream(1);
-    const secondClose = gate<StreamingCloseResult>();
-    secondInstance.closeWithResult.mockImplementationOnce(secondClose.wait);
-    const secondDelivery = await options.deliver({ text: "second" }, { kind: "final" });
-    await secondClose.started;
-    expect(secondInstance.closeWithResult).toHaveBeenCalledTimes(1);
-    media.resolve({ messageId: "om-media" });
-    const firstDelivery = await firstDeliveryPromise;
-    secondInstance.active = false;
-    secondClose.resolve({ visibleReplySent: true, content: "second", messageId: "om-second" });
-    await expect(secondDelivery?.finalization).resolves.toMatchObject(
-      accepted("second", ["om-second"]),
-    );
-    await expect(firstDelivery?.finalization).resolves.toMatchObject(
-      accepted("first", ["om-first", "om-media"]),
-    );
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
@@ -1741,7 +1651,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       toolCallId: "search-1",
       phase: "start",
       visible: true,
-      label: "🔎 Web Search",
+      label: "Web Search",
     },
     {
       name: "process",

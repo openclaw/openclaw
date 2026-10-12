@@ -12,12 +12,8 @@ import {
   resolveCurrentPairedDeviceNodeBinding,
 } from "../../infra/device-pairing-node-state.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/device-pairing-node.js";
-import { revokeDeviceToken, rotateDeviceToken } from "../../infra/device-pairing-tokens.js";
-import {
-  listDevicePairing,
-  requestDevicePairing,
-  withPairedDeviceRecords,
-} from "../../infra/device-pairing.js";
+import { rotateDeviceToken } from "../../infra/device-pairing-tokens.js";
+import { listDevicePairing, requestDevicePairing } from "../../infra/device-pairing.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -146,14 +142,14 @@ function createContext() {
       info: vi.fn(),
       warn: vi.fn(),
     },
-    nodeRegistry: {
+    nodeRegistry: Object.assign(new NodeRegistry(), {
       get: vi.fn(),
       listConnected: vi.fn(() => []),
       listConnectedForPairingStates: vi.fn(() => []),
       getActiveNode: vi.fn(),
       updateSurface: vi.fn(),
       updateNodeSkills: vi.fn(),
-    },
+    }),
   };
 }
 
@@ -700,35 +696,6 @@ describe("nodeHandlers node.pair.remove", () => {
     });
     expect(JSON.stringify(captured.events)).not.toContain(nodeId);
   });
-
-  it.each(["revoked", "tokenless"] as const)(
-    "removes %s device-backed node approvals",
-    async (tokenState) => {
-      const { stateDir, nodeId } = await createNodeState(`${tokenState}-android-node-1`);
-
-      if (tokenState === "revoked") {
-        const revoked = await revokeDeviceToken({
-          deviceId: nodeId,
-          role: "node",
-          baseDir: stateDir,
-        });
-        expect(revoked.ok).toBe(true);
-      } else {
-        await withPairedDeviceRecords(stateDir, (pairedByDeviceId) => {
-          delete pairedByDeviceId[nodeId]?.tokens;
-          return { value: undefined, persist: true };
-        });
-      }
-
-      const { context, opts } = createOptions({ nodeId });
-      await invokeNode("node.pair.remove", opts);
-      await Promise.resolve();
-
-      expect(opts.respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
-      expect(Object.hasOwn(await readPaired(stateDir), nodeId)).toBe(false);
-      expect(context.disconnectClientsForDevice).toHaveBeenCalledWith(nodeId, { role: "node" });
-    },
-  );
 
   it("preserves non-node roles when shared-auth pairing scope removes a mixed-role node", async () => {
     const { stateDir, nodeId } = await createNodeState("mixed-role-android-node-1", {

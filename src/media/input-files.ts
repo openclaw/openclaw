@@ -11,6 +11,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { logWarn } from "../logger.js";
@@ -234,36 +235,6 @@ function decodeTextContent(buffer: Buffer, charset: string | undefined, maxChars
   }
 }
 
-async function withInputFileTimeout<T>(params: {
-  task: (signal: AbortSignal) => Promise<T>;
-  timeoutMs: number;
-  label: string;
-  signal?: AbortSignal;
-}): Promise<T> {
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  const controller = new AbortController();
-  const signal = params.signal
-    ? AbortSignal.any([params.signal, controller.signal])
-    : controller.signal;
-  signal.throwIfAborted();
-  let onAbort!: () => void;
-  const cancelled = new Promise<never>((_, reject) => {
-    onAbort = () => reject(toErrorObject(signal.reason, "Input file extraction aborted"));
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-  const timeout = setTimeout(
-    () => controller.abort(new Error(`${params.label} timed out after ${timeoutMs}ms`)),
-    timeoutMs,
-  );
-  try {
-    // Legacy extractors may not cooperate, but the worker also receives the deadline cancellation.
-    return await Promise.race([params.task(signal), cancelled]);
-  } finally {
-    clearTimeout(timeout);
-    signal.removeEventListener("abort", onAbort);
-  }
-}
-
 /** Validates image bytes and converts HEIC/HEIF to JPEG, keeping the original Buffer otherwise. */
 export async function normalizeInputImageBuffer(params: {
   buffer: Buffer;
@@ -379,7 +350,8 @@ export async function extractFileContentFromBuffer(params: {
     (await classifyAttachmentBytes({ buffer, declaredMime: params.mimeType }));
   params.signal?.throwIfAborted();
   const mimeType = classification.mime;
-  const charset = classification.charset ?? params.charset;
+  const charset =
+    classification.charset ?? params.charset ?? parseContentType(params.mimeType).charset;
 
   if (!mimeType) {
     throw new Error("input_file missing media type");
@@ -389,23 +361,38 @@ export async function extractFileContentFromBuffer(params: {
   }
 
   if (mimeType === "application/pdf") {
-    const extracted = await withInputFileTimeout({
-      label: "PDF extraction",
-      timeoutMs: limits.timeoutMs,
-      signal: params.signal,
-      task: (signal) =>
-        extractPdfContent({
-          buffer,
-          signal,
-          maxPages: limits.pdf.maxPages,
-          maxPixels: limits.pdf.maxPixels,
-          minTextChars: limits.pdf.minTextChars,
-          ...(params.config ? { config: params.config } : {}),
-          onImageExtractionError: (err) => {
-            logWarn(`media: PDF image extraction skipped, ${String(err)}`);
-          },
-        }),
-    });
+    const timeoutMs = resolveTimerTimeoutMs(limits.timeoutMs, 1);
+    const controller = new AbortController();
+    const signal = params.signal
+      ? AbortSignal.any([params.signal, controller.signal])
+      : controller.signal;
+    signal.throwIfAborted();
+    const timeout = setTimeout(
+      () => controller.abort(new Error(`PDF extraction timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+    let extracted: Awaited<ReturnType<typeof extractPdfContent>>;
+    try {
+      // Legacy extractors may not cooperate, but the worker receives the same cancellation.
+      extracted = await racePromiseWithAbortSignal(
+        () =>
+          extractPdfContent({
+            buffer,
+            signal,
+            maxPages: limits.pdf.maxPages,
+            maxPixels: limits.pdf.maxPixels,
+            minTextChars: limits.pdf.minTextChars,
+            ...(params.config ? { config: params.config } : {}),
+            onImageExtractionError: (err) => {
+              logWarn(`media: PDF image extraction skipped, ${String(err)}`);
+            },
+          }),
+        signal,
+        (abortedSignal) => toErrorObject(abortedSignal.reason, "Input file extraction aborted"),
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
     const text = truncateUtf16Safe(extracted.text, limits.maxChars);
     const metadata: DocumentExtractionMetadata = {
       ...extracted.metadata,

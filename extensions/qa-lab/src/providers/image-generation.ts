@@ -1,7 +1,4 @@
-import {
-  normalizeTrimmedStringList,
-  uniqueStrings,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   QA_BASE_RUNTIME_PLUGIN_IDS,
   QA_CODEX_OPENAI_CATALOG_BASE_URL,
@@ -55,14 +52,12 @@ export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchI
   })();
   return {
     plugins: {
-      allow: uniqueStrings(
-        normalizeTrimmedStringList([
-          ...QA_BASE_RUNTIME_PLUGIN_IDS,
-          ...(input.existingPluginIds ?? []),
-          "openai",
-          ...input.requiredPluginIds,
-        ]),
-      ),
+      allow: normalizeUniqueTrimmedStringList([
+        ...QA_BASE_RUNTIME_PLUGIN_IDS,
+        ...(input.existingPluginIds ?? []),
+        "openai",
+        ...input.requiredPluginIds,
+      ]),
       entries: { openai: { enabled: true } },
     },
     ...(modelPatch ? { models: modelPatch } : {}),

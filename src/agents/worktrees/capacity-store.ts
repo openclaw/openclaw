@@ -16,6 +16,7 @@ export async function reserveWorktreeCapacity(params: {
   leaseSet: WorktreeLeaseSet;
   request: WorktreeCapacityRequest;
   predicates?: readonly WorktreeRegistryPredicate[];
+  signal?: AbortSignal;
   assertCurrent: () => void;
 }): Promise<WorktreeCapacityResult> {
   return await runWithOpenClawStateLeasesWorker(
@@ -26,7 +27,11 @@ export async function reserveWorktreeCapacity(params: {
         type: "worktrees.reserveCapacity",
         input: { ...params.request, leases, predicates: params.predicates },
       }),
-    { assertCurrent: params.assertCurrent, beforeCommit: params.assertCurrent },
+    {
+      assertCurrent: params.assertCurrent,
+      beforeCommit: params.assertCurrent,
+      signal: params.signal,
+    },
   );
 }
 
@@ -47,6 +52,7 @@ export async function releaseWorktreeCapacity(params: {
   const cleanupContext = {
     environment: params.context.environment,
     existingSchemaPath: params.context.existingSchemaPath,
+    stateIntegrity: params.context.stateIntegrity,
   };
   const store = await openOpenClawStateWorkerCleanupStore(
     databasePath,

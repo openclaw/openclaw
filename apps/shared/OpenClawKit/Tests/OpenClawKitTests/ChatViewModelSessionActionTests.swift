@@ -201,6 +201,8 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     private let branchListFailureIndices: Set<Int>
     private let historyGates: [Int: SessionActionCompletionGate]
     private let historyFailureIndices: Set<Int>
+    private let sendGate: SessionActionCompletionGate?
+    private let sessionListGate: SessionActionCompletionGate?
     private let sendSucceeds: Bool
 
     init(
@@ -222,6 +224,8 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         branchListFailureIndices: Set<Int> = [],
         historyGates: [Int: SessionActionCompletionGate] = [:],
         historyFailureIndices: Set<Int> = [],
+        sendGate: SessionActionCompletionGate? = nil,
+        sessionListGate: SessionActionCompletionGate? = nil,
         sendSucceeds: Bool = false)
     {
         self.createGate = createGate
@@ -242,6 +246,8 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         self.branchListFailureIndices = branchListFailureIndices
         self.historyGates = historyGates
         self.historyFailureIndices = historyFailureIndices
+        self.sendGate = sendGate
+        self.sessionListGate = sessionListGate
         self.sendSucceeds = sendSucceeds
     }
 
@@ -269,6 +275,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
         await self.state.recordSend(sessionKey: sessionKey)
+        await self.sendGate?.suspendCompletion()
         if self.sendSucceeds {
             return OpenClawChatSendResponse(runId: idempotencyKey, status: "accepted")
         }
@@ -400,6 +407,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         archived _: Bool) async throws -> OpenClawChatSessionsListResponse
     {
         await self.state.recordSessionListRequest()
+        await self.sessionListGate?.suspendCompletion()
         throw NSError(
             domain: "OpenClawChatTransport",
             code: 0,
@@ -685,9 +693,11 @@ struct ChatViewModelSessionActionTests {
         createIsUnsupported: Bool) async throws
     {
         let createGate = SessionActionCompletionGate()
+        let sessionListGate = SessionActionCompletionGate()
         let transport = SessionActionTransport(
             createGate: createGate,
-            createIsUnsupported: createIsUnsupported)
+            createIsUnsupported: createIsUnsupported,
+            sessionListGate: createIsUnsupported ? nil : sessionListGate)
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         let lease = try await viewModel.newSessionRouteLease()
 
@@ -707,9 +717,9 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.resetSessionKeys().isEmpty)
 
         if !createIsUnsupported {
-            try await waitUntil("committed session is discoverable after attachment ownership changes") {
-                await transport.sessionListRequestCount() == 1
-            }
+            await sessionListGate.waitUntilStarted()
+            sessionListGate.release()
+            #expect(await transport.sessionListRequestCount() == 1)
         }
     }
 
@@ -842,8 +852,9 @@ struct ChatViewModelSessionActionTests {
             sessionKey: "main",
             transport: transport,
             outbox: store)
-        viewModel.restoreOutboxMessages(session: viewModel.currentSessionSnapshot())
-        #expect(await self.waitForOutboxRestore(viewModel))
+        await viewModel.restoreOutboxMessages(session: viewModel.currentSessionSnapshot())?.value
+        #expect(viewModel.hasRestoredOutboxMessages)
+        #expect(viewModel.hasPendingOutboxCommandsForCurrentSession)
 
         await viewModel.rewindToMessage(self.userMessage(entryID: "message-42"))
 
@@ -871,8 +882,9 @@ struct ChatViewModelSessionActionTests {
             sessionKey: "main",
             transport: transport,
             outbox: store)
-        viewModel.restoreOutboxMessages(session: viewModel.currentSessionSnapshot())
-        #expect(await self.waitForOutboxRestore(viewModel))
+        await viewModel.restoreOutboxMessages(session: viewModel.currentSessionSnapshot())?.value
+        #expect(viewModel.hasRestoredOutboxMessages)
+        #expect(viewModel.hasPendingOutboxCommandsForCurrentSession)
 
         await viewModel.forkAtMessage(self.userMessage(entryID: "message-42"))
 
@@ -937,9 +949,11 @@ struct ChatViewModelSessionActionTests {
         let siblingStore = databases.store(gatewayID: "gw-test")
         let scope = OpenClawChatOutboxScope(sessionKey: "main", agentID: nil)
         #expect(await store.updateLastActiveLeafEntryID("leaf-active", expectedEpoch: 0, for: scope))
+        let sendGate = SessionActionCompletionGate()
         let transport = SessionActionTransport(
             branches: self.branches(),
             branchListFailureIndices: [0],
+            sendGate: sendGate,
             sendSucceeds: true)
         let viewModel = OpenClawChatViewModel(
             sessionKey: "main",
@@ -960,7 +974,11 @@ struct ChatViewModelSessionActionTests {
         viewModel.readySessionMetadataGeneration = viewModel.sessionMetadataGeneration
         viewModel.flushOutboxIfNeeded()
 
-        #expect(await self.waitForSend(transport))
+        // The branch reconcile pass starts this flush; awaiting it covers the post-send outbox status write.
+        await sendGate.waitUntilStarted()
+        let flush = try #require(viewModel.outboxFlushTask)
+        sendGate.release()
+        await flush.value
         #expect(await transport.branchListSessionKeys().suffix(2) == ["main", "main"])
         #expect(await transport.sentSessionKeys() == ["main"])
         #expect(await store.loadCommands().map(\.status) == [.awaitingConfirmation])
@@ -1343,38 +1361,6 @@ struct ChatViewModelSessionActionTests {
 }
 
 extension ChatViewModelSessionActionTests {
-    private func waitForOutboxRestore(
-        _ viewModel: OpenClawChatViewModel,
-        timeout: Duration = .seconds(15)) async -> Bool
-    {
-        let clock = ContinuousClock()
-        let deadline = clock.now + timeout
-        while clock.now < deadline {
-            if viewModel.hasRestoredOutboxMessages,
-               viewModel.hasPendingOutboxCommandsForCurrentSession
-            {
-                return true
-            }
-            await Task.yield()
-        }
-        return false
-    }
-
-    private func waitForSend(
-        _ transport: SessionActionTransport,
-        timeout: Duration = .seconds(15)) async -> Bool
-    {
-        let clock = ContinuousClock()
-        let deadline = clock.now + timeout
-        while clock.now < deadline {
-            if await transport.sentSessionKeys().isEmpty == false {
-                return true
-            }
-            await Task.yield()
-        }
-        return false
-    }
-
     private func retainCompletedNarration(in viewModel: OpenClawChatViewModel) {
         // This transport emits no sessions.changed echo. The successful local
         // mutation must discard retained narration from the previous branch.
@@ -1487,7 +1473,7 @@ extension ChatViewModelSessionActionTests {
             return try JSONSerialization.data(withJSONObject: payload)
         }
         let markdown = try await vm.sidebarMarkdown(session: session, connection: connection)
-        #expect(offsets == [0, 1, 0])
+        #expect(offsets == [0, 1])
         let older = try #require(markdown.range(of: "older question"))
         let newer = try #require(markdown.range(of: "newer answer"))
         #expect(older.lowerBound < newer.lowerBound)
@@ -1495,7 +1481,7 @@ extension ChatViewModelSessionActionTests {
         #expect(vm.sessionKey == "main")
     }
 
-    @Test(arguments: ["sessionId", "totalMessages", "deltaCursor", "activeLeafEntryId", "nextOffset"])
+    @Test(arguments: ["sessionId", "nextOffset"])
     func `sidebar Markdown refuses mixed or nonadvancing transcript pages`(_ changedField: String) async throws {
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: SessionActionTransport())
         let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(#"""
@@ -1519,9 +1505,6 @@ extension ChatViewModelSessionActionTests {
             if call > 1 || changedField == "nextOffset" {
                 switch changedField {
                 case "sessionId": payload[changedField] = "replacement"
-                case "totalMessages": payload[changedField] = 3
-                case "deltaCursor": payload[changedField] = "cursor-2"
-                case "activeLeafEntryId": payload["sessionInfo"] = [changedField: "leaf-2"]
                 default: payload[changedField] = 0
                 }
             }

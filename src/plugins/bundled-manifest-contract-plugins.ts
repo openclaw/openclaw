@@ -22,11 +22,7 @@ export function resolveEnabledBundledManifestContractPlugins(params: {
   let manifestRecords = params.manifestRecords;
   const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
   const loadCandidates = () => {
-    manifestRecords ??= loadManifestContractSnapshot({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    }).plugins;
+    manifestRecords ??= loadManifestContractSnapshot(params).plugins;
     return manifestRecords.filter(
       (plugin) =>
         plugin.origin === "bundled" &&

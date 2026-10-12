@@ -3,11 +3,21 @@ import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import { resolveSessionStorePathCore } from "./paths.js";
+import type {
+  DeleteSessionEntryLifecycleParams,
+  DeleteSessionEntryLifecycleResult,
+} from "./session-accessor.sqlite-contract.js";
+import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
+import {
+  captureIncognitoSessionOperation,
+  captureIncognitoSessionSource,
+} from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import type {
   IncognitoLifecycleEntry,
   IncognitoLifecycleOperations,
 } from "./session-incognito-lifecycle-contract.js";
+import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 
 type IncognitoLifecycleTarget = {
   actor: Pick<
@@ -47,27 +57,29 @@ export function deleteIncognitoSessionLifecycle(
   params: IncognitoLifecycleTarget & {
     target: IncognitoLifecycleEntry;
     reason: "reset" | "deleted";
+    expectedPluginOwnerId?: string;
+    expectedAgentHarnessId?: string;
   },
 ): Promise<IncognitoLifecycleOperations["session.lifecycle.delete"]["output"]> {
   const { actor, authority, scope } = captureLifecycle(params);
   const target = structuredClone(params.target);
   const reason = params.reason;
+  const expectedPluginOwnerId = params.expectedPluginOwnerId;
+  const expectedAgentHarnessId = params.expectedAgentHarnessId;
   return actor.sessions.withSharedState(async () => {
     const [
       { withSqliteSessionDeletions },
       { collectActiveSessionWorkAdmissions },
-      { preparePersonalGitHubSessionReceiptDeletion },
       { publishCommittedSessionEntryRemoval },
     ] = await Promise.all([
       import("./session-accessor.sqlite-deletion.js"),
       import("../../sessions/session-lifecycle-admission.js"),
-      import("../../state/github-personal-publication-lifecycle.js"),
       import("./session-accessor.sqlite-identity.js"),
     ]);
     return withSqliteSessionDeletions(
       scope,
       [target],
-      async (assertDeletionCurrent, capture) => {
+      async (assertDeletionCurrent, capture, settleReceipts) => {
         const current: IncognitoSessionAuthority = {
           assertCurrent() {
             authority.assertCurrent();
@@ -76,18 +88,6 @@ export function deleteIncognitoSessionLifecycle(
           },
           authorize: (stage, facts) => authority.authorize?.(stage, facts),
         };
-        const deleteReceipts = await preparePersonalGitHubSessionReceiptDeletion({
-          agentId: actor.agentId,
-          env: scope.env,
-          generations: [
-            {
-              sessionKey: target.sessionKey,
-              sessionId: target.entry.sessionId,
-              lifecycleRevision: target.entry.lifecycleRevision ?? null,
-            },
-          ],
-          assertCurrent: () => current.assertCurrent(),
-        });
         const result = await actor.sessions.lifecycle(
           current,
           {
@@ -95,6 +95,8 @@ export function deleteIncognitoSessionLifecycle(
             input: {
               target,
               reason,
+              expectedPluginOwnerId,
+              expectedAgentHarnessId,
               admissionIdentities: [
                 ...(collectActiveSessionWorkAdmissions().get(scope.ownerStorePath ?? actor.path) ??
                   []),
@@ -125,14 +127,26 @@ export function deleteIncognitoSessionLifecycle(
         );
         if (result.deleted) {
           const absent = actor.sessions.captureSnapshot(target.sessionKey);
-          await deleteReceipts(() => {
+          await settleReceipts(() => {
             actor.assertCurrent();
             absent.assertCurrent();
           });
         }
         return result;
       },
-      { incognito: actor },
+      {
+        incognito: actor,
+        receiptsOnCommit: {
+          generations: [
+            {
+              agentId: actor.agentId,
+              sessionKey: target.sessionKey,
+              sessionId: target.entry.sessionId,
+              lifecycleRevision: target.entry.lifecycleRevision ?? null,
+            },
+          ],
+        },
+      },
     );
   });
 }
@@ -141,15 +155,19 @@ export function deleteIncognitoSessionLifecycle(
 export function reclaimIncognitoSessionLifecycle(
   params: IncognitoLifecycleTarget & {
     input: IncognitoLifecycleOperations["session.lifecycle.reclaim.prepare"]["input"];
+    admissionSignal?: AbortSignal;
   },
 ): Promise<IncognitoLifecycleOperations["session.lifecycle.reclaim"]["output"]> {
   const { actor, authority, scope } = captureLifecycle(params);
   const input = structuredClone(params.input);
+  const { admissionSignal } = params;
+  admissionSignal?.throwIfAborted();
   return actor.sessions.withSharedState(async () => {
-    const plan = await actor.sessions.lifecycle(authority, {
-      type: "session.lifecycle.reclaim.prepare",
-      input,
-    });
+    const plan = await actor.sessions.lifecycle(
+      authority,
+      { type: "session.lifecycle.reclaim.prepare", input },
+      admissionSignal,
+    );
     const entries = plan.entries.flatMap(({ sessionKey, expectedEntry }) =>
       expectedEntry ? [{ sessionKey, entry: expectedEntry }] : [],
     );
@@ -166,8 +184,9 @@ export function reclaimIncognitoSessionLifecycle(
     return withSqliteSessionDeletions(
       scope,
       entries,
-      (assertDeletionCurrent, capture) =>
-        actor.sessions.lifecycle(
+      (assertDeletionCurrent, capture) => {
+        admissionSignal?.throwIfAborted();
+        return actor.sessions.lifecycle(
           {
             assertCurrent() {
               authority.assertCurrent();
@@ -193,11 +212,90 @@ export function reclaimIncognitoSessionLifecycle(
               },
             };
           },
-        ),
+        );
+      },
       {
         incognito: actor,
         additionalIdentities: plan.deletePlans.map((deletePlan) => deletePlan.sessionId),
       },
     );
   });
+}
+
+export function deleteCapturedIncognitoSession(
+  params: DeleteSessionEntryLifecycleParams,
+  expectedPluginOwnerId?: string,
+  expectedAgentHarnessId?: string,
+): Promise<DeleteSessionEntryLifecycleResult> | undefined {
+  const source = captureIncognitoSessionSource({
+    ...params,
+    sessionKey: params.target.canonicalKey,
+  });
+  if (source && "kind" in source) {
+    params.commitGuard?.();
+    source.assertCurrent();
+    return Promise.resolve({
+      deleted: false,
+      archivedTranscripts: [],
+      ...((params.expectedEntry ||
+        params.expectedSessionId != null ||
+        params.expectedLifecycleRevision !== undefined ||
+        params.expectedUpdatedAt !== undefined) && { expectedEntryMismatch: true as const }),
+    });
+  }
+  const binding = captureIncognitoSessionOperation({
+    ...params,
+    sessionKey: params.target.canonicalKey,
+  });
+  if (binding) {
+    const captured = {
+      ...params,
+      target: structuredClone(params.target),
+      expectedEntry: params.expectedEntry && structuredClone(params.expectedEntry),
+      env: captureSessionTranscriptTargetBinding({
+        storePath: binding.actor.path,
+        agentId: binding.actor.agentId,
+        env: params.env,
+      }).env,
+    };
+    const authority = {
+      assertCurrent() {
+        binding.authority.assertCurrent();
+        captured.commitGuard?.();
+      },
+    };
+    return binding.actor.sessions.withSharedState(async () => {
+      const { entry } = await binding.actor.sessions.read(
+        authority,
+        { sessionKey: captured.target.canonicalKey },
+        binding.admissionSignal,
+      );
+      if (
+        (captured.expectedEntry && !sqliteSessionEntriesEqual(entry, captured.expectedEntry)) ||
+        (captured.expectedSessionId !== undefined &&
+          (entry?.sessionId ?? null) !== captured.expectedSessionId) ||
+        (captured.expectedLifecycleRevision !== undefined &&
+          entry?.lifecycleRevision !== captured.expectedLifecycleRevision) ||
+        (captured.expectedUpdatedAt !== undefined &&
+          entry?.updatedAt !== captured.expectedUpdatedAt)
+      ) {
+        return { deleted: false, archivedTranscripts: [], expectedEntryMismatch: true as const };
+      }
+      if (!entry) {
+        return { deleted: false, archivedTranscripts: [] };
+      }
+      binding.admissionSignal?.throwIfAborted();
+      return deleteIncognitoSessionLifecycle({
+        actor: binding.actor,
+        authority,
+        env: captured.env,
+        ownerStorePath: captured.storePath,
+        target: { sessionKey: captured.target.canonicalKey, entry },
+        reason: "deleted",
+        expectedPluginOwnerId,
+        expectedAgentHarnessId,
+      });
+    });
+  }
+  return undefined;
 }

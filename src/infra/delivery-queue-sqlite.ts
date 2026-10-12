@@ -1,22 +1,18 @@
 // Stores durable delivery queue entries through their connection-bound owner.
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import {
-  loadDeliveryQueueEntryInDatabase,
-  type DeliveryQueueReadMode,
-} from "./delivery-queue-sqlite-bound.js";
+import type { DeliveryQueueReadMode } from "./delivery-queue-sqlite-bound.js";
 import {
   countPendingDeliveryQueueEntriesInDatabase,
-  getDeliveryQueueEntryOwnersInDatabase,
   loadDeliveryQueueEntriesInDatabase,
   prepareDeliveryQueueTerminalEntry,
   terminalizePendingDeliveryQueueEntryInDatabase,
-  type DeliveryQueueStoredStatus,
   type TerminalizePendingDeliveryQueueEntryParams,
   type TerminalizePendingDeliveryQueueEntryResult,
 } from "./delivery-queue-sqlite.kernel.js";
 import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
 import {
+  captureDeliveryQueueStateContext,
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "./delivery-queue-state-context.js";
@@ -39,31 +35,19 @@ function openStateDatabase(stateDir?: string, context?: DeliveryQueueStateContex
   });
 }
 
-/** Load a single pending delivery queue entry. */
-export function loadDeliveryQueueEntry(
+/** Select receipt and pending custody together, preserving bounded receipt expiry. */
+export async function inspectDeliveryQueueReceipt(
   queueName: string,
   id: string,
-  stateDir?: string,
-  mode: DeliveryQueueReadMode = "pending",
-  context?: DeliveryQueueStateContext,
-): DeliveryQueueEntryState | null {
-  return loadDeliveryQueueEntryInDatabase(
-    openStateDatabase(stateDir, context),
-    queueName,
-    id,
-    mode,
-  );
-}
-
-/** Read row status without hiding dead-lettered entries. */
-export function getDeliveryQueueEntryStatus(
-  queueName: string,
-  id: string,
-  stateDir?: string,
-): DeliveryQueueStoredStatus | undefined {
-  return getDeliveryQueueEntryOwnersInDatabase(openStateDatabase(stateDir), [queueName], id).get(
-    queueName,
-  )?.status;
+  includePending: boolean,
+  context: DeliveryQueueStateContext,
+) {
+  const result = await executeDeliveryQueueOperation(context, undefined, {
+    type: "deliveryQueue.inspectReceipt",
+    input: { queueName, id, includePending },
+  });
+  context.workerContext.admission.assertCurrent();
+  return result;
 }
 
 /** Load all pending entries for a queue namespace in database order. */
@@ -88,7 +72,25 @@ export async function countFailedDeliveryQueueEntries(
 }
 
 /** Count pending entries across an exact set of queue namespaces. */
-export function countPendingDeliveryQueueEntries(
+export async function countPendingDeliveryQueueEntries(
+  queueNames: readonly string[],
+  stateDir?: string,
+  context?: DeliveryQueueStateContext,
+): Promise<number> {
+  if (queueNames.length === 0) {
+    return 0;
+  }
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  const count = await executeDeliveryQueueOperation(captured, undefined, {
+    type: "deliveryQueue.countPending",
+    input: { queueNames: [...queueNames] },
+  });
+  captured.workerContext.admission.assertCurrent();
+  return count;
+}
+
+/** Doctor's offline migration retains its admitted native database owner. */
+export function countPendingDeliveryQueueEntriesForMaintenance(
   queueNames: readonly string[],
   stateDir?: string,
   context?: DeliveryQueueStateContext,

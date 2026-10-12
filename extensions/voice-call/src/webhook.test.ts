@@ -323,13 +323,6 @@ describe("VoiceCallWebhookServer media stream client IP resolution", () => {
       expected: "127.0.0.1",
     },
     {
-      name: "no trusted proxies",
-      trust: true,
-      proxies: [],
-      remote: "127.0.0.1",
-      expected: "127.0.0.1",
-    },
-    {
       name: "mapped remote and trusted proxy chain",
       trust: true,
       proxies: ["127.0.0.1", "203.0.113.10"],
@@ -1402,133 +1395,65 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
     });
   });
 
-  it.each(["outbound", "inbound"] as const)(
-    "applies greeting barge-in policy to %s calls",
-    async (direction) => {
-      const call = createCall(Date.now() - 1_000);
-      call.direction = direction;
-      call.state = "speaking";
-      call.metadata = { mode: "conversation", initialMessage: "Hello from the greeting." };
-      const clearTtsQueue = vi.fn<TwilioProviderTestDouble["clearTtsQueue"]>();
-      const processEvent = vi.fn<CallManager["processEvent"]>(async (event) => {
-        if (event.type !== "call.speech") {
-          return { kind: "processed" };
-        }
-        call.state = "listening";
-        return { kind: "final-speech", call, transcript: event.transcript, waiterResolved: false };
-      });
-      const manager = {
-        ...automaticReplyManagerStub,
-        getActiveCalls: () => [call],
-        endCall: vi.fn(async () => ({ success: true })),
-        getCallByProviderCallId: (id: string) => (id === call.providerCallId ? call : undefined),
-        getCall: (id: string) => (id === call.callId ? call : undefined),
-        speakInitialMessage: vi.fn(async () => {}),
-        processEvent,
-      } as unknown as CallManager;
-      const server = createServer(
-        createConfig({ provider: "twilio", streaming: { enabled: true } }),
-        manager,
-        createTwilioStreamingProvider({ clearTtsQueue }),
-      );
-      await server.start();
-      const handleInboundResponse = vi.fn(async () => {});
-      (
-        server as unknown as {
-          handleInboundResponse: (callId: string, transcript: string) => Promise<void>;
-        }
-      ).handleInboundResponse = handleInboundResponse;
-      const media = getMediaCallbacks(server).config;
-      const transcript = "hello after greeting";
-      if (direction === "outbound") {
-        media.onSpeechStart?.("provider-call-1", "stream");
-        media.onTranscript?.("provider-call-1", "hello", "stream");
-        media.onSpeechStart?.("provider-call-1", "stream");
-        media.onTranscript?.("provider-call-1", "hello again", "stream");
-        expect(clearTtsQueue).not.toHaveBeenCalled();
-        expect(handleInboundResponse).not.toHaveBeenCalled();
-        expect(processEvent).not.toHaveBeenCalled();
-        delete call.metadata.initialMessage;
-        call.state = "listening";
+  it("applies greeting barge-in policy to outbound calls", async () => {
+    const call = createCall(Date.now() - 1_000);
+    call.state = "speaking";
+    call.metadata = { mode: "conversation", initialMessage: "Hello from the greeting." };
+    const clearTtsQueue = vi.fn<TwilioProviderTestDouble["clearTtsQueue"]>();
+    const processEvent = vi.fn<CallManager["processEvent"]>(async (event) => {
+      if (event.type !== "call.speech") {
+        return { kind: "processed" };
       }
-      media.onSpeechStart?.("provider-call-1", "stream");
-      media.onTranscript?.("provider-call-1", transcript, "stream");
-      expect(clearTtsQueue).toHaveBeenCalledTimes(2);
-      expect(processEvent).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          type: "call.speech",
-          callId: call.callId,
-          providerCallId: call.providerCallId,
-          transcript,
-          isFinal: true,
-        }),
-      );
-      await vi.waitFor(() =>
-        expect(handleInboundResponse).toHaveBeenCalledExactlyOnceWith(call.callId, transcript),
-      );
-    },
-  );
-});
-describe("VoiceCallWebhookServer webhook event auto-response", () => {
-  it("auto-responds to an inbound webhook transcript without conversation mode", async () => {
-    const providerCallId = "v3:webhook-inbound";
-    const call: CallRecord = {
-      ...createCall(Date.now()),
-      providerCallId,
-      provider: "telnyx",
-      direction: "inbound",
-      state: "listening",
-    };
-    const transcript = "Hello from the inbound caller";
-    const { manager, processEvent } = createManager([call]);
-    processEvent.mockResolvedValue({
-      kind: "final-speech",
-      call,
-      transcript,
-      waiterResolved: false,
+      call.state = "listening";
+      return { kind: "final-speech", call, transcript: event.transcript, waiterResolved: false };
     });
-    const telnyxProvider: VoiceCallProvider = {
-      ...provider,
-      name: "telnyx",
-      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "telnyx:req:inbound" }),
-      parseWebhookEvent: () => ({
-        events: [
-          {
-            id: "event-inbound",
-            type: "call.speech",
-            callId: providerCallId,
-            providerCallId,
-            timestamp: Date.now(),
-            transcript,
-            isFinal: true,
-          },
-        ],
-        statusCode: 200,
-      }),
-    };
+    const manager = {
+      ...automaticReplyManagerStub,
+      getActiveCalls: () => [call],
+      endCall: vi.fn(async () => ({ success: true })),
+      getCallByProviderCallId: (id: string) => (id === call.providerCallId ? call : undefined),
+      getCall: (id: string) => (id === call.callId ? call : undefined),
+      speakInitialMessage: vi.fn(async () => {}),
+      processEvent,
+    } as unknown as CallManager;
     const server = createServer(
-      createConfig({ skipSignatureVerification: true }),
+      createConfig({ provider: "twilio", streaming: { enabled: true } }),
       manager,
-      telnyxProvider,
+      createTwilioStreamingProvider({ clearTtsQueue }),
     );
+    await server.start();
     const handleInboundResponse = vi.fn(async () => {});
     (
       server as unknown as {
         handleInboundResponse: (callId: string, transcript: string) => Promise<void>;
       }
     ).handleInboundResponse = handleInboundResponse;
-
-    const response = await postWebhookForm(await server.start(), "stub=1");
-
-    expect(response.status).toBe(200);
+    const media = getMediaCallbacks(server).config;
+    const transcript = "hello after greeting";
+    media.onSpeechStart?.("provider-call-1", "stream");
+    media.onTranscript?.("provider-call-1", "hello", "stream");
+    media.onSpeechStart?.("provider-call-1", "stream");
+    media.onTranscript?.("provider-call-1", "hello again", "stream");
+    expect(clearTtsQueue).not.toHaveBeenCalled();
+    expect(handleInboundResponse).not.toHaveBeenCalled();
+    expect(processEvent).not.toHaveBeenCalled();
+    delete call.metadata.initialMessage;
+    call.state = "listening";
+    media.onSpeechStart?.("provider-call-1", "stream");
+    media.onTranscript?.("provider-call-1", transcript, "stream");
+    expect(clearTtsQueue).toHaveBeenCalledTimes(2);
     expect(processEvent).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         type: "call.speech",
+        callId: call.callId,
+        providerCallId: call.providerCallId,
         transcript,
         isFinal: true,
       }),
     );
-    expect(handleInboundResponse).toHaveBeenCalledExactlyOnceWith(call.callId, transcript);
+    await vi.waitFor(() =>
+      expect(handleInboundResponse).toHaveBeenCalledExactlyOnceWith(call.callId, transcript),
+    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

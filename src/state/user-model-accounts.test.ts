@@ -20,17 +20,16 @@ import { captureOpenClawStateReadContext } from "./openclaw-state-worker-context
 import {
   clearUserProfileAuthLink,
   connectUserModelAccount,
-  isUserModelAuthProfileOwner,
   listUserModelAccounts,
   listUserProfileAuthLinks,
   listUserProfileAuthLinksAsync,
   readUserModelAccountSummary,
   readSelectedUserModelAccount,
   readUserModelAuthProfile,
-  resolveUserProfileAuthLink,
   setUserProfileAuthLink,
   updateUserModelAuthProfile,
 } from "./user-model-accounts.js";
+import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
 import { captureUserProfileModelAccountLinksAuthority } from "./user-profile-events.js";
 import { linkEmail, setAvatar } from "./user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
@@ -90,6 +89,55 @@ function connectToken(
 }
 
 describe("personal model accounts", () => {
+  it("reads current linked credentials together after in-process refresh and unlink writes", () => {
+    const options = stateOptions();
+    const alice = ensureProfileForEmail("catalog-alice@example.test", options);
+    const first = connectToken(alice.id, options).authProfileId;
+    const second = connectUserModelAccount(
+      {
+        ownerProfileId: alice.id,
+        credential: { type: "token", provider: "openai", token: "synthetic-second-token" },
+        assertCurrent() {},
+      },
+      options,
+    ).authProfileId;
+    const { db } = openOpenClawStateDatabase(options);
+    const read = () => {
+      const result = readUserModelAccountCommand(db, {
+        type: "userModelAccounts.catalog",
+        selection: { requesterProfileId: alice.id },
+      });
+      if (result.type !== "userModelAccounts.catalog") {
+        throw new Error("Expected personal catalog");
+      }
+      return result.catalog;
+    };
+    expect(Object.keys(read().profiles)).toEqual([first, second]);
+    expect(
+      updateUserModelAuthProfile(
+        first,
+        (profile) => {
+          if (profile.credential.type !== "token") {
+            throw new Error("Expected token credential");
+          }
+          profile.credential.token = "synthetic-refreshed-token";
+          return true;
+        },
+        options,
+      ),
+    ).toBe(true);
+    clearUserProfileAuthLink({ profileId: alice.id, provider: "openai" }, options);
+    expect(read()).toEqual({
+      links: [{ provider: "anthropic", authProfileId: first, updatedAt: expect.any(Number) }],
+      profiles: {
+        [first]: {
+          credential: { type: "token", provider: "anthropic", token: "synthetic-refreshed-token" },
+          usageStats: undefined,
+        },
+      },
+    });
+  });
+
   it("observes foreign default-link commits on the next worker read", async () => {
     const options = stateOptions();
     const alice = ensureProfileForEmail("worker-links@example.test", options);
@@ -186,9 +234,6 @@ describe("personal model accounts", () => {
         expect(
           listUserProfileAuthLinks(source.id, options).map((link) => link.authProfileId),
         ).toEqual(ownsCredential ? [authProfileId] : []);
-        expect(isUserModelAuthProfileOwner({ profileId: source.id, authProfileId }, options)).toBe(
-          ownsCredential,
-        );
         expect(readUserModelAuthProfile(authProfileId, options)?.credential).toEqual(
           ownsCredential
             ? { type: "token", provider: "anthropic", token: "synthetic-personal-token" }
@@ -218,9 +263,6 @@ describe("personal model accounts", () => {
         : "missing";
       expect(listUserProfileAuthLinks(profileId, options)).toEqual([]);
       expect(listUserModelAccounts({ profileId }, options)).toEqual({ accounts: [] });
-      expect(
-        resolveUserProfileAuthLink({ profileId, providers: ["openai"] }, options),
-      ).toBeUndefined();
       if (withProfile) {
         expect(hasPrivateAccountState(profileId, options)).toBe(false);
       } else {
@@ -399,12 +441,6 @@ describe("personal model accounts", () => {
         options,
       ),
     ).toBeUndefined();
-    expect(
-      isUserModelAuthProfileOwner(
-        { profileId: bob.id, authProfileId: first.authProfileId },
-        options,
-      ),
-    ).toBe(false);
 
     clearUserProfileAuthLink({ profileId: alice.id, provider: "openai" }, options);
     closeOpenClawStateDatabaseByPath(options.path);
@@ -419,12 +455,6 @@ describe("personal model accounts", () => {
         options,
       ),
     ).toMatchObject({ label: "account@example.test", selected: false });
-    expect(
-      isUserModelAuthProfileOwner(
-        { profileId: alice.id, authProfileId: first.authProfileId },
-        options,
-      ),
-    ).toBe(true);
     setUserProfileAuthLink(
       { profileId: alice.id, provider: "openai", authProfileId: first.authProfileId },
       options,
@@ -465,35 +495,6 @@ describe("personal model accounts", () => {
     ).toEqual([ids.at(-1)]);
   });
 
-  it("resolves through provider preference order without creating storage", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForEmail("bob@example.test", options);
-    expect(
-      resolveUserProfileAuthLink({ profileId: profile.id, providers: ["openai"] }, options),
-    ).toBeUndefined();
-    expect(hasPrivateAccountState(profile.id, options)).toBe(false);
-    setUserProfileAuthLink(
-      { profileId: profile.id, provider: "openai", authProfileId: "openai:bob" },
-      options,
-    );
-    setUserProfileAuthLink(
-      { profileId: profile.id, provider: "anthropic", authProfileId: "anthropic:bob" },
-      options,
-    );
-    expect(
-      resolveUserProfileAuthLink(
-        { profileId: profile.id, providers: ["anthropic", "openai"] },
-        options,
-      ),
-    ).toBe("anthropic:bob");
-    expect(
-      resolveUserProfileAuthLink({ profileId: profile.id, providers: ["openai"] }, options),
-    ).toBe("openai:bob");
-    expect(
-      resolveUserProfileAuthLink({ profileId: profile.id, providers: ["mistral"] }, options),
-    ).toBeUndefined();
-  });
-
   it("replaces only owned credentials, retaining exact session pins after unlink", () => {
     const options = stateOptions();
     const alice = ensureProfileForEmail("alice@example.test", options);
@@ -519,9 +520,7 @@ describe("personal model accounts", () => {
     expect(listUserProfileAuthLinks(bob.id, options)).toEqual([]);
 
     clearUserProfileAuthLink({ profileId: alice.id, provider: "anthropic" }, options);
-    expect(
-      resolveUserProfileAuthLink({ profileId: alice.id, providers: ["anthropic"] }, options),
-    ).toBeUndefined();
+    expect(listUserProfileAuthLinks(alice.id, options)).toEqual([]);
     expect(readUserModelAuthProfile(first.authProfileId, options)?.credential).toMatchObject({
       token: "synthetic-new-token",
     });
@@ -584,9 +583,9 @@ describe("personal model accounts", () => {
       credential: { token: "synthetic-rotated-token" },
       usageStats: { lastUsed: 42, cooldownUntil: 99, cooldownReason: "rate_limit" },
     });
-    expect(
-      resolveUserProfileAuthLink({ profileId: alice.id, providers: ["anthropic"] }, options),
-    ).toBe(authProfileId);
+    expect(listUserProfileAuthLinks(alice.id, options)).toMatchObject([
+      { provider: "anthropic", authProfileId },
+    ]);
   });
 
   it.each([false, true])(
@@ -618,18 +617,13 @@ describe("personal model accounts", () => {
         { provider: "openai", authProfileId: "openai:source" },
       ];
       expect(listUserProfileAuthLinks(target.id, options)).toMatchObject(expectedLinks);
+      expect(listUserProfileAuthLinks(source.id, options)).toMatchObject(expectedLinks);
       expect(
-        resolveUserProfileAuthLink({ profileId: source.id, providers: ["mistral"] }, options),
-      ).toBe("mistral:target");
-      expect(
-        resolveUserProfileAuthLink({ profileId: target.id, providers: ["anthropic"] }, options),
-      ).toBe(disconnected ? undefined : targetAccount.authProfileId);
-      expect(
-        isUserModelAuthProfileOwner(
+        readUserModelAccountSummary(
           { profileId: target.id, authProfileId: sourceAccount.authProfileId },
           options,
         ),
-      ).toBe(true);
+      ).toMatchObject({ authProfileId: sourceAccount.authProfileId });
       expect(
         readUserModelAuthProfile(sourceAccount.authProfileId, options)?.credential,
       ).toMatchObject({ token: sourceToken });

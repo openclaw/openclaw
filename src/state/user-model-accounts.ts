@@ -7,11 +7,7 @@ import { z } from "zod";
 import { inlineAuthProfileCredentialSchema } from "../agents/auth-profiles/credential-schema.js";
 import { coerceProfileUsageStats } from "../agents/auth-profiles/profile-usage-stats.js";
 import type { AuthProfileCredential, UserModelAuthProfile } from "../agents/auth-profiles/types.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { SECRET_STORE_VALUE_MAX_BYTES } from "../secrets/store/secret-store-validation-error.js";
 import {
@@ -28,8 +24,19 @@ import {
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-model-account-id.js";
+import {
+  invalidUserModelAccounts as invalidAccounts,
+  readSelectedUserModelAccountRecords,
+  readUserModelAccountRecord as readRecord,
+  userModelAccountRecordValue as accountRecordValue,
+  type UserModelAccountRecordName as AccountRecordName,
+} from "./user-model-account-records.kernel.js";
 import { publishUserProfileModelAccountLinksChange } from "./user-profile-events.js";
-import { selectResolvedUserProfile, userProfilesDb } from "./user-profiles-internal.js";
+import {
+  selectResolvedUserProfile,
+  selectResolvedUserProfileMetadataById,
+  userProfilesDb,
+} from "./user-profiles-internal.js";
 
 const credentialSchema = inlineAuthProfileCredentialSchema.refine(
   (credential) => credential.copyToAgents !== true,
@@ -48,22 +55,16 @@ const profileSchema = z.strictObject({
   usageStats: z.unknown().transform(coerceProfileUsageStats).optional(),
 });
 type UserModelLinks = z.infer<typeof linksSchema>;
-type AccountRecordName = "model-accounts" | `model-account:${string}`;
 
 export type UserProfileAuthLink = { provider: string; authProfileId: string; updatedAt: number };
-export type UserModelAccount = {
-  authProfileId: string;
-  provider: string;
-  label: string;
-  authType: AuthProfileCredential["type"];
-  selected: boolean;
+export type PersonalCatalogSelection = { profileId: string } | { requesterProfileId: string };
+export type PersonalCatalogProfiles = {
+  links: UserProfileAuthLink[];
+  profiles: Record<string, UserModelAuthProfile>;
 };
+export type UserModelAccount = ReturnType<typeof accountSummary>;
 
 const MODEL_ACCOUNTS_PAGE_SIZE = 50;
-
-function invalidAccounts(): Error {
-  return new Error("Personal model account state is invalid; restore a verified state backup.");
-}
 
 function parseRecord<T>(value: string, schema: z.ZodType<T>): T {
   if (Buffer.byteLength(value, "utf8") > SECRET_STORE_VALUE_MAX_BYTES) {
@@ -95,29 +96,6 @@ function requireOwner(db: DatabaseSync, profileId: string): string {
     throw new Error("Personal model account owner is unavailable; refresh Profile and try again.");
   }
   return owner;
-}
-
-function readRecord(db: DatabaseSync, owner: string, name: AccountRecordName): string | undefined {
-  if (!tableExists(db, "secret_store_entries")) {
-    return undefined;
-  }
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<Pick<DB, "secret_store_entries">>(db)
-      .selectFrom("secret_store_entries")
-      .select(["value", "kind", "allowed_hosts"])
-      .where("scope_kind", "=", "identity")
-      .where("scope_id", "=", owner)
-      .where("name", "=", name)
-      .where("deleted_at_ms", "is", null),
-  );
-  if (!row) {
-    return undefined;
-  }
-  if (row.kind !== "secret" || row.allowed_hosts !== null) {
-    throw invalidAccounts();
-  }
-  return row.value;
 }
 
 function writeRecord(
@@ -174,7 +152,10 @@ function readProfile(
   if (!isUserModelAuthProfileId(authProfileId)) {
     return undefined;
   }
-  const raw = readRecord(db, owner, `model-account:${authProfileId}`);
+  return parseProfileRecord(readRecord(db, owner, `model-account:${authProfileId}`));
+}
+
+function parseProfileRecord(raw: string | undefined): UserModelAuthProfile | undefined {
   if (raw === undefined) {
     return undefined;
   }
@@ -221,42 +202,7 @@ function credentialOwner(db: DatabaseSync, authProfileId: string): string | unde
   return locator ? resolveOwner(db, locator.ownerProfileId) : undefined;
 }
 
-/** A locator identifies a record; only its current identity owner can newly select it. */
-export function isUserModelAuthProfileOwner(
-  params: { profileId: string; authProfileId: string },
-  options: OpenClawStateDatabaseOptions = {},
-): boolean {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const owner = resolveOwner(db, params.profileId);
-      if (
-        !owner ||
-        credentialOwner(db, params.authProfileId) !== owner ||
-        !tableExists(db, "secret_store_entries")
-      ) {
-        return false;
-      }
-      return Boolean(
-        executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<Pick<DB, "secret_store_entries">>(db)
-            .selectFrom("secret_store_entries")
-            .select("name")
-            .where("scope_kind", "=", "identity")
-            .where("scope_id", "=", owner)
-            .where("name", "=", `model-account:${params.authProfileId}`)
-            .where("deleted_at_ms", "is", null),
-        ),
-      );
-    }, options) ?? false
-  );
-}
-
-function accountSummary(
-  authProfileId: string,
-  value: string,
-  links: UserModelLinks,
-): UserModelAccount {
+function accountSummary(authProfileId: string, value: string, links: UserModelLinks) {
   const { credential } = parseRecord(value, profileSchema);
   const identity = [credential.email?.trim(), credential.displayName?.trim()].filter(Boolean);
   return {
@@ -317,16 +263,54 @@ export function readUserModelAccountSummary(
   params: { profileId: string; authProfileId: string },
   options: OpenClawStateDatabaseOptions = {},
 ): UserModelAccount | undefined {
-  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-    const owner = resolveOwner(db, params.profileId);
-    if (!owner || credentialOwner(db, params.authProfileId) !== owner) {
-      return undefined;
-    }
-    const value = readRecord(db, owner, `model-account:${params.authProfileId}`);
-    return value === undefined
-      ? undefined
-      : accountSummary(params.authProfileId, value, readLinks(db, owner));
-  }, options);
+  return withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) => readUserModelAccountSummaryInDatabase(db, params),
+    options,
+  );
+}
+
+export function readUserModelAccountSummaryInDatabase(
+  db: DatabaseSync,
+  params: { profileId: string; authProfileId: string },
+): UserModelAccount | undefined {
+  const owner = resolveOwner(db, params.profileId);
+  if (!owner || credentialOwner(db, params.authProfileId) !== owner) {
+    return undefined;
+  }
+  const value = readRecord(db, owner, `model-account:${params.authProfileId}`);
+  return value === undefined
+    ? undefined
+    : accountSummary(params.authProfileId, value, readLinks(db, owner));
+}
+
+/** Prepare the private summary and the optional public owner label in one read operation. */
+export function readUserModelAccountSelectionInDatabase(
+  db: DatabaseSync,
+  params: { profileId?: string; authProfileId: string },
+) {
+  const locator = parseUserModelAuthProfileId(params.authProfileId);
+  const requester =
+    params.profileId && params.profileId !== locator?.ownerProfileId
+      ? resolveOwner(db, params.profileId)
+      : undefined;
+  const owner =
+    locator && tableExists(db, "user_profiles")
+      ? selectResolvedUserProfileMetadataById(db, locator.ownerProfileId)
+      : undefined;
+  const ownsAccount =
+    owner &&
+    !owner.merged_into &&
+    (params.profileId === locator?.ownerProfileId || requester === owner.id);
+  const value = ownsAccount
+    ? readRecord(db, owner.id, `model-account:${params.authProfileId}`)
+    : undefined;
+  return {
+    personal:
+      value !== undefined && owner
+        ? accountSummary(params.authProfileId, value, readLinks(db, owner.id))
+        : undefined,
+    owner: owner ? { profileId: owner.id, displayName: owner.display_name } : undefined,
+  };
 }
 
 /** Only an explicitly selected credential is loaded; no personal account enumeration. */
@@ -334,10 +318,40 @@ export function readUserModelAuthProfile(
   authProfileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): UserModelAuthProfile | undefined {
-  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-    const owner = credentialOwner(db, authProfileId);
-    return owner ? readProfile(db, owner, authProfileId) : undefined;
-  }, options);
+  return withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) => readUserModelAuthProfileInDatabase(db, authProfileId),
+    options,
+  );
+}
+
+export function readUserModelAuthProfileInDatabase(
+  db: DatabaseSync,
+  authProfileId: string,
+): UserModelAuthProfile | undefined {
+  return readPersonalCatalogProfilesInDatabase(db, { profileId: authProfileId }).profiles[
+    authProfileId
+  ];
+}
+
+/** The catalog reads only explicit pins or linked credentials from its admitted reader. */
+export function readPersonalCatalogProfilesInDatabase(
+  db: DatabaseSync,
+  selection: PersonalCatalogSelection,
+): PersonalCatalogProfiles {
+  const links =
+    "requesterProfileId" in selection
+      ? listUserProfileAuthLinksInDatabase(db, selection.requesterProfileId)
+      : [];
+  const profileIds =
+    "profileId" in selection ? [selection.profileId] : links.map((link) => link.authProfileId);
+  const profiles: PersonalCatalogProfiles["profiles"] = {};
+  for (const { id, ...record } of readSelectedUserModelAccountRecords(db, profileIds)) {
+    const profile = parseProfileRecord(accountRecordValue(record));
+    if (profile) {
+      profiles[id] = profile;
+    }
+  }
+  return { links, profiles };
 }
 
 /** The canonical OAuth/usage owners mutate one exact private credential under the DB lock. */
@@ -465,20 +479,6 @@ export async function listUserProfileAuthLinksAsync(
   return reply?.links ?? [];
 }
 
-export function resolveUserProfileAuthLink(
-  params: { profileId: string; providers: readonly string[] },
-  options: OpenClawStateDatabaseOptions = {},
-): string | undefined {
-  const links = listUserProfileAuthLinks(params.profileId, options);
-  for (const provider of params.providers) {
-    const link = links.find((candidate) => candidate.provider === provider);
-    if (link) {
-      return link.authProfileId;
-    }
-  }
-  return undefined;
-}
-
 /** Apply Doctor's verified credential renames without changing account selections or ownership. */
 export function renameUserProfileAuthLinks(
   profileIdMap: ReadonlyMap<string, string>,
@@ -584,11 +584,7 @@ export function setUserProfileAuthLink(
 }
 
 export function clearUserProfileAuthLink(
-  params: {
-    profileId: string;
-    provider: string;
-    assertCurrent?: (stage: "transaction" | "commit") => void;
-  },
+  params: Omit<Parameters<typeof setUserProfileAuthLink>[0], "authProfileId">,
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileAuthLink[] {
   return runOpenClawStateWriteTransaction(

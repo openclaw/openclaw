@@ -65,7 +65,7 @@ To reduce that, OpenClaw treats the auth profile store as a **token sink**:
   `openai:default`-style profile before OpenClaw owns OAuth for that
   provider; after that, OpenClaw-owned refreshes stay canonical
 - status/startup paths scope external CLI discovery to the provider set
-  already configured, so an unrelated CLI login store is not probed for a
+  already configured, so an unrelated CLI login store is not checked for a
   single-provider setup
 
 ## Storage (where tokens live)

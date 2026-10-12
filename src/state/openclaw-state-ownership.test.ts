@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
@@ -10,7 +10,13 @@ import {
   readConfigHealthStateFromStore,
   patchConfigHealthEntryToStore,
 } from "../config/io.health-state.js";
+import * as stateOwnerHeartbeat from "../infra/gateway-state-owner-heartbeat.js";
 import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { isPathInside } from "../infra/path-guards.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
 import {
   OpenClawStateOwnershipError,
   OpenClawStateOwnershipMetadataError,
@@ -18,6 +24,7 @@ import {
 import * as sqliteReadonlyLocation from "../infra/sqlite-snapshot-source.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withArtifactPreservingStateReads } from "./artifact-preserving-state-reads.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -36,14 +43,51 @@ import {
   inspectOpenClawStateOwnershipAtPath,
   STATE_SUPERVISION_KEY,
 } from "./openclaw-state-ownership.js";
+import { findOpenFixtureFiles } from "./openclaw-state-ownership.test-support.js";
+
+const heartbeatExits: Promise<void>[] = [];
+beforeEach(() => {
+  const start = stateOwnerHeartbeat.startGatewayStateOwnerHeartbeat;
+  vi.spyOn(stateOwnerHeartbeat, "startGatewayStateOwnerHeartbeat").mockImplementation((...args) => {
+    const heartbeat = start(...args);
+    heartbeatExits.push(
+      new Promise<void>((resolve) => {
+        heartbeat.worker.once("exit", () => resolve());
+      }),
+    );
+    return heartbeat;
+  });
+});
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
+    try {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      for (const directory of tempDirs.dirs) {
+        retireFixtureAdmissions(directory);
+      }
+      // Synchronous lease release unlinks locks before its heartbeat worker finishes closing them.
+      await Promise.all(heartbeatExits);
+      const openFiles = findOpenFixtureFiles(tempDirs.dirs);
+      assert.deepEqual(openFiles, [], "Fixture files remain open after database cleanup");
+      cleanup();
+    } finally {
+      heartbeatExits.length = 0;
+      vi.restoreAllMocks();
+    }
   });
 });
+
+function retireFixtureAdmissions(root: string): void {
+  for (const admission of captureSqliteDatabaseAdmissions()) {
+    if (isPathInside(root, admission.location)) {
+      // Physical admission outlives database close; fixtures own its final removal.
+      retireSqliteDatabaseAdmissionForPath(admission.location);
+      assert.throws(() => fs.fstatSync(admission.descriptor), { code: "EBADF" });
+    }
+  }
+}
 
 function createEnv(external = false): NodeJS.ProcessEnv {
   return {
@@ -633,6 +677,9 @@ describe("external shared-state ownership", () => {
     const env = createEnv();
     const databasePath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();
+    retireFixtureAdmissions(databasePath);
+    fs.renameSync(databasePath, `${databasePath}.seed`);
+    fs.copyFileSync(`${databasePath}.seed`, databasePath);
     const { DatabaseSync } = requireNodeSqlite();
     const drifted = new DatabaseSync(databasePath);
     try {
@@ -711,7 +758,7 @@ describe("external shared-state ownership", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const damaged = new DatabaseSync(databasePath);
     damaged.exec(
-      "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
+      "CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT; CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
     );
     damaged.enableDefensive?.(false);
     damaged.exec("PRAGMA writable_schema = ON;");
@@ -796,6 +843,9 @@ describe("external shared-state ownership", () => {
     const { path: databasePath, db: seeded } = openOpenClawStateDatabase({ env });
     const databaseLocation = seeded.location();
     closeOpenClawStateDatabaseForTest();
+    retireFixtureAdmissions(databasePath);
+    fs.renameSync(databasePath, `${databasePath}.seed`);
+    fs.copyFileSync(`${databasePath}.seed`, databasePath);
     const { DatabaseSync } = requireNodeSqlite();
     const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
       | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
@@ -815,26 +865,10 @@ describe("external shared-state ownership", () => {
       originalExec.call(this, sql);
       if (!claimInjected && validating.has(this) && sql === "COMMIT") {
         claimInjected = true;
-        const claimant = new DatabaseSync(databasePath);
-        try {
-          claimant
-            .prepare(
-              `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-               VALUES (?, ?, ?)`,
-            )
-            .run(
-              STATE_SUPERVISION_KEY,
-              JSON.stringify({
-                version: 1,
-                mode: "external",
-                managerId: "race-manager",
-                claimedAt: 1,
-              }),
-              1,
-            );
-        } finally {
-          claimant.close();
-        }
+        claimOpenClawStateOwnership("race-manager", {
+          path: databasePath,
+          env: { ...env, OPENCLAW_SUPERVISOR_MODE: "external" },
+        });
       }
     });
 
@@ -846,60 +880,28 @@ describe("external shared-state ownership", () => {
     expect(claimInjected).toBe(true);
   });
 
-  it("fences cached and injected handles after another connection commits an owner", () => {
+  it("reuses admitted ownership and fences cached handles after the owner commits a claim", () => {
     const externalEnv = createEnv(true);
     const unmarkedEnv = withoutExternalMarker(externalEnv);
     const opened = openOpenClawStateDatabase({ env: unmarkedEnv });
-    expect(openOpenClawStateDatabase({ env: unmarkedEnv })).toBe(opened);
-    const indexedOwnershipSql =
-      "SELECT value_json FROM config_machine_state WHERE state_key = ? LIMIT 1";
     const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
     try {
+      expect(openOpenClawStateDatabase({ env: unmarkedEnv })).toBe(opened);
       expect(openOpenClawStateDatabase({ env: unmarkedEnv, database: opened })).toBe(opened);
-      expect(reads.queries).toEqual([indexedOwnershipSql]);
-      reads.queries.length = 0;
       runOpenClawStateWriteTransaction(() => undefined, { env: unmarkedEnv, database: opened });
-      expect(reads.queries).toEqual([
-        indexedOwnershipSql,
-        "PRAGMA data_version",
-        indexedOwnershipSql,
-      ]);
+      expect(reads.queries.filter((sql) => /FROM config_machine_state/u.test(sql))).toEqual([]);
     } finally {
       reads.restore();
     }
-    expect(
-      opened.db.prepare(`EXPLAIN QUERY PLAN ${indexedOwnershipSql}`).all(STATE_SUPERVISION_KEY),
-    ).toEqual([
-      expect.objectContaining({
-        detail:
-          "SEARCH config_machine_state USING INDEX sqlite_autoindex_config_machine_state_1 (state_key=?)",
-      }),
-    ]);
-    const ownership = {
-      version: 1 as const,
-      mode: "external" as const,
-      managerId: "late-supervisor",
-      claimedAt: 1,
-    };
-    const { DatabaseSync } = requireNodeSqlite();
-    const claimant = new DatabaseSync(opened.path);
-    try {
-      claimant
-        .prepare(
-          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-        )
-        .run(STATE_SUPERVISION_KEY, JSON.stringify(ownership), ownership.claimedAt);
-    } finally {
-      claimant.close();
-    }
 
+    const ownership = claimOpenClawStateOwnership("late-supervisor", { env: externalEnv });
+    const write = vi.fn();
     expect(() => openOpenClawStateDatabase({ env: unmarkedEnv })).toThrow(
       OpenClawStateOwnershipError,
     );
     expect(() => openOpenClawStateDatabase({ env: unmarkedEnv, database: opened })).toThrow(
       OpenClawStateOwnershipError,
     );
-    const write = vi.fn();
     expect(() => runOpenClawStateWriteTransaction(write, { env: unmarkedEnv })).toThrow(
       OpenClawStateOwnershipError,
     );
@@ -927,7 +929,7 @@ describe("external shared-state ownership", () => {
     expect(inspectOpenClawStateOwnershipAtPath(database.path)).toEqual(ownership);
   });
 
-  it("fails closed when unmarked and lets an external claim repair malformed metadata", () => {
+  it("fails closed when unmarked and lets an external claim repair malformed metadata", async () => {
     const env = createEnv(true);
     const database = openOpenClawStateDatabase({ env });
     database.db
@@ -936,7 +938,16 @@ describe("external shared-state ownership", () => {
       )
       .run(STATE_SUPERVISION_KEY, '{"version":1,"mode":"external"}', Date.now());
     database.db.exec("ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json;");
+    const location = database.db.location();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    const owner = captureSqliteDatabaseAdmissions().find((entry) => entry.location === location);
+    assert(owner);
+    retireSqliteDatabaseAdmissionForPath(database.path);
+    assert.throws(() => fs.fstatSync(owner.descriptor), { code: "EBADF" });
+    // Persisted startup damage gets a new physical admission, not a live foreign edit.
+    fs.copyFileSync(database.path, `${database.path}.startup`);
+    fs.renameSync(`${database.path}.startup`, database.path);
 
     expect(() => openOpenClawStateDatabase({ env: withoutExternalMarker(env) })).toThrow(
       OpenClawStateOwnershipMetadataError,
@@ -1003,13 +1014,20 @@ describe("external shared-state ownership", () => {
       homedir: () => fixture.unmarkedEnv.OPENCLAW_STATE_DIR ?? "",
       logger: { warn: () => undefined },
     };
-    expect(readConfigHealthStateFromStore(healthDeps)).toEqual({ entries: {} });
+    expect(
+      withArtifactPreservingStateReads(() => readConfigHealthStateFromStore(healthDeps)),
+    ).toEqual({ entries: {} });
+    const afterRead = snapshotSqliteFamily(fixture.databasePath);
+    expect(afterRead.entries).toEqual(before.entries);
+    assert.deepStrictEqual(afterRead, before);
     expect(() =>
       patchConfigHealthEntryToStore(healthDeps, "/tmp/openclaw.json", {
         lastObservedSuspiciousSignature: "test",
       }),
     ).toThrow(OpenClawStateOwnershipError);
-    assert.deepStrictEqual(snapshotSqliteFamily(fixture.databasePath), before);
+    const afterWrite = snapshotSqliteFamily(fixture.databasePath);
+    expect(afterWrite.entries).toEqual(before.entries);
+    assert.deepStrictEqual(afterWrite, before);
   });
 
   it("allows read-only access without the external marker", async () => {

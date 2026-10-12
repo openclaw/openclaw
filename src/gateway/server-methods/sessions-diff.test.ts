@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import * as execRunner from "../../process/exec-runner.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { parseNumstatZ, splitPatchByFile } from "../../sessions/session-diff-parser.js";
@@ -23,6 +24,12 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("../session-utils.js", () => ({
   loadSessionEntry: hoisted.loadSessionEntry,
   loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
+}));
+
+// mock-isolation: Diff RPC cases supply session discovery while exercising real Git reads.
+vi.mock("../session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: (params: { key: string; agentId?: string }) =>
+    hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
 }));
 
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
@@ -259,7 +266,10 @@ describe("loadSessionDiff", () => {
       client: null,
       isWebchatConnect: () => false,
       respond: (ok, payload, error) => calls.push({ ok, payload, error }),
-      context: { getRuntimeConfig: () => cfg } as never,
+      context: {
+        getRuntimeConfig: () => cfg,
+        logGateway: createSubsystemLogger("test/sessions-diff"),
+      } as never,
     });
 
     expect(calls).toEqual([
@@ -268,7 +278,10 @@ describe("loadSessionDiff", () => {
         payload: expect.objectContaining({ root: repoRoot }),
       }),
     ]);
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith(
+      "global",
+      expect.objectContaining({ agentId: "ops" }),
+    );
     expect(hoisted.resolveAgentWorkspaceDir).toHaveBeenCalledWith(cfg, "ops");
   });
 

@@ -220,26 +220,17 @@ function pickPreferredManifestAuthChoice(
   candidates: readonly ProviderAuthChoiceCandidate[],
 ): ProviderAuthChoiceCandidate | undefined {
   let preferred: ProviderAuthChoiceCandidate | undefined;
-  let ambiguous = false;
+  let priority = Infinity;
   for (const candidate of candidates) {
-    if (!preferred) {
+    const candidatePriority = resolveProviderAuthChoiceOriginPriority(candidate.origin);
+    if (candidatePriority < priority) {
       preferred = candidate;
-      continue;
-    }
-    if (
-      resolveProviderAuthChoiceOriginPriority(candidate.origin) <
-      resolveProviderAuthChoiceOriginPriority(preferred.origin)
-    ) {
-      preferred = candidate;
-      ambiguous = false;
-    } else if (
-      resolveProviderAuthChoiceOriginPriority(candidate.origin) ===
-      resolveProviderAuthChoiceOriginPriority(preferred.origin)
-    ) {
-      ambiguous = true;
+      priority = candidatePriority;
+    } else if (candidatePriority === priority) {
+      preferred = undefined;
     }
   }
-  return ambiguous ? undefined : preferred;
+  return preferred;
 }
 
 function resolvePreferredManifestAuthChoicesByChoiceId(
@@ -318,7 +309,8 @@ export function resolveManifestDeprecatedProviderAuthChoice(
   });
 }
 
-function resolveManifestProviderOnboardAuthFlags(
+/** Resolves onboard auth flags from installed manifests and official cold-install metadata. */
+export function resolveProviderOnboardAuthFlags(
   params?: ManifestProviderAuthChoiceParams,
 ): ProviderOnboardAuthFlag[] {
   const preferredByFlag = new Map<
@@ -351,11 +343,8 @@ function resolveManifestProviderOnboardAuthFlags(
       },
     });
   }
-  return [...preferredByFlag.values()].map(({ flag }) => flag);
-}
-
-function resolveOfficialExternalProviderOnboardAuthFlags(): ProviderOnboardAuthFlag[] {
-  const flags: ProviderOnboardAuthFlag[] = [];
+  const flags = [...preferredByFlag.values()].map(({ flag }) => flag);
+  const seen = new Set(flags.map((flag) => `${flag.optionKey}::${flag.cliFlag}`));
   for (const entry of listOfficialExternalProviderCatalogEntries()) {
     const manifest = getOfficialExternalPluginCatalogManifest(entry);
     for (const provider of manifest?.providers ?? []) {
@@ -370,6 +359,11 @@ function resolveOfficialExternalProviderOnboardAuthFlags(): ProviderOnboardAuthF
         if (!optionKey || !authChoice || !cliFlag || !cliOption) {
           continue;
         }
+        const dedupeKey = `${optionKey}::${cliFlag}`;
+        if (seen.has(dedupeKey)) {
+          continue;
+        }
+        seen.add(dedupeKey);
         flags.push({
           optionKey,
           authChoice,
@@ -379,23 +373,6 @@ function resolveOfficialExternalProviderOnboardAuthFlags(): ProviderOnboardAuthF
         });
       }
     }
-  }
-  return flags;
-}
-
-/** Resolves onboard auth flags from installed manifests and official cold-install metadata. */
-export function resolveProviderOnboardAuthFlags(
-  params?: ManifestProviderAuthChoiceParams,
-): ProviderOnboardAuthFlag[] {
-  const flags = resolveManifestProviderOnboardAuthFlags(params);
-  const seen = new Set(flags.map((flag) => `${flag.optionKey}::${flag.cliFlag}`));
-  for (const flag of resolveOfficialExternalProviderOnboardAuthFlags()) {
-    const dedupeKey = `${flag.optionKey}::${flag.cliFlag}`;
-    if (seen.has(dedupeKey)) {
-      continue;
-    }
-    seen.add(dedupeKey);
-    flags.push(flag);
   }
   return flags;
 }

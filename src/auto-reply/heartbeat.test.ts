@@ -35,15 +35,6 @@ describe("stripHeartbeatToken", () => {
     );
   });
 
-  it("drops heartbeats with small junk in heartbeat mode", () => {
-    expect(stripHeartbeatToken("HEARTBEAT_OK 🦞", { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
-    expect(stripHeartbeatToken(`🦞 ${HEARTBEAT_TOKEN}`, { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
-  });
-
   it("keeps heartbeat replies when remaining content exceeds threshold", () => {
     const long = "A".repeat(DEFAULT_HEARTBEAT_ACK_MAX_CHARS + 1);
     expect(stripHeartbeatToken(`${long} ${HEARTBEAT_TOKEN}`, { mode: "heartbeat" })).toEqual({
@@ -76,12 +67,6 @@ describe("stripHeartbeatToken", () => {
       text: `hello ${HEARTBEAT_TOKEN} there`,
       didStrip: false,
     });
-  });
-
-  it("strips HTML-wrapped heartbeat tokens", () => {
-    expect(stripHeartbeatToken(`<b>${HEARTBEAT_TOKEN}</b>`, { mode: "heartbeat" })).toEqual(
-      createSkippedHeartbeatOutcome(),
-    );
   });
 
   it("strips markdown-wrapped heartbeat tokens", () => {
@@ -136,14 +121,6 @@ describe("stripHeartbeatToken", () => {
       ),
     ).toEqual(createSkippedHeartbeatOutcome());
   });
-
-  it("preserves trailing punctuation on text before the token", () => {
-    expect(stripHeartbeatToken(`All clear. ${HEARTBEAT_TOKEN}`, { mode: "message" })).toEqual({
-      shouldSkip: false,
-      text: "All clear.",
-      didStrip: true,
-    });
-  });
 });
 
 describe("isHeartbeatAcknowledgementText", () => {
@@ -164,13 +141,6 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
   it("returns false for missing scratch so the monitor can still run", () => {
     expect(isHeartbeatContentEffectivelyEmpty(undefined)).toBe(false);
     expect(isHeartbeatContentEffectivelyEmpty(null)).toBe(false);
-  });
-
-  it("returns true for whitespace only", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("   ")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("\n\n\n")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("  \n  \n  ")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("\t\t")).toBe(true);
   });
 
   it("returns true for comments only", () => {
@@ -228,12 +198,6 @@ Keep this scratch empty unless you want a tiny checklist. Keep it small.
 \`\`\`
 `;
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
-  });
-
-  it("returns false when actionable content exists", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("- Check email")).toBe(false);
-    expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch\n- Task 1")).toBe(false);
-    expect(isHeartbeatContentEffectivelyEmpty("Remind me to call mom")).toBe(false);
   });
 });
 

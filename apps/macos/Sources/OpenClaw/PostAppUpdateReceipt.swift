@@ -8,18 +8,6 @@ enum PostAppUpdateCoreUpdate: String, Codable, Sendable {
 }
 
 struct PostAppUpdateReceipt: Codable, Equatable {
-    private enum CodingKeys: String, CodingKey {
-        case fromVersion
-        case toVersion
-        case recordedAt
-        case gatewayUpdateIncomplete
-        case coreUpdate
-        case notificationAttempts
-        case notificationInFlight
-        case runtimeBuildID
-        case setupRecovery
-    }
-
     let fromVersion: String
     let toVersion: String
     let recordedAt: Date
@@ -160,19 +148,16 @@ enum PostAppUpdateReceiptStore {
                 self.clear(defaults: defaults)
             }
             receipt = nil
-        } else if let pending = self.pending(
+        } else if var pending = self.pending(
             currentVersion: currentVersion,
             currentRuntimeBuildID: runtimeBuildID,
             defaults: defaults)
         {
             if pending.runtimeBuildID == nil, let runtimeBuildID {
-                var enriched = pending
-                enriched.runtimeBuildID = runtimeBuildID
-                self.persist(enriched, defaults: defaults)
-                receipt = enriched
-            } else {
-                receipt = pending
+                pending.runtimeBuildID = runtimeBuildID
+                self.persist(pending, defaults: defaults)
             }
+            receipt = pending
         } else if previousVersion != currentVersion ||
             (runtimeBuildID != nil && runtimeBuildID != previousBuildID) || setupRecovery ||
             previousReceipt?.coreUpdatePending == true
@@ -358,7 +343,7 @@ enum PostAppUpdateReceiptStore {
         let current = self.load(defaults: defaults) ?? receipt
         guard current.toVersion == receipt.toVersion else { return current }
         var updated = current
-        updated.notificationAttempts = min(current.notificationAttempts + 1, self.notificationRetryLimit)
+        updated.notificationAttempts = min(current.notificationAttempts, self.notificationRetryLimit - 1) + 1
         self.persist(updated, defaults: defaults)
         return updated
     }

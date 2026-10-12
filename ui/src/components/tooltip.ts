@@ -24,9 +24,6 @@ let nextTooltipId = 0;
 const createTooltipId = () => `openclaw-tooltip-${++nextTooltipId}`;
 
 class TooltipProvider extends OpenClawLitElement {
-  @property({ type: Number }) delay = HOVER_DELAY;
-  @property({ type: Number }) skipDelay = SKIP_DELAY;
-
   delayed = true;
   #focusInput: "keyboard" | "pointer" = "keyboard";
   #skipDelayTimer: number | null = null;
@@ -61,14 +58,10 @@ class TooltipProvider extends OpenClawLitElement {
 
   closeTooltip() {
     this.#clearSkipDelayTimer();
-    if (this.skipDelay <= 0) {
-      this.delayed = true;
-      return;
-    }
     this.#skipDelayTimer = window.setTimeout(() => {
       this.#skipDelayTimer = null;
       this.delayed = true;
-    }, this.skipDelay);
+    }, SKIP_DELAY);
   }
 
   #clearSkipDelayTimer() {
@@ -366,6 +359,8 @@ class Tooltip extends OpenClawLitElement {
     // WaTooltip's initial `for` watcher clears a directly assigned anchor.
     // Reapply it after that update or an open tooltip has no popup geometry.
     await tooltip.updateComplete;
+    // Opening Web Awesome's tooltip reads the nested popup's rendered element.
+    await tooltip.popup?.updateComplete;
     if (this.webAwesomeTooltip === tooltip && this.#triggerElement === trigger) {
       tooltip.anchor = trigger;
       const popup = tooltip.popup;
@@ -470,7 +465,7 @@ class Tooltip extends OpenClawLitElement {
     const delay =
       this.delay === undefined && provider?.delayed === false
         ? 0
-        : Math.max(0, this.delay ?? provider?.delay ?? HOVER_DELAY);
+        : Math.max(0, this.delay ?? HOVER_DELAY);
     this.#openTimer = window.setTimeout(() => {
       this.#openTimer = null;
       this.#show();

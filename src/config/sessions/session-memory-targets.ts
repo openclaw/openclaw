@@ -1,9 +1,9 @@
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { SessionTranscriptInstance } from "./session-accessor.sqlite-contract.js";
-import { listSessionTranscriptInstances } from "./session-accessor.sqlite-entry.js";
 import { listSessionTranscriptArchivesReadOnly } from "./session-accessor.sqlite-history.js";
 import { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { listSessionTranscriptInstances } from "./session-history.js";
 import type {
   MemorySessionSelectors,
   MemorySessionTarget,
@@ -24,6 +24,32 @@ export function projectSessionMetadata(
   };
 }
 
+export function unresolvedMemorySessionTarget(
+  agentId: string,
+  sessionId: string,
+): MemorySessionTarget {
+  return {
+    agentId,
+    sessionId,
+    resolution: "unresolved",
+    hookExternalContentSource: null,
+    channel: null,
+    accountId: null,
+    chatType: null,
+    participants: [],
+  };
+}
+
+export function resolveMemorySessionSince(
+  since: MemorySessionSelectors["since"],
+): number | undefined {
+  const resolved = typeof since === "string" ? Date.parse(since) : since;
+  if (resolved !== undefined && !Number.isFinite(resolved)) {
+    throw new Error(`Invalid memory session date: ${since}`);
+  }
+  return resolved;
+}
+
 /** Resolve explicit memory-forget selectors against authoritative session owners. */
 export function readMemorySessionTargets(
   params: MemorySessionSelectors & { env?: NodeJS.ProcessEnv },
@@ -35,10 +61,7 @@ export function readMemorySessionTargets(
   if (sessionIds.length === 0 && hookSources.length === 0 && participants.length === 0) {
     return [];
   }
-  const since = typeof params.since === "string" ? Date.parse(params.since) : params.since;
-  if (since !== undefined && !Number.isFinite(since)) {
-    throw new Error(`Invalid memory session date: ${params.since}`);
-  }
+  const since = resolveMemorySessionSince(params.since);
   const resolvedSelectors = new Set<string>();
   const participantRecords = listSessionParticipantsReadOnly(params);
   const targets = new Map<string, MemorySessionTarget>();
@@ -93,16 +116,7 @@ export function readMemorySessionTargets(
   }
   for (const sessionId of sessionIds) {
     if (!resolvedSelectors.has(sessionId)) {
-      targets.set(sessionId, {
-        agentId: params.agentId,
-        sessionId,
-        resolution: "unresolved",
-        hookExternalContentSource: null,
-        channel: null,
-        accountId: null,
-        chatType: null,
-        participants: [],
-      });
+      targets.set(sessionId, unresolvedMemorySessionTarget(params.agentId, sessionId));
     }
   }
   return [...targets.values()];

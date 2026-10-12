@@ -1,6 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import { resolveIncludeWriteBoundary } from "../../../config/include-write-boundary.js";
 import { INCLUDE_KEY, isInternalIncludeWriteTarget } from "../../../config/includes.js";
 import type { ConfigFileSnapshot } from "../../../config/types.openclaw.js";
+import { isRootFileMissingFailure, openRootFileSync } from "../../../infra/boundary-file-read.js";
 import { isRecord } from "../../../utils.js";
 
 export function containsAuthoredInclude(value: unknown): boolean {
@@ -82,4 +85,24 @@ export function classifyOtelGrpcMigrationOwnership(params: {
     return ownership;
   }
   return readOtelProtocol(params.authoredConfig) === "grpc" ? ownership : { kind: "resolved-only" };
+}
+
+/** Read historical config evidence without following a backup outside its directory. */
+export function readDoctorConfigBackup(backupPath: string): string | undefined {
+  const opened = openRootFileSync({
+    absolutePath: backupPath,
+    rootPath: path.dirname(backupPath),
+    boundaryLabel: "config backup directory",
+  });
+  if (!opened.ok) {
+    if (isRootFileMissingFailure(opened)) {
+      return undefined;
+    }
+    throw new Error("Config backup could not be read safely");
+  }
+  try {
+    return fs.readFileSync(opened.fd, "utf8");
+  } finally {
+    fs.closeSync(opened.fd);
+  }
 }

@@ -1,0 +1,2354 @@
+{
+  "baseline": "7a8e5a19b68b5f3b3f824ba4f17ac6763d1a8063",
+  "apis": [
+    "text/default",
+    "text/tools",
+    "text/off",
+    "field/content",
+    "field/token",
+    "tool-payload",
+    "model-visible"
+  ],
+  "cases": [
+    [
+      "family/env assignment",
+      "API_KEY=example0value0tests",
+      "0dd271c1a174a29290647dc21b7212d1a0dafeeeefa9ef74440fab3aa95d7c2a"
+    ],
+    [
+      "family/escaped env assignment",
+      "API_KEY=\\'escvalue12345'",
+      "d7311a0cd7c069fafea25ce9d65ce7bc5edb3628debdf841c4f7a003c829f311"
+    ],
+    [
+      "family/json secret field",
+      "\"password\": \"plainsecretvalue123\"",
+      "eb66b4fbd668dab285d45497d8774c607f305d3eadc3681ea7c12c78410a346c"
+    ],
+    [
+      "family/json payment field",
+      "\"card_number\": \"4111111111111111\"",
+      "ff2c068b6eeef866e16def8d34b2adc3d86177049d208030b64c2baeb9ac310a"
+    ],
+    [
+      "family/ambiguous quoted field",
+      "credential: \"opaquevalue123456\"",
+      "cd392ea73f62d0b732d4c2f3a5b378d73df6d0d0b6b30e0c2e67319a770e2871"
+    ],
+    [
+      "family/cli flag equals",
+      "--api-key=opaquevalue1234567",
+      "2748de7f557f7661da229dafea66416a0ec66fb26055cdcb223ce6bc95693606"
+    ],
+    [
+      "family/cli flag space",
+      "--token opaquevalue12345678",
+      "44e8abd6c214c23e51200e93389e97ad9cc63650b43ba3002b472dfe5dee9953"
+    ],
+    [
+      "family/aws secret field",
+      "aws_secret_access_key = \"wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY0a\"",
+      "e80a7b204c29be81c111a310692c99803f90f8cf93c197605dc727b75e1b099c"
+    ],
+    [
+      "family/pem block",
+      "-----BEGIN PRIV\u0041TE KEY-----\nMIIB\n-----END PRIV\u0041TE KEY-----",
+      "ed9318936b5a79d28d458d8f0c21a96f3c39c54c768cbd790443eda4e94c35c6"
+    ],
+    [
+      "family/authorization bearer",
+      "Authorization: Bearer abcdefghij0123456789",
+      "ab5243fc7686d7f0e3a6b30b808461b10d0fc3c49f569930f948a5e7e154a4e5"
+    ],
+    [
+      "family/authorization basic",
+      "Authorization: Basic dXNlcjpwYXNzd29yZDE",
+      "1283a922038929e51db385186ed48692e259f026b7461787b3ad656d41a2759e"
+    ],
+    [
+      "family/authorization bot",
+      "Authorization: Bot abcdefghij012345678",
+      "6858d1623421927d0cf525b53b988007b1f1f595b9450a7540340dfb8a2747e8"
+    ],
+    [
+      "family/authorization opaque scheme",
+      "Authorization: Digest nonce=abcdefgh0123456789",
+      "362331359e369fe2712d5c91342c4098940943034f0266a7b74e5ce63afccc59"
+    ],
+    [
+      "family/authorization opaque tail",
+      "Authorization: plainopaquecred99;",
+      "0efb33c28084fb2df42f976cbf9b8495be60da4e146b0e1f43f69ad7fc531e0c"
+    ],
+    [
+      "family/proxy-authorization scheme",
+      "Proxy-Authorization: Digest nonce=abcdefgh0123456789",
+      "8adcf0f140b61a1adfc9144da14fe524d2439bbe82a3b4867db73ddfbb226742"
+    ],
+    [
+      "family/proxy-authorization tail",
+      "Proxy-Authorization: plainopaquecred99;",
+      "1ac651f00ef598752577f6c96e486d102495ec9b9949d5766a1b25c08a1883e1"
+    ],
+    [
+      "family/credential-style colon header",
+      "api-key: plainopaquevalue12345",
+      "b87c18c2b47b93f3eb5f5d99c928036effd745630018eb7a9d01de6006c658b9"
+    ],
+    [
+      "family/credential-style equals header",
+      "api-key=plainopaquevalue12345",
+      "bbad0786575faf2029f284474b029522bf21d5c08bf64eccb2b80508ee8f190a"
+    ],
+    [
+      "family/gateway colon header",
+      "X-OpenClaw-Token: plainopaquevalue123",
+      "daf4e2fe38a83dc7745294cda23e72c2937a76624d859a9890f77a47eb363394"
+    ],
+    [
+      "family/gateway equals header",
+      "X-OpenClaw-Token=plainopaquevalue123",
+      "b96d89cf743ee2c2c4e7ff572e2a2f11a807feb986fe628cdb90f022e6f8664e"
+    ],
+    [
+      "family/standalone bearer",
+      "Bearer abcdefghij0123456789",
+      "f95869e0db7bdc634086239519e204a1d0c3bd339605e612c67cd3b27c7d507f"
+    ],
+    [
+      "family/url userinfo",
+      "https@@S//user:secretpass@example.com/x",
+      "be7941a4d9b94dd6eb9e574334a553246c2952737bc516269c520e8eb570d423"
+    ],
+    [
+      "family/connection string",
+      "postgres@@S//u:secretpass@db.example.com/x",
+      "91f63b0a0610f0232505673eccbda197b8f5817dfec53fbcaa646f20338696c0"
+    ],
+    [
+      "family/form first pair",
+      "password=abcsecretdef&nextkey=1",
+      "88195d85ff5bfe14e216ac69f582cd841f5c1d1f65011b3cd7556e73d91213b2"
+    ],
+    [
+      "family/standalone quoted",
+      "password=\"quotedsecretvalue\"",
+      "46ee7c8622c61ac0dead9759c14139bc36aa8cfb3f28b1c826ab88d9791c16c0"
+    ],
+    [
+      "family/standalone unquoted",
+      "password=plainsecretvalue12",
+      "a48a4c1ce0dd975db4aa79c2c669fc0b7ae00851eed37097a652c04a70e48fc6"
+    ],
+    [
+      "family/config quoted",
+      "password: \"configsecretvalue\"",
+      "a28e9107bc48e3ab51af2811eebc84fbf18e4406a260217dc373ffef579657e1"
+    ],
+    [
+      "family/config colon unquoted",
+      "password: configsecretvalue12",
+      "bcfd1cb949e3876bb0d855413daaa7927aa72696939b392338b705e61e75660b"
+    ],
+    [
+      "family/config equals unquoted",
+      "api-key = cfgsecretvalue12",
+      "432c02919c895e9d812c9cc6d60e10011870114e4742c9be0da14d788c06ef14"
+    ],
+    [
+      "family/config direct",
+      "access-token=cfgdirectsecret1",
+      "768ef12988406e55b30b41c3fe376912fc9156a107f48b23c2359e081e005b12"
+    ],
+    [
+      "family/config prefixed",
+      "db-password: cfgprefixedsecret",
+      "923a2cc6c08be870caabb5c364db81bd6d4ec11ca245fc25e6e7ec12f8b22f7f"
+    ],
+    [
+      "family/config namespaced",
+      "smtp.password: cfgnssecret1234",
+      "3be989aeba2922881ad29892760460ecad075714bb43fb7e0a9f20d68f19000d"
+    ],
+    [
+      "family/bare pass",
+      "TODO\npass: opaquepassvalue123\nrest of line",
+      "c410820d618e9a3d80c29f00003cc172571dcba6972dc4e639e14f3dacb500d6"
+    ],
+    [
+      "family/openai sk",
+      "sk-abcdef0123456789",
+      "63a55c9ed829773b98be4c8e150639ae5db46f46b8bd263431bc7cc0fa28170f"
+    ],
+    [
+      "family/github ghp",
+      "ghp_abcdefghij1234567890",
+      "a85b55787afed3599c0d4e2e569cb2c9ad374c83f5f4d4bafb2254bb4f7b56a5"
+    ],
+    [
+      "family/github gho",
+      "gho_abcdefghij1234567890",
+      "ffddd73263fa6047c22e45ee966accf34641603735ab77df09abf39dbebc8c79"
+    ],
+    [
+      "family/github pat",
+      "github_pat_abcdefghij1234",
+      "9f83d884c42ac15d1008bb6473624f659a93473027ed5fb3282abad8c63772a8"
+    ],
+    [
+      "family/gitlab glpat",
+      "glpat-abcdefghijklmnopqrst",
+      "69dd25b1c74e64c041cc72fa13beba58adc0f342cdea43b572f733b1a0d5a8d7"
+    ],
+    [
+      "family/gitlab gloas",
+      "gloas-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+      "279d77ffc9f00239979d91a1f171f7c2cfe12ba37b566722494cb2220280ee5c"
+    ],
+    [
+      "family/gitlab gldt",
+      "gldt-abcdefghijklmnopqrst",
+      "f5225b6fb3026e6678862ca72b8cd2c0e15cdae98fa7bb69ec1d1deb7fcea65b"
+    ],
+    [
+      "family/gitlab glcbt",
+      "glcbt-abc_abcdefghijklmnopqrst",
+      "17b174736bed2d98612dc311c445f0d26c9749ec27895989d61cf98f243f9e15"
+    ],
+    [
+      "family/gitlab glptt",
+      "glptt-gggggggggggggggggggggggggggggggggggggggg",
+      "54b4e02ef293edbc9ca826b41fb3f6c2d7104489ff750b49014374aa132ec3f0"
+    ],
+    [
+      "family/gitlab glft",
+      "glft-abcdefghijklmnopqrst",
+      "750f2ae871471c039ee2f576cebcdcaf22c5a51567c3cb1868fa9e56da8bf9ef"
+    ],
+    [
+      "family/gitlab glimt",
+      "glimt-hhhhhhhhhhhhhhhhhhhhhhhhh",
+      "63d4ffa597aa0e0bbd30198a937e76bb2fc2498623d76b39f1c1db6cb757658a"
+    ],
+    [
+      "family/gitlab glagent",
+      "glagent-iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii",
+      "1d9b61de285ef557d367500224665d81463f7b08de523f46b598ec7601f04f7e"
+    ],
+    [
+      "family/gitlab glwt",
+      "glwt-abcdefghijklmnopqrst",
+      "612061a1555e5b0aaff871de66f8ce0c37606d231b229dd8ee96c612b64560bc"
+    ],
+    [
+      "family/gitlab glsoat",
+      "glsoat-abcdefghijklmnopqrst",
+      "3a8ebbaef66d0b5b97ad7ea46dd5db520409a9f8dde5bb65a1d62511984994c1"
+    ],
+    [
+      "family/gitlab glffct",
+      "glffct-abcdefghijklmnopqrst",
+      "2d4ef68ec6bcb5c4ba0d01416d3b13026706ec8737f06773c59fa135d2a37154"
+    ],
+    [
+      "family/gitlab glrt",
+      "glrt-abcdefghijklmnopqrst",
+      "884b8a7e676375595f21f44d8aadf691673961bf4624b03187d9d1e087f2c695"
+    ],
+    [
+      "family/gitlab gr134",
+      "GR1348941abcdefghijklmnopqrst",
+      "54146b00b526f4f009e2e1f79518bb743cab6a2bbcbeadb6c5f901c6b4d47060"
+    ],
+    [
+      "family/gitlab session",
+      "_gitlab_session=abcdefghijklmnopqrst",
+      "9f47ea05ad1fda4f2ae687cb7b27874a6c9d8837d96dc5e1bb184425fc242b9e"
+    ],
+    [
+      "family/slack xoxb",
+      "xoxb-123456789012-abcdefghij",
+      "f1ea612cc064a076c648865d917f24f6effda7146df26d99ff054ab3cadd9b8b"
+    ],
+    [
+      "family/slack xapp",
+      "xapp-123456789012-abcdefghij",
+      "8750471d3a227f55798cfcd503076491278e20c9ad8a9da3fd5e27efa7043182"
+    ],
+    [
+      "family/slack webhook",
+      "https@@S//hooks.slack.com/services/T01234567/B01234567/abcdefghijklmnopqrst",
+      "0c1ffcf936daffa331f62f5acd7ef2fad404d4c4c3eea9736a2240a7d6cd9dee"
+    ],
+    [
+      "family/discord webhook",
+      "https@@S//discord.com/api/webhooks/123456789012345678/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "e243b7fcd585a94f01393f60e61d1169576b113a2cc19f0dadc50a849186b1dc"
+    ],
+    [
+      "family/discord token",
+      "discord aaaaaaaaaaaaaaaaaaaaaaaa.bbbbbb.ccccccccccccccccccccccccccc",
+      "9f12122981b75c0664306856aca38f73893ad5ff85b3ee1e6598dd29b0540daf"
+    ],
+    [
+      "family/grogq gsk",
+      "gsk_abcdefghij12345",
+      "fcfb8b6b49c055986e379c99d5f720c1e92df8d8826d0d72072060d4aeadeed8"
+    ],
+    [
+      "family/google aiza",
+      "AIzaSyA1234567890abcdefghij",
+      "b7e99fec64a3cbb893712b2c1d7f93f829f7f85792a46d89b3af39a5db908ec1"
+    ],
+    [
+      "family/google ya29",
+      "ya29.a0123456789",
+      "e2607d898232e93e18bf941389f7b3da6056519ace8ead612aa9954b6fe50c45"
+    ],
+    [
+      "family/google refresh",
+      "1//0a0123456789",
+      "ead47b235f6d5fb7dc1c58f20b3f6389ff2f569273c7fade790306de88a47bc7"
+    ],
+    [
+      "family/jwt",
+      "eyJabcdefghij.1234567890.abcdefghij",
+      "b57e8c5947dbd8422f01edaadd6141765c49e20e771cdb7dd8135d6499be324a"
+    ],
+    [
+      "family/perplexity",
+      "pplx-abcdefghij12345",
+      "712031f82cc946b02d8537ca78589922ad2bf4e9653ece654aa7237efe0b902c"
+    ],
+    [
+      "family/fal",
+      "fal_abcdefghij12345",
+      "a881bc91062b6b5b46fc9a5769c64e8404c1780ca7555b07f026d1113decda29"
+    ],
+    [
+      "family/fireworks fc",
+      " fc-abcdefghij12345",
+      "a0148049a909ed01fb33455d314eed41a95d795116a43ef8473392c542e2efed"
+    ],
+    [
+      "family/browserbase",
+      "bb_live_abcdefghij12",
+      "04f24d0831f2935efae850deabbd4204e27d85918e62195689ec4e9eb6a33ddf"
+    ],
+    [
+      "family/fuzz gAAAA",
+      "gAAAAabcdefghij0123456789",
+      "e78c743d341cd4fe67846ea2d28a5dfc2eaa812619dd6f36b21b7e12104ad9ae"
+    ],
+    [
+      "family/stripe live",
+      "sk_live_abcdefghij12345",
+      "0b5c9a3951643eacd7f2259632db2adb474d1cbe11fe1aa97f911a6401efbaac"
+    ],
+    [
+      "family/sendgrid",
+      "SG.abcdefghij1234567.abcdefghij1234567",
+      "cc5def114e513b90fc7a9672fb356936d23c6a22b92201cc792cc4f5bcfa1c5d"
+    ],
+    [
+      "family/npm",
+      "npm_abcdefghij12345678",
+      "4d038dd0b74e9db74bfaa0a6d774517b3ea9e64bd875ddb30856ed03468c17ee"
+    ],
+    [
+      "family/pypi",
+      "pypi-abcdefghij12345",
+      "60b3363fdd0d6b07cf348dc5bb51cd438c4fb54fee5591010a9596c521d8ac25"
+    ],
+    [
+      "family/digitalocean",
+      "dop_v1_abcdefghij12345",
+      "b9478d9ecc18e956b924bd1421ecb6e833598bfdeae63668ed09b83d2e1477dd"
+    ],
+    [
+      "family/digitalpulse ct",
+      "dp.ct.jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj",
+      "71e0fcd255f9347b6b5d5426c2922362c1eaa6e9f080024d5b3fcf3a15e28c2d"
+    ],
+    [
+      "family/digitalpulse st",
+      "dp.st.kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      "ede33afa42750fbee216332642bd9b8471e019df1066725375d6e480415f29a9"
+    ],
+    [
+      "family/docker pat",
+      "dckr_pat_abcdefghij0123456789abcdefghij",
+      "9970fc728a80c4d1aba4a451fe3db222157c3e6c5aa8eed025a2ecfc010d8a88"
+    ],
+    [
+      "family/bkua",
+      "bkua_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "4cdf0fa8866c9e67687bb65790dfd5647fdd547a5de412ab8d51f39b71e2bb6a"
+    ],
+    [
+      "family/ccipat",
+      "CCIPAT_CCCCCCCCCCCCCCCCCCCCCC_0123456789abcdef0123456789abcdef01234567",
+      "1907d1e08953c8ae593be4cc7302380d57626c9869e97a4a0684e33076c59bb2"
+    ],
+    [
+      "family/sbp",
+      "sbp_dddddddddddddddddddddddddddddddddddddddd",
+      "251c22e08dccb5771613b929dd70bbc257cd8ea8d75c6f1b10da5ddbef5b8c58"
+    ],
+    [
+      "family/datadog",
+      "ddp_DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+      "31b960ee4b530ad128a48e782cc5a2fc0b86ffb45badbfca96f45cbeb3581efd"
+    ],
+    [
+      "family/nfp",
+      "nfp_EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+      "15d9fddb2679fcd7e2f33c3457c796f97c11b6661c4661087df80d4a736d97e8"
+    ],
+    [
+      "family/glsa",
+      "glsa_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+      "a28097cb8618bb4d4168bad298d744dff2c0f5575cf63947485a37e148df635a"
+    ],
+    [
+      "family/glc eyj",
+      "glc_eyJAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "b856d02d3ccd99befb4b601db01193c0f8e6b10fa1960b789a6230e75a89fd4d"
+    ],
+    [
+      "family/cfpat",
+      "CFPAT-GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+      "8d0281ed55a4609fb13cc561e01ea54811abd25bd889e5e653cd50d36f8a10dd"
+    ],
+    [
+      "family/bbdc",
+      "BBDC-HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH",
+      "4b07a1eca26fcf93ec99c3e3c9dd2de7af24986a6e32857d246007c3824cb411"
+    ],
+    [
+      "family/hrku",
+      "HRKU-AAIIIIIIIIIIIIIIIIIIII",
+      "671d6ec3534f186861f707bcb4269ab54e3e9d120004285d520fd85999e277f4"
+    ],
+    [
+      "family/planetscale",
+      "pat-eu1-abcdefgh-abcd-abcd-abcd-abcddefghijk",
+      "ae4724d64a4cb04ad0a865b0a978ad849e92fc5f066bc0657e852b54144935f5"
+    ],
+    [
+      "family/apify",
+      "apify_api_abcdefghij1234567890",
+      "d3cd1f7afdd4620417c9934d880bbfecb05e52498a701a72322db3131e6e18e6"
+    ],
+    [
+      "family/flyv1",
+      "FlyV1 fm123_JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ",
+      "3d91c99b6de90c420ad90addad3840359a3f1f5fdbbd14f9dcdf2341b9165b95"
+    ],
+    [
+      "family/fio",
+      "fio-u-KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+      "2b490c76c49834ee8515a5c0c23793a19d0491a96a701507ae41788785d99a1a"
+    ],
+    [
+      "family/alibaba am",
+      " am_abcdefghij12345",
+      "56358cef8806c7bb1e1422908ef73dc512803f49846731cff11ffe9828d9ab00"
+    ],
+    [
+      "family/alibaba sk",
+      " sk_abcdefghij12345",
+      "eb7558e431a2aaf71f69736084c428f7ea2071d7c48e761aeefbfb5fcae24eea"
+    ],
+    [
+      "family/tvly",
+      "tvly-abcdefghij12345",
+      "4e7dab9789a466db5631222d5f7bbee195162725f4f349ddece4f3406fd7869c"
+    ],
+    [
+      "family/exa",
+      "exa_abcdefghij12345",
+      "8dc829502b765f6da238ad9a0654d946ebb26d36ff3b8700e5675724edff4e99"
+    ],
+    [
+      "family/syt",
+      "syt_abcdefghij12345",
+      "2c197217d742b784b7ad1c5aa6b82afcb740c528190d9c40d3a81e946d1f6efb"
+    ],
+    [
+      "family/retaindb",
+      "retaindb_abcdefghij12",
+      "b71d453cf8c48ab35f0fdfc5b847bd31353e1d0041fe821d37c0275903745c16"
+    ],
+    [
+      "family/mem0",
+      "mem0_abcdefghij12345",
+      "12d266df73abe578c8c72564efd42e6c48592c4f376ddee5ea6b788c0a82d1ab"
+    ],
+    [
+      "family/brv",
+      "brv_abcdefghij12345",
+      "ab8805d2acede46d006d1665db6ba1cbfffcd786825dbce52eff3784da57019b"
+    ],
+    [
+      "family/xai",
+      "xai-LLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+      "1108166602e2df837a74d293ee6dcd40ef2b035500ca8e2d4cd063bf096d115d"
+    ],
+    [
+      "family/fireworks fw dash",
+      " fw-abcdefghij01234567890123456789",
+      "dc73dbb5dfdbfc36db5b6c756466509e78bd59a646b5e67b4289e91b5848bcd0"
+    ],
+    [
+      "family/fireworks fw score",
+      " fw_abcdefghij01234567890123456789",
+      "517f9e0d3758fa44005c52970c2d059b77cd5aee953e46f559130c635e879b83"
+    ],
+    [
+      "family/fireworks fpk",
+      " fpk_abcdefghij01234567890123456789",
+      "c598e3d903dc379fbe02ae13e3e46c37c95ea2b31a55e95d74ed29ea13bb4d4f"
+    ],
+    [
+      "family/hsk",
+      "hsk-abcdefghij12345",
+      "6b8b5e35f88245bf90eae44e6fff455b95cd11c2480fbbd368d79687d9f7c656"
+    ],
+    [
+      "family/aws akia",
+      "AKIAABCDEFGHIJKLMNOP",
+      "b139872d7e85d3b61d5ca044e0e3dc01f6ff6726f16c427629c8c975b9510628"
+    ],
+    [
+      "family/aws asia",
+      "ASIAABCDEFGHIJKLMNOP",
+      "35265bcf5d63cefee18bda287ef4367a869061879341555b8bcda1536981c8e0"
+    ],
+    [
+      "family/aws akid",
+      "AKIDabcdefghij12345",
+      "6c563f200849ccea7867da002750749c62a2745ac10040fad28d06ac3d7ffefa"
+    ],
+    [
+      "family/aliyun ltai",
+      "LTAIabcdefghij12345",
+      "7922d92faba1b984092b4616aae884e1f4b5686a97657ab841831b3fda217642"
+    ],
+    [
+      "family/huggingface",
+      "hf_abcdefghij12345",
+      "0ccd7fa24590ab5ba2be46008d7a0112366656a3ecf207c987dc399417bff4be"
+    ],
+    [
+      "family/api org",
+      "api_org_abcdefghijklmnopqrst",
+      "69026339f4cb925df616262efa5312804e6a52246bbca4cdcd51e62f0a9db4e0"
+    ],
+    [
+      "family/r8",
+      "r8_abcdefghij12345",
+      "584c4ae050f194b3c6ee8d0bb3bde241aee5d5059ab9fa993c02379a38678e3d"
+    ],
+    [
+      "family/atlassian atatt",
+      "ATATTabcdefghij1234567890=12345678",
+      "b39d0af29522782b569429007faa1cb8388f48d34d48e3f5ddff6ea45d40f4f6"
+    ],
+    [
+      "family/atlassian atctt",
+      "ATCTT3xFfGabcdefghij123=12345678",
+      "7c49375ddca0a23a4a700aa5878ce7c1583da4a395a4570e5b7f3323baf7588c"
+    ],
+    [
+      "family/atlassian atbb",
+      "ATBBabcdefghij012345",
+      "6d8512952a08f3d63ae6927ca9aad76a48e71115a21785b0ac233cadf8cad2ca"
+    ],
+    [
+      "family/dataiku dapi",
+      "dapi0123456789abcdef0123456789abcdef",
+      "36eb3492ba5a7646e43aa115dd56c5dd47a9e35a145297517180639086345d7e"
+    ],
+    [
+      "supplement/github variants",
+      "ghu_fixtureOnly1234567890 ghs_fixtureOnly1234567890 ghr_fixtureOnly1234567890",
+      "5f363dd7384b56ffaa8861ad62c2118c14ca719eb86f19051998df470576a96f"
+    ],
+    [
+      "supplement/gitlab runner",
+      "glrtr-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ab.abcdefghi",
+      "b402380400e25cc65ea54ae842542a719adfd5de70b5fa91c578a30372ffb65d"
+    ],
+    [
+      "supplement/stripe variants",
+      "sk_test_fixtureOnly1234567890 rk_live_fixtureOnly1234567890",
+      "1fd8eeec5f0814bb544a69656362f387468588c411336dd95de9231fa1ef3392"
+    ],
+    [
+      "supplement/digitalocean variants",
+      "doo_v1_fixtureOnly1234567890 dor_v1_fixtureOnly1234567890",
+      "de290645e21fd9b0609bc57e8af07399a478af3ba73438926017d76a924788cb"
+    ],
+    [
+      "supplement/doppler scoped",
+      "dp.st.test_env.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "e265aa7b560de40c8e4465ffa2a2969a2f135b7ea7b25fe07bbd4992d8d04465"
+    ],
+    [
+      "supplement/telegram variants",
+      "bot123456789:aaaaaaaaaaaaaaaaaaaaaaaa 987654321:bbbbbbbbbbbbbbbbbbbbbbbb",
+      "111f240c2d7d014c9323aead37f89396aab10b0478d52fbcd91ee0d84a18cb5f"
+    ],
+    [
+      "supplement/bare aws",
+      "Ab9GAb9GAb9GAb9GAb9GAb9GAb9GAb9GAb9GAb9G",
+      "3941b17a7baa9b5fec7f1c82ebda4ee77ad47c9a8d200c36a9e35eea55412c06"
+    ],
+    [
+      "supplement/quoted auth",
+      "'proxy-authorization': 'fixtureOpaqueValue1234567890'",
+      "b8c8f5bb364237c335d733c6cbca00892019bde4831d9879cdd327e40f9bff89"
+    ],
+    [
+      "supplement/cli spaced",
+      "--token fixtureOpaqueValue1234567890 --security-code 123456",
+      "38a77faa74dd4339da96c823de8412756f689d8716ce31f10e4e8be2e3934d4a"
+    ],
+    [
+      "supplement/quoted and escaped env",
+      "API_TOKEN='fixtureOpaqueValue1234567890' API_KEY=\\\"fixtureOpaqueValue0987654321\\\"",
+      "10835ea3da3290066a27c82e0b33f7ceb2ec91a1961dfc46f0b04a945b0dbe6e"
+    ],
+    [
+      "supplement/custom key spacing",
+      "smtp.password = fixtureValue123456 db-pass: fixtureValue098765",
+      "9ce34a15ca4ee6f74a9cc43744c47174bbd484804eb89e17b70894918e63eb75"
+    ],
+    [
+      "supplement/shell references",
+      "API_TOKEN=$API_TOKEN TOKEN=${TOKEN:-} SECRET=${SECRET:?}",
+      "bbb0917bead9fd411067101d93ad7b73240e341e00aa0828101247a6e0c0b927"
+    ],
+    [
+      "supplement/prose pass",
+      "Release notes: all checks pass: older clients retain behavior.",
+      "730728822f65180573c039c2ab0af489efa04cfafcd9a0d29ac13854d5026a3e"
+    ],
+    [
+      "supplement/short near misses",
+      "ghp_short glpat-short --token Bearer short password sk-short eyJ.a.b",
+      "98ce0890c675942db36f49c0c89ae886b9f60b4d631640e789c081e25fefb51b"
+    ],
+    [
+      "supplement/empty assignments",
+      "token=\"\" password= API_KEY= api-key: --credential",
+      "8ec9679381a6750be5a836a4f6e69033ae6d72793255e35f53bac2b128b87e66"
+    ],
+    [
+      "supplement/obfuscated keys",
+      "body=ok&pass%77ord=fixtureValue123456&auth%5Ftoken=fixtureValue098765",
+      "09335c54db0848639fd2881f8ec20c89df1628451a13a96a6689f3ca2babaf50"
+    ],
+    [
+      "supplement/unicode fields",
+      "🦞 pass​word=fixtureValue123456 KEY=fixtureValue123456 ſk-fixtureValue123456",
+      "eeac7f6e9862caa2c2d71d7f9ebb109dbc76cfde9eb13c1ed5f37593ae9f25b3"
+    ],
+    [
+      "supplement/unicode delimiters",
+      " token=fixtureValue123456 --password\tfixtureValue098765 ",
+      "00a1911755c58dd87ef535b6a2df14deab07028953af9589a98775581a31888b"
+    ],
+    [
+      "supplement/lone surrogates",
+      "\ud800 token=fixtureValue123456 \udfff sk-fixtureValue098765",
+      "3353464d82b6c6cff90e8f2eef471e3f00dccdfb347ae295aa976b0af0f12ceb"
+    ],
+    [
+      "supplement/public base64",
+      "data:application/octet-stream;base64,Ab9GAb9GAb9GAb9GAb9GAb9GAb9GAb9GAb9GAb9G",
+      "b48d60370bfcd2f50da854048e9f5a347bf733d1c576c0823cf388bdd3c4aaae"
+    ],
+    [
+      "family/env assignment/wrapped",
+      "API_KEY=example0value0tests",
+      "0dd271c1a174a29290647dc21b7212d1a0dafeeeefa9ef74440fab3aa95d7c2a"
+    ],
+    [
+      "family/env assignment/ordered",
+      "API_KEY=example0value0tests\nAuthorization: Bot abcdefghij012345678\nAPI_KEY=example0value0tests",
+      "6bb51039248adc4b4c521198a581f90a3fb06b3e7224e56fee2533be61f312be"
+    ],
+    [
+      "family/escaped env assignment/wrapped",
+      "{ message: 'API_KEY=\\'escvalue12345'' }",
+      "73cf220c2ecd36c1e7dcf4338a2f016acffc7f18b0e9235b861e1b4224a01c16"
+    ],
+    [
+      "family/escaped env assignment/ordered",
+      "API_KEY=\\'escvalue12345'\napi-key = cfgsecretvalue12\nAPI_KEY=\\'escvalue12345'",
+      "d90d9791fb3f5b4ad4ce2039ce9c75ec4be0b41499c076d7c295f0850e7a9328"
+    ],
+    [
+      "family/json secret field/wrapped",
+      "[🦞 \"password\": \"plainsecretvalue123\" done]",
+      "01fbfdddadd4830062b65db8d405b0561fe24a6f042baf839c1f2ca500694417"
+    ],
+    [
+      "family/json secret field/ordered",
+      "\"password\": \"plainsecretvalue123\"\nglwt-abcdefghijklmnopqrst\n\"password\": \"plainsecretvalue123\"",
+      "45fb3fdd1ee20c17f66fa5c0287b4f1cd890f1a6129a1aaace14a0b10d211741"
+    ],
+    [
+      "family/json payment field/wrapped",
+      "prefix_\"card_number\": \"4111111111111111\"_suffix",
+      "7449f869a03b97666a8ffc890bb1659150df50778d1c7298ad54483a3221b460"
+    ],
+    [
+      "family/json payment field/ordered",
+      "\"card_number\": \"4111111111111111\"\nfal_abcdefghij12345\n\"card_number\": \"4111111111111111\"",
+      "326a01ec3188e64964d79645ae2cb893cf04c2ba0f446c1fcff6af58e603923a"
+    ],
+    [
+      "family/ambiguous quoted field/wrapped",
+      "source:\n\tcredential: \"opaquevalue123456\"\r\nnext=visible",
+      "32a78f95bdaf2e0d8d1accad76856dc43306371a6d6eca19bf9f2b24bff39df3"
+    ],
+    [
+      "family/ambiguous quoted field/ordered",
+      "credential: \"opaquevalue123456\"\nglsa_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF\ncredential: \"opaquevalue123456\"",
+      "6f395fc3ec519301e300c64d5ab4876710115c0613bde292081f7e8798ee9122"
+    ],
+    [
+      "family/cli flag equals/wrapped",
+      "--api-key=opaquevalue1234567",
+      "2748de7f557f7661da229dafea66416a0ec66fb26055cdcb223ce6bc95693606"
+    ],
+    [
+      "family/cli flag equals/ordered",
+      "--api-key=opaquevalue1234567\nxai-LLLLLLLLLLLLLLLLLLLLLLLLLLLLLL\n--api-key=opaquevalue1234567",
+      "add730008840d82cd9d8137927b3ae7ca5819a030344663b80f9de0bcc0fc30d"
+    ],
+    [
+      "family/cli flag space/wrapped",
+      "{ message: '--token opaquevalue12345678' }",
+      "a0e4e6c68b91276e57e1c0b6d9ddb1a64cfd4924b47420c8f103f146e642bf6b"
+    ],
+    [
+      "family/cli flag space/ordered",
+      "--token opaquevalue12345678\nAPI_KEY=\\'escvalue12345'\n--token opaquevalue12345678",
+      "08d7306dec2eb8f8c8e7e3f60fc1c6f135c6a80fcd7cf7199a10be95f4da46cb"
+    ],
+    [
+      "family/aws secret field/wrapped",
+      "[🦞 aws_secret_access_key = \"wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY0a\" done]",
+      "7e5500b7fddcba32603f2024835bf2c54e0bae130c633c63a2951d7be6274e82"
+    ],
+    [
+      "family/aws secret field/ordered",
+      "aws_secret_access_key = \"wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY0a\"\nX-OpenClaw-Token: plainopaquevalue123\naws_secret_access_key = \"wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY0a\"",
+      "ac282fef749b6fb84014967e9fe0e9f5c3b72a8b7a298a89672099ca4429440c"
+    ],
+    [
+      "family/pem block/wrapped",
+      "prefix_-----BEGIN PRIV\u0041TE KEY-----\nMIIB\n-----END PRIV\u0041TE KEY-----_suffix",
+      "29ae7b51314be683584cad5107d8c96f7b31db990e932b6d670abd1d65e4e0c1"
+    ],
+    [
+      "family/pem block/ordered",
+      "-----BEGIN PRIV\u0041TE KEY-----\nMIIB\n-----END PRIV\u0041TE KEY-----\ngho_abcdefghij1234567890\n-----BEGIN PRIV\u0041TE KEY-----\nMIIB\n-----END PRIV\u0041TE KEY-----",
+      "e98fc4dc1458f303b11f4777fcbaf7b10c6605825b3e15dd17e4c2b29b16cf08"
+    ],
+    [
+      "family/authorization bearer/wrapped",
+      "source:\n\tAuthorization: Bearer abcdefghij0123456789\r\nnext=visible",
+      "8a3f28db7f60a36efd27aaccafaa4b5c7c8f7f5aca7cae1941dc22a9376de71e"
+    ],
+    [
+      "family/authorization bearer/ordered",
+      "Authorization: Bearer abcdefghij0123456789\nxapp-123456789012-abcdefghij\nAuthorization: Bearer abcdefghij0123456789",
+      "224d008bb629195ae8684ef9266cf730a08ea0665658d3a549396138fbb6ddf7"
+    ],
+    [
+      "family/authorization basic/wrapped",
+      "Authorization: Basic dXNlcjpwYXNzd29yZDE",
+      "1283a922038929e51db385186ed48692e259f026b7461787b3ad656d41a2759e"
+    ],
+    [
+      "family/authorization basic/ordered",
+      "Authorization: Basic dXNlcjpwYXNzd29yZDE\npypi-abcdefghij12345\nAuthorization: Basic dXNlcjpwYXNzd29yZDE",
+      "77cc21d80793532fff10065d91d46711159c77014d304456e602ff0811d4e9e2"
+    ],
+    [
+      "family/authorization bot/wrapped",
+      "{ message: 'Authorization: Bot abcdefghij012345678' }",
+      "0ed1887807fb0880806bda873163a4741d774b6f9c91269b0b1fb2bdf29741d6"
+    ],
+    [
+      "family/authorization bot/ordered",
+      "Authorization: Bot abcdefghij012345678\nFlyV1 fm123_JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ\nAuthorization: Bot abcdefghij012345678",
+      "170734c9f3d58954e9885882203c5aa5dba6f7c9a46d2a4d42d2fc92b76557ae"
+    ],
+    [
+      "family/authorization opaque scheme/wrapped",
+      "[🦞 Authorization: Digest nonce=abcdefgh0123456789 done]",
+      "06f960c9c70df1c2b4fc4a5651c162704861b191e673d4a12ab3311cdb9134fd"
+    ],
+    [
+      "family/authorization opaque scheme/ordered",
+      "Authorization: Digest nonce=abcdefgh0123456789\nAKIDabcdefghij12345\nAuthorization: Digest nonce=abcdefgh0123456789",
+      "2c1e6673a385ddc69b30d2e1ea200d47e94a35ce922e12b18139d99a6ff96de0"
+    ],
+    [
+      "family/authorization opaque tail/wrapped",
+      "prefix_Authorization: plainopaquecred99;_suffix",
+      "ef1558e5e5d35ec8c93c03b6e5cd1253d25d4a4585c12b0acb39dd54254f0f4b"
+    ],
+    [
+      "family/authorization opaque tail/ordered",
+      "Authorization: plainopaquecred99;\n-----BEGIN PRIV\u0041TE KEY-----\nMIIB\n-----END PRIV\u0041TE KEY-----\nAuthorization: plainopaquecred99;",
+      "68e9f30b4755d5e240b7aed8bdfbd6d947e3df43c0148417125a554c336026c3"
+    ],
+    [
+      "family/proxy-authorization scheme/wrapped",
+      "source:\n\tProxy-Authorization: Digest nonce=abcdefgh0123456789\r\nnext=visible",
+      "4b19539d71d749f4c29b9e1d532de665648e5f08e6b9ae83cdf660a5023b7097"
+    ],
+    [
+      "family/proxy-authorization scheme/ordered",
+      "Proxy-Authorization: Digest nonce=abcdefgh0123456789\npassword=plainsecretvalue12\nProxy-Authorization: Digest nonce=abcdefgh0123456789",
+      "cebf15d1532a336a65aa39217f5a087f5f27abb368da1dbe5de9bf80c658334b"
+    ],
+    [
+      "family/proxy-authorization tail/wrapped",
+      "Proxy-Authorization: plainopaquecred99;",
+      "1ac651f00ef598752577f6c96e486d102495ec9b9949d5766a1b25c08a1883e1"
+    ],
+    [
+      "family/proxy-authorization tail/ordered",
+      "Proxy-Authorization: plainopaquecred99;\nglft-abcdefghijklmnopqrst\nProxy-Authorization: plainopaquecred99;",
+      "7d0194e987a70263ace8d2b4e44b7d68dbf4939635713ddaa3551d3b7b563278"
+    ],
+    [
+      "family/credential-style colon header/wrapped",
+      "{ message: 'api-key: plainopaquevalue12345' }",
+      "e147b19359591cf14a68334eb3b1142c63e9b665773473a5a9e099cbdd5fc6fd"
+    ],
+    [
+      "family/credential-style colon header/ordered",
+      "api-key: plainopaquevalue12345\n1//0a0123456789\napi-key: plainopaquevalue12345",
+      "a54524bd4684477c5c74ca5ef1ad6ea8b3080ffb8163c9579084a207ff613eec"
+    ],
+    [
+      "family/credential-style equals header/wrapped",
+      "[🦞 api-key=plainopaquevalue12345 done]",
+      "c0da40148d79952a628c44b70fb48cd36bd2a4fbd0528874cf8a9e308e618125"
+    ],
+    [
+      "family/credential-style equals header/ordered",
+      "api-key=plainopaquevalue12345\nsbp_dddddddddddddddddddddddddddddddddddddddd\napi-key=plainopaquevalue12345",
+      "d1033bafa3d98ffb50da8df6f3a92292684382cd9920baab2517b31616a65d59"
+    ],
+    [
+      "family/gateway colon header/wrapped",
+      "prefix_X-OpenClaw-Token: plainopaquevalue123_suffix",
+      "259feb4520a7ca348cda1951014e1b20d1b18a8d97ae976612b322bdfdfe5a20"
+    ],
+    [
+      "family/gateway colon header/ordered",
+      "X-OpenClaw-Token: plainopaquevalue123\nretaindb_abcdefghij12\nX-OpenClaw-Token: plainopaquevalue123",
+      "be4b68ac3e4be94195535db92661d64eb09b76dd9d953b5dc1c595be4debf8af"
+    ],
+    [
+      "family/gateway equals header/wrapped",
+      "source:\n\tX-OpenClaw-Token=plainopaquevalue123\r\nnext=visible",
+      "1f2c462ef9f28e46dc015ec002cf50aa6f8e802fa819013c66ce4de49aeb710e"
+    ],
+    [
+      "family/gateway equals header/ordered",
+      "X-OpenClaw-Token=plainopaquevalue123\nATBBabcdefghij012345\nX-OpenClaw-Token=plainopaquevalue123",
+      "7c0d0eb70fef449a1df8f7d78886d833fc9bc555c1b1fcc1aed64c26ed91010f"
+    ],
+    [
+      "family/standalone bearer/wrapped",
+      "Bearer abcdefghij0123456789",
+      "f95869e0db7bdc634086239519e204a1d0c3bd339605e612c67cd3b27c7d507f"
+    ],
+    [
+      "family/standalone bearer/ordered",
+      "Bearer abcdefghij0123456789\nProxy-Authorization: plainopaquecred99;\nBearer abcdefghij0123456789",
+      "ef580199f4f27062c7df8fa2bdab19e3c75cd70ae36419e0cafbcfe42f280a34"
+    ],
+    [
+      "family/url userinfo/wrapped",
+      "{ message: 'https@@S//user:secretpass@example.com/x' }",
+      "178ce7be9bf044c29517095b79f9a3b6ae8e8a5d602d0962422dc0de88fc5392"
+    ],
+    [
+      "family/url userinfo/ordered",
+      "https@@S//user:secretpass@example.com/x\nTODO\npass: opaquepassvalue123\nrest of line\nhttps@@S//user:secretpass@example.com/x",
+      "0151ce6ea3da25c0148a3e6ec0d9d840a70d885f0e78d9044b555d1073e47ff4"
+    ],
+    [
+      "family/connection string/wrapped",
+      "[🦞 postgres@@S//u:secretpass@db.example.com/x done]",
+      "a346528fbda0fcfb97bc1e020f157fffd022b578222e4b326822f357ea9f22de"
+    ],
+    [
+      "family/connection string/ordered",
+      "postgres@@S//u:secretpass@db.example.com/x\nGR1348941abcdefghijklmnopqrst\npostgres@@S//u:secretpass@db.example.com/x",
+      "0d8066787fb7871a9c39f069e258e5b9c04617a1b377fd109d6a531e1abb2e0a"
+    ],
+    [
+      "family/form first pair/wrapped",
+      "prefix_password=abcsecretdef&nextkey=1_suffix",
+      "bd696e76c9dddfa54f227ef6aea6a6cc1154ed4e6f0d47330bb53807eefdfe2c"
+    ],
+    [
+      "family/form first pair/ordered",
+      "password=abcsecretdef&nextkey=1\nsk_live_abcdefghij12345\npassword=abcsecretdef&nextkey=1",
+      "190406c4bd95427bc7978910b021fec6cdcc5356ed5619140bbf6070e7ed6607"
+    ],
+    [
+      "family/standalone quoted/wrapped",
+      "source:\n\tpassword=\"quotedsecretvalue\"\r\nnext=visible",
+      "49300120c230076dd16f39a71833c8901873d853e9a86b9cd853733d7bca80c9"
+    ],
+    [
+      "family/standalone quoted/ordered",
+      "password=\"quotedsecretvalue\"\nHRKU-AAIIIIIIIIIIIIIIIIIIII\npassword=\"quotedsecretvalue\"",
+      "afa5d63e4a320595e8897f65562d55ef7e19acbb69f323ab41bf06bf8de71f6b"
+    ],
+    [
+      "family/standalone unquoted/wrapped",
+      "password=plainsecretvalue12",
+      "a48a4c1ce0dd975db4aa79c2c669fc0b7ae00851eed37097a652c04a70e48fc6"
+    ],
+    [
+      "family/standalone unquoted/ordered",
+      "password=plainsecretvalue12\nhsk-abcdefghij12345\npassword=plainsecretvalue12",
+      "bed525b6c5671206a9153ddb4e34d3cdc81e1dce2163a662e3bee347ce3023b4"
+    ],
+    [
+      "family/config quoted/wrapped",
+      "{ message: 'password: \"configsecretvalue\"' }",
+      "8c08dffcfecc79d63666ae2074825e26e70612469919e3d2e786e59880913c6e"
+    ],
+    [
+      "family/config quoted/ordered",
+      "password: \"configsecretvalue\"\n--api-key=opaquevalue1234567\npassword: \"configsecretvalue\"",
+      "81aef79b11243152cf57bc21981abf69fbd7ad261380644d24060a73a77d70b9"
+    ],
+    [
+      "family/config colon unquoted/wrapped",
+      "[🦞 password: configsecretvalue12 done]",
+      "df086ab6f5044b33e9651c02b8f92c26c7735800a39f6d29ad63909f229b360d"
+    ],
+    [
+      "family/config colon unquoted/ordered",
+      "password: configsecretvalue12\npostgres@@S//u:secretpass@db.example.com/x\npassword: configsecretvalue12",
+      "749fe528603dd65a8483ed728249e1b00e5afc11fe30fa2d3f4878894e695d74"
+    ],
+    [
+      "family/config equals unquoted/wrapped",
+      "prefix_api-key = cfgsecretvalue12_suffix",
+      "3382e5292bc8182990025b6d10e868eff8483d8842426a00e0a3b11ed7f666e0"
+    ],
+    [
+      "family/config equals unquoted/ordered",
+      "api-key = cfgsecretvalue12\ngldt-abcdefghijklmnopqrst\napi-key = cfgsecretvalue12",
+      "d6858c214bd3d094de5c183def1bdfd5b7f7d7d20c8e4b40d5264e594074d64e"
+    ],
+    [
+      "family/config direct/wrapped",
+      "source:\n\taccess-token=cfgdirectsecret1\r\nnext=visible",
+      "26bb42e7d38aa0fb27e958d3f249a0ed51be113c18780b7702caf03f241ac643"
+    ],
+    [
+      "family/config direct/ordered",
+      "access-token=cfgdirectsecret1\ngsk_abcdefghij12345\naccess-token=cfgdirectsecret1",
+      "53ae3b734362fc3466efb1cbc91fd97ead2879ce46ca44c6b0323dd738de9298"
+    ],
+    [
+      "family/config prefixed/wrapped",
+      "db-password: cfgprefixedsecret",
+      "923a2cc6c08be870caabb5c364db81bd6d4ec11ca245fc25e6e7ec12f8b22f7f"
+    ],
+    [
+      "family/config prefixed/ordered",
+      "db-password: cfgprefixedsecret\ndckr_pat_abcdefghij0123456789abcdefghij\ndb-password: cfgprefixedsecret",
+      "e3db13ac0fd4692bf3eb502b730be0792be4f2ff867d16afa0403dc6272f220a"
+    ],
+    [
+      "family/config namespaced/wrapped",
+      "{ message: 'smtp.password: cfgnssecret1234' }",
+      "e3c8e3ce46b14aa954dfdf300daf906b8b03365e54d8571b926c52abf29c7e0d"
+    ],
+    [
+      "family/config namespaced/ordered",
+      "smtp.password: cfgnssecret1234\ntvly-abcdefghij12345\nsmtp.password: cfgnssecret1234",
+      "83a977d65cdddc78380de463366802817a02fadf2df0295d202a0d79aea5693d"
+    ],
+    [
+      "family/bare pass/wrapped",
+      "[🦞 TODO\npass: opaquepassvalue123\nrest of line done]",
+      "7e16eb2d38fcc451896c663b4e927d59c8e18e8280efcbe7f6c7b39ecdb47f9d"
+    ],
+    [
+      "family/bare pass/ordered",
+      "TODO\npass: opaquepassvalue123\nrest of line\nr8_abcdefghij12345\nTODO\npass: opaquepassvalue123\nrest of line",
+      "296a1fb3ebfc0b68d2e2a841d440544406d24bfc0ddb3effed060c4c9b3d31ce"
+    ],
+    [
+      "family/openai sk/wrapped",
+      "prefix_sk-abcdef0123456789_suffix",
+      "5b785aefcc4118ff895e680a791fd0875f65c1e01cca627338b5f407347b2698"
+    ],
+    [
+      "family/openai sk/ordered",
+      "sk-abcdef0123456789\nAuthorization: Digest nonce=abcdefgh0123456789\nsk-abcdef0123456789",
+      "30b97f6aac1d9b4fe024ae1aa734230d4eb5a5ea30641eaaed32793a03a0c267"
+    ],
+    [
+      "family/github ghp/wrapped",
+      "source:\n\tghp_abcdefghij1234567890\r\nnext=visible",
+      "ac750498ab38f439f59eab0190b72d35756a51c56b63bd1b207da3c97353a145"
+    ],
+    [
+      "family/github ghp/ordered",
+      "ghp_abcdefghij1234567890\naccess-token=cfgdirectsecret1\nghp_abcdefghij1234567890",
+      "e97e2e7675bd30ae7e01e83aef152a30d7741914655cd06b7afda390d6ec6685"
+    ],
+    [
+      "family/github gho/wrapped",
+      "gho_abcdefghij1234567890",
+      "ffddd73263fa6047c22e45ee966accf34641603735ab77df09abf39dbebc8c79"
+    ],
+    [
+      "family/github gho/ordered",
+      "gho_abcdefghij1234567890\nglsoat-abcdefghijklmnopqrst\ngho_abcdefghij1234567890",
+      "ea8813b9878bab37e4f0ae978da1da825b928f0ac8ff00a643cc3b52752c2b9e"
+    ],
+    [
+      "family/github pat/wrapped",
+      "{ message: 'github_pat_abcdefghij1234' }",
+      "b719e73e2e73de7701439f6d90ec0b7c43be626a3e19d185041725206bac3ec4"
+    ],
+    [
+      "family/github pat/ordered",
+      "github_pat_abcdefghij1234\n fc-abcdefghij12345\ngithub_pat_abcdefghij1234",
+      "36034efd29a7e13ce2eb162b0c491bb1af5e4c6b35c0d3215b2d1810d05625aa"
+    ],
+    [
+      "family/gitlab glpat/wrapped",
+      "[🦞 glpat-abcdefghijklmnopqrst done]",
+      "7abeae5d0027f20c75d8a48682caa56766076532f72d7b9a725d5805bd18608a"
+    ],
+    [
+      "family/gitlab glpat/ordered",
+      "glpat-abcdefghijklmnopqrst\nglc_eyJAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nglpat-abcdefghijklmnopqrst",
+      "791bc2f63fcd97fddd322d5640cdfe60fb264141fb4f0c152f804c0bf6fce655"
+    ],
+    [
+      "family/gitlab gloas/wrapped",
+      "prefix_gloas-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01_suffix",
+      "a2aaf9ef21c28858aad3aff7e30f6a01c7b1a09c4245d72581cbead6fb847c48"
+    ],
+    [
+      "family/gitlab gloas/ordered",
+      "gloas-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01\n fw-abcdefghij01234567890123456789\ngloas-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+      "251b25b0dc21001a38de7f957518ecab3affd8038b03cae3795cd2e3f3160611"
+    ],
+    [
+      "family/gitlab gldt/wrapped",
+      "source:\n\tgldt-abcdefghijklmnopqrst\r\nnext=visible",
+      "522f5123a64b89d80847644d3ec1c909f817dfd1b992cc373ebe46d867663fb6"
+    ],
+    [
+      "family/gitlab gldt/ordered",
+      "gldt-abcdefghijklmnopqrst\n\"password\": \"plainsecretvalue123\"\ngldt-abcdefghijklmnopqrst",
+      "c5ee8ac6a5e795284813c259e4d13d38e693f8753309a6aad1ef11012bbedf01"
+    ],
+    [
+      "family/gitlab glcbt/wrapped",
+      "glcbt-abc_abcdefghijklmnopqrst",
+      "17b174736bed2d98612dc311c445f0d26c9749ec27895989d61cf98f243f9e15"
+    ],
+    [
+      "family/gitlab glcbt/ordered",
+      "glcbt-abc_abcdefghijklmnopqrst\nX-OpenClaw-Token=plainopaquevalue123\nglcbt-abc_abcdefghijklmnopqrst",
+      "0287dbc9154bf05795d1891c783c528d228b5af5d6ee4421283dac7e95b15d63"
+    ],
+    [
+      "family/gitlab glptt/wrapped",
+      "{ message: 'glptt-gggggggggggggggggggggggggggggggggggggggg' }",
+      "81497587b02aa75ba70e966400c1d8e2a3cb8357912617f51f6554cf361b139f"
+    ],
+    [
+      "family/gitlab glptt/ordered",
+      "glptt-gggggggggggggggggggggggggggggggggggggggg\ngithub_pat_abcdefghij1234\nglptt-gggggggggggggggggggggggggggggggggggggggg",
+      "74ef7d1d43641c909fb566e3374d601a8b5135010b47901da67074ac87b3f071"
+    ],
+    [
+      "family/gitlab glft/wrapped",
+      "[🦞 glft-abcdefghijklmnopqrst done]",
+      "468cd2616111c92457c38c3a9ec59c1a8f9c7a001b7449956685403cabbe7a4c"
+    ],
+    [
+      "family/gitlab glft/ordered",
+      "glft-abcdefghijklmnopqrst\nhttps@@S//hooks.slack.com/services/T01234567/B01234567/abcdefghijklmnopqrst\nglft-abcdefghijklmnopqrst",
+      "7ed84dcce5a5297ec23dfa60c3718d1869786aed5f9035644358e777ca4c9d18"
+    ],
+    [
+      "family/gitlab glimt/wrapped",
+      "prefix_glimt-hhhhhhhhhhhhhhhhhhhhhhhhh_suffix",
+      "2912b1d671cee52958c2cfe82d2a7705e200f7b8dd696f2d73f7cb3f0a51698a"
+    ],
+    [
+      "family/gitlab glimt/ordered",
+      "glimt-hhhhhhhhhhhhhhhhhhhhhhhhh\ndop_v1_abcdefghij12345\nglimt-hhhhhhhhhhhhhhhhhhhhhhhhh",
+      "f93a83d9f8a39fbdb8deb410f5b9d615273f8f9202aa63f5f79f6a0fe864c032"
+    ],
+    [
+      "family/gitlab glagent/wrapped",
+      "source:\n\tglagent-iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii\r\nnext=visible",
+      "929dc16b731289ceefb522e5c4a7ee0fd9af9e2e7099131f763117c186b58d9c"
+    ],
+    [
+      "family/gitlab glagent/ordered",
+      "glagent-iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii\nfio-u-KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK\nglagent-iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii",
+      "a62c67543eb7270f63cbcc69fc709b916fce08a66accda44735d052ad36383e0"
+    ],
+    [
+      "family/gitlab glwt/wrapped",
+      "glwt-abcdefghijklmnopqrst",
+      "612061a1555e5b0aaff871de66f8ce0c37606d231b229dd8ee96c612b64560bc"
+    ],
+    [
+      "family/gitlab glwt/ordered",
+      "glwt-abcdefghijklmnopqrst\nLTAIabcdefghij12345\nglwt-abcdefghijklmnopqrst",
+      "4fbd85ecc3b3568f101009fb098863daab22bb9017be96dd4b6b623fd72ed0c4"
+    ],
+    [
+      "family/gitlab glsoat/wrapped",
+      "{ message: 'glsoat-abcdefghijklmnopqrst' }",
+      "7dc5008048edbce63d479949511e8df36086e969b936d333653785da7eea31df"
+    ],
+    [
+      "family/gitlab glsoat/ordered",
+      "glsoat-abcdefghijklmnopqrst\nAuthorization: Bearer abcdefghij0123456789\nglsoat-abcdefghijklmnopqrst",
+      "f5826f32a13330297aeddf32820776cd52d9a704e90bd1ed123ea6d57b783037"
+    ],
+    [
+      "family/gitlab glffct/wrapped",
+      "[🦞 glffct-abcdefghijklmnopqrst done]",
+      "f36d39dad7405389a26b33b1a8bfd4fdaa156242b988367d0ed0149d1da122cb"
+    ],
+    [
+      "family/gitlab glffct/ordered",
+      "glffct-abcdefghijklmnopqrst\npassword: \"configsecretvalue\"\nglffct-abcdefghijklmnopqrst",
+      "902da730d0cac4095c997da450749f991a3623a480c92846ff9c35086e37ac08"
+    ],
+    [
+      "family/gitlab glrt/wrapped",
+      "prefix_glrt-abcdefghijklmnopqrst_suffix",
+      "83378294370b853691902c30c8737a2ad856eecffe6fd240ddae735b3e9c66e8"
+    ],
+    [
+      "family/gitlab glrt/ordered",
+      "glrt-abcdefghijklmnopqrst\nglimt-hhhhhhhhhhhhhhhhhhhhhhhhh\nglrt-abcdefghijklmnopqrst",
+      "8e44ab9d73d4ce8219deb7b60bc092e44cc5f78fa78ce6788334c9d089a3600c"
+    ],
+    [
+      "family/gitlab gr134/wrapped",
+      "source:\n\tGR1348941abcdefghijklmnopqrst\r\nnext=visible",
+      "ecc6833867b88e66ac2f66715cd5936b583b861f892e75d9216a12382928e72d"
+    ],
+    [
+      "family/gitlab gr134/ordered",
+      "GR1348941abcdefghijklmnopqrst\neyJabcdefghij.1234567890.abcdefghij\nGR1348941abcdefghijklmnopqrst",
+      "b74ab654b6ad9c0d127b182559aadf73fdc3f92b8e04094a63f18a1f6b7d8c0f"
+    ],
+    [
+      "family/gitlab session/wrapped",
+      "_gitlab_session=abcdefghijklmnopqrst",
+      "9f47ea05ad1fda4f2ae687cb7b27874a6c9d8837d96dc5e1bb184425fc242b9e"
+    ],
+    [
+      "family/gitlab session/ordered",
+      "_gitlab_session=abcdefghijklmnopqrst\nddp_DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD\n_gitlab_session=abcdefghijklmnopqrst",
+      "2eaa23a866a56952715822da1b778bbe55cd8db78bf75da309b8ec4c00dac1e6"
+    ],
+    [
+      "family/slack xoxb/wrapped",
+      "{ message: 'xoxb-123456789012-abcdefghij' }",
+      "8a03329d52e42e8d2262159ad221d851321736ec2c5076f5ee819ac463cdbcb4"
+    ],
+    [
+      "family/slack xoxb/ordered",
+      "xoxb-123456789012-abcdefghij\nmem0_abcdefghij12345\nxoxb-123456789012-abcdefghij",
+      "a6ddf46741bbcc00149721a312e8ccf43470e18dd48d2957fa9da0587bd1cba2"
+    ],
+    [
+      "family/slack xapp/wrapped",
+      "[🦞 xapp-123456789012-abcdefghij done]",
+      "46442724095610c78bd39fa15ef55c0e845b4ee14469f687772ced804fc4ad97"
+    ],
+    [
+      "family/slack xapp/ordered",
+      "xapp-123456789012-abcdefghij\ndapi0123456789abcdef0123456789abcdef\nxapp-123456789012-abcdefghij",
+      "510af6c0ba05f3975d4f505c0516f0b40a0a9a8b8ec6aefef948244dd1057e02"
+    ],
+    [
+      "family/slack webhook/wrapped",
+      "prefix_https@@S//hooks.slack.com/services/T01234567/B01234567/abcdefghijklmnopqrst_suffix",
+      "0a7922d7de7b7128d4182c33fee0c26c5d121f9f0b5a934c871b4578a0b569cf"
+    ],
+    [
+      "family/slack webhook/ordered",
+      "https@@S//hooks.slack.com/services/T01234567/B01234567/abcdefghijklmnopqrst\napi-key: plainopaquevalue12345\nhttps@@S//hooks.slack.com/services/T01234567/B01234567/abcdefghijklmnopqrst",
+      "6365b6287282428528af7c3610ad65dd6e42d756fc51bc3cc4d269f7c4c523be"
+    ],
+    [
+      "family/discord webhook/wrapped",
+      "source:\n\thttps@@S//discord.com/api/webhooks/123456789012345678/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\nnext=visible",
+      "683c744f6acdfceceedc34a63c95f0f346c96e91fe96a32b5c4ebb6077e049c2"
+    ],
+    [
+      "family/discord webhook/ordered",
+      "https@@S//discord.com/api/webhooks/123456789012345678/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nsk-abcdef0123456789\nhttps@@S//discord.com/api/webhooks/123456789012345678/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "1e6fb77b0327637d40e824fe92d11d36eb0d74d8944a4bc6724a9abf44b65131"
+    ],
+    [
+      "family/discord token/wrapped",
+      "discord aaaaaaaaaaaaaaaaaaaaaaaa.bbbbbb.ccccccccccccccccccccccccccc",
+      "9f12122981b75c0664306856aca38f73893ad5ff85b3ee1e6598dd29b0540daf"
+    ],
+    [
+      "family/discord token/ordered",
+      "discord aaaaaaaaaaaaaaaaaaaaaaaa.bbbbbb.ccccccccccccccccccccccccccc\n_gitlab_session=abcdefghijklmnopqrst\ndiscord aaaaaaaaaaaaaaaaaaaaaaaa.bbbbbb.ccccccccccccccccccccccccccc",
+      "cbd18889770d7c317e702ef1f28614e1ed294e5df768bb2e97c937b1c68ca024"
+    ],
+    [
+      "family/grogq gsk/wrapped",
+      "{ message: 'gsk_abcdefghij12345' }",
+      "1c0847db213f3491a45278216fa9960ed2029e81961476d15c43e9f76509cfdd"
+    ],
+    [
+      "family/grogq gsk/ordered",
+      "gsk_abcdefghij12345\nSG.abcdefghij1234567.abcdefghij1234567\ngsk_abcdefghij12345",
+      "ae17664e0358935ac15abe5821d3f0616361f904c3a7f53165ec14e520caa929"
+    ],
+    [
+      "family/google aiza/wrapped",
+      "[🦞 AIzaSyA1234567890abcdefghij done]",
+      "cd792f54b52ddfd471151d3afd528038f13dcb9fe84716dd317d4f006f1b7192"
+    ],
+    [
+      "family/google aiza/ordered",
+      "AIzaSyA1234567890abcdefghij\npat-eu1-abcdefgh-abcd-abcd-abcd-abcddefghijk\nAIzaSyA1234567890abcdefghij",
+      "ee9903fe3e52611b0b2dcbd034e78020b7ac4f95ff1820a057986f1ca177913c"
+    ],
+    [
+      "family/google ya29/wrapped",
+      "prefix_ya29.a0123456789_suffix",
+      "545c905394429e23c2c6705b2c6bd10c4207ca2dfaca54c19089f712c66b606e"
+    ],
+    [
+      "family/google ya29/ordered",
+      "ya29.a0123456789\nAKIAABCDEFGHIJKLMNOP\nya29.a0123456789",
+      "2b8bd927c70e1b2fb1bf43dc38751b9b00e8e1a63fc2194b4a06f77587032173"
+    ],
+    [
+      "family/google refresh/wrapped",
+      "source:\n\t1//0a0123456789\r\nnext=visible",
+      "2d552ce664df1f81d037d707b49d519af59a279773126b46ca0ab699dcf442a9"
+    ],
+    [
+      "family/google refresh/ordered",
+      "1//0a0123456789\n--token opaquevalue12345678\n1//0a0123456789",
+      "3b11c16ddeef97577ae5b469ed7d42c57fce35bd4d22d2cf7ffc87e87d0a3649"
+    ],
+    [
+      "family/jwt/wrapped",
+      "eyJabcdefghij.1234567890.abcdefghij",
+      "b57e8c5947dbd8422f01edaadd6141765c49e20e771cdb7dd8135d6499be324a"
+    ],
+    [
+      "family/jwt/ordered",
+      "eyJabcdefghij.1234567890.abcdefghij\npassword=abcsecretdef&nextkey=1\neyJabcdefghij.1234567890.abcdefghij",
+      "516d33a81424a3203957e1af6384121afdea51fb33a6378009e21098d8732661"
+    ],
+    [
+      "family/perplexity/wrapped",
+      "{ message: 'pplx-abcdefghij12345' }",
+      "44c22b1c6f8d1b11aca3c5063a817f45b24732b6bcab2ce07e76293abc91db5a"
+    ],
+    [
+      "family/perplexity/ordered",
+      "pplx-abcdefghij12345\nglcbt-abc_abcdefghijklmnopqrst\npplx-abcdefghij12345",
+      "111cd182969a546f3d952bba19925f4eb68e07811d3485dbc6a668c222c376fd"
+    ],
+    [
+      "family/fal/wrapped",
+      "[🦞 fal_abcdefghij12345 done]",
+      "b4c8b999d7a7cafddea826844543e29fda7c0f51c51fa3b63b538bad11424296"
+    ],
+    [
+      "family/fal/ordered",
+      "fal_abcdefghij12345\nAIzaSyA1234567890abcdefghij\nfal_abcdefghij12345",
+      "9739df9e97440175f9683d27a949fc614c928e07c600e47281a3101aa10d6351"
+    ],
+    [
+      "family/fireworks fc/wrapped",
+      "prefix_ fc-abcdefghij12345_suffix",
+      "ceb59f6516328bbb9fc0c4a1b4b80eae8bf8c6a55c11142c87e2b2e8ceced65c"
+    ],
+    [
+      "family/fireworks fc/ordered",
+      " fc-abcdefghij12345\nbkua_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n fc-abcdefghij12345",
+      "a6214b1e22114988cb427692d0be76da1d9a7b9ae7cca48b1cad873aaabab3ff"
+    ],
+    [
+      "family/browserbase/wrapped",
+      "source:\n\tbb_live_abcdefghij12\r\nnext=visible",
+      "32b80bac80ec5b110bade7556ff3907f3499bbb9a580c2b7fc3102bdfb549c3f"
+    ],
+    [
+      "family/browserbase/ordered",
+      "bb_live_abcdefghij12\nexa_abcdefghij12345\nbb_live_abcdefghij12",
+      "8bb2e2ee3b67af7490844ed9c6b3ccdba958189a167e268c7ddef130a978e3fc"
+    ],
+    [
+      "family/fuzz gAAAA/wrapped",
+      "gAAAAabcdefghij0123456789",
+      "e78c743d341cd4fe67846ea2d28a5dfc2eaa812619dd6f36b21b7e12104ad9ae"
+    ],
+    [
+      "family/fuzz gAAAA/ordered",
+      "gAAAAabcdefghij0123456789\nATATTabcdefghij1234567890=12345678\ngAAAAabcdefghij0123456789",
+      "708deef30caf13fb4ea50c1d74b9ba89b20de234a7e93f7d70cd6ce6be75554d"
+    ],
+    [
+      "family/stripe live/wrapped",
+      "{ message: 'sk_live_abcdefghij12345' }",
+      "2db39c6efd66dfc2a7cb50ee5c0ce8e2070039d8e7f9233fbf6471ca7732542e"
+    ],
+    [
+      "family/stripe live/ordered",
+      "sk_live_abcdefghij12345\nAuthorization: plainopaquecred99;\nsk_live_abcdefghij12345",
+      "33998585b346cd0c111bdbe126c863dae730e0fa30c0022fd383c52bd9528723"
+    ],
+    [
+      "family/sendgrid/wrapped",
+      "[🦞 SG.abcdefghij1234567.abcdefghij1234567 done]",
+      "fc03047cfb0ab258d42c79af83e28dffb51384864654f922bf8fae32e3e093d8"
+    ],
+    [
+      "family/sendgrid/ordered",
+      "SG.abcdefghij1234567.abcdefghij1234567\ndb-password: cfgprefixedsecret\nSG.abcdefghij1234567.abcdefghij1234567",
+      "014c96af59c868a12397dcd71676082d7db07d7afc3e5784de5b17c76cf63a0b"
+    ],
+    [
+      "family/npm/wrapped",
+      "prefix_npm_abcdefghij12345678_suffix",
+      "6a478d0f4634dbdb68d916146ea060f50c9873f462f3077630fe291c5dc6af1a"
+    ],
+    [
+      "family/npm/ordered",
+      "npm_abcdefghij12345678\nglffct-abcdefghijklmnopqrst\nnpm_abcdefghij12345678",
+      "e54ff52478e22f46b4121af38230e914089fce8ef3f952c96f170fec77c1fe75"
+    ],
+    [
+      "family/pypi/wrapped",
+      "source:\n\tpypi-abcdefghij12345\r\nnext=visible",
+      "50bbbe10eda8207b36257ab0c68108522a9cec2a28484c4d3151d0ad03bf9492"
+    ],
+    [
+      "family/pypi/ordered",
+      "pypi-abcdefghij12345\nbb_live_abcdefghij12\npypi-abcdefghij12345",
+      "331d4c751de7444cd96ff7a18046806b79f576ca87a2c5020938a436255ca492"
+    ],
+    [
+      "family/digitalocean/wrapped",
+      "dop_v1_abcdefghij12345",
+      "b9478d9ecc18e956b924bd1421ecb6e833598bfdeae63668ed09b83d2e1477dd"
+    ],
+    [
+      "family/digitalocean/ordered",
+      "dop_v1_abcdefghij12345\nCFPAT-GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG\ndop_v1_abcdefghij12345",
+      "aab0555afd9f110a2fe7aeb2f85533ebe91fff0fe434eec310148e336d5422f5"
+    ],
+    [
+      "family/digitalpulse ct/wrapped",
+      "{ message: 'dp.ct.jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj' }",
+      "7fc8a55687df91dc02752830cdc9e45e2db71d7b254e09d5223742b3769e9b0a"
+    ],
+    [
+      "family/digitalpulse ct/ordered",
+      "dp.ct.jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj\n fw_abcdefghij01234567890123456789\ndp.ct.jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj",
+      "a407ecd99255f94985355eb72bf7aa0c3f9785761999cc03205d654737682533"
+    ],
+    [
+      "family/digitalpulse st/wrapped",
+      "[🦞 dp.st.kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk done]",
+      "3e77bc21a29f04c218603ddfceec0b9f8130621229b604f91fbdf5d25037d38f"
+    ],
+    [
+      "family/digitalpulse st/ordered",
+      "dp.st.kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk\n\"card_number\": \"4111111111111111\"\ndp.st.kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      "771a2269b882b736dc994390c7bba00ec8b84203b839af66bca15c9c4b9a1516"
+    ],
+    [
+      "family/docker pat/wrapped",
+      "prefix_dckr_pat_abcdefghij0123456789abcdefghij_suffix",
+      "c9a14eef0e1f2f499bbf5166509776d2d2ae4399f5de0e43ca9af75f7c41bb9b"
+    ],
+    [
+      "family/docker pat/ordered",
+      "dckr_pat_abcdefghij0123456789abcdefghij\nBearer abcdefghij0123456789\ndckr_pat_abcdefghij0123456789abcdefghij",
+      "40f2e98889cc340cb66ee2afe61d32d9a7663e2261836b8abd81b35632404b75"
+    ],
+    [
+      "family/bkua/wrapped",
+      "source:\n\tbkua_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\r\nnext=visible",
+      "113c3723e165ec2ebeabe10daa6317e002590905eb8d6eb27a111a4e7956985c"
+    ],
+    [
+      "family/bkua/ordered",
+      "bkua_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nglpat-abcdefghijklmnopqrst\nbkua_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "b4854f6b0e5c0ec4cb2cd9645e4e7c32ee732c65ea8f99c5857afca665d700ad"
+    ],
+    [
+      "family/ccipat/wrapped",
+      "CCIPAT_CCCCCCCCCCCCCCCCCCCCCC_0123456789abcdef0123456789abcdef01234567",
+      "1907d1e08953c8ae593be4cc7302380d57626c9869e97a4a0684e33076c59bb2"
+    ],
+    [
+      "family/ccipat/ordered",
+      "CCIPAT_CCCCCCCCCCCCCCCCCCCCCC_0123456789abcdef0123456789abcdef01234567\nhttps@@S//discord.com/api/webhooks/123456789012345678/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nCCIPAT_CCCCCCCCCCCCCCCCCCCCCC_0123456789abcdef0123456789abcdef01234567",
+      "c3f4884b63c385b7a81d31049002783a47aa25481438194bb29d7301acf24615"
+    ],
+    [
+      "family/sbp/wrapped",
+      "{ message: 'sbp_dddddddddddddddddddddddddddddddddddddddd' }",
+      "a0150d42dd6e2d2e45f8e10853769b540aabba3645ad52be0706d62cbd7be1d3"
+    ],
+    [
+      "family/sbp/ordered",
+      "sbp_dddddddddddddddddddddddddddddddddddddddd\ndp.ct.jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj\nsbp_dddddddddddddddddddddddddddddddddddddddd",
+      "90fc2b001df3d9ae2bb771d4b28d993c108190bc2d88332e26a9a46a602e2804"
+    ],
+    [
+      "family/datadog/wrapped",
+      "[🦞 ddp_DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD done]",
+      "51a67d7bab20cdcd41068c21dced9537136a05766a5bf5d85981b227473350d7"
+    ],
+    [
+      "family/datadog/ordered",
+      "ddp_DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD\n am_abcdefghij12345\nddp_DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+      "60e9e2edb1febe40847bcd5ed6ab39d76e41e40bd14ec4511337ccae83fa091c"
+    ],
+    [
+      "family/nfp/wrapped",
+      "prefix_nfp_EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE_suffix",
+      "5318ba9a2b429d93ec3e63d3b57f16afd8393c87b9d3e2e4d1296c4c632e08d6"
+    ],
+    [
+      "family/nfp/ordered",
+      "nfp_EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE\nhf_abcdefghij12345\nnfp_EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+      "df92ad03c00f4251e9d8673035d4a94a0b80c25e7e0d14cfc7cc2bdcc8d8bd6f"
+    ],
+    [
+      "family/glsa/wrapped",
+      "source:\n\tglsa_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF\r\nnext=visible",
+      "a51700105c4ce815971894b206d616f72f85020b0803364567190c947a0b3b07"
+    ],
+    [
+      "family/glsa/ordered",
+      "glsa_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF\nAuthorization: Basic dXNlcjpwYXNzd29yZDE\nglsa_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+      "d61cfb04fd84a614c059a125d46658c2b4bac8bf64b99dc0e4b42ad42cb6e07c"
+    ],
+    [
+      "family/glc eyj/wrapped",
+      "glc_eyJAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "b856d02d3ccd99befb4b601db01193c0f8e6b10fa1960b789a6230e75a89fd4d"
+    ],
+    [
+      "family/glc eyj/ordered",
+      "glc_eyJAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\npassword: configsecretvalue12\nglc_eyJAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "91e6412d1e1baa0b3d1a615ba34df1c240fbd776a6b8fcd73020b76ebd4ff347"
+    ],
+    [
+      "family/cfpat/wrapped",
+      "{ message: 'CFPAT-GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG' }",
+      "07de94c439c6ea0323cf627abbe32f2e43c9b00df13dffa3c997a50a9b46456c"
+    ],
+    [
+      "family/cfpat/ordered",
+      "CFPAT-GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG\nglagent-iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii\nCFPAT-GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+      "89ec1946b8b93cce712ae534fe3d42729d77edef5bb60ac5c71ce86dded4ed4d"
+    ],
+    [
+      "family/bbdc/wrapped",
+      "[🦞 BBDC-HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH done]",
+      "1e2f7cbfce4c049833a5bf7a0a3697600a51794645267c0c55e79a359c979e06"
+    ],
+    [
+      "family/bbdc/ordered",
+      "BBDC-HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH\npplx-abcdefghij12345\nBBDC-HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH",
+      "6d67f10aab7e0871ab9f31c580fd63c5f46bd0daca86df0026a9599463249ba9"
+    ],
+    [
+      "family/hrku/wrapped",
+      "prefix_HRKU-AAIIIIIIIIIIIIIIIIIIII_suffix",
+      "b4d44042e64bf5f24afe5d5f07a8c44bcfc25d8e4f86c0b96f3e52d449ac3863"
+    ],
+    [
+      "family/hrku/ordered",
+      "HRKU-AAIIIIIIIIIIIIIIIIIIII\nnfp_EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE\nHRKU-AAIIIIIIIIIIIIIIIIIIII",
+      "f66af0f00511f4f623c72680593929fc1ce99b0af8551da12aac34447051a3ee"
+    ],
+    [
+      "family/planetscale/wrapped",
+      "source:\n\tpat-eu1-abcdefgh-abcd-abcd-abcd-abcddefghijk\r\nnext=visible",
+      "524bd3a9b90a4b21d0ebecd7e7221cf63b537c40cc0ea9c19df0c4fb948fc8a5"
+    ],
+    [
+      "family/planetscale/ordered",
+      "pat-eu1-abcdefgh-abcd-abcd-abcd-abcddefghijk\nbrv_abcdefghij12345\npat-eu1-abcdefgh-abcd-abcd-abcd-abcddefghijk",
+      "c60de117ecaa87e33918d6ee7d4af3e822040f77a1873ebf11d37130bfdb775c"
+    ],
+    [
+      "family/apify/wrapped",
+      "apify_api_abcdefghij1234567890",
+      "d3cd1f7afdd4620417c9934d880bbfecb05e52498a701a72322db3131e6e18e6"
+    ],
+    [
+      "family/apify/ordered",
+      "apify_api_abcdefghij1234567890\nAPI_KEY=example0value0tests\napify_api_abcdefghij1234567890",
+      "6d9dc65d8f74d9c67059f81d9b4d69e96cd8f162698c71dc238f8a0cc7bd60a8"
+    ],
+    [
+      "family/flyv1/wrapped",
+      "{ message: 'FlyV1 fm123_JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ' }",
+      "ee02bbd245a6f56305d34334964c1eebad75925d690b3171ef78ec03efc827a3"
+    ],
+    [
+      "family/flyv1/ordered",
+      "FlyV1 fm123_JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ\napi-key=plainopaquevalue12345\nFlyV1 fm123_JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ",
+      "ebfc5492e8c6d55677f97fc3d6884d0cb46cf0e503b0a4e3d4c3765ab12e5b9f"
+    ],
+    [
+      "family/fio/wrapped",
+      "[🦞 fio-u-KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK done]",
+      "a58c4bfe7b60c94f63540067f99e2613abd3fbe9caa7f79cff19dc72fe737a6e"
+    ],
+    [
+      "family/fio/ordered",
+      "fio-u-KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK\nghp_abcdefghij1234567890\nfio-u-KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+      "33447c586fc6f7a0658d48a9f3750de7b964cf43b9d9c353631aaa6a26402f68"
+    ],
+    [
+      "family/alibaba am/wrapped",
+      "prefix_ am_abcdefghij12345_suffix",
+      "1343cc8c63341861640496fd8d0375f351802d87d17a2e88caa7d88d2baa8842"
+    ],
+    [
+      "family/alibaba am/ordered",
+      " am_abcdefghij12345\nxoxb-123456789012-abcdefghij\n am_abcdefghij12345",
+      "a79db3dabc524e0a495ac7c4320f495c3ace859129d2a53ec54a912f7827c0b5"
+    ],
+    [
+      "family/alibaba sk/wrapped",
+      "source:\n\t sk_abcdefghij12345\r\nnext=visible",
+      "9187d94384bb42b0793b5aa537f3ab753a8675a67ab41d95c21bc6d53b4d49cc"
+    ],
+    [
+      "family/alibaba sk/ordered",
+      " sk_abcdefghij12345\nnpm_abcdefghij12345678\n sk_abcdefghij12345",
+      "2fbaca626a15ab642afcf3c91eaf7ca19f6e9c5c0b24c33ba60737a149636836"
+    ],
+    [
+      "family/tvly/wrapped",
+      "tvly-abcdefghij12345",
+      "4e7dab9789a466db5631222d5f7bbee195162725f4f349ddece4f3406fd7869c"
+    ],
+    [
+      "family/tvly/ordered",
+      "tvly-abcdefghij12345\napify_api_abcdefghij1234567890\ntvly-abcdefghij12345",
+      "7bee2985ff84b7d1804da852fa7b1d36ca9e9b254326a7619064a8c69549d903"
+    ],
+    [
+      "family/exa/wrapped",
+      "{ message: 'exa_abcdefghij12345' }",
+      "3c5fa2d116a6e896203235c57f7fb4ee4a6e8ef04d4ab186bac2ebd8727fcbff"
+    ],
+    [
+      "family/exa/ordered",
+      "exa_abcdefghij12345\nASIAABCDEFGHIJKLMNOP\nexa_abcdefghij12345",
+      "7680c5713febff2e7419edba2b17d63506bb5139823822cc1973976ca1c65470"
+    ],
+    [
+      "family/syt/wrapped",
+      "[🦞 syt_abcdefghij12345 done]",
+      "5d0f6852af73f84b0830491cf2fecf10bf32fa52eb32431de525bb5a807c6b00"
+    ],
+    [
+      "family/syt/ordered",
+      "syt_abcdefghij12345\naws_secret_access_key = \"wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY0a\"\nsyt_abcdefghij12345",
+      "dd46888d48400c35bce7840b80611874383d87a60d32aa29510a51ae372ffe80"
+    ],
+    [
+      "family/retaindb/wrapped",
+      "prefix_retaindb_abcdefghij12_suffix",
+      "20937ae0b089e63b21c2949633f28a15549714efff7b9aad01262ed970075066"
+    ],
+    [
+      "family/retaindb/ordered",
+      "retaindb_abcdefghij12\npassword=\"quotedsecretvalue\"\nretaindb_abcdefghij12",
+      "d3cc071f8e19137f3af874f3eca918e60d29ce9e0d70fe23fd60b690ae25a534"
+    ],
+    [
+      "family/mem0/wrapped",
+      "source:\n\tmem0_abcdefghij12345\r\nnext=visible",
+      "d0c4308b04047594f0f10f16a0e21c644e75d94a9073d85338f4022c07fb6ee0"
+    ],
+    [
+      "family/mem0/ordered",
+      "mem0_abcdefghij12345\nglptt-gggggggggggggggggggggggggggggggggggggggg\nmem0_abcdefghij12345",
+      "4167cbfecdc4523f5c139b25b12122e0e352480b4f61c984ae6618c19c38568f"
+    ],
+    [
+      "family/brv/wrapped",
+      "brv_abcdefghij12345",
+      "ab8805d2acede46d006d1665db6ba1cbfffcd786825dbce52eff3784da57019b"
+    ],
+    [
+      "family/brv/ordered",
+      "brv_abcdefghij12345\nya29.a0123456789\nbrv_abcdefghij12345",
+      "32bc3f57e770344970c23a9b1aad8fdea053f30182812b250b8ec3e6b79b5067"
+    ],
+    [
+      "family/xai/wrapped",
+      "{ message: 'xai-LLLLLLLLLLLLLLLLLLLLLLLLLLLLLL' }",
+      "8e9c4e1ce003a7a54f15b91ec0ea6df39dd0175c23acec2741761dddf7195840"
+    ],
+    [
+      "family/xai/ordered",
+      "xai-LLLLLLLLLLLLLLLLLLLLLLLLLLLLLL\nCCIPAT_CCCCCCCCCCCCCCCCCCCCCC_0123456789abcdef0123456789abcdef01234567\nxai-LLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+      "10fb1453b26b834c385282c653ed16ffa6a2f9cf01673e0075318937178bafe9"
+    ],
+    [
+      "family/fireworks fw dash/wrapped",
+      "[🦞  fw-abcdefghij01234567890123456789 done]",
+      "e5af682093c1b2bf2c4dec9a5ea759f4400396bdb61bcb23a00d0ccf894acfa4"
+    ],
+    [
+      "family/fireworks fw dash/ordered",
+      " fw-abcdefghij01234567890123456789\nsyt_abcdefghij12345\n fw-abcdefghij01234567890123456789",
+      "3ed4ccbd0fc70fde27560b6d2ebbc51ef8ab73e57726710af7dfaf997a308a23"
+    ],
+    [
+      "family/fireworks fw score/wrapped",
+      "prefix_ fw_abcdefghij01234567890123456789_suffix",
+      "dc2dc8fdba6ce9918d9060d82658a9f45261012a6cc0c247f788bed7bd24b257"
+    ],
+    [
+      "family/fireworks fw score/ordered",
+      " fw_abcdefghij01234567890123456789\nATCTT3xFfGabcdefghij123=12345678\n fw_abcdefghij01234567890123456789",
+      "d7c95c0c991f30e0580b6ee67174ef370714146a9abfb9d80da863b677af3e5c"
+    ],
+    [
+      "family/fireworks fpk/wrapped",
+      "source:\n\t fpk_abcdefghij01234567890123456789\r\nnext=visible",
+      "10fad396c51d23da2d4bae2b5a48e712d3213c92bae7f18597be4ab5d3d34511"
+    ],
+    [
+      "family/fireworks fpk/ordered",
+      " fpk_abcdefghij01234567890123456789\nProxy-Authorization: Digest nonce=abcdefgh0123456789\n fpk_abcdefghij01234567890123456789",
+      "865f982575e3ed82efb7caef96dc7a82173989c7bfad2a582c412e914d7ccb28"
+    ],
+    [
+      "family/hsk/wrapped",
+      "hsk-abcdefghij12345",
+      "6b8b5e35f88245bf90eae44e6fff455b95cd11c2480fbbd368d79687d9f7c656"
+    ],
+    [
+      "family/hsk/ordered",
+      "hsk-abcdefghij12345\nsmtp.password: cfgnssecret1234\nhsk-abcdefghij12345",
+      "299c7fc856424acac30fcd5fcf6d70f030a4e1b7a1ae1b1bf757074dc312c103"
+    ],
+    [
+      "family/aws akia/wrapped",
+      "{ message: 'AKIAABCDEFGHIJKLMNOP' }",
+      "851d3dc9f18b869705b58d8d8b591243e454d6bc1a8dcf57bddd5ef91f056017"
+    ],
+    [
+      "family/aws akia/ordered",
+      "AKIAABCDEFGHIJKLMNOP\nglrt-abcdefghijklmnopqrst\nAKIAABCDEFGHIJKLMNOP",
+      "c9f529336a98d34c99c3ccfa1d61d738ed9a4a7a6cb6e4ae5386061999e24811"
+    ],
+    [
+      "family/aws asia/wrapped",
+      "[🦞 ASIAABCDEFGHIJKLMNOP done]",
+      "c55c2ca242342bdda8e1970c47523055cc39d731f774870719540320bf409b96"
+    ],
+    [
+      "family/aws asia/ordered",
+      "ASIAABCDEFGHIJKLMNOP\ngAAAAabcdefghij0123456789\nASIAABCDEFGHIJKLMNOP",
+      "de83c1dff9a9a218e82ba8ea635741d3589ff2e87463340462fd4bf8ca8f1ceb"
+    ],
+    [
+      "family/aws akid/wrapped",
+      "prefix_AKIDabcdefghij12345_suffix",
+      "7d8ff5768d27ad6a6bec792213bddfa3449f5d0364b84b0578509afb813a90a8"
+    ],
+    [
+      "family/aws akid/ordered",
+      "AKIDabcdefghij12345\nBBDC-HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH\nAKIDabcdefghij12345",
+      "b710854ce14e627a79bb3aecfe01d5bb56027ff397cea520a80df2330b6dab44"
+    ],
+    [
+      "family/aliyun ltai/wrapped",
+      "source:\n\tLTAIabcdefghij12345\r\nnext=visible",
+      "690d8ea7872ccc86844494a7c765932ad9aa628c4e13b9b2d05c138774c04579"
+    ],
+    [
+      "family/aliyun ltai/ordered",
+      "LTAIabcdefghij12345\n fpk_abcdefghij01234567890123456789\nLTAIabcdefghij12345",
+      "499a4486bdab61420d990718060947459b5e095188f77ddc4e12e2fafc260206"
+    ],
+    [
+      "family/huggingface/wrapped",
+      "hf_abcdefghij12345",
+      "0ccd7fa24590ab5ba2be46008d7a0112366656a3ecf207c987dc399417bff4be"
+    ],
+    [
+      "family/huggingface/ordered",
+      "hf_abcdefghij12345\ncredential: \"opaquevalue123456\"\nhf_abcdefghij12345",
+      "738e10e086e31097f2b2698b5b10ec8ebfe9843e673fc6c42af12f33d14b854e"
+    ],
+    [
+      "family/api org/wrapped",
+      "{ message: 'api_org_abcdefghijklmnopqrst' }",
+      "cda93e2edf9b1601f92959dd2f07e222f4996efc5084a291e0860f25380968cc"
+    ],
+    [
+      "family/api org/ordered",
+      "api_org_abcdefghijklmnopqrst\nhttps@@S//user:secretpass@example.com/x\napi_org_abcdefghijklmnopqrst",
+      "d132b2ab6e903a8cdcfc76def9f3efe91703135ab50c5863c804ccfedb2ac6aa"
+    ],
+    [
+      "family/r8/wrapped",
+      "[🦞 r8_abcdefghij12345 done]",
+      "314be82adeb389b68d34e8d0da41a3fd385814accf69dc7c9916343a4da0991f"
+    ],
+    [
+      "family/r8/ordered",
+      "r8_abcdefghij12345\ngloas-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01\nr8_abcdefghij12345",
+      "1b115b6a995c62b23fee8f2f8416a7f0f325000e42c873d3380ed5edc904ebab"
+    ],
+    [
+      "family/atlassian atatt/wrapped",
+      "prefix_ATATTabcdefghij1234567890=12345678_suffix",
+      "d47df06b848a967e74eb5232a3014625495ce14dca3c3a3715d9238b08549784"
+    ],
+    [
+      "family/atlassian atatt/ordered",
+      "ATATTabcdefghij1234567890=12345678\ndiscord aaaaaaaaaaaaaaaaaaaaaaaa.bbbbbb.ccccccccccccccccccccccccccc\nATATTabcdefghij1234567890=12345678",
+      "a3a4500b8b7383561349df02a30ba2c386cbcd232a89c507223d416cc3c4410c"
+    ],
+    [
+      "family/atlassian atctt/wrapped",
+      "source:\n\tATCTT3xFfGabcdefghij123=12345678\r\nnext=visible",
+      "c626f76083cd59648d2623fc4660cb10af6af3c95ec20cdab7052c6154bdc6b6"
+    ],
+    [
+      "family/atlassian atctt/ordered",
+      "ATCTT3xFfGabcdefghij123=12345678\ndp.st.kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk\nATCTT3xFfGabcdefghij123=12345678",
+      "a4a34d5f38efb92ded7f1bdce0948266729962a1b227cabdd9e187e4aedaa10d"
+    ],
+    [
+      "family/atlassian atbb/wrapped",
+      "ATBBabcdefghij012345",
+      "6d8512952a08f3d63ae6927ca9aad76a48e71115a21785b0ac233cadf8cad2ca"
+    ],
+    [
+      "family/atlassian atbb/ordered",
+      "ATBBabcdefghij012345\n sk_abcdefghij12345\nATBBabcdefghij012345",
+      "5f5ac56ac4fe4715d95f2d49196611c2183c7bd254b6b7ba35cacae3786fe3e5"
+    ],
+    [
+      "family/dataiku dapi/wrapped",
+      "{ message: 'dapi0123456789abcdef0123456789abcdef' }",
+      "f6f08ce1ef7fa3b4a2439ce20cc012d86703fb10fee4a225e5fa57325afc1fdf"
+    ],
+    [
+      "family/dataiku dapi/ordered",
+      "dapi0123456789abcdef0123456789abcdef\napi_org_abcdefghijklmnopqrst\ndapi0123456789abcdef0123456789abcdef",
+      "8e81551b36adcf7074567f773b9fd12b14af7d787b17e0933130fde814110602"
+    ],
+    [
+      "family/env assignment/near-miss",
+      "API_KEY=examp​le0value0tests",
+      "d33f9d0c057ce6e4e218c384a6396bfe445f0e12d77df7fc26c45a30346ee253"
+    ],
+    [
+      "family/escaped env assignment/near-miss",
+      "API_KEY=\\'es​cvalue12345'",
+      "c9852412f0a6bbbce29882d32011c7dbcf19e8f2aabed01b332e396ab250600b"
+    ],
+    [
+      "family/json secret field/near-miss",
+      "\"password\": \"pla​insecretvalue123\"",
+      "3a09f55c424ea5041410a7b3f1ba8857bfe7a99a5412882af9927c8f823f14b1"
+    ],
+    [
+      "family/json payment field/near-miss",
+      "\"card_number\": \"​4111111111111111\"",
+      "45c2a5620142cf6bcfafd9ba58e54e516303150d98919a1720e86a856d2cd8f8"
+    ],
+    [
+      "family/ambiguous quoted field/near-miss",
+      "credential: \"op​aquevalue123456\"",
+      "e9f8ab543bed0364191d791ad3b8929b94c8994686acc86e1bd0410a2464f23c"
+    ],
+    [
+      "family/cli flag equals/near-miss",
+      "--api-key=opaq​uevalue1234567",
+      "de89ba9c8b6842cfed6c40ce2428cc07799529cd6fd71e9d30745086a6b38f77"
+    ],
+    [
+      "family/cli flag space/near-miss",
+      "--token opaqu​evalue12345678",
+      "1d7389a8f7bdaf85d8aa5b0b303271b3f9a1f05eba17082a65e986f7114d86bb"
+    ],
+    [
+      "family/aws secret field/near-miss",
+      "aws_secret_access_key = \"wJalrXUt​nFEMIK7MDENGbPxRfiCYEXAMPLEKEY0a\"",
+      "07a54da4b42b93fde70725cb475dab777e4330cb11277fdec5290662f7181165"
+    ],
+    [
+      "family/pem block/near-miss",
+      "-----BEGIN PRIV\u0041TE KEY-----\nM​IIB\n-----END PRIV\u0041TE KEY-----",
+      "e30fbbb72bdd9a9ec6724080f6a343251f3c5e9df2074aba4b135232d9607269"
+    ],
+    [
+      "family/authorization bearer/near-miss",
+      "Authorization: Bearer​ abcdefghij0123456789",
+      "26a5b441b16bb521f1daf3ca090d0ab49900f63bcf938c7ae7092208ab8c83e2"
+    ],
+    [
+      "family/authorization basic/near-miss",
+      "Authorization: Basic​ dXNlcjpwYXNzd29yZDE",
+      "bfa319a88b5daa2c3f817f89c52ce0b6b96bc5bc21cc512614111a15bcb94a71"
+    ],
+    [
+      "family/authorization bot/near-miss",
+      "Authorization: Bot ​abcdefghij012345678",
+      "b51ce2258ae2ff12cbf21c5296ab0e5d652f6bf3ebe80eb04264317472b10937"
+    ],
+    [
+      "family/authorization opaque scheme/near-miss",
+      "Authorization: Digest n​once=abcdefgh0123456789",
+      "1e075893eff3e86b9cd83bdd450dc2b9fd9be6ed0914db2797ca7f2d837d945a"
+    ],
+    [
+      "family/authorization opaque tail/near-miss",
+      "Authorization: p​lainopaquecred99;",
+      "928fbb808576e578fd096008ce3334d0887ca24bdfec719c725d72347df6376b"
+    ],
+    [
+      "family/proxy-authorization scheme/near-miss",
+      "Proxy-Authorization: Diges​t nonce=abcdefgh0123456789",
+      "e337291fd2f46a268d9a9e3d9414a0c4780a27600bd6fa3ef5e6bed443733b0b"
+    ],
+    [
+      "family/proxy-authorization tail/near-miss",
+      "Proxy-Authorization​: plainopaquecred99;",
+      "023d098bb0a5323d854492683541819f95489402e86c5a4caea379cf8d0d6ec5"
+    ],
+    [
+      "family/credential-style colon header/near-miss",
+      "api-key: plaino​paquevalue12345",
+      "1f491781bddfa7d25a907b8df7394e10ff8a0ae5ea47ac830b074b9490c4c6b6"
+    ],
+    [
+      "family/credential-style equals header/near-miss",
+      "api-key=plaino​paquevalue12345",
+      "f96ddb620d093516b668305d96723f5c8cf7d540723b667473e88316194cc1af"
+    ],
+    [
+      "family/gateway colon header/near-miss",
+      "X-OpenClaw-Token: ​plainopaquevalue123",
+      "2a03b731ad261eee2609d5386e9926fffc881f6edfb9b133e7482b4ef50d48f4"
+    ],
+    [
+      "family/gateway equals header/near-miss",
+      "X-OpenClaw-Token=p​lainopaquevalue123",
+      "375f4f0710e839a5606ac83312b64e3d417d875e9929b00e6df55d5e16d1d20c"
+    ],
+    [
+      "family/standalone bearer/near-miss",
+      "Bearer abcdef​ghij0123456789",
+      "0de661605f5041889736b315e36d9cdbe6ff7c0fe519a0c0940d047b30757796"
+    ],
+    [
+      "family/url userinfo/near-miss",
+      "https@@S//user:secre​tpass@example.com/x",
+      "3bb48b80740b9dbbe4ff29f2aadc59dae77367998ef5de51b625e7ad82fe40e4"
+    ],
+    [
+      "family/connection string/near-miss",
+      "postgres@@S//u:secretp​ass@db.example.com/x",
+      "b4b74720edec71e46b91059e0d4f8b27fa53e7ec15ff10c16bd71ec795aaf2d3"
+    ],
+    [
+      "family/form first pair/near-miss",
+      "password=abcsec​retdef&nextkey=1",
+      "2aeba193be95303a9df8c79745916b4e09274c6f540d765cb5230058f9ce5d84"
+    ],
+    [
+      "family/standalone quoted/near-miss",
+      "password=\"quot​edsecretvalue\"",
+      "08859b3ca6291da2e5fdcc33f5879e1c6ece877eb64cce72ccb59282f12b5fa4"
+    ],
+    [
+      "family/standalone unquoted/near-miss",
+      "password=plai​nsecretvalue12",
+      "c60eb139d3b1e6ccbae4889d5beb2f69477239f5a63e8ff42322a7892cc79d9a"
+    ],
+    [
+      "family/config quoted/near-miss",
+      "password: \"con​figsecretvalue\"",
+      "aa6a33f704a24b922405064f69ff944ae5f2613db6a490664c5405cab6510358"
+    ],
+    [
+      "family/config colon unquoted/near-miss",
+      "password: conf​igsecretvalue12",
+      "bdb0e3e8f4f6d5c0418ca02966393c2f6a712525781d67ce41bc075111f343f6"
+    ],
+    [
+      "family/config equals unquoted/near-miss",
+      "api-key = cfg​secretvalue12",
+      "0ebe85cc8ba24ab75284ee67d5a034006918d3b4a3df1fe198c95954c78d9aca"
+    ],
+    [
+      "family/config direct/near-miss",
+      "access-token=c​fgdirectsecret1",
+      "24eefc500887370b1dc384eee7b2610115f24df8cbaac58bf0ad1629896bb9e8"
+    ],
+    [
+      "family/config prefixed/near-miss",
+      "db-password: cf​gprefixedsecret",
+      "c209bb249476f19a99f0fcce99e4726d1139c35331ae7684accca10a3a4db85d"
+    ],
+    [
+      "family/config namespaced/near-miss",
+      "smtp.password: ​cfgnssecret1234",
+      "09bbade56f811c5ee347446d23ccfb458e0d2741a3b1ad1a65284b048cbad019"
+    ],
+    [
+      "family/bare pass/near-miss",
+      "TODO\npass: opaquepass​value123\nrest of line",
+      "4b9418aa23dad2a5345b577b00128241ebb1f141813373ad32d23ed180c803d3"
+    ],
+    [
+      "family/openai sk/near-miss",
+      "sk-abcdef​0123456789",
+      "918b40233f083e0b53e844adc8f50249db03caef9c4ff99c6de2b49e6f5b3e24"
+    ],
+    [
+      "family/github ghp/near-miss",
+      "ghp_abcdefgh​ij1234567890",
+      "1240d4cce82f7b347639117580f8fdb4ea2d70fc9d6952b9fbfc0b8a5cdeaa39"
+    ],
+    [
+      "family/github gho/near-miss",
+      "gho_abcdefgh​ij1234567890",
+      "101921990cda68a92107338b0e487bb77e58fc01cd8c0b75a5ca6d8495dff04f"
+    ],
+    [
+      "family/github pat/near-miss",
+      "github_pat_a​bcdefghij1234",
+      "60ac43f1e270a86ccab9d3772276adc14f779d8a6709db29d50e8c2388f3251c"
+    ],
+    [
+      "family/gitlab glpat/near-miss",
+      "glpat-abcdefg​hijklmnopqrst",
+      "38cba77ca64970accd8b719980a44e1bd1af21cbdbbc32304957376500d3b03b"
+    ],
+    [
+      "family/gitlab gloas/near-miss",
+      "gloas-0123456789abcdef0123456789abcd​ef0123456789abcdef0123456789abcdef01",
+      "143516590ddb39ff9a05ddc5e4d2acb0cb4801a729aac8f411b4f90ea5b7c235"
+    ],
+    [
+      "family/gitlab gldt/near-miss",
+      "gldt-abcdefg​hijklmnopqrst",
+      "77afaef121abd28b00afa94d5df8623e0ae250befeaae57781bc6caf00438c65"
+    ],
+    [
+      "family/gitlab glcbt/near-miss",
+      "glcbt-abc_abcde​fghijklmnopqrst",
+      "fcc6c02596c1b58d231fffdcfada261e5e088796363a1ac9491592da5b3ee952"
+    ],
+    [
+      "family/gitlab glptt/near-miss",
+      "glptt-ggggggggggggggggg​ggggggggggggggggggggggg",
+      "da2b643042677d1afe45d3f4e01f425402362fe7a7f48c138ba452a5494da897"
+    ],
+    [
+      "family/gitlab glft/near-miss",
+      "glft-abcdefg​hijklmnopqrst",
+      "c2c730ac32c73aa08e6e5ec451bd5dbcfb08acbad87495147209f0ed7817572f"
+    ],
+    [
+      "family/gitlab glimt/near-miss",
+      "glimt-hhhhhhhhh​hhhhhhhhhhhhhhhh",
+      "58b6832883be64b482ac689ea637d65caf27ee89446c76dc6087714a07175c59"
+    ],
+    [
+      "family/gitlab glagent/near-miss",
+      "glagent-iiiiiiiiiiiiiiiiiiiii​iiiiiiiiiiiiiiiiiiiiiiiiiiiii",
+      "853e0bd7d0e703eabe3e44733a24dd9b501a079136adac0548ce9a48580ffc6d"
+    ],
+    [
+      "family/gitlab glwt/near-miss",
+      "glwt-abcdefg​hijklmnopqrst",
+      "2ee9695f6ca4a971de031501b35023aa739a98dd036e7a5e4c58d2bff5c79294"
+    ],
+    [
+      "family/gitlab glsoat/near-miss",
+      "glsoat-abcdef​ghijklmnopqrst",
+      "87c07647d24e0ddd9aa728a9ac37f58563bb0c3fd4cf14a62832be232a5e1f0f"
+    ],
+    [
+      "family/gitlab glffct/near-miss",
+      "glffct-abcdef​ghijklmnopqrst",
+      "8852b64f016d87e4e4e90f8a35fe629fcba446a79dd723e75a7d75987d66d981"
+    ],
+    [
+      "family/gitlab glrt/near-miss",
+      "glrt-abcdefg​hijklmnopqrst",
+      "38624afdc4407f55705ef719a95ad97bd33042a4b0973d81534b3360b1977668"
+    ],
+    [
+      "family/gitlab gr134/near-miss",
+      "GR1348941abcde​fghijklmnopqrst",
+      "1638f285adf6d64a2959ed6b43348ce5e977d4d555990157a1ea916e99967931"
+    ],
+    [
+      "family/gitlab session/near-miss",
+      "_gitlab_session=ab​cdefghijklmnopqrst",
+      "56ae53cb388fa7cb20511b1552647ebf822b0131edaa41b29fec2d1e134639fe"
+    ],
+    [
+      "family/slack xoxb/near-miss",
+      "xoxb-123456789​012-abcdefghij",
+      "ae3a43f1779839fb709969fb20dff748073c359e2c4bb4ef4e08ca455595adf6"
+    ],
+    [
+      "family/slack xapp/near-miss",
+      "xapp-123456789​012-abcdefghij",
+      "fd6642844ad53466cd9d5ddfd5f142165fd28c0d6dc002a52070f719ff4e1504"
+    ],
+    [
+      "family/slack webhook/near-miss",
+      "https@@S//hooks.slack.com/services/T01​234567/B01234567/abcdefghijklmnopqrst",
+      "c421b1d02626a3169b80381712c23acb7e357caca684e3baab28ac12a182f3eb"
+    ],
+    [
+      "family/discord webhook/near-miss",
+      "https@@S//discord.com/api/webhooks/123456789012345678/aaaa​aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "7e5ab7494f64df28db54b6d7b779a481b3d3798976c3cb15972830fda4fa7aa4"
+    ],
+    [
+      "family/discord token/near-miss",
+      "discord aaaaaaaaaaaaaaaaaaaaaaaa.​bbbbbb.ccccccccccccccccccccccccccc",
+      "8ec3a6898b6b23d25f49ca3f7033b0753dc920e08a74068a4615405a6492a8d8"
+    ],
+    [
+      "family/grogq gsk/near-miss",
+      "gsk_abcde​fghij12345",
+      "3261c72845c72934c8cae067dcf82a416eb66c94639a01a7b7c9e3e118eee101"
+    ],
+    [
+      "family/google aiza/near-miss",
+      "AIzaSyA123456​7890abcdefghij",
+      "2f0ec1276a5db00b7633deb40fb1429244d48c4f9f0598cd74da18313009064a"
+    ],
+    [
+      "family/google ya29/near-miss",
+      "ya29.a01​23456789",
+      "27dfa55acf6b5df0f2d5671691906b1d6fa3f6f31bedd63bd3ff227f408a4cc9"
+    ],
+    [
+      "family/google refresh/near-miss",
+      "1//0a01​23456789",
+      "b4da5531911a3aa78b72f613e4369347eb8442e684125ec38e7368ebf5deca56"
+    ],
+    [
+      "family/jwt/near-miss",
+      "eyJabcdefghij.123​4567890.abcdefghij",
+      "308041939dbb66a691659f65395dbe178769acd4b7caa6e669e487c53836e2f0"
+    ],
+    [
+      "family/perplexity/near-miss",
+      "pplx-abcde​fghij12345",
+      "c39e7f96150bd8390139d2213af2d1b0334fb7f37545d40ff663124b4f6e3386"
+    ],
+    [
+      "family/fal/near-miss",
+      "fal_abcde​fghij12345",
+      "4ace1b910bf60963497e1775e8d61a5010c29fa58e0ab4540ad1241d1419ca71"
+    ],
+    [
+      "family/fireworks fc/near-miss",
+      " fc-abcde​fghij12345",
+      "239c10ee83cdf317c9941e46b42ba138462f13d6e9b36b02306eef99801d8527"
+    ],
+    [
+      "family/browserbase/near-miss",
+      "bb_live_ab​cdefghij12",
+      "33b7a29bc06ab0f8d50b04075b884e6b515dcdd16171eb6b9de25f7dbb2fa311"
+    ],
+    [
+      "family/fuzz gAAAA/near-miss",
+      "gAAAAabcdefg​hij0123456789",
+      "1dcecb3a2900b558028d20be89a27471b117ed883efffbc9e5dba180263b2c83"
+    ],
+    [
+      "family/stripe live/near-miss",
+      "sk_live_abc​defghij12345",
+      "541cec404af5da5462289bbc92eaa624387ebc5003180b011200b287e2de0bd7"
+    ],
+    [
+      "family/sendgrid/near-miss",
+      "SG.abcdefghij123456​7.abcdefghij1234567",
+      "43b7a463db5e37804ad68de1ebba4bfe54c7f9e0fc1c3be2291793d4414b87df"
+    ],
+    [
+      "family/npm/near-miss",
+      "npm_abcdefg​hij12345678",
+      "8e2ac62031041b24445d3bac63a0976ed17623565141b7a212d30858292d8db5"
+    ],
+    [
+      "family/pypi/near-miss",
+      "pypi-abcde​fghij12345",
+      "e48874df46bb1faff57c380c182d28633c1e178228b6b757e9d0b437e734e0a1"
+    ],
+    [
+      "family/digitalocean/near-miss",
+      "dop_v1_abcd​efghij12345",
+      "f85bb0061b80b0b0ee26bd49f8ae927b4d73d16ba384e9a15f0f89282d8a43e4"
+    ],
+    [
+      "family/digitalpulse ct/near-miss",
+      "dp.ct.jjjjjjjjjjjjjjjjjj​jjjjjjjjjjjjjjjjjjjjjjjj",
+      "c1474cb86499b660ca760fae5dd15c615cac184bd168623a6244560bd774d5c8"
+    ],
+    [
+      "family/digitalpulse st/near-miss",
+      "dp.st.kkkkkkkkkkkkkkkkkk​kkkkkkkkkkkkkkkkkkkkkkkk",
+      "c954d850bc5eca2031ed7a05a3b573b90c52d260acf2900450b67c89ab3e190b"
+    ],
+    [
+      "family/docker pat/near-miss",
+      "dckr_pat_abcdefghij​0123456789abcdefghij",
+      "28d81095c7ff44f14512bae907330f306bf98b396ba12d4513a2eca97eb2c362"
+    ],
+    [
+      "family/bkua/near-miss",
+      "bkua_bbbbbbbbbbbbbbbbb​bbbbbbbbbbbbbbbbbbbbbbb",
+      "c95f04eb2a776af195922d38a1ee83f009e99ae03fa15a0d7d6c6dd68eee34e8"
+    ],
+    [
+      "family/ccipat/near-miss",
+      "CCIPAT_CCCCCCCCCCCCCCCCCCCCCC_01234​56789abcdef0123456789abcdef01234567",
+      "01084e90a77e55b7ffd6f75d9dcffd35392894a3c65f8dae83e7071dfa522328"
+    ],
+    [
+      "family/sbp/near-miss",
+      "sbp_dddddddddddddddddd​dddddddddddddddddddddd",
+      "303f158df6e75b1075775497d826fd62ed8260f4ab82290a0b8f7b83a6b417c1"
+    ],
+    [
+      "family/datadog/near-miss",
+      "ddp_DDDDDDDDDDDDDDDD​DDDDDDDDDDDDDDDDDDDD",
+      "b692ee842b93cc1ab80f32c35724ddbbe708b2ae05f75fac7f537c3184da4535"
+    ],
+    [
+      "family/nfp/near-miss",
+      "nfp_EEEEEEEEEEEEEEEE​EEEEEEEEEEEEEEEEEEEE",
+      "79204a82b7b04610909c50dbc5e4394a87dd365de3138d31c76b02171fbc8dd8"
+    ],
+    [
+      "family/glsa/near-miss",
+      "glsa_FFFFFFFFFFFFFFFFFF​FFFFFFFFFFFFFFFFFFFFFFF",
+      "83c900340f4b70ef248eacbfc531b76b78fae05e7aea7dd01e2780fe86dffff2"
+    ],
+    [
+      "family/glc eyj/near-miss",
+      "glc_eyJAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA​AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "fe16db94d18e6a16043b85e149c4cd7706f47099eca9b21d51386d8fef777c84"
+    ],
+    [
+      "family/cfpat/near-miss",
+      "CFPAT-GGGGGGGGGGGGGGGGG​GGGGGGGGGGGGGGGGGGGGGGG",
+      "d4e1c67eee72823a1fc1fee798e98393f6852cdade45877ee00b7c8d81d8bbf8"
+    ],
+    [
+      "family/bbdc/near-miss",
+      "BBDC-HHHHHHHHHHHHHHHHHH​HHHHHHHHHHHHHHHHHHHHHHHH",
+      "8ecc6b93a9e4ef1fd30837263fdd993c285aa24f7013868b5106235e6e2cbd40"
+    ],
+    [
+      "family/hrku/near-miss",
+      "HRKU-AAIIIIII​IIIIIIIIIIIIII",
+      "92e501a6fc617ce3ba7c37f94034513423cf34ead45553e9e4057e39fb24a7a2"
+    ],
+    [
+      "family/planetscale/near-miss",
+      "pat-eu1-abcdefgh-abcd-​abcd-abcd-abcddefghijk",
+      "243a81eb29466b82180435fe5d0baacbe569db1f31bb0ebafa13097fbebdb7a5"
+    ],
+    [
+      "family/apify/near-miss",
+      "apify_api_abcde​fghij1234567890",
+      "e23cde1befd6fce571c83a4fff87823028dd74652965a2e13472ac268644b7ea"
+    ],
+    [
+      "family/flyv1/near-miss",
+      "FlyV1 fm123_JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ​JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ",
+      "04297a2564b0be824334f4254316092bcc8b77d3cf11a52e509fa9d35484f8d6"
+    ],
+    [
+      "family/fio/near-miss",
+      "fio-u-KKKKKKKKKKKKKKKKK​KKKKKKKKKKKKKKKKKKKKKKK",
+      "c80b020dabed0a0cb5bfcb395ac99adf338d96e7a041a8e779a0affc30b9a703"
+    ],
+    [
+      "family/alibaba am/near-miss",
+      " am_abcde​fghij12345",
+      "dbb4ac7e5d22f4574bcf379123d2c85cc2d9d051ece4bfd290dbe51e4bb12f32"
+    ],
+    [
+      "family/alibaba sk/near-miss",
+      " sk_abcde​fghij12345",
+      "4aabc6c5658fb96c54152c682eabb098401ea181eee5cbfd905834d0511915ff"
+    ],
+    [
+      "family/tvly/near-miss",
+      "tvly-abcde​fghij12345",
+      "4cf35d27113576a23280d08f3ddeeac093c0743e970b9c1802b78669af7fd5d0"
+    ],
+    [
+      "family/exa/near-miss",
+      "exa_abcde​fghij12345",
+      "dd3bf87df0ade8cf28158c1b6a9a1794487214908cd521d826937d562f9d8b72"
+    ],
+    [
+      "family/syt/near-miss",
+      "syt_abcde​fghij12345",
+      "d5428d0f7202680a75c01dbf953f2bda28e85a35af94997aeae81ef39bca6845"
+    ],
+    [
+      "family/retaindb/near-miss",
+      "retaindb_a​bcdefghij12",
+      "37b6a8cc142cca8cef41a7ef17826b3133cc8b47c95a8a461204b951ca6d0222"
+    ],
+    [
+      "family/mem0/near-miss",
+      "mem0_abcde​fghij12345",
+      "0c90aeb0fb7bad7c0dbcd4c9133fa630b0273142ae4a8db6c6bc7b2bfbb4a7fe"
+    ],
+    [
+      "family/brv/near-miss",
+      "brv_abcde​fghij12345",
+      "ec4453b911478eb54710ebb0ad3eb4e13bca303c0b6d1e45c58aa985cdd9a080"
+    ],
+    [
+      "family/xai/near-miss",
+      "xai-LLLLLLLLLLLLL​LLLLLLLLLLLLLLLLL",
+      "852aaf79fd281aa094051f68e302ed2d896d79980121654f47750ba60389b979"
+    ],
+    [
+      "family/fireworks fw dash/near-miss",
+      " fw-abcdefghij012​34567890123456789",
+      "1c43351e16dc96cf232245a4f60f6b9f4db2f1ba614604acae35f8e9d31888f1"
+    ],
+    [
+      "family/fireworks fw score/near-miss",
+      " fw_abcdefghij012​34567890123456789",
+      "c9112f3f00b14f001228bfe8b3662c6e7f26b7895e8e16543f741bcd534767c3"
+    ],
+    [
+      "family/fireworks fpk/near-miss",
+      " fpk_abcdefghij01​234567890123456789",
+      "6eb16fdb6ee4354992b7ef95d0fa80e559495bfc36f0a1312eb43fad826882dd"
+    ],
+    [
+      "family/hsk/near-miss",
+      "hsk-abcde​fghij12345",
+      "3c197839336e7bb44a806a99ed624ad8e871e648f8b7a09efbbb3bf3706159fa"
+    ],
+    [
+      "family/aws akia/near-miss",
+      "AKIAABCDEF​GHIJKLMNOP",
+      "e927453a4c2f19e939134348c9cd0cfca96180cf2d4fbcee382c1a2c57476151"
+    ],
+    [
+      "family/aws asia/near-miss",
+      "ASIAABCDEF​GHIJKLMNOP",
+      "16ee46fcba6acedd149f927bd7fa97c69d460eedd850a26ff41d0d2e5f394e04"
+    ],
+    [
+      "family/aws akid/near-miss",
+      "AKIDabcde​fghij12345",
+      "ab44e095c5993c1d731a4f827e3e9beef40ee665f517132f064f0313451533bb"
+    ],
+    [
+      "family/aliyun ltai/near-miss",
+      "LTAIabcde​fghij12345",
+      "5e3f8be7d28f412e0a2a8aef9a5f282f923a8c96c23824a35130ca5697181742"
+    ],
+    [
+      "family/huggingface/near-miss",
+      "hf_abcdef​ghij12345",
+      "4c8af6b3b2981a3703c634d10cb30c963a34cca001da4687a5fdce306d6f2548"
+    ],
+    [
+      "family/api org/near-miss",
+      "api_org_abcdef​ghijklmnopqrst",
+      "19f7dc95bceaa3270b1aff8aee1776f419d008794d9975f529265ac59877f484"
+    ],
+    [
+      "family/r8/near-miss",
+      "r8_abcdef​ghij12345",
+      "cd194795c1eb1ec34f553ce0dd75fff0e97125f6f984a70a7e13ecb3032f2043"
+    ],
+    [
+      "family/atlassian atatt/near-miss",
+      "ATATTabcdefghij12​34567890=12345678",
+      "91feaae37937f8012f749db613400eabf517e39d7fbdbbfef4083ceec03e7e78"
+    ],
+    [
+      "family/atlassian atctt/near-miss",
+      "ATCTT3xFfGabcdef​ghij123=12345678",
+      "79b2e7c7b26b20d9455bb1e7460cb833bd5d833b537e9cfa6ccd695bf4afd0ac"
+    ],
+    [
+      "family/atlassian atbb/near-miss",
+      "ATBBabcdef​ghij012345",
+      "f12c0454a554f5e8c2a534dfb92daad6c25a0b52c0f23a5a7a9a4f184d2c5fa4"
+    ],
+    [
+      "family/dataiku dapi/near-miss",
+      "dapi0123456789abcd​ef0123456789abcdef",
+      "11eea1f5d7a33533baafc97efda6b8f145e8b5416f971c63a174a80fa0a986f1"
+    ]
+  ]
+}

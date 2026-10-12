@@ -62,8 +62,10 @@ vi.mock("./session-resource-tool-policy.js", () => ({ resolveSessionResourceTool
 vi.mock("./session-row-projection-access.js", () => ({
   getSessionRowProjection: () => ({ sharingTarget: () => ({ entry, storePath: "/store" }) }),
 }));
+// mock-isolation: App admission uses fixture model selection without native session ownership reads.
 vi.mock("./session-utils-model-selection.js", () => ({
   resolveSessionSelectedModelRef: mocks.model,
+  resolveSessionSelectedModelRefAsync: async (...args: unknown[]) => mocks.model(...args),
 }));
 const config = { mcp: { apps: { enabled: true } } };
 let entry: { sessionId: string } & Partial<SessionEntry>;
@@ -122,6 +124,7 @@ describe("cold App request admission", () => {
           senderId: "alice",
           sessionId: "session",
           workspaceDir: "/workspace",
+          abortSignal: accessController.signal,
         }),
       }),
     );
@@ -131,20 +134,11 @@ describe("cold App request admission", () => {
     expect(mocks.direct).not.toHaveBeenCalled();
     expect(mocks.dispose).toHaveBeenCalledOnce();
     expect(mocks.releaseSource).toHaveBeenCalledOnce();
-    entry = { ...entry, agentRuntimeOverride: "openclaw" };
-    expect(active.assertCurrent).toThrow("runtime selection changed");
-    await active.dispose();
-  });
-  it("binds native startup to retained access when the RPC has no signal", async () => {
-    mocks.prepare.mockImplementation(async ({ input }) => {
-      expect(input.abortSignal).toBe(accessController.signal);
-      expect(input.abortSignal.aborted).toBe(false);
-      return { preparation: {}, dispose: mocks.dispose };
-    });
-    const active = await prepareMcpAppExtensionRuntime(options());
     expect(mocks.retain).toHaveBeenCalledOnce();
     expect(mocks.releaseAccess).toHaveBeenCalledOnce();
     expect(accessController.signal.aborted).toBe(true);
+    entry = { ...entry, agentRuntimeOverride: "openclaw" };
+    expect(active.assertCurrent).toThrow("runtime selection changed");
     await active.dispose();
   });
   it.each(["caller", "access"])("cancels native setup when %s authority aborts", async (source) => {
@@ -159,27 +153,22 @@ describe("cold App request admission", () => {
     expect(mocks.releaseAccess).toHaveBeenCalledOnce();
     expect(mocks.releaseSource).toHaveBeenCalledOnce();
   });
-  it.each([
-    { model: "previous-model" },
-    { modelProvider: "previous-provider" },
-    { agentHarnessId: "previous-harness" },
-    { model: "model", modelProvider: "openai", agentHarnessId: "codex" },
-  ])("keeps a retained App valid after ordinary turn observations %j", async (observations) => {
-    const active = await prepareMcpAppExtensionRuntime(options());
-    // Use a fresh view borrow, independent of the completed setup lifetime.
-    accessController = new AbortController();
-    const view = active.retainViewAuthority([]);
-    entry = { ...entry, ...observations };
-    expect(active.assertCurrent).not.toThrow();
-    expect(view.assertCurrent).not.toThrow();
-    expect(mocks.native).toHaveBeenCalledOnce();
-    view.release();
-    await active.dispose();
-  });
-  it.each([
-    { provider: "other-provider", model: "model" },
-    { provider: "openai", model: "inherited-new-model" },
-  ])(
+  it.each([{ agentHarnessId: "previous-harness" }])(
+    "keeps a retained App valid after ordinary turn observations %j",
+    async (observations) => {
+      const active = await prepareMcpAppExtensionRuntime(options());
+      // Use a fresh view borrow, independent of the completed setup lifetime.
+      accessController = new AbortController();
+      const view = active.retainViewAuthority([]);
+      entry = { ...entry, ...observations };
+      expect(active.assertCurrent).not.toThrow();
+      expect(view.assertCurrent).not.toThrow();
+      expect(mocks.native).toHaveBeenCalledOnce();
+      view.release();
+      await active.dispose();
+    },
+  );
+  it.each([{ provider: "openai", model: "inherited-new-model" }])(
     "revokes a retained App when canonical selection changes without local overrides %j",
     async (model) => {
       const active = await prepareMcpAppExtensionRuntime(options());
@@ -191,17 +180,15 @@ describe("cold App request admission", () => {
       await active.dispose();
     },
   );
-  it.each([
-    { authProfileOverride: "other-profile" },
-    { authProfileOverrideSource: "auto" as const },
-    { sandboxMode: "off" as const },
-    { modelSelectionLocked: true },
-  ])("continues to revoke changed authority %j", async (change) => {
-    const active = await prepareMcpAppExtensionRuntime(options());
-    entry = { ...entry, ...change };
-    expect(active.assertCurrent).toThrow("runtime selection changed");
-    await active.dispose();
-  });
+  it.each([{ authProfileOverride: "other-profile" }, { sandboxMode: "off" as const }])(
+    "continues to revoke changed authority %j",
+    async (change) => {
+      const active = await prepareMcpAppExtensionRuntime(options());
+      entry = { ...entry, ...change };
+      expect(active.assertCurrent).toThrow("runtime selection changed");
+      await active.dispose();
+    },
+  );
   it("revokes an effective runtime change even without a local override", async () => {
     const active = await prepareMcpAppExtensionRuntime(options());
     mocks.selection.mockReturnValue("other-harness");

@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObject } from "../../config/validation.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as agentDatabaseDisposal from "../../state/openclaw-agent-db-disposal.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
@@ -170,7 +171,7 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
   }
 });
 
-it("removes the staged directory and releases state ownership when database disposal reports failure", async () => {
+it("retains the staged directory and releases state ownership when database disposal reports failure", async () => {
   const state = await createOpenClawTestState({
     label: "probe-disposal-failure",
     env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
@@ -186,11 +187,11 @@ it("removes the staged directory and releases state ownership when database disp
     stagedDir = params.agentDir;
     return { payloads: [{ text: "OK" }] };
   });
-  const dispose = agentDatabase.disposeOpenClawAgentDatabaseByPath;
+  const dispose = agentDatabaseDisposal.disposeOpenClawAgentDatabaseByPath;
   const close = vi
-    .spyOn(agentDatabase, "disposeOpenClawAgentDatabaseByPath")
-    .mockImplementation((pathname, options) => {
-      const closed = dispose(pathname, options);
+    .spyOn(agentDatabaseDisposal, "disposeOpenClawAgentDatabaseByPath")
+    .mockImplementation(async (pathname, options) => {
+      const closed = await dispose(pathname, options);
       if (stagedDir && pathname.startsWith(stagedDir + path.sep)) {
         throw original;
       }
@@ -200,14 +201,23 @@ it("removes the staged directory and releases state ownership when database disp
   try {
     await expect(
       cleanup.run(() => runAuthProbes(probeParams(state, cfg, signals, 1))),
-    ).rejects.toBe(original);
+    ).rejects.toMatchObject({ cause: original });
     expect(stagedDir).toContain("openclaw-auth-probe-");
-    expect(fs.existsSync(stagedDir!)).toBe(false);
+    expect(fs.existsSync(stagedDir!)).toBe(true);
+    expect(
+      agentDatabase
+        .listOpenClawRegisteredAgentDatabases({ env: state.env })
+        .some((entry) => entry.path.startsWith(stagedDir! + path.sep)),
+    ).toBe(false);
     expect(fs.existsSync(path.join(lockDir, "gateway.state.lock"))).toBe(false);
     expect(signals.listenerCount("SIGTERM")).toBe(0);
     expect(cleanup.outcome).toBe("uncertain");
   } finally {
     close.mockRestore();
+    if (stagedDir) {
+      await dispose(path.join(stagedDir, "openclaw-agent.sqlite"), { env: state.env });
+      await fs.promises.rm(stagedDir, { recursive: true, force: true });
+    }
     await state.cleanup();
   }
 });

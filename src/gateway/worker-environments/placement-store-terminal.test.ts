@@ -15,7 +15,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
+import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
@@ -83,7 +83,7 @@ describe("worker placement terminal persistence", () => {
     await store.acceptWorkspaceResult(claim);
 
     expect(
-      await completeReclaimedWorkspaceTeardown({
+      await completeWorkerWorkspaceTeardown({
         placements: store,
         turnClaim: claim,
         environmentId: active.environmentId,
@@ -129,37 +129,46 @@ describe("worker placement terminal persistence", () => {
     });
   });
 
-  it("atomically fails a pending result and preserves its bounded reason across restart", async () => {
-    await advanceToActive();
-    const { claim, pending } = await pendingResult();
-    const closedClaims: WorkerSessionTurnClaim[] = [];
-    const unregister = store.registerTurnClaimClosedHandler((closedClaim) => {
-      closedClaims.push(closedClaim);
-    });
-    nowMs = 2_000;
-    const disappearance = `cloud worker disappeared: ${"provider-detail ".repeat(100)}`;
+  it.each(["active", "draining"] as const)(
+    "atomically fails a %s pending result and preserves its bounded reason across restart",
+    async (state) => {
+      await advanceToActive();
+      const { claim, pending } = await pendingResult();
+      if (state === "draining") {
+        await store.startWorkspaceResultDrain(claim);
+      }
+      const closedClaims: WorkerSessionTurnClaim[] = [];
+      const unregister = store.registerTurnClaimClosedHandler((closedClaim) => {
+        closedClaims.push(closedClaim);
+      });
+      nowMs = 2_000;
+      const disappearance = `cloud worker disappeared: ${"provider-detail ".repeat(100)}`;
 
-    const failed = await store.failWorkspaceResultAndReleaseTurn(pending, new Error(disappearance));
-    expect(failed).toMatchObject({
-      state: "failed",
-      generation: claim.placementGeneration + 3,
-      turnClaim: null,
-      terminalAtMs: 2_000,
-    });
-    expect(failed.terminalReason).toHaveLength(1_024);
-    expect(failed.terminalReason).toMatch(/^cloud worker disappeared: provider-detail/u);
-    expect(failed.recoveryError).toBe(failed.terminalReason);
-    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
-    expect(closedClaims).toEqual([claim]);
-    unregister();
+      const failed = await store.failWorkspaceResultAndReleaseTurn(
+        pending,
+        new Error(disappearance),
+      );
+      expect(failed).toMatchObject({
+        state: "failed",
+        generation: claim.placementGeneration + 3,
+        turnClaim: null,
+        terminalAtMs: 2_000,
+      });
+      expect(failed.terminalReason).toHaveLength(1_024);
+      expect(failed.terminalReason).toMatch(/^cloud worker disappeared: provider-detail/u);
+      expect(failed.recoveryError).toBe(failed.terminalReason);
+      expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
+      expect(closedClaims).toEqual([claim]);
+      unregister();
 
-    await closeStateDatabaseForTest();
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-    const reopened = store.get(SESSION.sessionId);
-    expect(reopened).toMatchObject({ state: "failed", terminalAtMs: 2_000 });
-    expect(reopened?.terminalReason).toBe(failed.terminalReason);
-  });
+      await closeStateDatabaseForTest();
+      database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+      store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+      const reopened = store.get(SESSION.sessionId);
+      expect(reopened).toMatchObject({ state: "failed", terminalAtMs: 2_000 });
+      expect(reopened?.terminalReason).toBe(failed.terminalReason);
+    },
+  );
 
   it("atomically abandons an offline remote-exec result while preserving its exact active owner", async () => {
     await advanceToActive(SESSION, "paired-device-environment", "remote-exec");

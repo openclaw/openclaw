@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
-import type { Transferable, Worker } from "node:worker_threads";
+import type { MessagePort, Transferable, Worker } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { trackNativeWorkerForCpu } from "./worker-cpu.js";
 import { decodeNativeWorkerFailure } from "./worker-native-error.js";
 import type {
@@ -15,9 +16,10 @@ import type {
   RetainedNativeWorker,
 } from "./worker-native-lifecycle.types.js";
 import { bindNativeWorkerResource } from "./worker-native-resource.js";
+import { NativeWorkerTaskPort } from "./worker-native-task-port.js";
+import { workerRequestKind } from "./worker-request-kind.js";
 
 type HeapStatistics = Awaited<ReturnType<Worker["getHeapStatistics"]>>;
-
 export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements RetainedNativeWorker {
   // Match native Worker callbacks even when a different caller services this port.
   private readonly runInContext = AsyncLocalStorage.snapshot();
@@ -32,8 +34,9 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
   private resourceClosed = false;
   private supervisorJoined = false;
   private resourceRecovery?: Promise<void>;
-  // Preserve one caller retry across the current close attempt's terminal failure.
-  private resourceRetryRequested = false;
+  private readonly taskPort?: NativeWorkerTaskPort;
+  private terminalObserved = false;
+  private taskPortLossReported = false;
   private requestId = 0;
   private stopCompletion = createRetainedOperation<void>(() => this.service());
   private readonly cpuRequests = new Map<
@@ -52,8 +55,20 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     private readonly evalSource: boolean,
     private readonly ownsNativeResource: boolean,
     private readonly resourceConnection?: NativeWorkerResourceConnection,
+    taskPort?: MessagePort,
   ) {
     super();
+    if (taskPort) {
+      const label = `worker:${
+        !evalSource && filename instanceof URL ? workerRequestKind(filename) : "other"
+      }`;
+      this.taskPort = new NativeWorkerTaskPort(taskPort, {
+        message: (value) =>
+          this.runInContext(() => runWithMainThreadTask(label, () => this.emit("message", value))),
+        messageerror: (error) => this.runInContext(() => this.emit("messageerror", error)),
+        unavailable: () => this.observeTaskPortLoss(),
+      });
+    }
   }
 
   get needsReference(): boolean {
@@ -70,6 +85,33 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     this.runtime.service();
   }
 
+  serviceTaskPort(): void {
+    if (!this.taskPort) {
+      return;
+    }
+    this.taskPort.service();
+    this.observeTaskPortLoss();
+  }
+
+  private observeTaskPortLoss(): void {
+    const failure = this.taskPort?.failure;
+    if (
+      !failure ||
+      !this.started ||
+      !this.referenced ||
+      this.taskPortLossReported ||
+      this.terminalObserved ||
+      this.stopping ||
+      this.joined ||
+      this.executionStopped ||
+      this.runtime.failure
+    ) {
+      return;
+    }
+    this.taskPortLossReported = true;
+    this.runInContext(() => this.emit("error", failure));
+  }
+
   serviceResource(): void {
     if (!this.resourceBinding || this.servicingResource || this.joined) {
       return;
@@ -78,10 +120,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     try {
       this.resourceBinding.service();
     } catch (error) {
-      this.stopCompletion.reject(error);
-      this.runInContext(() =>
-        this.emit("error", toErrorObject(error, "Native resource observation failed")),
-      );
+      this.resourceFailed(error);
     } finally {
       this.servicingResource = false;
     }
@@ -102,16 +141,13 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
             this.finishJoined(undefined);
           }
         }),
-      failed: (error) =>
-        this.runInContext(() => {
-          this.stopCompletion.reject(error);
-          this.emit("error", error);
-        }),
+      failed: (error) => this.resourceFailed(error),
     });
     return { workerDataKey: descriptor.workerDataKey, attachment: this.resourceBinding.attachment };
   }
 
   abandonResource(): void {
+    this.taskPort?.close();
     if (this.resourceBinding) {
       this.resourceBinding.abandonUnattached();
     } else {
@@ -119,32 +155,28 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     }
   }
 
-  private recoverResource(requestRetry = false): void {
-    if (!this.resourceBinding || this.joined) {
+  private resourceFailed(error: unknown): void {
+    this.runInContext(() => {
+      this.stopCompletion.reject(error);
+      this.emit("error", toErrorObject(error, "Native resource observation failed"));
+    });
+  }
+
+  private recoverResource(): void {
+    if (!this.resourceBinding || this.joined || this.resourceRecovery) {
       return;
     }
-    if (this.resourceRecovery) {
-      this.resourceRetryRequested ||= requestRetry;
-      return;
-    }
-    this.resourceRetryRequested = false;
     const recovery = this.resourceBinding.closeAfterSupervisor();
     this.resourceRecovery = recovery;
     void recovery.then(
       () =>
         this.runInContext(() => {
-          this.resourceRecovery = undefined;
-          this.resourceRetryRequested = false;
           this.finishJoined(undefined);
         }),
       (error: unknown) =>
         this.runInContext(() => {
-          this.resourceRecovery = undefined;
           this.stopping = false;
           this.stopCompletion.reject(error);
-          if (this.resourceRetryRequested) {
-            this.recoverResource();
-          }
         }),
     );
   }
@@ -153,6 +185,13 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     if (this.joined || this.stopping || this.executionStopped) {
       throw new Error("Native worker is closing");
     }
+    if (this.runtime.failure) {
+      throw this.runtime.failure;
+    }
+    if (this.taskPort) {
+      this.taskPort.postMessage(value, transferList);
+      return;
+    }
     this.runtime.post(
       { type: "post", id: this.id, value, transferList: [...transferList] },
       transferList,
@@ -160,16 +199,28 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
   }
 
   ref(): this {
-    this.referenced = true;
-    this.runtime.post({ type: "ref", id: this.id, referenced: true });
+    if (this.runtime.failure) {
+      throw this.runtime.failure;
+    }
+    this.taskPort?.assertAvailable();
+    if (!this.referenced) {
+      this.runtime.post({ type: "ref", id: this.id, referenced: true });
+      this.referenced = true;
+    }
     this.runtime.refreshReference();
     return this;
   }
 
   unref(): this {
+    const wasReferenced = this.referenced;
     this.referenced = false;
     if (!this.joined) {
-      this.runtime.post({ type: "ref", id: this.id, referenced: false });
+      if (this.runtime.failure) {
+        throw this.runtime.failure;
+      }
+      if (wasReferenced) {
+        this.runtime.post({ type: "ref", id: this.id, referenced: false });
+      }
     }
     this.runtime.refreshReference();
     return this;
@@ -192,7 +243,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
           cause: this.runtime.failure,
         }),
       );
-      this.recoverResource(true);
+      this.recoverResource();
       return this.stopCompletion.operation;
     }
     if (!this.stopping) {
@@ -252,6 +303,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
 
   ownerFailed(error: Error): void {
     this.runInContext(() => {
+      this.taskPort?.close();
       this.stopping = false;
       this.rejectSamples(error);
       this.stopCompletion.reject(error);
@@ -287,6 +339,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       return;
     }
     this.joined = true;
+    this.taskPort?.close();
     this.threadId = -1;
     this.stopping = false;
     this.referenced = false;
@@ -308,13 +361,27 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
 
   private finishExecution(code: number | undefined): void {
     if (!this.executionStopped) {
+      this.taskPort?.close();
       this.executionStopped = true;
       this.emit("execution-exit", code);
     }
   }
 
   receive(reply: NativeWorkerReply): void {
-    this.runInContext(() => this.receiveOwned(reply));
+    this.runInContext(() => {
+      if (
+        reply.type === "error" ||
+        reply.type === "messageerror" ||
+        reply.type === "create-error" ||
+        reply.type === "execution-exit" ||
+        reply.type === "stopped" ||
+        reply.type === "stop-error"
+      ) {
+        this.terminalObserved = true;
+        this.taskPort?.drain();
+      }
+      this.receiveOwned(reply);
+    });
   }
 
   private receiveOwned(reply: NativeWorkerReply): void {
@@ -322,7 +389,10 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       this.started = true;
       this.threadId = reply.threadId;
       trackNativeWorkerForCpu(this, this.filename, this.evalSource);
+      this.taskPort?.start();
       this.emit("started");
+      this.taskPort?.drain();
+      this.observeTaskPortLoss();
     } else if (reply.type === "message") {
       this.emit("message", reply.value);
     } else if (reply.type === "resource-message") {

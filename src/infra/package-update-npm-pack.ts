@@ -8,56 +8,38 @@ import type { UpdateStepResult } from "./update-step-result.js";
 
 const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
 
-function stripPackageAlias(spec: string, packageName: string): string {
+function isNpmGitSourceInstallSpec(spec: string, packageName: string): boolean {
   const trimmed = spec.trim();
   const prefix = `${packageName.trim()}@`;
-  return trimmed.toLowerCase().startsWith(prefix.toLowerCase())
+  const target = trimmed.toLowerCase().startsWith(prefix.toLowerCase())
     ? trimmed.slice(prefix.length).trim()
     : trimmed;
-}
-
-function isHttpGitUrlSpec(spec: string): boolean {
-  const url = URL.parse(spec);
-  if (!url || (url.protocol !== "https:" && url.protocol !== "http:")) {
-    return false;
-  }
-  const pathname = url.pathname.replace(/\/+$/u, "");
-  if (pathname.endsWith(".git")) {
+  if (
+    /^github:/i.test(target) ||
+    /^git\+(?:ssh|https|http|file):/i.test(target) ||
+    /^git:/i.test(target) ||
+    /^ssh:\/\//i.test(target) ||
+    /^[^@\s]+@[^:\s]+:[^#\s]+(?:#.*)?$/u.test(target)
+  ) {
     return true;
   }
-  const parts = pathname.split("/").filter(Boolean);
-  return url.hostname.toLowerCase() === "github.com" && parts.length === 2;
-}
-
-function isGitHubShorthandSpec(spec: string): boolean {
-  const [repo] = spec.split("#", 1);
+  const url = URL.parse(target);
+  if (url && (url.protocol === "https:" || url.protocol === "http:")) {
+    const pathname = url.pathname.replace(/\/+$/u, "");
+    if (
+      pathname.endsWith(".git") ||
+      (url.hostname.toLowerCase() === "github.com" &&
+        pathname.split("/").filter(Boolean).length === 2)
+    ) {
+      return true;
+    }
+  }
+  const [repo] = target.split("#", 1);
   if (!repo || repo.startsWith(".") || repo.startsWith("/") || repo.startsWith("@")) {
     return false;
   }
   const parts = repo.split("/");
   return parts.length === 2 && parts.every((part) => /^[^\s/:@]+$/u.test(part));
-}
-
-function isNpmGitSourceInstallSpec(spec: string, packageName: string): boolean {
-  const target = stripPackageAlias(spec, packageName);
-  return (
-    /^github:/i.test(target) ||
-    /^git\+(?:ssh|https|http|file):/i.test(target) ||
-    /^git:/i.test(target) ||
-    /^ssh:\/\//i.test(target) ||
-    /^[^@\s]+@[^:\s]+:[^#\s]+(?:#.*)?$/u.test(target) ||
-    isHttpGitUrlSpec(target) ||
-    isGitHubShorthandSpec(target)
-  );
-}
-
-async function findPackedTarball(packDir: string): Promise<string | null> {
-  const entries = await fs.readdir(packDir).catch((): string[] => []);
-  const tarballs = entries.filter((entry) => entry.endsWith(".tgz"));
-  if (tarballs.length !== 1) {
-    return null;
-  }
-  return path.join(packDir, tarballs[0] ?? "");
 }
 
 type PreparedNpmInstallSpec = {
@@ -113,8 +95,9 @@ export async function prepareNpmGitSourceInstallSpec(params: {
     return result;
   }
 
-  const tarball = await findPackedTarball(packDir);
-  if (!tarball) {
+  const entries = await fs.readdir(packDir).catch((): string[] => []);
+  const tarballs = entries.filter((entry) => entry.endsWith(".tgz"));
+  if (tarballs.length !== 1) {
     const failedStep: UpdateStepResult = {
       name: "package-pack-verify",
       command: `find packed tarball in ${packDir}`,
@@ -129,7 +112,7 @@ export async function prepareNpmGitSourceInstallSpec(params: {
     return result;
   }
 
-  result.installSpec = tarball;
+  result.installSpec = path.join(packDir, tarballs[0] ?? "");
   result.installCwd = packDir;
   return result;
 }

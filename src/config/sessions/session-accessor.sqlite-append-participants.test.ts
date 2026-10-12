@@ -30,7 +30,9 @@ it("reuses current participants across transcript appends and publishes new acto
     const database = openOpenClawAgentDatabase(scope);
     const reads = observeSqliteReadSql(StatementSync.prototype);
     const participantReads = () =>
-      reads.queries.filter((sql) => sql.startsWith('select * from "session_participants"')).length;
+      reads.queries.filter((sql) =>
+        sql.startsWith('select "session_key", "identity_namespace", "actor_id"'),
+      ).length;
     const append = (index: number) =>
       persistSessionTranscriptTurn(scope, {
         touchSessionEntry: true,

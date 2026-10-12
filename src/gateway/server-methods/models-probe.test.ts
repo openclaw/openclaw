@@ -382,9 +382,9 @@ describe("models.probe", () => {
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", message: "Connection probe failed." }),
+      expect.objectContaining({ code: "UNAVAILABLE", message: "Connection check failed." }),
     );
-    expect(warn).toHaveBeenCalledWith("Model connection probe failed.", {
+    expect(warn).toHaveBeenCalledWith("Model connection check failed.", {
       event: "models_probe_failed",
       provider: "ollama",
       timeoutMs: 9_000,

@@ -282,13 +282,6 @@ function applySecurityAuditSuppressions(
   return { findings: active, suppressedFindings };
 }
 
-function normalizeAllowFromList(list: Array<string | number> | undefined | null): string[] {
-  if (!Array.isArray(list)) {
-    return [];
-  }
-  return normalizeStringEntries(list);
-}
-
 async function collectFilesystemFindings(params: {
   stateDir: string;
   configPath: string;
@@ -428,10 +421,10 @@ async function collectPluginSecurityAuditFindings(
       ]),
     );
     if (context.includeChannelSecurity && context.plugins !== undefined) {
-      const { resolveConfiguredChannelPluginIds } =
+      const { resolveConfiguredChannelPluginIdsAsync } =
         await import("../plugins/channel-plugin-ids.js");
       const auditedChannelPluginIds = new Set(context.plugins.map((plugin) => plugin.id));
-      for (const pluginId of resolveConfiguredChannelPluginIds({
+      for (const pluginId of await resolveConfiguredChannelPluginIdsAsync({
         config: autoEnabled.config,
         activationSourceConfig: context.sourceConfig,
         workspaceDir: context.workspaceDir,
@@ -490,7 +483,7 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
     return findings;
   }
   for (const [provider, list] of Object.entries(allowFrom)) {
-    const normalized = normalizeAllowFromList(list);
+    const normalized = normalizeStringEntries(Array.isArray(list) ? list : []);
     if (normalized.includes("*")) {
       findings.push({
         checkId: `tools.elevated.allowFrom.${provider}.wildcard`,
@@ -992,9 +985,7 @@ function collectOpenExecSurfacePaths(cfg: OpenClawConfig): string[] {
       hits.add(`${scope}.dmPolicy`);
     }
     for (const [key, nested] of Object.entries(record)) {
-      if (asNullableRecord(nested)) {
-        visit(nested, `${scope}.${key}`);
-      }
+      visit(nested, `${scope}.${key}`);
     }
   };
   for (const [channelId, channelValue] of Object.entries(channels)) {
@@ -1171,34 +1162,38 @@ export async function runSecurityAuditCore(
     if (context.plugins !== undefined) {
       shouldAuditChannelSecurity = true;
     } else {
-      const { hasConfiguredChannelsForReadOnlyScope, resolveConfiguredChannelPluginIds } =
+      const { hasConfiguredChannelsForReadOnlyScopeAsync, resolveConfiguredChannelPluginIdsAsync } =
         await import("../plugins/channel-plugin-ids.js");
       shouldAuditChannelSecurity =
-        hasConfiguredChannelsForReadOnlyScope({
+        (await hasConfiguredChannelsForReadOnlyScopeAsync({
           config: cfg,
           activationSourceConfig: context.sourceConfig,
           workspaceDir: context.workspaceDir,
           env,
-        }) ||
-        resolveConfiguredChannelPluginIds({
-          config: cfg,
-          activationSourceConfig: context.sourceConfig,
-          workspaceDir: context.workspaceDir,
-          env,
-        }).length > 0;
+        })) ||
+        (
+          await resolveConfiguredChannelPluginIdsAsync({
+            config: cfg,
+            activationSourceConfig: context.sourceConfig,
+            workspaceDir: context.workspaceDir,
+            env,
+          })
+        ).length > 0;
     }
   }
   if (shouldAuditChannelSecurity) {
     const channelPlugins =
       context.plugins ??
-      (await import("../channels/plugins/read-only.js")).listReadOnlyChannelPluginsForConfig(cfg, {
+      (await (
+        await import("../channels/plugins/read-only.js")
+      ).listReadOnlyChannelPluginsForConfigAsync(cfg, {
         activationSourceConfig: context.sourceConfig,
         workspaceDir: context.workspaceDir,
         env,
         stateDir,
         includePersistedAuthState: true,
         includeSetupFallbackPlugins: true,
-      });
+      }));
     const { collectChannelSecurityFindings } = await import("./audit-channel.collect.runtime.js");
     findings.push(
       ...(await collectChannelSecurityFindings({

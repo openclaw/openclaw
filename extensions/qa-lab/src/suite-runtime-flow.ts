@@ -92,9 +92,6 @@ export async function runQaSuiteScenarioSteps(
   const result: QaSuiteScenarioResult = { name, status: "pass", steps: [] };
   for (const step of steps) {
     try {
-      if (process.env.OPENCLAW_QA_DEBUG === "1") {
-        console.error(`[qa-suite] start scenario="${name}" step="${step.name}"`);
-      }
       const outcome = await step.run();
       const details = outcome?.details;
       if (outcome?.timing) {
@@ -108,9 +105,6 @@ export async function runQaSuiteScenarioSteps(
         result.timing ??= {};
         result.timing.rttMs = result.rttMeasurement.finalMatchedReplyRttMs;
       }
-      if (process.env.OPENCLAW_QA_DEBUG === "1") {
-        console.error(`[qa-suite] pass scenario="${name}" step="${step.name}"`);
-      }
       result.steps.push({
         name: step.name,
         status: "pass",
@@ -119,9 +113,6 @@ export async function runQaSuiteScenarioSteps(
     } catch (error) {
       const details = formatQaErrorMessage(error);
       const status = error instanceof QaSuiteScenarioSkipError ? "skip" : "fail";
-      if (status === "fail" && process.env.OPENCLAW_QA_DEBUG === "1") {
-        console.error(`[qa-suite] fail scenario="${name}" step="${step.name}" details=${details}`);
-      }
       result.steps.push({ name: step.name, status, details });
       result.status = status;
       result.details = details;

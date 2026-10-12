@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -6,15 +8,12 @@ import {
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import {
-  ensureMemoryIndexSchema,
-  loadSqliteVecExtension,
-  MEMORY_INDEX_VECTOR_TABLE as VECTOR_TABLE,
-  type MemorySessionSyncTarget,
-  type MemorySource,
-  type MemoryWorkspaceFiles,
-  type MemorySyncParams,
-  type MemorySyncProgressUpdate,
+import type {
+  MemorySessionSyncTarget,
+  MemorySource,
+  MemoryWorkspaceFiles,
+  MemorySyncParams,
+  MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import {
@@ -22,7 +21,7 @@ import {
   type EmbeddingProvider,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
-import { MemoryManagerDatabaseContext } from "./manager-database-context.js";
+import type { MemoryIndexDatabase } from "./manager-database-context.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import {
   resolveMemoryPrimaryProviderRequest,
@@ -37,12 +36,8 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
-import {
-  MEMORY_INDEX_META_KEY as META_KEY,
-  readMemoryIndexMetadata,
-} from "./manager-retrieval-read.js";
 import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
-import { memoryTableExists, requiresMemoryVectorRebuild } from "./manager-vector-rebuild-state.js";
+import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
 
 export type MemorySyncProgressState = {
@@ -73,17 +68,86 @@ export type MemorySourceSyncPlan = {
 export type MemoryReindexRetryState = {
   dirty: boolean;
   memoryFullRetryDirty: boolean;
+  fullReindexRetryBackoff: MemoryFullReindexRetryBackoff;
   sessionsDirty: boolean;
   sessionsFullRetryDirty: boolean;
   sessionsReconcileDirty: boolean;
   sessionsDirtyFiles: Set<string>;
 };
 
-const LEGACY_VECTOR_TABLE = "chunks_vec";
+type MemoryFullReindexRetryBackoff = {
+  attempts: number;
+  retryAt: number;
+  failedWithEmbeddings: boolean;
+};
+
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
+const FULL_REINDEX_RETRY_INITIAL_DELAY_MS = 30_000;
+const FULL_REINDEX_RETRY_MAX_DELAY_MS = 30 * 60_000;
 const log = createSubsystemLogger("memory");
 
-export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext {
+// One process-lifetime container; stores belong only to their awaited rebuild.
+const reindexDatabase = new AsyncLocalStorage<{
+  manager: MemoryManagerSyncBase;
+  database: MemoryIndexDatabase;
+}>();
+
+export abstract class MemoryManagerSyncBase {
+  protected abstract publishedDatabase: MemoryIndexDatabase;
+  protected closed = false;
+
+  protected assertDatabaseMutationCurrent(database: MemoryIndexDatabase): void {
+    if (this.closed || database.closed || !database.db.isOpen || this.database !== database) {
+      throw new Error("Memory database owner closed or changed before write admission");
+    }
+    if (database.readOnly) {
+      throw new Error("Memory status managers are read-only");
+    }
+  }
+
+  protected get database(): MemoryIndexDatabase {
+    const context = reindexDatabase.getStore();
+    const shadow = context?.manager === this ? context.database : undefined;
+    if (shadow?.closed) {
+      throw new Error("Memory reindex database context is closed");
+    }
+    return shadow ?? this.publishedDatabase;
+  }
+
+  protected get db(): DatabaseSync {
+    return this.database.db;
+  }
+
+  protected get vector() {
+    return this.database.vector;
+  }
+
+  protected get fts() {
+    return this.database.fts;
+  }
+
+  protected withPublishedDatabase<T>(run: () => T): T {
+    // Public calls can originate in reindex progress/provider callbacks. They
+    // must never inherit the temporary writer or outlive its connection.
+    return reindexDatabase.exit(run);
+  }
+
+  protected async withReindexDatabase<T>(
+    database: MemoryIndexDatabase,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      const result = await reindexDatabase.run({ manager: this, database }, run);
+      // Publication attaches the finished file only after its writer closes.
+      await database.closeShadow();
+      return result;
+    } finally {
+      try {
+        await database.closeShadow();
+      } catch {}
+    }
+  }
+
   protected readonly memoryFiles?: MemoryWorkspaceFiles;
   protected memoryWatchSubscription?: AbortController;
   protected memoryWatchUnavailable = false;
@@ -91,6 +155,9 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected activeManagerOperations = 0;
   protected managerIdleWaiters = new Set<() => void>();
   protected readonly acquireLocalService?: MemoryCoreAcquireLocalService;
+  protected abstract readonly runInBackgroundContext: NonNullable<
+    MemoryCoreRuntimeHost["runInBackgroundContext"]
+  >;
   protected abstract readonly cfg: OpenClawConfig;
   protected abstract readonly agentId: string;
   protected abstract readonly workspaceDir: string;
@@ -120,6 +187,13 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   // Failed full memory reindexes must retry as full rebuilds, not incremental
   // dirty syncs that can skip unchanged files against the still-live index.
   protected memoryFullRetryDirty = false;
+  // Search maintenance hands this object to a transient manager. Keeping the
+  // state shared lets a failed detached rebuild update its serving owner.
+  protected fullReindexRetryBackoff: MemoryFullReindexRetryBackoff = {
+    attempts: 0,
+    retryAt: 0,
+    failedWithEmbeddings: false,
+  };
   protected sessionsDirty = false;
   // Failed full reindexes can start with no per-file dirty set. Keep a
   // one-shot all-sessions retry marker so the next non-force sync cannot skip.
@@ -144,10 +218,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected abstract pruneEmbeddingCacheIfNeeded(): Promise<void>;
   protected abstract resetProviderInitializationForRetry(): void;
   protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
-  protected abstract indexFile(
-    entry: MemoryIndexEntry,
-    options: { source: MemorySource; content?: string },
-  ): Promise<void>;
+  protected abstract indexFile(entry: MemoryIndexEntry, source: MemorySource): Promise<void>;
   protected abstract syncMemoryFiles(params: {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
@@ -194,6 +265,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     return {
       dirty: this.dirty,
       memoryFullRetryDirty: this.memoryFullRetryDirty,
+      fullReindexRetryBackoff: this.fullReindexRetryBackoff,
       sessionsDirty: this.sessionsDirty,
       sessionsFullRetryDirty: this.sessionsFullRetryDirty,
       sessionsReconcileDirty: this.sessionsReconcileDirty,
@@ -213,6 +285,11 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   adoptReindexRetryState(snapshot: MemoryReindexRetryState): void {
     this.dirty = snapshot.dirty || this.dirty;
     this.memoryFullRetryDirty = snapshot.memoryFullRetryDirty || this.memoryFullRetryDirty;
+    // The later cooldown wins: a transient maintenance manager must not shorten
+    // the backoff its serving owner already recorded for the same failure.
+    if (snapshot.fullReindexRetryBackoff.retryAt >= this.fullReindexRetryBackoff.retryAt) {
+      this.fullReindexRetryBackoff = snapshot.fullReindexRetryBackoff;
+    }
     this.sessionsFullRetryDirty = snapshot.sessionsFullRetryDirty || this.sessionsFullRetryDirty;
     this.sessionsReconcileDirty = snapshot.sessionsReconcileDirty || this.sessionsReconcileDirty;
     this.sessionsDirtyFiles = new Set([...snapshot.sessionsDirtyFiles, ...this.sessionsDirtyFiles]);
@@ -233,6 +310,23 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       this.sessionsDirty = true;
       this.sessionsFullRetryDirty = true;
     }
+  }
+
+  protected recordFullReindexFailure(withEmbeddings: boolean): void {
+    this.fullReindexRetryBackoff.attempts += 1;
+    this.fullReindexRetryBackoff.failedWithEmbeddings = withEmbeddings;
+    const delay = Math.min(
+      FULL_REINDEX_RETRY_INITIAL_DELAY_MS *
+        2 ** Math.min(this.fullReindexRetryBackoff.attempts - 1, 30),
+      FULL_REINDEX_RETRY_MAX_DELAY_MS,
+    );
+    this.fullReindexRetryBackoff.retryAt = Date.now() + delay;
+  }
+
+  protected clearFullReindexRetryBackoff(): void {
+    this.fullReindexRetryBackoff.attempts = 0;
+    this.fullReindexRetryBackoff.retryAt = 0;
+    this.fullReindexRetryBackoff.failedWithEmbeddings = false;
   }
 
   protected clearSessionRetryState(): void {
@@ -320,16 +414,11 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   }
 
   protected hasIndexedChunks(): boolean {
-    return (
-      this.db.prepare(`SELECT 1 as found FROM memory_index_chunks LIMIT 1`).get() !== undefined
-    );
+    return this.database.facts.hasIndexedChunks;
   }
 
   protected hasSemanticChunks(): boolean {
-    const row = this.db
-      .prepare(`SELECT 1 as found FROM memory_index_chunks WHERE model != 'fts-only' LIMIT 1`)
-      .get() as { found?: number } | undefined;
-    return row?.found === 1;
+    return this.database.facts.hasSemanticChunks;
   }
 
   protected resolveConfiguredIndexIdentity() {
@@ -343,14 +432,14 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     });
   }
 
-  protected resolveCurrentIndexIdentityState(params?: {
+  protected resolveCurrentIndexIdentityState(params: {
     meta?: MemoryIndexMeta | null;
     provider?: { id: string; model: string } | null;
     providerKeyKnown?: boolean;
     vectorReady?: boolean;
     hasIndexedChunks?: boolean;
   }): MemoryIndexIdentityState {
-    const hasProviderOverride = params && "provider" in params;
+    const hasProviderOverride = params.provider !== undefined;
     const configuredIndexIdentity =
       !hasProviderOverride && !this.provider && this.settings.provider !== "none"
         ? this.resolveConfiguredIndexIdentity()
@@ -370,10 +459,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       : this.provider
         ? { id: this.provider.id, model: this.provider.model }
         : configuredProvider;
-    const vectorReady =
-      params && "vectorReady" in params
-        ? Boolean(params.vectorReady)
-        : this.vector.available === true;
+    const vectorReady = params.vectorReady ?? this.vector.available === true;
     const initializedProviderIdentities =
       provider &&
       this.provider &&
@@ -394,15 +480,15 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
         : configuredProviderIdentities;
     const configuredProviderKeyKnown = configuredProviderIdentities.length > 0;
     return resolveMemoryIndexIdentityState({
-      meta: params && "meta" in params ? params.meta! : this.readMeta(),
+      meta: params.meta === undefined ? this.readMeta() : params.meta,
       provider,
       providerKey: configuredProviderKeyKnown
         ? providerIdentities[0]?.providerKey
-        : params?.providerKeyKnown === false
+        : params.providerKeyKnown === false
           ? undefined
           : (this.providerKey ?? undefined),
       providerAliases: providerIdentities.slice(1),
-      providerKeyKnown: configuredProviderKeyKnown ? true : params?.providerKeyKnown,
+      providerKeyKnown: configuredProviderKeyKnown ? true : params.providerKeyKnown,
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
       configuredScopeHash: resolveConfiguredScopeHash({
         workspaceDir: this.workspaceDir,
@@ -412,19 +498,21 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
       vectorReady,
-      hasIndexedChunks:
-        params && "hasIndexedChunks" in params
-          ? Boolean(params.hasIndexedChunks)
-          : this.hasIndexedChunks(),
+      hasIndexedChunks: params.hasIndexedChunks ?? this.hasIndexedChunks(),
       ftsTokenizer: this.settings.store.fts.tokenizer,
     });
   }
 
-  protected resetVectorState(): void {
-    this.database.vectorReady = null;
-    this.vector.available = null;
+  protected resetVectorState(vectorIndexComplete: boolean): void {
+    // Shadow publication replaces index rows, not the worker's loaded extension.
+    const extensionLoaded = vectorIndexComplete && this.vector.available === true;
+    this.database.vectorReady = extensionLoaded ? Promise.resolve(true) : null;
+    if (!extensionLoaded) {
+      this.vector.available = null;
+      this.vector.loadError = undefined;
+    }
+    this.database.ensuredVectorDimensions = undefined;
     this.vector.semanticAvailable = undefined;
-    this.vector.loadError = undefined;
     this.vector.dims = undefined;
     this.database.vectorDegradedWriteWarningShown = false;
   }
@@ -457,29 +545,35 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       log.warn(`sqlite-vec unavailable: ${message}`);
       return false;
     }
-    if (ready && typeof dimensions === "number" && dimensions > 0) {
-      // Another process may have published a vectorless index while this
-      // connection retained the previous dimensions in memory.
-      await this.withDatabaseWrite(() => {
-        const persistedMeta = this.readMeta();
-        if (persistedMeta && persistedMeta.vectorDims !== this.vector.dims) {
-          this.vector.dims = persistedMeta.vectorDims;
-        }
-        this.ensureVectorTable(dimensions);
-        if (persistedMeta && !persistedMeta.vectorDims && !this.hasIndexedChunks()) {
-          this.writeMeta({ ...persistedMeta, vectorDims: dimensions });
-        }
-      });
+    if (
+      ready &&
+      typeof dimensions === "number" &&
+      dimensions > 0 &&
+      this.database.ensuredVectorDimensions !== dimensions
+    ) {
+      const database = this.database;
+      await database.updateIndexStructure(
+        {
+          type: "vector.ensure",
+          input: {
+            dimensions,
+            currentDimensions: this.vector.dims,
+            state: {
+              vector: this.vector,
+              fts: this.fts,
+              extensionPath: this.vector.extensionPath,
+            },
+          },
+        },
+        () => this.assertDatabaseMutationCurrent(database),
+      );
+      database.ensuredVectorDimensions = dimensions;
+      this.vector.dims = dimensions;
     }
     return ready;
   }
 
   private async loadVectorExtension(): Promise<boolean> {
-    if (this.vector.available === true && this.hasVectorRebuildMarker()) {
-      this.markConfiguredSourcesForFullReindex();
-      return false;
-    }
-    // Child KNN proves capability, but this connection still needs its own extension setup.
     if (this.vector.available === false) {
       return false;
     }
@@ -491,23 +585,25 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       const resolvedPath = this.vector.extensionPath?.trim()
         ? resolveUserPath(this.vector.extensionPath)
         : undefined;
-      const loaded = await loadSqliteVecExtension({ db: this.db, extensionPath: resolvedPath });
-      if (!loaded.ok) {
-        throw new Error(loaded.error ?? "unknown sqlite-vec load error");
+      const database = this.database;
+      const loaded = await database.prepareVector(resolvedPath, () => {
+        if (this.closed || database.closed || !database.db.isOpen) {
+          throw new Error("Memory database owner closed before vector preparation");
+        }
+      });
+      if (!loaded) {
+        throw new Error("Memory vector preparation did not complete");
       }
       this.vector.extensionPath = loaded.extensionPath;
       this.vector.available = true;
-      if (this.hasVectorRebuildMarker()) {
+      if (["incomplete", "unverified"].includes(database.facts.vectorState.state)) {
         // A skipped vector write/delete can leave both missing and extra rows.
         // Refuse partial KNN results and let the normal shadow reindex rebuild all
         // configured sources before this manager treats vectors as ready.
         this.markConfiguredSourcesForFullReindex();
         return false;
       }
-      if (
-        !this.database.readOnly &&
-        (await this.withDatabaseWrite(() => this.dropLegacyVectorTable()))
-      ) {
+      if (loaded.retiredLegacy) {
         // A broad dirty sync can skip unchanged files whose source hashes were
         // migrated. Force the next sync to republish the derived vector rows.
         this.dirty = true;
@@ -523,15 +619,6 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     }
   }
 
-  private hasVectorRebuildMarker(): boolean {
-    return requiresMemoryVectorRebuild({
-      db: this.db,
-      vectorTable: VECTOR_TABLE,
-      metaVectorDims: this.readMeta()?.vectorDims,
-      hasSemanticChunks: this.hasSemanticChunks(),
-    });
-  }
-
   protected markConfiguredSourcesForFullReindex(): void {
     // This flag selects the shadow-reindex path even for a sessions-only index;
     // the rebuild itself still filters work through the configured sources.
@@ -545,46 +632,6 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     }
   }
 
-  private ensureVectorTable(dimensions: number): void {
-    if (this.vector.dims === dimensions && memoryTableExists(this.db, VECTOR_TABLE)) {
-      return;
-    }
-    if (!this.dropVectorTable()) {
-      throw new Error(`Failed to reset ${VECTOR_TABLE} before rebuilding vector dimensions`);
-    }
-    this.db.exec(
-      `CREATE VIRTUAL TABLE IF NOT EXISTS ${VECTOR_TABLE} USING vec0(\n` +
-        `  id TEXT PRIMARY KEY,\n` +
-        `  embedding FLOAT[${dimensions}]\n` +
-        `)`,
-    );
-    this.vector.dims = dimensions;
-  }
-
-  private dropLegacyVectorTable(): boolean {
-    if (!memoryTableExists(this.db, LEGACY_VECTOR_TABLE)) {
-      return false;
-    }
-    try {
-      this.db.exec(`DROP TABLE ${LEGACY_VECTOR_TABLE}`);
-      return true;
-    } catch (err) {
-      log.debug(`Failed to drop ${LEGACY_VECTOR_TABLE}: ${formatErrorMessage(err)}`);
-      return false;
-    }
-  }
-
-  private dropVectorTable(): boolean {
-    try {
-      this.db.exec(`DROP TABLE IF EXISTS ${VECTOR_TABLE}`);
-      return true;
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      log.debug(`Failed to drop ${VECTOR_TABLE}: ${message}`);
-      return false;
-    }
-  }
-
   protected buildSourceFilter(
     alias?: string,
     sourcesOverride?: MemorySource[],
@@ -593,39 +640,11 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     return buildMemorySourceFilter(alias, sources);
   }
 
-  protected ensureSchema() {
-    const result = ensureMemoryIndexSchema({
-      db: this.db,
-      cacheEnabled: this.cache.enabled,
-      ftsEnabled: this.fts.enabled,
-      ftsTokenizer: this.settings.store.fts.tokenizer,
-    });
-    this.fts.available = result.ftsAvailable;
-    if (result.ftsError) {
-      this.fts.loadError = result.ftsError;
-      // Only warn when hybrid search is enabled; otherwise this is expected noise.
-      if (this.fts.enabled) {
-        log.warn(`fts unavailable: ${result.ftsError}`);
-      }
-    }
-  }
-
   protected readMeta(): MemoryIndexMeta | null {
-    const { meta, serialized } = readMemoryIndexMetadata(this.db);
-    this.database.lastMetaSerialized = serialized;
-    return meta;
+    return this.database.facts.meta;
   }
 
-  protected writeMeta(meta: MemoryIndexMeta) {
-    const value = JSON.stringify(meta);
-    if (this.database.lastMetaSerialized === value) {
-      return;
-    }
-    this.db
-      .prepare(
-        `INSERT INTO memory_index_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-      )
-      .run(META_KEY, value);
-    this.database.lastMetaSerialized = value;
+  protected writeMeta(meta: MemoryIndexMeta): Promise<void> {
+    return this.database.writeMetadata(meta);
   }
 }

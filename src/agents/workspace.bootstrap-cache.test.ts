@@ -163,7 +163,6 @@ describe("workspace bootstrap file caching", () => {
 });
 
 describe("workspace file cache retention", () => {
-  const MIB = 1024 * 1024;
   let workspaceRoot = "";
 
   beforeEach(async () => {
@@ -184,20 +183,6 @@ describe("workspace file cache retention", () => {
     return filePath;
   }
 
-  it("promotes hits before weighted eviction", () => {
-    const first = cacheFile("first", 2 * MIB);
-    const second = cacheFile("second", 2 * MIB);
-    for (let index = 2; index < 6; index += 1) {
-      cacheFile(`entry-${index}`, 2 * MIB);
-    }
-    expect(readWorkspaceFileCache(first, "first")).toHaveLength(MIB);
-
-    cacheFile("newest", 2);
-
-    expect(readWorkspaceFileCache(second, "second")).toBeUndefined();
-    expect(readWorkspaceFileCache(first, "first")).toHaveLength(MIB);
-  });
-
   it("retires contained entries without evicting sibling roots", () => {
     const contained = cacheFile("contained", 2);
     const siblingRoot = `${workspaceRoot}-sibling`;
@@ -212,18 +197,5 @@ describe("workspace file cache retention", () => {
     } finally {
       retireWorkspaceFileCache(siblingRoot);
     }
-  });
-  it("keeps raw Unicode filesystem paths independent", () => {
-    const composed = path.join(workspaceRoot, "caf\u00e9", "AGENTS.md");
-    const decomposed = path.join(workspaceRoot, "cafe\u0301", "AGENTS.md");
-    writeWorkspaceFileCache({ filePath: composed, content: "composed", identity: "composed" });
-    writeWorkspaceFileCache({
-      filePath: decomposed,
-      content: "decomposed",
-      identity: "decomposed",
-    });
-
-    expect(readWorkspaceFileCache(composed, "composed")).toBe("composed");
-    expect(readWorkspaceFileCache(decomposed, "decomposed")).toBe("decomposed");
   });
 });

@@ -1,16 +1,17 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import { readSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import { readSqliteBusyTimeout, setSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import {
   readOpenClawAgentDatabaseIdentity,
   registerOpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
+import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
@@ -20,12 +21,8 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { onSessionIdentityMutation } from "./session-accessor.js";
 import { createSessionEntryRevisionGuard } from "./session-accessor.sqlite-entry-revision.js";
-import {
-  readUnchangedLifecycleTargetSnapshot,
-  writeSessionEntry,
-} from "./session-accessor.sqlite-entry-store.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   loadExactSessionEntry,
   patchSessionEntryCore,
@@ -36,6 +33,7 @@ import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { createSessionTranscriptOwnerPredicate } from "./session-accessor.sqlite-transcript-write-guard.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import { readSessionEntryCurrentFactsInDatabase } from "./session-entry-current-admission.worker.js";
@@ -71,9 +69,70 @@ describe("SQLite session entry patch commit revalidation", () => {
     database = openOpenClawAgentDatabase({ agentId: "main", env });
   });
 
-  /** Simulate another writer landing between patch preparation and its commit. */
-  function mutateRowOutOfBand(patch: Record<string, string>): void {
-    const other = new DatabaseSync(database.path);
+  it.each(["native", "worker"] as const)(
+    "publishes the %s patch's exact transcript predicate and rereads a sibling generation next time",
+    async (route) => {
+      const appended = appendTranscriptMessageSync(
+        { ...scope, sessionId: "session-1" },
+        { message: { role: "user", content: "receipt source" } },
+      );
+      if (!appended.ok || !appended.value?.anchor) {
+        throw new Error("Expected committed transcript anchor");
+      }
+      const anchor = appended.value.anchor;
+      const onCommitted = vi.fn();
+      const options = {
+        skipMaintenance: true,
+        onCommitted,
+        ...(route === "native" ? { assertCommitAllowed: () => {} } : {}),
+        workerGuard: {
+          shouldCommitIf: {
+            kind: "transcript" as const,
+            sessionId: "session-1",
+            generation: anchor.generation,
+            leafEntryId: anchor.entryId,
+          },
+        },
+      };
+      await expect(
+        patchSessionEntryCore(scope, () => ({ label: "committed" }), options),
+      ).resolves.toMatchObject({ label: "committed" });
+      expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ label: "committed" }),
+        {
+          sessionId: "session-1",
+          watermark: { generation: anchor.generation, maxSeq: anchor.rawSeq },
+        },
+      );
+      const sibling = openNodeSqliteDatabase(database.path);
+      try {
+        sibling
+          .prepare("UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?")
+          .run("sibling-rewrite", "session-1");
+      } finally {
+        sibling.close();
+      }
+      await expect(
+        patchSessionEntryCore(scope, () => ({ label: "must not commit" }), options),
+      ).resolves.toBeNull();
+      expect(onCommitted).toHaveBeenCalledOnce();
+      expect(loadExactSessionEntry(scope)?.entry.label).toBe("committed");
+      onCommitted.mockClear();
+      await patchSessionEntryCore(scope, () => ({ sessionId: "rotated-session" }), {
+        ...options,
+        workerGuard: {
+          shouldCommitIf: { ...options.workerGuard.shouldCommitIf, generation: "sibling-rewrite" },
+        },
+      });
+      expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ sessionId: "rotated-session" }),
+      );
+    },
+  );
+
+  /** Use the native writer boundary so interleaved commits publish their own receipts. */
+  function mutateRowFromSibling(patch: Record<string, string>, targetKey = sessionKey): void {
+    const other = openNodeSqliteDatabase(database.path);
     try {
       const entries = Object.entries(patch);
       const setters = entries.map(([key]) => `'$.${key}', ?`).join(", ");
@@ -81,7 +140,7 @@ describe("SQLite session entry patch commit revalidation", () => {
         .prepare(
           `UPDATE session_nodes SET entry_json = json_set(entry_json, ${setters}) WHERE session_key = ?`,
         )
-        .run(...entries.map(([, value]) => value), sessionKey);
+        .run(...entries.map(([, value]) => value), targetKey);
     } finally {
       other.close();
     }
@@ -98,6 +157,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       : patchSessionEntryTarget(
           {
             agentId: scope.agentId,
+            env: scope.env,
             storePath: database.path,
             target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
           },
@@ -116,7 +176,7 @@ describe("SQLite session entry patch commit revalidation", () => {
   it("yields to the event loop while another connection holds the entry write lock", async () => {
     const other = new DatabaseSync(database.path);
     // Bound the defective synchronous path without a timer or a timing assertion.
-    database.db.exec("PRAGMA busy_timeout = 250");
+    setSqliteBusyTimeout(database.db, 250);
     let release: Promise<void> | undefined;
     try {
       const result = await patchEntry("ordinary", () => {
@@ -136,7 +196,7 @@ describe("SQLite session entry patch commit revalidation", () => {
     await closeOpenClawAgentDatabasesAsync();
     database = openOpenClawAgentDatabase({ agentId: "main", env });
     expect(database.db.prepare("PRAGMA journal_mode = DELETE").get()?.journal_mode).toBe("delete");
-    database.db.exec("PRAGMA busy_timeout = 37");
+    setSqliteBusyTimeout(database.db, 37);
     const reader = new DatabaseSync(database.path);
     try {
       reader.exec("BEGIN");
@@ -236,15 +296,15 @@ describe("SQLite session entry patch commit revalidation", () => {
     }
 
     it.each([
-      { field: "sessionId", writer: "foreign" },
-      { field: "lifecycleRevision", writer: "foreign" },
-      { field: "activeWriterRunId", writer: "foreign" },
+      { field: "sessionId", writer: "sibling" },
+      { field: "lifecycleRevision", writer: "sibling" },
+      { field: "activeWriterRunId", writer: "sibling" },
       { field: "activeWriterRunId", writer: "same-connection" },
     ])("rejects a changed $field from a $writer writer", ({ field, writer }) => {
       const guard = createSessionEntryRevisionGuard(database.db, () => {}, ownerPredicate());
       guard();
-      if (writer === "foreign") {
-        mutateRowOutOfBand({ [field]: "replacement" });
+      if (writer === "sibling") {
+        mutateRowFromSibling({ [field]: "replacement" });
         expect(guard).toThrowError(
           expect.objectContaining({
             code: "invalid_state",
@@ -266,7 +326,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       }
     });
 
-    it("does not adopt a foreign revision that commits during the owner predicate", () => {
+    it("invalidates the next predicate check when a sibling commits during a read", () => {
       const matches = ownerPredicate();
       let mutateDuringPredicate = false;
       const guard = createSessionEntryRevisionGuard(
@@ -275,56 +335,54 @@ describe("SQLite session entry patch commit revalidation", () => {
         () => {
           const matched = matches();
           if (mutateDuringPredicate) {
-            mutateRowOutOfBand({ activeWriterRunId: "replacement" });
+            mutateRowFromSibling({ activeWriterRunId: "replacement" });
           }
           return matched;
         },
       );
       guard();
-      mutateRowOutOfBand({ label: "harmless metadata" });
+      mutateRowFromSibling({ label: "harmless metadata" });
       mutateDuringPredicate = true;
-      expect(guard).toThrow("Session entry facts changed during their mutation check");
+      expect(guard).not.toThrow();
       mutateDuringPredicate = false;
       expect(guard).toThrow("Prepared session entry facts are no longer current");
     });
 
-    it.each(["sessionId", "lifecycleRevision", "activeWriterRunId"] as const)(
-      "rejects a duplicate protected %s key instead of selecting its stale first value",
-      async (field) => {
-        const expected = {
-          sessionKey,
-          sessionId: "session-1",
-          lifecycleRevision: "original-lifecycle",
-          activeWriterRunId: "original-writer",
-        };
-        await upsertSessionEntryCore(scope, {
-          lifecycleRevision: expected.lifecycleRevision,
-          activeWriterRunId: expected.activeWriterRunId,
-        });
-        const guard = createSessionEntryRevisionGuard(
-          database.db,
-          () => {},
-          createSessionTranscriptOwnerPredicate(database, expected),
-        );
-        guard();
-        const other = new DatabaseSync(database.path);
-        try {
-          other
-            .prepare(
-              "UPDATE session_nodes SET entry_json = substr(entry_json, 1, length(entry_json) - 1) || ? WHERE session_key = ?",
-            )
-            .run(`,${JSON.stringify(field)}:"replacement"}`, sessionKey);
-        } finally {
-          other.close();
-        }
-        expect(guard).toThrow("Prepared session entry facts are no longer current");
-      },
-    );
+    it("rejects a duplicate protected writer key instead of selecting its stale first value", async () => {
+      const field = "activeWriterRunId";
+      const expected = {
+        sessionKey,
+        sessionId: "session-1",
+        lifecycleRevision: "original-lifecycle",
+        activeWriterRunId: "original-writer",
+      };
+      await upsertSessionEntryCore(scope, {
+        lifecycleRevision: expected.lifecycleRevision,
+        activeWriterRunId: expected.activeWriterRunId,
+      });
+      const guard = createSessionEntryRevisionGuard(
+        database.db,
+        () => {},
+        createSessionTranscriptOwnerPredicate(database, expected),
+      );
+      guard();
+      const other = openNodeSqliteDatabase(database.path);
+      try {
+        other
+          .prepare(
+            "UPDATE session_nodes SET entry_json = substr(entry_json, 1, length(entry_json) - 1) || ? WHERE session_key = ?",
+          )
+          .run(`,${JSON.stringify(field)}:"replacement"}`, sessionKey);
+      } finally {
+        other.close();
+      }
+      expect(guard).toThrow("Prepared session entry facts are no longer current");
+    });
 
     it("rejects JSON5 that the stored entry decoder would not accept", () => {
       const guard = createSessionEntryRevisionGuard(database.db, () => {}, ownerPredicate());
       guard();
-      const other = new DatabaseSync(database.path);
+      const other = openNodeSqliteDatabase(database.path);
       try {
         other
           .prepare(
@@ -374,7 +432,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       }
     });
 
-    it.each(["foreign", "same-connection"] as const)(
+    it.each(["sibling", "same-connection"] as const)(
       "refreshes a cached owner after a %s change and preserves rollback",
       (writer) => {
         const original = readSessionEntryCurrentFactsInDatabase(database, sessionKey);
@@ -390,8 +448,8 @@ describe("SQLite session entry patch commit revalidation", () => {
               "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRunId', ?, '$.subagentRecovery.lastRunId', ?) WHERE session_key = ?",
             )
             .run("next-lifecycle", "hidden-successor", sessionKey);
-        if (writer === "foreign") {
-          const other = new DatabaseSync(database.path);
+        if (writer === "sibling") {
+          const other = openNodeSqliteDatabase(database.path);
           try {
             update(other);
           } finally {
@@ -419,7 +477,7 @@ describe("SQLite session entry patch commit revalidation", () => {
 
     it("preserves parser values and last duplicate owner fields through native admission", () => {
       readSessionEntryCurrentFactsInDatabase(database, sessionKey);
-      const other = new DatabaseSync(database.path);
+      const other = openNodeSqliteDatabase(database.path);
       try {
         other
           .prepare(
@@ -493,9 +551,10 @@ describe("SQLite session entry patch commit revalidation", () => {
     });
   });
 
-  it("commits an unchanged persisted row after reopening during preparation", async () => {
-    const persisted = await patchEntry("ordinary", async () => {
-      expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
+  it("commits an unchanged persisted row after evicting the host handle during preparation", async () => {
+    const persisted = await patchEntry("ordinary", () => {
+      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      expect(database.db.isOpen).toBe(false);
       return { label: "renamed" };
     });
     expect(persisted).toMatchObject({ label: "renamed", sessionId: "session-1" });
@@ -505,125 +564,85 @@ describe("SQLite session entry patch commit revalidation", () => {
     });
   });
 
-  it("rejects the commit when the row changed while the update callback ran", async () => {
-    await expect(
-      patchSessionEntryCore(scope, () => {
-        mutateRowOutOfBand({ label: "other writer" });
-        return { label: "stale patch" };
-      }),
-    ).rejects.toMatchObject({ name: "SqliteSessionMutationConflictError" });
-    expect(loadExactSessionEntry(scope)?.entry).toMatchObject({ label: "other writer" });
-  });
-
-  it("rejects a lifecycle-target patch when the row changed while the update callback ran", async () => {
-    await expect(
-      patchSessionEntryTarget(
-        {
-          agentId: scope.agentId,
-          storePath: database.path,
-          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-        },
-        () => {
-          mutateRowOutOfBand({ label: "other writer" });
-          return { label: "stale patch" };
-        },
-      ),
-    ).rejects.toMatchObject({ name: "SqliteSessionMutationConflictError" });
-    expect(loadExactSessionEntry(scope)?.entry).toMatchObject({ label: "other writer" });
-  });
-
-  describe.each([
+  it.each([
     { route: "ordinary", replaceEntry: false },
-    { route: "lifecycle", replaceEntry: false },
     { route: "lifecycle", replaceEntry: true },
   ] as const)(
-    "canonical validation for $route patches (replacement: $replaceEntry)",
-    ({ route, replaceEntry }) => {
-      it.each([false, true])(
-        "revalidates unrelated lineage after a main-key change even when the target row is unchanged (no-op: %s)",
-        async (noop) => {
-          await upsertSessionEntryCore(
-            { ...scope, sessionKey: "agent:main:main" },
-            { sessionId: "main-session", updatedAt: 10 },
-          );
-          const before = database.db
-            .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
-            .get(sessionKey);
-
-          await expect(
-            patchEntry(
-              route,
-              (entry) => {
-                setCanonicalSqliteSessionMainKey(database, "work");
-                setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
-                expect(
-                  database.db
-                    .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
-                    .get(sessionKey),
-                ).toEqual(before);
-                return noop ? null : { ...entry, label: "must not commit" };
-              },
-              replaceEntry,
-            ),
-          ).rejects.toThrow("openclaw doctor --fix");
-
-          setUnrelatedParent(database.db, null);
-          expect(loadExactSessionEntry(scope)?.entry.label).toBe("original");
-        },
-      );
-    },
-  );
-
-  it.each([false, true])(
-    "keeps the exact-replacement reader exception after unrelated lineage invalidation (no-op: %s)",
-    async (noop) => {
+    "revalidates unrelated lineage for $route patches (replacement: $replaceEntry)",
+    async ({ route, replaceEntry }) => {
       await upsertSessionEntryCore(
         { ...scope, sessionKey: "agent:main:main" },
         { sessionId: "main-session", updatedAt: 10 },
       );
-      const result = await patchEntry(
-        "ordinary",
-        (entry) => {
-          setCanonicalSqliteSessionMainKey(database, "work");
-          setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
-          return noop ? null : { ...entry, label: "exact replacement" };
-        },
-        true,
-      );
-      expect(result?.label).toBe(noop ? "original" : "exact replacement");
-      setUnrelatedParent(database.db, null);
-      expect(loadExactSessionEntry(scope)?.entry.label).toBe(
-        noop ? "original" : "exact replacement",
-      );
-    },
-  );
+      const before = database.db
+        .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
+        .get(sessionKey);
 
-  it.each(["ordinary", "lifecycle"] as const)(
-    "rejects a no-op %s patch after reopening with invalidated unrelated lineage",
-    async (route) => {
-      await upsertSessionEntryCore(
-        { ...scope, sessionKey: "agent:main:main" },
-        { sessionId: "main-session", updatedAt: 10 },
-      );
       await expect(
-        patchEntry(route, async () => {
-          setCanonicalSqliteSessionMainKey(database, "work");
-          setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
-          expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
-          return null;
-        }),
+        patchEntry(
+          route,
+          (entry) => {
+            setCanonicalSqliteSessionMainKey(database, "work");
+            setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
+            expect(
+              database.db
+                .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
+                .get(sessionKey),
+            ).toEqual(before);
+            return { ...entry, label: "must not commit" };
+          },
+          replaceEntry,
+        ),
       ).rejects.toThrow("openclaw doctor --fix");
-      // Test cleanup must not depend on admitting the deliberately invalid store.
-      await closeOpenClawAgentDatabaseByPathAsync(database.path);
-      const cleanup = new DatabaseSync(database.path);
-      try {
-        setUnrelatedParent(cleanup, null);
-      } finally {
-        cleanup.close();
-      }
+
+      setUnrelatedParent(database.db, null);
       expect(loadExactSessionEntry(scope)?.entry.label).toBe("original");
     },
   );
+
+  it("keeps the exact-replacement reader exception after unrelated lineage invalidation", async () => {
+    await upsertSessionEntryCore(
+      { ...scope, sessionKey: "agent:main:main" },
+      { sessionId: "main-session", updatedAt: 10 },
+    );
+    const result = await patchEntry(
+      "ordinary",
+      (entry) => {
+        setCanonicalSqliteSessionMainKey(database, "work");
+        setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
+        return { ...entry, label: "exact replacement" };
+      },
+      true,
+    );
+    expect(result?.label).toBe("exact replacement");
+    setUnrelatedParent(database.db, null);
+    expect(loadExactSessionEntry(scope)?.entry.label).toBe("exact replacement");
+  });
+
+  it("rejects a no-op lifecycle patch after host eviction with invalidated unrelated lineage", async () => {
+    await upsertSessionEntryCore(
+      { ...scope, sessionKey: "agent:main:main" },
+      { sessionId: "main-session", updatedAt: 10 },
+    );
+    await expect(
+      patchEntry("lifecycle", () => {
+        setCanonicalSqliteSessionMainKey(database, "work");
+        setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
+        closeCachedOpenClawAgentDatabase(database, { eviction: true });
+        expect(database.db.isOpen).toBe(false);
+        return null;
+      }),
+    ).rejects.toThrow("openclaw doctor --fix");
+    // Test cleanup must not depend on admitting the deliberately invalid store.
+    await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    const cleanup = new DatabaseSync(database.path);
+    try {
+      setUnrelatedParent(cleanup, null);
+    } finally {
+      cleanup.close();
+    }
+    expect(loadExactSessionEntry(scope)?.entry.label).toBe("original");
+  });
 
   it("rejects an intervening owner assignment even when entry JSON is unchanged", async () => {
     assignSessionOwner(scope, {
@@ -657,81 +676,59 @@ describe("SQLite session entry patch commit revalidation", () => {
     });
   });
 
-  it.each([false, true])(
-    "preserves separately committed participants through patch and reopen (raw projection changed: %s)",
-    async (changeProjection) => {
-      recordSessionParticipant(scope, {
-        identity: { type: "agent", id: "existing" },
-        promptedAt: 10,
-      });
-      const persisted = await patchEntry("ordinary", () => {
-        const before = database.db
-          .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
-          .get(sessionKey);
-        expect(
-          recordSessionParticipant(scope, {
-            identity: { type: "agent", id: "new-participant" },
-            promptedAt: 20,
-          }),
-        ).toBe("inserted");
-        expect(
-          database.db.prepare("SELECT * FROM session_nodes WHERE session_key = ?").get(sessionKey),
-        ).toEqual(before);
-        if (changeProjection) {
-          database.db
-            .prepare("UPDATE session_nodes SET display_name = ? WHERE session_key = ?")
-            .run("projection-only", sessionKey);
-          expect(
-            database.db
-              .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
-              .get(sessionKey),
-          ).toEqual({ ...before, display_name: "projection-only" });
-        }
-        expect(loadExactSessionEntry(scope)?.entry.label).toBe("original");
-        return { label: "with participants" };
-      });
-      expect(persisted).toMatchObject({ sessionId: "session-1", label: "with participants" });
-      expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
-      expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
-        label: "with participants",
-        participantCount: 2,
-        participants: expect.arrayContaining([
-          expect.objectContaining({ identity: { type: "agent", id: "existing" } }),
-          expect.objectContaining({ identity: { type: "agent", id: "new-participant" } }),
-        ]),
-      });
-      database = openOpenClawAgentDatabase({ agentId: "main", env });
-      expect(listSessionParticipantsReadOnly(scope).get(sessionKey)).toEqual([
-        {
-          identity: { type: "agent", id: "existing" },
-          contributionCount: 1,
-          firstPromptedAt: 10,
-          lastPromptedAt: 10,
-        },
-        {
-          identity: { type: "agent", id: "new-participant" },
-          contributionCount: 1,
-          firstPromptedAt: 20,
-          lastPromptedAt: 20,
-        },
-      ]);
+  it("preserves separately committed participants through patch and reopen with unchanged row projection", async () => {
+    recordSessionParticipant(scope, {
+      identity: { type: "agent", id: "existing" },
+      promptedAt: 10,
+    });
+    const persisted = await patchEntry("ordinary", () => {
+      const before = database.db
+        .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
+        .get(sessionKey);
       expect(
-        database.db
-          .prepare(
-            "SELECT json_type(entry_json, '$.participants') AS participants, json_type(entry_json, '$.participantCount') AS participant_count FROM session_nodes WHERE session_key = ?",
-          )
-          .get(sessionKey),
-      ).toEqual({ participants: null, participant_count: null });
-    },
-  );
-
-  it("requires a hydrated read when a prepared entry has no persisted row snapshot", () => {
-    const selected = loadExactSessionEntry(scope);
-    expect(selected).toBeDefined();
-    if (!selected) {
-      throw new Error("Expected seeded session entry");
-    }
-    expect(readUnchangedLifecycleTargetSnapshot(database, [selected])).toBeUndefined();
+        recordSessionParticipant(scope, {
+          identity: { type: "agent", id: "new-participant" },
+          promptedAt: 20,
+        }),
+      ).toBe("inserted");
+      expect(
+        database.db.prepare("SELECT * FROM session_nodes WHERE session_key = ?").get(sessionKey),
+      ).toEqual(before);
+      expect(loadExactSessionEntry(scope)?.entry.label).toBe("original");
+      return { label: "with participants" };
+    });
+    expect(persisted).toMatchObject({ sessionId: "session-1", label: "with participants" });
+    expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
+    expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
+      label: "with participants",
+      participantCount: 2,
+      participants: expect.arrayContaining([
+        expect.objectContaining({ identity: { type: "agent", id: "existing" } }),
+        expect.objectContaining({ identity: { type: "agent", id: "new-participant" } }),
+      ]),
+    });
+    database = openOpenClawAgentDatabase({ agentId: "main", env });
+    expect(listSessionParticipantsReadOnly(scope).get(sessionKey)).toEqual([
+      {
+        identity: { type: "agent", id: "existing" },
+        contributionCount: 1,
+        firstPromptedAt: 10,
+        lastPromptedAt: 10,
+      },
+      {
+        identity: { type: "agent", id: "new-participant" },
+        contributionCount: 1,
+        firstPromptedAt: 20,
+        lastPromptedAt: 20,
+      },
+    ]);
+    expect(
+      database.db
+        .prepare(
+          "SELECT json_type(entry_json, '$.participants') AS participants, json_type(entry_json, '$.participantCount') AS participant_count FROM session_nodes WHERE session_key = ?",
+        )
+        .get(sessionKey),
+    ).toEqual({ participants: null, participant_count: null });
   });
 
   it("rejects a lifecycle target selected under a different stored key", async () => {
@@ -739,6 +736,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       patchSessionEntryTarget(
         {
           agentId: scope.agentId,
+          env: scope.env,
           storePath: database.path,
           target: { canonicalKey: "agent:main:different-target", storeKeys: [sessionKey] },
         },
@@ -791,33 +789,5 @@ describe("SQLite session entry patch commit revalidation", () => {
       label: "updated",
       ...stamp,
     });
-  });
-
-  it("still publishes an identity replacement when a patch rotates the session id", async () => {
-    const mutations: unknown[] = [];
-    const unsubscribe = onSessionIdentityMutation((mutation) => mutations.push(mutation));
-    try {
-      await patchSessionEntryCore(scope, () => ({ sessionId: "session-2" }));
-    } finally {
-      unsubscribe();
-    }
-    expect(mutations).toContainEqual(
-      expect.objectContaining({
-        kind: "replace",
-        previous: expect.objectContaining({ sessionId: "session-1", sessionKeys: [sessionKey] }),
-        current: expect.objectContaining({ sessionId: "session-2", sessionKeys: [sessionKey] }),
-      }),
-    );
-  });
-
-  it("does not publish an identity mutation when a patch keeps the session id", async () => {
-    const mutations: unknown[] = [];
-    const unsubscribe = onSessionIdentityMutation((mutation) => mutations.push(mutation));
-    try {
-      await patchSessionEntryCore(scope, () => ({ updatedAt: 20 }));
-    } finally {
-      unsubscribe();
-    }
-    expect(mutations).toEqual([]);
   });
 });

@@ -19,12 +19,10 @@ export function shouldHandleNavigationClick(event: MouseEvent): boolean {
 }
 
 export function anchorFromNavigationEvent(event: Event): HTMLAnchorElement | null {
-  for (const target of event.composedPath()) {
-    if (target instanceof HTMLAnchorElement) {
-      return target;
-    }
-  }
-  return event.target instanceof Element ? event.target.closest("a") : null;
+  return (
+    event.composedPath().find((target) => target instanceof HTMLAnchorElement) ??
+    (event.target instanceof Element ? event.target.closest("a") : null)
+  );
 }
 
 /** External web links that may be handed to a browser surface. */

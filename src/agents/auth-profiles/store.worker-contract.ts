@@ -1,9 +1,12 @@
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import type {
   AuthProfileCredential,
-  AuthProfileRowRead,
   AuthProfileStore,
+  AuthProfileStoreOwner,
+  OAuthCredential,
   UserModelAuthProfile,
+  SharedAuthStoreOwnership,
 } from "./types.js";
 import type {
   PersonalAuthProfileUsageReduction,
@@ -50,7 +53,43 @@ export type AuthProfileUsageResult =
   | { ok: true; receipt: AuthProfileUsageReceipt }
   | { ok: false; error: OpenClawStateWorkerErrorPayload };
 
-export type AuthProfileWorkerOperations = {
+export type AuthStoreUpdateInput = {
+  owner: AuthProfileStoreOwner;
+  agentDir?: string;
+  envOnly: boolean;
+  peerGeneration?: { profileId: string; generation: OAuthCredential };
+};
+
+export type AuthStoreUpdatePublication = AuthProfileUsageReceipt["publication"];
+
+export type AuthStoreUpdateOperations = {
+  "authProfiles.update": { input: AuthStoreUpdateInput; output: boolean };
+};
+
+export type AuthProfileBootstrapInput = {
+  sourcePath: string;
+  sourceIdentity?: DatabasePathIdentity;
+  legacySourcePaths: string[];
+};
+
+export type AuthProfileBootstrapResult = {
+  ownership: SharedAuthStoreOwnership;
+  relocated: boolean;
+};
+
+export type AuthProfileWorkerOperations = AuthStoreUpdateOperations & {
+  "authProfiles.bootstrap": {
+    input: AuthProfileBootstrapInput;
+    output: AuthProfileBootstrapResult;
+  };
+  "authProfiles.personalAccept": {
+    input: { profileId: string; credential: AuthProfileCredential };
+    output: boolean;
+  };
+  "authProfiles.personalReplace": {
+    input: { profileId: string; expected: UserModelAuthProfile; next: UserModelAuthProfile };
+    output: UserModelAuthProfile | undefined;
+  };
   "authProfiles.usage": { input: AuthProfileUsageInput; output: AuthProfileUsageResult };
   "authProfiles.personalUsage": {
     input: { profileId: string; reduction: PersonalAuthProfileUsageReduction };
@@ -58,7 +97,7 @@ export type AuthProfileWorkerOperations = {
   };
   "authProfiles.read": {
     input: { artifactPreserving: boolean };
-    output: AuthProfileRowRead;
+    output: void;
   };
   "authProfiles.sharedOwnership": {
     input: { artifactPreserving: boolean };

@@ -1,4 +1,4 @@
-import { runSqlitePinnedReadSnapshotSync } from "../../infra/sqlite-pinned-read-snapshot.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   requestSqliteWorkerOperationAdmission,
   takeSqliteWorkerOperationAdmissionAttachment,
@@ -76,8 +76,11 @@ export const channelIngressOperations = {
     input: ChannelIngressListInput & { readOnly: boolean },
     { open, stateOptions },
   ) => {
-    const read = ({ db }: Pick<OpenClawStateDatabase, "db">) =>
-      runSqlitePinnedReadSnapshotSync(db, () => kernel.listChannelIngressRowsInDatabase(db, input));
+    const read = ({ db }: Pick<OpenClawStateDatabase, "db">) => {
+      const select = () => kernel.listChannelIngressRowsInDatabase(db, input);
+      // Pending listings paginate past corrupt payloads; other statuses use one SELECT.
+      return input.status === "pending" ? runSqliteReadSnapshotSync(db, select) : select();
+    };
     return input.readOnly
       ? (withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, stateOptions()) ?? [])
       : read(open());
@@ -87,9 +90,8 @@ export const channelIngressOperations = {
     { open },
   ) => {
     const { db } = open();
-    return runSqlitePinnedReadSnapshotSync(db, () =>
-      kernel.readChannelIngressClaimSnapshotInDatabase(db, input),
-    );
+    const read = () => kernel.readChannelIngressClaimSnapshotInDatabase(db, input);
+    return input.candidateIds?.length ? runSqliteReadSnapshotSync(db, read) : read();
   },
   "channelIngress.staleClaims": (
     input: Parameters<typeof kernel.listStaleChannelIngressClaimsInDatabase>[1],

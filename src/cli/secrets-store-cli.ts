@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import type { SecretsStoreMutationResult } from "../../packages/gateway-protocol/src/schema/secrets.js";
 import { isRedactedSecretValue } from "../config/redact-sentinel.js";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { danger } from "../globals.js";
@@ -10,6 +11,7 @@ import type {
   SecretStoreValidationError,
 } from "../secrets/store/secret-store.js";
 import { formatDocsHelp } from "./help-format.js";
+import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { runSecretsCommand } from "./secrets-cli-output.js";
 
 type OutputOptions = { json?: boolean; plain?: boolean; scope?: string };
@@ -134,17 +136,28 @@ function renderList(entries: SecretStoreEntryMetadata[], options: OutputOptions)
   }
 }
 
-async function noteGatewayReload(): Promise<void> {
-  try {
-    const { readActiveGatewayLockIdentity } = await import("../infra/gateway-lock.js");
-    if (await readActiveGatewayLockIdentity()) {
-      defaultRuntime.log(
-        "A gateway is running. Run `openclaw secrets reload` for config-referenced values to take effect.",
-      );
-    }
-  } catch {
-    // The store write is authoritative; gateway detection is only an actionable courtesy.
-  }
+async function mutateStore(
+  method: string,
+  input: Record<string, unknown>,
+  target: string,
+  runLocal: (scope: {
+    env: NodeJS.ProcessEnv;
+    assertCurrent: () => void;
+  }) => Promise<{ kind?: StoreKind } | void>,
+): Promise<SecretsStoreMutationResult> {
+  return await runWithLocalStateOwner({
+    method,
+    params: input,
+    target,
+    recoveryCommand: "openclaw secrets store list",
+    runLocal: async (scope) => {
+      const result = await runLocal(scope);
+      const { purgeExpiredSecretStoreEntries } = await import("../secrets/store/secret-store.js");
+      scope.assertCurrent();
+      await purgeExpiredSecretStoreEntries({ database: { env: scope.env } });
+      return { ok: true, reloaded: false, ...result };
+    },
+  });
 }
 
 async function confirmMutation(message: string, yes: boolean | undefined): Promise<void> {
@@ -248,12 +261,21 @@ export function registerSecretStoreCli(secrets: Command): void {
             defaultRuntime.log(`Would update allowed hosts for ${name}.`);
             return;
           }
-          storeModule.updateSecretStoreAllowedHosts({
-            scope,
+          await mutateStore(
+            "secrets.store.allowedHosts",
+            { name, allowedHosts },
             name,
-            allowedHosts,
-            updatedBy: "cli",
-          });
+            async ({ env, assertCurrent }) => {
+              await storeModule.updateSecretStoreAllowedHosts({
+                scope,
+                name,
+                allowedHosts,
+                updatedBy: "cli",
+                database: { env },
+                assertCurrent,
+              });
+            },
+          );
           defaultRuntime.log(
             allowedHosts.length > 0
               ? `Allowed ${name} for ${allowedHosts.join(", ")}.`
@@ -266,9 +288,7 @@ export function registerSecretStoreCli(secrets: Command): void {
             ? options.value
             : await (
                 await import("./secrets-store-input.js")
-              ).readSecretStoreInput({
-                valueFile: options.valueFile,
-              });
+              ).readSecretStoreInput(options.valueFile);
         if (isRedactedSecretValue(value)) {
           const current = await storeModule.readSecretStoreValue({ scope, name });
           if (current.ok && !isRedactedSecretValue(current.value)) {
@@ -281,19 +301,29 @@ export function registerSecretStoreCli(secrets: Command): void {
           defaultRuntime.log(`Would ${kind === "secret" ? "write" : "set"} ${name} (${kind}).`);
           return;
         }
-        const storedKind = await storeModule.writeSecretStoreEntry({
-          scope,
+        const input = {
           name,
           value,
           kind,
           ...(allowedHosts !== undefined ? { allowedHosts } : {}),
           inheritExistingKind: options.kind === undefined,
           ...(options.value !== undefined ? { valueSource: "argv" as const } : {}),
-          updatedBy: "cli",
-        });
-        await storeModule.purgeExpiredSecretStoreEntries();
-        defaultRuntime.log(`Stored ${name} (${storedKind}).`);
-        await noteGatewayReload();
+        };
+        const result = await mutateStore(
+          "secrets.store.set",
+          input,
+          name,
+          async ({ env, assertCurrent }) => ({
+            kind: await storeModule.writeSecretStoreEntry({
+              ...input,
+              scope,
+              updatedBy: "cli",
+              database: { env },
+              assertCurrent,
+            }),
+          }),
+        );
+        defaultRuntime.log(`Stored ${name} (${result.kind ?? kind}).`);
       }),
     );
 
@@ -365,16 +395,20 @@ export function registerSecretStoreCli(secrets: Command): void {
           `Remove ${names.length} team store entr${names.length === 1 ? "y" : "ies"}?`,
           options.yes,
         );
-        const { deleteSecretStoreEntry, purgeExpiredSecretStoreEntries } =
-          await import("../secrets/store/secret-store.js");
+        const { deleteSecretStoreEntry } = await import("../secrets/store/secret-store.js");
         for (const name of names) {
-          await deleteSecretStoreEntry({ scope, name });
+          await mutateStore(
+            "secrets.store.delete",
+            { name },
+            name,
+            async ({ env, assertCurrent }) => {
+              await deleteSecretStoreEntry({ scope, name, database: { env }, assertCurrent });
+            },
+          );
         }
-        await purgeExpiredSecretStoreEntries();
         defaultRuntime.log(
           `Removed ${names.length} team store entr${names.length === 1 ? "y" : "ies"}.`,
         );
-        await noteGatewayReload();
       }),
     );
 
@@ -437,15 +471,22 @@ export function registerSecretStoreCli(secrets: Command): void {
           return;
         }
         await confirmMutation(`Import ${writable.length} team store entries?`, options.yes);
-        await storeModule.writeSecretStoreEntries({
-          scope,
-          entries: writable,
-          inheritExistingKind: options.kind === undefined,
-          updatedBy: "cli",
-        });
-        await storeModule.purgeExpiredSecretStoreEntries();
+        const input = { entries: writable, inheritExistingKind: options.kind === undefined };
+        await mutateStore(
+          "secrets.store.import",
+          input,
+          "team secret store import",
+          async ({ env, assertCurrent }) => {
+            await storeModule.writeSecretStoreEntries({
+              ...input,
+              scope,
+              updatedBy: "cli",
+              database: { env },
+              assertCurrent,
+            });
+          },
+        );
         defaultRuntime.log(`Imported ${writable.length} team store entries.`);
-        await noteGatewayReload();
       }),
     );
 }

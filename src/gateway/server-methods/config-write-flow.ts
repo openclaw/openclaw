@@ -159,29 +159,6 @@ export function shouldAwaitGatewayConfigApplication(params: {
   return !resolveConfigRestartRequirement(params).requiresRestart;
 }
 
-function resolveConfigRestartRequest(params: unknown) {
-  const {
-    sessionKey,
-    deliveryContext: requestedDeliveryContext,
-    threadId: requestedThreadId,
-    note,
-    restartDelayMs,
-  } = parseRestartRequestParams(params);
-
-  // Extract deliveryContext + threadId for routing after restart.
-  // Uses generic :thread: parsing plus plugin-owned session grammars.
-  const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
-    extractDeliveryInfo(sessionKey);
-
-  return {
-    sessionKey,
-    note,
-    restartDelayMs,
-    deliveryContext: requestedDeliveryContext ?? sessionDeliveryContext,
-    threadId: requestedThreadId ?? sessionThreadId,
-  };
-}
-
 /** Persists a gateway config write and returns follow-up work that must run after response. */
 export async function commitGatewayConfigWrite(params: {
   snapshot: ConfigWriteSnapshot;
@@ -267,8 +244,11 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
   sentinelPersisted: boolean;
   restart: ReturnType<typeof scheduleGatewayRestart> | undefined;
 }> {
-  const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
-    resolveConfigRestartRequest(params.requestParams);
+  const { sessionKey, note, restartDelayMs, deliveryContext, threadId } = parseRestartRequestParams(
+    params.requestParams,
+  );
+  // Restart delivery uses generic :thread: parsing plus plugin-owned session grammars.
+  const sessionDelivery = await extractDeliveryInfo(sessionKey);
   const restartRequirement = resolveConfigRestartRequirement({
     changedPaths: params.changedPaths,
     previousConfig: params.previousConfig,
@@ -279,8 +259,8 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
     status: "ok",
     ts: Date.now(),
     sessionKey,
-    deliveryContext,
-    threadId,
+    deliveryContext: deliveryContext ?? sessionDelivery.deliveryContext,
+    threadId: threadId ?? sessionDelivery.threadId,
     message: note ?? null,
     doctorHint: formatDoctorNonInteractiveHint(),
     stats: {

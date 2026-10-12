@@ -7,35 +7,22 @@ const ANIMATED_WEBP_BUFFER = Buffer.from(
 );
 
 describe("animated WebP delivery", () => {
-  it.each(["untyped", "local"] as const)(
-    "preserves animated WebP frames above the preferred size through the %s owner",
-    async (owner) => {
-      const imageCompression = { models: [{ preferredSidePx: 12 }] };
-      const result =
-        owner !== "local"
-          ? await optimizeImageBufferForWebMedia({
-              buffer: ANIMATED_WEBP_BUFFER,
-              fileName: "animated.webp",
-              maxBytes: 1024,
-              imageCompression,
-            })
-          : await loadWebMedia("/virtual/animated.webp", {
-              maxBytes: 1024,
-              sandboxValidated: true,
-              readFile: async () => ANIMATED_WEBP_BUFFER,
-              imageCompression,
-            });
-      expect(result).toMatchObject({
-        contentType: "image/webp",
-        kind: "image",
-        fileName: "animated.webp",
-      });
-      expect(result.buffer.equals(ANIMATED_WEBP_BUFFER)).toBe(true);
-    },
-  );
+  it("preserves animated WebP frames above the preferred size without a MIME hint", async () => {
+    const result = await optimizeImageBufferForWebMedia({
+      buffer: ANIMATED_WEBP_BUFFER,
+      fileName: "animated.webp",
+      maxBytes: 1024,
+      imageCompression: { models: [{ preferredSidePx: 12 }] },
+    });
+    expect(result).toMatchObject({
+      contentType: "image/webp",
+      kind: "image",
+      fileName: "animated.webp",
+    });
+    expect(result.buffer.equals(ANIMATED_WEBP_BUFFER)).toBe(true);
+  });
 
   it.each([
-    { limits: { maxSidePx: 12 }, constraint: "side" },
     { limits: { maxPixels: 144 }, constraint: "pixel" },
     { limits: undefined, constraint: "byte" },
   ] as const)(

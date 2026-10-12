@@ -231,7 +231,7 @@ export function createWorkerTurnSessionRuntimeLoader() {
   };
   return async () => ({
     managedWorktrees: {
-      findLiveByOwner: () => ({
+      findLiveByOwner: async () => ({
         id: "workspace",
         name: "fixture",
         repoFingerprint: "fixture",

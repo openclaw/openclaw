@@ -21,14 +21,13 @@ import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
-import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import {
   resolveTelegramBotHasTopicsEnabled,
   resolveTelegramForumFlag,
   withResolvedTelegramForumFlag,
   TelegramPairingStoreReadError,
 } from "./bot/helpers.js";
-import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
+import type { TelegramGetChat } from "./bot/types.js";
 import { emitTelegramLiveLocationMessageHook } from "./location-message-hook.js";
 
 export function createTelegramInboundPipeline({
@@ -54,6 +53,15 @@ export function createTelegramInboundPipeline({
     message: messageRuntime,
   });
   const getChat: TelegramGetChat = bot.api.getChat.bind(bot.api);
+  const resolveForumFlag = (msg: Message, isGroup: boolean) =>
+    resolveTelegramForumFlag({
+      chatId: msg.chat.id,
+      chatType: msg.chat.type,
+      isGroup,
+      isForum: msg.chat.is_forum,
+      isTopicMessage: msg.is_topic_message,
+      getChat,
+    });
   const resolveBotUserId = (ctx: { me?: { id?: number } }): number => {
     const botUserId = ctx.me?.id ?? opts.botInfo?.id;
     if (botUserId == null) {
@@ -61,21 +69,6 @@ export function createTelegramInboundPipeline({
     }
     return botUserId;
   };
-  type InboundTelegramEvent = {
-    ctxForDedupe: TelegramUpdateKeyContext;
-    ctx: TelegramContext;
-    botUserId: number;
-    msg: Message;
-    chatId: number;
-    isGroup: boolean;
-    isForum: boolean;
-    senderId: string;
-    requireConfiguredGroup: boolean;
-    sendOversizeWarning: boolean;
-    oversizeLogMessage: string;
-    errorMessage: string;
-  };
-
   const normalizeChannelPostMessage = (post: Message): Message => {
     const senderChat = post.sender_chat ?? post.chat;
     const syntheticFrom = {
@@ -93,66 +86,46 @@ export function createTelegramInboundPipeline({
       },
     } as Message;
   };
-  const recordEditedMessageForReplyChain = async (params: {
-    ctxForDedupe: TelegramUpdateKeyContext;
-    msg: Message;
-    requireConfiguredGroup: boolean;
-    botUserId: number;
-    providerUpdate?: { id: number; kind: "edited_message" | "edited_channel_post" };
-  }) => {
-    if (shouldSkipUpdate(params.ctxForDedupe)) {
-      return;
-    }
-    const msg = params.msg;
-    const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
-    const isForum = await resolveTelegramForumFlag({
-      chatId: msg.chat.id,
-      chatType: msg.chat.type,
-      isGroup,
-      isForum: msg.chat.is_forum,
-      isTopicMessage: msg.is_topic_message,
-      getChat,
-    });
-    const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
-    const gate = await authorizeInboundMessage({
-      msg: normalizedMsg,
-      chatId: normalizedMsg.chat.id,
-      isGroup,
-      isForum,
-      senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
-      requireConfiguredGroup: params.requireConfiguredGroup,
-      dmAccess: "silent",
-    });
-    if (!gate.allowed) {
-      return;
-    }
-    await recordMessageForReplyChain(normalizedMsg, gate.context.threadSpec, params.botUserId);
-    if (params.providerUpdate) {
-      emitTelegramLiveLocationMessageHook({
-        accountId,
-        msg: normalizedMsg,
-        updateId: params.providerUpdate.id,
-        updateKind: params.providerUpdate.kind,
-        isForum,
-      });
-    }
-  };
-
-  const handleInboundMessageLike = async (
-    event: InboundTelegramEvent,
+  const handleMessage = async (
+    ctx: Context,
+    kind: "message" | "channel_post",
   ): Promise<TelegramInboundDisposition> => {
+    const isChannelPost = kind === "channel_post";
+    const msg = isChannelPost ? ctx.channelPost : ctx.message;
+    if (!msg) {
+      return { kind: "ignored" };
+    }
+    const isGroup = isChannelPost || msg.chat.type === "group" || msg.chat.type === "supergroup";
+    const isForum = isChannelPost ? false : await resolveForumFlag(msg, isGroup);
+    const normalizedMsg = isChannelPost
+      ? normalizeChannelPostMessage(msg)
+      : withResolvedTelegramForumFlag(msg, isForum);
+    const botUserId = resolveBotUserId(ctx);
+    // Bot-authored message updates can be echoed back by Telegram. Channel-originated posts
+    // remain eligible even when their sender is this bot.
+    if (!isChannelPost && normalizedMsg.from?.id != null && normalizedMsg.from.id === botUserId) {
+      return { kind: "ignored" };
+    }
+    const chatId = normalizedMsg.chat.id;
+    const syntheticContext = buildSyntheticContext(ctx, normalizedMsg);
+    const senderId =
+      isChannelPost && msg.sender_chat?.id != null
+        ? String(msg.sender_chat.id)
+        : msg.from?.id != null
+          ? String(msg.from.id)
+          : "";
     let dispatchDedupeClaims: ChannelReplayClaimHandle[] = [];
     try {
-      if (shouldSkipUpdate(event.ctxForDedupe)) {
+      if (shouldSkipUpdate(ctx)) {
         return { kind: "ignored" };
       }
       const gate = await authorizeInboundMessage({
-        msg: event.msg,
-        chatId: event.chatId,
-        isGroup: event.isGroup,
-        isForum: event.isForum,
-        senderId: event.senderId,
-        requireConfiguredGroup: event.requireConfiguredGroup,
+        msg: normalizedMsg,
+        chatId,
+        isGroup,
+        isForum,
+        senderId,
+        requireConfiguredGroup: isChannelPost,
         dmAccess: "challenge",
       });
       if (!gate.allowed) {
@@ -170,54 +143,57 @@ export function createTelegramInboundPipeline({
       } = gate.context;
 
       const sessionState = await resolveTelegramSessionState({
-        chatId: event.chatId,
-        isGroup: event.isGroup,
+        chatId,
+        isGroup,
         threadSpec,
-        botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(event.ctx.me),
-        senderId: event.senderId,
+        botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(syntheticContext.me),
+        senderId,
         runtimeCfg: gate.context.cfg,
       });
       const promptContextMinTimestampMs = asFiniteNumber(
         sessionState.sessionEntry?.sessionStartedAt,
       );
-      const promptContextAmbientWatermark = resolvePromptContextAmbientWatermark({
-        chatId: event.chatId,
-        isGroup: event.isGroup,
+      const promptContextAmbientWatermark = await resolvePromptContextAmbientWatermark({
+        chatId,
+        isGroup,
         resolvedThreadId,
         sessionKey: sessionState.sessionKey,
         storePath: sessionState.storePath,
       });
 
-      const dispatchDedupe = await claimMessageDispatchDedupe(event.msg, event.botUserId);
+      const dispatchDedupe = await claimMessageDispatchDedupe(normalizedMsg, botUserId);
       if (!dispatchDedupe.process) {
         return { kind: "ignored" };
       }
       dispatchDedupeClaims = dispatchDedupe.claims;
-      await recordMessageForReplyChain(event.msg, gate.context.threadSpec, event.botUserId);
+      await recordMessageForReplyChain(normalizedMsg, gate.context.threadSpec, botUserId);
       return await processInboundMessage({
         authorizationCfg: gate.context.cfg,
-        ctx: event.ctx,
-        msg: event.msg,
-        chatId: event.chatId,
-        isGroup: event.isGroup,
+        ctx: syntheticContext,
+        msg: normalizedMsg,
+        chatId,
+        isGroup,
         threadSpec,
         dmPolicy,
         storeAllowFrom,
-        senderId: event.senderId,
+        senderId,
         effectiveGroupAllow,
         effectiveDmAllow,
         channelIngressResolver: gate.resolveChannelIngress,
-        groupConfig: event.isGroup ? (groupConfig as TelegramGroupConfig | undefined) : undefined,
+        groupConfig: isGroup ? (groupConfig as TelegramGroupConfig | undefined) : undefined,
         topicConfig,
-        sendOversizeWarning: event.sendOversizeWarning,
-        oversizeLogMessage: event.oversizeLogMessage,
+        sendOversizeWarning: !isChannelPost,
+        oversizeLogMessage: isChannelPost
+          ? "channel post media exceeds size limit"
+          : "media exceeds size limit",
         dispatchDedupeClaims,
         ...promptContextBoundaryOptions(promptContextMinTimestampMs, promptContextAmbientWatermark),
       });
     } catch (err) {
       releaseDispatchDedupeClaims(dispatchDedupeClaims, err);
-      runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
-      const spooledReplay = isTelegramSpooledReplayUpdate(event.ctx.update);
+      const errorMessage = isChannelPost ? "channel_post handler failed" : "handler failed";
+      runtime.error?.(danger(`${errorMessage}: ${String(err)}`));
+      const spooledReplay = isTelegramSpooledReplayUpdate(syntheticContext.update);
       if (err instanceof TelegramPairingStoreReadError || spooledReplay) {
         recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
         // Spooled replays are durably retried; live updates get one apology
@@ -230,11 +206,11 @@ export function createTelegramInboundPipeline({
           runtime,
           fn: () =>
             bot.api.sendMessage(
-              event.chatId,
+              chatId,
               "⚠️ Couldn't process this message, please try again in a moment.",
               {
                 reply_parameters: {
-                  message_id: event.msg.message_id,
+                  message_id: normalizedMsg.message_id,
                   allow_sending_without_reply: true,
                 },
               },
@@ -245,103 +221,58 @@ export function createTelegramInboundPipeline({
     }
   };
 
-  const handleMessage = async (ctx: Context): Promise<TelegramInboundDisposition> => {
-    const msg = ctx.message;
-    if (!msg) {
-      return { kind: "ignored" };
-    }
-    const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
-    const isForum = await resolveTelegramForumFlag({
-      chatId: msg.chat.id,
-      chatType: msg.chat.type,
-      isGroup,
-      isForum: msg.chat.is_forum,
-      isTopicMessage: msg.is_topic_message,
-      getChat,
-    });
-    const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
-    const botUserId = resolveBotUserId(ctx);
-    // Bot-authored message updates can be echoed back by Telegram. Skip them here
-    // and rely on the dedicated channel_post handler for channel-originated posts.
-    if (normalizedMsg.from?.id != null && normalizedMsg.from.id === botUserId) {
-      return { kind: "ignored" };
-    }
-    return await handleInboundMessageLike({
-      ctxForDedupe: ctx,
-      ctx: buildSyntheticContext(ctx, normalizedMsg),
-      botUserId,
-      msg: normalizedMsg,
-      chatId: normalizedMsg.chat.id,
-      isGroup,
-      isForum,
-      senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
-      requireConfiguredGroup: false,
-      sendOversizeWarning: true,
-      oversizeLogMessage: "media exceeds size limit",
-      errorMessage: "handler failed",
-    });
-  };
-
   const handleEditedMessage = async (
     ctx: Context,
     kind: "edited_message" | "edited_channel_post",
   ): Promise<TelegramInboundDisposition> => {
     const isChannelPost = kind === "edited_channel_post";
-    const msg = isChannelPost ? ctx.editedChannelPost : ctx.editedMessage;
-    if (!msg) {
+    const original = isChannelPost ? ctx.editedChannelPost : ctx.editedMessage;
+    if (!original) {
       return { kind: "ignored" };
     }
-    await recordEditedMessageForReplyChain({
-      ctxForDedupe: ctx,
-      msg: isChannelPost ? normalizeChannelPostMessage(msg) : msg,
+    const msg = isChannelPost ? normalizeChannelPostMessage(original) : original;
+    const botUserId = resolveBotUserId(ctx);
+    const updateId = ctx.update?.update_id;
+    if (shouldSkipUpdate(ctx)) {
+      return { kind: "recorded" };
+    }
+    const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+    const isForum = await resolveForumFlag(msg, isGroup);
+    const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
+    const gate = await authorizeInboundMessage({
+      msg: normalizedMsg,
+      chatId: normalizedMsg.chat.id,
+      isGroup,
+      isForum,
+      senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
       requireConfiguredGroup: isChannelPost,
-      botUserId: resolveBotUserId(ctx),
-      providerUpdate:
-        typeof ctx.update?.update_id === "number" ? { id: ctx.update.update_id, kind } : undefined,
+      dmAccess: "silent",
     });
-    return { kind: "recorded" };
-  };
-
-  const handleChannelPost = async (ctx: Context): Promise<TelegramInboundDisposition> => {
-    const post = ctx.channelPost;
-    if (!post) {
-      return { kind: "ignored" };
+    if (gate.allowed) {
+      await recordMessageForReplyChain(normalizedMsg, gate.context.threadSpec, botUserId);
+      if (typeof updateId === "number") {
+        emitTelegramLiveLocationMessageHook({
+          accountId,
+          msg: normalizedMsg,
+          updateId,
+          updateKind: kind,
+          isForum,
+        });
+      }
     }
-
-    const chatId = post.chat.id;
-    const syntheticMsg = normalizeChannelPostMessage(post);
-
-    return await handleInboundMessageLike({
-      ctxForDedupe: ctx,
-      ctx: buildSyntheticContext(ctx, syntheticMsg),
-      botUserId: resolveBotUserId(ctx),
-      msg: syntheticMsg,
-      chatId,
-      isGroup: true,
-      isForum: false,
-      senderId:
-        post.sender_chat?.id != null
-          ? String(post.sender_chat.id)
-          : post.from?.id != null
-            ? String(post.from.id)
-            : "",
-      requireConfiguredGroup: true,
-      sendOversizeWarning: false,
-      oversizeLogMessage: "channel post media exceeds size limit",
-      errorMessage: "channel_post handler failed",
-    });
+    return { kind: "recorded" };
   };
 
   return {
     handle: async (ctx) => {
       if (ctx.message) {
-        return await handleMessage(ctx);
+        return await handleMessage(ctx, "message");
       }
       if (ctx.editedMessage) {
         return await handleEditedMessage(ctx, "edited_message");
       }
       if (ctx.channelPost) {
-        return await handleChannelPost(ctx);
+        return await handleMessage(ctx, "channel_post");
       }
       if (ctx.editedChannelPost) {
         return await handleEditedMessage(ctx, "edited_channel_post");
@@ -358,8 +289,5 @@ export function registerTelegramInboundHandlers({
   bot: RegisterTelegramHandlerParams["bot"];
   pipeline: Pick<TelegramInboundPipeline, "handle">;
 }): void {
-  bot.on("message", pipeline.handle);
-  bot.on("edited_message", pipeline.handle);
-  bot.on("channel_post", pipeline.handle);
-  bot.on("edited_channel_post", pipeline.handle);
+  bot.on(["message", "edited_message", "channel_post", "edited_channel_post"], pipeline.handle);
 }

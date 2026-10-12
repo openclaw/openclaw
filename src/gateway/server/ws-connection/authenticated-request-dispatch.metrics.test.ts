@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../../agents/admitted-run-context.js";
 import {
   onDiagnosticEvent,
@@ -24,7 +25,7 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createGatewayMethodRegistry } from "../../methods/registry.js";
-import { agentWaitHandler } from "../../server-methods/agent-wait.js";
+import { agentHandlers } from "../../server-methods/agent.js";
 import { createLazyCoreHandlers } from "../../server-methods/lazy-core-handlers.js";
 import type { GatewayRequestHandler, RespondFn } from "../../server-methods/types.js";
 import {
@@ -32,6 +33,7 @@ import {
   createOperatorWsClient,
 } from "./authenticated-request-dispatch.test-support.js";
 import { createGatewayRpcDiagnostics } from "./request-diagnostics.js";
+import { GatewayRequestStartTimeoutError } from "./request-start.js";
 // Compile the real router before timed cases; family preparation remains controlled below.
 import "../../server-methods.js";
 
@@ -132,6 +134,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
       fixture.client,
     );
     await fixture.finished;
+    expect(fixture.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
     const log = output.mock.calls.flat().join("\n");
     expect(log).toContain("sessions.list");
     expect(log).toContain(`source=${query.rowMode ? "dashboard" : "unspecified"}`);
@@ -217,7 +220,11 @@ describe("authenticated Gateway RPC diagnostics", () => {
       }
       const secondDispatch = second.dispatch();
       try {
-        await secondEntered.promise;
+        await awaitGateBeforeSettlement(
+          secondEntered.promise,
+          secondDispatch,
+          "overlapping request settled before handler entry",
+        );
         setDiagnosticsEnabledForProcess(true);
         if (overlap === "crossing") {
           firstRelease.resolve();
@@ -495,15 +502,17 @@ describe("authenticated Gateway RPC diagnostics", () => {
     },
   );
 
-  it.each(["authorization", "capacity"])(
+  it.each(["authorization", "capacity", "timeout"])(
     "records %s rejection without a handler sample",
     async (reason) => {
       const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true));
       const fixture = createRequest(handler, "sessions.list");
       if (reason === "authorization") {
         fixture.client.connect.scopes = [];
-      } else {
+      } else if (reason === "capacity") {
         scheduling.start.mockReturnValue(null);
+      } else {
+        scheduling.start.mockRejectedValue(new GatewayRequestStartTimeoutError());
       }
       await fixture.dispatch();
       await fixture.finished;
@@ -517,6 +526,18 @@ describe("authenticated Gateway RPC diagnostics", () => {
       );
       if (reason === "capacity") {
         expect(fixture.events.at(-1)).not.toHaveProperty("queueWaitMs");
+      } else if (reason === "timeout") {
+        expect(fixture.events.at(-1)).toHaveProperty("queueWaitMs");
+        expect(fixture.send).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ok: false,
+            error: expect.objectContaining({
+              code: "UNAVAILABLE",
+              retryable: true,
+              details: { reason: "request-start-timeout" },
+            }),
+          }),
+        );
       }
     },
   );
@@ -706,7 +727,7 @@ describe("Gateway observation response ordering", () => {
   afterEach(() => resetGatewayWorkAdmission());
   it("does not send a second response when shutdown follows a completed observation", async () => {
     const fixture = createDispatchTestHarness({
-      extraHandlers: { "agent.wait": agentWaitHandler },
+      extraHandlers: { "agent.wait": agentHandlers["agent.wait"]! },
       buildRequestContext: () => ({
         dedupe: new Map(),
         chatAbortControllers: new Map(),

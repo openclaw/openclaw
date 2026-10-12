@@ -8,7 +8,10 @@ import {
   readPluginPackageVersion,
   resolveAmbientNodeProxyAgent,
 } from "openclaw/plugin-sdk/extension-shared";
-import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import {
+  captureEffectAuthority,
+  captureChannelReadAuthority,
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { captureFeishuSendContext } from "./send-context.js";
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
@@ -23,7 +26,6 @@ const FEISHU_WS_CONFIG = {
   pingTimeout: 3,
 } as const;
 
-/** User-Agent header value for all Feishu API requests. */
 export function getFeishuUserAgent(): string {
   return FEISHU_USER_AGENT;
 }
@@ -155,7 +157,6 @@ function isManagedProxyActive() {
 
 let cachedFeishuProxyAgent: Agent | undefined;
 let pendingFeishuProxyAgent: Promise<Agent | undefined> | undefined;
-let feishuProxyAgentGeneration = 0;
 
 // Ambient proxy configuration is process-stable. Share one dual-protocol agent
 // across REST, bootstrap, and WebSocket traffic so connections stay pooled.
@@ -167,17 +168,12 @@ async function getFeishuProxyAgent(): Promise<Agent | undefined> {
     return pendingFeishuProxyAgent;
   }
 
-  const generation = feishuProxyAgentGeneration;
   let resolutionError: unknown;
   const pending = resolveAmbientNodeProxyAgent<Agent>({
     onError: (error) => {
       resolutionError = error;
     },
   }).then((agent) => {
-    if (generation !== feishuProxyAgentGeneration) {
-      agent?.destroy();
-      return undefined;
-    }
     if (!agent && isManagedProxyActive()) {
       throw new Error("Feishu managed proxy is active but no proxy agent could be created", {
         cause: resolutionError,
@@ -190,15 +186,12 @@ async function getFeishuProxyAgent(): Promise<Agent | undefined> {
   try {
     return await pending;
   } finally {
-    if (pendingFeishuProxyAgent === pending) {
-      pendingFeishuProxyAgent = undefined;
-    }
+    pendingFeishuProxyAgent = undefined;
   }
 }
 
 /** @internal Resets process-scoped proxy state between tests. */
 export function resetFeishuProxyAgentForTest(): void {
-  feishuProxyAgentGeneration += 1;
   pendingFeishuProxyAgent = undefined;
   cachedFeishuProxyAgent?.destroy();
   cachedFeishuProxyAgent = undefined;
@@ -386,43 +379,52 @@ function createFeishuHttpInstance(
     }
   }
 
+  async function dispatch<T, D>(
+    authority: FeishuRequestAuthority | undefined,
+    options: Lark.HttpRequestOptions<D> | undefined,
+    send: (options: FeishuProxyAwareHttpRequestOptions<D>) => Promise<T>,
+  ): Promise<T> {
+    const effect = captureEffectAuthority();
+    const prepared = await injectRequestOptions(options, authority);
+    return effect.initiate(() => {
+      authority?.assertCurrent();
+      return send(prepared);
+    });
+  }
+
+  const createMethod =
+    (method: "get" | "delete" | "head" | "options"): Lark.HttpInstance["get"] =>
+    (url, opts) =>
+      runRequest((authority) =>
+        dispatch(authority, opts, (prepared) => base[method](resolveRequestUrl(url), prepared)),
+      );
+  const createDataMethod =
+    (method: "post" | "put" | "patch"): Lark.HttpInstance["post"] =>
+    (url, data, opts) =>
+      runRequest((authority) =>
+        dispatch(authority, opts, (prepared) =>
+          base[method](resolveRequestUrl(url), data, prepared),
+        ),
+      );
+
   return {
     request: (opts) =>
       // SDK message requests reach this seam after formatPayload/auth. Token
       // requests use post below and must never mark a message as dispatched.
       runRequest(
-        async (authority) =>
-          base.request(await injectRequestOptions(normalizeMultipartUploadData(opts), authority)),
+        (authority) =>
+          dispatch(authority, normalizeMultipartUploadData(opts), (prepared) =>
+            base.request(prepared),
+          ),
         "request",
       ),
-    get: (url, opts) =>
-      runRequest(async (assert) =>
-        base.get(resolveRequestUrl(url), await injectRequestOptions(opts, assert)),
-      ),
-    post: (url, data, opts) =>
-      runRequest(async (assert) =>
-        base.post(resolveRequestUrl(url), data, await injectRequestOptions(opts, assert)),
-      ),
-    put: (url, data, opts) =>
-      runRequest(async (assert) =>
-        base.put(resolveRequestUrl(url), data, await injectRequestOptions(opts, assert)),
-      ),
-    patch: (url, data, opts) =>
-      runRequest(async (assert) =>
-        base.patch(resolveRequestUrl(url), data, await injectRequestOptions(opts, assert)),
-      ),
-    delete: (url, opts) =>
-      runRequest(async (assert) =>
-        base.delete(resolveRequestUrl(url), await injectRequestOptions(opts, assert)),
-      ),
-    head: (url, opts) =>
-      runRequest(async (assert) =>
-        base.head(resolveRequestUrl(url), await injectRequestOptions(opts, assert)),
-      ),
-    options: (url, opts) =>
-      runRequest(async (assert) =>
-        base.options(resolveRequestUrl(url), await injectRequestOptions(opts, assert)),
-      ),
+    get: createMethod("get"),
+    post: createDataMethod("post"),
+    put: createDataMethod("put"),
+    patch: createDataMethod("patch"),
+    delete: createMethod("delete"),
+    head: createMethod("head"),
+    options: createMethod("options"),
   };
 }
 
@@ -479,10 +481,7 @@ type FeishuWsClientCallbacks = Pick<
   "onError" | "onReady" | "onReconnected" | "onReconnecting"
 >;
 
-/**
- * Create a Feishu WebSocket client for an account.
- * Note: WSClient is not cached since each call creates a new connection.
- */
+/** WSClient is not cached since each call creates a new connection. */
 export async function createFeishuWSClient(
   account: ResolvedFeishuAccount,
   callbacks: FeishuWsClientCallbacks = {},

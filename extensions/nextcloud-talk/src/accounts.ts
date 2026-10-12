@@ -3,12 +3,10 @@ import {
   normalizeAccountId,
   resolveAccountWithDefaultFallback,
 } from "openclaw/plugin-sdk/account-core";
-import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  listNextcloudTalkAccountIds as listNextcloudTalkAccountIdsFromConfig,
   mergeNextcloudTalkAccountConfig,
   resolveDefaultNextcloudTalkAccountId,
 } from "../configured-state.js";
@@ -17,12 +15,6 @@ import {
   type NextcloudTalkCredentialUnavailableDiagnostic,
 } from "./api-credentials.js";
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
-
-const debugAccounts = (...args: unknown[]) => {
-  if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_NEXTCLOUD_TALK_ACCOUNTS)) {
-    console.warn("[nextcloud-talk:accounts]", ...args);
-  }
-};
 
 export type ResolvedNextcloudTalkAccount = {
   accountId: string;
@@ -38,12 +30,7 @@ export type ResolvedNextcloudTalkAccount = {
 };
 
 export { resolveDefaultNextcloudTalkAccountId };
-
-export function listNextcloudTalkAccountIds(cfg: CoreConfig): string[] {
-  const ids = listNextcloudTalkAccountIdsFromConfig(cfg);
-  debugAccounts("listNextcloudTalkAccountIds", ids);
-  return ids;
-}
+export { listNextcloudTalkAccountIds } from "../configured-state.js";
 
 function resolveNextcloudTalkSecret(
   accountId: string,
@@ -106,13 +93,6 @@ export function resolveNextcloudTalkAccount(params: {
     const enabled = baseEnabled && accountEnabled;
     const secretResolution = resolveNextcloudTalkSecret(accountId, merged);
     const baseUrl = merged.baseUrl?.trim()?.replace(/\/$/, "") ?? "";
-
-    debugAccounts("resolve", {
-      accountId,
-      enabled,
-      secretSource: secretResolution.source,
-      baseUrl: baseUrl ? "[set]" : "[missing]",
-    });
 
     return {
       accountId,

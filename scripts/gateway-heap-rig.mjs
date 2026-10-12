@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Long-running, synthetic-only Gateway retention probe. Run on an isolated host.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import {
   appendFileSync,
@@ -78,7 +78,7 @@ const record = (event) => {
   console.log(line);
 };
 const config = structuredClone(BASE_GATEWAY_BENCH_CONFIG);
-config.cron = { enabled: false };
+config.cron = { enabled: true };
 config.gateway.controlUi.allowedOrigins = [`http://127.0.0.1:${port}`];
 config.memory = { search: { enabled: false } };
 config.plugins.slots = { memory: "none" };
@@ -102,6 +102,15 @@ config.agents.entries = Object.fromEntries(
   ["main", "second"].map((id) => {
     const workspace = path.join(root, `workspace-${id}`);
     mkdirSync(workspace);
+    // Git baseline discovery must not ascend into a checkout containing the live SQLite state.
+    const gitInit = spawnSync(
+      "git",
+      ["init", "--quiet", "--template=", "--initial-branch=main", workspace],
+      { encoding: "utf8" },
+    );
+    if (gitInit.status !== 0) {
+      throw new Error(`Could not isolate synthetic workspace: ${gitInit.error ?? gitInit.stderr}`);
+    }
     return [id, { workspace }];
   }),
 );
@@ -121,7 +130,6 @@ const env = createGatewayBenchEnv(root, configPath, {
 const children = [];
 const clients = new Set();
 const requests = {};
-const retries = {};
 const events = {};
 const identities = Array.from({ length: clientCount }, () => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -174,16 +182,6 @@ async function sleep(ms) {
     }
   }
 }
-class GatewayRpcError extends Error {
-  constructor(method, responseError) {
-    super(`${method}: ${JSON.stringify(responseError)}`);
-    this.projectAccessChanged =
-      method === "projects.list" &&
-      responseError?.code === "UNAVAILABLE" &&
-      responseError?.message ===
-        "Project access changed while preparing the listing. Retry the request.";
-  }
-}
 async function connect(protocol, identity) {
   const controlUi = Boolean(identity);
   const challenge = Promise.withResolvers();
@@ -204,7 +202,7 @@ async function connect(protocol, identity) {
     try {
       const result = await work;
       if (!result.ok) {
-        throw new GatewayRpcError(method, result.error);
+        throw new Error(`${method}: ${JSON.stringify(result.error)}`);
       }
       requests[method] = (requests[method] ?? 0) + 1;
       return result.payload;
@@ -332,7 +330,7 @@ try {
         await admin.rpc("sessions.create", { key, agentId });
         await admin.rpc("chat.inject", {
           sessionKey: key,
-          message: `Synthetic history ${index}. `.repeat(32),
+          message: `Synthetic history ${index}. `.repeat(2048).slice(0, 32 * 1024),
         });
         if ((index + 1) % 250 === 0) {
           record({ kind: "seed", completed: index + 1 });
@@ -344,17 +342,53 @@ try {
   if (inventory.totalCount < sessionCount) {
     throw new Error(`Seed inventory incomplete: ${inventory.totalCount}`);
   }
-  record({ kind: "seeded", totalCount: inventory.totalCount });
+  record({ kind: "seeded", totalCount: inventory.totalCount, historyBytesPerSession: 32 * 1024 });
   const startedAt = performance.now();
   const deadline = startedAt + minutes * 60000;
   const samples = [];
+  const floors = [];
   const snapshots = [];
   /** @type {Promise<unknown>} */
   let currentTurn = Promise.resolve();
+  let floor;
+  const floorWidthMs = 10 * 60_000;
+  function finishFloor() {
+    if (floor) {
+      floors.push(floor);
+      record({ kind: "heap-floor", ...floor, counts: { ...turnDriver.counts } });
+      floor = undefined;
+    }
+  }
   async function sample() {
     const observation = await readGatewayMemory(admin.rpc, startedAt);
     samples.push(observation);
-    record({ kind: "sample", ...observation, requests: { ...requests }, retries: { ...retries } });
+    const window = Math.floor(observation.atMs / floorWidthMs);
+    if (floor && floor.window !== window) {
+      finishFloor();
+    }
+    if (!floor) {
+      const sampleInventory = await admin.rpc("sessions.list", { limit: 1, archived: "all" });
+      floor = {
+        window,
+        startMinute: window * 10,
+        endMinute: (window + 1) * 10,
+        samples: 0,
+        heapUsedMb: observation.heapUsedMb,
+        atMs: observation.atMs,
+        sessionCountAtStart: sampleInventory.totalCount,
+      };
+    }
+    floor.samples++;
+    if (observation.heapUsedMb < floor.heapUsedMb) {
+      floor.heapUsedMb = observation.heapUsedMb;
+      floor.atMs = observation.atMs;
+    }
+    record({
+      kind: "sample",
+      ...observation,
+      requests: { ...requests },
+      counts: { ...turnDriver.counts },
+    });
   }
   async function snapshot(minute) {
     /** @type {PromiseWithResolvers<void>} */
@@ -368,7 +402,13 @@ try {
         { reason: `synthetic retention rig minute ${minute}` },
         300000,
       );
-      const entry = { kind: "snapshot", minute, atMs: performance.now() - startedAt, ...result };
+      const entry = {
+        kind: "snapshot",
+        minute,
+        atMs: performance.now() - startedAt,
+        connectedClients: clients.size,
+        ...result,
+      };
       snapshots.push(entry);
       record(entry);
     } finally {
@@ -394,7 +434,7 @@ try {
               reconnectAt = performance.now() + 180000 + index * 11000;
             }
             const selected =
-              sessions[(Math.floor(round / 11) * clientCount + index) % sessions.length];
+              sessions[(Math.floor(round / 10) * clientCount + index) % sessions.length];
             const { key, agentId } = selected;
             const identity = { sessionKey: key, agentId };
             const calls = [
@@ -402,7 +442,7 @@ try {
                 "sessions.list",
                 {
                   limit: 100,
-                  offset: (Math.floor(round / 11) * 100) % sessionCount,
+                  offset: (Math.floor(round / 10) * 100) % sessionCount,
                   archived: "all",
                   includeDerivedTitles: true,
                   includeLastMessage: true,
@@ -420,32 +460,10 @@ try {
               ["agent.identity.get", identity],
               ["cron.list", { includeDisabled: true, limit: 50, compact: true }],
               ["cron.status", {}],
-              ["projects.list", { includeObserved: true }],
               ["sessions.messages.unsubscribe", { key, agentId, subscriptionId: "rig-active" }],
             ];
             const [method, params] = calls[round++ % calls.length];
-            let result;
-            try {
-              result = await client.rpc(method, params);
-            } catch (error) {
-              if (!(error instanceof GatewayRpcError) || !error.projectAccessChanged) {
-                throw error;
-              }
-              // The projects owner refuses a read when access facts change across its await.
-              retries[method] = (retries[method] ?? 0) + 1;
-              record({
-                kind: "rpc-retry",
-                method,
-                atMs: performance.now() - startedAt,
-                reason: error.message,
-              });
-              await sleep(rpcInterval);
-              await workloadReady;
-              if (abort.signal.aborted || performance.now() >= deadline) {
-                break;
-              }
-              result = await client.rpc(method, params);
-            }
+            const result = await client.rpc(method, params);
             if (method === "sessions.catalog.list") {
               const fixture = result.catalogs?.find((catalog) => catalog.id === "heap-rig-catalog");
               if (!fixture?.hosts?.some((host) => host.sessions.length > 0)) {
@@ -456,9 +474,12 @@ try {
             }
             await sleep(rpcInterval);
           }
-        } finally {
+        } catch (error) {
           client?.close();
+          throw error;
         }
+        // Global cleanup closes successful clients after the final snapshot,
+        // keeping the connection population equal in both heap captures.
       })().catch(fail),
     );
   }
@@ -485,16 +506,27 @@ try {
     })().catch(fail),
   );
   await sample();
-  for (let minute = 1; minute <= minutes && !abort.signal.aborted; minute++) {
-    await sleep(startedAt + minute * 60000 - performance.now());
+  let nextSnapshot = 0;
+  for (let tick = 1; tick <= minutes * 6 && !abort.signal.aborted; tick++) {
+    await sleep(startedAt + tick * 10_000 - performance.now());
     if (abort.signal.aborted) {
       break;
     }
-    if (snapshotMinutes.includes(minute)) {
-      await snapshot(minute);
+    if (performance.now() < deadline) {
+      await sample();
     }
-    await sample();
+    while (
+      nextSnapshot < snapshotMinutes.length &&
+      Math.max(tick * 10_000, performance.now() - startedAt) >=
+        snapshotMinutes[nextSnapshot] * 60_000
+    ) {
+      await snapshot(snapshotMinutes[nextSnapshot++]);
+    }
+    // Snapshot writing can span several ticks; do not replay missed samples.
+    tick = Math.max(tick, Math.floor((performance.now() - startedAt) / 10_000));
   }
+  await currentTurn;
+  finishFloor();
   if (failure) {
     throw failure;
   }
@@ -502,8 +534,9 @@ try {
     kind: "complete",
     node: process.version,
     requests,
-    retries,
     events,
+    counts: { ...turnDriver.counts },
+    floors,
     snapshots: snapshots.map(({ path: file, heapUsedAfter, atMs }) => ({
       path: file,
       heapUsedAfter,
@@ -512,7 +545,7 @@ try {
   });
   writeFileSync(
     path.join(root, "result.json"),
-    `${JSON.stringify({ node: process.version, v8: process.versions.v8, build, pid: gateway.pid, minutes, sessionCount, clientCount, requests, retries, events, samples, snapshots }, null, 2)}\n`,
+    `${JSON.stringify({ node: process.version, v8: process.versions.v8, build, pid: gateway.pid, minutes, sessionCount, clientCount, requests, events, samples, floors, snapshots, turns: turnDriver.evidence, counts: turnDriver.counts }, null, 2)}\n`,
   );
 } catch (error) {
   record({ kind: "failed", error: String(error) });

@@ -200,6 +200,8 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(script.startsWith("@echo off\r\n")).toBe(true);
     expect(script).toContain(`Get-Process -Id ${process.pid}`);
     expect(script).toContain("WaitForExit(180000)");
+    expect(script).toContain("[DateTime]::UtcNow.AddSeconds(5400)");
+    expect(script).toContain("replacement Gateway listener appeared within 5400s");
     expect(script).toContain("gateway-restart.log");
     expect(script).toContain(
       'openclaw restart attempt source=windows-task-handoff target="OpenClaw Gateway (work)"',

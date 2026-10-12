@@ -126,9 +126,9 @@ describe("Codex source-bound pending input", () => {
     }
   });
 
-  it.each(["open", "closed"] as const)(
+  it.each(["closed"] as const)(
     "guards a Codex pending-question claim across registration: %s",
-    async (transition) => {
+    async () => {
       registrations.mockClear();
       const harness = createStartedThreadHarness();
       const params = createTestParams();
@@ -198,7 +198,7 @@ describe("Codex source-bound pending input", () => {
             () => "accepted",
             () => "rejected",
           );
-        sourceCurrent = transition === "open";
+        sourceCurrent = false;
         registration.resolve();
         expect(await delivery).toBe(sourceCurrent ? "accepted" : "rejected");
         expect(

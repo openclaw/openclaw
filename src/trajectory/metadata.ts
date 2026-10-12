@@ -81,10 +81,10 @@ function toSortedUniqueStrings(values: readonly string[] | undefined): string[] 
   if (!values || values.length === 0) {
     return undefined;
   }
-  return [
-    ...new Set(values.filter((value) => typeof value === "string" && value.trim().length > 0)),
-  ]
+  return [...new Set(values)]
+    .filter((value) => typeof value === "string")
     .map((value) => value.trim())
+    .filter(Boolean)
     .toSorted((left, right) => left.localeCompare(right));
 }
 

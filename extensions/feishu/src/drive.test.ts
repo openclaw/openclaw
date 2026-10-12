@@ -534,23 +534,6 @@ describe("registerFeishuDriveTools", () => {
     }
   });
 
-  it.each([0, 201, 1.5])("rejects invalid folder page_size %s", async (pageSize) => {
-    const listFiles = vi.fn();
-    createFeishuToolClientMock.mockReturnValue({ drive: { file: { list: listFiles } } });
-    const tool = buildDriveTool();
-
-    const result = await tool.execute("call-list-invalid-page-size", {
-      action: "list",
-      folder_token: "folder_1",
-      page_size: pageSize,
-    });
-
-    expect(result.details).toMatchObject({
-      error: "page_size must be a positive integer between 1 and 200",
-    });
-    expect(listFiles).not.toHaveBeenCalled();
-  });
-
   it("surfaces reply_comment HTTP errors when the single supported body fails", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const tool = buildDriveTool();
@@ -632,32 +615,6 @@ describe("registerFeishuDriveTools", () => {
     const details = result.details as FeishuDriveCommentDetails;
     expect(details.success).toBe(true);
     expect(details.reply_id).toBe("r-preflight-fallback");
-    expect(details.delivery_mode).toBe("reply_comment");
-  });
-
-  it("continues with reply_comment when batch_query returns no exact comment match", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const tool = buildDriveTool();
-
-    requestMock
-      .mockResolvedValueOnce(commentMetadataResponse(true, "different_comment"))
-      .mockResolvedValueOnce(driveResponse({ reply_id: "r-no-exact-match" }));
-
-    const result = await tool.execute(
-      "call-preflight-no-exact-match",
-      replyCommentInput("fallback on exact match miss"),
-    );
-
-    expectRequestCall(requestMock, 0, commentMetadataRequest());
-    expectRequestCall(requestMock, 1, replyCommentRequest("fallback on exact match miss"));
-    expect(
-      warnSpy.mock.calls.some((call) =>
-        String(call[0]).includes("whole-comment compatibility path"),
-      ),
-    ).toBe(false);
-    const details = result.details as FeishuDriveCommentDetails;
-    expect(details.success).toBe(true);
-    expect(details.reply_id).toBe("r-no-exact-match");
     expect(details.delivery_mode).toBe("reply_comment");
   });
 

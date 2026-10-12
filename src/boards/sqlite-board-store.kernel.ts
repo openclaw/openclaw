@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { BoardOp, BoardSnapshot } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -46,6 +47,7 @@ type BoardDatabase = Pick<
   "board_tabs" | "board_widgets" | "session_nodes"
 >;
 type BoardDatabaseHandle = Pick<OpenClawAgentDatabase, "db" | "path">;
+export type BoardSessionIdentity = Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
 
 type StoredBoard = {
   snapshot: BoardSnapshot;
@@ -56,13 +58,6 @@ type StoredBoard = {
 
 const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
 const BOARD_WRITE_BATCH_SIZE = 64;
-
-// Read-only connections cannot run the lazy DDL, and a pre-existing v13 DB has
-// no board tables until the first write. Reads must treat that as "no boards",
-// not "no such table".
-function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolean {
-  return tableExists(database.db, "board_widgets");
-}
 
 export function ensureBoardSchema(database: BoardDatabaseHandle): void {
   if (ensuredBoardDatabases.has(database.db)) {
@@ -173,11 +168,26 @@ function upsertTabs(
 
 function updateWidgetLayouts(
   database: BoardDatabaseHandle,
+  previous: StoredBoard,
   snapshot: BoardSnapshot,
   updatedAt: number,
+  writtenName?: string,
 ): void {
   const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+  const previousRows = new Map(previous.widgetRows.map((row) => [row.name, row]));
   for (const widget of snapshot.widgets) {
+    const row = previousRows.get(widget.name);
+    if (
+      widget.name === writtenName ||
+      (row &&
+        row.tab_id === widget.tabId &&
+        row.title === (widget.title ?? null) &&
+        row.size_w === widget.sizeW &&
+        row.size_h === widget.sizeH &&
+        row.position === widget.position)
+    ) {
+      continue;
+    }
     executeSqliteQuerySync(
       database.db,
       db
@@ -267,7 +277,11 @@ function deleteRemovedTabs(
   }
 }
 
-export function hasBoardSession(database: BoardDatabaseHandle, sessionKey: string): boolean {
+export function hasBoardSession(
+  database: BoardDatabaseHandle,
+  sessionKey: string,
+  expected?: BoardSessionIdentity,
+): boolean {
   const row = getBoardReadQueries(database.db).session(sessionKey).rows[0];
   if (!row) {
     return false;
@@ -279,7 +293,11 @@ export function hasBoardSession(database: BoardDatabaseHandle, sessionKey: strin
       typeof entry === "object" &&
       !Array.isArray(entry) &&
       "sessionId" in entry &&
-      typeof entry.sessionId === "string",
+      typeof entry.sessionId === "string" &&
+      (!expected ||
+        (entry.sessionId === expected.sessionId &&
+          ("lifecycleRevision" in entry ? entry.lifecycleRevision : undefined) ===
+            expected.lifecycleRevision)),
     );
   } catch {
     return false;
@@ -290,7 +308,9 @@ export function readBoardSessionKeys(
   database: BoardDatabaseHandle,
   sessionKeys: readonly string[],
 ): Set<string> {
-  if (sessionKeys.length === 0 || !boardTablesPresent(database)) {
+  // Read-only connections cannot run the lazy DDL; pre-existing v13 databases
+  // have no board tables until their first write.
+  if (sessionKeys.length === 0 || !tableExists(database.db, "board_widgets")) {
     return new Set();
   }
   const db = getNodeSqliteKysely<BoardDatabase>(database.db);
@@ -308,7 +328,7 @@ export function readBoardSnapshotWithHtmlViewMetadata(
   database: BoardDatabaseHandle,
   sessionKey: string,
 ): BoardSnapshotWithHtmlViewMetadata | undefined {
-  if (!hasBoardSession(database, sessionKey) || !boardTablesPresent(database)) {
+  if (!hasBoardSession(database, sessionKey) || !tableExists(database.db, "board_widgets")) {
     return undefined;
   }
   const stored = readStoredBoard(database, sessionKey);
@@ -321,7 +341,7 @@ export function readBoardWidgetDocument(
   name: string,
   contentKind?: "mcp-app",
 ) {
-  if (!hasBoardSession(database, sessionKey) || !boardTablesPresent(database)) {
+  if (!hasBoardSession(database, sessionKey) || !tableExists(database.db, "board_widgets")) {
     return undefined;
   }
   const db = getNodeSqliteKysely<BoardDatabase>(database.db);
@@ -353,9 +373,13 @@ export function applyBoardOpsToDatabase(
   database: BoardDatabaseHandle,
   sessionKey: string,
   ops: readonly BoardOp[],
+  expectedSession?: BoardSessionIdentity,
 ): BoardSnapshot {
-  if (!hasBoardSession(database, sessionKey)) {
-    throw new BoardValidationError("not_found", `board session not found: ${sessionKey}`);
+  if (!hasBoardSession(database, sessionKey, expectedSession)) {
+    throw new BoardValidationError(
+      expectedSession ? "invalid_operation" : "not_found",
+      expectedSession ? "board session changed; retry" : `board session not found: ${sessionKey}`,
+    );
   }
   const previous = readStoredBoard(database, sessionKey);
   const layout = applyBoardOps(previous.snapshot, ops);
@@ -367,7 +391,7 @@ export function applyBoardOpsToDatabase(
   const now = Date.now();
   upsertTabs(database, previous, next);
   deleteRemovedWidgets(database, previous, next);
-  updateWidgetLayouts(database, next, now);
+  updateWidgetLayouts(database, previous, next, now);
   updateWidgetHeightModes(database, previous, ops);
   deleteRemovedTabs(database, previous, next);
   return cloneBoardSnapshot(next);
@@ -378,9 +402,13 @@ export function putBoardWidgetInDatabase(
   sessionKey: string,
   canonicalInput: ReturnType<typeof normalizeBoardWidgetPutParams>,
   viewGeneration: string,
+  expectedSession?: BoardSessionIdentity,
 ) {
-  if (!hasBoardSession(database, sessionKey)) {
-    throw new BoardValidationError("not_found", `board session not found: ${sessionKey}`);
+  if (!hasBoardSession(database, sessionKey, expectedSession)) {
+    throw new BoardValidationError(
+      expectedSession ? "invalid_operation" : "not_found",
+      expectedSession ? "board session changed; retry" : `board session not found: ${sessionKey}`,
+    );
   }
   const previous = readStoredBoard(database, sessionKey);
   const canonicalParams = resolveSqliteBoardWidgetPutParams(
@@ -447,7 +475,7 @@ export function putBoardWidgetInDatabase(
         }),
       ),
   );
-  updateWidgetLayouts(database, next, now);
+  updateWidgetLayouts(database, previous, next, now, canonicalParams.name);
   return createBoardWidgetPutResult(next, canonicalParams.name);
 }
 
@@ -458,9 +486,13 @@ export function grantBoardWidgetInDatabase(
   decision: "granted" | "rejected",
   revision: number,
   instanceId?: string,
+  expectedSession?: BoardSessionIdentity,
 ): BoardSnapshot {
-  if (!hasBoardSession(database, sessionKey)) {
-    throw new BoardValidationError("not_found", `board session not found: ${sessionKey}`);
+  if (!hasBoardSession(database, sessionKey, expectedSession)) {
+    throw new BoardValidationError(
+      expectedSession ? "invalid_operation" : "not_found",
+      expectedSession ? "board session changed; retry" : `board session not found: ${sessionKey}`,
+    );
   }
   const previous = readStoredBoard(database, sessionKey);
   const next = createBoardGrantSnapshot(previous.snapshot, name, decision, revision, instanceId);

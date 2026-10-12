@@ -3,13 +3,12 @@ import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { runWithRetainedGatewayRootWork } from "../../process/gateway-work-admission.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
-import type { ExecApprovalRecord } from "../exec-approval-manager.js";
 import {
   buildRequestedApprovalEvent,
   handlePendingApprovalRequest,
   isApprovalRecordVisibleToClient,
 } from "./approval-shared.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import type { GatewayClient } from "./types.js";
 
 type ApprovalRequestDeliveryTarget = {
   deviceId: string;
@@ -76,20 +75,66 @@ export function handlePendingApprovalRequestWithDelivery<TKind extends keyof App
     approvalKind,
     requestEventName: `${approvalKind}.approval.requested`,
     requestEvent,
-    deliverRequest: () =>
-      runApprovalRequestDeliveries({
-        context: pending.context,
-        record: pending.record,
-        forward: forwardRequest
-          ? [() => forwardRequest(requestEvent), `${logPrefix} forward ${logContext}request failed`]
-          : undefined,
-        iosPush: iosPushRequest
-          ? [
-              (isTargetVisible) => iosPushRequest(requestEvent, { isTargetVisible }),
-              `${logPrefix} iOS push ${logContext}request failed`,
-            ]
-          : undefined,
-      }),
+    deliverRequest: () => {
+      const isTargetVisible = (target: ApprovalRequestDeliveryTarget) =>
+        isApprovalRecordVisibleToClient({
+          record: pending.record,
+          client: {
+            connect: {
+              client: { id: GATEWAY_CLIENT_IDS.IOS_APP },
+              device: { id: target.deviceId },
+              scopes: [...target.scopes],
+            },
+          } as GatewayClient,
+        });
+      const deliveryTasks: Promise<boolean>[] = [];
+      const startDelivery = (run: () => Promise<boolean>, errorLabel: string) => {
+        deliveryTasks.push(
+          trackAsyncWork(() => runWithRetainedGatewayRootWork(run)).catch((err: unknown) => {
+            pending.context.logGateway?.error?.(`${errorLabel}: ${String(err)}`);
+            return false;
+          }),
+        );
+      };
+      if (forwardRequest) {
+        startDelivery(
+          () => forwardRequest(requestEvent),
+          `${logPrefix} forward ${logContext}request failed`,
+        );
+      }
+      if (iosPushRequest) {
+        startDelivery(
+          () => iosPushRequest(requestEvent, { isTargetVisible }),
+          `${logPrefix} iOS push ${logContext}request failed`,
+        );
+      }
+      try {
+        const webPushDelivery = pending.context.approvalWebPushDelivery?.handleRequested(
+          pending.record,
+        );
+        if (webPushDelivery !== false && webPushDelivery !== undefined) {
+          startDelivery(() => Promise.resolve(webPushDelivery), "approval Web Push request failed");
+        }
+      } catch (err) {
+        pending.context.logGateway?.error?.(`approval Web Push request failed: ${String(err)}`);
+      }
+      if (deliveryTasks.length === 0) {
+        return false;
+      }
+      // A delivered route must unblock approval while other started routes keep
+      // their error handlers and can finish without delaying the requester.
+      return new Promise<boolean>((resolve) => {
+        let remaining = deliveryTasks.length;
+        for (const delivery of deliveryTasks) {
+          void delivery.then((delivered) => {
+            remaining -= 1;
+            if (delivered || remaining === 0) {
+              resolve(delivered);
+            }
+          });
+        }
+      });
+    },
     afterDecision: async (decision) => {
       if (decision === null) {
         // Expiration uses the current delivery owner after the approval wait.
@@ -100,92 +145,4 @@ export function handlePendingApprovalRequestWithDelivery<TKind extends keyof App
     afterDecisionErrorLabel:
       afterDecisionErrorLabel ?? `${logPrefix} iOS push ${logContext}expire failed`,
   });
-}
-
-type ApprovalRequestDelivery = readonly [
-  run: (isTargetVisible: (target: ApprovalRequestDeliveryTarget) => boolean) => Promise<boolean>,
-  errorLabel: string,
-];
-
-type ApprovalDeliveryLogContext = {
-  approvalWebPushDelivery?: Pick<
-    NonNullable<GatewayRequestContext["approvalWebPushDelivery"]>,
-    "handleRequested"
-  >;
-  logGateway?: { error?: (message: string) => void };
-};
-
-function trackApprovalDelivery<T>(run: () => Promise<T>): Promise<T> {
-  return trackAsyncWork(() => runWithRetainedGatewayRootWork(run));
-}
-
-function resolveFirstSuccessfulApprovalDelivery(
-  deliveryTasks: readonly Promise<boolean>[],
-): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    let remaining = deliveryTasks.length;
-    for (const delivery of deliveryTasks) {
-      void delivery.then((delivered) => {
-        if (delivered) {
-          resolve(true);
-          return;
-        }
-        remaining -= 1;
-        if (remaining === 0) {
-          resolve(false);
-        }
-      });
-    }
-  });
-}
-
-/** Runs external approval deliveries concurrently and reports whether any route accepted. */
-function runApprovalRequestDeliveries<TPayload>(params: {
-  context: ApprovalDeliveryLogContext;
-  record: ExecApprovalRecord<TPayload>;
-  forward?: ApprovalRequestDelivery;
-  iosPush?: ApprovalRequestDelivery;
-}): boolean | Promise<boolean> {
-  const isTargetVisible = (target: ApprovalRequestDeliveryTarget) =>
-    isApprovalRecordVisibleToClient({
-      record: params.record,
-      client: {
-        connect: {
-          client: { id: GATEWAY_CLIENT_IDS.IOS_APP },
-          device: { id: target.deviceId },
-          scopes: [...target.scopes],
-        },
-      } as GatewayClient,
-    });
-  const deliveryTasks = [params.forward, params.iosPush].flatMap((delivery) => {
-    if (!delivery) {
-      return [];
-    }
-    const [run, errorLabel] = delivery;
-    return [
-      trackApprovalDelivery(() => run(isTargetVisible)).catch((err: unknown) => {
-        params.context.logGateway?.error?.(`${errorLabel}: ${String(err)}`);
-        return false;
-      }),
-    ];
-  });
-  try {
-    const webPushDelivery = params.context.approvalWebPushDelivery?.handleRequested(params.record);
-    if (webPushDelivery !== false && webPushDelivery !== undefined) {
-      deliveryTasks.push(
-        trackApprovalDelivery(() => Promise.resolve(webPushDelivery)).catch((err: unknown) => {
-          params.context.logGateway?.error?.(`approval Web Push request failed: ${String(err)}`);
-          return false;
-        }),
-      );
-    }
-  } catch (err) {
-    params.context.logGateway?.error?.(`approval Web Push request failed: ${String(err)}`);
-  }
-  if (deliveryTasks.length === 0) {
-    return false;
-  }
-  // A delivered route must unblock approval while other started routes keep
-  // their error handlers and can finish without delaying the requester.
-  return resolveFirstSuccessfulApprovalDelivery(deliveryTasks);
 }

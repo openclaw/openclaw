@@ -5,7 +5,6 @@ import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
-  listPotentialConfiguredChannelPresenceSignals,
   type AmbientEnvTriggerPolicy,
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -64,50 +63,19 @@ export function readStartupBundledDiscoveryMode(
 function listPotentialEnabledChannelIds(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-  options: {
-    ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-    includePersistedAuthState?: boolean;
-  } = {},
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy,
 ): string[] {
   const disabled = new Set(listExplicitlyDisabledChannelIdsForConfig(config));
   const enabledSignals = [
     ...listPotentialConfiguredChannelIds(config, env, {
       includePersistedAuthState: false,
-      ambientEnvTriggers: options.ambientEnvTriggers,
+      ambientEnvTriggers,
     }),
     ...listExplicitConfiguredChannelIdsForConfig(config),
   ]
     .map((id) => normalizeOptionalLowercaseString(id) ?? "")
     .filter((id) => id && !disabled.has(id));
-  if (options.includePersistedAuthState !== true) {
-    return sortUniquePluginIds(enabledSignals);
-  }
-  const persistedSignals = listPotentialConfiguredChannelPresenceSignals(config, env, {
-    includePersistedAuthState: true,
-    ambientEnvTriggers: options.ambientEnvTriggers,
-  })
-    .filter((signal) => signal.source === "persisted-auth")
-    .map((signal) => normalizeOptionalLowercaseString(signal.channelId) ?? "")
-    .filter(Boolean);
-  // Only persisted-auth evidence bypasses disabled activation during migration.
-  return sortUniquePluginIds([...enabledSignals, ...persistedSignals]);
-}
-
-function resolveGatewayStartupDreamingEngineId(config: OpenClawConfig): string | undefined {
-  const dreamingConfig = resolveMemoryDreamingConfig({
-    pluginConfig: resolveMemoryDreamingPluginConfig(config),
-    cfg: config,
-  });
-  return dreamingConfig.enabled && resolveGatewayStartupDreamingSelectedPluginId(config)
-    ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID
-    : undefined;
-}
-
-function resolveGatewayStartupDreamingSelectedPluginId(config: OpenClawConfig): string | undefined {
-  const selectedPluginId = normalizeOptionalLowercaseString(resolveMemoryDreamingPluginId(config));
-  return selectedPluginId && selectedPluginId !== DEFAULT_MEMORY_DREAMING_PLUGIN_ID
-    ? selectedPluginId
-    : undefined;
+  return sortUniquePluginIds(enabledSignals);
 }
 
 export function blocksPluginStartup(params: {
@@ -136,9 +104,21 @@ export function resolveAuthorizedGatewayStartupDreamingPluginIds(params: {
   index: { plugins: readonly InstalledPluginIndexRecord[] };
   platform?: NodeJS.Platform;
 }): Set<string> {
-  const engineId = resolveGatewayStartupDreamingEngineId(params.config);
-  const dreamingSelectedPluginId = resolveGatewayStartupDreamingSelectedPluginId(params.config);
-  if (!engineId || !params.pluginsConfig.enabled || !params.activationSourcePlugins.enabled) {
+  const dreamingConfig = resolveMemoryDreamingConfig({
+    pluginConfig: resolveMemoryDreamingPluginConfig(params.config),
+    cfg: params.config,
+  });
+  const dreamingSelectedPluginId = normalizeOptionalLowercaseString(
+    resolveMemoryDreamingPluginId(params.config),
+  );
+  const engineId = DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
+  if (
+    !dreamingConfig.enabled ||
+    !dreamingSelectedPluginId ||
+    dreamingSelectedPluginId === engineId ||
+    !params.pluginsConfig.enabled ||
+    !params.activationSourcePlugins.enabled
+  ) {
     return new Set();
   }
   if (
@@ -317,14 +297,10 @@ export function collectConfiguredStartupChannelIds(params: {
   configs: readonly OpenClawConfig[];
   env: NodeJS.ProcessEnv;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-  includePersistedAuthState?: boolean;
 }): string[] {
   return sortUniquePluginIds(
     params.configs.flatMap((config) =>
-      listPotentialEnabledChannelIds(config, params.env, {
-        ambientEnvTriggers: params.ambientEnvTriggers,
-        includePersistedAuthState: params.includePersistedAuthState,
-      }),
+      listPotentialEnabledChannelIds(config, params.env, params.ambientEnvTriggers),
     ),
   );
 }

@@ -2,10 +2,7 @@ import path from "node:path";
 import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   findCapabilityProviderById,
@@ -103,23 +100,28 @@ type CapabilityProvider = {
   defaultModel?: string;
   models?: readonly string[];
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
+  isConfiguredAsync?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => Promise<boolean>;
 };
 
-type CapabilityProviderSource = CapabilityProvider[] | (() => CapabilityProvider[]);
+type CapabilityProviderSource =
+  | readonly CapabilityProvider[]
+  | (() => readonly CapabilityProvider[]);
 
 type GenerationCapabilityProviderKey =
   | "imageGenerationProviders"
   | "videoGenerationProviders"
   | "musicGenerationProviders";
 
+/** @deprecated Only synchronous tool-constructor compatibility uses this path. */
 export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
-  providers: T[];
+  providers: readonly T[];
   provider?: T;
   providerId?: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
 }): boolean {
   const provider =
     params.provider ??
@@ -128,30 +130,39 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
       providerId: params.providerId,
       normalizeProviderId,
     });
-  if (!provider) {
-    return params.providerId
-      ? hasProviderAuthForTool({
-          provider: params.providerId,
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          agentDir: params.agentDir,
-          authStore: params.authStore,
-        })
-      : false;
+  const providerId = provider ? provider.id : params.providerId;
+  if (providerId === undefined || (!provider && !providerId)) {
+    return false;
   }
-  if (provider.isConfigured) {
+  if (provider?.isConfigured) {
     return provider.isConfigured({
       cfg: params.cfg,
       agentDir: params.agentDir,
     });
   }
   return hasProviderAuthForTool({
-    provider: provider.id,
+    provider: providerId,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
+    authProfileStoreSource: params.authProfileStoreSource,
   });
+}
+
+export async function isCapabilityProviderConfiguredAsync<T extends CapabilityProvider>(
+  params: Parameters<typeof isCapabilityProviderConfigured<T>>[0],
+): Promise<boolean> {
+  const provider =
+    params.provider ??
+    findCapabilityProviderById({
+      providers: params.providers,
+      providerId: params.providerId,
+      normalizeProviderId,
+    });
+  return provider?.isConfiguredAsync
+    ? await provider.isConfiguredAsync({ cfg: params.cfg, agentDir: params.agentDir })
+    : isCapabilityProviderConfigured({ ...params, provider });
 }
 
 export function createCapabilityProviderRuntimeDeps<T extends CapabilityProvider>(
@@ -168,40 +179,36 @@ export function createCapabilityProviderRuntimeDeps<T extends CapabilityProvider
 }
 
 export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(params: {
-  providers: T[];
+  providers: readonly T[];
   modelConfig: ToolModelConfig;
   modelOverride?: string;
 }): T | undefined {
-  const selectedRef =
-    resolveCapabilityModelRefForProviders({
+  for (const raw of [params.modelOverride, params.modelConfig.primary]) {
+    const selectedRef = resolveCapabilityModelRefForProviders({
       providers: params.providers,
-      raw: params.modelOverride,
-      parseModelRef: parseGenerationModelRef,
-      normalizeProviderId,
-    }) ??
-    resolveCapabilityModelRefForProviders({
-      providers: params.providers,
-      raw: params.modelConfig.primary,
+      raw,
       parseModelRef: parseGenerationModelRef,
       normalizeProviderId,
     });
-  if (!selectedRef) {
-    return undefined;
+    if (selectedRef) {
+      return findCapabilityProviderById({
+        providers: params.providers,
+        providerId: selectedRef.provider,
+        normalizeProviderId,
+      });
+    }
   }
-  return findCapabilityProviderById({
-    providers: params.providers,
-    providerId: selectedRef.provider,
-    normalizeProviderId,
-  });
+  return undefined;
 }
 
-function resolveCapabilityModelCandidatesForTool(params: {
+async function resolveCapabilityModelCandidatesForTool(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
-  providers: CapabilityProvider[];
-}): string[] {
+  authProfileStoreSource?: boolean;
+  providers: readonly CapabilityProvider[];
+}): Promise<string[]> {
   const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
   for (const provider of params.providers) {
     const providerId = provider.id.trim();
@@ -210,10 +217,10 @@ function resolveCapabilityModelCandidatesForTool(params: {
       !providerId ||
       !modelId ||
       providerDefaults.has(providerId) ||
-      !isCapabilityProviderConfigured({
+      !(await isCapabilityProviderConfiguredAsync({
         ...params,
         provider,
-      })
+      }))
     ) {
       continue;
     }
@@ -227,33 +234,30 @@ function resolveCapabilityModelCandidatesForTool(params: {
   const primaryProvider = resolveDefaultModelRef(params.cfg).provider;
   const normalizedPrimaryProvider = normalizeProviderId(primaryProvider);
   const providerIds = [...providerDefaults.keys()].toSorted();
-  const matchesPrimaryProvider = (providerId: string): boolean => {
-    const entry = providerDefaults.get(providerId);
-    return (
-      normalizeProviderId(providerId) === normalizedPrimaryProvider ||
-      (entry?.aliases ?? []).includes(normalizedPrimaryProvider)
-    );
-  };
+  const matchesPrimaryProvider = (providerId: string): boolean =>
+    normalizeProviderId(providerId) === normalizedPrimaryProvider ||
+    providerDefaults.get(providerId)!.aliases.includes(normalizedPrimaryProvider);
   const orderedProviders = [
     ...providerIds.filter(matchesPrimaryProvider),
     ...providerIds.filter((providerId) => !matchesPrimaryProvider(providerId)),
   ];
-  return uniqueStrings(orderedProviders.flatMap((id) => providerDefaults.get(id)?.ref ?? []));
+  return uniqueStrings(orderedProviders.map((id) => providerDefaults.get(id)!.ref));
 }
 
 /**
  * Builds the model config for a generation tool from explicit config first, then configured
  * provider defaults ordered around the agent's primary provider.
  */
-export function resolveCapabilityModelConfigForTool(params: {
+export async function resolveCapabilityModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   modelConfig?: AgentModelConfig;
   modelOverride?: string;
   providers: CapabilityProviderSource;
-}): ToolModelConfig | null {
+}): Promise<ToolModelConfig | null> {
   const configured = coerceToolModelConfig(params.modelConfig);
   const modelOverride = normalizeOptionalString(params.modelOverride);
   const explicit = modelOverride ? { ...configured, primary: modelOverride } : configured;
@@ -264,19 +268,21 @@ export function resolveCapabilityModelConfigForTool(params: {
   return buildToolModelConfigFromCandidates({
     ...params,
     explicit,
-    candidates: resolveCapabilityModelCandidatesForTool({ ...params, providers }),
-    isProviderConfigured: (providerId) =>
-      isCapabilityProviderConfigured({ ...params, providers, providerId }),
+    candidates: await resolveCapabilityModelCandidatesForTool({ ...params, providers }),
+    // Candidate selection already checked each provider against its current auth owner.
+    isProviderConfigured: () => true,
   });
 }
 
+/** @deprecated Only synchronous tool-constructor compatibility uses this path. */
 export function hasGenerationToolAvailability(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   modelConfig?: AgentModelConfig;
-  providers?: CapabilityProvider[] | (() => CapabilityProvider[]);
+  providers?: CapabilityProviderSource;
   providerKey: GenerationCapabilityProviderKey;
 }): boolean {
   if (params.cfg?.plugins?.enabled === false) {
@@ -321,26 +327,41 @@ export function hasGenerationToolAvailability(params: {
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
+      authProfileStoreSource: params.authProfileStoreSource,
       capability: capabilityAuthOperation(params.providerKey),
     }),
   );
 }
 
+export async function hasGenerationToolAvailabilityAsync(
+  params: Parameters<typeof hasGenerationToolAvailability>[0],
+): Promise<boolean> {
+  if (params.cfg?.plugins?.enabled === false) {
+    return false;
+  }
+  if (hasToolModelConfig(coerceToolModelConfig(params.modelConfig))) {
+    return true;
+  }
+  const providers = typeof params.providers === "function" ? params.providers() : params.providers;
+  if (providers) {
+    for (const provider of providers) {
+      if (await isCapabilityProviderConfiguredAsync({ ...params, providers, provider })) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return hasGenerationToolAvailability({ ...params, providers: undefined });
+}
+
 export function resolveGenerateAction(
   args: Record<string, unknown>,
 ): "generate" | "status" | "list" {
-  const action = normalizeOptionalLowercaseString(readToolStringParam(args, "action"));
-  switch (action) {
-    case undefined:
-    case "generate":
-      return "generate";
-    case "status":
-      return "status";
-    case "list":
-      return "list";
-    default:
-      throw new ToolInputError('action must be "generate", "status", or "list"');
+  const action = readToolStringParam(args, "action")?.toLowerCase() ?? "generate";
+  if (action === "generate" || action === "status" || action === "list") {
+    return action;
   }
+  throw new ToolInputError('action must be "generate", "status", or "list"');
 }
 
 /**

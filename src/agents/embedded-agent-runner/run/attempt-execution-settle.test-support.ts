@@ -38,6 +38,7 @@ export function createFixture(mocks: {
     getHeartbeatToolResponse: vi.fn(() => undefined),
     getItemLifecycle: vi.fn(() => ({ startedCount: 0, completedCount: 0, activeCount: 0 })),
     getLastAssistantTextMessageIndex: vi.fn(() => undefined),
+    getKeptAnswer: vi.fn(() => undefined),
     getLastAssistantUsage: vi.fn(() => undefined),
     getLastCompactionTokensAfter: vi.fn(() => undefined),
     getLastToolError: vi.fn(() => undefined),
@@ -126,7 +127,6 @@ export function createFixture(mocks: {
     cache: {},
     history: {
       contextEnginePromptAuthority: "assembled",
-      contextEngineAssemblySucceeded: true,
       unwindowedContextEngineMessagesForPrecheck: [{ role: "user", content: "history" }],
     },
     isProbeSession: false,
@@ -162,6 +162,7 @@ export function createFixture(mocks: {
     },
     cacheTrace,
     contextGuards: {
+      checkMidTurnPrecheck: vi.fn(),
       getAfterTurnCheckpoint: vi.fn(() => 2),
       takePendingMidTurnPrecheckRequest: vi.fn(() => null),
     },

@@ -133,7 +133,7 @@ describe("bounded scheduled proof reuse", () => {
       }
       for (const filename of [
         "src/cli/plugins-scaffold-config.ts",
-        "src/gateway/node-command-policy-mobile.ts",
+        "src/gateway/node-command-policy.ts",
         "src/infra/node-commands.ts",
         "packages/normalization-core/src/record-coerce.ts",
         "scripts/test-projects.mts",

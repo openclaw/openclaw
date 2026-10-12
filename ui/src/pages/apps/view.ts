@@ -261,29 +261,6 @@ function renderSection(section: AppSection, props: AppsProps) {
   `;
 }
 
-function renderCommunity() {
-  return html`
-    <section class="apps-section" aria-label=${t("appsPage.sectionCommunity")}>
-      <h2 class="apps-section__heading">${t("appsPage.sectionCommunity")}</h2>
-      <nav class="apps-community" aria-label=${t("appsPage.sectionCommunity")}>
-        ${COMMUNITY_LINKS.map(
-          (link) => html`
-            <a
-              class="apps-pill"
-              href=${link.href}
-              target=${EXTERNAL_LINK_TARGET}
-              rel=${buildExternalLinkRel()}
-            >
-              <span class="apps-pill__icon" aria-hidden="true">${link.icon}</span>
-              <span>${t(link.labelKey)}</span>
-            </a>
-          `,
-        )}
-      </nav>
-    </section>
-  `;
-}
-
 export function renderApps(props: AppsProps) {
   return html`
     <div class="apps-page">
@@ -291,7 +268,25 @@ export function renderApps(props: AppsProps) {
         <h1 class="apps-hero__title">${t("appsPage.heroTitle")}</h1>
         <p class="apps-hero__tagline">${t("appsPage.heroTagline")}</p>
       </section>
-      ${APP_SECTIONS.map((section) => renderSection(section, props))} ${renderCommunity()}
+      ${APP_SECTIONS.map((section) => renderSection(section, props))}
+      <section class="apps-section" aria-label=${t("appsPage.sectionCommunity")}>
+        <h2 class="apps-section__heading">${t("appsPage.sectionCommunity")}</h2>
+        <nav class="apps-community" aria-label=${t("appsPage.sectionCommunity")}>
+          ${COMMUNITY_LINKS.map(
+            (link) => html`
+              <a
+                class="apps-pill"
+                href=${link.href}
+                target=${EXTERNAL_LINK_TARGET}
+                rel=${buildExternalLinkRel()}
+              >
+                <span class="apps-pill__icon" aria-hidden="true">${link.icon}</span>
+                <span>${t(link.labelKey)}</span>
+              </a>
+            `,
+          )}
+        </nav>
+      </section>
     </div>
   `;
 }

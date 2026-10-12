@@ -190,7 +190,7 @@ final class ChatSessionSidebarChildren {
                     self.errors[id] = String(localized: "Could not load child sessions. Try again.")
                     continue
                 }
-                let result = try await lease.listChildSessions(parentKey: parent.key)
+                let result = try await lease.listChildSessions(parent.key)
                 guard valid() else { continue }
                 guard result.isComplete else {
                     // ui/src/lib/sessions/child-session-data.ts:54: partial pages never certify a child window.

@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   resolveHeartbeatReplyPayload,
@@ -12,11 +11,13 @@ import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../auto-reply/heartbeat.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isHostNoticePayload,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../auto-reply/reply-payload.js";
 import { suppressPendingFinalDelivery } from "../auto-reply/reply/dispatch-from-config.pending-final.js";
+import { resolvePendingFinalDeliveryCompletion } from "../auto-reply/reply/pending-final-delivery.js";
 import { resolveReplyOperationAbortReason } from "../auto-reply/reply/reply-operation-abort.js";
 import {
   resolveReplyOperationAgentTurn,
@@ -27,18 +28,18 @@ import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-pref
 import { resolveSourceReplyDeliveryMode } from "../auto-reply/reply/source-reply-delivery-mode.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
-import {
-  loadExactSessionEntryReadOnly,
-  patchSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
-import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { mergeSessionEntry } from "../config/sessions/types.js";
 import { writeCronJobScratch } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  isDeliveryRecoveryOwnedRetry,
+  resolveDeliveryNotSentRetryability,
+} from "./delivery-recovery.shared.js";
 import { formatErrorMessage } from "./errors.js";
+import { readExecRequestOwners } from "./exec-request-context.js";
 import { classifyHeartbeatAgentOutcome } from "./heartbeat-delivery-normalization.js";
-import { HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX } from "./heartbeat-events-filter.js";
+import { isExecCompletionSystemEvent } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
 import { persistHeartbeatOutcome } from "./heartbeat-outcome-store.js";
@@ -50,7 +51,10 @@ import type {
 } from "./heartbeat-runner-execution.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
 import { restoreHeartbeatUpdatedAt } from "./heartbeat-runner-session.js";
-import { publishHeartbeatSessionReply } from "./heartbeat-session-publication.js";
+import {
+  prepareHeartbeatTargetAwareness,
+  publishHeartbeatSessionReply,
+} from "./heartbeat-session-publication.js";
 import {
   HEARTBEAT_IDLE_RETRY_GRACE_MS,
   HEARTBEAT_SKIP_CHANNEL_NOT_READY,
@@ -58,14 +62,15 @@ import {
   requestHeartbeat,
   type HeartbeatRunResult,
 } from "./heartbeat-wake.js";
+import { isOutboundDeliveryError } from "./outbound/deliver-types.js";
 import { resolveAgentOutboundIdentity } from "./outbound/identity.js";
-import {
-  resolveOutboundPayloadMirrorText,
-  type NormalizedOutboundPayload,
-} from "./outbound/payloads.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
-import { resolveSystemEventQueueKey, withSystemEventOwner } from "./system-event-ownership.js";
-import { consumeSelectedSystemEventEntries, enqueueSystemEvent } from "./system-events.js";
+import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
+import {
+  consumeSelectedSystemEventEntries,
+  holdSystemEventDelivery,
+  peekDeliverableSystemEventEntries,
+} from "./system-events.js";
 
 type HeartbeatDispatch = {
   opts: HeartbeatRunOptions;
@@ -73,6 +78,8 @@ type HeartbeatDispatch = {
   prepared: PreparedHeartbeatRun;
   result?: HeartbeatRunResult;
   deliveryError?: string;
+  retryUnqueuedDelivery?: boolean;
+  execDeliveryOutcome?: "delivered" | "recovery-owned" | "unknown-after-send" | "rejected";
   deliveryReason?: string;
   deliverySilent?: boolean;
   projectTarget?: boolean;
@@ -96,70 +103,6 @@ export function createHeartbeatDispatch(
 
 const FIRST_HEARTBEAT_ALERT_PREAMBLE =
   'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Run `openclaw config set agents.defaults.heartbeat.target "none"` to keep these internal.';
-const MAX_HEARTBEAT_TARGET_AWARENESS_CHARS = 1_000;
-
-function prepareHeartbeatTargetAwareness(params: {
-  agentId: string;
-  storePath: string;
-  runSessionKey: string;
-  targetSessionKey?: string;
-  startedAt: number;
-}): ((payload: NormalizedOutboundPayload) => void) | undefined {
-  const sessionKey = params.targetSessionKey?.trim();
-  if (!sessionKey || sessionKey === params.runSessionKey) {
-    return undefined;
-  }
-  try {
-    if (resolveAgentIdFromSessionKey(sessionKey, params.agentId) !== params.agentId) {
-      return undefined;
-    }
-    const scope = { agentId: params.agentId, storePath: params.storePath, sessionKey };
-    const entry = loadExactSessionEntryReadOnly(scope)?.entry;
-    if (!entry?.sessionId) {
-      return undefined;
-    }
-    const expectedSessionId = entry.sessionId;
-    const expectedLifecycleRevision = entry.lifecycleRevision;
-    const idempotencyKey = `${HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX}${params.startedAt}:${params.runSessionKey}`;
-    return (payload) => {
-      try {
-        // Recheck the exact pre-send lifecycle before publishing awareness. Resets
-        // can preserve sessionId while rotating lifecycleRevision.
-        const latest = loadExactSessionEntryReadOnly(scope)?.entry;
-        if (
-          latest?.sessionId !== expectedSessionId ||
-          latest.lifecycleRevision !== expectedLifecycleRevision
-        ) {
-          return;
-        }
-        const deliveredText = resolveMirroredTranscriptText({
-          text: payload.hookContent ?? resolveOutboundPayloadMirrorText(payload),
-          mediaUrls: payload.mediaUrls,
-        });
-        if (!deliveredText) {
-          return;
-        }
-        const text = truncateUtf16Safe(deliveredText, MAX_HEARTBEAT_TARGET_AWARENESS_CHARS);
-        const suffix = text.length < deliveredText.length ? "\n[truncated]" : "";
-        enqueueSystemEvent(
-          `A heartbeat delivered this message to this channel:\n${text}${suffix}`,
-          withSystemEventOwner({ sessionKey, contextKey: idempotencyKey }, params.agentId),
-        );
-      } catch (error) {
-        // Platform delivery already succeeded; projection remains best-effort bookkeeping.
-        log.warn("heartbeat: failed to queue target session awareness", {
-          error: formatErrorMessage(error),
-        });
-      }
-    };
-  } catch (error) {
-    log.warn("heartbeat: failed to resolve existing target session projection", {
-      error: formatErrorMessage(error),
-    });
-    return undefined;
-  }
-}
-
 /** Monitoring decides which final is public before ordinary dispatch can send it. */
 async function prepareHeartbeatDispatchReply(
   policy: HeartbeatDispatch,
@@ -171,7 +114,13 @@ async function prepareHeartbeatDispatchReply(
   const { delivery, visibility, sessionKey, storePath, runSessionKey, previousUpdatedAt } =
     prepared;
   const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
-  const selected = resolveHeartbeatReplyPayload(replyResult);
+  // A continuation under a quiet heartbeat posts the model's reply, never host notices;
+  // its terminal failure then stays silent.
+  const selected = resolveHeartbeatReplyPayload(
+    prepared.quietHostNotices
+      ? replies.filter((reply) => !isHostNoticePayload(reply))
+      : replyResult,
+  );
   const execution = resolveReplyOperationAgentTurn(runState);
   const heartbeatResponse = selectHeartbeatToolResponse(replyResult);
   const response = heartbeatResponse?.response;
@@ -182,7 +131,11 @@ async function prepareHeartbeatDispatchReply(
     runState.admission.reason === "active-run" &&
     !response &&
     (!selected || !hasOutboundReplyContent(selected));
-  if (execution === "cancelled" || execution === "superseded" || admissionBusy) {
+  const execCancelled = () =>
+    prepared.inspectedSystemEventsToConsume.some((event) =>
+      readExecRequestOwners(event)?.some((owner) => owner.signal.aborted),
+    );
+  if (execution === "cancelled" || execution === "superseded" || admissionBusy || execCancelled()) {
     const reason =
       execution === "superseded"
         ? "preempted"
@@ -267,6 +220,8 @@ async function prepareHeartbeatDispatchReply(
       await suppressPendingFinalDelivery(reply, { preserveActivity: true });
     }
   }
+  // A delivered failure notice does not complete the work whose model turn failed.
+  const completedExecTurn = prepared.hasExecCompletion && outcome.kind !== "failure";
   const finish = (event: Parameters<typeof emitHeartbeatEvent>[0], consume = true) => {
     emitHeartbeatEvent({
       ...event,
@@ -274,7 +229,27 @@ async function prepareHeartbeatDispatchReply(
       durationMs: Date.now() - startedAt,
       accountId: delivery.accountId,
     });
-    if (consume && preflight.shouldInspectPendingEvents) {
+    const queueKey = resolveSystemEventQueueKey(sessionKey, agentId);
+    // Stop cannot revoke a confirmed send or transfer recovery's existing custody
+    // to a newly generated reply for the surviving occurrences.
+    const settleEvents =
+      !execCancelled() ||
+      (policy.execDeliveryOutcome !== undefined && policy.execDeliveryOutcome !== "rejected");
+    if (completedExecTurn && preflight.shouldInspectPendingEvents && !consume) {
+      const execEvents = prepared.inspectedSystemEventsToConsume.filter(
+        isExecCompletionSystemEvent,
+      );
+      if (policy.execDeliveryOutcome && settleEvents) {
+        consumeSelectedSystemEventEntries(queueKey, execEvents);
+      } else if (
+        !policy.execDeliveryOutcome &&
+        policy.deliveryError &&
+        !policy.retryUnqueuedDelivery
+      ) {
+        holdSystemEventDelivery(queueKey, execEvents);
+      }
+    }
+    if (consume && settleEvents && preflight.shouldInspectPendingEvents) {
       consumeSelectedSystemEventEntries(resolveSystemEventQueueKey(sessionKey, agentId), [
         ...prepared.inspectedSystemEventsToConsume,
         ...prepared.deferredGenericEvents,
@@ -297,10 +272,36 @@ async function prepareHeartbeatDispatchReply(
         });
       }
     }
+    if (
+      completedExecTurn &&
+      settleEvents &&
+      (consume ||
+        policy.execDeliveryOutcome ||
+        (policy.deliveryError && !policy.retryUnqueuedDelivery)) &&
+      preflight.deferredEventEntries.length > 0
+    ) {
+      const next = peekDeliverableSystemEventEntries(queueKey);
+      if (next.length > 0) {
+        const source = next.some(isExecCompletionSystemEvent)
+          ? "exec-event"
+          : next.some((entry) => entry.contextKey?.startsWith("cron:"))
+            ? "cron"
+            : "hook";
+        requestHeartbeat({
+          source,
+          intent: source === "exec-event" ? "event" : "immediate",
+          reason: source === "exec-event" ? source : source + ":pending",
+          heartbeat: wake.heartbeat,
+          agentId,
+          sessionKey,
+        });
+      }
+    }
     policy.result =
       outcome.kind === "failure"
         ? { status: "failed", reason: outcome.reason }
         : { status: "ran", durationMs: Date.now() - startedAt };
+    return {};
   };
   const stateKey = prepared.outboundPolicySessionKey ?? sessionKey;
   const record = (value: HeartbeatToolResponse) =>
@@ -331,6 +332,17 @@ async function prepareHeartbeatDispatchReply(
   const restoreActivity = () =>
     restoreHeartbeatUpdatedAt({ agentId, storePath, sessionKey, updatedAt: previousUpdatedAt });
   const suppressSelected = () => suppressPendingFinalDelivery(selected, { preserveActivity: true });
+  const checkReady = (onError: (error: unknown) => { ok: false; reason?: string }) =>
+    channel
+      ? resolveHeartbeatChannelPlugin(channel)
+          ?.heartbeat?.checkReady?.({ cfg, accountId: delivery.accountId, deps: opts.deps })
+          .catch(onError)
+      : undefined;
+  const deliveryRetry = (): HeartbeatRunResult => ({
+    status: "skipped",
+    reason: HEARTBEAT_SKIP_CHANNEL_NOT_READY,
+    retryAtMs: Date.now() + HEARTBEAT_IDLE_RETRY_GRACE_MS,
+  });
   if (outcome.kind === "ack") {
     if ("response" in outcome && outcome.response) {
       await record(outcome.response);
@@ -345,7 +357,7 @@ async function prepareHeartbeatDispatchReply(
       return {};
     }
     if (committed.matchingRoute) {
-      finish({
+      return finish({
         status: "sent",
         to: delivery.to,
         preview: truncateHeartbeatPreview(committed.routeSentTexts.join("\n")),
@@ -354,17 +366,15 @@ async function prepareHeartbeatDispatchReply(
         indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
         silent: false,
       });
-      return {};
     }
     if (runState.backgroundWorkStarted) {
-      finish({
+      return finish({
         status: "skipped",
         reason: "background-work",
         message: "Heartbeat started background work; completion is tracked separately.",
         channel,
         silent: true,
       });
-      return {};
     }
     const event = {
       status: outcome.eventStatus,
@@ -376,16 +386,10 @@ async function prepareHeartbeatDispatchReply(
         : undefined,
     };
     if (!("silent" in outcome && outcome.silent) && visibility.showOk && channel && delivery.to) {
-      const readiness = await resolveHeartbeatChannelPlugin(channel)
-        ?.heartbeat?.checkReady?.({
-          cfg,
-          accountId: delivery.accountId,
-          deps: opts.deps,
-        })
-        .catch((error: unknown) => {
-          log.warn(`heartbeat: HEARTBEAT_OK delivery failed: ${formatErrorMessage(error)}`);
-          return { ok: false };
-        });
+      const readiness = await checkReady((error) => {
+        log.warn(`heartbeat: HEARTBEAT_OK delivery failed: ${formatErrorMessage(error)}`);
+        return { ok: false };
+      });
       if (!readiness || readiness.ok) {
         return {
           reply: setReplyPayloadMetadata(
@@ -404,8 +408,7 @@ async function prepareHeartbeatDispatchReply(
         };
       }
     }
-    finish({ ...event, silent: true });
-    return {};
+    return finish({ ...event, silent: true });
   }
   const stateEntry = prepared.policySessionEntry;
   const failed = outcome.kind === "failure";
@@ -425,6 +428,7 @@ async function prepareHeartbeatDispatchReply(
     const previousAt = stateEntry?.lastHeartbeatSentAt;
     if (
       !prepared.internalProjection &&
+      !prepared.hasExecCompletion &&
       !outcome.mediaUrls.length &&
       !outcome.hasStructuredReplyContent &&
       stateEntry?.lastHeartbeatText?.trim() &&
@@ -435,8 +439,7 @@ async function prepareHeartbeatDispatchReply(
     ) {
       await restoreActivity();
       await suppressSelected();
-      finish({ status: "skipped", reason: "duplicate", preview, hasMedia: false, channel });
-      return {};
+      return finish({ status: "skipped", reason: "duplicate", preview, hasMedia: false, channel });
     }
   }
   const noChannelTarget = !prepared.internalProjection && (!channel || !delivery.to);
@@ -448,7 +451,7 @@ async function prepareHeartbeatDispatchReply(
       }
       await suppressSelected();
     }
-    finish(
+    return finish(
       failed
         ? { ...event, silent: true }
         : {
@@ -463,12 +466,9 @@ async function prepareHeartbeatDispatchReply(
           },
       !failed,
     );
-    return {};
   }
   const readiness = channel
-    ? await resolveHeartbeatChannelPlugin(channel)
-        ?.heartbeat?.checkReady?.({ cfg, accountId: delivery.accountId, deps: opts.deps })
-        .catch((error: unknown) => ({ ok: false, reason: formatErrorMessage(error) }))
+    ? await checkReady((error) => ({ ok: false, reason: formatErrorMessage(error) }))
     : undefined;
   if (readiness && !readiness.ok) {
     await unconfirmed(readiness.reason ?? HEARTBEAT_SKIP_CHANNEL_NOT_READY);
@@ -483,11 +483,7 @@ async function prepareHeartbeatDispatchReply(
       false,
     );
     if (!failed) {
-      policy.result = {
-        status: "skipped",
-        reason: HEARTBEAT_SKIP_CHANNEL_NOT_READY,
-        retryAtMs: Date.now() + HEARTBEAT_IDLE_RETRY_GRACE_MS,
-      };
+      policy.result = deliveryRetry();
     }
     return {};
   }
@@ -548,7 +544,9 @@ async function prepareHeartbeatDispatchReply(
             },
         sent && !failed,
       );
-      if (policy.deliveryError && !failed) {
+      if (!failed && policy.retryUnqueuedDelivery) {
+        policy.result = deliveryRetry();
+      } else if (policy.deliveryError && !failed) {
         policy.result = { status: "failed", reason: policy.deliveryError };
       }
     },
@@ -573,6 +571,9 @@ export async function deliverHeartbeatDispatch(
         startedAt,
       })
     : undefined;
+  let publishedIntent = false;
+  let platformDispatchStarted = false;
+  const hasPendingFinalOwner = Boolean(resolvePendingFinalDeliveryCompletion([payload]));
   try {
     if (delivery.channel === "none" || !delivery.to) {
       // A failed attempt does not own the successful completion's receipt identity.
@@ -602,6 +603,8 @@ export async function deliverHeartbeatDispatch(
       });
       if (!committed.ok) {
         policy.deliveryReason = committed.reason;
+      } else {
+        policy.execDeliveryOutcome = "delivered";
       }
       // Settlement consumes only captured occurrences, and only after the
       // canonical transcript owner accepts this generation's write or replay.
@@ -625,9 +628,22 @@ export async function deliverHeartbeatDispatch(
       signal,
       silent: policy.deliverySilent,
       onDeliveredPayload,
+      onDeliveryIntent: () => {
+        publishedIntent = true;
+      },
+      onPlatformSendDispatch: async () => {
+        platformDispatchStarted = true;
+      },
     });
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;
+    }
+    if (policy.projectTarget !== false) {
+      if (send.status === "sent") {
+        policy.execDeliveryOutcome = "delivered";
+      } else if (send.status === "suppressed" && send.reason === "adapter_returned_no_identity") {
+        policy.execDeliveryOutcome = "unknown-after-send";
+      }
     }
     if (send.status === "suppressed") {
       policy.deliveryReason = send.reason;
@@ -640,6 +656,28 @@ export async function deliverHeartbeatDispatch(
     };
   } catch (error) {
     policy.deliveryError = formatErrorMessage(error);
+    policy.execDeliveryOutcome =
+      policy.projectTarget === false
+        ? undefined
+        : isDeliveryRecoveryOwnedRetry(error)
+          ? "recovery-owned"
+          : publishedIntent &&
+              isOutboundDeliveryError(error) &&
+              error.queueCustody === "released" &&
+              resolveDeliveryNotSentRetryability(error) === false
+            ? "rejected"
+            : undefined;
+    // Uncertain publication retains recovery custody even before the intent callback.
+    // A cancelled, unpublished direct send settles its claimed final without replay;
+    // published cancellation additionally needs the queue owner's released custody.
+    policy.retryUnqueuedDelivery =
+      policy.prepared.hasExecCompletion &&
+      !policy.execDeliveryOutcome &&
+      !platformDispatchStarted &&
+      ((!publishedIntent && (!hasPendingFinalOwner || signal?.aborted === true)) ||
+        (signal?.aborted === true &&
+          isOutboundDeliveryError(error) &&
+          error.queueCustody === "released"));
     throw error;
   }
 }

@@ -97,6 +97,57 @@ describe("recordInboundSession", () => {
     expect(reported).toHaveBeenCalledOnce();
   });
 
+  it("rejects pending database admission before dispatch even when reporting fails", async () => {
+    const { AgentDatabaseAdmissionError } = await import("../state/agent-database-admission.js");
+    const failure = new AgentDatabaseAdmissionError({
+      agentId: "main",
+      paths: ["/tmp/openclaw-agent.sqlite"],
+      code: "agent-database-inspection-pending",
+      reason: "Startup preparation is pending",
+      repairHint: "Wait for startup preparation to finish",
+    });
+    const onRecordError = vi.fn(() => {
+      throw new Error("reporting failed");
+    });
+    let trackedTask: Promise<unknown> | undefined;
+    recordSessionMetaFromInboundMock.mockRejectedValueOnce(failure);
+
+    await expect(
+      record({
+        onRecordError,
+        trackSessionMetaTask: (task) => {
+          trackedTask = task;
+        },
+        updateLastRoute: {
+          sessionKey: "agent:main:demo-channel:1234:thread:42",
+          channel: "demo-channel",
+          to: "demo-channel:1234",
+        },
+      }),
+    ).rejects.toBe(failure);
+
+    expect(onRecordError).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(trackedTask).toBeDefined();
+    await expect(trackedTask).resolves.toBeUndefined();
+    expect(updateLastRouteMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps terminal database admission metadata errors best effort", async () => {
+    const { AgentDatabaseAdmissionError } = await import("../state/agent-database-admission.js");
+    const failure = new AgentDatabaseAdmissionError({
+      agentId: "main",
+      paths: ["/tmp/openclaw-agent.sqlite"],
+      code: "agent-database-inspection-failed",
+      reason: "Startup preparation failed",
+      repairHint: "Run openclaw doctor --fix",
+    });
+    const onRecordError = vi.fn();
+    recordSessionMetaFromInboundMock.mockRejectedValueOnce(failure);
+
+    await expect(record({ onRecordError })).resolves.toBeUndefined();
+    expect(onRecordError).toHaveBeenCalledExactlyOnceWith(failure);
+  });
+
   it("does not pass ctx when updating a different session key", async () => {
     await record({
       updateLastRoute: {

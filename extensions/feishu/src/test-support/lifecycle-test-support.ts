@@ -191,7 +191,7 @@ function installFeishuLifecycleRuntime(params: {
           params.resolveCommandAuthorizedFromAuthorizers ?? vi.fn(() => false),
       },
       session: {
-        readSessionUpdatedAt: vi.fn(),
+        readSessionUpdatedAtAsync: vi.fn(async () => undefined),
         resolveStorePath: params.resolveStorePath,
       },
       pairing: {

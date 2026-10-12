@@ -37,11 +37,7 @@ export type DiscordComponentSelectOption = {
   label: string;
   value: string;
   description?: string;
-  emoji?: {
-    name: string;
-    id?: string;
-    animated?: boolean;
-  };
+  emoji?: NonNullable<DiscordComponentButtonSpec["emoji"]>;
   default?: boolean;
 };
 
@@ -134,25 +130,28 @@ export type DiscordComponentMessageSpec = {
   modal?: DiscordModalSpec;
 };
 
-export type DiscordComponentEntry = {
+type DiscordInteractionEntry = {
   id: string;
-  kind: "button" | "select" | "modal-trigger";
-  label: string;
   callbackData?: string;
-  callbackDataKind?: DiscordComponentCallbackDataKind;
-  selectType?: DiscordComponentSelectType;
-  options?: Array<{ value: string; label: string }>;
-  modalId?: string;
   sessionKey?: string;
   agentId?: string;
   accountId?: string;
   reusable?: boolean;
-  consumptionGroupId?: string;
-  consumptionGroupEntryIds?: string[];
   allowedUsers?: string[];
   messageId?: string;
   createdAt?: number;
   expiresAt?: number;
+};
+
+export type DiscordComponentEntry = DiscordInteractionEntry & {
+  kind: "button" | "select" | "modal-trigger";
+  label: string;
+  callbackDataKind?: DiscordComponentCallbackDataKind;
+  selectType?: DiscordComponentSelectType;
+  options?: Array<{ value: string; label: string }>;
+  modalId?: string;
+  consumptionGroupId?: string;
+  consumptionGroupEntryIds?: string[];
 };
 
 export type DiscordModalFieldDefinition = Omit<DiscordModalFieldSpec, "name"> & {
@@ -160,19 +159,9 @@ export type DiscordModalFieldDefinition = Omit<DiscordModalFieldSpec, "name"> & 
   name: string;
 };
 
-export type DiscordModalEntry = {
-  id: string;
+export type DiscordModalEntry = DiscordInteractionEntry & {
   title: string;
-  callbackData?: string;
   fields: DiscordModalFieldDefinition[];
-  sessionKey?: string;
-  agentId?: string;
-  accountId?: string;
-  reusable?: boolean;
-  messageId?: string;
-  createdAt?: number;
-  expiresAt?: number;
-  allowedUsers?: string[];
 };
 
 export type DiscordComponentBuildResult = {

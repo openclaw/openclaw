@@ -1,4 +1,3 @@
-// Friendly parse-error formatter for Commander errors and root CLI recovery hints.
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -115,7 +114,6 @@ function formatOrdinaryCliParseErrorMessage(message: string): string {
   return `OpenClaw could not parse this command: ${message}`;
 }
 
-/** Convert Commander parse errors into OpenClaw-specific help and docs guidance. */
 export function formatCliParseErrorOutput(
   raw: string,
   options: FormatCliParseErrorOptions = {},

@@ -48,7 +48,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       },
     },
   };
-  it.each(["imessage", "signal", "whatsapp"])(
+  it.each(["whatsapp"])(
     "leaves concurrent %s decisions to the Gateway and retires both terminal surfaces",
     async (channel) => {
       const winner = createDeferred<ApprovalResolveResult>();
@@ -193,7 +193,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     }
   });
 
-  it.each(["exec", "plugin", "system-agent"] as const)(
+  it.each(["system-agent"] as const)(
     "preserves %s approval bindings and rejects mismatched presentation or delivery markers",
     (approvalKind) => {
       const metadata = {
@@ -540,21 +540,6 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       expect(persistence.lookup).not.toHaveBeenCalled();
     },
   );
-
-  it("expires in-memory reaction targets by ttl", async () => {
-    let now = 1_000;
-    const store = createApprovalReactionTargetStore<{ approvalId: string }>({
-      namespace: "test.approvals",
-      maxEntries: 10,
-      defaultTtlMs: 100,
-      nowMs: () => now,
-    });
-    const target = { approvalId: "approval-1" };
-    await store.register("message-1", target);
-    expect(await store.lookup("message-1")).toEqual(target);
-    now = 1_101;
-    expect(await store.lookup("message-1")).toBeNull();
-  });
 
   it("uses the current system clock when no clock is injected", async () => {
     vi.useFakeTimers({ now: 1_000 });

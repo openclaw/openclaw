@@ -1,4 +1,3 @@
-// Fetches Claude provider usage windows.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -197,9 +196,7 @@ export async function fetchClaudeUsage(
       if (typeof raw === "string" && raw.trim()) {
         message = raw.trim();
       }
-    } catch {
-      // ignore parse errors
-    }
+    } catch {}
 
     // Claude Code CLI setup-token yields tokens that can be used for inference, but may not
     // include user:profile scope required by the OAuth usage endpoint. When a claude.ai

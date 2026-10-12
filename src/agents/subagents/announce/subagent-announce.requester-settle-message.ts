@@ -19,6 +19,8 @@ export function buildRequesterSettleWakeMessage(params: {
   parentOnly?: boolean;
   /** A yield handed the conversation back; private results stay input, the final is delivered. */
   yieldedFinalDeliverable?: boolean;
+  /** The descendant wait was spent while a descendant result was still undelivered. */
+  descendantsUnsettled?: boolean;
   children: readonly SubagentRunRecord[];
   recoveryChildren: readonly SubagentRunRecord[];
   preserveModelRouteNotice: boolean;
@@ -59,7 +61,9 @@ export function buildRequesterSettleWakeMessage(params: {
       : routeNotices;
   const recoveryRoster = buildSubagentRestartRecoveryRoster(params.recoveryChildren);
   return [
-    "[Subagent Context] Every subagent in this batch has now settled, including its descendants.",
+    params.descendantsUnsettled
+      ? "[Subagent Context] Every subagent in this batch has ended, but a descendant result below it was still undelivered when waiting stopped; a child that later receives it may report again in a separate completion."
+      : "[Subagent Context] Every subagent in this batch has now settled, including its descendants.",
     "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive for it. Other batches may still be running.",
     // Private completion guidance already includes the shared outcome policy.
     ...(params.parentOnly ? [] : [`[Subagent Context] ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}`]),

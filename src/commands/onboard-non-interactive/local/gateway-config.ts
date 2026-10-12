@@ -26,6 +26,10 @@ export async function applyNonInteractiveGatewayConfig(params: {
   tailscaleMode: string;
 } | null> {
   const { opts, runtime } = params;
+  const reject = (message: string): null => {
+    rejectOnboardingOption(opts, runtime, message);
+    return null;
+  };
 
   const existingGateway = params.nextConfig.gateway;
   const port = opts.gatewayPort ?? params.defaultPort;
@@ -63,12 +67,9 @@ export async function applyNonInteractiveGatewayConfig(params: {
     if (customBindHostIssue) {
       const setCommand = formatCliCommand("openclaw config set gateway.customBindHost <ipv4>");
       const interactiveCommand = formatCliCommand("openclaw onboard");
-      rejectOnboardingOption(
-        opts,
-        runtime,
+      return reject(
         `--gateway-bind custom requires gateway.customBindHost: ${customBindHostIssue}. Set it with ${setCommand} and rerun, or run ${interactiveCommand} interactively to be prompted for it.`,
       );
-      return null;
     }
   }
   const changesAuthOrTailscale =
@@ -78,13 +79,10 @@ export async function applyNonInteractiveGatewayConfig(params: {
   }
   if (changesAuthOrTailscale && tailscaleMode === "funnel" && authMode !== "password") {
     if (authMode === "trusted-proxy") {
-      rejectOnboardingOption(
-        opts,
-        runtime,
+      return reject(
         'Tailscale Funnel requires password auth, but the Gateway is configured with "trusted-proxy" auth. ' +
           "Re-run with --gateway-auth password to switch, or keep Tailscale exposure off.",
       );
-      return null;
     }
     authMode = "password";
   }
@@ -112,12 +110,9 @@ export async function applyNonInteractiveGatewayConfig(params: {
     if (gatewayTokenRefEnv) {
       const resolvedFromEnv = process.env[gatewayTokenRefEnv]?.trim();
       if (!resolvedFromEnv) {
-        rejectOnboardingOption(
-          opts,
-          runtime,
+        return reject(
           `Environment variable "${gatewayTokenRefEnv}" is missing or empty. Export it first, then rerun ${formatCliCommand("openclaw onboard --non-interactive")}.`,
         );
-        return null;
       }
       auth.token = createGatewayEnvSecretRef(nextConfig, gatewayTokenRefEnv);
     } else if (explicitGatewayToken || !existingTokenRef) {
@@ -147,12 +142,9 @@ export async function applyNonInteractiveGatewayConfig(params: {
           normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD))
         : normalizeOptionalString(input);
     if (!password) {
-      rejectOnboardingOption(
-        opts,
-        runtime,
+      return reject(
         "Missing --gateway-password for password auth. Pass --gateway-password or use --gateway-auth token.",
       );
-      return null;
     }
     auth = {
       ...auth,

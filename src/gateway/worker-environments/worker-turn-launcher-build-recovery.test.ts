@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   abortEmbeddedAgentRun,
@@ -17,6 +17,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
@@ -54,6 +55,8 @@ import {
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
+
+afterAll(closeStateDatabaseForTest);
 
 async function expectSinglePersistedInput() {
   expect(
@@ -304,7 +307,7 @@ async function createBuildRecoveryHarness(
 
 describe("worker turn launcher build recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
   afterEach(() => {
     resetGatewayWorkAdmission();
     resetDiagnosticRunActivityForTest();
@@ -644,6 +647,39 @@ describe("worker turn launcher build recovery", () => {
       }
     },
   );
+
+  it("clears the reconnect deadline when runtime refresh preparation fails", async () => {
+    const harness = await createBuildRecoveryHarness({
+      rejection: "pending refresh",
+      refreshInPlace: true,
+    });
+    const preparationError = new Error("runtime refresh preparation failed");
+    const prepareRuntimeRefresh = placements.prepareRuntimeRefresh.bind(placements);
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    const cleared = vi.spyOn(globalThis, "clearTimeout");
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    const preparation = vi
+      .spyOn(placements, "prepareRuntimeRefresh")
+      .mockImplementationOnce(prepareRuntimeRefresh)
+      .mockImplementationOnce(async () => {
+        reconnectTimer = scheduled.mock.results.at(-1)?.value;
+        expect(scheduled.mock.lastCall?.[1]).toBe(5_000);
+        throw preparationError;
+      });
+    try {
+      await expect(harness.execute()).rejects.toBe(preparationError);
+      expect(preparation).toHaveBeenCalledTimes(2);
+      expect(harness.launchTurn).not.toHaveBeenCalled();
+      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      expect(reconnectTimer).toBeDefined();
+      expect(cleared).toHaveBeenCalledWith(reconnectTimer);
+    } finally {
+      clearTimeout(reconnectTimer);
+      preparation.mockRestore();
+      scheduled.mockRestore();
+      cleared.mockRestore();
+    }
+  });
 
   it("bounds reconnect admission by the caller's timeout", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });

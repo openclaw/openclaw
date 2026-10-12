@@ -238,8 +238,13 @@ describe("test-projects args", () => {
     },
     {
       title: "routes fake-timer unit-fast targets to the serial fake-timer config",
-      target: "src/acp/translator.stop-reason.test.ts",
+      target: "src/utils.test.ts",
       config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+    },
+    {
+      title: "routes ACP event ledger consumers to their host broker owner",
+      target: "src/acp/translator.stop-reason.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
     },
     {
       title: "routes ACP session signals to their host broker owner",
@@ -376,7 +381,6 @@ describe("test-projects args", () => {
           "src/agents/openai-transport-stream.base.test.ts",
           "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
           "src/agents/openai-transport-stream.failed-sse.test.ts",
-          "src/agents/openai-transport-stream.incomplete-sse.test.ts",
           "src/agents/openai-transport-stream.replay-and-tools.test.ts",
         ],
         watchMode: false,

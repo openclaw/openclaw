@@ -7,10 +7,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import WebSocket from "ws";
 import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { buildDeviceAuthPayloadV3 } from "../../../../packages/gateway-client/src/device-auth.js";
 import { PROTOCOL_VERSION, type HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { GatewayClient, type GatewayClientOptions } from "../../../../src/gateway/client.js";
-import { buildDeviceAuthPayloadV3 } from "../../../../src/gateway/device-auth.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,

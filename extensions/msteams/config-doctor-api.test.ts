@@ -110,12 +110,12 @@ describe("Microsoft Teams Gateway webhook migration", () => {
   it.each([
     ["/api/:tenant/messages", "uses Express pattern syntax"],
     ["/api{/messages}", "uses Express pattern syntax"],
-    ["/health", "is reserved for Gateway probes"],
-    ["/healthz", "is reserved for Gateway probes"],
-    ["/ready", "is reserved for Gateway probes"],
-    ["/readyz", "is reserved for Gateway probes"],
-    ["/startup", "is reserved for Gateway probes"],
-    ["/startupz", "is reserved for Gateway probes"],
+    ["/health", "is reserved for Gateway checks"],
+    ["/healthz", "is reserved for Gateway checks"],
+    ["/ready", "is reserved for Gateway checks"],
+    ["/readyz", "is reserved for Gateway checks"],
+    ["/startup", "is reserved for Gateway checks"],
+    ["/startupz", "is reserved for Gateway checks"],
     ["/api/channels/teams", "requires Gateway authentication"],
     ["/%61pi/channels/teams", "requires Gateway authentication"],
   ])("diagnoses unavailable %s callbacks under every compatibility setting", (path, reason) => {

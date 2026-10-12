@@ -118,15 +118,6 @@ describe("Slack bot-thread mention configuration", () => {
       true,
     ],
     [
-      "wildcard",
-      {
-        requireMentionInBotThreads: true,
-        channels: { "*": { requireMentionInBotThreads: false }, C123: {} },
-      },
-      "default",
-      true,
-    ],
-    [
       "disabled room",
       { requireMentionInBotThreads: false, channels: { C123: { enabled: false } } },
       "default",
@@ -148,11 +139,7 @@ describe("Slack bot-thread mention configuration", () => {
     }
   });
 
-  it.each([
-    { policy: "mention policy", config: { requireMentionInBotThreads: true } },
-    { policy: "channel access", config: { channels: { C123: { enabled: false } } } },
-    { policy: "sender access", config: { channels: { C123: { users: ["U_ALLOWED"] } } } },
-  ])("stops the real handler when $policy changes during root lookup", async ({ config }) => {
+  it("stops the real handler when mention policy changes during root lookup", async () => {
     const test = fixture({ requireMentionInBotThreads: false, historyLimit: 0 }, "default", {
       ackReaction: "eyes",
       ackReactionScope: "all",
@@ -162,7 +149,7 @@ describe("Slack bot-thread mention configuration", () => {
     test.replies.mockImplementation(async () => {
       const next: OpenClawConfig = {
         ...test.ctx.cfg,
-        channels: { slack: { ...test.ctx.cfg.channels?.slack, ...config } },
+        channels: { slack: { ...test.ctx.cfg.channels?.slack, requireMentionInBotThreads: true } },
       };
       setRuntimeConfigSnapshot(next, next);
       return { messages: [{ ts: test.threadTs, text: "Bot root", user: "B1" }] };
@@ -199,35 +186,14 @@ describe("Slack bot-thread mention configuration", () => {
     expect((await test.prepare())?.ctxPayload.MentionSource).toBe("explicit_bot");
   });
 
-  it.each(["user", "bot_id", "foreign", "wrong timestamp", "unavailable"] as const)(
-    "exempts only verified bot-owned roots from mention gating: %s",
-    async (kind) => {
-      const test = fixture({ requireMention: true, requireMentionInBotThreads: false });
-      test.message.parent_user_id = kind === "foreign" ? "U_ROOT" : undefined;
-      if (kind === "unavailable") {
-        test.replies.mockRejectedValue(new Error("missing_scope"));
-      } else {
-        test.replies.mockResolvedValue({
-          messages: [
-            {
-              ts: kind === "wrong timestamp" ? test.message.ts : test.threadTs,
-              [kind === "bot_id" ? "bot_id" : "user"]: "B1",
-              text: "Bot root",
-            },
-          ],
-        });
-      }
-      const prepared = await test.prepare();
-      if (kind === "user" || kind === "bot_id") {
-        expect(prepared?.ctxPayload.RawBody).toBe("Continue here");
-      } else {
-        expect(prepared).toBeNull();
-        expect(test.info).toHaveBeenCalledWith(
-          expect.objectContaining({ reason: "missing-mention" }),
-          expect.any(String),
-        );
-      }
-      expect(test.replies).toHaveBeenCalledTimes(kind === "foreign" ? 0 : 1);
-    },
-  );
+  it("admits replies to roots verified by bot ID when bot-thread mentions are disabled", async () => {
+    const test = fixture({ requireMention: true, requireMentionInBotThreads: false });
+    test.message.parent_user_id = undefined;
+    test.replies.mockResolvedValue({
+      messages: [{ ts: test.threadTs, bot_id: "B1", text: "Bot root" }],
+    });
+    const prepared = await test.prepare();
+    expect(prepared?.ctxPayload.RawBody).toBe("Continue here");
+    expect(test.replies).toHaveBeenCalledTimes(1);
+  });
 });

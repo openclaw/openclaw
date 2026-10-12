@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -15,6 +16,10 @@ import {
 import { channelPairingHandlers } from "../gateway/server-methods/channel-pairing.js";
 import { execApprovalsHandlers } from "../gateway/server-methods/exec-approvals.js";
 import {
+  createSecretsHandlers,
+  createSecretStoreWriteService,
+} from "../gateway/server-methods/secrets.js";
+import {
   createSessionMutationTestClient,
   createSessionMutationTestContext,
 } from "../gateway/server-methods/sessions-mutations.owner.test-support.js";
@@ -23,14 +28,26 @@ import {
   restoreExecApprovalsSnapshotLocked,
   updateExecApprovals,
 } from "../infra/exec-approvals.js";
-import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
+import {
+  acquireGatewayLock,
+  resolveGatewayLockPaths,
+  type GatewayLockHandle,
+} from "../infra/gateway-lock.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
+import { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
 import {
   readChannelPairingStateSnapshot,
   writeChannelPairingStateSnapshot,
 } from "../pairing/pairing-store-sqlite.test-helpers.js";
+import {
+  listSecretStoreEntries,
+  readSecretStoreValue,
+  writeSecretStoreEntry,
+} from "../secrets/store/secret-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import { writeAdminStateOwnerObservationPreload } from "./admin-state-owner.observation.test-support.js";
 import { adminStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
@@ -87,6 +104,7 @@ describe("administrative CLI state owner routing", () => {
   let claim: TestPortClaim;
   let owner: GatewayLockHandle | null;
   let server: WebSocketServer;
+  let catalogServer: ReturnType<typeof createServer>;
   let scenario: Scenario = "live";
   let selectedMethod: string;
   let missingCapability: string | undefined;
@@ -96,7 +114,7 @@ describe("administrative CLI state owner routing", () => {
 
   beforeAll(async () => {
     root = roots.make("openclaw-admin-owner-");
-    claim = await acquireTestPortBlock({ offsets: [0] });
+    claim = await acquireTestPortBlock({ offsets: [0, 1] });
     env = {
       PATH: process.env.PATH,
       SystemRoot: process.env.SystemRoot,
@@ -110,6 +128,11 @@ describe("administrative CLI state owner routing", () => {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       NODE_DISABLE_COMPILE_CACHE: "1",
     };
+    const preloadPath = await writeAdminStateOwnerObservationPreload(
+      root,
+      resolveGatewayLockPaths(env).ownerLockPath,
+    );
+    Object.assign(env, sqliteWorkerPreloadEnv(preloadPath));
     const cfg = {
       gateway: {
         mode: "local" as const,
@@ -117,6 +140,7 @@ describe("administrative CLI state owner routing", () => {
         auth: { mode: "token" as const, token },
       },
       commands: { ownerAllowFrom: ["telegram:123"] },
+      models: { catalogRefresh: { url: `http://127.0.0.1:${claim.port + 1}/catalog` } },
     };
     await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(cfg));
     for (const key of ["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH", "HOME", "USERPROFILE"]) {
@@ -126,7 +150,31 @@ describe("administrative CLI state owner routing", () => {
     expect(owner).not.toBeNull();
     missingApprovals = readExecApprovalsSnapshot();
     expect(missingApprovals.exists).toBe(false);
-    const handlers = { ...channelPairingHandlers, ...execApprovalsHandlers };
+    const reloadSecrets = async () => ({ warningCount: 0 });
+    const handlers = {
+      ...channelPairingHandlers,
+      ...execApprovalsHandlers,
+      ...createSecretsHandlers({
+        reloadSecrets,
+        storeWriteService: createSecretStoreWriteService({ reloadSecrets }),
+        resolveSecrets: async () => ({ assignments: [], diagnostics: [], inactiveRefPaths: [] }),
+      }),
+    };
+    catalogServer = createServer((_req, response) =>
+      response.end(
+        JSON.stringify({
+          schemaVersion: 2,
+          generatedAt: 1_753_500_000_000,
+          sourceCommit: "fixture",
+          providers: { synthetic: {} },
+          models: [
+            { id: "synthetic-model", provider: "synthetic", pricing: { status: "unknown" } },
+          ],
+        }),
+      ),
+    );
+    catalogServer.listen(claim.port + 1, "127.0.0.1");
+    await once(catalogServer, "listening");
     const client = createSessionMutationTestClient();
     client.connect.scopes = ["operator.admin"];
     const context = createSessionMutationTestContext(cfg);
@@ -202,6 +250,9 @@ describe("administrative CLI state owner routing", () => {
 
   afterAll(async () => {
     await closeMinimalGatewayServer(server);
+    await new Promise<void>((resolve, reject) => {
+      catalogServer.close((error) => (error ? reject(error) : resolve()));
+    });
     await closeOpenClawStateDatabaseAsync();
     await owner?.release();
     await claim.release();
@@ -232,12 +283,15 @@ describe("administrative CLI state owner routing", () => {
       ],
     });
     await updateExecApprovals({
-      update: () => ({
-        version: 1,
-        agents: {
-          "*": { allowlist: operation.kind === "allowlist-remove" ? [{ pattern }] : [] },
+      update: {
+        kind: "replace",
+        file: {
+          version: 1,
+          agents: {
+            "*": { allowlist: operation.kind === "allowlist-remove" ? [{ pattern }] : [] },
+          },
         },
-      }),
+      },
     });
     if (scenario === "offline") {
       await closeOpenClawStateDatabaseAsync();
@@ -261,6 +315,7 @@ describe("administrative CLI state owner routing", () => {
     expect(result.code, result.stderr).toBe(succeeded ? 0 : 1);
     if (scenario === "offline") {
       expect(observation.adminSql).toBeGreaterThan(0);
+      expect(observation.workerSql).toBeGreaterThan(0);
       expect(observation).toMatchObject({ missingCustody: 0, ownerPids: [observation.pid] });
       expect(methods).toEqual([]);
     } else {
@@ -311,6 +366,120 @@ describe("administrative CLI state owner routing", () => {
         expect(JSON.parse(result.stdout)).toMatchObject({ exists: true, hash: snapshot.hash });
       }
     }
+  });
+
+  it.each(["live", "offline", "refused", "lost-reply"] as const)(
+    "secret set: %s preserves ownership and never replays a routed write",
+    async (mode) => {
+      scenario = mode;
+      selectedMethod = "secrets.store.set";
+      await writeSecretStoreEntry({
+        scope: { kind: "team" },
+        name: "OWNER_SECRET",
+        value: "synthetic-original",
+        kind: "secret",
+        updatedBy: "fixture",
+      });
+      if (mode === "offline") {
+        await closeOpenClawStateDatabaseAsync();
+        await owner?.release();
+        owner = null;
+      }
+      const result = await runCliProcessChild({
+        nodeArgs: [...entrypoint, "secrets", "store", "set", "OWNER_SECRET", "--value-file", "-"],
+        env,
+        input: "synthetic-rotated",
+      });
+      if (!owner) {
+        owner = await acquireGatewayLock({
+          env,
+          port: claim.port,
+          allowInTests: true,
+          timeoutMs: 0,
+        });
+      }
+      expect(result.code, result.stderr).toBe(mode === "live" || mode === "offline" ? 0 : 1);
+      const observation = JSON.parse(
+        await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"),
+      );
+      if (mode === "offline") {
+        expect(observation.secretWrites).toBeGreaterThan(0);
+        expect(observation).toMatchObject({ missingCustody: 0, ownerPids: [observation.pid] });
+      } else {
+        expect(observation.secretWrites).toBe(0);
+      }
+      expect(methods).toEqual(mode === "offline" ? [] : ["secrets.store.set"]);
+      expect(
+        await readSecretStoreValue({ scope: { kind: "team" }, name: "OWNER_SECRET" }),
+      ).toMatchObject({
+        ok: true,
+        value: mode === "refused" ? "synthetic-original" : "synthetic-rotated",
+      });
+      if (mode === "refused") {
+        expect(result.stderr).toContain("No local mutation was attempted");
+      }
+      if (mode === "lost-reply") {
+        expect(result.stderr).toContain("outcome may be partial");
+      }
+    },
+  );
+
+  it("routes secret import, host policy, and removal through the live owner", async () => {
+    const run = async (args: string[], input?: string) => {
+      const result = await runCliProcessChild({
+        nodeArgs: [...entrypoint, "secrets", "store", ...args],
+        env,
+        input,
+      });
+      expect(result.code, result.stderr).toBe(0);
+      const observed = JSON.parse(
+        await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"),
+      );
+      expect(observed.secretWrites).toBe(0);
+    };
+    await run(
+      ["import", "--from", "-", "--yes"],
+      "BATCH_TOKEN=synthetic-imported\nBATCH_MODE=test\n",
+    );
+    expect(
+      await readSecretStoreValue({ scope: { kind: "team" }, name: "BATCH_TOKEN" }),
+    ).toMatchObject({ ok: true, value: "synthetic-imported" });
+    await run(["set", "BATCH_TOKEN", "--allow-host", "API.EXAMPLE.COM"]);
+    expect(
+      (await listSecretStoreEntries({ scope: { kind: "team" } })).find(
+        (entry) => entry.name === "BATCH_TOKEN",
+      ),
+    ).toMatchObject({ kind: "secret", allowedHosts: ["api.example.com"] });
+    await run(["rm", "BATCH_TOKEN", "--yes"]);
+    expect((await readSecretStoreValue({ scope: { kind: "team" }, name: "BATCH_TOKEN" })).ok).toBe(
+      false,
+    );
+    expect(methods).toEqual([
+      "secrets.store.import",
+      "secrets.store.allowedHosts",
+      "secrets.store.delete",
+    ]);
+  });
+
+  it("refuses live catalog refresh and persists the same command offline", async () => {
+    const run = () => runCliProcessChild({ nodeArgs: [...entrypoint, "models", "refresh"], env });
+    const refused = await run();
+    expect(refused.code, refused.stderr).toBe(1);
+    expect(refused.stderr).toContain("exclusive offline state ownership");
+    expect(methods).toEqual([]);
+    expect(readRemoteModelCatalog()).toBeUndefined();
+    await closeOpenClawStateDatabaseAsync();
+    await owner?.release();
+    owner = null;
+    const result = await run();
+    owner = await acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
+    expect(result.code, result.stderr).toBe(0);
+    expect(readRemoteModelCatalog()?.generated_at).toBe(1_753_500_000_000);
+    const observed = JSON.parse(
+      await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"),
+    );
+    expect(observed.catalogWrites).toBeGreaterThan(0);
+    expect(observed).toMatchObject({ missingCustody: 0, ownerPids: [observed.pid] });
   });
 
   it("keeps an unstored default policy absent when a live owner serves approvals get", async () => {

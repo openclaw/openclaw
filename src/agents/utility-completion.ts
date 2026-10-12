@@ -6,7 +6,7 @@ import {
 } from "./isolated-completion-route.js";
 import { hasAvailableAuthForProvider } from "./model-auth.js";
 import {
-  createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
   type ModelCatalogDecisionParams,
 } from "./model-catalog-decisions.js";
 import { resolveSimpleCompletionSelectionForAgent } from "./simple-completion-runtime.js";
@@ -54,10 +54,9 @@ export async function prepareUtilityCompletionForAgent(
   params: Parameters<typeof resolveUtilityCompletionForAgent>[0],
 ) {
   const prepared = resolveUtilityCompletionForAgent(params);
-  // Execution may refresh credentials. A prepared catalog projection must use
-  // its own captured readiness instead, or an unrelated store can change its label.
   if (
     prepared.agentHarnessRuntimeOverride &&
+    prepared.agentHarnessRuntimeOverride !== "claude-cli" &&
     (await hasAvailableAuthForProvider({
       provider: prepared.provider,
       cfg: params.cfg,
@@ -118,23 +117,22 @@ export async function resolveUtilityCompletionRuntimeForAgent(
       if (!entry) {
         return undefined;
       }
-      const decisions = createModelCatalogDecisions({
+      const decisions = await prepareModelCatalogDecisions({
         ...params,
         preferredProfileId: prepared.authProfileId,
         pinnedProfileId: prepared.authProfileId,
         profileProvider: provider,
       });
-      if (prepared.agentHarnessRuntimeOverride) {
-        const direct = await decisions.evaluateEntry(
-          entry,
-          params.snapshot.routeVariants,
-          "openclaw",
-        );
+      if (
+        prepared.agentHarnessRuntimeOverride &&
+        prepared.agentHarnessRuntimeOverride !== "claude-cli"
+      ) {
+        const direct = decisions.evaluateEntry(entry, params.snapshot.routeVariants, "openclaw");
         if (direct.availability === true) {
           delete prepared.agentHarnessRuntimeOverride;
         }
       }
-      const runtime = resolveIsolatedCompletionRuntime({
+      const runtime = await resolveIsolatedCompletionRuntime({
         ...prepared,
         agentDir: params.agentDir ?? prepared.agentDir,
         workspaceDir: params.workspaceDir,
@@ -143,7 +141,7 @@ export async function resolveUtilityCompletionRuntimeForAgent(
       if (!runtime) {
         return undefined;
       }
-      const host = await decisions.evaluateEntry(entry, params.snapshot.routeVariants, runtime.id);
+      const host = decisions.evaluateEntry(entry, params.snapshot.routeVariants, runtime.id);
       const available = decisions.evaluateNative(entry, host, runtime.id).availability;
       // A selected engine is not evidence that its prepared account is usable.
       // Reuse catalog readiness, including CLI/native observations, before publishing it.

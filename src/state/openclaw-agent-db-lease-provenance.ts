@@ -59,6 +59,47 @@ export function readAgentDatabaseLeaseProvenance(pathname: string): string | nul
   }
 }
 
-export function isSameBootAgentDatabaseLease(provenance: string | null, pathname: string): boolean {
+function isSameBootAgentDatabaseLease(provenance: string | null, pathname: string): boolean {
   return provenance !== null && provenance === readAgentDatabaseLeaseProvenance(pathname);
+}
+
+export function agentDatabaseLeaseProcessDeathRefusal(
+  row: {
+    opened_at: number;
+    owner_start_time: number | null;
+    path: string;
+    provenance: string | null;
+  },
+  pathname: string,
+  staleReason: NonNullable<ReturnType<typeof agentDatabaseLeaseStaleReason>>,
+): string | undefined {
+  if (staleReason !== "owner-pid-dead") {
+    return "owner-start-time-changed";
+  }
+  if (row.opened_at <= 0) {
+    return "predecessor-admission-incomplete";
+  }
+  if (row.owner_start_time === null) {
+    return "owner-start-time-missing";
+  }
+  if (row.path !== pathname) {
+    return "lease-path-mismatch";
+  }
+  if (row.provenance === null) {
+    return "legacy-provenance-missing";
+  }
+  return isSameBootAgentDatabaseLease(row.provenance, pathname)
+    ? undefined
+    : "host-boot-namespace-version-file-mismatch";
+}
+
+export function agentDatabaseAdmissionProvenanceRefusal(
+  provenance: string | null | undefined,
+  pathname: string,
+): string | undefined {
+  return provenance === undefined
+    ? "native-admission-required"
+    : isSameBootAgentDatabaseLease(provenance, pathname)
+      ? undefined
+      : "prepared-provenance-mismatch";
 }

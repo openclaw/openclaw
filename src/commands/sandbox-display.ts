@@ -3,6 +3,17 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import type { RuntimeEnv } from "../runtime.js";
 
+function displayUsage(container: SandboxContainerInfo, runtime: RuntimeEnv): void {
+  runtime.log(
+    `    Age:     ${formatDurationCompact(Date.now() - container.createdAtMs, { spaced: true }) ?? "0s"}`,
+  );
+  runtime.log(
+    `    Idle:    ${formatDurationCompact(Date.now() - container.lastUsedAtMs, { spaced: true }) ?? "0s"}`,
+  );
+  runtime.log(`    Session: ${container.sessionKey}`);
+  runtime.log("");
+}
+
 export function displayContainers(containers: SandboxContainerInfo[], runtime: RuntimeEnv): void {
   if (containers.length === 0) {
     runtime.log("No sandbox runtimes found.");
@@ -17,14 +28,7 @@ export function displayContainers(containers: SandboxContainerInfo[], runtime: R
       `    ${container.configLabelKind ?? "Image"}:   ${container.image} ${container.imageMatch ? "✓" : "⚠️  mismatch"}`,
     );
     runtime.log(`    Backend: ${container.backendId ?? "docker"}`);
-    runtime.log(
-      `    Age:     ${formatDurationCompact(Date.now() - container.createdAtMs, { spaced: true }) ?? "0s"}`,
-    );
-    runtime.log(
-      `    Idle:    ${formatDurationCompact(Date.now() - container.lastUsedAtMs, { spaced: true }) ?? "0s"}`,
-    );
-    runtime.log(`    Session: ${container.sessionKey}`);
-    runtime.log("");
+    displayUsage(container, runtime);
   }
 }
 
@@ -43,14 +47,7 @@ export function displayBrowsers(browsers: SandboxBrowserInfo[], runtime: Runtime
     if (browser.noVncPort) {
       runtime.log(`    noVNC:   ${browser.noVncPort}`);
     }
-    runtime.log(
-      `    Age:     ${formatDurationCompact(Date.now() - browser.createdAtMs, { spaced: true }) ?? "0s"}`,
-    );
-    runtime.log(
-      `    Idle:    ${formatDurationCompact(Date.now() - browser.lastUsedAtMs, { spaced: true }) ?? "0s"}`,
-    );
-    runtime.log(`    Session: ${browser.sessionKey}`);
-    runtime.log("");
+    displayUsage(browser, runtime);
   }
 }
 

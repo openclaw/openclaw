@@ -78,7 +78,7 @@ export async function probeFeishu(
     return {
       ok: false,
       appId: creds.appId,
-      error: "probe aborted",
+      error: "check aborted",
     };
   }
 
@@ -116,11 +116,11 @@ export async function probeFeishu(
       return {
         ok: false,
         appId: creds.appId,
-        error: "probe aborted",
+        error: "check aborted",
       };
     }
     if (responseResult.status === "timeout") {
-      return cacheError(`probe timed out after ${timeoutMs}ms`);
+      return cacheError(`check timed out after ${timeoutMs}ms`);
     }
 
     const response = responseResult.value;
@@ -128,7 +128,7 @@ export async function probeFeishu(
       return {
         ok: false,
         appId: creds.appId,
-        error: "probe aborted",
+        error: "check aborted",
       };
     }
 

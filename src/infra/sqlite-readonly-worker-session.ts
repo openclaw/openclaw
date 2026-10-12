@@ -133,6 +133,18 @@ export function createSqliteReadOnlyWorkerSession(
     }
     child.kill("SIGKILL");
   };
+  const sendMessage = (message: Parameters<ChildProcess["send"]>[0]) =>
+    child.send(message, (error) => {
+      if (error) {
+        retire(error);
+      }
+    });
+  const releasePending = (request: NonNullable<typeof pending>) => {
+    pending = undefined;
+    pendingOperation = undefined;
+    request.cleanup();
+    return request;
+  };
   if (host.retainLifetime !== false) {
     void retainSnapshotWork(closed, () => retire(new Error("SQLite snapshot owner stopped")));
   }
@@ -163,10 +175,7 @@ export function createSqliteReadOnlyWorkerSession(
     nativeClosed = true;
     retired = true;
     if (pending) {
-      const request = pending;
-      pending = undefined;
-      pendingOperation = undefined;
-      request.cleanup();
+      const request = releasePending(pending);
       request.reject(
         request.failure ??
           createSqliteReadOnlyWorkerError(
@@ -225,25 +234,17 @@ export function createSqliteReadOnlyWorkerSession(
       ) {
         const reply = pending.transfer.accept(message.result);
         if ("request" in reply) {
-          child.send({ id: pending.id, transfer: reply.request }, (error) => {
-            if (error) {
-              retire(error);
-            }
-          });
+          sendMessage({ id: pending.id, transfer: reply.request });
           return;
         }
         value = reply.value;
       } else {
         value = readSqliteReadOnlyWorkerValue(
-          { stdout: JSON.stringify(message.result), stderr },
+          { kind: "launched", stdout: JSON.stringify(message.result), stderr, status: 0 },
           pending.mode,
         );
       }
-      const request = pending;
-      pending = undefined;
-      pendingOperation = undefined;
-      request.cleanup();
-      request.resolve(value);
+      releasePending(pending).resolve(value);
     } catch (error) {
       if (
         pending &&
@@ -252,11 +253,7 @@ export function createSqliteReadOnlyWorkerSession(
         isSqliteReadOnlyWorkerResult(message.result) &&
         !message.result.ok
       ) {
-        const request = pending;
-        pending = undefined;
-        pendingOperation = undefined;
-        request.cleanup();
-        request.reject(error);
+        releasePending(pending).reject(error);
         return;
       }
       // A failed native close can retain a source lease. Do not reject the
@@ -327,20 +324,17 @@ export function createSqliteReadOnlyWorkerSession(
             const request = {
               id,
               args: host.requestArgs(pathname, options),
-              ...(options.mode === "auth-profile-rows"
+              ...(options.mode === "auth-profile-rows" || options.mode === "operation"
                 ? {
-                    auth: {
+                    [options.mode === "operation" ? "operation" : "auth"]: {
                       expectedIdentity: options.expectedIdentity,
+                      artifactPreserving: options.artifactPreserving,
+                      ...(options.mode === "operation"
+                        ? { command: serialize(options.command).toString("base64") }
+                        : {}),
                     },
                   }
-                : options.mode === "operation"
-                  ? {
-                      operation: {
-                        expectedIdentity: options.expectedIdentity,
-                        command: serialize(options.command).toString("base64"),
-                      },
-                    }
-                  : {}),
+                : {}),
             };
             if (
               options.mode === "operation" &&
@@ -348,11 +342,7 @@ export function createSqliteReadOnlyWorkerSession(
             ) {
               throw new Error("SQLite read-only operation exceeded its request buffer");
             }
-            child.send(request, (error) => {
-              if (error) {
-                retire(error);
-              }
-            });
+            sendMessage(request);
           } catch (error) {
             retire(error);
           }
@@ -375,11 +365,7 @@ export function createSqliteReadOnlyWorkerSession(
       const timer = setTimeout(() => retire(), host.closeTimeoutMs);
       try {
         // Child-owned disconnect preserves Node's process-and-pipes close event.
-        child.send("close", (error) => {
-          if (error) {
-            retire(error);
-          }
-        });
+        sendMessage("close");
       } catch (error) {
         retire(error);
       }

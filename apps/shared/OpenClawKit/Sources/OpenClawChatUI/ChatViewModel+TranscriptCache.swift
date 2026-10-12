@@ -21,6 +21,17 @@ extension OpenClawChatViewModel {
         markTimelineChanged()
     }
 
+    /// Prefer the transcript's copy of a sentence over the live stream, regardless of arrival order.
+    var liveAssistantText: String? {
+        guard let text = self.streamingAssistantText else { return nil }
+        let live = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !live.isEmpty else { return text }
+        let recorded = self.transcriptMessages.reversed().prefix { $0.role.lowercased() != "user" }.contains {
+            $0.role.lowercased() == "assistant" && $0.rawText == live
+        }
+        return recorded ? nil : text
+    }
+
     nonisolated static func durableSessionCacheProjection(
         _ session: OpenClawChatSessionEntry) -> OpenClawChatSessionEntry
     {

@@ -237,7 +237,7 @@ struct DashboardExperienceTests {
     private func makeController(server: DashboardHTTPFixture) -> DashboardWindowController {
         DashboardWindowController(
             url: server.url("/"),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })

@@ -172,18 +172,14 @@ export function summarizeStructuredResult(
   };
 }
 
-function resolveConversationChannel(row: SessionRow): string | undefined {
-  return normalizeOptionalLowercaseString(
+/** Convert a Gateway session row into a reply-capable conversation descriptor. */
+export function toConversation(row: SessionRow): ConversationDescriptor | null {
+  const channel = normalizeOptionalLowercaseString(
     toText(row.deliveryContext?.channel) ??
       toText(row.lastChannel) ??
       toText(row.channel) ??
       toText(row.origin?.provider),
   );
-}
-
-/** Convert a Gateway session row into a reply-capable conversation descriptor. */
-export function toConversation(row: SessionRow): ConversationDescriptor | null {
-  const channel = resolveConversationChannel(row);
   const to = toText(row.deliveryContext?.to) ?? toText(row.lastTo);
   if (!channel || !to) {
     return null;

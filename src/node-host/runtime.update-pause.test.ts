@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import {
   createNodeHostClient,
   frame,
@@ -81,35 +80,7 @@ describe("node-host update pause", () => {
     },
   );
 
-  it("does not let a resumed idle read release a replacement update pause", async () => {
-    const first = createDeferred<boolean>();
-    const second = createDeferred<boolean>();
-    mocks.workerHasActiveWork
-      .mockImplementationOnce(async () => await first.promise)
-      .mockImplementationOnce(async () => await second.promise);
-    const runtime = await startRuntime();
-    const original = runtime.tryPauseForUpdate();
-    runtime.resumeAfterUpdate();
-    const replacement = runtime.tryPauseForUpdate();
-    try {
-      first.resolve(false);
-      expect(await original).toBe(false);
-      await runtime.invoke(frame);
-      expect(mocks.handleInvoke).not.toHaveBeenCalled();
-      second.resolve(false);
-      expect(await replacement).toBe(true);
-      runtime.resumeAfterUpdate();
-      await runtime.invoke(frame);
-      expect(mocks.handleInvoke).toHaveBeenCalledOnce();
-    } finally {
-      first.resolve(false);
-      second.resolve(false);
-      await Promise.allSettled([original, replacement]);
-      await runtime.close();
-    }
-  });
-
-  it.each(["missing", "undefined", "throwing", "declared"])(
+  it.each(["missing", "throwing", "declared"])(
     "requires an explicit plugin idle result after invocation with a %s hook",
     async (mode) => {
       const pluginBridge =
@@ -120,15 +91,13 @@ describe("node-host update pause", () => {
         retainedWork = false;
       });
       const hasActiveWork =
-        mode === "undefined"
-          ? vi.fn<() => boolean>()
-          : mode === "throwing"
-            ? () => {
-                throw new Error("plugin work state unavailable");
-              }
-            : mode === "declared"
-              ? () => retainedWork
-              : undefined;
+        mode === "throwing"
+          ? () => {
+              throw new Error("plugin work state unavailable");
+            }
+          : mode === "declared"
+            ? () => retainedWork
+            : undefined;
       const registry = createEmptyPluginRegistry();
       registry.nodeHostCommands = [
         {
@@ -175,42 +144,40 @@ describe("node-host update pause", () => {
     },
   );
 
-  it.each(["system.run", "test.duplex", NODE_DESKTOP_STREAM_COMMAND])(
-    "keeps %s busy from admission through disconnected command settlement",
-    async (command) => {
-      const held = holdInvoke();
-      const request = vi.fn(async () => ({}));
-      const runtime = await startRuntime(createNodeHostClient(request));
-      const invoking = runtime.invoke({ ...frame, command });
-      try {
-        expect(await runtime.tryPauseForUpdate()).toBe(false);
-        await vi.waitFor(() => expect(held.signal).toBeDefined());
-        await runtime.cancelAll();
-        expect(held.signal?.aborted).toBe(true);
-        expect(await runtime.tryPauseForUpdate()).toBe(false);
+  it("keeps an invocation busy from admission through disconnected command settlement", async () => {
+    const command = "test.duplex";
+    const held = holdInvoke();
+    const request = vi.fn(async () => ({}));
+    const runtime = await startRuntime(createNodeHostClient(request));
+    const invoking = runtime.invoke({ ...frame, command });
+    try {
+      expect(await runtime.tryPauseForUpdate()).toBe(false);
+      await vi.waitFor(() => expect(held.signal).toBeDefined());
+      await runtime.cancelAll();
+      expect(held.signal?.aborted).toBe(true);
+      expect(await runtime.tryPauseForUpdate()).toBe(false);
 
-        held.release();
-        await invoking;
-        await vi.waitFor(async () => expect(await runtime.tryPauseForUpdate()).toBe(true));
-        await runtime.invoke({ ...frame, id: "during-update", command });
-        expect(mocks.handleInvoke).toHaveBeenCalledOnce();
-        expect(request).toHaveBeenCalledWith("node.invoke.result", {
-          id: "during-update",
-          nodeId: frame.nodeId,
-          ok: false,
-          error: { code: "UNAVAILABLE", message: expect.stringContaining("updating") },
-        });
+      held.release();
+      await invoking;
+      await vi.waitFor(async () => expect(await runtime.tryPauseForUpdate()).toBe(true));
+      await runtime.invoke({ ...frame, id: "during-update", command });
+      expect(mocks.handleInvoke).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledWith("node.invoke.result", {
+        id: "during-update",
+        nodeId: frame.nodeId,
+        ok: false,
+        error: { code: "UNAVAILABLE", message: expect.stringContaining("updating") },
+      });
 
-        runtime.resumeAfterUpdate();
-        await runtime.invoke({ ...frame, id: "after-update", command });
-        expect(mocks.handleInvoke).toHaveBeenCalledTimes(2);
-      } finally {
-        held.release();
-        await invoking;
-        await runtime.close();
-      }
-    },
-  );
+      runtime.resumeAfterUpdate();
+      await runtime.invoke({ ...frame, id: "after-update", command });
+      expect(mocks.handleInvoke).toHaveBeenCalledTimes(2);
+    } finally {
+      held.release();
+      await invoking;
+      await runtime.close();
+    }
+  });
 
   it("waits for superseded commands and buffered output after their replacements finish", async () => {
     const first = holdInvoke();

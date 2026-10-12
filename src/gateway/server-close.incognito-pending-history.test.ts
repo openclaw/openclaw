@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import type { SessionPendingInputPage } from "../config/sessions/session-accessor.sqlite-pending-inputs.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
@@ -25,6 +26,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority = { assertCurrent() {} };
 const order: string[] = [];
 let actor: IncognitoAgentDatabaseExecution;
+let env: NodeJS.ProcessEnv;
 
 const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory({
   disposeAllBundleLspRuntimes: async () => {},
@@ -62,10 +64,11 @@ beforeAll(async () => {
       return store;
     });
   try {
+    env = { OPENCLAW_STATE_DIR: tempDirs.make("gateway-close-incognito-pending-") };
     const opened = await captureOpenClawAgentDatabaseExecution({
       kind: "ephemeral",
       agentId: "main",
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("gateway-close-incognito-pending-") },
+      env,
       authority,
     });
     assert(opened);
@@ -84,7 +87,7 @@ afterAll(async () => {
   }
 });
 
-it("drains an accepted interruption after scheduler abort before closing the actor transport", async () => {
+it("drains accepted staging, release and interruption after scheduler abort before closing the actor transport", async () => {
   const target = {
     sessionKey: "agent:main:dashboard:incognito-pending-close",
     sessionId: "pending-close",
@@ -120,7 +123,7 @@ it("drains an accepted interruption after scheduler abort before closing the act
           (scope) =>
             operation({
               execute: async (command, options) => {
-                if (command.type === "session.pendingInputs.interruptHistory") {
+                if (command.type === "session.pendingInputs.mutate") {
                   queued.resolve();
                   await resume.promise;
                 }
@@ -137,6 +140,29 @@ it("drains an accepted interruption after scheduler abort before closing the act
     delayMs: 0,
     async run() {
       try {
+        const receipt = await stageSessionPendingInput(
+          {
+            ...target,
+            agentId: actor.agentId,
+            env,
+            incognito: { actor, authority, admissionSignal: scheduler.signal },
+          },
+          {
+            runId: "close-staged",
+            assertCurrent() {},
+            message: {
+              role: "user",
+              content: "Synthetic close staging",
+              timestamp: 1,
+              idempotencyKey: "close-staged:user",
+            },
+          },
+        );
+        assert(receipt);
+        order.push("staging-settled");
+        receipt.finish("cancelled");
+        await receipt.settled?.();
+        order.push("release-settled");
         const page = await history.listPendingInputs();
         order.push("interruption-settled");
         result.resolve(page);
@@ -153,7 +179,7 @@ it("drains an accepted interruption after scheduler abort before closing the act
     await awaitGateBeforeSettlement(
       queued.promise,
       outcome,
-      "Pending history settled before its interruption was accepted",
+      "Pending input settled before staging was accepted",
     );
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
@@ -175,16 +201,39 @@ it("drains an accepted interruption after scheduler abort before closing the act
     );
     expect(scheduler.signal.aborted).toBe(true);
     expect(order).toEqual(["scheduler-aborted"]);
+    expect(() =>
+      stageSessionPendingInput(
+        {
+          ...target,
+          agentId: actor.agentId,
+          env,
+          incognito: { actor, authority, admissionSignal: scheduler.signal },
+        },
+        {
+          runId: "too-late",
+          assertCurrent() {},
+          message: {
+            role: "user",
+            content: "Synthetic late work",
+            timestamp: 1,
+            idempotencyKey: "too-late:user",
+          },
+        },
+      ),
+    ).toThrow();
     resume.resolve();
     await expect(outcome).resolves.toMatchObject({
       items: [
         { id: "close-first", state: "interrupted" },
         { id: "close-second", state: "interrupted" },
+        { runId: "close-staged", state: "cancelled" },
       ],
     });
     await expect(closing).resolves.toMatchObject({ warnings: [] });
     expect(order).toEqual([
       "scheduler-aborted",
+      "staging-settled",
+      "release-settled",
       "interruption-settled",
       "scheduler-drained",
       "transport-close",

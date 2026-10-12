@@ -33,13 +33,6 @@ type TrajectoryRuntimeInit = {
   workspaceDir?: string;
 };
 
-type TrajectoryRuntimeRecorder = {
-  enabled: true;
-  recordEvent: (type: string, data?: Record<string, unknown>) => void;
-  flush: () => Promise<void>;
-  describeFlushState: () => string | undefined;
-};
-
 const TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS = 32_768;
 const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
 const TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS = 64;
@@ -218,25 +211,21 @@ function limitTrajectoryPayloadValue(
 
 function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string, unknown> {
   const finalPromptText = data.finalPromptText;
-  const redactedFinalPromptText =
-    typeof finalPromptText === "string" ? (redactSecrets(finalPromptText) as string) : undefined;
-  const boundedData =
-    typeof finalPromptText === "string" &&
-    typeof redactedFinalPromptText === "string" &&
-    (Buffer.byteLength(finalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES ||
-      Buffer.byteLength(redactedFinalPromptText, "utf8") >
-        TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES)
-      ? {
-          ...data,
-          finalPromptText: truncateUtf8Prefix(
-            redactedFinalPromptText,
-            TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES,
-          ),
-          finalPromptTextOriginalLength: finalPromptText.length,
-        }
-      : typeof redactedFinalPromptText === "string"
-        ? { ...data, finalPromptText: redactedFinalPromptText }
-        : data;
+  let boundedData = data;
+  if (typeof finalPromptText === "string") {
+    const redactedFinalPromptText = redactSecrets(finalPromptText);
+    boundedData = { ...data, finalPromptText: redactedFinalPromptText };
+    if (
+      Buffer.byteLength(finalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES ||
+      Buffer.byteLength(redactedFinalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES
+    ) {
+      boundedData.finalPromptText = truncateUtf8Prefix(
+        redactedFinalPromptText,
+        TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES,
+      );
+      boundedData.finalPromptTextOriginalLength = finalPromptText.length;
+    }
+  }
   return redactSecrets(
     sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(boundedData)),
   ) as Record<string, unknown>;
@@ -328,10 +317,13 @@ export function toTrajectoryToolDefinitions(
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-export function createTrajectoryRuntimeRecorder(
-  params: TrajectoryRuntimeInit,
-): TrajectoryRuntimeRecorder | null {
-  const env = params.env ?? process.env;
+export async function createTrajectoryRuntimeRecorder(input: TrajectoryRuntimeInit) {
+  const params = {
+    ...input,
+    env: { ...(input.env ?? process.env) },
+    sessionTarget: input.sessionTarget && { ...input.sessionTarget },
+  };
+  const env = params.env;
   // Trajectory capture is now default-on. The env var remains as an explicit
   // override so operators can still disable recording with OPENCLAW_TRAJECTORY=0.
   const enabled = parseBooleanValue(env.OPENCLAW_TRAJECTORY) ?? true;
@@ -343,7 +335,7 @@ export function createTrajectoryRuntimeRecorder(
     1,
     Math.floor(params.maxRuntimeFileBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
   );
-  const sink = createSqliteTrajectoryRuntimeSink({
+  const sink = await createSqliteTrajectoryRuntimeSink({
     env,
     maxRuntimeFileBytes,
     sessionFile: params.sessionFile,
@@ -352,14 +344,15 @@ export function createTrajectoryRuntimeRecorder(
     sessionTarget: params.sessionTarget,
     assertCommitAllowed: params.assertCommitAllowed,
   });
+  params.assertCommitAllowed?.();
   if (!sink) {
     return null;
   }
   let seq = 0;
 
   return {
-    enabled: true,
-    recordEvent: (type, data) => {
+    enabled: true as const,
+    recordEvent: (type: string, data?: Record<string, unknown>) => {
       const nextSeq = seq + 1;
       const event: TrajectoryEvent = {
         traceSchema: "openclaw-trajectory",
@@ -387,9 +380,8 @@ export function createTrajectoryRuntimeRecorder(
       if (!boundedLine) {
         return;
       }
-      const boundedEvent = JSON.parse(boundedLine) as TrajectoryEvent;
       seq = nextSeq;
-      sink.write(boundedEvent, boundedLine);
+      sink.write(event, boundedLine);
     },
     flush: sink.flush,
     describeFlushState: sink.describeFlushState,

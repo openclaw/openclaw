@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createSnapshot } from "../config/mutate.test-support.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
@@ -20,12 +19,10 @@ const mocks = vi.hoisted(() => ({
   preserving: false,
 }));
 
-vi.mock("./config-preflight-snapshot.js", () => ({
+vi.mock("./config-preflight-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config-preflight-snapshot.js")>()),
   readConfigPreflightSnapshot: mocks.read,
   readAdmittedConfigSnapshot: mocks.read,
-  needsRefreshedPluginIndexPersistence: () => false,
-  assertPreflightConfigUnchanged: vi.fn(),
-  persistRefreshedPluginIndex: vi.fn(),
 }));
 vi.mock("../infra/sqlite-readonly-worker.js", () => ({
   withSqliteReadOnlyWorkerScope: (run: () => unknown) => run(),
@@ -60,7 +57,7 @@ const assertCurrent = () => {
 };
 
 beforeEach(async () => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   mocks.preserving = false;
   stateDir = temp.make("startup-capture-cleanup-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -89,34 +86,14 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("settles capture reclamation under custody before Gateway plugin verification", async () => {
-  const started = createDeferred();
-  const finish = createDeferred();
-  mocks.prune.mockImplementationOnce(async (_state, assertAdmission) => {
-    assertAdmission();
-    started.resolve();
-    await finish.promise;
-    assertAdmission();
-    return { removed: [], warnings: [] };
-  });
-  mocks.verify.mockImplementationOnce(async () => {
-    expect(authorityLive).toBe(false);
-    return { quarantinedPlugins: [] };
-  });
-  const startup = runStartupConfigPreflight({ gateway: true });
-  expect(
-    await Promise.race([
-      started.promise.then(() => "cleanup"),
-      startup.then(() => "startup complete"),
-    ]),
-  ).toBe("cleanup");
-  expect(mocks.verify).not.toHaveBeenCalled();
-  finish.resolve();
-  await expect(startup).resolves.toHaveProperty("snapshot.valid", true);
+it("leaves capture reclamation to the Gateway post-ready owner", async () => {
+  await expect(runStartupConfigPreflight({ gateway: true })).resolves.toHaveProperty(
+    "snapshot.valid",
+    true,
+  );
   expect(mocks.verify).toHaveBeenCalledOnce();
-  expect(mocks.prune).toHaveBeenCalledWith(stateDir, expect.any(Function), expect.any(Object), {
-    startup: true,
-  });
+  expect(mocks.maintenance).not.toHaveBeenCalled();
+  expect(mocks.prune).not.toHaveBeenCalled();
 });
 
 it("cleans up for CLI startup only after its state-preparation guard accepts", async () => {
@@ -143,7 +120,7 @@ it.each(["observe", "artifact-preserving"])(
 );
 
 it.each(["maintenance", "permission", "cleanup", "contention"])(
-  "continues startup after %s refusal, warning unless another process owns state",
+  "continues CLI startup after %s refusal, warning unless another process owns state",
   async (kind) => {
     const reason = "fixture capture cleanup unavailable";
     if (kind === "contention") {
@@ -168,17 +145,18 @@ it.each(["maintenance", "permission", "cleanup", "contention"])(
     } else {
       mocks.prune.mockResolvedValueOnce({ removed: [], warnings: [reason] });
     }
-    await expect(
-      runStartupConfigPreflight({ gateway: kind !== "contention" }),
-    ).resolves.toHaveProperty("snapshot.valid", true);
+    await expect(runStartupConfigPreflight({ gateway: false })).resolves.toHaveProperty(
+      "snapshot.valid",
+      true,
+    );
+    expect(mocks.maintenance).toHaveBeenCalledOnce();
+    expect(mocks.prune).toHaveBeenCalledTimes(kind === "cleanup" ? 1 : 0);
     if (kind === "contention") {
-      expect(mocks.maintenance).toHaveBeenCalledOnce();
-      expect(mocks.prune).not.toHaveBeenCalled();
       expect(mocks.warning).not.toHaveBeenCalled();
     } else {
       expect(mocks.warning).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(reason));
-      expect(mocks.verify).toHaveBeenCalledOnce();
     }
+    expect(mocks.verify).not.toHaveBeenCalled();
   },
 );
 

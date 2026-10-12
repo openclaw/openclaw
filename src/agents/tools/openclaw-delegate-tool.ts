@@ -2,13 +2,17 @@
 import { randomUUID } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { SYSTEM_AGENT_ID } from "../../system-agent/agent-id.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { resolveExecDefaults } from "../exec-defaults.js";
+import { resolveExecDefaults, type ResolvedExecDefaults } from "../exec-defaults.js";
+import { withPreparedExecDefaults } from "../exec-defaults.preparation.js";
 import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
+import type { PreparedToolConstruction } from "../tool-construction-preparation.js";
 import { jsonResult, readToolStringParam, type AnyAgentTool } from "./common.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
@@ -26,9 +30,7 @@ const OpenClawDelegateOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type OpenClawDelegateResult = Static<typeof OpenClawDelegateOutputSchema> & {
-  sessionId: string;
-};
+type OpenClawDelegateResult = Static<typeof OpenClawDelegateOutputSchema>;
 
 function stableDelegationSessionId(sessionKey: string | undefined, agentId: string): string {
   return sessionKey?.trim()
@@ -36,37 +38,59 @@ function stableDelegationSessionId(sessionKey: string | undefined, agentId: stri
     : `delegate-${randomUUID()}`;
 }
 
+type DelegateToolOptions = Pick<
+  OpenClawToolsOptions,
+  | "sandboxed"
+  | "runSessionKey"
+  | "agentSessionKey"
+  | "agentChannel"
+  | "currentMessagingTarget"
+  | "currentChannelId"
+  | "agentTo"
+  | "agentAccountId"
+  | "currentThreadTs"
+  | "agentThreadId"
+  | "config"
+  | "execSession"
+  | "execOverrides"
+  | "fsPolicy"
+> & { sessionAgentId: string };
+
+function execDefaultsParams(options: DelegateToolOptions) {
+  return {
+    cfg: options.config,
+    agentId: options.sessionAgentId,
+    sessionKey: options.agentSessionKey ?? options.runSessionKey,
+    sessionEntry: options.execSession,
+    execOverrides: options.execOverrides,
+  };
+}
+
+/** Consume the policy inside its captured store and classification lifetime. */
+export async function createOpenClawDelegateToolsForRunAsync(
+  options: DelegateToolOptions,
+  preparation: PreparedToolConstruction,
+): Promise<AnyAgentTool[]> {
+  preparation.assertCurrent();
+  if (options.sandboxed || options.sessionAgentId === SYSTEM_AGENT_ID) {
+    return [];
+  }
+  return withPreparedExecDefaults(execDefaultsParams(options), preparation, async (defaults) =>
+    createOpenClawDelegateToolsForRun(options, defaults),
+  );
+}
+
+/** Synchronous construction is retained for the deprecated harness SDK factory. */
 export function createOpenClawDelegateToolsForRun(
-  options: Pick<
-    OpenClawToolsOptions,
-    | "sandboxed"
-    | "runSessionKey"
-    | "agentSessionKey"
-    | "agentChannel"
-    | "currentMessagingTarget"
-    | "currentChannelId"
-    | "agentTo"
-    | "agentAccountId"
-    | "currentThreadTs"
-    | "agentThreadId"
-    | "config"
-    | "execSession"
-    | "execOverrides"
-    | "fsPolicy"
-  > & { sessionAgentId: string },
+  options: DelegateToolOptions,
+  preparedExecDefaults?: ResolvedExecDefaults,
 ): AnyAgentTool[] {
   if (options.sandboxed || options.sessionAgentId === SYSTEM_AGENT_ID) {
     return [];
   }
   const sessionKey = options.runSessionKey ?? options.agentSessionKey;
   const defaultSessionId = stableDelegationSessionId(sessionKey, options.sessionAgentId);
-  const execPolicy = resolveExecDefaults({
-    cfg: options.config,
-    agentId: options.sessionAgentId,
-    sessionKey: options.agentSessionKey ?? sessionKey,
-    sessionEntry: options.execSession,
-    execOverrides: options.execOverrides,
-  });
+  const execPolicy = preparedExecDefaults ?? resolveExecDefaults(execDefaultsParams(options));
   const fullPermission =
     options.fsPolicy?.workspaceOnly !== true &&
     execPolicy.effectiveHost !== "sandbox" &&
@@ -111,19 +135,24 @@ export function createOpenClawDelegateToolsForRun(
             approvalSignals: signal ? [signal] : [],
           }
         : undefined;
+      // The helper admits its own runtime; caller authority remains in its separate scope.
       const result = await withGatewayToolCallerIdentity(caller, () =>
-        callInProcessGatewayTool<OpenClawDelegateResult>("openclaw.chat", {
-          sessionId,
-          message,
-          delegation: {
-            agentId: options.sessionAgentId,
-            ...(sessionKey ? { sessionKey } : {}),
-            ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
-            ...(turnSourceTo ? { turnSourceTo } : {}),
-            ...(options.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
-            ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
-          },
-        }),
+        runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+          runOutsidePluginRuntimeGenerationScope(() =>
+            callInProcessGatewayTool<OpenClawDelegateResult>("openclaw.chat", {
+              sessionId,
+              message,
+              delegation: {
+                agentId: options.sessionAgentId,
+                ...(sessionKey ? { sessionKey } : {}),
+                ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
+                ...(turnSourceTo ? { turnSourceTo } : {}),
+                ...(options.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
+                ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+              },
+            }),
+          ),
+        ),
       );
       return jsonResult({
         reply: result.reply,

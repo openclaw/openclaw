@@ -17,6 +17,7 @@ type RosterActivitySnapshot = {
   readonly cards: ReadonlyArray<Readonly<ReturnType<typeof agentRosterCards>[number]>>;
   readonly result: SessionsListResult | null;
   readonly involvingMe: boolean;
+  readonly membershipReady: boolean;
   readonly loading: boolean;
   readonly error: string | null;
   readonly subscriptionError: string | null;
@@ -35,11 +36,13 @@ const emptySnapshot: RosterActivitySnapshot = {
   cards: [],
   result: null,
   involvingMe: false,
+  membershipReady: false,
   loading: false,
   error: null,
   subscriptionError: null,
 };
 const stores = new WeakMap<SessionCapability, RosterActivityStore>();
+const ROSTER_SESSION_LIMIT = 300;
 
 /** Visible roster consumers share a capability-owned all-agent window and identity projection. */
 export function rosterActivityStore(context: RosterContext): RosterActivityStore {
@@ -121,6 +124,11 @@ class RosterActivityStore {
     this.publish({
       result,
       involvingMe: this.involvingMe,
+      membershipReady:
+        binding.snapshot.readSucceeded === true &&
+        !loading &&
+        (binding.snapshot.pagination?.hasMore !== true ||
+          binding.snapshot.pagination.count >= ROSTER_SESSION_LIMIT),
       loading: binding.metadataLoading || loading,
       error: binding.metadataError ?? error,
       subscriptionError: this.context.sessions.eventSubscriptionError,
@@ -175,7 +183,8 @@ class RosterActivityStore {
           includeLastMessage: true,
           archivedFilter: "all",
           involvingMe: this.involvingMe,
-          limit: 300,
+          excludeDock: true,
+          limit: ROSTER_SESSION_LIMIT,
           pageSize: SESSIONS_LIST_TRANSCRIPT_LIMIT,
         },
         (snapshot) => {
@@ -222,6 +231,17 @@ class RosterActivityStore {
     binding.metadataError = null;
     binding.request = Promise.resolve()
       .then(async () => {
+        if (!this.isCurrent(binding) || !this.visible()) {
+          binding.metadataLoading = false;
+          binding.requested = false;
+          if (this.isCurrent(binding)) {
+            this.project();
+          }
+          return;
+        }
+        // Membership has no dependency on agent display metadata. Keep its single
+        // managed window moving while names and avatars hydrate independently.
+        const membership = binding.observation?.refresh().catch(() => undefined);
         try {
           const raw = await this.context.agents.ensureList();
           if (!this.isCurrent(binding)) {
@@ -237,18 +257,12 @@ class RosterActivityStore {
           if (this.isCurrent(binding)) {
             binding.metadataError = formatUiError(error, t("agentsHome.loadFailed"));
           }
-          return;
         } finally {
           binding.metadataLoading = false;
           if (this.isCurrent(binding)) {
             this.project();
           }
-        }
-        if (this.isCurrent(binding) && this.visible()) {
-          // The observation publishes list failures; retirement is not a new view error.
-          await binding.observation?.refresh().catch(() => undefined);
-        } else if (this.isCurrent(binding)) {
-          binding.requested = false;
+          await membership;
         }
       })
       .finally(() => {

@@ -86,6 +86,24 @@ const cases = [
         query:
           "SELECT current_session_id AS id FROM session_nodes WHERE entry_valid != 1 ORDER BY session_key",
       },
+      {
+        name: "idx_agent_voice_session_open_scope",
+        table: "cache_entries",
+        primaryKey: "key",
+        query: `SELECT key AS id FROM cache_entries WHERE scope = 'talk-client-voice-sessions'
+          AND CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.status') END = 'open'
+          AND CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.agentId') END = 'main'
+          AND CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.sessionKey') END = 'agent:main:main'
+          AND CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.origin') END = 'client'`,
+      },
+      {
+        name: "idx_agent_voice_session_open_updated",
+        table: "cache_entries",
+        primaryKey: "key",
+        query: `SELECT key AS id FROM cache_entries WHERE scope = 'talk-client-voice-sessions'
+          AND CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.status') END = 'open'
+          AND updated_at <= 2`,
+      },
     ],
     seed(db: DatabaseSync) {
       const insert = db.prepare(`
@@ -99,6 +117,21 @@ const cases = [
           key === "c" ? JSON.stringify({ sessionId: key, updatedAt: 1 }) : `{invalid-${key}`,
         );
       }
+      const cache = db.prepare(
+        "INSERT INTO cache_entries(scope, key, value_json, updated_at) VALUES ('talk-client-voice-sessions', ?, ?, 1)",
+      );
+      for (const key of ["a", "b", "c"]) {
+        cache.run(
+          key,
+          JSON.stringify({
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            origin: "client",
+            status: key === "c" ? "closed" : "open",
+          }),
+        );
+      }
+      cache.run("malformed", "{broken");
       db.exec(`
         UPDATE session_nodes SET entry_valid = -1 WHERE session_key != 'agent:main:c';
         UPDATE session_nodes SET entry_valid = 1 WHERE session_key = 'agent:main:c';

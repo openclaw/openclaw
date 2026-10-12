@@ -14,6 +14,7 @@ import {
   revokeMessageActionTurnCapability,
 } from "../gateway/message-action-turn-capability.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
+import { drainAgentRunTerminalWrites } from "../infra/agent-run-terminal-writes.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
@@ -21,6 +22,7 @@ import {
 import {
   captureCronJobMessageActionAuthority,
   captureCronJobMessageSourceAuthority,
+  captureCronJobStandingGrantAuthority,
 } from "./active-jobs.js";
 import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
 import type { CronExecutionIdentityAdmission } from "./service/state.js";
@@ -111,21 +113,6 @@ export function prepareCronRunAdmission(params: {
               scheduled: {
                 policy: scheduledToolPolicy,
                 assertCurrent: scheduledMessageAuthority,
-                ...(scheduledMessageAuthority.prepareUse
-                  ? {
-                      prepareUse: (sourceSensitive: boolean, assertCurrent?: () => void) => {
-                        const prepare = (
-                          sourceSensitive
-                            ? scheduledMessageSourceAuthority
-                            : scheduledMessageAuthority
-                        )?.prepareUse;
-                        if (!prepare) {
-                          throw new Error("Cron message source has no prepared authority");
-                        }
-                        return prepare(assertCurrent);
-                      },
-                    }
-                  : {}),
                 ...(scheduledMessageSourceAuthority
                   ? { assertSourceCurrent: scheduledMessageSourceAuthority }
                   : {}),
@@ -136,12 +123,20 @@ export function prepareCronRunAdmission(params: {
         expiresWithRun: true,
       })
     : undefined;
+  const close = () => {
+    revokeMessageActionTurnCapability(messageActionTurnCapability);
+    preparedRunAdmission.close();
+  };
   return {
     preparedRunAdmission,
+    standingGrantAuthority: captureCronJobStandingGrantAuthority({
+      jobId: params.jobId,
+      operationalRunInstance,
+    }),
     messageActionTurnCapability,
-    close: () => {
-      revokeMessageActionTurnCapability(messageActionTurnCapability);
-      preparedRunAdmission.close();
+    close,
+    finish: async () => {
+      await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance).finally(close);
     },
   };
 }

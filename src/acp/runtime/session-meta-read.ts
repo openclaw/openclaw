@@ -2,15 +2,16 @@ import {
   withSessionEntryReadOnlyInWorker,
   type SessionEntryReadWorkerOwner,
 } from "../../config/sessions/session-entry-read-runtime.js";
+import type { IncognitoSessionActor } from "../../config/sessions/session-incognito-actor.js";
+import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../../config/sessions/session-incognito-contract.js";
-import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
-import {
-  captureAcpSessionReadContext,
-  type AcpSessionReadContextInput,
-} from "./session-meta-read-context.js";
+import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
+import type {
+  AcpSessionEntryReadInput,
+  PreparedAcpSessionEntryRead,
+} from "./session-meta-read.types.js";
 import {
   readAcpSessionMetaForEntries,
   readAcpSessionMetaForEntry,
@@ -21,47 +22,84 @@ import {
   type AcpSessionStoreEntry,
 } from "./session-meta-store.js";
 
-export type AcpSessionEntryReadInput = AcpSessionReadContextInput & {
-  sessionKey: string;
-  agentId?: string;
-  clone?: boolean;
-};
+export type {
+  AcpSessionEntryPreparer,
+  AcpSessionEntryReadInput,
+  PreparedAcpSessionEntryRead,
+} from "./session-meta-read.types.js";
 
 /** Retain the canonical session source through its lifecycle-bound ACP metadata join. */
 export async function readAcpSessionEntryAsync(
   params: AcpSessionEntryReadInput,
-  incognito?: { actor: IncognitoAgentDatabaseExecution; authority: IncognitoSessionAuthority },
+  incognito?: { actor: IncognitoSessionActor; authority: IncognitoSessionAuthority },
 ): Promise<AcpSessionStoreEntry | null> {
-  const sessionKey = params.sessionKey.trim();
-  // Empty keys share the reader's null result without opening a session store.
-  if (!incognito || !sessionKey) {
-    return withAcpSessionEntryRead(params, (entry) => entry);
-  }
-  const { actor, authority } = incognito;
+  return withAcpSessionEntryRead(params, (entry) => entry, {}, incognito);
+}
+
+/** Retain a bound private source through the caller's asynchronous cleanup operation. */
+export function prepareAcpSessionEntryRead(
+  params: AcpSessionEntryReadInput,
+): Promise<PreparedAcpSessionEntryRead> | undefined {
+  const binding = captureIncognitoSessionOperation(params);
+  return binding && params.sessionKey.trim()
+    ? prepareBoundAcpSessionEntryRead(params, binding)
+    : undefined;
+}
+
+async function prepareBoundAcpSessionEntryRead(
+  params: AcpSessionEntryReadInput,
+  binding: { actor: IncognitoSessionActor; authority: IncognitoSessionAuthority },
+): Promise<PreparedAcpSessionEntryRead & { assertDisclosureCurrent(): void }> {
+  const { actor, authority } = binding;
+  const input = { ...params, sessionKey: params.sessionKey.trim() };
   actor.assertCurrent();
   authority.assertCurrent();
-  const input = { ...params, sessionKey };
   const context = captureAcpSessionReadContext(input);
-  return actor.sessions.withSharedState(async () => {
-    const captured = await context;
-    const target = resolveSessionStorePathForAcp({ ...input, ...captured });
-    if (target.agentId !== actor.agentId) {
-      throw new Error("ACP read differs from its captured incognito actor");
-    }
-    const entry = await actor.acp.readEntry({
-      ...captured,
-      sessionKey: target.storeSessionKey,
-      authority: {
-        assertCurrent() {
-          captured.assertCurrent();
-          authority.assertCurrent();
+  let acquired: PreparedAcpSessionEntryRead | undefined;
+  try {
+    const prepared = await actor.sessions.withSharedState(async () => {
+      const captured = await context;
+      const target = resolveSessionStorePathForAcp({ ...input, ...captured });
+      if (target.agentId !== actor.agentId) {
+        throw new Error("ACP read differs from its captured incognito actor");
+      }
+      const { prepareIncognitoAcpSessionEntryRead } =
+        await import("./session-meta-worker-mutation.js");
+      const source = await prepareIncognitoAcpSessionEntryRead({
+        ...captured,
+        actor,
+        storePath: target.storePath,
+        sessionKey: target.storeSessionKey,
+        authority: {
+          assertCurrent() {
+            captured.assertCurrent();
+            authority.assertCurrent();
+          },
+          authorize: (stage, facts) => authority.authorize?.(stage, facts),
         },
-        authorize: (stage, facts) => authority.authorize?.(stage, facts),
-      },
+      });
+      acquired = source;
+      const assertDisclosureCurrent = () => {
+        captured.assertCurrent();
+        authority.assertCurrent();
+        actor.assertReadable();
+      };
+      return {
+        ...source,
+        session: source.session ? { ...source.session, sessionKey: input.sessionKey } : null,
+        assertDisclosureCurrent,
+        assertCurrent() {
+          source.assertCurrent();
+          assertDisclosureCurrent();
+        },
+      };
     });
-    captured.assertCurrent();
-    return { ...target, cfg: captured.cfg, sessionKey: input.sessionKey, entry, acp: entry?.acp };
-  });
+    prepared.assertCurrent();
+    return prepared;
+  } catch (error) {
+    acquired?.release();
+    throw error;
+  }
 }
 
 /** The consuming owner can verify the exact selected physical source before custody ends. */
@@ -72,6 +110,7 @@ export async function withAcpSessionEntryRead<T>(
     owner: SessionEntryReadWorkerOwner | undefined,
   ) => T | Promise<T>,
   options: { currentMetadata?: true } = {},
+  incognito?: { actor: IncognitoSessionActor; authority: IncognitoSessionAuthority },
 ): Promise<T> {
   const input = { ...params };
   const sessionKey = input.sessionKey.trim();
@@ -79,10 +118,24 @@ export async function withAcpSessionEntryRead<T>(
   if (!sessionKey) {
     return consume(null, undefined);
   }
+  const binding = incognito ?? captureIncognitoSessionOperation(input);
+  if (binding) {
+    const prepared = await prepareBoundAcpSessionEntryRead(input, binding);
+    let value: T;
+    try {
+      prepared.assertCurrent();
+      value = await consume(prepared.session, undefined);
+      prepared.assertCurrent();
+    } finally {
+      prepared.release();
+    }
+    prepared.assertDisclosureCurrent();
+    return value;
+  }
   const { cfg, env, databasePath, assertCurrent } = await captureAcpSessionReadContext(input);
   assertCurrent();
   const target = resolveSessionStorePathForAcp({ ...input, sessionKey, cfg, env });
-  const storeSessionKey = normalizeStoreSessionKey(target.storeSessionKey);
+  const storeSessionKey = target.storeSessionKey;
   if (isIncognitoSessionKey(storeSessionKey)) {
     // Incognito retains its process-held native owner and nonyielding join until its cutover.
     const stored = readSessionEntryFromStore({ ...input, sessionKey, cfg, env });

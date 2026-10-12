@@ -1,4 +1,3 @@
-// Lazily loads one gateway handler without changing its request contract.
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./server-methods/types.js";
 
 export function createLazyHandler(

@@ -91,7 +91,9 @@ vi.mock("./node-worker-workspace.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: These pure supervisor tests never inspect host processes or boot identity.
 vi.mock("./node-worker-process-identity.js", () => ({
+  getNodeWorkerBootIdentity: () => null,
   requireNodeWorkerProcessIdentity: (pid: number) => ({ pid, startTime: 1 }),
   inspectNodeWorkerProcessIdentity: mocks.inspectIdentity,
 }));

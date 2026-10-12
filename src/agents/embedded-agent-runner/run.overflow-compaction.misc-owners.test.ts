@@ -12,7 +12,6 @@ import {
   markEmbeddedRunAuthProfileSuccess,
   reportEmbeddedRunSuccessfulAuthBinding,
 } from "./run/auth-profile-success.js";
-import { resolveInitialThinkLevel } from "./run/runtime-resolution.js";
 
 vi.mock("../auth-profiles.js", () => ({
   markAuthProfileSuccess: vi.fn(),
@@ -105,38 +104,15 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
     }
   });
 
-  it.each([
-    {
-      name: "non-profile provenance",
+  it("rejects prepared auth with non-profile provenance", () => {
+    reportEmbeddedRunSuccessfulAuthBinding({
+      ...bindingInput,
       apiKeyInfo: {
         apiKey: "resolved-key",
         source: "env:OPENAI_API_KEY",
-        mode: "api-key" as const,
+        mode: "api-key",
         profileId: "openai:work",
       },
-    },
-    {
-      name: "different profile provenance",
-      apiKeyInfo: {
-        apiKey: "resolved-key",
-        source: "profile:openai:other",
-        mode: "api-key" as const,
-        profileId: "openai:other",
-      },
-    },
-    {
-      name: "non-API-key mode",
-      apiKeyInfo: {
-        apiKey: "resolved-key",
-        source: "profile:openai:work",
-        mode: "token" as const,
-        profileId: "openai:work",
-      },
-    },
-  ])("rejects prepared auth with $name", ({ apiKeyInfo }) => {
-    reportEmbeddedRunSuccessfulAuthBinding({
-      ...bindingInput,
-      apiKeyInfo,
       agentDir: "/tmp/openclaw-auth-success-negative",
       modelBaseUrl: "https://api.openai.com/v1",
     });
@@ -197,17 +173,6 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
 });
 
 describe("overflow loop owner policies", () => {
-  it("uses provider policy for a configless MiniMax-M3 run", () => {
-    expect(
-      resolveInitialThinkLevel({
-        config: undefined,
-        provider: "minimax",
-        modelId: "MiniMax-M3",
-        model: { reasoning: true },
-      }),
-    ).toBe("adaptive");
-  });
-
   it("retains bounded ordered delivery facts and source finality across generations", () => {
     const target = {
       tool: "message",

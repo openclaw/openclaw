@@ -229,6 +229,10 @@ describe("Feishu plugin adapters", () => {
   it("recognizes provider-prefixed targets", () => {
     expect(looksLikeFeishuId("feishu:user:ou_123")).toBe(true);
   });
+
+  it("declares exact native chat types", () => {
+    expect(feishuPlugin.capabilities.chatTypes).toEqual(["direct", "group"]);
+  });
 });
 
 describe("Feishu discovery", () => {

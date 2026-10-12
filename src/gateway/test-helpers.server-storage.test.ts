@@ -63,7 +63,7 @@ test("joins a direct history projection's accepted read before retiring the Gate
       ...source,
       createTransport(command) {
         const transport = source.createTransport(command);
-        if (command.type !== "acpSessions.metadata") {
+        if (command.type !== "sessionRows.sharedFacts") {
           return transport;
         }
         return {

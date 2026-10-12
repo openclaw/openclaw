@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { ensureMemoryIndexSchema } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { assertOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db.js";
@@ -349,6 +350,34 @@ describe("OpenClaw database maintenance schema validation", () => {
       ).toThrow("missing table auth_profile_store");
     } finally {
       database.close();
+    }
+  });
+
+  it("admits the retired chunk path index read-only and never repairs it back", () => {
+    using database = createAgentDatabase();
+    const retiredIndex = () =>
+      database
+        .prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_memory_index_chunks_path'")
+        .get();
+    expect(retiredIndex()).toBeUndefined();
+    database.exec("CREATE INDEX idx_memory_index_chunks_path ON memory_index_chunks(path)");
+    for (const retained of [true, false]) {
+      if (!retained) {
+        ensureMemoryIndexSchema({ db: database, cacheEnabled: true, ftsEnabled: false });
+        database.exec("DROP INDEX idx_memory_index_chunks_path_source");
+        expect(
+          repairCanonicalSqliteIndexes(database, "agent.sqlite", OPENCLAW_AGENT_SCHEMA_SQL),
+        ).toEqual(["idx_memory_index_chunks_path_source"]);
+        expect(retiredIndex()).toBeUndefined();
+      }
+      database.exec("PRAGMA query_only = ON");
+      expect(() =>
+        assertOpenClawAgentDatabaseForMaintenance(database, {
+          agentId: "worker-1",
+          pathname: "agent.sqlite",
+        }),
+      ).not.toThrow();
+      database.exec("PRAGMA query_only = OFF");
     }
   });
 

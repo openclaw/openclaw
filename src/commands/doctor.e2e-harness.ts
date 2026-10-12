@@ -209,25 +209,8 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
     },
     worktrees: { hasLegacy: false, legacyIds: [], pathRewrites: [] },
-    voiceWake: {
-      triggersPath: "/tmp/state/settings/voicewake.json",
-      routingPath: "/tmp/state/settings/voicewake-routing.json",
-      hasLegacy: false,
-    },
-    updateCheck: {
-      sourcePath: "/tmp/state/update-check.json",
-      hasLegacy: false,
-    },
     configHealth: {
       sourcePath: "/tmp/state/logs/config-health.json",
-      hasLegacy: false,
-    },
-    pluginBindingApprovals: {
-      sourcePath: "/tmp/state/plugin-binding-approvals.json",
-      hasLegacy: false,
-    },
-    currentConversationBindings: {
-      sourcePath: "/tmp/state/bindings/current-conversations.json",
       hasLegacy: false,
     },
     tuiLastSessions: {
@@ -236,10 +219,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
     },
     auditLogs: {
       sources: [],
-      hasLegacy: false,
-    },
-    acpReplayLedger: {
-      sourcePath: "/tmp/state/acp/event-ledger.json",
       hasLegacy: false,
     },
     managedOutgoingImages: {
@@ -443,6 +422,7 @@ vi.mock("./doctor-memory-search.js", () => ({
   noteMemorySearchHealth,
 }));
 
+// mock-isolation: Keep plugin discovery outside the command fixture.
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
   withDeferredPluginDoctorMigrations: (_pluginIds: readonly string[], run: () => unknown) => run(),
   applyPluginDoctorCompatibilityMigrations: (config: unknown) => ({
@@ -450,6 +430,7 @@ vi.mock("../plugins/doctor-contract-registry.js", () => ({
     changes: [],
   }),
   collectDoctorConfigRepairPluginIds: () => [],
+  resolvePluginDoctorProviderRenames: () => [],
   listPluginDoctorLegacyConfigRules,
 }));
 

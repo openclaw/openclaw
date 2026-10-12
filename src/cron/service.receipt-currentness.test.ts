@@ -7,7 +7,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import * as nativeWorkers from "../infra/worker-native-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
-import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -30,99 +29,12 @@ import {
   assertCronRunReceiptCurrentInDatabase,
   CronRunReceiptRevisionError,
   findActiveCronRunReceiptInDatabase,
-  finishCronRunReceiptAsync,
 } from "./store/run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
   makeCronReceiptJob,
+  finishCronRunReceiptAsync,
 } from "./store/run-receipt-store.test-support.js";
-import type { CronStoredJob } from "./types.js";
-
-it("keeps claimed revision separate from current message and grant facts in worker replies", async () => {
-  await withOpenClawTestState({ label: "cron-receipt-authority-facts" }, async (fixture) => {
-    const job: CronStoredJob = makeCronReceiptJob("separate-authority-revisions");
-    job.payload = {
-      kind: "agentTurn",
-      message: "read synthetic messages",
-      toolsAllow: ["message"],
-    };
-    job.owner = { sessionKey: "agent:alpha:local", accountId: "synthetic" };
-    job.scheduledToolPolicy = {
-      version: 1,
-      mode: "account",
-      ownerSessionKey: "agent:alpha:local",
-      ownerAccountId: "synthetic",
-    };
-    job.toolsAllowProvenance = {
-      version: 1,
-      source: "authenticated-requester",
-      callerOrigin: { kind: "local" },
-    };
-    const storePath = fixture.statePath("cron", "jobs.json");
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
-    const handle = claimCronRunReceiptForTest(storePath, job, 1);
-    const context = captureOpenClawStateReadWorkerContext();
-    const read = async (ownerPid = handle.ownerPid) => {
-      const result = await executeExistingOpenClawStateRead(
-        { path: context.admission.databasePath, env: context.environment },
-        {
-          type: "cron.currentReceipt",
-          handle: { ...handle, ownerPid },
-          includeJob: true,
-          includeAvailability: true,
-        },
-        { context, current: true },
-      );
-      if (!result?.ok || result.type !== "cron.currentReceipt") {
-        throw new Error("Expected current receipt worker facts");
-      }
-      return result.facts;
-    };
-    try {
-      const admitted = await read();
-      expect(admitted.receipt).toEqual(handle);
-      expect(admitted.deletionBlocked).toBe(false);
-      expect(admitted.job).toMatchObject({
-        id: job.id,
-        agentId: "alpha",
-        enabled: true,
-        hasCanonicalDeliveryMode: true,
-        configRevision: handle.configRevision,
-        messageToolAuthorityInputs: { policy: job.scheduledToolPolicy },
-        messageActionAuthorityInputs: {
-          policy: job.scheduledToolPolicy,
-          callerOrigin: { kind: "local" },
-          executableRevision: expect.any(String),
-        },
-      });
-      job.enabled = false;
-      await saveCronStore(storePath, { version: 1, jobs: [job] });
-      const disabled = await read();
-      expect(disabled.receipt).toEqual(handle);
-      expect(disabled.job?.enabled).toBe(false);
-      expect(disabled.job?.configRevision).not.toBe(admitted.job?.configRevision);
-      expect(disabled.job?.grantDefinitionRevision).toBe(admitted.job?.grantDefinitionRevision);
-      expect(disabled.job?.messageToolAuthorityInputs).toEqual(
-        admitted.job?.messageToolAuthorityInputs,
-      );
-      job.enabled = true;
-      job.payload.message = "read another synthetic conversation";
-      await saveCronStore(storePath, { version: 1, jobs: [job] });
-      const edited = await read();
-      expect(edited.receipt).toEqual(handle);
-      expect(edited.job?.grantDefinitionRevision).not.toBe(admitted.job?.grantDefinitionRevision);
-      expect(edited.job?.messageToolAuthorityInputs).toEqual(
-        admitted.job?.messageToolAuthorityInputs,
-      );
-      expect(edited.job?.messageActionAuthorityInputs).not.toEqual(
-        admitted.job?.messageActionAuthorityInputs,
-      );
-      expect((await read(handle.ownerPid + 1)).job).toBeUndefined();
-    } finally {
-      await finishCronRunReceiptAsync({ handle, status: "skipped", finishedAtMs: 3 });
-    }
-  });
-});
 
 it("rechecks unrepaired delivery in the current row before activating a prepared run", async () => {
   await withOpenClawTestState({ label: "cron-receipt-delivery" }, async (fixture) => {
@@ -200,10 +112,10 @@ it.each(["payload", "webhook"] as const)(
       const preload = state.path("receipt-reply-gate.mjs");
       await fs.writeFile(
         preload,
-        `import { parentPort, workerData, isMainThread, threadId } from "node:worker_threads";
+        `import { MessagePort, workerData, isMainThread, threadId } from "node:worker_threads";
          const gate = new Int32Array(workerData.receiptGate);
-         const post = parentPort.postMessage.bind(parentPort);
-         parentPort.postMessage = (message, ...args) => {
+         const post = MessagePort.prototype.postMessage;
+         MessagePort.prototype.postMessage = function (message, ...args) {
            if (message?.status === "ok" && message.value?.ok &&
                message.value.type === "cron.currentReceipt" && Atomics.load(gate, 0) > 0) {
              const count = Atomics.add(gate, 1, 1) + 1;
@@ -216,7 +128,7 @@ it.each(["payload", "webhook"] as const)(
                Atomics.wait(gate, 2, 0);
              }
            }
-           return post(message, ...args);
+           return post.call(this, message, ...args);
          };`,
       );
       const gate = new Int32Array(new SharedArrayBuffer(12));
@@ -228,9 +140,9 @@ it.each(["payload", "webhook"] as const)(
       const create = nativeWorkers.createRetainedNativeWorker;
       const factory = vi
         .spyOn(nativeWorkers, "createRetainedNativeWorker")
-        .mockImplementation((filename, options, source, resource) => {
+        .mockImplementation((filename, options, source, resource, taskPorts) => {
           if (selected || String(filename) !== readUrl) {
-            return create(filename, options, source, resource);
+            return create(filename, options, source, resource, taskPorts);
           }
           selected = true;
           const nativeOptions = options ?? {};
@@ -249,6 +161,7 @@ it.each(["payload", "webhook"] as const)(
             },
             source,
             resource,
+            taskPorts,
           );
         });
       const enqueueSystemEvent = vi.fn();

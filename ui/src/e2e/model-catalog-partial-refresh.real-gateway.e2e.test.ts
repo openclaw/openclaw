@@ -13,6 +13,7 @@ import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -182,6 +183,9 @@ suite.define(() => {
           const url = new URL(browserUrl);
           url.pathname = `/${route}`;
           await page.goto(url.href);
+          if (route !== "new") {
+            await enterControlUiSession(page);
+          }
           await waitForControlUiGatewayReady(page);
           const composer = page.locator(".agent-chat__input").first();
           const model = composer.locator("[data-chat-model-select]");

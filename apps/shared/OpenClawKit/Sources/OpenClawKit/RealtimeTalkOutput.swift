@@ -7,7 +7,7 @@ import OSLog
 /// Audio events and synchronous relay controls use the same critical section.
 final class RealtimeTalkOutput: @unchecked Sendable {
     private let lock = NSLock()
-    private let player: (any RealtimePCMPlayback)?
+    private let player: RealtimePCMStreamingAudioPlayer?
     private let legacyPlayer: PCMStreamingAudioPlaying
     private let transport: RealtimeTalkRelayTransport
     private let notification: AsyncStream<Void>.Continuation
@@ -49,7 +49,7 @@ final class RealtimeTalkOutput: @unchecked Sendable {
         transport: RealtimeTalkRelayTransport,
         notification: AsyncStream<Void>.Continuation)
     {
-        self.player = player as? any RealtimePCMPlayback
+        self.player = player as? RealtimePCMStreamingAudioPlayer
         self.legacyPlayer = player
         self.transport = transport
         self.notification = notification

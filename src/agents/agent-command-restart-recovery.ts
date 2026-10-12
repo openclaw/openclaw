@@ -2,11 +2,17 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
+import { hasMainSessionRecoveryClaim } from "../config/sessions/restart-recovery-state.js";
 import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidenceResult,
 } from "../config/sessions/restart-recovery-types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  bindPreparedSessionSourceAssertion,
+  prepareSessionSourceScope,
+  releaseSessionSourceAuthorities,
+} from "../config/sessions/session-source-authority.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import {
@@ -117,23 +123,21 @@ export function constrainRestartRecoveryDeliveryPayloads(
         },
       ),
     );
-    if (visibleReplyIndex >= 0) {
-      const visibleReply = constrained[visibleReplyIndex];
-      if (visibleReply) {
-        // Recovery owns the exact artifacts; merge them with the actual final
-        // reply so automatic delivery cannot emit a caption before its media.
-        const [mergedReply] =
-          mergeAttemptToolMediaPayloads({
-            payloads: [visibleReply],
-            toolMediaUrls: exactMediaUrls,
-            hostOwnedToolMediaUrls: exactMediaUrls,
-            toolTrustedLocalMedia: true,
-            sourceReplyDeliveryMode: "automatic",
-          }) ?? [];
-        if (mergedReply) {
-          constrained[visibleReplyIndex] = mergedReply;
-          return constrained;
-        }
+    const visibleReply = constrained[visibleReplyIndex];
+    if (visibleReply) {
+      // Recovery owns the exact artifacts; merge them with the actual final
+      // reply so automatic delivery cannot emit a caption before its media.
+      const [mergedReply] =
+        mergeAttemptToolMediaPayloads({
+          payloads: [visibleReply],
+          toolMediaUrls: exactMediaUrls,
+          hostOwnedToolMediaUrls: exactMediaUrls,
+          toolTrustedLocalMedia: true,
+          sourceReplyDeliveryMode: "automatic",
+        }) ?? [];
+      if (mergedReply) {
+        constrained[visibleReplyIndex] = mergedReply;
+        return constrained;
       }
     }
   }
@@ -291,9 +295,24 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
 export function shouldPersistCurrentRunSessionCleanup(
   current: SessionEntry | undefined,
   sessionId: string,
+  runId: string,
 ): boolean {
+  if (!current || current.sessionId !== sessionId) {
+    return false;
+  }
+  if (current.abortedLastRun !== true) {
+    return true;
+  }
+  // Stop is terminal, while a restart keeps custody. Only the settled command
+  // may retire its own source claim after all execution and delivery owners leave.
   return (
-    current !== undefined && current.sessionId === sessionId && current.abortedLastRun !== true
+    current.status === "killed" &&
+    current.lastRunId === runId &&
+    current.restartRecoveryDeliveryRunId === runId &&
+    current.lifecycleRunId === undefined &&
+    !current.mainRestartRecovery &&
+    !current.restartRecoveryRuns?.length &&
+    !current.pendingFinalDelivery
   );
 }
 
@@ -306,23 +325,15 @@ export function shouldPersistRestartRecoveryContextClaim(
   if (!current) {
     return allowCreate;
   }
-  if (!shouldPersistCurrentRunSessionCleanup(current, sessionId)) {
+  if (
+    current.sessionId !== sessionId ||
+    (current.abortedLastRun === true && hasMainSessionRecoveryClaim(current))
+  ) {
     return false;
   }
   return (
     current.restartRecoveryDeliveryRunId === undefined ||
     current.restartRecoveryDeliveryRunId === runId
-  );
-}
-
-export function shouldPersistRestartRecoveryCleanup(
-  current: SessionEntry | undefined,
-  sessionId: string,
-  runId: string,
-): boolean {
-  return (
-    shouldPersistCurrentRunSessionCleanup(current, sessionId) &&
-    current?.restartRecoveryDeliveryRunId === runId
   );
 }
 
@@ -334,6 +345,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   entry: SessionEntry;
   forceRestartSafeTools?: boolean;
   runId: string;
+  operatorSource?: SessionEntry["restartRecoveryOperatorSource"];
   sourceIngress?: SessionEntry["restartRecoverySourceIngress"];
   sourceRunId?: string;
   sourceReplyDeliveryMode?: SessionEntry["restartRecoverySourceReplyDeliveryMode"];
@@ -347,6 +359,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   | "restartRecoveryDeliverySourceRunId"
   | "restartRecoveryHarnessCompletion"
   | "restartRecoveryForceSafeTools"
+  | "restartRecoveryOperatorSource"
   | "restartRecoverySourceIngress"
   | "restartRecoverySourceReplyDeliveryMode"
   | "restartRecoverySuppressTextDelivery"
@@ -370,13 +383,12 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
       restartRecoverySuppressTextDelivery: entry.restartRecoverySuppressTextDelivery,
       restartRecoveryDeliveryRunId: params.runId,
       restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+      restartRecoveryOperatorSource: entry.restartRecoveryOperatorSource,
       restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
       restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
       restartRecoveryForceSafeTools: entry.restartRecoveryForceSafeTools,
     };
   }
-  const createsTranscriptOnlySourceClaim =
-    params.sourceRunId !== undefined && params.deliveryContext === undefined;
   const createsScopedDeliveryClaim = params.sourceRunId !== undefined;
   if (createsScopedDeliveryClaim && !params.sourceIngress) {
     throw new Error("restart recovery source ownership is required for a new claim");
@@ -396,9 +408,9 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
       createsScopedDeliveryClaim && params.disableMessageTool === true ? true : undefined,
     restartRecoverySuppressTextDelivery:
       createsScopedDeliveryClaim && params.suppressTextDelivery === true ? true : undefined,
-    restartRecoveryDeliveryRunId:
-      params.deliveryContext || createsTranscriptOnlySourceClaim ? params.runId : undefined,
+    restartRecoveryDeliveryRunId: createsScopedDeliveryClaim ? params.runId : undefined,
     restartRecoveryDeliverySourceRunId: params.sourceRunId,
+    restartRecoveryOperatorSource: createsScopedDeliveryClaim ? params.operatorSource : undefined,
     restartRecoverySourceIngress: createsScopedDeliveryClaim ? params.sourceIngress : undefined,
     restartRecoverySourceReplyDeliveryMode: params.sourceRunId
       ? params.sourceReplyDeliveryMode
@@ -459,13 +471,13 @@ export function prepareCommandHarnessCompletionRecovery(params: {
 }
 
 /** Called after the caller has recorded the committed entry for failure cleanup. */
-export function bindCommandHarnessCompletionAssertion(params: {
+export async function bindCommandHarnessCompletionAssertion(params: {
   claim?: HarnessCompletionRecovery;
   persisted?: SessionEntry;
   sessionKey: string;
   storePath?: string;
   opts: AgentCommandOpts;
-}): AgentCommandOpts {
+}): Promise<{ opts: AgentCommandOpts; source?: { release(): Promise<void> } }> {
   const { claim, persisted, sessionKey, storePath, opts } = params;
   if (
     claim &&
@@ -476,7 +488,7 @@ export function bindCommandHarnessCompletionAssertion(params: {
     throw createSessionWorkStartChangedError(sessionKey);
   }
   if (!claim || !storePath) {
-    return opts;
+    return { opts };
   }
   const guarded = {
     ...opts,
@@ -489,6 +501,26 @@ export function bindCommandHarnessCompletionAssertion(params: {
       { recoveryReference: opts.assertSourceCurrent?.recoveryReference },
     ),
   };
-  guarded.assertSourceCurrent();
-  return guarded;
+  // A resumed run needs its exact source prepared before the first assertion.
+  const prepared = await prepareSessionSourceScope(guarded.assertSourceCurrent);
+  if (!prepared) {
+    guarded.assertSourceCurrent();
+    return { opts: guarded };
+  }
+  const source = bindPreparedSessionSourceAssertion(guarded.assertSourceCurrent, prepared);
+  try {
+    source();
+    return {
+      opts: {
+        ...guarded,
+        assertSourceCurrent: Object.assign(source, {
+          recoveryReference: guarded.assertSourceCurrent.recoveryReference,
+        }),
+      },
+      source,
+    };
+  } catch (error) {
+    await releaseSessionSourceAuthorities([source], [error]);
+    throw error;
+  }
 }

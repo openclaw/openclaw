@@ -1,4 +1,3 @@
-// Prepares config writes by diffing current state and preserving metadata.
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
@@ -699,40 +698,29 @@ function mergeMissingExplicitValues(currentValue: unknown, explicitValue: unknow
   if (hasOwnValidIncludeDirective(currentValue)) {
     return currentValue;
   }
-  if (!isRecord(currentValue) || !isRecord(explicitValue)) {
-    if (!Array.isArray(currentValue) || !Array.isArray(explicitValue)) {
-      return currentValue;
-    }
-    let changed = false;
-    const next = [...currentValue];
-    for (const [key, childExplicitValue] of Object.entries(explicitValue)) {
-      const index = parseConfigPathArrayIndex(key);
-      if (index === undefined) {
-        continue;
-      }
-      const missing = index >= next.length || next[index] === undefined;
-      const childMerged = missing
-        ? structuredClone(childExplicitValue)
-        : mergeMissingExplicitValues(next[index], childExplicitValue);
-      if (missing || !Object.is(childMerged, next[index])) {
-        next[index] = childMerged;
-        changed = true;
-      }
-    }
-    return changed ? next : currentValue;
+  if (
+    !(isRecord(currentValue) && isRecord(explicitValue)) &&
+    !(Array.isArray(currentValue) && Array.isArray(explicitValue))
+  ) {
+    return currentValue;
   }
   let changed = false;
-  const next = { ...currentValue };
+  const next = Array.isArray(currentValue) ? [...currentValue] : { ...currentValue };
   for (const [key, childExplicitValue] of Object.entries(explicitValue)) {
-    if (isBlockedObjectKey(key)) {
+    if (
+      Array.isArray(next) ? parseConfigPathArrayIndex(key) === undefined : isBlockedObjectKey(key)
+    ) {
       continue;
     }
-    const missing = !Object.hasOwn(next, key);
+    const missing = Array.isArray(next)
+      ? Number(key) >= next.length || next[Number(key)] === undefined
+      : !Object.hasOwn(next, key);
+    const currentChild: unknown = missing ? undefined : Reflect.get(next, key);
     const childMerged = missing
       ? structuredClone(childExplicitValue)
-      : mergeMissingExplicitValues(next[key], childExplicitValue);
-    if (missing || !Object.is(childMerged, next[key])) {
-      next[key] = childMerged;
+      : mergeMissingExplicitValues(currentChild, childExplicitValue);
+    if (missing || !Object.is(childMerged, currentChild)) {
+      Reflect.set(next, key, childMerged);
       changed = true;
     }
   }
@@ -995,57 +983,57 @@ function indexAgentRosterSourcePaths(
   );
 }
 
+type RosterProjectionValue = { value: unknown; present: boolean };
+
+function readRosterChild(value: unknown, key: string | number | undefined): RosterProjectionValue {
+  if (key === undefined) {
+    return { value: undefined, present: false };
+  }
+  if (typeof key === "number") {
+    const array = Array.isArray(value) ? value : [];
+    return { value: array[key], present: key < array.length };
+  }
+  const record = isRecord(value) ? value : {};
+  return { value: record[key], present: Object.hasOwn(record, key) };
+}
+
 function projectAuthoredRosterValue(params: {
-  authored: unknown;
-  authoredPresent: boolean;
-  explicit: unknown;
-  explicitPresent: boolean;
+  authored: RosterProjectionValue;
+  explicit: RosterProjectionValue;
   explicitPaths: readonly (readonly string[])[];
   path: readonly string[];
-  runtime: unknown;
-  runtimePresent: boolean;
-  source: unknown;
-  sourcePresent: boolean;
+  runtime: RosterProjectionValue;
+  source: RosterProjectionValue;
   next: unknown;
 }): unknown {
   const explicitlySet = params.explicitPaths.some((path) => pathStartsWith(params.path, path));
   if (isRecord(params.next)) {
-    const authored = isRecord(params.authored) ? params.authored : {};
-    const explicit = isRecord(params.explicit) ? params.explicit : {};
-    const runtime = isRecord(params.runtime) ? params.runtime : {};
-    const source = isRecord(params.source) ? params.source : {};
     const value: Record<string, unknown> = {};
     for (const [key, nextValue] of Object.entries(params.next)) {
       if (isBlockedObjectKey(key)) {
         continue;
       }
       value[key] = projectAuthoredRosterValue({
-        authored: authored[key],
-        authoredPresent: Object.hasOwn(authored, key),
-        explicit: explicit[key],
-        explicitPresent: Object.hasOwn(explicit, key),
+        authored: readRosterChild(params.authored.value, key),
+        explicit: readRosterChild(params.explicit.value, key),
         explicitPaths: params.explicitPaths,
         path: [...params.path, key],
-        runtime: runtime[key],
-        runtimePresent: Object.hasOwn(runtime, key),
-        source: source[key],
-        sourcePresent: Object.hasOwn(source, key),
+        runtime: readRosterChild(params.runtime.value, key),
+        source: readRosterChild(params.source.value, key),
         next: nextValue,
       });
     }
     return value;
   }
   if (Array.isArray(params.next)) {
-    if (explicitlySet && params.explicitPresent && Array.isArray(params.explicit)) {
-      return structuredClone(params.explicit);
+    if (explicitlySet && params.explicit.present && Array.isArray(params.explicit.value)) {
+      return structuredClone(params.explicit.value);
     }
-    const authored = Array.isArray(params.authored) ? params.authored : [];
-    const explicit = Array.isArray(params.explicit) ? params.explicit : [];
-    const runtime = Array.isArray(params.runtime) ? params.runtime : [];
-    const source = Array.isArray(params.source) ? params.source : [];
+    const runtime = Array.isArray(params.runtime.value) ? params.runtime.value : [];
+    const source = Array.isArray(params.source.value) ? params.source.value : [];
     const usedRuntimeIndexes = new Set<number>();
     const usedSourceIndexes = new Set<number>();
-    const findMatchingIndex = (
+    const claimMatchingIndex = (
       values: unknown[],
       used: Set<number>,
       nextValue: unknown,
@@ -1056,62 +1044,52 @@ function projectAuthoredRosterValue(params: {
         !used.has(preferredIndex) &&
         isDeepStrictEqual(values[preferredIndex], nextValue)
       ) {
+        used.add(preferredIndex);
         return preferredIndex;
       }
       const index = values.findIndex(
         (value, candidate) => !used.has(candidate) && isDeepStrictEqual(value, nextValue),
       );
-      return index >= 0 ? index : undefined;
+      if (index < 0) {
+        return undefined;
+      }
+      used.add(index);
+      return index;
     };
     return params.next.map((nextValue, index) => {
-      const runtimeIndex = findMatchingIndex(runtime, usedRuntimeIndexes, nextValue, index);
-      if (runtimeIndex !== undefined) {
-        usedRuntimeIndexes.add(runtimeIndex);
-      }
-      const sourceIndex = findMatchingIndex(source, usedSourceIndexes, nextValue, index);
-      if (sourceIndex !== undefined) {
-        usedSourceIndexes.add(sourceIndex);
-      }
+      const runtimeIndex = claimMatchingIndex(runtime, usedRuntimeIndexes, nextValue, index);
+      const sourceIndex = claimMatchingIndex(source, usedSourceIndexes, nextValue, index);
       const fallbackIndexAvailable =
         !usedRuntimeIndexes.has(index) && !usedSourceIndexes.has(index);
       const authoredIndex =
         runtimeIndex ?? sourceIndex ?? (fallbackIndexAvailable ? index : undefined);
       return projectAuthoredRosterValue({
-        authored: authoredIndex === undefined ? undefined : authored[authoredIndex],
-        authoredPresent: authoredIndex !== undefined && authoredIndex < authored.length,
-        explicit: explicit[index],
-        explicitPresent: index < explicit.length,
+        authored: readRosterChild(params.authored.value, authoredIndex),
+        explicit: readRosterChild(params.explicit.value, index),
         explicitPaths: params.explicitPaths,
         path: [...params.path, String(index)],
-        runtime:
-          runtimeIndex === undefined
-            ? fallbackIndexAvailable
-              ? runtime[index]
-              : undefined
-            : runtime[runtimeIndex],
-        runtimePresent:
-          runtimeIndex !== undefined || (fallbackIndexAvailable && index < runtime.length),
-        source:
-          sourceIndex === undefined
-            ? fallbackIndexAvailable
-              ? source[index]
-              : undefined
-            : source[sourceIndex],
-        sourcePresent:
-          sourceIndex !== undefined || (fallbackIndexAvailable && index < source.length),
+        runtime: readRosterChild(
+          runtime,
+          runtimeIndex ?? (fallbackIndexAvailable ? index : undefined),
+        ),
+        source: readRosterChild(
+          source,
+          sourceIndex ?? (fallbackIndexAvailable ? index : undefined),
+        ),
         next: nextValue,
       });
     });
   }
-  if (explicitlySet && params.explicitPresent) {
-    return structuredClone(params.explicit);
+  if (explicitlySet && params.explicit.present) {
+    return structuredClone(params.explicit.value);
   }
   const unchangedFromRuntime =
-    params.runtimePresent && isDeepStrictEqual(params.runtime, params.next);
-  const unchangedFromSource = params.sourcePresent && isDeepStrictEqual(params.source, params.next);
+    params.runtime.present && isDeepStrictEqual(params.runtime.value, params.next);
+  const unchangedFromSource =
+    params.source.present && isDeepStrictEqual(params.source.value, params.next);
   return structuredClone(
-    params.authoredPresent && (unchangedFromRuntime || unchangedFromSource)
-      ? params.authored
+    params.authored.present && (unchangedFromRuntime || unchangedFromSource)
+      ? params.authored.value
       : params.next,
   );
 }
@@ -1346,16 +1324,12 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     Object.entries(nextEntries).map(([id, nextEntry]) => {
       const priorId = entryIdentityByNextId.get(id) ?? id;
       const value = projectAuthoredRosterValue({
-        authored: authoredEntries[priorId],
-        authoredPresent: Object.hasOwn(authoredEntries, priorId),
-        explicit: explicitEntries[id],
-        explicitPresent: Object.hasOwn(explicitEntries, id),
+        authored: readRosterChild(authoredEntries, priorId),
+        explicit: readRosterChild(explicitEntries, id),
         explicitPaths,
         path: [id],
-        runtime: runtimeEntries[priorId],
-        runtimePresent: Object.hasOwn(runtimeEntries, priorId),
-        source: sourceEntries[priorId],
-        sourcePresent: Object.hasOwn(sourceEntries, priorId),
+        runtime: readRosterChild(runtimeEntries, priorId),
+        source: readRosterChild(sourceEntries, priorId),
         next: nextEntry,
       });
       if (isRecord(value) && isRecord(nextEntry)) {
@@ -1592,14 +1566,9 @@ export function resolvePersistCandidateForWrite(
       : params.explicitSetPaths;
   const explicitSetValueSource = persistCanonicalRoster
     ? canonicalizeAgentRosterForExplicitWrite({
+        ...params,
         valueSource: params.explicitSetValueSource ?? params.nextConfig,
         rootAuthoredConfig,
-        runtimeConfig: params.runtimeConfig,
-        sourceConfig: params.sourceConfig,
-        sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations,
-        nextConfig: params.nextConfig,
-        explicitSetPaths: params.explicitSetPaths,
-        unsetPaths: params.unsetPaths,
       })
     : (params.explicitSetValueSource ?? params.nextConfig);
   let persistedBase = projectConfigWriteSource(params);
@@ -1611,26 +1580,24 @@ export function resolvePersistCandidateForWrite(
       persistedBase = setPathValue(persistedBase, ["agents", "entries"], entries, true);
     }
   }
-  const withPreservedIncludes = preserveUntouchedIncludes({
+  const includeProjection = {
+    ...params,
     runtimeConfig: inputBasis.config,
-    sourceConfig: params.sourceConfig,
-    sourceConfigBeforeMigrations: includeProjectionSourceBeforeMigrations,
-    nextConfig: params.nextConfig,
     rootAuthoredConfig: includeProjectionRootAuthoredConfig,
+    sourceConfigBeforeMigrations: includeProjectionSourceBeforeMigrations,
+  };
+  const withPreservedIncludes = preserveUntouchedIncludes({
+    ...includeProjection,
     persistedCandidate: persistedBase,
   });
   // Structural reconstruction finishes first so it cannot discard later explicit sibling writes.
   const persisted = injectExplicitlySetPaths({
+    ...includeProjection,
     valueSource: explicitSetValueSource,
     persistedCandidate: withPreservedIncludes,
-    runtimeConfig: inputBasis.config,
-    sourceConfig: params.sourceConfig,
-    sourceConfigBeforeMigrations: includeProjectionSourceBeforeMigrations,
     explicitSetPaths,
-    rootAuthoredConfig: includeProjectionRootAuthoredConfig,
     // Includes were validated and restored above; ancestor merges retain their directives.
     preserveDescendantIncludes: persistCanonicalRoster,
-    allowIncludeAncestorExplicitSetPaths: params.allowIncludeAncestorExplicitSetPaths,
   });
   const preserveAuthoredRoster =
     canCanonicalizeAgentRoster(params.nextConfig) || params.preserveLegacyAgentRoster === true;
@@ -1640,7 +1607,6 @@ export function resolvePersistCandidateForWrite(
       : restoreAuthoredAgentRoster(persisted, rootAuthoredConfig);
   if (wantsCanonicalRoster) {
     // A roster rewrite must never drop entries the mutation did not explicitly delete.
-    // A 2026-07-25 production incident lost agents.entries.main twice through silent rewrites.
     assertCanonicalAgentRosterRetainsEntries({
       currentConfig: params.sourceConfig,
       canonicalConfig: withAuthoredRoster,
@@ -1656,11 +1622,9 @@ export function resolvePersistCandidateForWrite(
   return params.sourceConfigValid === false || inputBasis.kind === "source"
     ? withSchema
     : preserveAuthoredAgentParams({
-        sourceConfig: params.sourceConfig,
-        nextConfig: params.nextConfig,
+        ...params,
         rootAuthoredConfig,
         persistedCandidate: withSchema,
-        unsetPaths: params.unsetPaths,
       });
 }
 

@@ -36,7 +36,6 @@ on:
       - "patches/**"
       - "package.json"
       - "pnpm-lock.yaml"
-      - "src/gateway/node-command-policy-mobile.ts"
       - "src/infra/node-commands.ts"
       - "packages/normalization-core/**"
   pull_request:

@@ -188,15 +188,15 @@ describe("package scripts", () => {
       const targets =
         buildAllIndex < 0
           ? extractNodeScriptTargets(script)
-          : resolveBuildAllSteps(parseBuildAllArgs(tokens.slice(buildAllIndex + 1)).profile)
-              .filter((step) => step.kind !== "pnpm")
-              .flatMap((step) => extractNodeScriptTargets(["node", ...step.args].join(" ")));
+          : resolveBuildAllSteps(
+              parseBuildAllArgs(tokens.slice(buildAllIndex + 1)).profile,
+            ).flatMap((step) => extractNodeScriptTargets(["node", ...step.args].join(" ")));
       const check = targets.indexOf("scripts/check-plugin-sdk-exports.mts");
 
       expect(check).toBeGreaterThanOrEqual(0);
       for (const prerequisite of [
         "scripts/runtime-postbuild.mts",
-        "scripts/write-plugin-sdk-entry-dts.ts",
+        "scripts/write-unified-entry-dts.ts",
       ]) {
         const publication = targets.indexOf(prerequisite);
         expect(publication, prerequisite).toBeGreaterThanOrEqual(0);
@@ -333,7 +333,7 @@ describe("package scripts", () => {
       "src/agents/sandbox/fs-paths.test.ts",
       "src/agents/sessions/tools/render-utils.test.ts",
       "src/agents/agent-tools.read.windows.test.ts",
-      "src/agents/agent-tools.read.host-operations.test.ts",
+      "src/agents/agent-tools.read.workspace-mutations.test.ts",
       "src/agents/sessions/tools/path-utils.test.ts",
       "src/agents/provider-local-service.env-case.test.ts",
       "src/infra/process-env.test.ts",

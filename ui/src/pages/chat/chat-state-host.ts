@@ -40,13 +40,10 @@ export type ChatPageHost = ChatHost &
     reviewQueuedMessageEdit?: () => void;
     captureComposerRecoveryReload?: () => () => Promise<boolean>;
     chatMetadataIsPresented?: () => boolean;
-    password: string;
-    onboarding: boolean;
     assistantName: string;
     assistantAvatar: string | null;
     assistantAvatarStatus: "none" | "local" | "remote" | "data" | null;
     assistantAvatarReason: string | null;
-    assistantAvatarSource: string | null;
     assistantIdentityRequestVersion: number;
     userName: string | null;
     userAvatar: string | null;
@@ -61,7 +58,6 @@ export type ChatPageHost = ChatHost &
     resourceBasePath: string;
     chatAvatarUrl: string | null;
     senderAgentAvatars?: ReadonlyMap<string, string | null>;
-    chatAvatarSource: string | null;
     chatAvatarStatus: "none" | "local" | "remote" | "data" | null;
     chatAvatarReason: string | null;
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
@@ -97,7 +93,6 @@ export type ChatPageHost = ChatHost &
     chatRunStatus: ChatProps["runStatus"];
     chatModelsLoading: boolean;
     sessionsLoading: boolean;
-    lastErrorCode: string | null;
     chatStreamRenderFrame: number | null;
     chatLastScrollHeight: number;
     sidebarLayout: SidebarLayout;
@@ -109,7 +104,6 @@ export type ChatPageHost = ChatHost &
     imageLightboxRequestVersion: number;
     querySelector: (selectors: string) => Element | null;
     resetToolStream: () => void;
-    resetChatScroll: () => void;
     resetChatInputHistoryNavigation: () => void;
     scrollToBottom: (opts?: { smooth?: boolean }) => void;
     loadAssistantIdentity: () => Promise<void>;
@@ -143,6 +137,5 @@ export type ChatPageHost = ChatHost &
     beginImageOpen: () => number;
     handleOpenImage: (item: ImageLightboxItem, requestVersion?: number) => void;
     handleCloseImage: () => void;
-    announceSessionSwitch?: (sessionKey: string, label: string) => void;
     retireSessionCompanion?: (sessionKey: string, agentId?: string | null) => void;
   };

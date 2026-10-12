@@ -508,7 +508,11 @@ export class CodexToolTranscriptProjection {
   }
 
   emitAfterToolCallObservation(item: CodexThreadItem): void {
-    if (!this.shouldEmitAfterToolCallObservation(item)) {
+    if (
+      !isProjectedNativeToolItem(item) ||
+      this.afterToolCallObservedItemIds.has(item.id) ||
+      (this.options.nativePostToolUseRelayEnabled && isNativePostToolUseRelayItem(item))
+    ) {
       return;
     }
     const name = itemName(item);
@@ -668,13 +672,6 @@ export class CodexToolTranscriptProjection {
       error: formatMissingToolResultError({ id: firstMissingId, name }),
       ...(item && isMutatingNativeToolItem(item) ? { mutatingAction: true } : {}),
     });
-  }
-
-  private shouldEmitAfterToolCallObservation(item: CodexThreadItem): boolean {
-    if (!isProjectedNativeToolItem(item) || this.afterToolCallObservedItemIds.has(item.id)) {
-      return false;
-    }
-    return !(this.options.nativePostToolUseRelayEnabled && isNativePostToolUseRelayItem(item));
   }
 
   private createToolCallMessage(params: ToolTranscriptCallInput): AgentMessage {

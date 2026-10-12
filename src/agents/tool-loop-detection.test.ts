@@ -17,7 +17,6 @@ vi.mock("./embedded-agent-messaging.js", () => ({
   isMessagingToolSendAction: (toolName: string) => toolName === "telegram",
 }));
 
-const config = { enabled: true };
 const WARNING_THRESHOLD = 10;
 const CRITICAL_THRESHOLD = 20;
 const HISTORY_SIZE = 30;
@@ -44,7 +43,7 @@ function createLoop(toolName: string, params: unknown) {
         append({ result: result(index) }, args(index));
       }
     },
-    detect: (toolParams = params) => detectToolCallLoop(state, toolName, toolParams, config),
+    detect: (toolParams = params) => detectToolCallLoop(state, toolName, toolParams),
   };
 }
 
@@ -112,30 +111,22 @@ function createSendLoop() {
 }
 
 describe("tool-loop-detection", () => {
-  it("is disabled by default", () => {
-    const state = createState();
-    for (let index = 0; index < CRITICAL_THRESHOLD; index++) {
-      recordToolCall(state, "read", { path: "/same.txt" });
-    }
-    expect(detectToolCallLoop(state, "read", { path: "/same.txt" })).toEqual({ stuck: false });
-  });
-
   it("warns only for history belonging to the current run", () => {
     const state = createState();
     const params = { path: "/same.txt" };
     for (let index = 0; index < WARNING_THRESHOLD; index++) {
-      recordToolCall(state, "read", params, `call-${index}`, config, { runId: "run-1" });
+      recordToolCall(state, "read", params, `call-${index}`, { runId: "run-1" });
     }
-    expect(detectToolCallLoop(state, "read", params, config, { runId: "run-1" })).toMatchObject({
+    expect(detectToolCallLoop(state, "read", params, { runId: "run-1" })).toMatchObject({
       stuck: true,
       level: "warning",
       detector: "generic_repeat",
       count: WARNING_THRESHOLD,
     });
-    expect(detectToolCallLoop(state, "read", params, config, { runId: "run-2" })).toEqual({
+    expect(detectToolCallLoop(state, "read", params, { runId: "run-2" })).toEqual({
       stuck: false,
     });
-    expect(detectToolCallLoop(state, "read", params, config)).toEqual({ stuck: false });
+    expect(detectToolCallLoop(state, "read", params)).toEqual({ stuck: false });
   });
 
   it("allows calls without history", () => {
@@ -574,6 +565,119 @@ describe("tool-loop-detection", () => {
     });
   });
 
+  it.each([
+    { queries: ["alpha"], hits: true, detector: "generic_repeat" },
+    { queries: ["alpha", "beta"], hits: true, detector: "ping_pong" },
+    { queries: ["alpha"], hits: false, detector: "generic_repeat" },
+  ])("blocks memory-search $detector loops with hits=$hits", ({ queries, hits, detector }) => {
+    const loop = createLoop("memory_search", { query: "alpha" });
+    loop.repeat(
+      CRITICAL_THRESHOLD,
+      (index) =>
+        jsonResult({
+          results: hits
+            ? [
+                {
+                  path: "memory/notes.md",
+                  startLine: 1,
+                  endLine: 2,
+                  score: 0.42 + index * 1e-9,
+                  vectorScore: 0.5,
+                  snippet: "status: nothing new",
+                  source: "memory",
+                },
+              ]
+            : [],
+          provider: "none",
+          mode: "fts",
+          debug: {
+            backend: "builtin",
+            effectiveMode: "fts",
+            hits: hits ? 1 : 0,
+            managerMs: 1 + index,
+            searchMs: 3 + index,
+            toolMs: 5 + index,
+            outsideSearchMs: 2 + index,
+          },
+        }),
+      (index) => ({ query: queries[index % queries.length] }),
+    );
+    expect(loop.detect()).toMatchObject({
+      stuck: true,
+      level: "critical",
+      detector,
+    });
+  });
+
+  it.each([
+    { results: [{ path: "memory/other.md", snippet: "same", startLine: 1, endLine: 2 }] },
+    { results: [{ path: "memory/notes.md", snippet: "changed", startLine: 1, endLine: 2 }] },
+    { results: [{ path: "memory/notes.md", snippet: "same", startLine: 3, endLine: 4 }] },
+    { results: [] },
+    { stale: true, warning: "Memory index is stale", action: "Rebuild the index" },
+    { partial: true },
+    { error: "Search unavailable", disabled: true },
+  ])("resets a memory-search streak when semantic content changes: %j", (change) => {
+    const loop = createLoop("memory_search", { query: "alpha" });
+    const result = jsonResult({
+      results: [{ path: "memory/notes.md", snippet: "same", startLine: 1, endLine: 2, score: 0.4 }],
+      provider: "none",
+      debug: { searchMs: 3 },
+    });
+    const delivered = structuredClone(result);
+    loop.repeat(CRITICAL_THRESHOLD, () => result);
+    expect(loop.detect()).toMatchObject({ level: "critical" });
+    expect(result).toEqual(delivered);
+    loop.record(jsonResult({ ...result.details, ...change }));
+    expect(loop.detect()).toMatchObject({ level: "warning" });
+  });
+
+  it.each(["error", "unstructured"])("preserves full memory-search %s results", (kind) => {
+    const loop = createLoop("memory_search", { query: "alpha" });
+    loop.repeat(CRITICAL_THRESHOLD, (index) => ({
+      content: [{ type: "text", text: `changed result ${index}` }],
+      ...(kind === "error" ? { isError: true, details: { results: [] } } : {}),
+    }));
+    expect(loop.detect()).toMatchObject({ level: "warning" });
+  });
+
+  it.each([
+    [
+      "ordered hits",
+      (index: number) => ({
+        results:
+          index % 2 === 0
+            ? [
+                { path: "memory/a.md", snippet: "a" },
+                { path: "memory/b.md", snippet: "b" },
+              ]
+            : [
+                { path: "memory/b.md", snippet: "b" },
+                { path: "memory/a.md", snippet: "a" },
+              ],
+        debug: { backend: "builtin" },
+      }),
+    ],
+    [
+      "stable debug state",
+      (index: number) => ({
+        results: [{ path: "memory/a.md", snippet: "a" }],
+        debug: { backend: index % 2 === 0 ? "builtin" : "sqlite" },
+      }),
+    ],
+  ] as const)("does not critically block progressing memory-search %s", (_label, details) => {
+    const loop = createLoop("memory_search", { query: "alpha" });
+    loop.repeat(CRITICAL_THRESHOLD, (index) => ({
+      content: [{ type: "text", text: "ignored structured rendering" }],
+      details: details(index),
+    }));
+    expect(loop.detect()).toMatchObject({
+      stuck: true,
+      level: "warning",
+      detector: "generic_repeat",
+    });
+  });
+
   it("blocks changing-argument unknown-tool retries only at the threshold", () => {
     const loop = createLoop("exec", { command: "echo next" });
     for (let index = 0; index < UNKNOWN_TOOL_THRESHOLD - 1; index++) {
@@ -588,6 +692,27 @@ describe("tool-loop-detection", () => {
       count: UNKNOWN_TOOL_THRESHOLD,
     });
   });
+
+  it.each(["Unknown tool: missing_a", "Unknown tool id: missing_a"])(
+    "preserves unknown-tool evidence across loop vetoes: %s",
+    (error) => {
+      const loop = createLoop("tool_call", { tool: "missing_a" });
+      for (let index = 0; index < UNKNOWN_TOOL_THRESHOLD; index++) {
+        loop.fail(new Error(error));
+      }
+      loop.record(veto);
+      recordToolCallOutcome(loop.state, { toolName: "read", toolParams: {}, result: veto });
+      expect(loop.detect()).toMatchObject({
+        stuck: true,
+        detector: "unknown_tool_repeat",
+        count: UNKNOWN_TOOL_THRESHOLD,
+        message: expect.stringContaining("unavailable tool missing_a"),
+      });
+      const differentTool = { tool: "missing_b" };
+      loop.fail(new Error("Unknown tool id: missing_b"), differentTool);
+      expect(loop.detect(differentTool)).toEqual({ stuck: false });
+    },
+  );
 
   it.each([
     { outcome: "missing", count: WARNING_THRESHOLD - 1, level: "warning" },
@@ -614,7 +739,7 @@ describe("tool-loop-detection", () => {
         });
       }
     }
-    expect(detectToolCallLoop(state, "list", { dir: "/workspace" }, config)).toMatchObject({
+    expect(detectToolCallLoop(state, "list", { dir: "/workspace" })).toMatchObject({
       stuck: true,
       level,
       detector: "ping_pong",
@@ -671,7 +796,7 @@ describe("tool-loop-detection", () => {
   it("does not attach outcomes to matching calls from another run", () => {
     const state = createState();
     const params = { path: "/same.txt" };
-    recordToolCall(state, "read", params, "call-1", config, { runId: "run-1" });
+    recordToolCall(state, "read", params, "call-1", { runId: "run-1" });
     recordToolCallOutcome(state, {
       toolName: "read",
       toolParams: params,

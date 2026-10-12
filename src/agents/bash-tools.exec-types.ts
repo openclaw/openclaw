@@ -71,6 +71,7 @@ export type ExecToolDefaults = {
   security?: ExecSecurity;
   ask?: ExecAsk;
   trigger?: string;
+  continuesConversation?: boolean;
   node?: string;
   /** Default working directory for node-host execution only. */
   nodeCwd?: string;
@@ -141,6 +142,44 @@ export type ExecToolDefaults = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
+};
+
+/** Request and approval context shared by Gateway and node execution hosts. */
+export type ExecHostCommandParams = {
+  command: string;
+  env: Record<string, string>;
+  requestedEnv?: Record<string, string>;
+  timeoutSec?: number;
+  defaultTimeoutSec: number;
+  security: ExecSecurity;
+  ask: ExecAsk;
+  bypassHostApprovalFloors?: boolean;
+  autoReview?: boolean;
+  autoReviewer?: ExecAutoReviewer;
+  signal?: AbortSignal;
+  strictInlineEval?: boolean;
+  commandHighlighting?: boolean;
+  trigger?: string;
+  agentId?: string;
+  sessionKey?: string;
+  toolCallId?: string;
+  /** Session UUID active when the approval was requested; pins the followup. */
+  sessionId?: string;
+  /** Session-store template, so the direct/denied followup can detect a rebind. */
+  sessionStore?: string;
+  bashElevated?: ExecElevatedDefaults;
+  approvalReviewerDeviceId?: string;
+  nonInteractiveApproval?: boolean;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
+  approvalFollowupMode?: "agent" | "direct";
+  warnings: string[];
+  notifySessionKey?: string;
+  approvalRunningNoticeMs: number;
+  processContinuationAvailable?: boolean;
+  trustedSafeBinDirs?: ReadonlySet<string>;
 };
 
 /** Outcome passed to approval follow-up factories after approved async exec. */

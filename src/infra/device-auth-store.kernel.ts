@@ -151,31 +151,25 @@ function storeToken(
   };
   // A comparison replaces only its observed token or inserts only its observed
   // absence; it cannot overwrite a row that another request rotated or created.
-  const result =
+  const query =
     params.expectedToken == null
-      ? executeSqliteQuerySync(
-          db,
-          kysely
-            .insertInto(target.table)
-            .values({ ...target.key, ...values })
-            .onConflict((conflict) => {
-              const keyed = conflict.columns(
-                target.table === "device_auth_tokens"
-                  ? ["device_id", "role"]
-                  : ["gateway_scope", "device_id", "role"],
-              );
-              return params.expectedToken === null ? keyed.doNothing() : keyed.doUpdateSet(values);
-            }),
-        )
-      : executeSqliteQuerySync(
-          db,
-          kysely
-            .updateTable(target.table)
-            .set(values)
-            .where(target.match)
-            .where("token", "=", params.expectedToken),
-        );
-  return result.numAffectedRows === 1n ? entry : null;
+      ? kysely
+          .insertInto(target.table)
+          .values({ ...target.key, ...values })
+          .onConflict((conflict) => {
+            const keyed = conflict.columns(
+              target.table === "device_auth_tokens"
+                ? ["device_id", "role"]
+                : ["gateway_scope", "device_id", "role"],
+            );
+            return params.expectedToken === null ? keyed.doNothing() : keyed.doUpdateSet(values);
+          })
+      : kysely
+          .updateTable(target.table)
+          .set(values)
+          .where(target.match)
+          .where("token", "=", params.expectedToken);
+  return executeSqliteQuerySync(db, query).numAffectedRows === 1n ? entry : null;
 }
 
 export function clearDeviceAuthTokenFromDatabase(

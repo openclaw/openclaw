@@ -622,9 +622,7 @@ struct MacNodeModeCoordinatorTests {
         do {
             try await gateway.connect(
                 url: #require(URL(string: "ws://first.example.invalid")),
-                token: nil,
-                bootstrapToken: nil,
-                password: nil,
+                credentials: .init(),
                 connectOptions: options,
                 sessionBox: WebSocketSessionBox(session: webSocketSession),
                 onConnected: {},
@@ -688,9 +686,7 @@ struct MacNodeModeCoordinatorTests {
                     onPendingSnapshot: { await drainSnapshot.recordCapture() })
                 try await gateway.connect(
                     url: successorURL,
-                    token: nil,
-                    bootstrapToken: nil,
-                    password: nil,
+                    credentials: .init(),
                     connectOptions: options,
                     sessionBox: WebSocketSessionBox(session: webSocketSession),
                     onConnected: { await lifecycle.recordSuccessorConnected() },
@@ -907,7 +903,7 @@ struct MacNodeModeCoordinatorTests {
             catalogAdvertised: false))
     }
 
-    @Test func `Codex supervision activation respects the plugin flag and global policy`() {
+    @Test func `Codex catalog activation respects the plugin flag and global policy`() {
         let enabled: [String: Any] = [
             "plugins": [
                 "entries": [
@@ -1003,17 +999,17 @@ struct MacNodeModeCoordinatorTests {
         ]
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: agentHome))
 
-        let supervisionDisabled: [String: Any] = [
+        let catalogDisabled: [String: Any] = [
             "plugins": [
                 "entries": [
                     "codex": [
                         "enabled": true,
-                        "config": ["supervision": ["enabled": false]],
+                        "config": ["sessionCatalog": ["enabled": false], "supervision": ["enabled": true]],
                     ],
                 ],
             ],
         ]
-        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: supervisionDisabled))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: catalogDisabled))
 
         let pluginDisabled: [String: Any] = [
             "plugins": [
@@ -1276,7 +1272,7 @@ struct MacNodeModeCoordinatorTests {
             configuredFingerprint: nil,
             storedFingerprint: "old"))
 
-        #expect(route.permitsTrustedPinReplacement(url: url, failure: failure))
+        #expect(route.trustedPinReplacementDecline(url: url, failure: failure) == nil)
     }
 
     @Test func `does not auto repair a redirected TLS authority`() throws {
@@ -1312,9 +1308,9 @@ struct MacNodeModeCoordinatorTests {
             systemTrustOk: true,
             port: 443)
 
-        #expect(!route.permitsTrustedPinReplacement(url: url, failure: redirectedHost))
-        #expect(!route.permitsTrustedPinReplacement(url: url, failure: redirectedPort))
-        #expect(!route.permitsTrustedPinReplacement(url: url, failure: otherStore))
+        #expect(route.trustedPinReplacementDecline(url: url, failure: redirectedHost) == .hostMismatch)
+        #expect(route.trustedPinReplacementDecline(url: url, failure: redirectedPort) == .portMismatch)
+        #expect(route.trustedPinReplacementDecline(url: url, failure: otherStore) == .pinStoreMismatch)
     }
 
     @Test func `does not auto repair untrusted remote pin mismatch`() throws {
@@ -1333,7 +1329,7 @@ struct MacNodeModeCoordinatorTests {
             configuredFingerprint: nil,
             storedFingerprint: "old"))
 
-        #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
+        #expect(route.trustedPinReplacementDecline(url: url, failure: failure) == .systemTrustFailed)
     }
 
     @Test func `does not auto repair configured pin mismatch`() throws {
@@ -1352,7 +1348,7 @@ struct MacNodeModeCoordinatorTests {
             configuredFingerprint: "configured",
             storedFingerprint: "old"))
 
-        #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
+        #expect(route.trustedPinReplacementDecline(url: url, failure: failure) == .configuredPin)
     }
 
     @Test(.gatewayTLSStoreIsolated) func `stale repair cannot replace a newer stored pin`() throws {
@@ -1412,7 +1408,7 @@ struct MacNodeModeCoordinatorTests {
             configuredFingerprint: nil,
             storedFingerprint: "old"))
 
-        #expect(route.permitsTrustedPinReplacement(url: url, failure: failure))
+        #expect(route.trustedPinReplacementDecline(url: url, failure: failure) == nil)
     }
 
     @Test func `does not auto repair untrusted loopback pin mismatch`() throws {
@@ -1431,6 +1427,6 @@ struct MacNodeModeCoordinatorTests {
             configuredFingerprint: nil,
             storedFingerprint: "old"))
 
-        #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
+        #expect(route.trustedPinReplacementDecline(url: url, failure: failure) == .systemTrustFailed)
     }
 }

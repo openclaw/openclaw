@@ -833,7 +833,7 @@ describe("doctor gateway runtime checks", () => {
     "reports recorded Node $version capabilities as $severity",
     async ({ version, text, status, severity }) => {
       const message = text
-        ? `Node ${version}: unsupported version, capability probe passed.`
+        ? `Node ${version}: unsupported version, capability check passed.`
         : `Node ${version}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)`;
       mocks.readGatewayServiceState.mockResolvedValueOnce({
         installed: true,

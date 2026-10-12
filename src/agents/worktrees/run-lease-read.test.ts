@@ -5,10 +5,11 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as pidAlive from "../../shared/pid-alive.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
 import { readWorktreeCleanupState } from "./registry-read.js";
-import { hasLiveWorktreeRunLeaseRow, insertRegistryWorktree } from "./registry.js";
+import { insertRegistryWorktree } from "./registry.js";
 import { readWorktreeRunLeaseStateInDatabase, worktreeRunLeaseScope } from "./run-lease-owner.js";
 import { reapWorktreeRunLeases } from "./run-lease-store.js";
 import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
+import { hasLiveWorktreeRunLease as hasLiveWorktreeRunLeaseRow } from "./run-lease.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -29,7 +30,7 @@ it("reads live, dead, reused, and unverifiable owners without reaping or writer 
     { id: "foreign", pid: 12345, startTime: 1, live: true },
   ];
   for (const entry of cases) {
-    insertRegistryWorktree(env, {
+    await insertRegistryWorktree(env, {
       id: entry.id,
       name: entry.id,
       repoFingerprint: "0123456789abcdef",

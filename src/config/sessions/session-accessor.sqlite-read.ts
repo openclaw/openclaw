@@ -8,7 +8,11 @@ import {
 } from "../../infra/kysely-sync.js";
 import { assertSqliteJsonlReadBudget } from "../../infra/sqlite-jsonl-budget.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
+import {
+  assertTransactionUsable,
+  runSqliteDeferredTransactionSync,
+} from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -32,7 +36,9 @@ import {
   type SessionSqliteTargetResolutionCache,
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
+import { loadTranscriptEventRowsAfterSeqInDatabase } from "./session-accessor.sqlite-transcript-incremental-read.js";
 import {
+  findTranscriptEventInRows,
   readLatestAssistantTextFromDatabase,
   readTranscriptHeaderFromDatabase,
 } from "./session-accessor.sqlite-transcript-metadata-read.js";
@@ -45,14 +51,16 @@ import {
   readTranscriptStatsBatchFromDatabase,
   readTranscriptStatsFromDatabase,
 } from "./session-accessor.sqlite-transcript-stats.js";
-import {
-  readHotSessionTranscriptSnapshot,
-  readRestoredSessionTranscript,
-} from "./session-cold-storage-read.js";
-import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
+import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionTranscriptReadSnapshot } from "./session-history-read.types.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
-import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import {
+  captureSessionTranscriptQuestionAnswers,
+  resolveSqliteSessionTranscriptReadFence,
+} from "./session-transcript-read-fence.js";
 import {
   transcriptEventJsonSql,
   transcriptEventNavigationSql,
@@ -64,6 +72,10 @@ export type SqliteTranscriptSnapshotRow = {
   seq: number;
 };
 
+export type SqliteTranscriptSnapshotState =
+  | { kind: "current"; rows: SqliteTranscriptSnapshotRow[] }
+  | { kind: "stale" };
+
 export type SqliteTranscriptStorageRow = SqliteTranscriptSnapshotRow & {
   createdAt: number;
 };
@@ -72,24 +84,62 @@ export function createTranscriptIdentityReader(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
 ) {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    return (eventId: string) => {
+      if (readSessionActorTransactionState(database, { sessionId }) !== actor) {
+        throw new Error("Transcript identity reader escaped its actor transaction");
+      }
+      if (actor.transcript.coldArchive) {
+        throw new SessionTranscriptColdError(sessionId);
+      }
+      const row = actor.transcript.identities.get(eventId);
+      return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
+    };
+  }
+  const db = getSessionKysely(database.db);
   const read = prepareSqliteQuerySync<
     string,
-    { event_id: string; parent_id: string | null; seq: number }
+    {
+      event_id: string | null;
+      parent_id: string | null;
+      seq: number | null;
+      cold: boolean | number;
+    }
   >(database.db, (parameter) =>
-    getSessionKysely(database.db)
-      .selectFrom("transcript_event_identities")
-      .select(["event_id", "parent_id", "seq"])
-      .where("session_id", "=", sessionId)
-      .where(
-        "event_id",
-        "=",
-        parameter((eventId) => eventId),
+    db
+      .selectFrom(db.selectNoFrom((eb) => eb.val(sessionId).as("session_id")).as("target"))
+      .leftJoin("transcript_event_identities as identity", (join) =>
+        join.onRef("identity.session_id", "=", "target.session_id").on(
+          "identity.event_id",
+          "=",
+          parameter((eventId) => eventId),
+        ),
+      )
+      .select(["identity.event_id", "identity.parent_id", "identity.seq"])
+      .select((eb) =>
+        eb
+          .exists(
+            eb
+              .selectFrom("session_transcript_cold_archives")
+              .select("session_id")
+              .where("session_id", "=", sessionId),
+          )
+          .as("cold"),
       ),
   );
   return (eventId: string) =>
-    readHotSessionTranscriptSnapshot(database, sessionId, "identity", () => {
-      const row = read(eventId).rows[0];
-      return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
+    runSqliteReadOperationSync(database.db, () => {
+      assertTransactionUsable(database.db);
+      // The singleton keeps cold-state evidence even when this identity is absent.
+      const row = read(eventId).rows[0]!;
+      assertTransactionUsable(database.db);
+      if (row.cold) {
+        throw new SessionTranscriptColdError(sessionId);
+      }
+      return row.event_id !== null && row.seq !== null
+        ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq }
+        : undefined;
     });
 }
 
@@ -101,7 +151,6 @@ export function readTranscriptIdentityByEventId(
   return createTranscriptIdentityReader(database, sessionId)(eventId);
 }
 
-/** Loads raw transcript events synchronously from the additive SQLite transcript store. */
 export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): TranscriptEvent[] {
   return loadTranscriptReadSnapshotSync(scope).events;
 }
@@ -216,6 +265,11 @@ export function validatePreparedAssistantAppendSync(
 ): number | null | undefined {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const questionAnswers = captureSessionTranscriptQuestionAnswers(
+    database,
+    resolved.sessionId,
+    admittedUserId,
+  );
   return runSqliteDeferredTransactionSync(
     database.db,
     () =>
@@ -224,6 +278,7 @@ export function validatePreparedAssistantAppendSync(
         resolved.sessionId,
         preparedParentId,
         admittedUserId,
+        questionAnswers?.answers,
       )
         ? readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt
         : undefined,
@@ -249,25 +304,6 @@ export function loadTranscriptEventRowsAfterSeqSync(
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   return loadTranscriptEventRowsAfterSeqInDatabase(database, resolved.sessionId, afterSeq);
-}
-
-export function loadTranscriptEventRowsAfterSeqInDatabase(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  sessionId: string,
-  afterSeq: number,
-): SessionTranscriptEventRow[] {
-  return readHotSessionTranscriptSnapshot(database, sessionId, "incremental", () => {
-    const db = getSessionKysely(database.db);
-    const query = db
-      .selectFrom("transcript_events")
-      .select([transcriptEventJsonSql(database.db).as("event_json"), "seq"])
-      .where("session_id", "=", sessionId)
-      .where("seq", ">", afterSeq);
-    return executeSqliteQuerySync(database.db, query.orderBy("seq", "asc")).rows.map((row) => ({
-      event: JSON.parse(row.event_json) as TranscriptEvent,
-      seq: sqliteNumber(row.seq),
-    }));
-  });
 }
 
 /** Reads one checkpoint row so incremental consumers can reject transcript rewrites. */
@@ -476,7 +512,6 @@ export function readTranscriptStatsBatchReadOnlySync(
   return results;
 }
 
-/** Reads the latest visible assistant text from SQLite transcript rows in reverse order. */
 export function loadLatestAssistantText(
   scope: SessionTranscriptReadScope,
 ): LatestTranscriptAssistantText | undefined {
@@ -485,81 +520,45 @@ export function loadLatestAssistantText(
   return readLatestAssistantTextFromDatabase(database, resolved);
 }
 
-/** Checks physical message history without loading payloads covered by the identity index. */
-export async function hasSessionTranscriptMessage(
-  scope: SessionTranscriptReadScope,
-): Promise<boolean> {
-  return readRestoredSessionTranscript(scope, () => {
-    const resolved = resolveSqliteTranscriptReadScope(scope);
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const db = getSessionKysely(database.db);
-    // Classification can change during a concurrent rewrite. Both probes must see
-    // the same snapshot or an always-present message can disappear between them.
-    return runSqliteDeferredTransactionSync(
-      database.db,
-      () => {
-        assertSessionTranscriptHot(database.db, resolved.sessionId);
-        const message = executeSqliteQueryTakeFirstSync(
-          database.db,
-          db
-            .selectFrom("transcript_event_identities")
-            .select("seq")
-            .where("session_id", "=", resolved.sessionId)
-            .where("event_type", "=", "message")
-            .limit(1),
-        );
-        if (message) {
-          return true;
-        }
-        // Exact imports, id-less records, and nullable types need raw inspection.
-        // Build the classified sequence set once; a type-selecting join can rescan
-        // the covering type index for every event in a metadata-only transcript.
-        const classified = db
-          .selectFrom("transcript_event_identities")
-          .select("seq")
-          .where("session_id", "=", resolved.sessionId)
-          .where("event_type", "is not", null);
-        const rows = iterateSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("transcript_events")
-            .select(transcriptEventNavigationSql().as("event_json"))
-            .where("session_id", "=", resolved.sessionId)
-            .where("seq", "not in", classified)
-            .orderBy("seq", "desc"),
-        );
-        return (
-          findTranscriptEventInRows(
-            rows,
-            (event) =>
-              typeof event === "object" &&
-              event !== null &&
-              "type" in event &&
-              event.type === "message",
-          ) !== undefined
-        );
-      },
-      { databaseLabel: database.path, operationLabel: "session transcript presence" },
-    );
-  });
-}
-
 export function findTranscriptEventInDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
   match: (event: TranscriptEvent) => boolean,
+  navigationMatch?: (event: TranscriptEvent) => boolean,
 ): { event: TranscriptEvent } | undefined {
   return readHotSessionTranscriptSnapshot(database, sessionId, "match", () => {
-    const db = getSessionKysely(database.db);
-    const rows = iterateSqliteQuerySync(
+    const events = getSessionKysely(database.db)
+      .selectFrom("transcript_events")
+      .where("session_id", "=", sessionId);
+    const selection = navigationMatch
+      ? transcriptEventNavigationSql()
+      : transcriptEventJsonSql(database.db);
+    for (const row of iterateSqliteQuerySync(
       database.db,
-      db
-        .selectFrom("transcript_events")
-        .select(transcriptEventJsonSql(database.db).as("event_json"))
-        .where("session_id", "=", sessionId)
+      events
+        .select(["seq", selection.as("event_json")])
+        .select((eb) => eb("navigation_json", "is not", null).as("projected"))
         .orderBy("seq", "desc"),
-    );
-    return findTranscriptEventInRows(rows, match);
+    )) {
+      const prefilter = row.projected ? navigationMatch : undefined;
+      if (prefilter && !findTranscriptEventInRows([row], prefilter)) {
+        continue;
+      }
+      // Identity TEXT already is the canonical payload, including exceptional JSON.
+      const payload = prefilter
+        ? executeSqliteQueryTakeFirstSync(
+            database.db,
+            events
+              .select(transcriptEventJsonSql(database.db).as("event_json"))
+              .where("seq", "=", row.seq),
+          )
+        : row;
+      const found = payload && findTranscriptEventInRows([payload], match);
+      if (found) {
+        return found;
+      }
+    }
+    return undefined;
   });
 }
 
@@ -569,64 +568,14 @@ export function findAssistantTranscriptEventInDatabase(
   sessionId: string,
   idempotencyKey?: string,
 ): { event: TranscriptEvent } | undefined {
-  return readHotSessionTranscriptSnapshot(database, sessionId, "match", () => {
-    const db = getSessionKysely(database.db);
-    const matches = (event: TranscriptEvent) => {
-      const message = readTranscriptEventMessage(event);
-      return (
-        message?.role === "assistant" &&
-        (idempotencyKey === undefined || message.idempotencyKey === idempotencyKey)
-      );
-    };
-    for (const row of iterateSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("transcript_events")
-        .select(["seq", transcriptEventNavigationSql().as("event_json")])
-        .select((eb) => eb("navigation_json", "is not", null).as("projected"))
-        .where("session_id", "=", sessionId)
-        .orderBy("seq", "desc"),
-    )) {
-      const candidate = findTranscriptEventInRows([row], matches);
-      if (!candidate) {
-        continue;
-      }
-      // Identity TEXT already is the canonical payload, including exceptional JSON.
-      if (!row.projected) {
-        return candidate;
-      }
-      const payload = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("transcript_events")
-          .select(transcriptEventJsonSql(database.db).as("event_json"))
-          .where("session_id", "=", sessionId)
-          .where("seq", "=", row.seq),
-      );
-      const found = payload && findTranscriptEventInRows([payload], matches);
-      if (found) {
-        return found;
-      }
-    }
-    return undefined;
-  });
-}
-
-function findTranscriptEventInRows(
-  rows: Iterable<{ event_json: string }>,
-  match: (event: TranscriptEvent) => boolean,
-): { event: TranscriptEvent } | undefined {
-  for (const row of rows) {
-    try {
-      const event = JSON.parse(row.event_json) as TranscriptEvent;
-      if (match(event)) {
-        return { event };
-      }
-    } catch {
-      // Malformed rows are skipped, matching transcript index tolerance.
-    }
-  }
-  return undefined;
+  const matches = (event: TranscriptEvent) => {
+    const message = readTranscriptEventMessage(event);
+    return (
+      message?.role === "assistant" &&
+      (idempotencyKey === undefined || message.idempotencyKey === idempotencyKey)
+    );
+  };
+  return findTranscriptEventInDatabase(database, sessionId, matches, matches);
 }
 
 export function readTranscriptEventMessage(
@@ -642,4 +591,29 @@ export function readTranscriptEventId(event: TranscriptEvent): string | undefine
 
 export function readEventTimestamp(event: unknown): number | undefined {
   return parseDateFirstTimestampMs(asOptionalRecord(event)?.timestamp);
+}
+
+export function isSqliteTranscriptSnapshotUnchanged(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  expected: readonly SqliteTranscriptSnapshotRow[],
+): boolean {
+  const current = readTranscriptEventRows(database, sessionId);
+  return (
+    current.length === expected.length &&
+    current.every(
+      (row, index) =>
+        row.seq === expected[index]?.seq && row.eventJson === expected[index]?.eventJson,
+    )
+  );
+}
+
+export function assertSqliteTranscriptSnapshotUnchanged(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  expected: readonly SqliteTranscriptSnapshotRow[],
+): void {
+  if (!isSqliteTranscriptSnapshotUnchanged(database, sessionId, expected)) {
+    throw new SqliteTranscriptMutationConflictError(sessionId);
+  }
 }

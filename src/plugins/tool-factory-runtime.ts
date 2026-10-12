@@ -2,9 +2,12 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithTrackedCancellation } from "../shared/async-work-scope.js";
+import { prepareMemoryAudienceRead } from "./memory-audience.js";
+import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
 import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
@@ -58,6 +61,7 @@ export function bindPluginToolCallbacks(
   registry: PluginRegistry,
   tool: AnyAgentTool,
   assertInvocationCurrent?: () => void,
+  memoryAudience?: OpenClawPluginToolContext["memoryAudience"],
 ): AnyAgentTool {
   const record = registry.plugins.find((candidate) => candidate.id === entry.pluginId);
   const authority = capturePluginLifecycleAuthority(registry, record, { scopedRuntime: true });
@@ -78,13 +82,23 @@ export function bindPluginToolCallbacks(
   };
   const prepare = tool.prepareArguments;
   const callbacks = {
-    execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
-      invoke(() => {
-        const [toolCallId, params, signal, onUpdate] = args;
+    execute: async (...args: Parameters<AnyAgentTool["execute"]>) => {
+      const [toolCallId, params, signal, onUpdate] = args;
+      const pending =
+        memoryAudience &&
+        resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.pluginId ===
+          entry.pluginId
+          ? prepareMemoryAudienceRead(memoryAudience)
+          : undefined;
+      if (pending) {
+        await racePromiseWithAbortSignal(pending, signal);
+      }
+      return invoke(() => {
         const execute = (executionSignal?: AbortSignal) =>
           tool.execute(toolCallId, params, executionSignal, onUpdate);
         return signal ? runWithTrackedCancellation(signal, execute) : execute();
-      }),
+      });
+    },
     ...(prepare
       ? { prepareArguments: (args: unknown) => invoke(() => prepare.call(tool, args)) }
       : {}),

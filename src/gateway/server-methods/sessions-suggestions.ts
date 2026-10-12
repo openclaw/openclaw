@@ -1,4 +1,3 @@
-import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import {
   ErrorCodes,
   errorShape,
@@ -7,6 +6,7 @@ import {
   validateSessionSuggestionsResolveParams,
   validateSessionTypingParams,
   type SessionSuggestion,
+  type SessionSuggestionEvent,
   type SessionTypingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -14,6 +14,7 @@ import {
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
   type StoredSessionSuggestion,
 } from "../../config/sessions.js";
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import {
   addSessionSuggestionInWorker,
   claimSessionSuggestionDispatchInWorker,
@@ -33,7 +34,8 @@ import {
   getSessionRowProjection,
   requireSessionRowProjection,
 } from "../session-row-projection-access.js";
-import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
+import { captureIncognitoSessionMutationFacts } from "../session-sharing-incognito.js";
+import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import {
   authorizeIncognitoSessionTarget,
   canManageSessionSharing,
@@ -46,6 +48,7 @@ import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import {
   broadcastTypingThrottled,
   liveViewerIdentities,
+  normalizeTypingRequestParams,
   TYPING_PREVIEW_THROTTLE_MS,
   TYPING_THROTTLE_MS,
   updateTypingConnections,
@@ -55,12 +58,12 @@ import {
   authorizeSessionSuggestionMutation,
   createSessionSuggestionMutation,
   suggestionScope,
-  publishSuggestion,
   requireSuggestionTarget,
+  readCollaborationTarget,
   requireVisibleSuggestionRole,
 } from "./sessions-suggestions-access.js";
 import { dispatchSuggestion } from "./sessions-suggestions-dispatch.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 function protocolSuggestion(
@@ -80,6 +83,27 @@ function protocolSuggestion(
     createdAt: suggestion.createdAt,
     state: suggestion.state,
   };
+}
+
+function publishSuggestion(
+  context: GatewayRequestContext,
+  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
+  requestedSessionKey: string,
+  action: SessionSuggestionEvent["action"],
+  stored: StoredSessionSuggestion,
+): SessionSuggestion {
+  const suggestion = protocolSuggestion(target, stored);
+  context.broadcast(
+    "session.suggestion",
+    { action, suggestion },
+    {
+      sessionKeys: [
+        ...new Set([requestedSessionKey, target.canonicalKey, target.storeKey]),
+      ].toSorted(),
+      agentId: suggestion.agentId,
+    },
+  );
+  return suggestion;
 }
 
 function respondSuggestionDispatchError(respond: RespondFn, error: unknown): void {
@@ -103,7 +127,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     validateSessionSuggestionsAddParams,
     async ({ params, respond, client, context, signal, sessionMutationAuthorization }) => {
       const cfg = context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig();
-      const target = requireSuggestionTarget({ client, context, ...params, respond });
+      const target = requireSuggestionTarget({ context, ...params, respond });
       const author = gatewayClientSessionCreator(client);
       if (
         !target ||
@@ -162,12 +186,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
               assertCurrent,
             );
             mutation.readCurrent();
-            const projected = protocolSuggestion(target, suggestion);
-            publishSuggestion(context, target, params.sessionKey, {
-              action: "added",
-              suggestion: projected,
-            });
-            return projected;
+            return publishSuggestion(context, target, params.sessionKey, "added", suggestion);
           },
         });
         if (added.ok) {
@@ -201,64 +220,76 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         return;
       }
       const identity = gatewayClientSessionCreator(client);
-      const facts = await prepareSessionMutationFacts({
-        cfg,
-        sessionKey: params.sessionKey,
-        agentId: requested.agentId,
-        allowMissing: true,
+      const projection = requireSessionRowProjection(context);
+      const query = { key: params.sessionKey, agentId: requested.agentId };
+      const binding = captureIncognitoSessionBinding({
+        sessionKey: query.key,
+        agentId: query.agentId,
       });
-      try {
-        const readCurrent = () => {
-          if (
-            signal?.aborted ||
-            client?.invalidated ||
-            client?.connectionSignal?.aborted ||
-            hasCurrentClientAuthority?.() === false ||
-            gatewayClientSessionCreator(client)?.id !== identity?.id
-          ) {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.FORBIDDEN, "suggestion reader authority changed"),
-            );
-            return null;
-          }
-          const current = facts.readCurrent(context.getRuntimeConfig());
-          const policy = (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)();
-          const sharing = prepareProjectedSessionSharing({
-            cfg: policy,
-            client,
-            isMember: (_target, id) => current.membership.has(id),
-          });
-          const target = current.target;
-          if (
-            !target ||
-            (hasOperatorBoundary(client, policy) &&
-              sharing.entryFilter?.(target.storeKey, target.entry) === false)
-          ) {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.sessionKey}`),
-            );
-            return null;
-          }
-          const role = requireVisibleSuggestionRole({
-            client,
-            cfg: policy,
-            sessionKey: params.sessionKey,
-            target,
-            respond,
-            sharing,
-          });
-          return role === null ? null : { target, role };
-        };
-        const initial = readCurrent();
-        if (!initial) {
-          return;
+      const actorFacts = binding && captureIncognitoSessionMutationFacts(binding, query.key, true);
+      if (!binding) {
+        while (projection.needsMembershipPreparation()) {
+          await projection.prepareMembership();
         }
-        const stored = await listSessionSuggestions(suggestionScope(initial.target));
-        const current = readCurrent();
+      }
+      let selected: ReturnType<typeof readCollaborationTarget> = undefined;
+      const readCurrent = (read: Pick<SessionRowReadView, "describe"> = projection) => {
+        if (
+          signal?.aborted ||
+          client?.invalidated ||
+          client?.connectionSignal?.aborted ||
+          hasCurrentClientAuthority?.() === false ||
+          gatewayClientSessionCreator(client)?.id !== identity?.id
+        ) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.FORBIDDEN, "suggestion reader authority changed"),
+          );
+          return null;
+        }
+        const target = readCollaborationTarget(projection, query, read, actorFacts);
+        if (
+          getSessionRowProjection(context) !== projection ||
+          (selected &&
+            (!target ||
+              target.generation !== selected.generation ||
+              target.storePath !== selected.storePath ||
+              target.entry.sessionId !== selected.entry.sessionId ||
+              target.entry.lifecycleRevision !== selected.entry.lifecycleRevision))
+        ) {
+          throw new SessionMutationFactsUnavailableError();
+        }
+        const policy = (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)();
+        const sharing = prepareProjectedSessionSharing({
+          cfg: policy,
+          client,
+          isMember: (value, id) =>
+            actorFacts
+              ? actorFacts.readCurrent().membership.has(id)
+              : projection.hasMembership(value.storePath, value.storeKey, id),
+        });
+        const role = requireVisibleSuggestionRole({
+          client,
+          cfg: policy,
+          sessionKey: params.sessionKey,
+          target: target ?? null,
+          respond,
+          sharing,
+        });
+        return role === null || !target ? null : { target, role };
+      };
+      const initial =
+        isIncognitoSessionKey(query.key) && !binding
+          ? await withReadySessionRows(projection, () => [query], readCurrent)
+          : readCurrent();
+      if (!initial) {
+        return;
+      }
+      selected = initial.target;
+      const stored = await listSessionSuggestions(suggestionScope(initial.target));
+      const reply = (read?: Pick<SessionRowReadView, "describe">) => {
+        const current = readCurrent(read);
         if (!current) {
           return;
         }
@@ -271,8 +302,11 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           role: current.role,
           suggestions: visible.map((suggestion) => protocolSuggestion(current.target, suggestion)),
         });
-      } finally {
-        facts.release();
+      };
+      if (isIncognitoSessionKey(query.key) && !binding) {
+        await withReadySessionRows(projection, () => [query], reply);
+      } else {
+        reply();
       }
     },
   ),
@@ -291,7 +325,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       sessionMutationAuthorization,
     }) => {
       const cfg = context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig();
-      const target = requireSuggestionTarget({ client, context, ...params, respond });
+      const target = requireSuggestionTarget({ context, ...params, respond });
       if (!target) {
         return;
       }
@@ -394,9 +428,8 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
             });
             if (!released.ok) {
               respond(false, undefined, released.error);
-              return false;
             }
-            return true;
+            return released.ok;
           } catch (error) {
             respondSuggestionDispatchError(respond, error);
             return false;
@@ -455,12 +488,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
             if (!suggestion) {
               return null;
             }
-            const projected = protocolSuggestion(target, suggestion);
-            publishSuggestion(context, target, params.sessionKey, {
-              action: "resolved",
-              suggestion: projected,
-            });
-            return projected;
+            return publishSuggestion(context, target, params.sessionKey, "resolved", suggestion);
           },
         });
         if (!finalizeResult.ok) {
@@ -497,20 +525,11 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     context,
     hasCurrentClientAuthority,
   }) => {
-    const params =
-      typeof requestParams.preview === "string"
-        ? {
-            ...requestParams,
-            preview: truncateCodePoints(requestParams.preview.trim(), 400),
-          }
-        : requestParams;
+    const params = normalizeTypingRequestParams(requestParams);
     if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
       return;
     }
     const projection = requireSessionRowProjection(context);
-    while (projection.needsMembershipPreparation()) {
-      await projection.prepareMembership();
-    }
     const cfg = context.getRuntimeConfig();
     const requestedAgent = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
     if (!requestedAgent.ok) {
@@ -518,24 +537,18 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       return;
     }
     const query = { key: params.sessionKey, agentId: requestedAgent.agentId };
-    const readTarget = (read: Pick<SessionRowReadView, "describe"> = projection) => {
-      if (isIncognitoSessionKey(query.key)) {
-        const row = read.describe(query);
-        return (
-          row && {
-            agentId: row.agentId,
-            canonicalKey: row.key,
-            storeKey: row.key,
-            storeKeys: [row.key],
-            storePath: row.storeTarget.storePath,
-            entry: row.entry,
-            generation: row.generation,
-          }
-        );
+    const binding = captureIncognitoSessionBinding({
+      sessionKey: query.key,
+      agentId: query.agentId,
+    });
+    const actorFacts = binding && captureIncognitoSessionMutationFacts(binding, query.key, true);
+    if (!binding) {
+      while (projection.needsMembershipPreparation()) {
+        await projection.prepareMembership();
       }
-      const current = projection.sharingTargetState(query);
-      return current.status === "ready" ? current.target : null;
-    };
+    }
+    const readTarget = (read?: Pick<SessionRowReadView, "describe">) =>
+      readCollaborationTarget(projection, query, read, actorFacts);
     const incognitoError = authorizeIncognitoSessionTarget({
       client,
       sessionKey: query.key,
@@ -545,15 +558,18 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       respond(false, undefined, incognitoError);
       return;
     }
-    const target = isIncognitoSessionKey(query.key)
-      ? await withReadySessionRows(projection, () => [query], readTarget)
-      : readTarget();
+    const target =
+      isIncognitoSessionKey(query.key) && !binding
+        ? await withReadySessionRows(projection, () => [query], readTarget)
+        : readTarget();
     const sharing = () =>
       prepareProjectedSessionSharing({
         cfg: projection.getPolicyConfig(),
         client,
         isMember: (value, identity) =>
-          projection.hasMembership(value.storePath, value.storeKey, identity),
+          actorFacts
+            ? actorFacts.readCurrent().membership.has(identity)
+            : projection.hasMembership(value.storePath, value.storeKey, identity),
       });
     const prepared = sharing();
     if (
@@ -612,17 +628,22 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     ]);
     const now = Date.now();
     const typingKey = `${actor.id}\0${target.agentId}\0${target.canonicalKey}\0${target.entry.sessionId}\0${target.entry.lifecycleRevision ?? 0}`;
-    const { typing: effectiveTyping, preview } = updateTypingConnections({
+    const {
+      typing: effectiveTyping,
+      preview,
+      cursor,
+    } = updateTypingConnections({
       key: typingKey,
       connectionId: client?.connId ?? actor.id,
       typing: params.typing,
-      ...(params.typing && params.preview ? { preview: params.preview } : {}),
+      preview: params.preview,
+      cursor: params.cursor,
       now,
     });
     const broadcast = broadcastTypingThrottled({
       key: typingKey,
       typing: effectiveTyping,
-      signature: `${effectiveTyping}\0${preview ?? ""}`,
+      signature: `${effectiveTyping}\0${preview ?? ""}\0${cursor ?? ""}`,
       intervalMs: preview ? TYPING_PREVIEW_THROTTLE_MS : TYPING_THROTTLE_MS,
       now,
       emit: () => {
@@ -661,6 +682,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           actor,
           typing: effectiveTyping,
           ...(preview ? { preview } : {}),
+          ...(cursor !== undefined ? { cursor } : {}),
           ts: Date.now(),
         };
         context.broadcast("session.typing", event, {

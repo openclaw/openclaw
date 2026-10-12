@@ -76,6 +76,55 @@ function createStoreForRequest(request: ReturnType<typeof createGatewayRequestMo
 }
 
 describe("roster activity lifecycle", () => {
+  it("completes the current membership window while agent metadata is pending", async () => {
+    vi.useFakeTimers();
+    const page = createDeferred<SessionsListResult>();
+    const load = vi.fn(async () => page.promise);
+    const { store, context, sessions } = createStore(load);
+    const agents = createDeferred<typeof context.agents.state.agentsList>();
+    const identity = createDeferred();
+    context.agents.ensureList = () => agents.promise;
+    context.agentIdentity.ensure = () => identity.promise;
+    const stop = store.subscribe(() => {});
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(store.snapshot.membershipReady).toBe(false);
+      page.resolve(result("Membership before identity"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.snapshot.membershipReady).toBe(true);
+      expect(store.snapshot.loading).toBe(true);
+
+      agents.resolve(context.agents.state.agentsList);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.snapshot.membershipReady).toBe(true);
+      expect(load).toHaveBeenCalledTimes(1);
+
+      const filtered = createDeferred<SessionsListResult>();
+      load.mockImplementationOnce(() => filtered.promise);
+      store.setInvolvingMe(true);
+      expect(store.snapshot.membershipReady).toBe(false);
+      expect(store.snapshot.involvingMe).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(load).toHaveBeenCalledTimes(2);
+      filtered.resolve(result("Current filter"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.snapshot.membershipReady).toBe(true);
+      expect(store.snapshot.result?.sessions[0]?.lastMessagePreview).toBe("Current filter");
+      identity.resolve();
+      await store.refresh();
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(store.snapshot.loading).toBe(false);
+    } finally {
+      agents.resolve(context.agents.state.agentsList);
+      identity.resolve();
+      page.resolve(result(""));
+      stop();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("publishes committed archive and restore receipts without events", async () => {
     vi.useFakeTimers();
     const key = "agent:ember:receipt-only";
@@ -230,60 +279,60 @@ describe("roster activity lifecycle", () => {
     },
   );
 
-  it.each([
-    "groups",
-    "stores",
-    "catalogChanged",
-    "unpin",
-    "archive",
-    "restore",
-    "older",
-    "involvingMe",
-  ])("coalesces uncertain %s membership into one authoritative window refresh", async (change) => {
-    vi.useFakeTimers();
-    const row: GatewaySessionRow = {
-      key: "agent:main:main",
-      kind: "direct",
-      sessionId: "held",
-      updatedAt: 10,
-      ...(change === "unpin" ? { pinned: true, pinnedAt: 1 } : {}),
-      ...(change === "restore" ? { archived: true } : {}),
-    };
-    const next = {
-      ...row,
-      updatedAt: change === "older" ? 5 : 20,
-      ...(change === "archive" ? { archived: true } : {}),
-      ...(change === "restore" ? { archived: false } : {}),
-      ...(change === "unpin" ? { pinned: false, pinnedAt: undefined } : {}),
-    };
-    const load = vi
-      .fn()
-      .mockResolvedValueOnce({ ...result(""), sessions: [row] })
-      .mockResolvedValue({ ...result(""), sessions: [next] });
-    const { store, emit } = createStore(load);
-    store.setInvolvingMe(change === "involvingMe");
-    const stop = store.subscribe(() => {});
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      const payload = ["groups", "stores"].includes(change)
-        ? { reason: change }
-        : {
-            reason: "patch",
-            sessionKey: next.key,
-            session: next,
-            ...(change === "catalogChanged" ? { catalogChanged: true } : {}),
-          };
-      for (let index = 0; index < 10; index += 1) {
-        emit({ type: "event", event: "sessions.changed", payload });
+  it.each(["groups", "stores", "catalogChanged", "unpin", "archive", "restore", "involvingMe"])(
+    "coalesces uncertain %s membership into one authoritative window refresh",
+    async (change) => {
+      vi.useFakeTimers();
+      const row: GatewaySessionRow = {
+        key: "agent:main:main",
+        kind: "direct",
+        sessionId: "held",
+        updatedAt: 10,
+        ...(change === "unpin" ? { pinned: true, pinnedAt: 1 } : {}),
+        ...(change === "restore" ? { archived: true } : {}),
+      };
+      const next = {
+        ...row,
+        updatedAt: 20,
+        ...(change === "archive" ? { archived: true, pinned: false } : {}),
+        ...(change === "restore" ? { archived: false } : {}),
+        ...(change === "unpin" ? { pinned: false, pinnedAt: undefined } : {}),
+      };
+      const load = vi
+        .fn()
+        .mockResolvedValueOnce({ ...result(""), sessions: [row] })
+        .mockResolvedValue({ ...result(""), sessions: [next] });
+      const { store, emit } = createStore(load);
+      store.setInvolvingMe(change === "involvingMe");
+      const stop = store.subscribe(() => {});
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(load).toHaveBeenCalledWith(
+          expect.objectContaining({
+            excludeDock: true,
+            ...(change === "involvingMe" ? { involvingMe: true } : {}),
+          }),
+        );
+        const payload = ["groups", "stores"].includes(change)
+          ? { reason: change }
+          : {
+              reason: "patch",
+              sessionKey: next.key,
+              session: next,
+              ...(change === "catalogChanged" ? { catalogChanged: true } : {}),
+            };
+        for (let index = 0; index < 10; index += 1) {
+          emit({ type: "event", event: "sessions.changed", payload });
+        }
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(load).toHaveBeenCalledTimes(2);
+        expect(store.snapshot.result?.sessions).toEqual([next]);
+      } finally {
+        stop();
+        vi.useRealTimers();
       }
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(load).toHaveBeenCalledTimes(2);
-      expect(store.snapshot.result?.sessions).toEqual([next]);
-    } finally {
-      stop();
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
   it("does not let an in-flight window replace a newer broadcast row", async () => {
     vi.useFakeTimers();

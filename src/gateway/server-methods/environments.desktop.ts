@@ -86,34 +86,14 @@ export async function respondDesktopObserve(params: {
     return;
   }
 
-  const service = params.context.workerEnvironmentService;
-  if (!service) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"),
-    );
-    return;
-  }
-  try {
-    const result = await service.observeDesktop({
-      environmentId: request.source.environmentId,
+  const { environmentId } = request.source;
+  await respondWorkerDesktop(params, "observe", (service) =>
+    service.observeDesktop({
+      environmentId,
       control: params.request.control ?? false,
       requester: params.requester,
-    });
-    params.respond(true, result, undefined);
-  } catch (error) {
-    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-    const invalid = code === "environment_not_found" || code === "invalid_state";
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        invalid ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
-        invalid && error instanceof Error ? error.message : "worker desktop observe unavailable",
-      ),
-    );
-  }
+    }),
+  );
 }
 
 export async function respondDesktopLaunch(params: {
@@ -122,6 +102,18 @@ export async function respondDesktopLaunch(params: {
   respond: RespondFn;
   context: GatewayRequestContext;
 }) {
+  await respondWorkerDesktop(params, "launch", (service) =>
+    service.launchDesktopApp({ environmentId: params.environmentId, app: params.app }),
+  );
+}
+
+async function respondWorkerDesktop(
+  params: { respond: RespondFn; context: GatewayRequestContext },
+  operation: "observe" | "launch",
+  run: (
+    service: NonNullable<GatewayRequestContext["workerEnvironmentService"]>,
+  ) => Promise<unknown>,
+) {
   const service = params.context.workerEnvironmentService;
   if (!service) {
     params.respond(
@@ -132,19 +124,15 @@ export async function respondDesktopLaunch(params: {
     return;
   }
   try {
-    params.respond(
-      true,
-      await service.launchDesktopApp({ environmentId: params.environmentId, app: params.app }),
-      undefined,
-    );
+    params.respond(true, await run(service), undefined);
   } catch (error) {
     const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
     const invalid =
       code === "environment_not_found" ||
       code === "invalid_state" ||
-      code === "desktop_app_not_found" ||
-      code === "unsupported_platform";
-    const actionable = invalid || code === "launcher_failure";
+      (operation === "launch" &&
+        (code === "desktop_app_not_found" || code === "unsupported_platform"));
+    const actionable = invalid || (operation === "launch" && code === "launcher_failure");
     params.respond(
       false,
       undefined,
@@ -152,7 +140,9 @@ export async function respondDesktopLaunch(params: {
         invalid ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
         actionable && error instanceof Error
           ? error.message
-          : "worker desktop app launch unavailable; try again",
+          : operation === "launch"
+            ? "worker desktop app launch unavailable; try again"
+            : "worker desktop observe unavailable",
       ),
     );
   }

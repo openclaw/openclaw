@@ -4,10 +4,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { renderMessageImages } from "../pages/chat/components/chat-message-images.ts";
 import { renderMessageMarkdown } from "../pages/chat/components/chat-message-text.ts";
 import { exportWidget } from "../pages/chat/components/widget-export.ts";
-import "../pages/chat/components/browser-tab-card.ts";
+import "../pages/chat/components/browser-tab-card.tsx";
 import { renderCopyButton } from "./copy-button.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
-import "./markdown-mermaid.ts";
+import "./markdown-mermaid.tsx";
 import { handleMarkdownTableInteraction, releaseMarkdownTables } from "./markdown-tables.ts";
 
 const owners: HTMLElement[] = [];
@@ -55,8 +55,8 @@ afterAll(() => {
 
 async function waitForDiagram(diagram: HTMLElement) {
   const { page } = await import("vitest/browser");
-  await expect.element(page.elementLocator(diagram).getByRole("img")).toBeVisible();
-  await diagram.shadowRoot!.querySelector("img")!.decode();
+  await expect.element(page.getByRole("img", { name: "Mermaid diagram" })).toBeVisible();
+  await diagram.querySelector("img")!.decode();
 }
 
 async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
@@ -94,7 +94,7 @@ async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
     owner.append(diagram);
     await diagram.updateComplete;
     await waitForDiagram(diagram);
-    button = diagram.shadowRoot?.querySelector(".copy-button") ?? null;
+    button = diagram.querySelector(".copy-button") ?? null;
   } else {
     render(renderCopyButton("Current message"), owner);
     button = owner.querySelector("button");
@@ -126,8 +126,8 @@ async function mountBrowserCard() {
   return {
     card,
     copy: () =>
-      card.shadowRoot
-        ?.querySelector("wa-dropdown")
+      card
+        .querySelector("wa-dropdown")
         ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "copy-url" } } })),
   };
 }
@@ -184,17 +184,28 @@ describe("Markdown clipboard operation lifetime", () => {
           ]),
           owner,
         );
-        await vi.waitFor(() =>
-          expect(owner.querySelector('[aria-label="Copy image"]')).not.toBeNull(),
-        );
-        copy = () => owner.querySelector<HTMLButtonElement>('[aria-label="Copy image"]')!.click();
+        await vi.waitFor(() => expect(owner.querySelector("wa-dropdown")).not.toBeNull());
+        copy = () =>
+          owner
+            .querySelector("wa-dropdown")!
+            .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "copy" } } }));
       } else {
         const frame = document.body.appendChild(document.createElement("iframe"));
         owners.push(frame);
+        vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((request) => {
+          void snapshot.promise.then((dataUrl) => {
+            window.dispatchEvent(
+              new MessageEvent("message", {
+                source: frame.contentWindow,
+                data: { type: "openclaw:widget-snapshot", id: request.id, dataUrl },
+              }),
+            );
+          });
+        });
         copy = () => {
-          widgetResult = exportWidget("copy", frame, "Synthetic widget", {
-            requestSnapshot: () => snapshot.promise,
-          }).catch((error: unknown) => error);
+          widgetResult = exportWidget("copy", frame, "Synthetic widget").catch(
+            (error: unknown) => error,
+          );
         };
       }
       const code = await mountCopy("code");

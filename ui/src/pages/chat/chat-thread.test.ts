@@ -191,80 +191,7 @@ function messageRecord(group: MessageGroup, index = 0): Record<string, unknown> 
 }
 
 describe("assistant commentary grouping", () => {
-  it.each(
-    [
-      {
-        name: "independently unique boundaries",
-        boundaries: [{ afterBoundaryRunId: "a" }, { boundaryRunId: "c" }],
-        timestamp: 1_000,
-        owners: [undefined],
-        orders: ["A B tool C"],
-      },
-      {
-        name: "ambiguous after boundary",
-        boundaries: [{ afterBoundaryRunId: "a", boundaryRunId: "c" }, { afterBoundaryRunId: "b" }],
-        timestamp: 0,
-        owners: [undefined, "run-2"],
-        orders: ["tool A B C", "A B tool C"],
-      },
-      {
-        name: "ambiguous before boundary",
-        boundaries: [{ boundaryRunId: "b" }, { afterBoundaryRunId: "a", boundaryRunId: "c" }],
-        timestamp: 1_000,
-        owners: ["run-1"],
-        orders: ["A tool B C"],
-      },
-      {
-        name: "repeated equal boundaries remain ambiguous",
-        boundaries: [
-          { afterBoundaryRunId: "unloaded", boundaryRunId: "c" },
-          { afterBoundaryRunId: "unloaded", boundaryRunId: "c" },
-        ],
-        timestamp: 1_000,
-        owners: [undefined],
-        orders: ["A B C tool"],
-      },
-    ].flatMap(({ name, boundaries, timestamp, owners, orders }) =>
-      owners.map((runId, index) => ({
-        name,
-        boundaries,
-        timestamp,
-        runId,
-        expectedOrder: orders[index]!.split(" "),
-      })),
-    ),
-  )(
-    "resolves $name independently for tool owner $runId",
-    ({ boundaries, timestamp, runId, expectedOrder }) => {
-      const paneId = `independent-tool-boundaries:${JSON.stringify([boundaries, runId])}`;
-      try {
-        const groups = messageGroups({
-          paneId,
-          messages: [
-            userMessage("A", 100, { __openclaw: { idempotencyKey: "a:user" } }),
-            userMessage("B", 200, { __openclaw: { idempotencyKey: "b:user" } }),
-            userMessage("C", 300, { __openclaw: { idempotencyKey: "c:user" } }),
-          ],
-          streamSegments: boundaries.map((boundary, index) => ({
-            text: "",
-            ts: 10,
-            runId: `run-${index + 1}`,
-            toolCallId: "shared-call",
-            ...boundary,
-          })),
-          toolMessages: [toolResultMessage("shared-call", "read", "output", timestamp, { runId })],
-        });
-
-        expect(
-          groups.map((group) => (group.role === "tool" ? "tool" : messageRecord(group).content)),
-        ).toEqual(expectedOrder);
-      } finally {
-        resetChatThreadState(paneId);
-      }
-    },
-  );
-
-  it("keeps a post-steer tool segment and card after a textless steer", () => {
+  it("keeps later target-run tool output after an accepted steer", () => {
     const toolCallId = "call-after-steer";
     const items = buildItems({
       runId: "active-run",
@@ -281,17 +208,9 @@ describe("assistant commentary grouping", () => {
       ],
       streamSegments: [
         {
-          text: "",
-          ts: 2,
-          runId: "active-run",
-          boundaryRunId: "steer-run",
-          boundaryMarker: true,
-        },
-        {
           text: "After steer",
           ts: 3,
           runId: "active-run",
-          afterBoundaryRunId: "steer-run",
           toolCallId,
         },
       ],
@@ -311,8 +230,10 @@ describe("assistant commentary grouping", () => {
     const segmentIndex = items.findIndex((item) => itemText(item).includes("After steer"));
     const toolIndex = items.findIndex((item) => itemText(item).includes("Tool after steer"));
 
+    expect(steerIndex).toBeGreaterThan(-1);
+    expect(toolIndex).toBeGreaterThan(-1);
     expect(segmentIndex).toBeGreaterThan(steerIndex);
-    expect(toolIndex).toBeGreaterThan(steerIndex);
+    expect(toolIndex).toBeGreaterThan(segmentIndex);
   });
 
   const reconnectingSend = queuedSend(
@@ -611,7 +532,7 @@ describe("collapseCompletedTurnWork", () => {
     expect(rendered.map((item) => item.kind)).toEqual(["group", "group", "group", "group"]);
   });
 
-  it("collapses pre-steer work across a queued message from a peer", () => {
+  it("does not borrow an unscoped answer across a queued message from a peer", () => {
     const messages = [
       userMessage("do it", 1_000, {
         __openclaw: { idempotencyKey: "active-run:user", senderId: "operator" },
@@ -644,8 +565,18 @@ describe("collapseCompletedTurnWork", () => {
       "group",
       "group",
       "group",
+      "group",
     ]);
-    expect(requireWorkGroup(completed[1]).durationMs).toBeNull();
+    expect(
+      requireWorkGroup(completed[1]).groups.flatMap((group) =>
+        group.messages.map(({ message }) => message),
+      ),
+    ).toEqual([messages[2]]);
+    expect(
+      completed.flatMap((item) =>
+        item.kind === "group" ? item.messages.map(({ message }) => message) : [],
+      ),
+    ).toEqual([messages[0], messages[1], messages[3], messages[4], messages[5]]);
   });
 
   it.each([
@@ -1504,7 +1435,7 @@ describe("buildCachedChatItems", () => {
       nextText: ["Standalone preamble", "After tool.", "Continued. Again."],
     },
     {
-      name: "full-build baseline after a steer",
+      name: "whole live reply after an accepted steer",
       liveOnly: true,
       props: {
         runId: "active-run",
@@ -1515,14 +1446,13 @@ describe("buildCachedChatItems", () => {
           }),
         ],
         streamSegments: [
-          { text: "Before steer.", ts: 2, runId: "active-run", boundaryRunId: "steer-run" },
-          { text: "Standalone preamble", ts: 3, runId: "active-run", boundaryRunId: "steer-run" },
+          { text: "Standalone preamble", ts: 3, runId: "active-run", itemId: "preamble" },
         ],
         stream: "Before steer. After steer.",
       },
-      initialText: ["After steer."],
+      initialText: ["Before steer. After steer."],
       nextStream: "Before steer. After steer. Continued.",
-      nextText: ["After steer. Continued."],
+      nextText: ["Before steer. After steer. Continued."],
     },
   ] satisfies {
     name: string;

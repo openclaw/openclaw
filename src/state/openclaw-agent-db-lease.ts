@@ -12,11 +12,13 @@ import {
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
+import { SqliteWorkerOpenRefusedError } from "../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
+  AgentDatabaseDeletionRefusedError,
   assertAgentDeletionPathFence,
   prepareAgentDeletionPathFence,
 } from "./agent-deletion-journal.js";
@@ -25,7 +27,7 @@ import {
   agentDatabaseLeaseStaleReason,
   mayShareAgentDatabaseFile,
   readAgentDatabaseLeaseProvenance,
-  isSameBootAgentDatabaseLease,
+  agentDatabaseLeaseProcessDeathRefusal,
 } from "./openclaw-agent-db-lease-provenance.js";
 import type { OpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
@@ -156,7 +158,7 @@ export type OpenClawAgentIntegrityVerificationReceiver = (
   record: OpenClawAgentIntegrityVerification | undefined,
   canReuseRuntimeIntegrity: boolean,
   invalidated: boolean,
-  processDeath: boolean,
+  because?: string,
 ) => void;
 
 export function claimOpenClawAgentDatabaseLease(
@@ -220,18 +222,14 @@ function claimAgentDatabaseLeaseInDatabase(
   }
   assertAgentDeletionPathFence(database, deletionFence);
   let invalidated = false;
-  let processDeath = true;
+  let processDeathRefusal: string | undefined;
   for (const held of readAgentDatabaseLeases(database.db)) {
     const staleReason = mayShareAgentDatabaseFile(held.path, owner.path)
       ? agentDatabaseLeaseStaleReason(held)
       : undefined;
     if (staleReason) {
-      processDeath &&=
-        staleReason === "owner-pid-dead" &&
-        held.opened_at > 0 &&
-        held.owner_start_time !== null &&
-        held.path === owner.path &&
-        isSameBootAgentDatabaseLease(held.provenance, owner.path);
+      const because = agentDatabaseLeaseProcessDeathRefusal(held, owner.path, staleReason);
+      processDeathRefusal ??= because;
       log.info(`agent database stale lease: ${staleReason}; previous release not observed`, {
         agentId: held.agent_id,
         leaseId: held.lease_id,
@@ -239,6 +237,7 @@ function claimAgentDatabaseLeaseInDatabase(
         staleReason,
         ownerPid: held.owner_pid,
         ownerStartTime: held.owner_start_time,
+        because: because ?? "same-boot-dead-owner",
       });
       clearAgentDatabaseLeaseVerifications(database.db, held.path, env);
       invalidated = true;
@@ -261,7 +260,7 @@ function claimAgentDatabaseLeaseInDatabase(
     verification && hasLiveLease ? { ...verification, clean_close: 0 } : verification,
     !hasOtherOwner,
     invalidated,
-    invalidated && processDeath && !hasOtherOwner,
+    processDeathRefusal ?? (hasOtherOwner ? "live-or-unknown-owner" : undefined),
   );
   executeSqliteQuerySync(
     database.db,
@@ -389,14 +388,14 @@ function hasAgentDatabasePathLease(
   );
 }
 
-/** Publish completed admission without turning deferred verification into durable proof. */
+/** Publish completed admission and, when checked, its durable verification. */
 export function recordOpenClawAgentDatabaseAdmission(
   leaseId: string,
   params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
   identity: string,
   integrityVerified: boolean,
-): void {
-  runOpenClawStateWriteTransaction(
+): boolean {
+  return runOpenClawStateWriteTransaction(
     (database) => {
       assertOpenClawAgentDatabaseLease(leaseId, params);
       executeSqliteQuerySync(
@@ -414,8 +413,13 @@ export function recordOpenClawAgentDatabaseAdmission(
           ownerStartTime: getFileLockProcessStartTime(process.pid),
         })
       ) {
-        recordOpenClawAgentIntegrityVerification(params.path, params.env ?? process.env, identity);
+        return recordOpenClawAgentIntegrityVerification(
+          params.path,
+          params.env ?? process.env,
+          identity,
+        );
       }
+      return false;
     },
     { env: params.env },
   );
@@ -459,15 +463,9 @@ export function assertOpenClawAgentDatabaseLease(
   }
 }
 
-export type OpenClawAgentDatabaseWorkerLeaseReceipt = {
-  leaseId: string;
-  agentId: string;
-  path: string;
-  ownerPid: number;
-  ownerStartTime: number | null;
-  sharedStatePath: string;
-  sharedStateIdentity: string;
-};
+export type OpenClawAgentDatabaseWorkerLeaseReceipt = ReturnType<
+  typeof readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim
+>;
 
 /** Preparation grants no access; claim repeats admission on the captured shared owner. */
 export function prepareOpenClawAgentDatabaseWorkerLease(
@@ -478,13 +476,10 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
   receipt: OpenClawAgentDatabaseWorkerLeaseReceipt;
   provenance: string | null;
   validation?: OpenClawAgentDatabaseValidation;
+  deferUnverifiedIntegrity?: boolean;
   claim(onVerification?: OpenClawAgentIntegrityVerificationReceiver): string;
 } {
-  const database = {
-    db: sharedDatabase.db,
-    path: sharedDatabase.path,
-    walMaintenance: sharedDatabase.walMaintenance,
-  };
+  const database = { ...sharedDatabase };
   const identity = requireOpenClawStateDatabaseIdentity(database);
   const assertCurrent = () => {
     if (!database.db.isOpen || requireOpenClawStateDatabaseIdentity(database) !== identity) {
@@ -517,16 +512,23 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
         { agentId: receipt.agentId, path: receipt.path },
         options,
       );
-      runOpenClawStateWriteTransaction((current) => {
-        assertCurrent();
-        claimAgentDatabaseLeaseInDatabase(
-          current,
-          { ...receipt, provenance },
-          deletionFence,
-          options.env,
-          onVerification,
-        );
-      }, options);
+      try {
+        runOpenClawStateWriteTransaction((current) => {
+          assertCurrent();
+          claimAgentDatabaseLeaseInDatabase(
+            current,
+            { ...receipt, provenance },
+            deletionFence,
+            options.env,
+            onVerification,
+          );
+        }, options);
+      } catch (error) {
+        if (error instanceof AgentDatabaseDeletionRefusedError) {
+          throw new SqliteWorkerOpenRefusedError(error);
+        }
+        throw error;
+      }
       return receipt.leaseId;
     },
   };
@@ -536,7 +538,7 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
 export function readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim(
   leaseId: string,
   params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
-): OpenClawAgentDatabaseWorkerLeaseReceipt {
+) {
   assertOpenClawAgentDatabaseLease(leaseId, params);
   const database = openOpenClawStateDatabase({
     env: params.env,

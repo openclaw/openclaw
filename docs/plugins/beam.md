@@ -115,7 +115,7 @@ Uploading the same `beamId` updates the existing catalog row when its `updatedAt
 
 ## Continue on the Team Gateway
 
-Select a Beam in the Control UI and write a message in its composer. On the first send, OpenClaw creates a normal session for the selected Team agent, copies the bounded sanitized history from the retained canonical Beam row into it, and sends your message there. Ignored stale uploads cannot change that continuation source. The original Beam stays unchanged, and later source uploads do not alter the copied session.
+Select a Beam in the Control UI and write a message in its composer. On the first send, OpenClaw creates a normal session for the selected Team agent, copies the bounded sanitized history from the retained Beam row into it, and sends your message there. Ignored stale uploads cannot change that continuation source. The original Beam stays unchanged, and later source uploads do not alter the copied session.
 
 OpenClaw uses `sourceModel` when that exact model is available to the Team agent. Otherwise it uses the agent's configured model. Each copied transcript item is marked as untrusted external content. The copied session also includes a notice that the old content is reference material rather than operator instructions, names the model choice, and explains that the session cannot access the source machine or its tools.
 
@@ -132,10 +132,10 @@ Beam stores sanitized payloads in OpenClaw's shared SQLite-backed plugin state:
 
 The sidebar reuses an in-memory metadata inventory rather than loading every
 transcript on each poll. Uploads and deletions invalidate that inventory immediately;
-the next list shares one canonical reload. A plugin service preloads the inventory
+the next list shares one reload from the store. A plugin service preloads the inventory
 and refreshes it every 30 seconds to pick up changes made by other processes.
 Expired entries are hidden on every list. Transcript reads and continuation always
-read canonical storage. No stored-data migration is needed on update.
+read the underlying store. No stored-data migration is needed on update.
 
 The catalog is intentionally shared across the Gateway operator domain. Every client with `operator.read` can view every beamed session. Uploading or continuing requires `operator.write` or `operator.admin`; agent access policy must also allow the chosen agent. Any write-authorized operator that knows a Beam id can update that row. Uploader attribution does not grant ownership or change access. OpenClaw operator scopes are not tenant isolation; use a separate Gateway when sessions must be isolated between teams or machines.
 
@@ -186,7 +186,7 @@ Beam can also act as the sender: an opt-in mirror that continuously publishes th
 }
 ```
 
-- `endpoint` (required): the final remote receiver URL. Changing it starts fresh delivery to that receiver, including unchanged active sessions; pending terminal retries for the previous receiver are discarded, leaving its rows to expire normally. Redirect responses (301, 302, 303, 307, and 308) are not followed; configure the destination URL directly. After a redirect, repeated polls are suppressed for the current mirror service instance. A Gateway restart probes the configured endpoint once again so a receiver corrected at the same URL can recover. HTTPS is enforced for non-loopback hosts; plaintext `http://` is accepted only for `localhost`/`127.0.0.1`/`::1` development.
+- `endpoint` (required): the final remote receiver URL. Changing it starts fresh delivery to that receiver, including unchanged active sessions; pending terminal retries for the previous receiver are discarded, leaving its rows to expire normally. Redirect responses (301, 302, 303, 307, and 308) are not followed; configure the destination URL directly. After a redirect, repeated polls are suppressed for the current mirror service instance. A Gateway restart checks the configured endpoint once again so a receiver corrected at the same URL can recover. HTTPS is enforced for non-loopback hosts; plaintext `http://` is accepted only for `localhost`/`127.0.0.1`/`::1` development.
 - `token`: Gateway credential for the remote receiver, sent as `Authorization: Bearer`. Accepts a plain string or a secret reference; a configured-but-unresolved token pauses mirroring instead of sending unauthenticated requests. Deployments fronted by an identity-aware proxy need an ingress that accepts this bearer credential.
 - `catalogs` (required): the session catalog ids to mirror, as explicit per-catalog consent — an omitted or empty list mirrors nothing. The local `beam` receiver catalog is always excluded so two mirrored Gateways cannot re-mirror each other's rows.
 - `pollSeconds` (default 30, minimum 10): how often the mirror scans local catalogs.
@@ -210,7 +210,7 @@ When browsing Claude sessions on paired nodes, update those nodes alongside the 
 
 **`429 Too Many Requests`** The authenticated client exceeded the bounded request or concurrency limit. Retry after the current minute window.
 
-**`beam mirror upload blocked ... receiver returned redirect`** The configured mirror endpoint returned a redirect. Beam does not follow redirects and suppresses repeated attempts for the current service instance; set `mirror.endpoint` to the final receiver URL. A Gateway restart probes the configured endpoint once again.
+**`beam mirror upload blocked ... receiver returned redirect`** The configured mirror endpoint returned a redirect. Beam does not follow redirects and suppresses repeated attempts for the current service instance; set `mirror.endpoint` to the final receiver URL. A Gateway restart checks the configured endpoint once again.
 
 ## Related
 

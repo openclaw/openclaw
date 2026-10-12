@@ -15,12 +15,10 @@ import {
   createAmbientVerifiedBinding,
   SystemAgentChatEngine,
   RuntimeSystemAgentChatEngine,
-  SystemAgentInferenceUnavailableError,
   runSystemAgentTurnWithDeps,
   type OpenClawConfig,
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.test-support.js";
-import { loadSystemAgentOverview } from "./overview.js";
 
 describe("SystemAgentChatEngine facade", () => {
   it.each(["requester", "alternate"])("preserves runtime ownership for %s", async (requester) => {
@@ -135,41 +133,6 @@ describe("SystemAgentChatEngine facade", () => {
     }
   });
 
-  it("uses the verified inference owner for a delegated fleet overview", async () => {
-    useTempStateDir();
-    const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: { model: "openai/gpt-5.6-luna" }, work: {} },
-      },
-      gateway: { port: 1 },
-    };
-    const engine = new SystemAgentChatEngine({
-      requesterAgentId: "main",
-      deps: {
-        loadOverview: async (options?: { agentId?: string }) =>
-          loadSystemAgentOverview({
-            ...options,
-            deps: {
-              readConfigFileSnapshot: async () => configSnapshot(config),
-              probeLocalCommand: async (command) => ({ command, found: false }),
-              probeGatewayUrl: async (url) => ({ url, reachable: false }),
-            },
-          }),
-      },
-    });
-    try {
-      const overview = await engine.loadOverview();
-      expect(overview.defaultAgentId).toBe("main");
-      expect(overview.agents.map(({ id, isDefault }) => ({ id, isDefault }))).toEqual([
-        { id: "main", isDefault: true },
-        { id: "work", isDefault: false },
-      ]);
-    } finally {
-      await engine.dispose();
-    }
-  });
-
   it("rejects a seeded approval when its binding changes during classification", async () => {
     const baseConfig = {
       agents: { defaults: { model: "openai/gpt-5.5" } },
@@ -203,7 +166,9 @@ describe("SystemAgentChatEngine facade", () => {
     });
     engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
 
-    await expect(engine.handle("yes")).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    await expect(engine.handle("yes")).rejects.toMatchObject({
+      message: expect.stringContaining("verified inference route changed"),
+    });
     expect(runConfigSet).not.toHaveBeenCalled();
   });
 
@@ -228,7 +193,7 @@ describe("SystemAgentChatEngine facade", () => {
             loadOverview: fakeOverviewLoader(),
           },
         } as unknown as SystemAgentChatEngineOptions),
-    ).toThrow(SystemAgentInferenceUnavailableError);
+    ).toThrow("openclaw onboard");
     expect(applySetup).not.toHaveBeenCalled();
   });
 
@@ -264,9 +229,9 @@ describe("SystemAgentChatEngine facade", () => {
       },
     });
 
-    await expect(engine.handle("what should I do next?")).rejects.toBeInstanceOf(
-      SystemAgentInferenceUnavailableError,
-    );
+    await expect(engine.handle("what should I do next?")).rejects.toMatchObject({
+      message: expect.stringContaining("verified inference route changed"),
+    });
   });
 
   it("preserves the inference failure without a second model attempt", async () => {

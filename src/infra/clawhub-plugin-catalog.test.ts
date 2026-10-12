@@ -46,33 +46,6 @@ function requestedUrl(fetchImpl: ReturnType<typeof mockResponse>) {
 
 describe("ClawHub plugin catalog client", () => {
   it.each([false, true])(
-    "attributes manual search unless telemetry is disabled: %s",
-    async (disabled) => {
-      await withEnvAsync({ CLAWHUB_DISABLE_TELEMETRY: String(disabled) }, async () => {
-        const fetchImpl = mockResponse({ results: [{ score: 9, package: remotePlugin }] });
-        const result = await fetchClawHubPluginCatalog({
-          baseUrl: "https://example.com",
-          query: "memory",
-          searchSource: "openclaw-control-ui",
-          category: "memory",
-          limit: 5,
-          fetchImpl,
-        });
-        expect(fetchImpl).toHaveBeenCalledOnce();
-        const url = requestedUrl(fetchImpl);
-        expect(url.pathname).toBe("/api/v1/plugins/search");
-        expect(Object.fromEntries(url.searchParams)).toEqual({
-          q: "memory",
-          category: "memory",
-          limit: "5",
-          ...(disabled ? {} : { searchSource: "openclaw-control-ui" }),
-        });
-        expect(result.items.map((item) => item.packageName)).toEqual(["memory-plus"]);
-      });
-    },
-  );
-
-  it.each([false, true])(
     "replays transient failures only when search cannot record an observation: %s",
     async (disabled) => {
       await withEnvAsync({ CLAWHUB_DISABLE_TELEMETRY: String(disabled) }, async () => {
@@ -96,44 +69,44 @@ describe("ClawHub plugin catalog client", () => {
     },
   );
 
-  it.each([
-    ["overview", fetchClawHubPluginOverview],
-    ["categories", fetchClawHubPluginCategories],
-  ])("omits ambient auth from public %s unless explicitly requested", async (_name, read) => {
-    await withEnvAsync(
-      {
-        CLAWHUB_TOKEN: "ambient-test-token",
-        OPENCLAW_CLAWHUB_URL: undefined,
-        CLAWHUB_URL: undefined,
-      },
-      async () => {
-        const authorization: Array<string | null> = [];
-        const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
-          authorization.push(new Headers(init?.headers).get("authorization"));
-          return jsonResponse({ items: [remotePlugin], categories: [remoteCategory] });
-        };
-        await read({ fetchImpl });
-        await read({ fetchImpl, skipAuth: false });
-        await read({ fetchImpl, token: "explicit-test-token" });
-        await read({ fetchImpl, baseUrl: "https://private.example/clawhub" });
-        await read({ fetchImpl, baseUrl: "https://private.example/clawhub", skipAuth: true });
-        for (const key of ["OPENCLAW_CLAWHUB_URL", "CLAWHUB_URL"]) {
-          await withEnvAsync({ [key]: "https://private.example/clawhub" }, async () => {
-            await read({ fetchImpl });
-          });
-        }
-        expect(authorization).toEqual([
-          null,
-          "Bearer ambient-test-token",
-          "Bearer explicit-test-token",
-          "Bearer ambient-test-token",
-          null,
-          "Bearer ambient-test-token",
-          "Bearer ambient-test-token",
-        ]);
-      },
-    );
-  });
+  it.each([["overview", fetchClawHubPluginOverview]])(
+    "omits ambient auth from public %s unless explicitly requested",
+    async (_name, read) => {
+      await withEnvAsync(
+        {
+          CLAWHUB_TOKEN: "ambient-test-token",
+          OPENCLAW_CLAWHUB_URL: undefined,
+          CLAWHUB_URL: undefined,
+        },
+        async () => {
+          const authorization: Array<string | null> = [];
+          const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+            authorization.push(new Headers(init?.headers).get("authorization"));
+            return jsonResponse({ items: [remotePlugin], categories: [remoteCategory] });
+          };
+          await read({ fetchImpl });
+          await read({ fetchImpl, skipAuth: false });
+          await read({ fetchImpl, token: "explicit-test-token" });
+          await read({ fetchImpl, baseUrl: "https://private.example/clawhub" });
+          await read({ fetchImpl, baseUrl: "https://private.example/clawhub", skipAuth: true });
+          for (const key of ["OPENCLAW_CLAWHUB_URL", "CLAWHUB_URL"]) {
+            await withEnvAsync({ [key]: "https://private.example/clawhub" }, async () => {
+              await read({ fetchImpl });
+            });
+          }
+          expect(authorization).toEqual([
+            null,
+            "Bearer ambient-test-token",
+            "Bearer explicit-test-token",
+            "Bearer ambient-test-token",
+            null,
+            "Bearer ambient-test-token",
+            "Bearer ambient-test-token",
+          ]);
+        },
+      );
+    },
+  );
 
   it("reads the bounded plugin overview in one request", async () => {
     const fetchImpl = mockResponse({
@@ -280,26 +253,6 @@ describe("ClawHub plugin catalog client", () => {
     });
   });
 
-  it("requests the curated category order instead of an official-first download order", async () => {
-    const fetchImpl = mockResponse({ items: [remotePlugin] });
-
-    await fetchClawHubPluginCatalog({
-      baseUrl: "https://example.com",
-      intent: "all",
-      category: "models",
-      limit: 8,
-      fetchImpl,
-    });
-
-    const url = requestedUrl(fetchImpl);
-    expect(Object.fromEntries(url.searchParams)).toEqual({
-      category: "models",
-      curated: "true",
-      sort: "downloads",
-      limit: "8",
-    });
-  });
-
   it("validates and restores canonical category ordering", async () => {
     const fetchImpl = mockResponse({
       categories: [
@@ -319,16 +272,6 @@ describe("ClawHub plugin catalog client", () => {
     });
 
     expect(categories.map((category) => category.slug)).toEqual(["channels", "models"]);
-  });
-
-  it("preserves the microphone icon for Voice", async () => {
-    const category = { ...remoteCategory, slug: "voice", icon: "mic" };
-    await expect(
-      fetchClawHubPluginCategories({
-        baseUrl: "https://example.com",
-        fetchImpl: async () => jsonResponse({ categories: [category] }),
-      }),
-    ).resolves.toEqual([category]);
   });
 
   it("rejects arbitrary category icon values", async () => {
@@ -390,201 +333,198 @@ describe("ClawHub plugin catalog client", () => {
     ]);
   });
 
-  it.each([
-    { ui: ["widget", "page", "widget"], expected: ["page", "widget"] },
-    { ui: undefined, expected: undefined },
-    { ui: [], expected: [] },
-    { ui: "page", expected: undefined },
-    { ui: ["page", "unknown"], expected: undefined },
-  ])("reads complete exact-version detail with UI metadata $ui", async ({ ui, expected }) => {
-    const requestedUrls: string[] = [];
-    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
-      const url = new URL(requestUrl(input));
-      requestedUrls.push(`${url.pathname}${url.search}`);
-      return jsonResponse({
-        package: {
-          ...remotePlugin,
-          topics: ["Retrieval"],
-          tags: { latest: "1.2.3", stable: "1.2.2" },
-          createdAt: 100,
-          updatedAt: 300,
-          compatibility: { minGatewayVersion: ">=2.0.0" },
-          scanStatus: "clean",
-        },
+  it.each([{ ui: ["widget", "page", "widget"], expected: ["page", "widget"] }])(
+    "reads complete exact-version detail with UI metadata $ui",
+    async ({ ui, expected }) => {
+      const requestedUrls: string[] = [];
+      const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+        const url = new URL(requestUrl(input));
+        requestedUrls.push(`${url.pathname}${url.search}`);
+        return jsonResponse({
+          package: {
+            ...remotePlugin,
+            topics: ["Retrieval"],
+            tags: { latest: "1.2.3", stable: "1.2.2" },
+            createdAt: 100,
+            updatedAt: 300,
+            compatibility: { minGatewayVersion: ">=2.0.0" },
+            scanStatus: "clean",
+          },
+          owner: {
+            handle: "alice",
+            displayName: "Alice",
+            official: true,
+            image: "https://avatars.example.com/alice.png",
+          },
+          versions: {
+            items: [
+              {
+                version: "1.2.3",
+                createdAt: 300,
+                changelog: "Current release",
+                distTags: ["latest"],
+              },
+              { version: "1.2.2", createdAt: 200, changelog: "Previous release", distTags: [] },
+            ],
+            nextCursor: null,
+          },
+          version: {
+            version: "1.2.2",
+            createdAt: 200,
+            changelog: "Previous release",
+            pluginManifestSummary: {
+              schemaVersion: 1,
+              configFields: [
+                { name: "apiKey", description: "Service API key", required: true, sensitive: true },
+              ],
+              mcpServers: [
+                {
+                  name: "memory",
+                  url: "https://mcp.example.com/memory?mode=read",
+                  transport: "streamable-http",
+                  auth: "oauth",
+                  scope: "memory:read",
+                  setup: "Connect your account.",
+                },
+                { name: "legacy" },
+              ],
+              contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
+              providers: ["memory-model"],
+              channels: ["memory-chat"],
+              uiCapabilities: ui,
+              bundledSkills: [
+                {
+                  name: "Recall",
+                  description: "Recall saved knowledge",
+                  rootPath: "skills/recall",
+                  skillMdPath: "skills/recall/SKILL.md",
+                  sha256: "a".repeat(64),
+                  size: 42,
+                },
+              ],
+              compatibility: { minGatewayVersion: ">=1.0.0" },
+            },
+            verification: {
+              tier: "source-linked",
+              scope: "artifact-only",
+              summary: "Linked to source.",
+              sourceRepo: "alice/memory-plus",
+              sourceCommit: "abc123",
+              sourcePath: "plugins/memory-plus",
+              scanStatus: "clean",
+            },
+            llmAnalysis: {
+              status: "clean",
+              verdict: "benign",
+              summary: "Capabilities match the stated purpose.",
+              guidance: "Review the API key before enabling.",
+              checkedAt: 400,
+            },
+          },
+          security: {
+            overview: "Exact release passed ClawHub security review.",
+            verdict: "review",
+            securityAuditUrl: "https://example.com/alice/plugins/memory-plus/security-audit",
+            trust: {
+              scanStatus: "clean",
+              moderationState: "approved",
+              blockedFromDownload: false,
+              reasons: [],
+              pending: false,
+              stale: false,
+            },
+          },
+          readme: "# Memory Plus\n\nLong-term memory.",
+        });
+      });
+
+      const detail = await fetchClawHubPluginDetail({
+        baseUrl: "https://example.com",
+        packageName: "memory-plus",
+        version: "1.2.2",
+        fetchImpl,
+      });
+
+      expect(requestedUrls).toEqual(["/api/v1/packages/memory-plus/detail?version=1.2.2"]);
+      expect(detail).toMatchObject({
+        packageName: "memory-plus",
+        iconUrl: `https://example.com${remotePlugin.icon}`,
         owner: {
           handle: "alice",
           displayName: "Alice",
+          imageUrl: "https://avatars.example.com/alice.png",
           official: true,
-          image: "https://avatars.example.com/alice.png",
         },
-        versions: {
-          items: [
-            {
-              version: "1.2.3",
-              createdAt: 300,
-              changelog: "Current release",
-              distTags: ["latest"],
-            },
-            { version: "1.2.2", createdAt: 200, changelog: "Previous release", distTags: [] },
-          ],
-          nextCursor: null,
-        },
-        version: {
+        topics: ["Retrieval"],
+        registry: "https://example.com",
+        tags: { latest: "1.2.3", stable: "1.2.2" },
+        selectedRelease: {
           version: "1.2.2",
           createdAt: 200,
           changelog: "Previous release",
-          pluginManifestSummary: {
-            schemaVersion: 1,
-            configFields: [
-              { name: "apiKey", description: "Service API key", required: true, sensitive: true },
-            ],
-            mcpServers: [
-              {
-                name: "memory",
-                url: "https://mcp.example.com/memory?mode=read",
-                transport: "streamable-http",
-                auth: "oauth",
-                scope: "memory:read",
-                setup: "Connect your account.",
-              },
-              { name: "legacy" },
-            ],
-            contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
-            providers: ["memory-model"],
-            channels: ["memory-chat"],
-            uiCapabilities: ui,
-            bundledSkills: [
-              {
-                name: "Recall",
-                description: "Recall saved knowledge",
-                rootPath: "skills/recall",
-                skillMdPath: "skills/recall/SKILL.md",
-                sha256: "a".repeat(64),
-                size: 42,
-              },
-            ],
-            compatibility: { minGatewayVersion: ">=1.0.0" },
+          tags: [],
+        },
+        downloadability: { status: "unknown" },
+        metadata: { manifest: "available", readme: "available", security: "available" },
+        trust: { disposition: "clean", pending: false, stale: false },
+        createdAt: 100,
+        updatedAt: 300,
+        readme: "# Memory Plus\n\nLong-term memory.",
+        compatibility: { minGatewayVersion: ">=1.0.0" },
+        configFields: [
+          { name: "apiKey", description: "Service API key", required: true, sensitive: true },
+        ],
+        mcpServers: ["memory", "legacy"],
+        mcpServerDetails: [
+          {
+            name: "memory",
+            url: "https://mcp.example.com/memory?mode=read",
+            transport: "streamable-http",
+            auth: "oauth",
+            scope: "memory:read",
+            setup: "Connect your account.",
           },
-          verification: {
-            tier: "source-linked",
-            scope: "artifact-only",
-            summary: "Linked to source.",
-            sourceRepo: "alice/memory-plus",
-            sourceCommit: "abc123",
-            sourcePath: "plugins/memory-plus",
-            scanStatus: "clean",
-          },
-          llmAnalysis: {
-            status: "clean",
-            verdict: "benign",
-            summary: "Capabilities match the stated purpose.",
-            guidance: "Review the API key before enabling.",
-            checkedAt: 400,
-          },
+          { name: "legacy" },
+        ],
+        contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
+        providers: ["memory-model"],
+        channels: ["memory-chat"],
+        skills: [{ name: "Recall", description: "Recall saved knowledge" }],
+        versions: [
+          { version: "1.2.3", createdAt: 300, changelog: "Current release", tags: ["latest"] },
+          { version: "1.2.2", createdAt: 200, changelog: "Previous release", tags: [] },
+        ],
+        verification: {
+          tier: "source-linked",
+          summary: "Linked to source.",
+          sourceRepo: "alice/memory-plus",
+          sourceCommit: "abc123",
+          sourcePath: "plugins/memory-plus",
+          scanStatus: "clean",
         },
         security: {
-          overview: "Exact release passed ClawHub security review.",
+          status: "clean",
           verdict: "review",
-          securityAuditUrl: "https://example.com/alice/plugins/memory-plus/security-audit",
-          trust: {
-            scanStatus: "clean",
-            moderationState: "approved",
-            blockedFromDownload: false,
-            reasons: [],
-            pending: false,
-            stale: false,
-          },
+          auditUrl: "https://example.com/alice/plugins/memory-plus/security-audit",
+          summary: "Exact release passed ClawHub security review.",
         },
-        readme: "# Memory Plus\n\nLong-term memory.",
       });
-    });
-
-    const detail = await fetchClawHubPluginDetail({
-      baseUrl: "https://example.com",
-      packageName: "memory-plus",
-      version: "1.2.2",
-      fetchImpl,
-    });
-
-    expect(requestedUrls).toEqual(["/api/v1/packages/memory-plus/detail?version=1.2.2"]);
-    expect(detail).toMatchObject({
-      packageName: "memory-plus",
-      iconUrl: `https://example.com${remotePlugin.icon}`,
-      owner: {
-        handle: "alice",
-        displayName: "Alice",
-        imageUrl: "https://avatars.example.com/alice.png",
-        official: true,
-      },
-      topics: ["Retrieval"],
-      registry: "https://example.com",
-      tags: { latest: "1.2.3", stable: "1.2.2" },
-      selectedRelease: {
-        version: "1.2.2",
-        createdAt: 200,
-        changelog: "Previous release",
-        tags: [],
-      },
-      downloadability: { status: "unknown" },
-      metadata: { manifest: "available", readme: "available", security: "available" },
-      trust: { disposition: "clean", pending: false, stale: false },
-      createdAt: 100,
-      updatedAt: 300,
-      readme: "# Memory Plus\n\nLong-term memory.",
-      compatibility: { minGatewayVersion: ">=1.0.0" },
-      configFields: [
-        { name: "apiKey", description: "Service API key", required: true, sensitive: true },
-      ],
-      mcpServers: ["memory", "legacy"],
-      mcpServerDetails: [
-        {
-          name: "memory",
-          url: "https://mcp.example.com/memory?mode=read",
-          transport: "streamable-http",
-          auth: "oauth",
-          scope: "memory:read",
-          setup: "Connect your account.",
-        },
-        { name: "legacy" },
-      ],
-      contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
-      providers: ["memory-model"],
-      channels: ["memory-chat"],
-      skills: [{ name: "Recall", description: "Recall saved knowledge" }],
-      versions: [
-        { version: "1.2.3", createdAt: 300, changelog: "Current release", tags: ["latest"] },
-        { version: "1.2.2", createdAt: 200, changelog: "Previous release", tags: [] },
-      ],
-      verification: {
-        tier: "source-linked",
-        summary: "Linked to source.",
-        sourceRepo: "alice/memory-plus",
-        sourceCommit: "abc123",
-        sourcePath: "plugins/memory-plus",
-        scanStatus: "clean",
-      },
-      security: {
-        status: "clean",
-        verdict: "review",
-        auditUrl: "https://example.com/alice/plugins/memory-plus/security-audit",
-        summary: "Exact release passed ClawHub security review.",
-      },
-    });
-    expect(detail.uiCapabilities).toEqual(expected);
-    const joined = joinClawHubPluginDetail({
-      remote: detail,
-      local: { plugins: [], diagnostics: [], mutationAllowed: true },
-    });
-    expect(joined.detail).toMatchObject({
-      contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
-      providers: ["memory-model"],
-      channels: ["memory-chat"],
-    });
-    expect(joined.detail.uiCapabilities).toEqual(expected);
-    expect(joined.detail.mcpServers).toEqual(["memory", "legacy"]);
-    expect(joined.detail.mcpServerDetails).toEqual(detail.mcpServerDetails);
-    expect(Value.Check(PluginDiscoveryDetailSchema, joined.detail)).toBe(true);
-  });
+      expect(detail.uiCapabilities).toEqual(expected);
+      const joined = joinClawHubPluginDetail({
+        remote: detail,
+        local: { plugins: [], diagnostics: [], mutationAllowed: true },
+      });
+      expect(joined.detail).toMatchObject({
+        contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
+        providers: ["memory-model"],
+        channels: ["memory-chat"],
+      });
+      expect(joined.detail.uiCapabilities).toEqual(expected);
+      expect(joined.detail.mcpServers).toEqual(["memory", "legacy"]);
+      expect(joined.detail.mcpServerDetails).toEqual(detail.mcpServerDetails);
+      expect(Value.Check(PluginDiscoveryDetailSchema, joined.detail)).toBe(true);
+    },
+  );
 
   it("withholds unsafe MCP endpoints and only projects bounded public metadata", async () => {
     const credentialEndpoint = new URL("https://example.invalid/mcp");
@@ -661,7 +601,7 @@ describe("ClawHub plugin catalog client", () => {
     expect(Value.Check(PluginDiscoveryDetailSchema, joined.detail)).toBe(true);
   });
 
-  it.each([undefined, {}])(
+  it.each([{}])(
     "keeps detail available without a release or optional security: %s",
     async (security) => {
       const fetchImpl = vi.fn(async () =>

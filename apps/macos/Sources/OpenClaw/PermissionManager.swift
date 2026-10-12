@@ -109,15 +109,12 @@ enum PermissionManager {
         return false
     }
 
-    private static func ensureAccessibility(interactive: Bool) async -> Bool {
-        let trusted = await MainActor.run { AXIsProcessTrusted() }
-        if interactive, !trusted {
-            await MainActor.run {
-                let opts: NSDictionary = ["AXTrustedCheckOptionPrompt": true]
-                _ = AXIsProcessTrustedWithOptions(opts)
-            }
+    @MainActor private static func ensureAccessibility(interactive: Bool) -> Bool {
+        if interactive, !AXIsProcessTrusted() {
+            let opts: NSDictionary = ["AXTrustedCheckOptionPrompt": true]
+            _ = AXIsProcessTrustedWithOptions(opts)
         }
-        return await MainActor.run { AXIsProcessTrusted() }
+        return AXIsProcessTrusted()
     }
 
     @MainActor
@@ -318,10 +315,7 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
 
     /// nonisolated for Swift 6 strict concurrency compatibility
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        let status = manager.authorizationStatus
-        Task { @MainActor in
-            self.finish(status: status)
-        }
+        self.locationManager(manager, didChangeAuthorization: manager.authorizationStatus)
     }
 
     /// Legacy callback (still used on some macOS versions / configurations).
@@ -345,9 +339,6 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        let status = manager.authorizationStatus
-        Task { @MainActor in
-            self.finish(status: status)
-        }
+        self.locationManager(manager, didChangeAuthorization: manager.authorizationStatus)
     }
 }

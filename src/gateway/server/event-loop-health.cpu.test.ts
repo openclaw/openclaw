@@ -1,4 +1,5 @@
 import { cpus } from "node:os";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getTrackedWorkerCpuSources } from "../../infra/worker-cpu.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -60,13 +61,15 @@ async function createMonitor() {
     eventLoopUtilization: () => ({ idle: now, active: 0, utilization: 0.05 }),
   });
   monitors.push(monitor);
-  await clock.wake();
+  await setImmediate();
   return monitor;
 }
 
 async function sample(elapsedMs = 1_000) {
   now += elapsedMs;
   await clock.advanceTo(now);
+  // Worker replies publish asynchronously; settle them before advancing the injected clock again.
+  await setImmediate();
 }
 
 describe("CPU breakdown sampling", () => {
@@ -181,7 +184,7 @@ describe("CPU breakdown sampling", () => {
         monitor[action]();
       }
       slow.resolve({ user: now * 500, system: 0 });
-      await clock.wake();
+      await setImmediate();
       if (action === "timeout") {
         expect(monitor.snapshot()).toBe(health);
         await sample();

@@ -11,6 +11,7 @@ import {
   errorShape,
   type SessionsPatchManyResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import {
   clearActiveEmbeddedRun,
@@ -18,7 +19,7 @@ import {
 } from "../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
 import { WORKTREE_MUTATION_LEASE_SCOPE } from "../agents/worktrees/capacity-contract.js";
-import { getRegistryWorktree } from "../agents/worktrees/registry.js";
+import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
 import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
 import {
   managedWorktrees,
@@ -32,6 +33,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import * as sessionLifecycle from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
@@ -85,11 +87,13 @@ test("sessions.patchMany releases unrelated writes while restoration waits for a
       await release.promise;
     },
   );
-  const originalRestore = managedWorktrees.restore.bind(managedWorktrees);
-  const restore = vi.spyOn(managedWorktrees, "restore").mockImplementation((params) => {
-    operationEntered.resolve();
-    return originalRestore(params);
-  });
+  const originalRestore = captureMethodCall("restore")(ManagedWorktreeService.prototype);
+  const restore = vi
+    .spyOn(ManagedWorktreeService.prototype, "restore")
+    .mockImplementation(function (this: ManagedWorktreeService, params) {
+      operationEntered.resolve();
+      return originalRestore(this, params);
+    });
   let mutation: ReturnType<typeof directSessionReq> | undefined;
   let independent: ReturnType<typeof directSessionReq> | undefined;
   let successor: ReturnType<typeof directSessionReq> | undefined;
@@ -246,7 +250,7 @@ test("sessions.patchMany leaves a failed restore's label available to a later ta
   });
   await cleanupWorktrees();
   const restore = vi
-    .spyOn(managedWorktrees, "restore")
+    .spyOn(ManagedWorktreeService.prototype, "restore")
     .mockRejectedValueOnce(new Error("checkout unavailable"));
   try {
     const result = await directSessionReq<SessionsPatchManyResult>("sessions.patchMany", {
@@ -259,6 +263,15 @@ test("sessions.patchMany leaves a failed restore's label available to a later ta
     expect(result).toMatchObject({
       ok: true,
       payload: { outcomes: [{ ok: false, error: { code: "UNAVAILABLE" } }, { ok: true }] },
+    });
+    expect(result.payload?.outcomes[0]).toMatchObject({
+      error: {
+        retryable: true,
+        message: expect.stringContaining("Free disk space"),
+      },
+    });
+    expect(result.payload?.outcomes[0]).not.toMatchObject({
+      error: { message: expect.stringMatching(/worktree slot/i) },
     });
     expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toEqual(
       expect.any(Number),
@@ -289,42 +302,44 @@ test.each(["identity", "label-owner", "participants", "removed"] as const)(
       }),
     ).toMatchObject({ ok: true });
     await cleanupWorktrees();
-    const originalRestore = managedWorktrees.restore.bind(managedWorktrees);
-    const restore = vi.spyOn(managedWorktrees, "restore").mockImplementationOnce(async (params) => {
-      const restored = await originalRestore(params);
-      // Another supported owner can act after allocation/Git completes, before metadata commits.
-      if (change === "identity") {
-        await patchSessionEntryCore(scope, () => ({ sessionId: "replacement-session" }), {
-          skipMaintenance: true,
-        });
-      } else if (change === "label-owner") {
-        expect(
-          await directSessionReq("sessions.patch", {
-            key: peer.payload!.key,
-            label: "Requested label",
-          }),
-        ).toMatchObject({ ok: true });
-      } else if (change === "participants") {
-        expect(
-          recordSessionParticipant(scope, {
-            identity: { type: "agent", id: "participant-agent" },
-            promptedAt: 100,
-          }),
-        ).toBe("inserted");
-      } else {
-        const respond = vi.fn();
-        await worktreesHandlers["worktrees.remove"]!({
-          params: { id: worktree.id },
-          respond,
-        } as never);
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ removed: true }),
-          undefined,
-        );
-      }
-      return restored;
-    });
+    const originalRestore = captureMethodCall("restore")(ManagedWorktreeService.prototype);
+    const restore = vi
+      .spyOn(ManagedWorktreeService.prototype, "restore")
+      .mockImplementationOnce(async function (this: ManagedWorktreeService, params) {
+        const restored = await originalRestore(this, params);
+        // Another supported owner can act after allocation/Git completes, before metadata commits.
+        if (change === "identity") {
+          await patchSessionEntryCore(scope, () => ({ sessionId: "replacement-session" }), {
+            skipMaintenance: true,
+          });
+        } else if (change === "label-owner") {
+          expect(
+            await directSessionReq("sessions.patch", {
+              key: peer.payload!.key,
+              label: "Requested label",
+            }),
+          ).toMatchObject({ ok: true });
+        } else if (change === "participants") {
+          expect(
+            recordSessionParticipant(scope, {
+              identity: { type: "agent", id: "participant-agent" },
+              promptedAt: 100,
+            }),
+          ).toBe("inserted");
+        } else {
+          const respond = vi.fn();
+          await worktreesHandlers["worktrees.remove"]!({
+            params: { id: worktree.id },
+            respond,
+          } as never);
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ removed: true }),
+            undefined,
+          );
+        }
+        return restored;
+      });
     try {
       const result = await directSessionReq("sessions.patch", {
         key,
@@ -410,13 +425,15 @@ test.each(["accepted", "revoked", "replacement"] as const)(
     embeddedRunMock.activeIds.add(earlier.sessionId);
     const reached = createDeferredCore();
     const release = createDeferredCore();
-    const originalRestore = managedWorktrees.restore.bind(managedWorktrees);
-    const restore = vi.spyOn(managedWorktrees, "restore").mockImplementationOnce(async (params) => {
-      const result = await originalRestore(params);
-      reached.resolve();
-      await release.promise;
-      return result;
-    });
+    const originalRestore = captureMethodCall("restore")(ManagedWorktreeService.prototype);
+    const restore = vi
+      .spyOn(ManagedWorktreeService.prototype, "restore")
+      .mockImplementationOnce(async function (this: ManagedWorktreeService, params) {
+        const result = await originalRestore(this, params);
+        reached.resolve();
+        await release.promise;
+        return result;
+      });
     let revoked = false;
     const pending = directSessionReq<SessionsPatchManyResult>(
       "sessions.patchMany",
@@ -575,7 +592,7 @@ test.each(["ready", "cleared-selection"] as const)(
     if (catalogMode === "cleared-selection") {
       await patchSessionEntryCore({ storePath, sessionKey: key }, () => ({ thinkingLevel: "off" }));
     }
-    const restore = vi.spyOn(managedWorktrees, "restore");
+    const restore = vi.spyOn(ManagedWorktreeService.prototype, "restore");
     const restored = patch(false);
     try {
       await Promise.race([catalogEntered.promise, restored]);
@@ -626,26 +643,21 @@ test("sessions.patchMany preserves the checkout when the archive commit is refus
   const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
   await fs.writeFile(path.join(worktree.path, "README.md"), "uncommitted edit\n");
   await fs.writeFile(path.join(worktree.path, "draft.txt"), "untracked draft\n");
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
   let rejectedCommit = false;
-  const admission = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (
-          request.stage === "commit" &&
-          isRecord(request.facts) &&
-          isRecord(request.facts.publication) &&
-          request.facts.publication.kind === "session-entry-replacements" &&
-          Array.isArray(request.facts.publication.changedKeys) &&
-          request.facts.publication.changedKeys.includes(key)
-        ) {
-          rejectedCommit = true;
-          throw new Error("injected archive commit failure");
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+    if (
+      request.stage === "commit" &&
+      isRecord(request.facts) &&
+      isRecord(request.facts.publication) &&
+      request.facts.publication.kind === "session-entry-replacements" &&
+      Array.isArray(request.facts.publication.changedKeys) &&
+      request.facts.publication.changedKeys.includes(key)
+    ) {
+      rejectedCommit = true;
+      throw new Error("injected archive commit failure");
+    }
+    admit(request, grant);
+  });
   try {
     const outcome = (
       await directSessionReq<SessionsPatchManyResult>("sessions.patchMany", {
@@ -928,7 +940,7 @@ test("automatic archive preserves a checkout rearchived while cleanup awaited", 
   }
 });
 
-test.each(["checkout-failed", "expired", "source-missing"] as const)(
+test.each(["expired", "source-missing"] as const)(
   "sessions.patch keeps an archived conversation when its worktree cannot be restored (%s)",
   async (failure) => {
     const fixture = await createArchiveWorktreeFixture();
@@ -948,40 +960,26 @@ test.each(["checkout-failed", "expired", "source-missing"] as const)(
     } else if (failure === "source-missing") {
       await fs.rename(workspace, `${workspace}-offline`);
     }
-    const restore =
-      failure === "checkout-failed"
-        ? vi
-            .spyOn(managedWorktrees, "restore")
-            .mockRejectedValueOnce(new Error("checkout unavailable"))
-        : undefined;
-    try {
-      const restored = await directSessionReq("sessions.patch", {
-        key,
-        expectedSessionId: sessionId,
-        archived: false,
-      });
-      expect(restored).toMatchObject({
-        ok: false,
-        error: { code: "UNAVAILABLE", retryable: true },
-      });
-      expect(restored.error?.message).toContain("worktree");
-      expect(restored.error?.message).not.toMatch(/worktree slot/i);
-      expect(restored.error?.message).toContain(
-        failure === "checkout-failed" ? "Free disk space" : "new worktree task",
-      );
-      if (failure === "expired") {
-        expect(restored.error?.message).toContain("expired");
-      }
-      if (failure === "source-missing") {
-        expect(restored.error?.message).toContain("source repository is missing");
-      }
-      await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(
-        transcript,
-      );
-      expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
-      await expect(fs.access(worktree.path)).rejects.toThrow();
-    } finally {
-      restore?.mockRestore();
+    const restored = await directSessionReq("sessions.patch", {
+      key,
+      expectedSessionId: sessionId,
+      archived: false,
+    });
+    expect(restored).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", retryable: true },
+    });
+    expect(restored.error?.message).toContain("worktree");
+    expect(restored.error?.message).not.toMatch(/worktree slot/i);
+    expect(restored.error?.message).toContain("new worktree task");
+    if (failure === "expired") {
+      expect(restored.error?.message).toContain("expired");
     }
+    if (failure === "source-missing") {
+      expect(restored.error?.message).toContain("source repository is missing");
+    }
+    await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
+    expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
+    await expect(fs.access(worktree.path)).rejects.toThrow();
   },
 );

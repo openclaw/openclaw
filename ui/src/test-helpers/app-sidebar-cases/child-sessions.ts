@@ -91,6 +91,7 @@ describe("AppSidebar agent chip", () => {
       includeGlobal: false,
       includeUnknown: false,
       configuredAgentsOnly: true,
+      excludeDock: true,
     });
     const childRows = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-recent-session--child")];
     const parentTree = sidebar.querySelector('[data-session-tree="agent:main:parent"]');
@@ -107,6 +108,7 @@ describe("AppSidebar agent chip", () => {
       expect.stringContaining("Research sources"),
       expect.stringContaining("Check tests"),
     ]);
+    // This read-only fixture advertises no group-write capability.
     expect(childRows.every((row) => row.getAttribute("draggable") === "false")).toBe(true);
     expect(
       childRows.every((row) => row.querySelector("[data-sidebar-session-archive]") !== null),

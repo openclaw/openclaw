@@ -1,8 +1,13 @@
+import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
+import { readSessionRuntimeOwnershipAsync } from "../agents/harness/session-runtime-ownership.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { withReadySessionRows } from "../gateway/session-row-prepared-read.js";
 import type * as records from "../gateway/session-row-projection-record.js";
 import type { SessionRowProjection } from "../gateway/session-row-projection.js";
 import { listProjectedSessions } from "../gateway/session-utils-list.js";
+import { buildGatewaySessionRow } from "../gateway/session-utils-row.js";
+import { createGatewaySessionEntryReader } from "../gateway/session-utils-store-lineage.js";
+import type { loadGatewaySessionEntryReadOnly } from "../gateway/session-utils-store.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { TuiBackend } from "./tui-backend.js";
 
@@ -23,6 +28,38 @@ export function readEmbeddedHistorySessionInfo(
         : undefined;
     },
   );
+}
+
+export async function readEmbeddedPrivateHistorySessionInfo(
+  selected: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+  entry: SessionEntry,
+) {
+  const { cfg, agentId, canonicalKey, storePath, store, readSource } = selected;
+  const [acpMeta] = await readAcpSessionMetaForEntries({
+    cfg,
+    entries: [{ agentId, sessionKey: canonicalKey, entry }],
+  });
+  const runtimeOwnership = await readSessionRuntimeOwnershipAsync({
+    config: cfg,
+    agentId,
+    sessionKey: canonicalKey,
+    storePath: readSource?.path ?? storePath,
+    sessionEntry: entry,
+    readPreparedPreviousSessionId: () => entry.previousSessionId,
+  });
+  return buildGatewaySessionRow({
+    cfg,
+    storePath,
+    store,
+    key: canonicalKey,
+    entry,
+    preparedAcpMeta: acpMeta ?? null,
+    preparedRuntimeOwnership: runtimeOwnership ?? null,
+    agentId,
+    modelSource: { entry, readSourceEntry: createGatewaySessionEntryReader(selected) },
+    lightweightListRow: true,
+    skipTranscriptUsageFallback: true,
+  });
 }
 
 export function createEmbeddedSessionReader(lifecycle: {

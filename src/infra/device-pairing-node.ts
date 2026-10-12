@@ -28,7 +28,6 @@ import {
 } from "./device-pairing-worker.js";
 import type { PairedDevice, PairedDevicePendingNodeSurface } from "./device-pairing.types.js";
 
-export { projectNodePairing } from "./device-pairing-node.records.js";
 export type {
   NodePairingCleanupClaim,
   NodePairingPendingRequest,

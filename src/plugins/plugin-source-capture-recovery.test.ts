@@ -451,13 +451,10 @@ it.each([
   },
 );
 
-it("reclaims aged tokenless roots without a census and retries locked roots", async () => {
+it("reclaims aged tokenless roots and retries locked roots", async () => {
   const stateDir = temp.make("capture-recovery-legacy-");
   const stateTemp = path.join(stateDir, "tmp");
   fs.mkdirSync(stateTemp);
-  vi.spyOn(census, "inspectOtherOpenClawProcesses").mockReturnValue({
-    error: "Exact process command census is unavailable on win32.",
-  });
   const create = (parent: string, name: string) => {
     const directory = path.join(parent, name);
     fs.mkdirSync(directory);
@@ -479,12 +476,12 @@ it("reclaims aged tokenless roots without a census and retries locked roots", as
   const fresh = create(tmpdir(), "openclaw-plugin-build-fresh");
   // Filesystem timestamps use the real clock even when Date is faked.
   fs.utimesSync(fresh, new Date(), new Date());
-  const rename = fsPromises.rename.bind(fsPromises);
-  const probe = vi.spyOn(fsPromises, "rename").mockImplementation(async (from, to) => {
-    if (from === busy) {
+  const remove = fsPromises.rm.bind(fsPromises);
+  const probe = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
+    if (target === busy) {
       throw locked;
     }
-    await rename(from, to);
+    await remove(target, options);
   });
   await sweepPluginSourceCapturesForTest(stateDir);
   expect(old.filter((directory) => fs.existsSync(directory))).toHaveLength(0);
@@ -492,7 +489,6 @@ it("reclaims aged tokenless roots without a census and retries locked roots", as
   for (const kept of [fresh, busy, tokened, unrelated, link]) {
     expect(fs.existsSync(kept)).toBe(true);
   }
-  // Renaming alone must not count as reclaiming the payload.
   expect(fs.readdirSync(stateTemp)).toEqual([]);
   const retainedNames = () =>
     fs

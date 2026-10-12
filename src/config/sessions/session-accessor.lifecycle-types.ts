@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { SqliteSessionGenerationClaim } from "./session-accessor.sqlite-generation.types.js";
+import type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
 import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -58,13 +59,20 @@ export type ResetSessionEntryLifecycleMutation = Omit<
   "archivedTranscripts"
 >;
 
+export type SessionResetCommitContext = SessionEntryCommitContext & {
+  source: { agentId: string; path: string };
+};
+
 export type ResetSessionEntryLifecycleParams = {
   /** Revalidate caller authority before preparation and synchronous reset commit. */
   commitGuard?: () => void;
   /** Preserve legacy rotation archival unless the caller appended an in-log boundary. */
   archivePreviousTranscript?: boolean;
   /** Runs after the persisted entry changes and any requested archival completes. */
-  afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
+  afterEntryMutation?: (
+    mutation: ResetSessionEntryLifecycleMutation,
+    context: SessionResetCommitContext,
+  ) => Promise<void> | void;
   /** Agent owner used to resolve backend transcript artifacts. */
   agentId?: string;
   /** Builds the persisted replacement entry from the current backend row. */
@@ -158,8 +166,6 @@ export type SessionEntryLifecycleRemoval = SessionEntryLifecycleRemovalBase &
         expectedEntry?: SessionEntry;
       }
   );
-
-export { SessionEntryLifecycleUpsertConflictError } from "./session-mutation-conflict-error.js";
 
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;

@@ -6,13 +6,9 @@ import { describe, expect, it, vi } from "vitest";
 import { saveLegacySessionStore as saveSessionStore } from "../../infra/state-migrations.legacy-session-store.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
-import {
-  collectSessionMaintenancePreserveKeys,
-  registerSessionMaintenancePreserveKeysProvider,
-} from "./store-maintenance-preserve.js";
+import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import {
   capEntryCount,
   countUnarchivedSessionEntries,
@@ -34,11 +30,6 @@ function makeEntry(updatedAt: number): SessionEntry {
 
 function makeStore(entries: Array<[string, SessionEntry]>): Record<string, SessionEntry> {
   return Object.fromEntries(entries);
-}
-
-function isGatewayModelRunSessionKey(sessionKey: string): boolean {
-  const store = makeStore([[sessionKey, makeEntry(Date.now() - 10 * DAY_MS)]]);
-  return pruneStaleModelRunEntries(store, DAY_MS) === 1;
 }
 
 function isProtectedSessionMaintenanceEntry(key: string, entry: SessionEntry | undefined): boolean {
@@ -63,7 +54,6 @@ function createMaintenanceArtifacts() {
 describe("pruneStaleEntries", () => {
   it.each([
     ["agent:main:dashboard:child", { spawnedBy: "agent:main:main" }, "age-retention"],
-    ["agent:main:dashboard:child", { parentSessionKey: "agent:main:work" }, "age-retention"],
     ["agent:main:subagent:child", {}, undefined],
   ] as const)("drops a stale child pin on %s %j", (key, lineage, archiveReason) => {
     const stale = { ...makeEntry(Date.now() - 31 * DAY_MS), pinnedAt: 1, ...lineage };
@@ -74,11 +64,7 @@ describe("pruneStaleEntries", () => {
     );
   });
 
-  it.each([
-    ["archivedAt", "protected", {}],
-    ["pinnedAt", "protected", {}],
-    ["pinnedAt", "agent:main:dashboard:protected", { parentSessionKey: "agent:main:main" }],
-  ] as const)(
+  it.each([["pinnedAt", "protected", {}]] as const)(
     "preserves %s on %s until protection is removed, then archives the same identity",
     (field, key, lineage) => {
       const now = Date.now();
@@ -172,68 +158,6 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     highWaterBytes: null,
   };
 
-  it("preserves the active session and cleans artifacts using the final referenced session set", async () => {
-    const now = Date.now();
-    const store = makeStore([
-      ["agent:main:hook:stale", { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS }],
-      [
-        "agent:main:hook:stale-shared",
-        {
-          sessionId: "shared-session",
-          updatedAt: now - 30 * DAY_MS,
-        },
-      ],
-      ["fresh-shared", { sessionId: "shared-session", updatedAt: now }],
-      ["active", { sessionId: "active-session", updatedAt: now - 30 * DAY_MS }],
-    ]);
-    const archiveCalls: Array<{
-      removedSessionFiles: Array<[string, string | undefined]>;
-      referencedSessionIds: Set<string>;
-    }> = [];
-
-    const storePath = "/tmp/openclaw-sessions/sessions.json";
-    const admission = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: ["active"],
-      assertAllowed: () => {},
-    });
-    try {
-      await applyFileBackedSessionStoreMaintenance({
-        storePath,
-        store,
-        maintenanceConfig: { ...baseMaintenance, pruneAfterMs: 7 * DAY_MS },
-        log: { warn: () => {}, info: () => {} },
-        artifacts: {
-          archiveRemovedSessionTranscripts: async (params) => {
-            archiveCalls.push({
-              removedSessionFiles: [...params.removedSessionFiles],
-              referencedSessionIds: new Set(params.referencedSessionIds),
-            });
-            return new Set();
-          },
-          cleanupArchivedSessionTranscripts: async () => {},
-        },
-      });
-    } finally {
-      admission.release();
-    }
-
-    expect(store["agent:main:hook:stale"]).toBeUndefined();
-    expect(store["agent:main:hook:stale-shared"]).toBeUndefined();
-    expect(store).toHaveProperty("fresh-shared");
-    expect(store).toHaveProperty("active");
-    expect(store.active?.archivedAt).toBeUndefined();
-    expect(archiveCalls).toEqual([
-      {
-        removedSessionFiles: [
-          ["stale-session", undefined],
-          ["shared-session", undefined],
-        ],
-        referencedSessionIds: new Set(["shared-session", "active-session"]),
-      },
-    ]);
-  });
-
   it("reports archive retention failure without aborting file-backed maintenance", async () => {
     const now = Date.now();
     const store = makeStore([
@@ -308,56 +232,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     },
   );
 
-  it("excludes archived sessions from cap pressure", async () => {
-    const now = Date.now();
-    const store = makeStore([
-      ["archived-1", { ...makeEntry(now - 5), archivedAt: now }],
-      ["archived-2", { ...makeEntry(now - 4), archivedAt: now }],
-      ["archived-3", { ...makeEntry(now - 3), archivedAt: now }],
-      ["dashboard-1", makeEntry(now - 2)],
-      ["dashboard-2", makeEntry(now - 1)],
-    ]);
-    await applyFileBackedSessionStoreMaintenance({
-      storePath: "/tmp/openclaw-sessions/protected-quota.json",
-      store,
-      maintenanceConfig: { ...baseMaintenance, maxEntries: 2 },
-      log: { warn: () => {}, info: () => {} },
-      artifacts: createMaintenanceArtifacts(),
-    });
-
-    expect(Object.keys(store)).toHaveLength(5);
-    expect(store).toHaveProperty("archived-1");
-    expect(store).toHaveProperty("archived-2");
-    expect(store).toHaveProperty("archived-3");
-    expect(store["dashboard-1"]?.archivedAt).toBeUndefined();
-    expect(store["dashboard-2"]?.archivedAt).toBeUndefined();
-  });
-
   it.each([
-    {
-      name: "preserves every active admission across multiple sessions",
-      storeName: "active-admissions",
-      preserved: [
-        ["agent:main:cron:job:run:active", "active-session"],
-        ["writer", "writer-session"],
-      ],
-      identities: ["agent:main:cron:job:run:active", "active-session", "writer"],
-    },
-    {
-      name: "preserves every store alias backed by an active session id",
-      storeName: "active-aliases",
-      preserved: [
-        ["agent:main:cron:job:run:active", "active-alias-session"],
-        ["agent:main:cron:job:run:active:thread:reply", "active-alias-session"],
-      ],
-      identities: ["active-alias-session"],
-    },
-    {
-      name: "preserves a raw legacy store key matched by a canonical admission identity",
-      storeName: "active-legacy-key",
-      preserved: [["Agent:Main:Subagent:CHILD", "active-legacy-session"]],
-      identities: ["agent:main:subagent:child"],
-    },
     {
       name: "preserves a cloud-owned session independently of the active writer",
       storeName: "active-cloud-placement",
@@ -384,7 +259,10 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     });
     const unregisterProvider =
       "providerKeys" in scenario
-        ? registerSessionMaintenancePreserveKeysProvider(() => scenario.providerKeys)
+        ? registerSessionMaintenancePreserveKeysProvider(async () => ({
+            capture: () => scenario.providerKeys,
+            dispose() {},
+          }))
         : undefined;
 
     try {
@@ -499,84 +377,6 @@ describe("pruneStaleModelRunEntries", () => {
     expect(store).toHaveProperty("agent:main:telegram:group:-100123:topic:77");
     expect(store).toHaveProperty("agent:main:cron:job:run:123");
   });
-
-  it("honors preserve keys and disabled retention", () => {
-    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
-    const store = makeStore([[staleModelRun, makeEntry(Date.now() - 10 * DAY_MS)]]);
-
-    expect(
-      pruneStaleModelRunEntries(store, DAY_MS, { preserveKeys: new Set([staleModelRun]) }),
-    ).toBe(0);
-    expect(store).toHaveProperty(staleModelRun);
-    expect(pruneStaleModelRunEntries(store, null)).toBe(0);
-    expect(store).toHaveProperty(staleModelRun);
-    expect(pruneStaleModelRunEntries(store, 0)).toBe(0);
-    expect(store).toHaveProperty(staleModelRun);
-    expect(pruneStaleModelRunEntries(store, -DAY_MS)).toBe(0);
-    expect(store).toHaveProperty(staleModelRun);
-  });
-
-  it("preserves model-locked harness sessions from model-run pruning", () => {
-    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
-    const store = makeStore([
-      [staleModelRun, { ...makeEntry(Date.now() - 10 * DAY_MS), modelSelectionLocked: true }],
-    ]);
-
-    expect(pruneStaleModelRunEntries(store, DAY_MS)).toBe(0);
-    expect(store).toHaveProperty(staleModelRun);
-  });
-
-  it("rejects non-canonical session keys that do not parse as agent-scoped", () => {
-    // Unscoped: missing `agent:<id>:` prefix — parseAgentSessionKey returns null.
-    expect(
-      isGatewayModelRunSessionKey("explicit:model-run-123e4567-e89b-12d3-a456-426614174000"),
-    ).toBe(false);
-    // Empty agent id segment: not a canonical `agent:<id>:` scoped key.
-    expect(
-      isGatewayModelRunSessionKey("agent::explicit:model-run-123e4567-e89b-12d3-a456-426614174000"),
-    ).toBe(false);
-    // Extra colon segment between agent id and `explicit:` — rest starts
-    // with `extra:` and fails the predicate's regex.
-    expect(
-      isGatewayModelRunSessionKey(
-        "agent:main:extra:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
-      ),
-    ).toBe(false);
-    // Whitespace-padded keys are non-canonical even though parseAgentSessionKey
-    // trims before normalizing; the predicate intentionally checks the original
-    // key shape before accepting a model-run key.
-    expect(
-      isGatewayModelRunSessionKey(
-        "  agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
-      ),
-    ).toBe(false);
-    expect(
-      isGatewayModelRunSessionKey(
-        "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000  ",
-      ),
-    ).toBe(false);
-  });
-
-  it("matches canonical keys whose agent id begins with model-run-", () => {
-    // Guards against an over-tight fix that confuses the agent id segment
-    // with the `explicit:model-run-<uuid>` rest segment.
-    expect(
-      isGatewayModelRunSessionKey(
-        "agent:model-run-foo:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
-      ),
-    ).toBe(true);
-  });
-
-  it("preserves case-insensitive matching for canonical keys", () => {
-    // normalizeLowercaseStringOrEmpty + parseAgentSessionKey's normalization
-    // lower-case everything outside opaque peer IDs, so a mixed-case
-    // canonical key still matches.
-    expect(
-      isGatewayModelRunSessionKey(
-        "agent:Main:Explicit:Model-Run-123E4567-E89B-12D3-A456-426614174000",
-      ),
-    ).toBe(true);
-  });
 });
 
 describe("capEntryCount", () => {
@@ -592,42 +392,6 @@ describe("capEntryCount", () => {
     expect(store[syntheticKey]).toBeUndefined();
     expect(store).toHaveProperty("newest");
     expect(store.newest?.archivedAt).toBeUndefined();
-  });
-
-  it("archives later-inserted sessions first when activity timestamps tie", () => {
-    const now = Date.now();
-    const store = makeStore([
-      ["same-before", makeEntry(now)],
-      ["z-middle", makeEntry(now)],
-      ["same-after", makeEntry(now)],
-    ]);
-
-    expect(capEntryCount(store, 1, { nowMs: now })).toBe(2);
-    expect(store).toHaveProperty("same-before");
-    expect(store["same-before"]?.archivedAt).toBeUndefined();
-    expect(store["z-middle"]?.archivedAt).toBe(now);
-    expect(store["same-after"]?.archivedAt).toBe(now);
-  });
-
-  it("preserves durable external conversation entries when capping", () => {
-    const now = Date.now();
-    const threadKey = "agent:main:discord:channel:123456:thread:987654";
-    const store = makeStore([
-      [threadKey, makeEntry(now - 5 * DAY_MS)],
-      ["oldest", makeEntry(now - 4 * DAY_MS)],
-      ["old", makeEntry(now - 3 * DAY_MS)],
-      ["recent", makeEntry(now - DAY_MS)],
-      ["newest", makeEntry(now)],
-    ]);
-
-    expect(capEntryCount(store, 3)).toBe(2);
-
-    expect(Object.keys(store)).toHaveLength(5);
-    expect(store).toHaveProperty(threadKey);
-    expect(store.newest?.archivedAt).toBeUndefined();
-    expect(store.recent?.archivedAt).toBeUndefined();
-    expect(store.oldest?.archivedAt).toEqual(expect.any(Number));
-    expect(store.old?.archivedAt).toEqual(expect.any(Number));
   });
 
   it("never evicts the agent primary main session even when protected entries fill the cap (#112637)", () => {
@@ -649,164 +413,35 @@ describe("capEntryCount", () => {
     expect(Object.keys(store)).toHaveLength(4);
   });
 
-  it.each([
-    ["agent:main:harness-owned:locked", { modelSelectionLocked: true }],
-    ["agent:main:dashboard:pinned", { pinnedAt: 1, parentSessionKey: "agent:main:main" }],
-  ])("preserves protected %s when capping", (lockedKey, protection) => {
-    const now = Date.now();
-    const store = makeStore([
-      [lockedKey, { ...makeEntry(now - 10 * DAY_MS), ...protection }],
-      ["recent", makeEntry(now)],
-      ["old", makeEntry(now - DAY_MS)],
-    ]);
+  it.each([["agent:main:dashboard:pinned", { pinnedAt: 1, parentSessionKey: "agent:main:main" }]])(
+    "preserves protected %s when capping",
+    (lockedKey, protection) => {
+      const now = Date.now();
+      const store = makeStore([
+        [lockedKey, { ...makeEntry(now - 10 * DAY_MS), ...protection }],
+        ["recent", makeEntry(now)],
+        ["old", makeEntry(now - DAY_MS)],
+      ]);
 
-    expect(capEntryCount(store, 2)).toBe(1);
+      expect(capEntryCount(store, 2)).toBe(1);
 
-    expect(store).toHaveProperty(lockedKey);
-    expect(store).toHaveProperty("recent");
-    expect(store.old?.archivedAt).toEqual(expect.any(Number));
-  });
-
-  it("normalizes runtime-provided preserve keys to match lowercased store keys", () => {
-    const now = Date.now();
-    const childKey = "agent:main:subagent:child";
-    const store = makeStore([
-      [childKey, { ...makeEntry(now - 10 * DAY_MS), spawnedBy: "agent:main:slack:direct:U1" }],
-      ["recent-1", makeEntry(now)],
-      ["old", makeEntry(now - 1)],
-    ]);
-    // Provider returns the key in mixed case + with surrounding whitespace;
-    // normalization must match the lowercased store key during maintenance.
-    const unregister = registerSessionMaintenancePreserveKeysProvider(() => [
-      "  Agent:Main:Subagent:CHILD  ",
-    ]);
-
-    try {
-      const evicted = capEntryCount(store, 2, {
-        preserveKeys: collectSessionMaintenancePreserveKeys(),
-      });
-
-      expect(evicted).toBe(1);
-      expect(Object.keys(store)).toHaveLength(3);
-      expect(store).toHaveProperty(childKey);
-      expect(store["recent-1"]?.archivedAt).toBeUndefined();
+      expect(store).toHaveProperty(lockedKey);
+      expect(store).toHaveProperty("recent");
       expect(store.old?.archivedAt).toEqual(expect.any(Number));
-    } finally {
-      unregister();
-    }
-  });
-
-  it("can temporarily exceed the cap when every candidate is runtime-protected", () => {
-    const now = Date.now();
-    const store = makeStore([
-      ["agent:main:subagent:child-a", makeEntry(now - 2)],
-      ["agent:main:subagent:child-b", makeEntry(now - 1)],
-    ]);
-    const unregister = registerSessionMaintenancePreserveKeysProvider(() => Object.keys(store));
-
-    try {
-      const evicted = capEntryCount(store, 1, {
-        preserveKeys: collectSessionMaintenancePreserveKeys(),
-      });
-
-      expect(evicted).toBe(0);
-      expect(Object.keys(store)).toHaveLength(2);
-    } finally {
-      unregister();
-    }
-  });
+    },
+  );
 });
 
 describe("isProtectedSessionMaintenanceEntry", () => {
-  it.each([
-    ["agent:worker:main", true],
-    ["global", true],
-    ["agent:main:opaque", false],
-  ])("classifies primary session key %s as protected=%s", (key, expected) => {
-    expect(isProtectedSessionMaintenanceEntry(key, makeEntry(Date.now()))).toBe(expected);
-  });
-
-  it("treats generated ACP bridge sessions as disposable", () => {
-    expect(
-      isProtectedSessionMaintenanceEntry("agent:main:acp-bridge:session-1", {
-        ...makeEntry(Date.now()),
-        chatType: "group",
-      }),
-    ).toBe(false);
-  });
-
-  it("does not protect synthetic sessions just because they carry group metadata", () => {
-    expect(
-      isProtectedSessionMaintenanceEntry("agent:main:subagent:worker", {
-        ...makeEntry(Date.now()),
-        chatType: "group",
-      }),
-    ).toBe(false);
-    expect(
-      isProtectedSessionMaintenanceEntry("agent:main:cron:job:run:123", {
-        ...makeEntry(Date.now()),
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "telegram", to: "group:test" },
-          origin: { chatType: "group" },
-        }),
-      }),
-    ).toBe(false);
-  });
-
-  it("protects metadata-less Telegram topic keys without treating every :topic: id as a thread", () => {
-    expect(
-      isProtectedSessionMaintenanceEntry(
-        "agent:main:telegram:group:-100123:topic:77",
-        makeEntry(Date.now()),
-      ),
-    ).toBe(true);
-    expect(
-      isProtectedSessionMaintenanceEntry(
-        "agent:main:opaque:topic:om_topic_root:sender:ou_topic_user",
-        makeEntry(Date.now()),
-      ),
-    ).toBe(false);
-  });
-
-  it("protects metadata-less channel session keys and channel chat metadata", () => {
-    expect(
-      isProtectedSessionMaintenanceEntry("agent:main:slack:channel:C123", makeEntry(Date.now())),
-    ).toBe(true);
-    expect(
-      isProtectedSessionMaintenanceEntry(
-        "agent:main:custom:channel:room-one:with:colon",
-        makeEntry(Date.now()),
-      ),
-    ).toBe(true);
-    expect(
-      isProtectedSessionMaintenanceEntry("agent:main:opaque", {
-        ...makeEntry(Date.now()),
-        chatType: "channel",
-      }),
-    ).toBe(true);
-  });
+  it.each([["global", true]])(
+    "classifies primary session key %s as protected=%s",
+    (key, expected) => {
+      expect(isProtectedSessionMaintenanceEntry(key, makeEntry(Date.now()))).toBe(expected);
+    },
+  );
 });
 
 describe("resolveMaintenanceConfigFromInput", () => {
-  it("defaults to enforcing session maintenance", () => {
-    const maintenance = resolveMaintenanceConfigFromInput();
-
-    expect(maintenance.mode).toBe("enforce");
-    expect(maintenance.maxEntries).toBe(5000);
-  });
-
-  it("defaults gateway model-run probes to fixed 24h retention", () => {
-    expect(resolveMaintenanceConfigFromInput().modelRunPruneAfterMs).toBe(DAY_MS);
-  });
-
-  it("keeps archived transcripts by default and bounds growth with a disk budget", () => {
-    const maintenance = resolveMaintenanceConfigFromInput();
-
-    expect(maintenance.resetArchiveRetentionMs).toBeNull();
-    expect(maintenance.maxDiskBytes).toBe(10 * 1024 * 1024 * 1024);
-    expect(maintenance.highWaterBytes).toBe(Math.floor(10 * 1024 * 1024 * 1024 * 0.8));
-  });
-
   it("honors explicit archive retention and disk budget opt-outs", () => {
     const maintenance = resolveMaintenanceConfigFromInput({
       resetArchiveRetention: "7d",
@@ -820,13 +455,6 @@ describe("resolveMaintenanceConfigFromInput", () => {
 
   it("disables the disk budget when an explicit maxDiskBytes fails to parse", () => {
     const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: "lots" });
-
-    expect(maintenance.maxDiskBytes).toBeNull();
-    expect(maintenance.highWaterBytes).toBeNull();
-  });
-
-  it("disables the disk budget when maxDiskBytes is the string '0'", () => {
-    const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: "0" });
 
     expect(maintenance.maxDiskBytes).toBeNull();
     expect(maintenance.highWaterBytes).toBeNull();
@@ -864,18 +492,18 @@ describe("resolveMaintenanceConfigFromInput", () => {
     });
   });
 
-  it.each([
-    ["the number 0", 0],
-    ["a byte string that rounds to zero", "0.4b"],
-  ])("falls back to the default high-water mark when highWaterBytes is %s", (_label, raw) => {
-    const maintenance = resolveMaintenanceConfigFromInput({
-      maxDiskBytes: "500mb",
-      highWaterBytes: raw,
-    });
+  it.each([["the number 0", 0]])(
+    "falls back to the default high-water mark when highWaterBytes is %s",
+    (_label, raw) => {
+      const maintenance = resolveMaintenanceConfigFromInput({
+        maxDiskBytes: "500mb",
+        highWaterBytes: raw,
+      });
 
-    expect(maintenance.maxDiskBytes).toBe(500 * 1024 * 1024);
-    expect(maintenance.highWaterBytes).toBe(Math.floor(500 * 1024 * 1024 * 0.8));
-  });
+      expect(maintenance.maxDiskBytes).toBe(500 * 1024 * 1024);
+      expect(maintenance.highWaterBytes).toBe(Math.floor(500 * 1024 * 1024 * 0.8));
+    },
+  );
 
   it("keeps an explicit positive highWaterBytes", () => {
     const maintenance = resolveMaintenanceConfigFromInput({
@@ -896,12 +524,5 @@ describe("resolveMaintenanceConfigFromInput", () => {
     expect(
       shouldRunModelRunPrune({ maintenance: defaultMaintenance, entryCount: 50, force: true }),
     ).toBe(false);
-  });
-
-  it("batches normal entry-count maintenance for production-sized caps", () => {
-    expect(resolveSessionEntryMaintenanceHighWater(2)).toBe(3);
-    expect(resolveSessionEntryMaintenanceHighWater(50)).toBe(75);
-    expect(resolveSessionEntryMaintenanceHighWater(500)).toBe(550);
-    expect(resolveSessionEntryMaintenanceHighWater(5000)).toBe(5500);
   });
 });

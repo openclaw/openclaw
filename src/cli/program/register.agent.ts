@@ -1,8 +1,7 @@
 import type { Command } from "commander";
-import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { hasExplicitOptions } from "../command-options.js";
-import { formatHelpExamples } from "../help-format.js";
+import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
 
 type RuntimeModule = typeof import("../../runtime.js");
@@ -21,11 +20,7 @@ export function registerAgentsCommands(program: Command): void {
   const agents = program
     .command("agents")
     .description("Manage isolated agents (workspaces + auth + routing)")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/agents", "docs.openclaw.ai/cli/agents")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/agents"));
 
   agents
     .command("list")
@@ -65,8 +60,9 @@ export function registerAgentsCommands(program: Command): void {
     .option("--json", "Output JSON summary", false)
     .action(async (opts): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
-        const { agentsBindCommand } = await import("../../commands/agents.commands.bind.js");
-        await agentsBindCommand(opts, runtime);
+        const { agentsUpdateBindingsCommand } =
+          await import("../../commands/agents.commands.bind.js");
+        await agentsUpdateBindingsCommand("bind", opts, runtime);
       });
     });
 
@@ -79,8 +75,9 @@ export function registerAgentsCommands(program: Command): void {
     .option("--json", "Output JSON summary", false)
     .action(async (opts): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
-        const { agentsUnbindCommand } = await import("../../commands/agents.commands.bind.js");
-        await agentsUnbindCommand(opts, runtime);
+        const { agentsUpdateBindingsCommand } =
+          await import("../../commands/agents.commands.bind.js");
+        await agentsUpdateBindingsCommand("unbind", opts, runtime);
       });
     });
 

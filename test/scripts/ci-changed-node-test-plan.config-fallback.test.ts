@@ -89,8 +89,15 @@ it.each([
       expect.objectContaining({
         configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
         includePatterns: [
+          "extensions/qa-lab/src/codex-plugin-lifecycle.test.ts",
           "extensions/qa-lab/src/execution-identity-storage-inspection.test.ts",
+          "extensions/qa-lab/src/gateway-child-artifacts.test.ts",
+          "extensions/qa-lab/src/gateway-child-auth-handoff.test.ts",
+          "extensions/qa-lab/src/gateway-child-auth-profiles.test.ts",
+          "extensions/qa-lab/src/gateway-child-lifecycle.test.ts",
+          "extensions/qa-lab/src/gateway-child.test.ts",
           "extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.test.ts",
+          "extensions/qa-lab/src/providers/shared/auth-store.test.ts",
         ],
         requiresDist: false,
       }),
@@ -516,7 +523,7 @@ describe("CI changed Node test plan", () => {
       planConcurrency: 1,
     });
     expect(groups.find((group) => group.includePatterns?.includes(target))).toMatchObject({
-      configs: ["test/vitest/vitest.tooling.config.ts"],
+      configs: ["test/vitest/vitest.infra.config.ts"],
       pretestBuildMode: "private-qa",
     });
     // Each config in the pair keeps its complete, separate include inventory.
@@ -538,7 +545,7 @@ describe("CI changed Node test plan", () => {
     );
     expect(buildVitestRunPlans([target])).toEqual([
       expect.objectContaining({
-        config: "test/vitest/vitest.tooling.config.ts",
+        config: "test/vitest/vitest.infra.config.ts",
         includePatterns: [target],
       }),
     ]);

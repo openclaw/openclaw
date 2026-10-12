@@ -7,9 +7,7 @@ import {
   resolveChannelResetConfig,
   resolveSessionResetPolicy,
   resolveSessionResetType,
-  type SessionEntry,
 } from "../../config/sessions.js";
-import { hasSessionTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -21,12 +19,12 @@ import {
   type RestoredCronContinuation,
 } from "../agent-turn/agent-handler-helpers.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import { evaluateAgentSessionReuse } from "./agent-session-patch.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-export function prepareAgentSession(params: {
+type PrepareAgentSessionParams = {
   cfg: OpenClawConfig;
   requestedSessionKey: string;
   requestedSessionId?: string;
@@ -39,7 +37,11 @@ export function prepareAgentSession(params: {
   effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   preAttachmentSession?: { canonicalKey: string; sessionId?: string };
   respond: GatewayRequestHandlerOptions["respond"];
-}) {
+  assertCurrent?: () => void;
+};
+
+export async function prepareAgentSession(params: PrepareAgentSessionParams) {
+  params.assertCurrent?.();
   const requestedSessionAgent = resolveRequestedSessionAgentId(
     params.cfg,
     params.requestedSessionKey,
@@ -50,10 +52,23 @@ export function prepareAgentSession(params: {
     return undefined;
   }
   const requestedAgentId = requestedSessionAgent.agentId;
-  const { cfg, storePath, entry, canonicalKey, legacyKey, storeKeys } = loadSessionEntry(
-    params.requestedSessionKey,
-    { agentId: requestedAgentId, clone: false },
-  );
+  const selected = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: params.cfg,
+    key: params.requestedSessionKey,
+    agentId: requestedAgentId,
+    excludeInternalEffects: true,
+    assertActive: params.assertCurrent,
+  });
+  return prepareAdmittedAgentSession(params, selected, requestedAgentId);
+}
+
+async function prepareAdmittedAgentSession(
+  params: PrepareAgentSessionParams,
+  selected: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
+  requestedAgentId: string,
+) {
+  const { cfg, storePath, entry, canonicalKey, legacyKey, storeKeys } = selected;
+  const canonicalSessionAgentId = parseAgentSessionKey(canonicalKey)?.agentId ?? requestedAgentId;
   if (params.expectedExistingSessionId && entry?.sessionId !== params.expectedExistingSessionId) {
     params.respond(
       false,
@@ -144,15 +159,15 @@ export function prepareAgentSession(params: {
     );
     return undefined;
   }
-  if (
-    respondDeletedAgentSession({
-      cfg,
-      canonicalKey,
-      entry,
-      acpMetadataSessionKey: legacyKey,
-      respond: params.respond,
-    })
-  ) {
+  const deleted = respondDeletedAgentSession({
+    cfg,
+    canonicalKey,
+    entry,
+    acpMetadataSessionKey: legacyKey,
+    respond: params.respond,
+    assertCurrent: params.assertCurrent,
+  });
+  if (deleted instanceof Promise ? await deleted : deleted) {
     return undefined;
   }
   const archivedSessionError = resolveAgentSessionWorkStartError(canonicalKey, entry);
@@ -161,7 +176,6 @@ export function prepareAgentSession(params: {
     return undefined;
   }
 
-  const canonicalSessionAgentId = parseAgentSessionKey(canonicalKey)?.agentId ?? requestedAgentId;
   const now = Date.now();
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg: cfg.session,
@@ -171,30 +185,11 @@ export function prepareAgentSession(params: {
       channel: sessionDeliveryChannel(entry) ?? params.recipientChannel,
     }),
   });
-  const visibleRequest =
-    effectiveBootstrapContextRunKind !== "cron" &&
-    effectiveBootstrapContextRunKind !== "heartbeat" &&
-    !params.request.internalEvents?.length;
-  const failedSessionTranscriptMissing = (candidateEntry: SessionEntry | undefined): boolean => {
-    if (candidateEntry?.status !== "failed" || !candidateEntry.sessionId?.trim()) {
-      return false;
-    }
-    try {
-      return !hasSessionTranscriptEventsSync({
-        agentId: canonicalSessionAgentId,
-        sessionId: candidateEntry.sessionId,
-        sessionKey: canonicalKey,
-        storePath,
-        sessionEntry: candidateEntry,
-      });
-    } catch {
-      return true;
-    }
-  };
-  const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: canonicalSessionAgentId });
   const isSystemGatewayRun =
     effectiveBootstrapContextRunKind === "cron" || effectiveBootstrapContextRunKind === "heartbeat";
-  const reuse = evaluateAgentSessionReuse({
+  const visibleRequest = !isSystemGatewayRun && !params.request.internalEvents?.length;
+  const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: canonicalSessionAgentId });
+  const reuse = await evaluateAgentSessionReuse({
     freshEntry: entry,
     cfg,
     sessionAgentId: canonicalSessionAgentId,
@@ -207,8 +202,8 @@ export function prepareAgentSession(params: {
     requestedSessionId: params.requestedSessionId,
     isSystemGatewayRun,
     visibleRequest,
-    failedSessionTranscriptMissing,
   });
+  params.assertCurrent?.();
   const sessionId = reuse.sessionId ?? randomUUID();
   return {
     cfg,
@@ -232,6 +227,5 @@ export function prepareAgentSession(params: {
     sessionPersistedBeforeGatewayAdmission: entry !== undefined,
     effectiveBootstrapContextRunKind,
     restoredCronContinuationIdentity,
-    failedSessionTranscriptMissing,
   };
 }

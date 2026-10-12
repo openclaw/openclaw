@@ -5,6 +5,7 @@ import { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { AssistantDock, type AssistantDockOwner } from "../app/assistant-dock.ts";
+import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { PLUGIN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import { takeSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
@@ -15,6 +16,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import { type ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
@@ -24,7 +26,12 @@ function createRosterHost(request: GatewayBrowserClient["request"]) {
   const { gateway } = createGatewayHarness(client);
   const agents = createAgentCapability(gateway);
   const sessions = createTestSessionCapability(gateway);
-  const context = { gateway, agents, sessions } as unknown as ApplicationContext;
+  const context = {
+    gateway,
+    agents,
+    sessions,
+    config: createApplicationConfigCapability({ resourceBasePath: "" }),
+  } as unknown as ApplicationContext;
   const abort = new AbortController();
   const owner = {
     client,
@@ -53,6 +60,38 @@ function createRosterHost(request: GatewayBrowserClient["request"]) {
 }
 
 describe("native UI roster refresh", () => {
+  it("forwards dock conversation creation through the host to the Gateway", async () => {
+    const key = "agent:main:board-agent";
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.create") {
+        return { key, entry: { sessionId: "board-agent", createdSurface: "plugin-dock" } };
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 1);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = createTestGatewayClient(request);
+    const fixture = createRosterHost(client.request.bind(client));
+    onTestFinished(fixture.dispose);
+    await expect(
+      fixture.host.sessions.create({
+        agentId: "main",
+        displayName: "Board agent",
+        surface: "plugin-dock",
+      }),
+    ).resolves.toBe(key);
+    expect(request).toHaveBeenCalledWith("sessions.create", {
+      agentId: "main",
+      displayName: "Board agent",
+      surface: "plugin-dock",
+    });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({ excludeDock: true }),
+    );
+  });
+
   it("observes independent session windows without replacing or exposing the application roster", async () => {
     const primary = sessionsResult(
       [{ key: "agent:main:current", kind: "direct", updatedAt: 1 }],
@@ -109,6 +148,7 @@ describe("native UI roster refresh", () => {
         source: "chat-pane",
         includeGlobal: true,
         includeUnknown: true,
+        excludeDock: true,
         configuredAgentsOnly: false,
         limit: 1,
         archived: "all",
@@ -396,7 +436,7 @@ describe("native UI locale subscription", () => {
 });
 
 describe("native UI page navigation", () => {
-  it("pins only registered destinations once through sidebar preferences and retires pin handles", () => {
+  it("pins and unpins through saved sidebar preferences once and retires the handles", () => {
     const fixture = createRosterHost(vi.fn());
     onTestFinished(fixture.dispose);
     let sidebarEntries = ["route:usage", "session:agent:main:existing"];
@@ -412,7 +452,12 @@ describe("native UI page navigation", () => {
       },
     });
     const view = new AbortController();
-    const pin = scopeControlUiHost(fixture.host, view.signal).ui.pinNavigation;
+    const {
+      pinNavigation: pin,
+      unpinNavigation: unpin,
+      isNavigationPinned: isPinned,
+    } = scopeControlUiHost(fixture.host, view.signal).ui;
+    expect(isPinned("board")).toBe(false);
     pin("board");
     expect(update).not.toHaveBeenCalled();
     const unregister = fixture.host.ui.registerNavigation({
@@ -427,14 +472,25 @@ describe("native UI page navigation", () => {
     expect(update).toHaveBeenCalledExactlyOnceWith({
       sidebarEntries: ["route:usage", "session:agent:main:existing", "plugin:review/board"],
     });
+    expect(isPinned("board")).toBe(true);
+    expect(isPinned("foreign/board")).toBe(false);
     unregister();
-    sidebarEntries = ["route:usage"];
+    unpin("foreign/board");
+    unpin("board");
+    unpin("board");
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(sidebarEntries).toEqual(["route:usage", "session:agent:main:existing"]);
+    expect(isPinned("board")).toBe(false);
     pin("board");
-    expect(update).toHaveBeenCalledOnce();
+    expect(update).toHaveBeenCalledTimes(2);
     view.abort();
     expect(() => pin("board")).toThrow("view has ended");
+    expect(() => unpin("board")).toThrow("view has ended");
+    expect(() => isPinned("board")).toThrow("view has ended");
     fixture.dispose();
     expect(() => fixture.host.ui.pinNavigation("board")).toThrow("activation has ended");
+    expect(() => fixture.host.ui.unpinNavigation("board")).toThrow("activation has ended");
+    expect(() => fixture.host.ui.isNavigationPinned("board")).toThrow("activation has ended");
   });
 
   it("opens a queried global session with its owner before changing the selected key", async () => {
@@ -663,6 +719,7 @@ describe("native UI conversation dock", () => {
     const { gateway } = createGatewayHarness(client);
     const context = {
       assistantDock: dock,
+      config: createApplicationConfigCapability({ resourceBasePath: "" }),
       gateway,
       sessions: { subscribe },
       agents: { subscribe },

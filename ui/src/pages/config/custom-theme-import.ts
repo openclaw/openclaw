@@ -21,14 +21,11 @@ type TweakcnThemeResolution = {
 function normalizeThemeIdFromPath(pathname: string): string | null {
   const segments = pathname.split("/").filter(Boolean);
   const themeId = segments.at(-1);
-  if (!themeId) {
-    return null;
-  }
-  if (segments.length === 2 && segments[0] === "themes") {
-    requireThemeId(themeId);
-    return themeId;
-  }
-  if (segments.length === 3 && segments[0] === "r" && segments[1] === "themes") {
+  if (
+    themeId &&
+    ((segments.length === 2 && segments[0] === "themes") ||
+      (segments.length === 3 && segments[0] === "r" && segments[1] === "themes"))
+  ) {
     requireThemeId(themeId);
     return themeId;
   }

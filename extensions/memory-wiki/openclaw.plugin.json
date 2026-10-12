@@ -44,7 +44,7 @@
     },
     "obsidian.useOfficialCli": {
       "label": "Use Obsidian CLI",
-      "help": "Probe and use the official Obsidian CLI when available."
+      "help": "Check and use the official Obsidian CLI when available."
     },
     "bridge.enabled": {
       "label": "Enable Bridge Mode",

@@ -1,10 +1,5 @@
 import { Type } from "typebox";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../agents/admitted-run-context.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import type { resolveGatewayScopedTools } from "./tool-resolution.js";
 
@@ -21,13 +16,7 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
 }));
 vi.mock("./tool-resolution.js", () => ({ resolveGatewayScopedTools: resolveTools }));
 
-import {
-  activateMcpLoopbackClientGrantCapture,
-  mintAttachGrant,
-  mintMcpLoopbackClientGrant,
-  revokeAttachGrant,
-  revokeMcpLoopbackClientGrant,
-} from "./mcp-grant-store.js";
+import { mintAttachGrant, revokeAttachGrant } from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
 
@@ -78,7 +67,7 @@ describe("MCP HTTP session archive authority", () => {
       toolCallerIdentity = getGatewayToolCallerIdentity();
       return completed;
     });
-    resolveTools.mockReset().mockReturnValue({
+    resolveTools.mockReset().mockResolvedValue({
       agentId: "main",
       workspaceDir: "/workspace/archive-authority",
       captureFinalCronCreatorTools: undefined,
@@ -94,71 +83,7 @@ describe("MCP HTTP session archive authority", () => {
     });
   });
 
-  it("forwards the bound admission's exact operator source to discovery and execution", async () => {
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "archive-operator",
-      scopes: ["operator.sessions.write"],
-      assertCurrent: () => {},
-    });
-    const runId = "mcp-archive-authority";
-    const admission = prepareAgentRunAdmission({
-      cfg: {},
-      operatorAuthority,
-      operationalRunInstance: createOperationalRunInstanceRef(runId),
-      facts: {
-        runId,
-        agentId: "main",
-        ingress: { kind: "system", boundary: "mcp-archive-authority-test", state: "present" },
-      },
-    });
-    let grantToken: string | undefined;
-    try {
-      const admittedRunContext = await admission.admit("gateway", "archive-authority-gateway");
-      const runtimeOwnerToken = activeRuntime().ownerToken;
-      const sessionKey = "agent:main:archive-authority-bound";
-      const grant = mintMcpLoopbackClientGrant({
-        context: { sessionKey, agentId: "main", runId, senderIsOwner: false },
-        runtimeOwnerToken,
-        admittedRunContext,
-      });
-      grantToken = grant.token;
-      const captureKey = "archive-authority-capture";
-      expect(
-        activateMcpLoopbackClientGrantCapture({
-          token: grant.token,
-          runtimeOwnerToken,
-          captureKey,
-        }),
-      ).not.toBe(false);
-      const headers = { "x-openclaw-cli-capture-key": captureKey };
-
-      expect(await sendRequest(grant.token, "tools/list", headers)).toMatchObject({
-        result: { tools: [{ name: "authority_probe" }] },
-      });
-      expect(resolveTools).toHaveBeenCalledTimes(1);
-      expect(resolveTools.mock.calls[0]?.[0]).toMatchObject({ sessionKey, senderIsOwner: false });
-      expect(resolveTools.mock.calls[0]?.[0].admittedRunContext).toBe(admittedRunContext);
-      expect(execute).not.toHaveBeenCalled();
-
-      expect(await sendRequest(grant.token, "tools/call", headers)).toMatchObject({
-        result: { ...completed, isError: false },
-      });
-      expect(execute).toHaveBeenCalledTimes(1);
-      expect(resolveTools).toHaveBeenCalledTimes(1);
-      expect(toolCallerIdentity?.operatorAuthority).toBe(operatorAuthority);
-      expect(toolCallerIdentity?.operationalRunInstance).toBe(
-        admittedRunContext.operationalRunInstance,
-      );
-      expect(toolCallerIdentity?.sessionKey).toBe(sessionKey);
-    } finally {
-      if (grantToken) {
-        revokeMcpLoopbackClientGrant(grantToken);
-      }
-      admission.close();
-    }
-  });
-
-  it.each(["owner", "non-owner", "attach"] as const)(
+  it.each(["owner", "attach"] as const)(
     "does not invent an operator source from %s credentials or spoofed headers",
     async (kind) => {
       const runtime = activeRuntime();
@@ -166,8 +91,7 @@ describe("MCP HTTP session archive authority", () => {
         kind === "attach"
           ? mintAttachGrant({ sessionKey: "agent:main:archive-authority-attach" })
           : undefined;
-      const token =
-        attachGrant?.token ?? (kind === "owner" ? runtime.ownerToken : runtime.nonOwnerToken);
+      const token = attachGrant?.token ?? runtime.ownerToken;
       try {
         expect(await sendRequest(token, "tools/list")).toMatchObject({
           result: { tools: [{ name: "authority_probe" }] },

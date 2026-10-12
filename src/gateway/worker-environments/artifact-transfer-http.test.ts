@@ -9,14 +9,20 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "../auth-rate-limit.js";
-import { createArtifactTransferHttpCallback } from "./artifact-transfer-http.js";
+import {
+  classifyWorkerBootstrapArtifactTransferPath,
+  WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH,
+} from "../gateway-http-route-contracts.js";
+import {
+  createArtifactTransferHttpCallback,
+  handleArtifactTransferHttpRequest,
+} from "./artifact-transfer-http.js";
 import {
   ArtifactTransferBusyError,
   createArtifactTransferService,
   type ArtifactTransferService,
 } from "./artifact-transfer-service.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap-timeouts.js";
-import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-bootstrap-artifact-transfer-http.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 type ResponseOptions = { writeError?: Error; afterWrite?: () => void };
@@ -114,7 +120,9 @@ describe("artifact transfer response settlement", () => {
       req.headers.range = options.range;
     }
     try {
-      await handleWorkerBootstrapArtifactTransferHttpRequest({
+      await handleArtifactTransferHttpRequest({
+        classifyPath: classifyWorkerBootstrapArtifactTransferPath,
+        routePrefix: `${WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH}/artifacts/`,
         req,
         res,
         clientIp: "127.0.0.1",

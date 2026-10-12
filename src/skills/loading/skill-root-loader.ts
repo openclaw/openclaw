@@ -1,9 +1,19 @@
+import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isMissingPathError } from "../../infra/errors.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shouldRejectHardlinkedPluginFiles } from "../../plugins/hardlink-policy.js";
+import { getSkillRootDiscoveryEpoch } from "../runtime/refresh-state.js";
+import {
+  isSkillDiscoveryDependencyCurrent,
+  observeSkillDiscoveryPath,
+  readSkillRootDiscoveryToken,
+  type SkillDiscoveryDependency,
+} from "../runtime/refresh-watch-registry.js";
 import type { SkillEntry } from "../types.js";
 import {
   loadSingleSkillDirectory,
@@ -11,9 +21,9 @@ import {
   type LocalSkillLoadDiagnostic,
 } from "./local-loader.js";
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
+import { SKILL_SOURCE_ORIGIN_RELATIVE_PATH } from "./skill-entry-metadata-path.js";
 import { createSkillEntry } from "./skill-entry-metadata.js";
 import { compactSkillPath } from "./skill-paths.js";
-import { mergeSkillRecords, type SkillCollision } from "./skill-precedence.js";
 import {
   canonicalSkillDirForSource,
   discoverPluginSkills,
@@ -36,6 +46,107 @@ type LoadedSkillRecord = Pick<LoadedLocalSkill, "skill" | "frontmatter"> & {
   syncSourceDir?: string;
   syncDirName?: string;
 };
+
+const skillRootRecordsCache = new Map<
+  string,
+  { key: string; dependencies: SkillDiscoveryDependency[]; records: LoadedSkillRecord[] }
+>();
+
+const MAX_DISCOVERY_LINK_HOPS = 40;
+
+// Resolve a path from the filesystem root, recording every link it passes through.
+function resolveRecordingLinks(
+  input: string,
+  links: Set<string>,
+  budget = { hops: MAX_DISCOVERY_LINK_HOPS },
+): string | undefined {
+  const absolute = path.resolve(input);
+  let current = path.parse(absolute).root;
+  const parts = absolute.slice(current.length).split(path.sep).filter(Boolean);
+  for (const [index, part] of parts.entries()) {
+    const next = path.join(current, part);
+    try {
+      if (!fs.lstatSync(next).isSymbolicLink()) {
+        current = next;
+        continue;
+      }
+      budget.hops -= 1;
+      links.add(next);
+      const resolved =
+        budget.hops >= 0
+          ? resolveRecordingLinks(
+              path.resolve(path.dirname(next), fs.readlinkSync(next)),
+              links,
+              budget,
+            )
+          : undefined;
+      if (!resolved) {
+        return undefined;
+      }
+      current = resolved;
+    } catch (error) {
+      // A missing tail is observed through the watcher of its nearest ancestor.
+      return isMissingPathError(error) ? path.join(current, ...parts.slice(index)) : undefined;
+    }
+  }
+  return current;
+}
+
+/**
+ * Watchers that observe every link discovery followed and every directory it
+ * inspected. Undefined when any of them is unobserved, so the scan is not reused.
+ */
+function collectDiscoveryDependencies(
+  inspectedPaths: readonly string[],
+  linkOnlyPaths: readonly string[],
+): SkillDiscoveryDependency[] | undefined {
+  const links = new Set<string>();
+  const observedPaths: string[] = [];
+  for (const entry of inspectedPaths) {
+    const realPath = resolveRecordingLinks(entry, links);
+    if (!realPath) {
+      return undefined;
+    }
+    observedPaths.push(realPath);
+  }
+  // Rejected candidates are never read; only links that could re-admit them matter.
+  for (const entry of linkOnlyPaths) {
+    if (!resolveRecordingLinks(entry, links)) {
+      return undefined;
+    }
+  }
+  const dependencies = new Map<string, SkillDiscoveryDependency>();
+  for (const observedPath of [...links, ...observedPaths]) {
+    const dependency = observeSkillDiscoveryPath(observedPath);
+    if (!dependency) {
+      return undefined;
+    }
+    dependencies.set(dependency.target, dependency);
+  }
+  return [...dependencies.values()];
+}
+
+// The watcher classifies writes by path; an aliased discovery file (symlink or
+// extra hardlink) can change through a name it treats as a supporting file.
+function hasAliasedDiscoveryFile(skillDir: string): boolean {
+  for (const relative of ["SKILL.md", ".openclaw", SKILL_SOURCE_ORIGIN_RELATIVE_PATH]) {
+    try {
+      const stat = fs.lstatSync(path.join(skillDir, relative));
+      if (stat.isSymbolicLink() || (stat.isFile() && stat.nlink > 1)) {
+        return true;
+      }
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function clearSkillRootRecordsCache(): void {
+  skillRootRecordsCache.clear();
+}
 
 export function warnInvalidSkill(source: string, diagnostic: LocalSkillLoadDiagnostic): void {
   skillsLogger.warn("Skipping invalid skill.", {
@@ -129,13 +240,71 @@ export function loadSkillRootRecords(params: {
         resolveSkillTelemetrySourceValue(params.source) === "bundled" ? "bundled" : "workspace",
       rootDir: params.dir,
     });
+  const allowedSymlinkTargetRealPaths = resolveAllowedSkillSymlinkTargetRealPaths(params.config);
+  // The watcher owns freshness: reuse a root only while its planned targets and every
+  // watcher its discovery depended on stay verified and unchanged. Audit and
+  // diagnostic callers always need a live scan.
+  const token =
+    params.mode === "audit" || params.onDiagnostic
+      ? undefined
+      : readSkillRootDiscoveryToken(params.dir);
+  const cacheSlot = JSON.stringify([discoveryRoot.path, params.source]);
+  const cacheKey =
+    token === undefined
+      ? undefined
+      : JSON.stringify([
+          discoveryRoot.path,
+          params.source,
+          discoveryRoot.worktree,
+          limits,
+          allowedSymlinkTargetRealPaths,
+          rejectHardlinks,
+          getSkillRootDiscoveryEpoch(),
+          token,
+        ]);
+  const cached = skillRootRecordsCache.get(cacheSlot);
+  if (
+    cacheKey !== undefined &&
+    cached?.key === cacheKey &&
+    cached.dependencies.every(isSkillDiscoveryDependencyCurrent)
+  ) {
+    return cached.records.slice();
+  }
+  let unresolved = false;
+  const linkOnlyPaths: string[] = [];
+  const inspectedDirs = new Set<string>([discoveryRoot.path]);
   const discovered = discoverSkillCandidates({
     dir: params.dir,
     source: params.source,
     limits,
-    allowedSymlinkTargetRealPaths: resolveAllowedSkillSymlinkTargetRealPaths(params.config),
-    onDiagnostic: params.onDiagnostic,
+    allowedSymlinkTargetRealPaths,
+    onDiagnostic: (diagnostic) => {
+      // A dangling link's destination may appear later without any observed change.
+      unresolved ||= diagnostic.kind === "read";
+      if (diagnostic.kind === "invalid") {
+        linkOnlyPaths.push(diagnostic.path);
+      }
+      params.onDiagnostic?.(diagnostic);
+    },
+    onDirectory: (dir) => inspectedDirs.add(path.resolve(dir)),
+    onSymlink: (link) => linkOnlyPaths.push(link),
   });
+  // Rejected and non-directory links count too: retargeting one can admit a skill.
+  const dependencies =
+    cacheKey === undefined ||
+    unresolved ||
+    [...discovered.candidates, discovered.configuredRootCandidate].some(
+      (candidate) => candidate && hasAliasedDiscoveryFile(candidate.skillDir),
+    )
+      ? undefined
+      : collectDiscoveryDependencies([...inspectedDirs], linkOnlyPaths);
+  const remember = (records: LoadedSkillRecord[]) => {
+    if (cacheKey !== undefined && dependencies) {
+      skillRootRecordsCache.set(cacheSlot, { key: cacheKey, dependencies, records });
+      pruneMapToMaxSize(skillRootRecordsCache, 256);
+    }
+    return records.slice();
+  };
   const maxSkillsLoadedPerSource = Math.max(0, limits.maxSkillsLoadedPerSource);
   const loadCandidate = (candidate: CandidateSkillDir) => {
     const record = loadContainedSkillRecord({
@@ -158,7 +327,7 @@ export function loadSkillRootRecords(params: {
   if (discovered.configuredRootCandidate) {
     const rootRecord = loadCandidate(discovered.configuredRootCandidate);
     if (rootRecord) {
-      return [rootRecord];
+      return remember([rootRecord]);
     }
   }
 
@@ -176,7 +345,7 @@ export function loadSkillRootRecords(params: {
       loadedSkills.push(record);
     }
   }
-  return loadedSkills;
+  return remember(loadedSkills);
 }
 
 function loadGeneratedPluginSkillRecords(params: {
@@ -215,7 +384,6 @@ function loadGeneratedPluginSkillRecords(params: {
 export function loadWorkspaceSkillSourceEntries(
   plan: WorkspaceSkillSourcePlan,
   config?: OpenClawConfig,
-  collisions?: SkillCollision[],
 ): WorkspaceSkillSources["entries"] {
   const grouped = new Map<string, Array<LoadedSkillRecord & { sourceOrder?: number }>>();
   for (const root of plan.roots) {
@@ -250,25 +418,16 @@ export function loadWorkspaceSkillSourceEntries(
         left.skill.name.localeCompare(right.skill.name, "en") ||
         left.skill.source.localeCompare(right.skill.source, "en"),
     );
-  return mergeSkillRecords(
-    ["extra", "bundled", "workshop", "managed", "personal", "workspace"].flatMap(
-      (tier) => grouped.get(tier) ?? [],
-    ),
-    JSON.stringify(["sources", plan.workspaceDir]),
-    collisions,
-  ).map(createSkillEntry);
+  return ["extra", "bundled", "workshop", "managed", "personal", "workspace"]
+    .flatMap((tier) => grouped.get(tier) ?? [])
+    .map(createSkillEntry);
 }
 
 export function loadExecutionSkillEntries(
   executionWorkspaceDir: string,
   config?: OpenClawConfig,
-  collisions?: SkillCollision[],
 ): SkillEntry[] {
-  return mergeSkillRecords(
-    resolveWorkspaceSkillDirectories(executionWorkspaceDir).flatMap((root) =>
-      loadSkillRootRecords({ ...root, config }),
-    ),
-    JSON.stringify(["execution", executionWorkspaceDir]),
-    collisions,
-  ).map(createSkillEntry);
+  return resolveWorkspaceSkillDirectories(executionWorkspaceDir)
+    .flatMap((root) => loadSkillRootRecords({ ...root, config }))
+    .map(createSkillEntry);
 }

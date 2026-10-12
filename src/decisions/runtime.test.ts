@@ -1,3 +1,6 @@
+import { AsyncResource } from "node:async_hooks";
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
@@ -13,8 +16,17 @@ import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-run
 import * as currentPluginMetadata from "../plugins/current-plugin-metadata-state.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import {
+  bindPluginRegistryResourceOwner,
+  markPluginRegistryActive,
+  markPluginRegistryRetired,
+  revokePluginRecord,
+} from "../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  withPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as diagnostics from "./diagnostics.js";
 import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
@@ -28,6 +40,67 @@ afterEach(() => {
 });
 
 describe("registered decision capability", () => {
+  it("uses the adopted owner from a collected callback scope without reviving a retired instance", async () => {
+    class RetiredRegistry {
+      readonly fixtureLabel = "RetiredRegistry";
+    }
+    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+    const host = registered(evaluate);
+    const instance = getPluginInstance(host.record)!;
+    setRuntimeConfigSnapshot(config);
+    const current = { ...host.registry };
+    const resource = (() => {
+      const previous = Object.assign(new RetiredRegistry(), host.registry);
+      markPluginRegistryActive(previous);
+      const retained = instance.run(() => new AsyncResource("retired-decision-scope"));
+      markPluginRegistryActive(current);
+      markPluginRegistryRetired(previous);
+      return retained;
+    })();
+    try {
+      await setImmediate();
+      expect(queryObjects(RetiredRegistry)).toBe(0);
+      const invoke = () =>
+        resource.runInAsyncScope(() => host.api.runtime.decisions.evaluate(batch, options()));
+      await expect(invoke()).resolves.toMatchObject({ status: "ok" });
+      expect(evaluate).toHaveBeenCalledOnce();
+      revokePluginRecord(current, host.record);
+      await expect(invoke()).rejects.toThrow("runtime is no longer active");
+      expect(evaluate).toHaveBeenCalledOnce();
+    } finally {
+      resource.emitDestroy();
+      markPluginRegistryRetired(current);
+    }
+  });
+
+  it("preserves a live prepared decision view and propagates caller scope getter failures", async () => {
+    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+    const host = registered(evaluate);
+    setRuntimeConfigSnapshot(config);
+    const prepared = bindPluginRegistryResourceOwner(
+      { ...host.registry, decisionProviders: [] },
+      host.registry,
+    );
+    await expect(
+      withPluginRuntimeRegistryScope(prepared, () =>
+        host.api.runtime.decisions.evaluate(batch, options()),
+      ),
+    ).resolves.toEqual({ status: "unavailable", reason: "not-configured" });
+    const failure = new Error("caller scope getter failed");
+    await expect(
+      withPluginRuntimeGatewayRequestScope(
+        {
+          isWebchatConnect: () => false,
+          get pluginRegistry(): never {
+            throw failure;
+          },
+        },
+        () => host.api.runtime.decisions.evaluate(batch, options()),
+      ),
+    ).rejects.toBe(failure);
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+
   it("keeps ordinary input rejection recoverable without retries or circuit poisoning", async () => {
     const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => ({
       status: "unavailable",

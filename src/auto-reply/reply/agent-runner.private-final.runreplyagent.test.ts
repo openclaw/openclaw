@@ -25,14 +25,14 @@ import {
   createTestTemplateContext,
 } from "./agent-runner.test-fixtures.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
-import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 // Hoist mocks before static dependencies, but defer the runner to avoid incomplete cyclic exports.
 await vi.hoisted(async () => {
   await import("./agent-runner.misc.runreplyagent.test-support.js");
 });
-const { runReplyAgent } = await import("./agent-runner.js");
+const { runReplyAgent } = await import("./agent-runner-run.js");
 
 setupAgentRunnerTestHooks();
 
@@ -89,7 +89,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     pendingContinuation?: boolean;
     onDeliberateSilentTerminalReply?: () => void;
     onObservedReplyDelivery?: () => Promise<void> | void;
-    replyOperation?: ReturnType<typeof createReplyOperation>;
+    onReplyOperationOwned?: (operation: ReplyOperation) => boolean | void;
   }) {
     const tmp = tempDirs.make("openclaw-stranded-");
     const storePath = path.join(tmp, "sessions.json");
@@ -204,8 +204,8 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
           isHeartbeat: params.isHeartbeat,
           onDeliberateSilentTerminalReply: params.onDeliberateSilentTerminalReply,
           onObservedReplyDelivery: params.onObservedReplyDelivery,
+          onReplyOperationOwned: params.onReplyOperationOwned,
         },
-        replyOperation: params.replyOperation,
       });
       const terminalEvent = agentEvents.find(
         (event) =>
@@ -471,11 +471,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
 
   it("schedules the stranded-reply retry drain only after the active reply operation clears", async () => {
     const sessionKey = "stranded";
-    const replyOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => boolean>(() => true);
     vi.mocked(enqueueFollowupRun).mockReturnValueOnce(true);
 
     vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
@@ -483,7 +479,9 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
     });
 
-    await runPrivateFinalCase({ replyOperation });
+    await runPrivateFinalCase({ onReplyOperationOwned });
+    const replyOperation = onReplyOperationOwned.mock.calls[0]?.[0];
+    assert(replyOperation);
 
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(replyRunRegistry.get(sessionKey)).toBe(replyOperation);

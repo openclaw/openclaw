@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { assertAgentSessionStoreDeletionSafe } from "./agent-delete-databases.js";
 import { findOverlappingWorkspaceAgentIds, isSharedAuthStoreOwner } from "./agent-delete-safety.js";
@@ -29,10 +33,61 @@ describe("shared session store deletion safety", () => {
           openOpenClawAgentDatabase({ agentId: "alpha" });
         }
 
-        expect(() => assertAgentSessionStoreDeletionSafe(cfg, "alpha")).not.toThrow();
+        await expect(assertAgentSessionStoreDeletionSafe(cfg, "alpha")).resolves.toBeUndefined();
       });
     },
   );
+
+  it.each([false, true])(
+    "rechecks foreign ownership with an absent registry: %s",
+    async (absentRegistry) => {
+      await withStateDirEnv("openclaw-agent-delete-owner-commit-", async ({ stateDir }) => {
+        const sharedPath = path.join(stateDir, "shared.sqlite");
+        const cfg: OpenClawConfig = {
+          agents: { ownership: "explicit", entries: { alpha: {}, ops: {} } },
+          session: { store: sharedPath },
+        };
+        openOpenClawAgentDatabase({ agentId: "ops", path: sharedPath });
+        const options = absentRegistry ? { path: path.join(stateDir, "absent-state.sqlite") } : {};
+        await expect(
+          assertAgentSessionStoreDeletionSafe(cfg, "alpha", options),
+        ).resolves.toBeUndefined();
+
+        const foreign = new DatabaseSync(sharedPath);
+        try {
+          foreign
+            .prepare("UPDATE schema_meta SET agent_id = ? WHERE meta_key = 'primary'")
+            .run("alpha");
+        } finally {
+          foreign.close();
+        }
+
+        await expect(assertAgentSessionStoreDeletionSafe(cfg, "alpha", options)).rejects.toThrow(
+          'Agent "alpha" owns the session database still used by agent "ops"',
+        );
+        if (options.path) {
+          expect(fs.existsSync(options.path)).toBe(false);
+        }
+      });
+    },
+  );
+
+  it("refuses a replaced session store after safety admission yields", async () => {
+    await withStateDirEnv("openclaw-agent-delete-owner-replacement-", async ({ stateDir }) => {
+      const sharedPath = path.join(stateDir, "shared.sqlite");
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { alpha: {}, ops: {} } },
+        session: { store: sharedPath },
+      };
+      openOpenClawAgentDatabase({ agentId: "ops", path: sharedPath });
+      await closeOpenClawAgentDatabasesAsync();
+      const pending = assertAgentSessionStoreDeletionSafe(cfg, "alpha");
+      const rejected = expect(pending).rejects.toThrow("changed during deletion planning");
+      fs.renameSync(sharedPath, `${sharedPath}.captured`);
+      fs.writeFileSync(sharedPath, "replacement fixture");
+      await rejected;
+    });
+  });
 });
 
 describe("shared auth store deletion safety", () => {

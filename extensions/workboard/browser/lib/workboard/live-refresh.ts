@@ -1,7 +1,12 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { normalizeWorkboardChange } from "./change-payload.ts";
 import { refreshWorkboard, shouldDeferWorkboardLiveRefresh } from "./loading.ts";
-import { getWorkboardRuntime, getWorkboardState, type WorkboardHost } from "./runtime.ts";
+import {
+  getWorkboardRuntime,
+  getWorkboardState,
+  hasCurrentWorkboardCards,
+  type WorkboardHost,
+  type WorkboardClientContext,
+} from "./runtime.ts";
 
 const WORKBOARD_LIVE_REFRESH_RETRY_MS = 1000;
 
@@ -17,16 +22,14 @@ function clearRetry(host: WorkboardHost): void {
   }
 }
 
-function scheduleRetry(host: WorkboardHost, generation: number): void {
+function scheduleRetry(host: WorkboardHost): void {
   const runtime = getWorkboardRuntime(host);
   if (runtime.liveRefreshRetryTimer) {
     return;
   }
   runtime.liveRefreshRetryTimer = setTimeout(() => {
     delete runtime.liveRefreshRetryTimer;
-    if ((runtime.liveRefreshGeneration ?? 0) === generation) {
-      void runPendingRefresh(host);
-    }
+    void runPendingRefresh(host);
   }, WORKBOARD_LIVE_REFRESH_RETRY_MS);
 }
 
@@ -35,9 +38,8 @@ async function runPendingRefresh(host: WorkboardHost): Promise<void> {
   if (runtime.liveRefreshPromise) {
     return await runtime.liveRefreshPromise;
   }
-  const generation = runtime.liveRefreshGeneration ?? 0;
   const promise = (async () => {
-    while (runtime.liveRefreshPending && (runtime.liveRefreshGeneration ?? 0) === generation) {
+    while (runtime.liveRefreshPending) {
       const entry = runtime.liveRefreshEntry;
       const state = getWorkboardState(host);
       if (
@@ -58,12 +60,12 @@ async function runPendingRefresh(host: WorkboardHost): Promise<void> {
           requestUpdate: entry.requestUpdate,
           source: "live",
         }));
-      if ((runtime.liveRefreshGeneration ?? 0) !== generation) {
+      if (!runtime.liveRefreshEntry) {
         return;
       }
       if (!refreshed) {
         runtime.liveRefreshPending = true;
-        scheduleRetry(host, generation);
+        scheduleRetry(host);
         return;
       }
       if (runtime.liveChangeEpoch === targetEpoch) {
@@ -95,13 +97,12 @@ async function runPendingRefresh(host: WorkboardHost): Promise<void> {
   }
 }
 
-export function configureWorkboardLiveRefresh(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
-  refresh?: () => Promise<boolean>;
-  shouldDefer?: () => boolean;
-}): boolean {
+export function configureWorkboardLiveRefresh(
+  params: WorkboardClientContext & {
+    refresh?: () => Promise<boolean>;
+    shouldDefer?: () => boolean;
+  },
+): boolean {
   const runtime = getWorkboardRuntime(params.host);
   const requiresCanonicalReload = Boolean(
     params.client && runtime.liveRefreshEntry?.client !== params.client,
@@ -124,6 +125,9 @@ export function handleWorkboardChanged(host: WorkboardHost, payload: unknown): b
     return false;
   }
   const runtime = getWorkboardRuntime(host);
+  if (!runtime.liveRefreshEntry?.refresh && hasCurrentWorkboardCards(host, payload)) {
+    return false;
+  }
   if (runtime.liveChangeEpoch !== change.epoch) {
     runtime.liveChangeEpoch = change.epoch;
     runtime.liveHighestSeenRevision = change.revision;

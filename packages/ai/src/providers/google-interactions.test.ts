@@ -73,6 +73,57 @@ describe("google-interactions provider", () => {
     messages: [{ role: "user", content: "Hello", timestamp: 0 }],
   };
 
+  it("exposes cumulative tool input before the provider completes the call", async ({
+    onTestFinished,
+  }) => {
+    const gate = createDeferred();
+    onTestFinished(() => gate.resolve());
+    const encoder = new TextEncoder();
+    mockSse(
+      new ReadableStream<Uint8Array>({
+        async start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              [
+                'data: {"event_type":"step.start","step":{"type":"function_call","id":"progress","name":"write","arguments":{}}}\n\n',
+                'data: {"event_type":"step.delta","delta":{"type":"arguments_delta","arguments":"{\\"content\\":\\"line"}}\n\n',
+              ].join(""),
+            ),
+          );
+          await gate.promise;
+          controller.enqueue(
+            encoder.encode(
+              [
+                'data: {"event_type":"step.delta","delta":{"type":"arguments_delta","arguments":" end\\"}"}}\n\n',
+                'data: {"event_type":"step.stop"}\n\n',
+                completedSse({ status: "requires_action" }),
+              ].join(""),
+            ),
+          );
+          controller.close();
+        },
+      }),
+    );
+    const stream = streamGoogleInteractions(makeInteractionsModel(), basicContext, {
+      apiKey: crypto.randomUUID(),
+    });
+    let firstInput: unknown;
+    try {
+      for await (const event of stream) {
+        if (event.type === "toolcall_delta" && firstInput === undefined) {
+          firstInput = structuredClone(event.partial.content[event.contentIndex]);
+          gate.resolve();
+        }
+      }
+    } finally {
+      gate.resolve();
+    }
+    expect(firstInput).toMatchObject({ partialJson: '{"content":"line' });
+    expect((await stream.result()).content).toEqual([
+      { type: "toolCall", id: "progress", name: "write", arguments: { content: "line end" } },
+    ]);
+  });
+
   it("terminates outer stream loop immediately and cancels reader upon receiving data: [DONE]", async () => {
     let cancelCalled = false;
     const encoder = new TextEncoder();
@@ -290,6 +341,7 @@ describe("google-interactions provider", () => {
           errorCode: "malformed_tool_call_arguments",
           errorMessage: "Provider completed tool call with malformed JSON arguments",
         });
+        expect(result.content[0]).not.toHaveProperty("partialJson");
         expect(cancel).toHaveBeenCalledOnce();
         expect(body.locked).toBe(false);
         expect(pendingWork).toHaveLength(1);

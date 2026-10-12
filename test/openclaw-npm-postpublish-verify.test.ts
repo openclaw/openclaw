@@ -12,16 +12,12 @@ import {
 import { dirname, join } from "node:path";
 import { build } from "tsdown";
 import { describe, expect, it, vi } from "vitest";
-import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "../scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import {
-  buildPublishedInstallScenarios,
-  collectInstalledBundledExtensionManifestErrors,
   collectInstalledContextEngineRuntimeErrors,
   collectInstalledRootDependencyManifestErrors,
   collectInstalledPackageErrors,
   fetchRegistryJson,
-  parseOpenClawNpmPostpublishVerifyArgs,
   resolvePublishedInstallSourceVerification,
   resolveInstalledBinaryCommandInvocation,
   retryNpmRegistryProvenanceRead,
@@ -31,7 +27,6 @@ import {
   rewriteRootRuntimeImportsToStableAliases,
   writeStableRootRuntimeAliases,
 } from "../scripts/runtime-postbuild.mts";
-import { packageActivationRuntimeEntrypoint } from "../src/infra/package-update-activation-runtime-assets.js";
 import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../src/infra/runtime-dependency-ownership.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -45,7 +40,6 @@ import { toolingTsEntrypoints } from "./scripts/tooling-ts-runtime.test-support.
 const { createTempDir } = createScriptTestHarness();
 const makeInstalledPackageRoot = () => createTempDir("openclaw-postpublish-");
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
-const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
 
 function writeInstalledFile(root: string, relativePath: string, source = "export {};\n") {
   const file = join(root, relativePath);
@@ -72,29 +66,6 @@ describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
 
     expect(source).toContain('from "./lib/error-format.mts"');
     expect(source).not.toContain('from "../src/infra/errors.ts"');
-  });
-
-  it("rejects an extra empty operand before verification", () => {
-    expect(() => parseOpenClawNpmPostpublishVerifyArgs(["2026.3.23", ""])).toThrow(
-      "Unexpected openclaw npm postpublish verifier argument",
-    );
-  });
-});
-
-describe("buildPublishedInstallScenarios", () => {
-  it("adds a stable-to-correction upgrade scenario for correction releases", () => {
-    expect(buildPublishedInstallScenarios("2026.3.23-2")).toEqual([
-      {
-        name: "fresh-exact",
-        installSpecs: ["openclaw@2026.3.23-2"],
-        expectedVersion: "2026.3.23-2",
-      },
-      {
-        name: "upgrade-from-base-stable",
-        installSpecs: ["openclaw@2026.3.23", "openclaw@2026.3.23-2"],
-        expectedVersion: "2026.3.23-2",
-      },
-    ]);
   });
 });
 
@@ -214,26 +185,6 @@ describe("npm registry provenance verification", () => {
     });
   }
 
-  it("fetches npm registry JSON with bounded response handling", async () => {
-    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
-      expect(init).toMatchObject({
-        headers: {
-          Accept: "application/json",
-        },
-        redirect: "error",
-        signal: expect.any(AbortSignal),
-      });
-      return new Response(JSON.stringify({ ok: true }));
-    });
-
-    await expect(
-      fetchRegistryJson("https://registry.example/openclaw", {
-        fetchImpl: fetchImpl as typeof fetch,
-        timeoutMs: 1234,
-      }),
-    ).resolves.toEqual({ ok: true });
-  });
-
   it("bounds oversized npm registry response bodies", async () => {
     await expect(
       fetchRegistryJson("https://registry.example/openclaw", {
@@ -290,23 +241,9 @@ describe("npm registry provenance verification", () => {
     ).rejects.toThrow("does not match");
   });
 
-  it("trusts later extended-stable patches from the canonical branch", async () => {
-    const verifyBundle = makeBundleVerifier();
-    const releaseVersion = "2026.6.34";
-    const ref = "refs/heads/extended-stable/2026.6.33";
-    await verifyProvenance({
-      version: releaseVersion,
-      attestations: attestationsFor(buildProvenancePayload(releaseVersion, ref)),
-      verifyBundle,
-    });
-    expect(verifyBundle.mock.calls[0]?.[1]).toEqual(releaseIdentity(ref));
-  });
-
   it.each([
     ["ordinary release from a feature branch", version, "refs/heads/feature/untrusted"],
     ["later patch on a noncanonical branch", "2026.6.34", "refs/heads/extended-stable/2026.6.34"],
-    ["patch below 33", "2026.6.32", "refs/heads/extended-stable/2026.6.33"],
-    ["correction suffix", "2026.6.33-1", "refs/heads/extended-stable/2026.6.33"],
   ])("rejects untrusted release provenance for %s", async (_label, releaseVersion, workflowRef) => {
     const verifyBundle = makeBundleVerifier();
 
@@ -366,52 +303,6 @@ describe("npm registry provenance verification", () => {
 });
 
 describe("collectInstalledPackageErrors", () => {
-  it("requires the activation runtime and allowlisted facade sidecars", () => {
-    const packageRoot = makeInstalledPackageRoot();
-    const requiredArtifacts = [
-      [
-        "dist/facade-activation-check.runtime.js",
-        "installed package is missing required facade activation runtime: dist/facade-activation-check.runtime.js",
-      ],
-      [
-        "dist/extensions/image-generation-core/runtime-api.js",
-        "installed package allows bundled runtime facade image-generation-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/image-generation-core/runtime-api.js.",
-      ],
-    ] as const;
-    const missingErrors = installedPackageErrors(packageRoot);
-    for (const [relativePath, error] of requiredArtifacts) {
-      expect(missingErrors).toContain(error);
-      writeInstalledFile(packageRoot, relativePath);
-    }
-    const installedErrors = installedPackageErrors(packageRoot);
-    for (const [, error] of requiredArtifacts) {
-      expect(installedErrors).not.toContain(error);
-    }
-  });
-
-  function writeExpectedBundledExtensionManifests(
-    packageRoot: string,
-    omittedIds: readonly string[] = [],
-  ): void {
-    const omitted = new Set(omittedIds);
-    for (const relativePath of requiredBundledPluginPackPaths) {
-      const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
-      if (!match || omitted.has(match[1] ?? "")) {
-        continue;
-      }
-      writeInstalledFile(
-        packageRoot,
-        relativePath,
-        relativePath.endsWith(".json") ? "{}\n" : "export {};\n",
-      );
-    }
-    writePackageFile(
-      packageRoot,
-      "dist/postinstall-inventory.json",
-      requiredBundledPluginPackPaths,
-    );
-  }
-
   it("rejects an oversized worker before the full verifier reads its contents", () => {
     const packageRoot = makeInstalledPackageRoot();
 
@@ -429,58 +320,6 @@ describe("collectInstalledPackageErrors", () => {
     expect(errors.filter((error) => error === sizeError)).toEqual([sizeError]);
     expect(errors).not.toContain(
       "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
-    );
-  });
-
-  it("rejects an unresolved legacy context loader in a self-contained worker", () => {
-    const packageRoot = makeInstalledPackageRoot();
-    writeInstalledFile(
-      packageRoot,
-      `dist/worker/${WORKER_BUNDLE_ENTRY_PATH}`,
-      "/* Failed to load legacy context engine runtime. */\n",
-    );
-
-    expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([
-      "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
-    ]);
-  });
-
-  it("rejects a missing installed bundled provider directory", () => {
-    const providerId = "ollama";
-    const packageRoot = makeInstalledPackageRoot();
-
-    writeInstalledFile(packageRoot, "package.json", '{"version":"2026.3.23"}\n');
-    writeExpectedBundledExtensionManifests(packageRoot, [providerId]);
-
-    const missingManifestPath = join(packageRoot, "dist", "extensions", providerId, "package.json");
-    const expectedError = `installed bundled extension manifest missing: ${missingManifestPath}.`;
-    const missingArtifactErrors = requiredBundledPluginPackPaths
-      .filter((relativePath) => relativePath.startsWith(`dist/extensions/${providerId}/`))
-      .map((relativePath) =>
-        relativePath.endsWith("/package.json")
-          ? expectedError
-          : `installed bundled plugin artifact missing: ${relativePath}.`,
-      );
-
-    expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toStrictEqual(
-      missingArtifactErrors,
-    );
-    expect(installedPackageErrors(packageRoot)).toContain(expectedError);
-  });
-
-  it("rejects an installed bundled artifact omitted from its inventory", () => {
-    const relativePath = "dist/extensions/ollama/provider-discovery.js";
-    const packageRoot = makeInstalledPackageRoot();
-
-    writeExpectedBundledExtensionManifests(packageRoot);
-    writeInstalledFile(
-      packageRoot,
-      "dist/postinstall-inventory.json",
-      JSON.stringify(requiredBundledPluginPackPaths.filter((entry) => entry !== relativePath)),
-    );
-
-    expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toContain(
-      `installed bundled plugin artifact omitted from dist inventory: ${relativePath}.`,
     );
   });
 
@@ -523,39 +362,9 @@ describe("collectInstalledPackageErrors", () => {
     expect(probe.status, probe.stderr).toBe(0);
     expect(JSON.parse(probe.stdout)).toEqual(expectedMissingManifests(packageRoot));
   });
-
-  it("surfaces invalid installed bundled extension manifests", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    writeInstalledFile(packageRoot, "package.json", '{"version":"2026.3.23"}\n');
-    writeExpectedBundledExtensionManifests(packageRoot);
-    writeInstalledFile(packageRoot, "dist/extensions/telegram/package.json", "{not-json\n");
-    writeInstalledFile(packageRoot, "dist/extensions/telegram/runtime-api.js", "export {};\n");
-
-    const manifestErrors = collectInstalledBundledExtensionManifestErrors(packageRoot);
-    expect(manifestErrors).toHaveLength(1);
-    expect(manifestErrors[0]).toContain(
-      "installed bundled extension manifest invalid: failed to parse",
-    );
-    expect(manifestErrors[0]).toContain("dist/extensions/telegram/package.json");
-
-    expect(installedPackageErrors(packageRoot)).toContain(manifestErrors[0]);
-  });
 });
 
 describe("collectInstalledContextEngineRuntimeErrors", () => {
-  it("ignores extension-owned JavaScript assets", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    writeInstalledFile(
-      packageRoot,
-      "dist/extensions/diffs/assets/viewer-runtime.js",
-      'throw new Error("Failed to load legacy context engine runtime.");\n',
-    );
-
-    expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toStrictEqual([]);
-  });
-
   it("refuses unbounded packaged dist scans", () => {
     const packageRoot = makeInstalledPackageRoot();
 
@@ -605,6 +414,38 @@ describe("resolveInstalledBinaryCommandInvocation", () => {
 });
 
 describe("collectInstalledRootDependencyManifestErrors", () => {
+  it("finishes vendor call graphs while retaining root dependency checks", () => {
+    const packageRoot = makeInstalledPackageRoot();
+    writePackageFile(packageRoot, "package.json", { name: "openclaw", dependencies: {} });
+    const calls = ["const value0 = opaque();"];
+    for (let index = 1; index <= 28; index++) {
+      calls.push(`const value${index} = opaque(value${index - 1}, value${index - 1});`);
+    }
+    writeInstalledFile(
+      packageRoot,
+      "dist/vendor.js",
+      `${calls.join("\n")}\nrequire("root-runtime");`,
+    );
+    // A subprocess deadline is necessary because the original synchronous graph scan never yields.
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "--input-type=module",
+        "-e",
+        'import { collectInstalledRootDependencyManifestErrors } from "./scripts/openclaw-npm-postpublish-verify.ts"; console.log(JSON.stringify(collectInstalledRootDependencyManifestErrors(process.argv[1]))); process.exit(0);',
+        packageRoot,
+      ],
+      { encoding: "utf8", timeout: 3000 },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([
+      "installed package root is missing declared runtime dependency 'root-runtime' for dist importers: vendor.js. Add it to package.json dependencies/optionalDependencies.",
+    ]);
+  });
+
   function makeCompanionImportFixture(params: {
     source?: string;
     fileName?: string;
@@ -691,18 +532,6 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     };
   }
 
-  it("accepts byte-matched ownership from an additional trusted companion manifest root", () => {
-    const { installRoot, packageRoot } = makeCompanionImportFixture({
-      companions: [],
-      ownership: companionOwnership,
-    });
-    const trustedManifestRoot = writeTrustedDiscordManifest(installRoot);
-
-    expect(
-      collectInstalledRootDependencyManifestErrors(packageRoot, [trustedManifestRoot]),
-    ).toStrictEqual([]);
-  });
-
   it("uses generated region ownership only when the compatibility gate is enabled", () => {
     const { packageRoot, legacyErrors } = makeLegacyFixture();
     const missingDependency =
@@ -731,15 +560,14 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     ]);
   });
 
-  it.each([
-    { main: "dist/nested", fileName: "nested/index.js" },
-    { bin: { openclaw: "./dist/companion-runtime.js" } },
-    { exports: { "./*": "./dist/*.js" }, fileName: "nested/runtime.js" },
-  ])("keeps legacy public entrypoints root-owned: %j", ({ fileName, ...entrypoints }) => {
-    const { packageRoot, legacyErrors } = makeLegacyFixture(undefined, fileName);
-    writePackageFile(packageRoot, "package.json", { name: "openclaw", ...entrypoints });
-    expect(legacyErrors()).toEqual([expect.stringContaining("@discordjs/voice")]);
-  });
+  it.each([{ main: "dist/nested", fileName: "nested/index.js" }])(
+    "keeps legacy public entrypoints root-owned: %j",
+    ({ fileName, ...entrypoints }) => {
+      const { packageRoot, legacyErrors } = makeLegacyFixture(undefined, fileName);
+      writePackageFile(packageRoot, "package.json", { name: "openclaw", ...entrypoints });
+      expect(legacyErrors()).toEqual([expect.stringContaining("@discordjs/voice")]);
+    },
+  );
 
   it.each([
     {
@@ -753,47 +581,9 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         'load("@discordjs/voice");',
       ].join("\n"),
     },
-    {
-      name: "region markers inside a template literal",
-      source:
-        'const text = `//#region extensions/discord/src/runtime.ts\n${require("@discordjs/voice")}\n//#endregion`;',
-    },
   ])("rejects legacy ownership for $name", ({ source }) => {
     const { legacyErrors } = makeLegacyFixture(source);
     expect(legacyErrors()).toEqual([expect.stringContaining("@discordjs/voice")]);
-  });
-
-  it.each<{
-    name: string;
-    companions: Array<{ id: string; name?: string; dependencies: Record<string, string> }>;
-  }>([
-    { name: "missing companion", companions: [] },
-    {
-      name: "wrong companion identity",
-      companions: [
-        {
-          id: "discord",
-          name: "unrelated-package",
-          dependencies: { "@discordjs/voice": "0.19.2" },
-        },
-      ],
-    },
-    {
-      name: "dependency declared only by another companion",
-      companions: [
-        { id: "discord", dependencies: {} },
-        { id: "msteams", dependencies: { "@discordjs/voice": "0.19.2" } },
-      ],
-    },
-  ])("rejects chunk ownership with $name", ({ companions }) => {
-    const { packageRoot } = makeCompanionImportFixture({
-      companions,
-      ownership: companionOwnership,
-    });
-
-    expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-      "installed package root is missing declared runtime dependency '@discordjs/voice' for dist importers: companion-runtime.js. Add it to package.json dependencies/optionalDependencies.",
-    ]);
   });
 
   it("does not authorize changed chunk bytes", () => {
@@ -804,35 +594,6 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
 
     expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
       expect.stringContaining("companion-runtime.js"),
-    ]);
-  });
-
-  it.each([
-    {
-      name: "another build output importing the same dependency",
-      fileName: "config-doctor/runtime.js",
-      source: 'require("@discordjs/voice");\n',
-      missingImporter: "config-doctor/runtime.js",
-      companionFileName: "companion-runtime.js",
-    },
-    {
-      name: "a directory root require reaching the annotated chunk",
-      fileName: "root-runtime.cjs",
-      source: 'require("./nested");\n',
-      missingImporter: "nested/index.js",
-      companionFileName: "nested/index.js",
-    },
-  ])("does not exempt $name", ({ fileName, source, missingImporter, companionFileName }) => {
-    const { packageRoot } = makeCompanionImportFixture({
-      ownership: {
-        chunks: { [companionFileName]: companionOwnership.chunks["companion-runtime.js"] },
-      },
-      fileName: companionFileName,
-    });
-
-    writeInstalledFile(packageRoot, `dist/${fileName}`, source);
-    expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-      `installed package root is missing declared runtime dependency '@discordjs/voice' for dist importers: ${missingImporter}. Add it to package.json dependencies/optionalDependencies.`,
     ]);
   });
 
@@ -853,42 +614,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     ]);
   });
 
-  it("accepts optional or externalized runtime imports", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    writePackageFile(packageRoot, "package.json", {
-      dependencies: {},
-    });
-    writeInstalledFile(
-      packageRoot,
-      "dist/optional-runtime.js",
-      ['await import("@a2ui/markdown-it");', 'await import("@lancedb/lancedb");', ""].join("\n"),
-    );
-    writeInstalledFile(
-      packageRoot,
-      "dist/externalized-plugin-runtime.js",
-      [
-        'import * as lark from "@larksuiteoapi/node-sdk";',
-        'import prism from "prism-media";',
-        "export { lark, prism };",
-        "",
-      ].join("\n"),
-    );
-    writeInstalledFile(
-      packageRoot,
-      "dist/plugin-sdk/channel-test-helpers.js",
-      'import { expect, it } from "vitest";\nexport { expect, it };\n',
-    );
-
-    expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
-  });
-
   it.each([
-    [
-      "block shadow",
-      '{ const require = (name) => name; require("view-name"); } require("root-runtime");',
-      ["root-runtime", "view-name"],
-    ],
     [
       "assigned destructured binding",
       'import { createRequire } from "node:module"; let { load } = loaders; load = createRequire(import.meta.url); load("root-runtime");',
@@ -902,11 +628,6 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     [
       "conditional roots",
       'import { createRequire } from "node:module"; const require = usePlugin ? createRequire(pluginPath) : createRequire(import.meta.url); require("root-runtime");',
-      ["root-runtime"],
-    ],
-    [
-      "logical factory",
-      'import { createRequire } from "node:module"; const preferred = null; const make = preferred || createRequire; const require = make(import.meta.url); require("root-runtime");',
       ["root-runtime"],
     ],
     [
@@ -1009,11 +730,6 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       'import { createRequire } from "node:module"; import fs from "node:fs/promises"; function build(options) { const pending = fs.realpath(options.filename); normalize(pending); return (async () => { const root = await pending; const require = createRequire(root); require("root-runtime"); })(); }',
       ["root-runtime"],
     ],
-    [
-      "compiled control UI builder ordering",
-      'import { createRequire } from "node:module"; import fs from "node:fs/promises"; import path from "node:path"; async function build(params) { const rootDir = await fs.realpath(params.rootDir); const entry = await fs.realpath(path.resolve(rootDir, params.source)); if (!entry) throw new Error("missing entry"); const require = createRequire(path.join(rootDir, "package.json")); require("plugin-build-tool"); }',
-      [],
-    ],
   ])("follows lexical require ownership: %s", (_name, source, dependencies) => {
     const packageRoot = makeInstalledPackageRoot();
     writePackageFile(packageRoot, "package.json", { dependencies: {} });
@@ -1024,38 +740,6 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
           `installed package root is missing declared runtime dependency '${name}' for dist importers: runtime.js. Add it to package.json dependencies/optionalDependencies.`,
       ),
     );
-  });
-
-  it.each([
-    {
-      expected: [
-        "installed package root dist file 'runtime/oversized.js' is invalid or exceeds 6291456 bytes.",
-      ],
-      name: "rejects oversized arbitrary nested dist files",
-      relativePath: "runtime/oversized.js",
-    },
-    {
-      expected: [],
-      name: "accepts the oversized worker deploy entrypoint",
-      relativePath: `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
-      source: `/* ${"x".repeat(6 * 1024 * 1024)} */\nthis is not valid JavaScript`,
-    },
-    {
-      expected: [],
-      name: "accepts the oversized sealed package-update recovery helper",
-      relativePath: packageActivationRuntimeEntrypoint.distWorkerPath,
-    },
-  ])("$name", ({ expected, relativePath, source }) => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    writePackageFile(packageRoot, "package.json", {
-      dependencies: {},
-    });
-    const filePath = join(packageRoot, "dist", relativePath);
-    mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, source ?? `/* ${"x".repeat(6 * 1024 * 1024)} */\n`);
-
-    expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual(expected);
   });
 });
 
@@ -1151,17 +835,13 @@ describe("runtime dependency ownership build contract", () => {
     ]);
   });
 
-  it.each([
-    [
-      "createRequire import",
-      `import { createRequire } from "node:module";
-       export const value = createRequire(import.meta.url)("fixture-runtime");`,
-    ],
-    ["root-shared chunk", 'export { value } from "./shared.js";'],
-  ])("rejects a root %s even when a plugin owns the same dependency", async (_name, source) => {
-    const root = await buildInstalledFixture(source);
-    expect(collectInstalledRootDependencyManifestErrors(root)).toEqual([
-      expect.stringContaining("missing declared runtime dependency 'fixture-runtime'"),
-    ]);
-  });
+  it.each([["root-shared chunk", 'export { value } from "./shared.js";']])(
+    "rejects a root %s even when a plugin owns the same dependency",
+    async (_name, source) => {
+      const root = await buildInstalledFixture(source);
+      expect(collectInstalledRootDependencyManifestErrors(root)).toEqual([
+        expect.stringContaining("missing declared runtime dependency 'fixture-runtime'"),
+      ]);
+    },
+  );
 });

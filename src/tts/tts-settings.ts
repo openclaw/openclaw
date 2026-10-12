@@ -17,6 +17,7 @@ import type {
   TtsModelOverrideConfig,
   TtsProvider,
 } from "../config/types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { normalizeSpeechProviderId } from "./provider-registry-core.js";
 import type { SpeechProviderConfig } from "./provider-types.js";
 import { withSpeakerSelectionCompat } from "./speaker.js";
@@ -185,16 +186,36 @@ export function resolveTtsConfig(
   };
 }
 
+/** @deprecated Use resolveTtsPrefsPathAsync. Removed at the next Plugin SDK major. */
 export function resolveTtsPrefsPath(
   config: ResolvedTtsConfig,
   preparedTtsPreferences?: PreparedTtsPreferences,
 ): string {
+  if (!preparedTtsPreferences) {
+    warnPluginSdkDeprecation({
+      family: "tts",
+      method: "resolveTtsPrefsPath",
+      replacement: "resolveTtsPrefsPathAsync",
+    });
+  }
   return resolveTtsPrefsPathValue(
     config.prefsPath,
     preparedTtsPreferences
       ? () => preparedTtsPreferences.machinePrefsPath
       : machinePrefsPathResolver,
   );
+}
+
+export async function resolveTtsPrefsPathAsync(
+  config: ResolvedTtsConfig,
+  preparedTtsPreferences?: PreparedTtsPreferences,
+): Promise<string> {
+  const prepared =
+    preparedTtsPreferences ??
+    (config.prefsPath?.trim() || process.env.OPENCLAW_TTS_PREFS?.trim()
+      ? {}
+      : await (await import("./tts-preferences.js")).prepareTtsPreferences());
+  return resolveTtsPrefsPath(config, prepared);
 }
 
 export function resolveTtsAutoMode(params: {
@@ -216,7 +237,7 @@ function resolveTtsPersonaIdFromPrefs(
   if (prefs.tts && Object.hasOwn(prefs.tts, "persona")) {
     return normalizeTtsPersonaId(prefs.tts.persona);
   }
-  return normalizeTtsPersonaId(config.persona);
+  return config.persona;
 }
 
 export function resolveTtsPersonaFromPrefs(
@@ -263,10 +284,7 @@ export function resolveTtsSettingsSnapshot(params: {
   const persona = personaId ? config.personas[personaId] : undefined;
   const prefsProvider = normalizeConfiguredSpeechProviderId(prefs.tts?.provider);
   const personaProvider = normalizeConfiguredSpeechProviderId(persona?.provider);
-  const configuredProvider =
-    config.providerSource === "config"
-      ? (normalizeConfiguredSpeechProviderId(config.provider) ?? config.provider)
-      : undefined;
+  const configuredProvider = config.providerSource === "config" ? config.provider : undefined;
   const providerPreference: TtsProviderPreference | undefined = prefsProvider
     ? { provider: prefsProvider, source: "prefs" }
     : personaProvider
@@ -348,9 +366,9 @@ export function listTtsPersonas(config: ResolvedTtsConfig): ResolvedTtsPersona[]
   return Object.values(config.personas).toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-export function resolveTtsPersonaList(cfg: OpenClawConfig) {
+export async function resolveTtsPersonaList(cfg: OpenClawConfig) {
   const config = resolveTtsConfig(cfg);
-  const prefsPath = resolveTtsPrefsPath(config);
+  const prefsPath = await resolveTtsPrefsPathAsync(config);
   const active = getTtsPersona(config, prefsPath);
   return {
     active: active?.id ?? null,

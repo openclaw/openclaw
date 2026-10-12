@@ -18,7 +18,11 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { persistTranscriptSummary } from "../transcripts/capture-summary.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
-import { getTranscriptLibrary } from "../transcripts/library.js";
+import {
+  exportTranscriptLibrary,
+  getTranscriptLibrary,
+  listTranscriptLibrary,
+} from "../transcripts/library.js";
 import type {
   TranscriptSessionDescriptor,
   TranscriptUtterance,
@@ -34,6 +38,7 @@ import { TranscriptsStore, transcriptSessionSelector } from "../transcripts/stor
 import { summarizeTranscripts } from "../transcripts/summary.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 const dirs = useStateDatabaseTempDirs();
 
@@ -122,8 +127,7 @@ async function withoutParentTranscriptSql(operation: () => Promise<void>) {
       }
     }
     const probes = [
-      "SELECT sqlite_version() AS version",
-      "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
+      "SELECT sqlite_version() AS version, sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
     ];
     for (const entry of observed) {
       expect(entry.databasePath, "caller-thread file-backed SQLite activity").toBeNull();
@@ -144,7 +148,11 @@ it("keeps cold transcript reads on the canonical worker and preserves store crea
   const databasePath = resolveOpenClawStateSqlitePath(env);
   expect(existsSync(databasePath)).toBe(false);
   await withoutParentSql(async () => {
-    expect(await store.listReadEntries({ limit: 2 })).toEqual([]);
+    expect(await listTranscriptLibrary(store, { limit: 2 })).toEqual({
+      sessions: [],
+      nextCursor: null,
+    });
+    expect(await store.listReadEntries({ limit: 2 })).toEqual({ entries: [], hasMore: false });
     expect(await store.listSessionEntries()).toEqual([]);
     expect(await store.readLatestEntry()).toBeUndefined();
     expect(await store.readSession("missing")).toBeUndefined();
@@ -157,6 +165,31 @@ it("keeps cold transcript reads on the canonical worker and preserves store crea
   });
   expect(existsSync(databasePath)).toBe(true);
   expect(existsSync(exportRoot)).toBe(false);
+});
+
+it("reads cold and warm public pages off thread with tied dates and private sources", async () => {
+  const { store } = fixture();
+  for (const sessionId of ["a", "b"]) {
+    await store.writeSession({
+      sessionId,
+      startedAt: "2026-09-18T12:00:00.000Z",
+      source: { providerId: "manual-transcript", private: "synthetic-private" },
+      metadata: { agentId: "main", private: "synthetic-metadata" },
+    });
+  }
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  await withoutParentSql(async () => {
+    const first = await listTranscriptLibrary(store, { limit: 1 }, () => "Manual");
+    expect(first.sessions).toMatchObject([
+      { sessionId: "a", providerName: "Manual", agentId: "main" },
+    ]);
+    expect(first.nextCursor).not.toBeNull();
+    const second = await listTranscriptLibrary(store, { limit: 1, cursor: first.nextCursor! });
+    expect(second.sessions).toMatchObject([{ sessionId: "b" }]);
+    expect(second.nextCursor).toBeNull();
+    expect(JSON.stringify([first, second])).not.toContain("synthetic-");
+  });
 });
 
 it("appends immutable speech on the canonical worker with exact-id deduplication and sequence order", async () => {
@@ -343,18 +376,13 @@ it.each(
     const failure = new TranscriptsSummaryChangedError();
     let current = true;
     const requests: workerAdmission.SqliteWorkerAdmissionRequest["stage"][] = [];
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const observer = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          requests.push(request.stage);
-          if (request.stage === stage) {
-            current = false;
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const observer = probe.admission(workerAdmission, (request, grant, admit) => {
+      requests.push(request.stage);
+      if (request.stage === stage) {
+        current = false;
+      }
+      admit(request, grant);
+    });
     const assertCurrent = () => {
       if (!current) {
         throw failure;
@@ -509,6 +537,50 @@ it("returns complete stored reads and typed errors after existing-only status an
     await expect(result).rejects.toMatchObject({
       type: "transcript_result_too_large",
       maxBytes: TRANSCRIPTS_RESULT_MAX_BYTES,
+    });
+  });
+});
+
+it("exports cold and warm library rows and notes without caller-thread SQLite", async () => {
+  const { store } = fixture();
+  const session: TranscriptSessionDescriptor = {
+    sessionId: "export-worker",
+    title: "Export meeting",
+    startedAt: "2026-09-18T12:00:00.000Z",
+    source: { providerId: "manual-transcript" },
+  };
+  await store.writeSession(session);
+  const utterance = {
+    text: "Saved speech",
+    speaker: { label: "Sam" },
+    metadata: { private: true },
+  };
+  await store.appendUtteranceForSession(session, utterance);
+  await store.writeSummary(summarizeTranscripts({ session, utterances: [utterance] }), session);
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  const selector = transcriptSessionSelector(session);
+  await withoutParentSql(async () => {
+    for (const format of ["jsonl", "markdown", "jsonl"] as const) {
+      const exported = await exportTranscriptLibrary(store, { selector, format });
+      const text = Buffer.from(exported.data, "base64").toString("utf8");
+      expect(text).toContain("Saved speech");
+      expect(text).not.toContain("private");
+      if (format === "markdown") {
+        expect(text).toContain("Export meeting");
+        expect(text).toContain("Sam");
+      } else {
+        expect(JSON.parse(text)).toEqual({
+          sequence: 0,
+          text: "Saved speech",
+          speakerLabel: "Sam",
+        });
+      }
+    }
+    await expect(
+      exportTranscriptLibrary(store, { selector: "missing", format: "jsonl" }),
+    ).rejects.toMatchObject({
+      type: "transcript_session_not_found",
     });
   });
 });

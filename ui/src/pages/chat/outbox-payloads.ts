@@ -1,9 +1,9 @@
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { t } from "../../i18n/index.ts";
 import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   outboxPayloadTab,
-  observeOutboxRecoveryOwner,
   readOutboxPayload,
   removeOutboxPayloads,
   writeOutboxPayload,
@@ -64,12 +64,12 @@ export function captureOutboxPayloadOwner(
 ): () => boolean {
   const client = host.client;
   const gateway = host.settings?.gatewayUrl;
-  const recoveryScope = observeOutboxRecoveryOwner(host);
+  const recoveryScope = readOfflineStorageScope(host);
   const incognito = isIncognitoComposerScope(host, scope);
   return () =>
     host.client === client &&
     host.settings?.gatewayUrl === gateway &&
-    observeOutboxRecoveryOwner(host) === recoveryScope &&
+    readOfflineStorageScope(host) === recoveryScope &&
     isIncognitoComposerScope(host, scope) === incognito;
 }
 
@@ -89,7 +89,7 @@ async function preparePayload(
       ? { status: "failed", reason: "unavailable" }
       : { status: "ready", update: {} };
   }
-  const recoveryScope = observeOutboxRecoveryOwner(host);
+  const recoveryScope = readOfflineStorageScope(host);
   if (!recoveryScope) {
     return { status: "failed", reason: "unavailable" };
   }
@@ -210,7 +210,7 @@ export async function prepareOutboxPayload(
 ): Promise<PayloadResult> {
   const reference = item.attachmentPayload;
   const scope = payloadScope(host, item);
-  if (!reference || isIncognitoComposerScope(host, scope) || !observeOutboxRecoveryOwner(host)) {
+  if (!reference || isIncognitoComposerScope(host, scope) || !readOfflineStorageScope(host)) {
     return preparePayload(host, item, purpose);
   }
   const key = JSON.stringify([
@@ -220,7 +220,7 @@ export async function prepareOutboxPayload(
     reference.recoveryScope,
     scope,
     host.settings?.gatewayUrl,
-    observeOutboxRecoveryOwner(host),
+    readOfflineStorageScope(host),
     purpose,
     item.attachments?.map(({ mimeType, fileName, sizeBytes, origin }) => [
       mimeType,

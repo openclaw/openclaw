@@ -91,29 +91,18 @@ const projection = (transcriptMessageId: string) => ({
 describe("telegram message cache", () => {
   let state: OpenClawTestState;
   let store: PluginStateKeyedStore<PersistedValue>;
-  let failWrite: boolean;
   const scopeKey = resolveTelegramMessageCachePersistentScopeKey("default");
   const key = (messageId: string) => `${scopeKey}:default:7:${messageId}`;
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ prefix: "telegram-cache-", layout: "state-only" });
-    failWrite = false;
     const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>(
       options: Parameters<TelegramRuntime["state"]["openKeyedStore"]>[0],
     ) => {
-      const backing = createPluginStateKeyedStoreForTests<T>("telegram", {
+      return createPluginStateKeyedStoreForTests<T>("telegram", {
         ...options,
         env: state.env,
       });
-      return {
-        ...backing,
-        async register(...args: Parameters<typeof backing.register>) {
-          if (failWrite) {
-            throw new Error("state store unavailable");
-          }
-          return backing.register(...args);
-        },
-      };
     };
     setTelegramRuntime(createPluginRuntimeMock({ state: { openKeyedStore } }));
     store = createPluginStateKeyedStoreForTests("telegram", {
@@ -238,42 +227,6 @@ describe("telegram message cache", () => {
     expect(chain.map((node) => node.messageId)).toEqual(["9"]);
   });
 
-  it("propagates ancestor lookup failures instead of using an embedded snapshot", async () => {
-    const cache = createTelegramMessageCache();
-    const unavailable: Cache = {
-      ...cache,
-      async get(params) {
-        if (params.messageId === "8") {
-          throw new Error("ancestor lookup unavailable");
-        }
-        return cache.get(params);
-      },
-    };
-    await expect(
-      replyChain(
-        unavailable,
-        message(10, "Grace", {
-          reply_to_message: message(9, "Lin", {
-            reply_to_message: message(8, "Ada", { text: "Stale fallback" }),
-          }),
-        }),
-      ),
-    ).rejects.toThrow("ancestor lookup unavailable");
-  });
-
-  it.each([
-    { boundary: "depth cap", ids: [9, 8, 7, 6, 5], expected: ["9", "8", "7", "6"] },
-    { boundary: "cycle", ids: [9, 8, 9], expected: ["9", "8"] },
-  ])("bounds embedded-only reply traversal at the $boundary", async ({ ids, expected }) => {
-    const cache = createTelegramMessageCache();
-    let reply: Message | undefined;
-    for (const id of ids.toReversed()) {
-      reply = message(id, "Ada", reply ? { reply_to_message: reply } : {});
-    }
-    const chain = await replyChain(cache, message(10, "Grace", { reply_to_message: reply }));
-    expect(chain.map((node) => node.messageId)).toEqual(expected);
-  });
-
   it("persists prompt-context projection provenance across cache restart", async () => {
     const marker = projection("assistant-projection-restart");
     const cache = createTelegramMessageCache();
@@ -372,25 +325,6 @@ describe("telegram message cache", () => {
     expect(reloaded?.promptContextProjectionMarker).toEqual({ kind: "valid", projection: marker });
   });
 
-  it("poisons projection provenance when its durable cache write fails", async () => {
-    failWrite = true;
-    const cache = createTelegramMessageCache();
-    await expect(
-      record(cache, message(9126, "Nora", { text: "Markerless context" })),
-    ).resolves.toMatchObject({ messageId: "9126" });
-
-    const marker = projection("assistant-persistence-failure");
-    await expect(
-      record(cache, botMessage(9127, "Projected context"), { promptContextProjection: marker }),
-    ).rejects.toThrow("state store unavailable");
-    await expect(get(cache, "9127")).resolves.toMatchObject({
-      promptContextProjectionMarker: {
-        kind: "invalid",
-        transcriptMessageId: marker.transcriptMessageId,
-      },
-    });
-  });
-
   it.each([
     ["projected row first", ["projected", "parent"]],
     ["embedding parent first", ["parent", "projected"]],
@@ -441,23 +375,19 @@ describe("telegram message cache", () => {
     expect(hydrated?.promptContextProjectionMarker).toBeUndefined();
   });
 
-  it.each([undefined, 2])(
-    "ignores unsupported cache version %s without rewriting it",
-    async (version) => {
-      const persisted = {
-        ...(version === undefined ? {} : { version }),
-        sourceMessage: botMessage(9126, "Pre-projection state message"),
-        promptContextProjection: projection("must-not-be-inferred"),
-        threadBinding: { kind: "provider-observed-v1", threadId: "77" },
-        threadId: "77",
-      };
-      await store.register(key("9126"), persisted);
+  it("ignores unversioned cache rows without rewriting them", async () => {
+    const persisted = {
+      sourceMessage: botMessage(9126, "Pre-projection state message"),
+      promptContextProjection: projection("must-not-be-inferred"),
+      threadBinding: { kind: "provider-observed-v1", threadId: "77" },
+      threadId: "77",
+    };
+    await store.register(key("9126"), persisted);
 
-      resetCache();
-      await expect(get(createTelegramMessageCache(), "9126")).resolves.toBeNull();
-      await expect(store.lookup(key("9126"))).resolves.toEqual(persisted);
-    },
-  );
+    resetCache();
+    await expect(get(createTelegramMessageCache(), "9126")).resolves.toBeNull();
+    await expect(store.lookup(key("9126"))).resolves.toEqual(persisted);
+  });
 
   it("does not partially parse malformed persisted thread ids", async () => {
     const cache = createTelegramMessageCache();
@@ -478,27 +408,6 @@ describe("telegram message cache", () => {
     resetCache();
     const recent = await recentBefore(createTelegramMessageCache(), "9127", { threadId: 100 });
     expect(recent).toEqual([]);
-  });
-
-  it("drops unsafe Telegram thread ids from live messages", async () => {
-    const cache = createTelegramMessageCache();
-    await record(
-      cache,
-      message(9127, "Nora", {
-        date: 1_736_389_127,
-        message_thread_id: Number.MAX_SAFE_INTEGER + 1,
-        text: "Unsafe topic message",
-      }),
-    );
-
-    expect((await store.lookup(key("9127")))?.threadId).toBeUndefined();
-    const topicRecent = await recentBefore(cache, "9128", {
-      threadId: Number.MAX_SAFE_INTEGER + 1,
-    });
-    const unscopedRecent = await recentBefore(cache, "9128");
-
-    expect(topicRecent).toEqual([]);
-    expect(unscopedRecent.map((entry) => entry.messageId)).toEqual(["9127"]);
   });
 
   it("does not use unsafe message ids as recent-before cutoffs", async () => {

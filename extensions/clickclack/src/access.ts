@@ -4,11 +4,7 @@ import {
   formatNormalizedAllowFromEntries,
   resolveAllowlistMatchByCandidates,
 } from "openclaw/plugin-sdk/allow-from";
-import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
-import type {
-  resolveStableChannelMessageIngress,
-  StableChannelIngressIdentityParams,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   resolveBotThreadMentionPolicy,
   resolveInboundMentionDecision,
@@ -48,19 +44,6 @@ const clickClackIngressIdentity = {
   isWildcardEntry: (entry) => normalizeClickClackUserId(entry) === "*",
   entryIdPrefix: "clickclack-user",
 } satisfies StableChannelIngressIdentityParams;
-
-type ClickClackDiscussionRoute = Extract<
-  Awaited<ReturnType<typeof resolveClickClackDiscussionRoute>>,
-  { state: "active" }
->["route"];
-
-type ClickClackPreparedInboundRoute = {
-  isDirect: boolean;
-  target: string;
-  route: ResolvedAgentRoute;
-  discussionRoute?: ClickClackDiscussionRoute;
-  revoked: boolean;
-};
 
 async function isClickClackBotOwnedThread(params: {
   account: ResolvedClickClackAccount;
@@ -164,7 +147,7 @@ async function resolvePreparedInboundRoute(params: {
   account: ResolvedClickClackAccount;
   config: CoreConfig;
   message: ClickClackMessage;
-}): Promise<ClickClackPreparedInboundRoute> {
+}) {
   const runtime = getClickClackRuntime();
   const isDirect = Boolean(params.message.direct_conversation_id);
   const target = buildClickClackTarget(
@@ -199,7 +182,7 @@ async function resolvePreparedInboundRoute(params: {
           ...accountRoute,
           agentId: discussionRoute.agentId,
           sessionKey: discussionRoute.sessionKey,
-          lastRoutePolicy: "session",
+          lastRoutePolicy: "session" as const,
         }
       : accountRoute,
     discussionRoute,
@@ -207,27 +190,13 @@ async function resolvePreparedInboundRoute(params: {
   };
 }
 
-export type ClickClackInboundAccess = {
-  shouldDispatch: boolean;
-  isCurrent: () => boolean;
-  commandAuthorized: boolean;
-  /** Whether the resolved group policy required a direct mention. */
-  requireMention?: boolean;
-  mentionFacts: {
-    canDetectMention: boolean;
-    wasMentioned: boolean;
-    hasAnyMention?: boolean;
-  };
-  botLoopProtection?: ChannelBotLoopProtectionFacts;
-  preparedRoute: ClickClackPreparedInboundRoute;
-  channelIngress?: Awaited<ReturnType<typeof resolveStableChannelMessageIngress>>;
-};
+export type ClickClackInboundAccess = Awaited<ReturnType<typeof resolveClickClackInboundAccess>>;
 
 export async function resolveClickClackInboundAccess(params: {
   account: ResolvedClickClackAccount;
   config: CoreConfig;
   message: ClickClackMessage;
-}): Promise<ClickClackInboundAccess> {
+}) {
   const runtime = getClickClackRuntime();
   const initialGroupPolicy = resolveClickClackGroupPolicy({
     account: params.account,

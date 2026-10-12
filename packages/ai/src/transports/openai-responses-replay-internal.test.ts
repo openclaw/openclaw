@@ -3,7 +3,7 @@ import type { Model } from "@openclaw/llm-core";
 import OpenAI from "openai";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { OpenAIResponsesCompactionRejection } from "../provider-options.js";
+import type { CompactionReplayRejection } from "../provider-options.js";
 import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
 import { createResponsesStreamWithRecovery } from "./openai-responses-replay-internal.js";
 import { createOpenAIProviderAcceptanceHook } from "./openai-transport-shared.js";
@@ -119,7 +119,7 @@ describe("Responses streamed recovery lifecycle", () => {
         ...request,
         input: [{ role: "user", content: "Before checkpoint" }, ...request.input],
       }));
-      const onCompactionRejected = vi.fn((_checkpoint: OpenAIResponsesCompactionRejection) => {
+      const onCompactionRejected = vi.fn((_checkpoint: CompactionReplayRejection) => {
         order.push("commit");
       });
 

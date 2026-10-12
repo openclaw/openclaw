@@ -9,8 +9,7 @@ import {
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveLineAccount } from "./accounts.js";
 import { handleLineWebhookEvents } from "./bot-handlers.js";
-import type { LineInboundContext } from "./bot-message-context.js";
-import { createLineWebhookSpool, type LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
+import { createLineWebhookSpool } from "./webhook-spool.js";
 
 const DEFAULT_MEDIA_MAX_MB = 10;
 type BuildChannelInboundContext =
@@ -21,13 +20,7 @@ interface LineBotOptions {
   runtime: RuntimeEnv;
   buildContext?: BuildChannelInboundContext;
   config: OpenClawConfig;
-  onMessage: (
-    ctx: LineInboundContext,
-    control: {
-      cfg: OpenClawConfig;
-      turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle;
-    },
-  ) => Promise<void>;
+  onMessage: Parameters<typeof handleLineWebhookEvents>[1]["processMessage"];
 }
 
 export function createLineBot(opts: LineBotOptions) {

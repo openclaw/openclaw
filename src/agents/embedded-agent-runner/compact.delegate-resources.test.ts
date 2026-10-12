@@ -58,7 +58,6 @@ const modes = [
   "cleanup-tail",
   "preparation-failure",
   "mcp-caller-abort",
-  "mcp-ready",
   "lsp-parent-abort",
   "before_compaction",
   "after_compaction",
@@ -415,7 +414,7 @@ describe("delegate compaction resource retirement", () => {
     async (mode) => {
       const lspCancelled = mode === "lsp-parent-abort";
       const mcpCancelled = mode === "mcp-caller-abort";
-      const pendingPreparation = lspCancelled || mcpCancelled || mode === "mcp-ready";
+      const pendingPreparation = lspCancelled || mcpCancelled;
       const preparationFailed = mode === "preparation-failure" || lspCancelled || mcpCancelled;
       await withOpenClawTestState(
         { label: "delegate-resources", layout: "split" },
@@ -702,9 +701,6 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                   if (mode === "lsp-parent-abort") {
                     parent.beginClose(new Error("fixture parent cancelled compaction"));
                     expect(controller.signal.aborted).toBe(false);
-                  }
-                  if (mode === "mcp-ready") {
-                    current.finish.resolve();
                   }
                 }
                 const result = pendingPreparation

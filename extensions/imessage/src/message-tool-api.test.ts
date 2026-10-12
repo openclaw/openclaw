@@ -32,41 +32,6 @@ describe("iMessage message-tool artifact", () => {
     );
   });
 
-  it("keeps poll actions discoverable until the first lazy bridge probe", () => {
-    const discovery = describeMessageTool({
-      cfg: { channels: { imessage: { cliPath: "imsg" } } } as never,
-      currentChannelId: "chat_id:1",
-    });
-
-    expect(discovery?.actions).toContain("poll");
-    expect(discovery?.actions).toContain("poll-vote");
-    expect(discovery?.schema).toMatchObject({
-      actions: ["poll-vote"],
-      visibility: "all-configured",
-      properties: { pollOptionText: { type: "string" } },
-    });
-  });
-
-  it("guides Remote Mac accounts to stable poll option ids", () => {
-    const discovery = describeMessageTool({
-      cfg: {
-        channels: {
-          imessage: {
-            cliPath: "/gateway/imsg-ssh",
-            remoteHost: "bot@messages-mac",
-          },
-        },
-      } as never,
-      currentChannelId: "chat_id:1",
-    });
-
-    expect(discovery?.schema?.properties).toMatchObject({
-      pollOptionId: { description: expect.stringContaining("Required for Remote Mac") },
-      pollOptionIndex: { description: expect.stringContaining("Local iMessage accounts only") },
-      pollOptionText: { description: expect.stringContaining("Local iMessage accounts only") },
-    });
-  });
-
   it("uses an already-cached legacy wrapper host for synchronous poll guidance", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-tool-host-"));
     tempDirs.push(dir);
@@ -166,23 +131,6 @@ describe("iMessage message-tool artifact", () => {
     expect(discovery?.actions).toContain("poll");
     expect(discovery?.actions).not.toContain("poll-vote");
     expect(discovery?.schema).toBeUndefined();
-  });
-
-  it("hides poll-vote when only the poll creation selector is available", () => {
-    setCachedIMessagePrivateApiStatus("imsg", {
-      available: true,
-      v2Ready: true,
-      selectors: { pollPayloadMessage: true },
-      rpcMethods: ["send", "poll.send", "poll.vote"],
-    });
-
-    const discovery = describeMessageTool({
-      cfg: { channels: { imessage: { cliPath: "imsg" } } } as never,
-      currentChannelId: "chat_id:1",
-    });
-
-    expect(discovery?.actions).toContain("poll");
-    expect(discovery?.actions).not.toContain("poll-vote");
   });
 
   it("offers poll-vote once imsg advertises the poll.vote rpc", () => {

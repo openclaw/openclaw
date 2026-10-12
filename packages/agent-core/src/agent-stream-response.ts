@@ -3,7 +3,10 @@ import {
   createEmptyTransportUsage,
   replaceCompactionReplayOwnerContent,
 } from "@openclaw/ai/transports";
-import { PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE } from "@openclaw/llm-core";
+import {
+  appendTextDeltaToAssistantMessage,
+  PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+} from "@openclaw/llm-core";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -42,6 +45,7 @@ export type AsyncToolBatchScheduling = {
 
 export type ExecutedToolCallBatch = {
   messages: ToolResultMessage[];
+  terminalToolCallIds: string[];
   steeringMessages: AgentMessage[];
   terminate: boolean;
   terminateRun: boolean;
@@ -61,13 +65,7 @@ function resolveAssistantMessageUpdate(
   if (event.type !== "text_delta") {
     return currentMessage;
   }
-  const content = [...currentMessage.content];
-  const currentContent = content[event.contentIndex];
-  content[event.contentIndex] =
-    currentContent?.type === "text"
-      ? { ...currentContent, text: currentContent.text + event.delta }
-      : { type: "text", text: event.delta };
-  return { ...currentMessage, content };
+  return appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta);
 }
 
 function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessage {
@@ -397,10 +395,18 @@ export async function streamAgentResponse(
             // Record one provider terminal, with its original usage, after tool outcomes settle.
             await executions;
           }
+          const tail = remainingFragment(result);
           const finalMessage = prepareAssistantMessage(
             ensureToolTurnIdentity(
               removeNonExecutableToolCalls({
-                ...remainingFragment(result),
+                ...tail,
+                // The provider stop covers the whole response. Its calls were committed
+                // with earlier fragments, so a call-free tail is the response's end.
+                ...(committedContentCount > 0 &&
+                tail.stopReason === "toolUse" &&
+                !tail.content.some((item) => item.type === "toolCall")
+                  ? { stopReason: "stop" as const }
+                  : {}),
                 ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
                 ...(outputLimit && signal?.aborted
                   ? { stopReason: "aborted" }

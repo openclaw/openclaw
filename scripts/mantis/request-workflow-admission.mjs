@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 
-// Consumer configuration still owns the approved ref/SHA pair. This producer
-// guard lets that ref stay stationary without trusting an arbitrary PR branch.
+// The consumer pins the executed SHA. Protected main may advance after checkout;
+// admission still verifies that exact SHA against main ancestry below.
 export async function assertRequestWorkflowRef({ repository, ref, sha, token, fetchImpl = fetch }) {
   if (
     repository !== "openclaw/openclaw" ||
@@ -52,7 +52,7 @@ export async function assertRequestWorkflowRef({ repository, ref, sha, token, fe
   };
   const pinned = await readBranch(branch);
   const main = branch === "main" ? pinned : await readBranch("main");
-  if (pinned !== sha) {
+  if (branch !== "main" && pinned !== sha) {
     throw new Error("Workflow branch moved from the executed SHA");
   }
   if (main !== sha) {

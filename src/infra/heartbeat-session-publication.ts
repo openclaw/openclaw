@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import {
+  loadExactSessionEntryReadOnly,
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
   publishTranscriptUpdate,
@@ -16,11 +18,14 @@ import {
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { readCommittedTranscriptMessageSequence } from "../config/sessions/session-accessor.sqlite-transcript-sequences.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
+import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { resolveRawAssistantAnswerText } from "../shared/assistant-answer-text.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import {
@@ -28,7 +33,14 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../shared/transcript-only-openclaw-assistant.js";
 import { formatErrorMessage } from "./errors.js";
+import { HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX } from "./heartbeat-events-filter.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
+import {
+  resolveOutboundPayloadMirrorText,
+  type NormalizedOutboundPayload,
+} from "./outbound/payloads.js";
+import { withSystemEventOwner } from "./system-event-ownership.js";
+import { enqueueSystemEvent } from "./system-events.js";
 
 type HeartbeatSessionPublication = { ok: true; messageId: string } | { ok: false; reason: string };
 
@@ -60,7 +72,7 @@ export async function publishHeartbeatSessionReply(params: {
     const assertOwnedWrite = captureOwnedTranscriptWriteAssertion(scope);
     const metadata = getReplyPayloadMetadata(params.payload);
     const authority = metadata?.sessionWriterDeliveryAuthority;
-    const initial = loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
+    const initial = await readSessionEntryReadOnlyInWorker({ ...scope, readConsistency: "latest" });
     const writerRunId = authority?.expectedWriterRunId ?? initial?.activeWriterRunId;
     const expected = {
       expectedSessionId: scope.sessionId,
@@ -299,5 +311,69 @@ export async function publishHeartbeatSessionReply(params: {
       return receipt;
     }
     return { ok: false, reason: formatErrorMessage(error) };
+  }
+}
+
+const MAX_HEARTBEAT_TARGET_AWARENESS_CHARS = 1_000;
+
+export function prepareHeartbeatTargetAwareness(params: {
+  agentId: string;
+  storePath: string;
+  runSessionKey: string;
+  targetSessionKey?: string;
+  startedAt: number;
+}): ((payload: NormalizedOutboundPayload) => void) | undefined {
+  const sessionKey = params.targetSessionKey?.trim();
+  if (!sessionKey || sessionKey === params.runSessionKey) {
+    return undefined;
+  }
+  try {
+    if (resolveAgentIdFromSessionKey(sessionKey, params.agentId) !== params.agentId) {
+      return undefined;
+    }
+    const scope = { agentId: params.agentId, storePath: params.storePath, sessionKey };
+    const entry = loadExactSessionEntryReadOnly(scope)?.entry;
+    if (!entry?.sessionId) {
+      return undefined;
+    }
+    const expectedSessionId = entry.sessionId;
+    const expectedLifecycleRevision = entry.lifecycleRevision;
+    const idempotencyKey = `${HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX}${params.startedAt}:${params.runSessionKey}`;
+    return (payload) => {
+      try {
+        // Recheck the exact pre-send lifecycle before publishing awareness. Resets
+        // can preserve sessionId while rotating lifecycleRevision.
+        const latest = loadExactSessionEntryReadOnly(scope)?.entry;
+        if (
+          latest?.sessionId !== expectedSessionId ||
+          latest.lifecycleRevision !== expectedLifecycleRevision
+        ) {
+          return;
+        }
+        const deliveredText = resolveMirroredTranscriptText({
+          text: payload.hookContent ?? resolveOutboundPayloadMirrorText(payload),
+          mediaUrls: payload.mediaUrls,
+        });
+        if (!deliveredText) {
+          return;
+        }
+        const text = truncateUtf16Safe(deliveredText, MAX_HEARTBEAT_TARGET_AWARENESS_CHARS);
+        const suffix = text.length < deliveredText.length ? "\n[truncated]" : "";
+        enqueueSystemEvent(
+          `A heartbeat delivered this message to this channel:\n${text}${suffix}`,
+          withSystemEventOwner({ sessionKey, contextKey: idempotencyKey }, params.agentId),
+        );
+      } catch (error) {
+        // Platform delivery already succeeded; projection remains best-effort bookkeeping.
+        log.warn("heartbeat: failed to queue target session awareness", {
+          error: formatErrorMessage(error),
+        });
+      }
+    };
+  } catch (error) {
+    log.warn("heartbeat: failed to resolve existing target session projection", {
+      error: formatErrorMessage(error),
+    });
+    return undefined;
   }
 }

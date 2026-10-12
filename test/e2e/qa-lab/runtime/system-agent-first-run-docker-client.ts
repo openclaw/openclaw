@@ -5,7 +5,6 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { shouldStartOnboardingForFreshInstall } from "../../../../dist/cli/run-main.js";
 import { runGuidedOnboarding } from "../../../../dist/commands/onboard-guided.js";
 import { clearConfigCache } from "../../../../dist/config/config.js";
 import type { OpenClawConfig } from "../../../../dist/config/types.openclaw.js";
@@ -231,13 +230,13 @@ async function runReleasedPendingRecovery(inferenceConfig: OpenClawConfig) {
   delete defaults.models;
   // v2026.9.4 (3a9d69db) wrote this runtime-bearing main entry after claiming
   // the receipt, before workspace setup. Do not recreate the retired producer.
-  const main = {
+  const mainEntry = {
     default: true,
     models: { [EXPECTED_PERSISTED_MODEL]: { agentRuntime: { id: "claude-cli" } } },
   };
   const releasedConfig: OpenClawConfigWithLegacyRoster = {
     ...structuredClone(inferenceConfig),
-    agents: { defaults, entries: { main } },
+    agents: { defaults, entries: { main: mainEntry } },
   };
   const securityAcknowledgedAt = releasedConfig.wizard?.securityAcknowledgedAt;
   assert(
@@ -276,7 +275,7 @@ async function runReleasedPendingRecovery(inferenceConfig: OpenClawConfig) {
   clearConfigCache();
   const after: OpenClawConfigWithLegacyRoster = JSON.parse(await fs.readFile(configPath, "utf8"));
   const owner = readLocalOnboardingStateForConfig(configPath, after);
-  const mainPreserved = isDeepStrictEqual(after.agents?.entries, { main });
+  const mainPreserved = isDeepStrictEqual(after.agents?.entries, { main: mainEntry });
   console.log(
     `OpenClaw released pending recovery state: ${JSON.stringify({
       status: owner?.status,
@@ -326,10 +325,10 @@ async function main() {
   await fs.rm(stateDir, { recursive: true, force: true });
   await fs.mkdir(stateDir, { recursive: true });
 
-  clearConfigCache();
+  const firstRun = await runPackagedCli([]);
   assert(
-    await shouldStartOnboardingForFreshInstall(["node", "openclaw"]),
-    "fresh bare OpenClaw invocation did not route to onboarding",
+    firstRun.code === 1 && firstRun.stderr.includes("Onboarding needs an interactive TTY."),
+    `fresh bare OpenClaw invocation did not route to onboarding: ${firstRun.stdout}\n${firstRun.stderr}`,
   );
 
   const blocked = await runPackagedCli(["setup", "--message", "overview"]);

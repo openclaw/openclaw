@@ -8,7 +8,11 @@ import type {
   SessionEntryCurrentFacts,
 } from "../../../config/sessions/session-entry-current.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
-import type { InternalSessionEntry, SessionEntry } from "../../../config/sessions/types.js";
+import {
+  isTerminalSessionStatus,
+  type InternalSessionEntry,
+  type SessionEntry,
+} from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
@@ -130,11 +134,15 @@ export async function persistSubagentSessionTiming(
   const startedAt = getSubagentSessionStartedAt(entry);
   const endedAt = asFiniteNumber(entry.execution.endedAt);
   const runtimeMs = getSubagentSessionRuntimeMs(entry, endedAt);
-  const status = resolveSubagentSessionStatus(entry);
+  const projectedStatus = resolveSubagentSessionStatus(entry);
+  const status = isTerminalSessionStatus(projectedStatus) ? projectedStatus : undefined;
 
-  const lastRunError = status
-    ? resolveSessionRunError(entry.execution.outcome ?? {}, status)
-    : undefined;
+  const lastRunError =
+    status === "interrupted"
+      ? "Run interrupted by a Gateway restart."
+      : status
+        ? resolveSessionRunError(entry.execution.outcome ?? {}, status)
+        : undefined;
   const update = (sessionEntry: InternalSessionEntry) => {
     const settled = options?.settledQueuedCancellation;
     if (
@@ -190,17 +198,15 @@ export async function persistSubagentSessionTiming(
       }
     }
 
-    if (status) {
-      next.status = status;
-    } else {
-      delete next.status;
-    }
+    next.status = status;
     if (lastRunError) {
       next.lastRunError = lastRunError;
-    } else if (status === "done" || status === "interrupted") {
+    } else if (status === "done") {
       delete next.lastRunError;
     }
-    if (status && status !== "killed") {
+    if (status === "interrupted") {
+      next.abortedLastRun = true;
+    } else if (status && status !== "killed") {
       delete next.abortedLastRun;
     }
     return next;
@@ -256,7 +262,7 @@ export async function persistSubagentSessionTiming(
       }
       return undefined;
     });
-    if (persisted && lastRunError) {
+    if (persisted && lastRunError && status !== "interrupted") {
       await recordGatewaySessionRunFailure({
         target: {
           agentId,

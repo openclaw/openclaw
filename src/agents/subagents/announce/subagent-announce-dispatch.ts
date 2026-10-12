@@ -147,22 +147,17 @@ export async function runSubagentAnnounceDispatch(params: {
     primaryDirect.disposition === "session_queued" ||
     primaryDirect.disposition === "intentional_non_delivery" ||
     primaryDirect.disposition === "ambiguous" ||
-    primaryDirect.disposition === "permanent_failure"
+    primaryDirect.disposition === "permanent_failure" ||
+    params.signal?.aborted
   ) {
-    return withPhases(primaryDirect);
-  }
-
-  if (params.signal?.aborted) {
     return withPhases(primaryDirect);
   }
 
   const fallbackSteerOutcome = await params.steer();
   const fallbackSteer = mapSteerOutcomeToDeliveryResult(fallbackSteerOutcome);
   appendPhase("steer-fallback", fallbackSteer);
-  if (fallbackSteer.delivered || fallbackSteer.terminal) {
-    return withPhases(fallbackSteer);
-  }
-
   // Keep the direct failure authoritative; dropped fallback remains in its phase.
-  return withPhases(primaryDirect);
+  return withPhases(
+    fallbackSteer.delivered || fallbackSteer.terminal ? fallbackSteer : primaryDirect,
+  );
 }

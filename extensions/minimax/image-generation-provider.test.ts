@@ -3,10 +3,7 @@ import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildMinimaxImageGenerationProvider,
-  buildMinimaxPortalImageGenerationProvider,
-} from "./image-generation-provider.js";
+import { buildMinimaxImageGenerationProvider } from "./image-generation-provider.js";
 
 installPinnedHostnameTestHooks();
 
@@ -47,26 +44,26 @@ describe("minimax image-generation provider", () => {
     expect(init?.method).toBe("POST");
   }
 
-  it.each([
-    ["minimax", buildMinimaxImageGenerationProvider],
-    ["minimax-portal", buildMinimaxPortalImageGenerationProvider],
-  ])("advertises %s image generation using its own config-only credential", (providerId, build) => {
-    expect(
-      build().isConfigured?.({
-        cfg: {
-          models: {
-            providers: {
-              [providerId]: {
-                apiKey: "minimax-config-only-key",
-                baseUrl: "https://api.minimax.io/v1",
-                models: [],
+  it.each(["minimax", "minimax-portal"])(
+    "advertises %s image generation using its own config-only credential",
+    async (providerId) => {
+      expect(
+        await buildMinimaxImageGenerationProvider(providerId).isConfiguredAsync?.({
+          cfg: {
+            models: {
+              providers: {
+                [providerId]: {
+                  apiKey: "minimax-config-only-key",
+                  baseUrl: "https://api.minimax.io/v1",
+                  models: [],
+                },
               },
             },
           },
-        },
-      }),
-    ).toBe(true);
-  });
+        }),
+      ).toBe(true);
+    },
+  );
 
   it("generates PNG buffers through the shared provider HTTP path", async () => {
     mockMinimaxApiKey();
@@ -190,7 +187,7 @@ describe("minimax image-generation provider", () => {
       headers: { "X-MiniMax-Image-Policy": "enabled" },
     };
 
-    const provider = buildMinimaxPortalImageGenerationProvider();
+    const provider = buildMinimaxImageGenerationProvider("minimax-portal");
     await provider.generateImage({
       provider: "minimax-portal",
       model: "image-01",
@@ -282,7 +279,7 @@ describe("minimax image-generation provider", () => {
     mockMinimaxApiKey();
     const fetchMock = mockMinimaxImageResponse();
 
-    const provider = buildMinimaxPortalImageGenerationProvider();
+    const provider = buildMinimaxImageGenerationProvider("minimax-portal");
     await provider.generateImage({
       provider: "minimax-portal",
       model: "image-01",

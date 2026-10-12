@@ -127,10 +127,6 @@ function terminalTools(diagnostics: ToolAccessDiagnostics) {
   return diagnostics.tools.filter((tool) => TERMINAL_TOOLS.some((id) => id === tool.id));
 }
 
-function isExcluded(tool: ToolAccessDiagnostics["tools"][number]): boolean {
-  return tool.status === "excluded";
-}
-
 type CommandApprovalSummary = {
   scopeLabel?: string;
   host: { requested: string };
@@ -175,7 +171,7 @@ export function renderExecPolicyToolAccess(params: {
   const preview = access.live?.status === "verified" ? access.live.diagnostics : undefined;
   const diagnostics = preview ?? access.local;
   const tools = diagnostics ? terminalTools(diagnostics) : [];
-  const excluded = tools.filter(isExcluded);
+  const excluded = tools.filter((tool) => tool.status === "excluded");
   const missingFromPreview = tools.some((tool) => tool.status === "unavailable");
   const status =
     access.live?.status === "unverified"
@@ -225,7 +221,9 @@ export function renderExecPolicyToolAccess(params: {
   }
   if (access.live?.status === "unverified") {
     if (access.local) {
-      const localExcluded = terminalTools(access.local).filter(isExcluded);
+      const localExcluded = terminalTools(access.local).filter(
+        (tool) => tool.status === "excluded",
+      );
       lines.push(
         localExcluded.length > 0
           ? `Local configuration excludes: ${localExcluded.map((tool) => tool.id).join(", ")}`
@@ -240,7 +238,7 @@ export function renderExecPolicyToolAccess(params: {
         ? "Included in session preview"
         : tool.status === "allowed"
           ? "Allowed by configuration; execution unverified"
-          : isExcluded(tool)
+          : tool.status === "excluded"
             ? "Excluded by policy"
             : "Not included in session preview; execution unverified";
     lines.push(`${display(tool.id)}: ${label}`);

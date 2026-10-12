@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
@@ -6,6 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
 import { StaleWorkerBuildError } from "./admission.js";
@@ -39,9 +40,11 @@ import {
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("worker turn recovery after environment reconciliation errors", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it("settles a stale-build turn when a lost shared node rejects its stop acknowledgement", async () => {
     const store = await createWorkerEnvironmentStore({ database: openOpenClawStateDatabase() });
@@ -82,7 +85,6 @@ describe("worker turn recovery after environment reconciliation errors", () => {
       resolveProvider: () => provider,
       prepareInstallation: async () => installation,
       bootstrapWorker: vi.fn(),
-      executeInference: vi.fn(),
       placementStore: createWorkerSessionPlacementGate(placements),
       nodeTunnelManager,
       logger: { warn },

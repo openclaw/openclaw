@@ -17,24 +17,19 @@ type LobsterInputRequest = {
   resumeToken?: string;
 };
 
-type LobsterEnvelope =
-  | {
-      ok: true;
-      status: "ok" | "needs_approval" | "needs_input" | "cancelled";
-      output: unknown[];
-      requiresApproval: null | {
-        type: "approval_request";
-        prompt: string;
-        items: unknown[];
-        resumeToken?: string;
-        approvalId?: string;
-      };
-      requiresInput?: LobsterInputRequest;
-    }
-  | {
-      ok: false;
-      error: { type?: string; message: string };
-    };
+type LobsterEnvelope = {
+  ok: true;
+  status: "ok" | "needs_approval" | "needs_input" | "cancelled";
+  output: unknown[];
+  requiresApproval: null | {
+    type: "approval_request";
+    prompt: string;
+    items: unknown[];
+    resumeToken?: string;
+    approvalId?: string;
+  };
+  requiresInput?: LobsterInputRequest;
+};
 
 export type LobsterRunnerParams = {
   action: "run" | "resume";
@@ -48,10 +43,6 @@ export type LobsterRunnerParams = {
   cwd: string;
   timeoutMs: number;
   maxStdoutBytes: number;
-};
-
-export type LobsterRunner = {
-  run: (params: LobsterRunnerParams) => Promise<LobsterEnvelope>;
 };
 
 type EmbeddedToolContext = {
@@ -133,14 +124,14 @@ function createLimitedSink(maxBytes: number, label: "stdout" | "stderr") {
 function normalizeEnvelope(
   envelope: EmbeddedToolEnvelope,
   maxStdoutBytes: number,
-): Extract<LobsterEnvelope, { ok: true }> {
+): LobsterEnvelope {
   if (!envelope.ok) {
     throw new Error(envelope.error?.message ?? "lobster runtime failed");
   }
   if (envelope.status === "needs_input" && !envelope.requiresInput?.resumeToken) {
     throw new Error("Lobster input request is missing its resume token");
   }
-  const normalized: Extract<LobsterEnvelope, { ok: true }> = {
+  const normalized: LobsterEnvelope = {
     ok: true,
     status: envelope.status ?? "ok",
     output: Array.isArray(envelope.output) ? envelope.output : [],
@@ -196,11 +187,11 @@ async function loadEmbeddedToolRuntimeFromPackage(): Promise<EmbeddedToolRuntime
 
 export function createEmbeddedLobsterRunner(options?: {
   loadRuntime?: () => Promise<EmbeddedToolRuntime>;
-}): LobsterRunner {
+}) {
   const loadRuntime = options?.loadRuntime ?? loadEmbeddedToolRuntimeFromPackage;
   let runtimePromise: Promise<EmbeddedToolRuntime> | undefined;
   return {
-    async run(params) {
+    async run(params: LobsterRunnerParams) {
       runtimePromise ??= loadRuntime();
       const runtime = await runtimePromise;
       const controller = new AbortController();

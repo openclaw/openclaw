@@ -88,7 +88,7 @@ const manifestSource = readFileSync(
 const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
-const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb";
+const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6";
 const CREATE_GITHUB_APP_TOKEN_V3 =
   "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
@@ -1697,6 +1697,35 @@ AFTER_CD
         ).toBe(releaseGate && !qualification);
       }
     }
+    const releaseChild = {
+      eventName: "workflow_dispatch",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      dispatchId: "full-release-validation-1-1-ci",
+    } as const;
+    expect(evaluateWorkflowExpression("${{ " + prepare.if + " }}", releaseChild)).toBe(true);
+    expect(evaluateWorkflowExpression(job["runs-on"], releaseChild)).toBe(
+      "blacksmith-16vcpu-ubuntu-2404",
+    );
+    expect(evaluateWorkflowExpression(parallelism!, releaseChild)).toBe(1);
+    for (const recovery of [
+      { ...releaseChild, runnerBackend: "github" as const },
+      { ...releaseChild, runAttempt: 2 },
+      { ...releaseChild, runnerBackend: "hybrid" as const, runAttempt: 2 },
+      { ...releaseChild, runnerBackend: "runson" as const, runAttempt: 2 },
+    ]) {
+      expect(evaluateWorkflowExpression(job["runs-on"], recovery)).toBe("ubuntu-24.04");
+      expect(evaluateWorkflowExpression(parallelism!, recovery)).toBe(1);
+    }
+    expect(
+      evaluateWorkflowExpression(job["runs-on"], {
+        ...releaseChild,
+        releaseRunnerGroup: "release-runners",
+      }),
+    ).toEqual({ group: "release-runners", labels: "ubuntu-24.04" });
+    const manualDispatch = { ...releaseChild, dispatchId: "" };
+    expect(evaluateWorkflowExpression(job["runs-on"], manualDispatch)).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowExpression(parallelism!, manualDispatch)).toBe(1);
     expect(prepare.run).toContain("pnpm build:ci-artifacts");
     expect(prepare.run).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
     expect(prepare.run).not.toContain("--skip-check");
@@ -1710,6 +1739,7 @@ AFTER_CD
     );
     expect(baseline.env).toEqual({
       TARGET_CONTEXT_REF: "${{ inputs.target_context_ref || github.base_ref || github.ref_name }}",
+      QUALIFICATION_BASELINES_JSON: "${{ inputs.qualification_baselines_json }}",
       FROZEN_TARGET: "${{ needs.preflight.outputs.frozen_target }}",
     });
     expect(job.steps.indexOf(baseline)).toBeLessThan(job.steps.indexOf(run));
@@ -1746,6 +1776,7 @@ AFTER_CD
   it.each<{
     candidate: string;
     shape: string;
+    captured?: string;
     expected?: string;
     context?: string;
     frozen?: boolean;
@@ -1755,6 +1786,26 @@ AFTER_CD
     error?: string;
   }>([
     { candidate: "2026.9.3", shape: "current", expected: "openclaw@2026.9.2" },
+    {
+      candidate: "2026.9.3",
+      shape: "frozen-captured-three-key",
+      frozen: true,
+      captured: "openclaw@2026.9.1",
+      catalog: {
+        oldestSupportedBaseline: "2026.6.1",
+        scenarios: ["base", "legacy-operator-state"],
+        assertionOnlyScenarios: [],
+      },
+      expected: "openclaw@2026.9.1",
+    },
+    {
+      candidate: "2026.9.3",
+      shape: "assertion-only-is-not-executable",
+      frozen: true,
+      catalog: { scenarios: ["base"], assertionOnlyScenarios: ["legacy-operator-state"] },
+      expected: "openclaw@2026.9.2",
+      scenario: "base",
+    },
     { candidate: "2026.9.4-beta.1", shape: "prerelease", expected: "openclaw@2026.9.3" },
     {
       candidate: "2026.6.35",
@@ -1790,13 +1841,24 @@ AFTER_CD
       shape: "malformed-catalog",
       frozen: true,
       catalogText: "{",
-      error: "SyntaxError",
+      error: "Invalid upgrade-survivor scenario catalog",
     },
     {
       candidate: "2026.9.3",
       shape: "invalid-catalog",
       frozen: true,
       catalog: { scenarios: "base", assertionOnlyScenarios: [] },
+      error: "Invalid upgrade-survivor scenario catalog",
+    },
+    {
+      candidate: "2026.9.3",
+      shape: "invalid-support-floor",
+      frozen: true,
+      catalog: {
+        oldestSupportedBaseline: "latest",
+        scenarios: ["base"],
+        assertionOnlyScenarios: [],
+      },
       error: "Invalid upgrade-survivor scenario catalog",
     },
     {
@@ -1820,7 +1882,13 @@ AFTER_CD
       const tooling = path.join(root, ".ci-harness", "scripts", "lib");
       mkdirSync(bin);
       mkdirSync(tooling, { recursive: true });
-      for (const name of ["release-upgrade-baseline.mjs", "release-version.mjs"]) {
+      for (const name of [
+        "release-upgrade-baseline.mjs",
+        "release-version.mjs",
+        "canonical-json.mjs",
+        "upgrade-survivor-policy.mjs",
+        "upgrade-survivor-scenarios.json",
+      ]) {
         copyFileSync(path.resolve("scripts", "lib", name), path.join(tooling, name));
       }
       writeFileSync(
@@ -1841,6 +1909,7 @@ AFTER_CD
         path.join(bin, "npm"),
         `#!${process.execPath}
 const args = process.argv.slice(2);
+if (process.env.QUALIFICATION_BASELINES_JSON) throw new Error("frozen qualification must not re-resolve npm baselines");
 if (JSON.stringify(args) !== JSON.stringify(["view", "openclaw", "versions", "--json", "--silent", "--prefer-online"])) process.exit(2);
 console.log(JSON.stringify(["2026.6.34", "2026.6.35", "2026.9.1", "2026.9.2", "2026.9.3", "2026.9.4-beta.1"]));
 `,
@@ -1887,6 +1956,12 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
             OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: inheritedRestartMode,
             FROZEN_TARGET: String(fixture.frozen ?? false),
             TARGET_CONTEXT_REF: fixture.context ?? "main",
+            QUALIFICATION_BASELINES_JSON: fixture.captured
+              ? JSON.stringify({
+                  upgradeBaseline: fixture.captured,
+                  upgradeSurvivorBaselines: [fixture.captured],
+                })
+              : "",
           },
         },
       );
@@ -2691,7 +2766,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         caller.mode === "read-write" ||
         (typeof caller.mode === "string" && caller.mode.includes("'read-write'")),
     );
-    expect(writeAuthorizedCallers).toHaveLength(4);
+    expect(writeAuthorizedCallers).toHaveLength(5);
     expect(writeAuthorizedCallers).toEqual(
       expect.arrayContaining([
         {
@@ -2708,6 +2783,11 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           file: ".github/workflows/vitest-cache-warm.yml",
           mode: "read-write",
           step: expect.objectContaining({ name: "Setup Node environment" }),
+        },
+        {
+          file: ".github/workflows/vitest-cache-warm.yml",
+          mode: "read-write",
+          step: expect.objectContaining({ name: "Setup release build runtime and cache" }),
         },
       ]),
     );
@@ -3271,19 +3351,26 @@ server.listen(0, "127.0.0.1", () => {
     },
   );
 
-  it("refreshes full-build cache generations without changing their restore prefix", () => {
+  it("shares full-build caches by installed Node version across requests and generations", () => {
     const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
     const cacheStep = expectDefined(
       action.runs.steps.find((step: WorkflowStep) => step.name === "Restore build-all cache"),
       "full-build cache restore",
     );
-    const renderCacheKey = (template: string, runId: number, runAttempt: number) =>
+    const renderCacheKey = (
+      template: string,
+      runId: number,
+      runAttempt: number,
+      requestedNode = "24.x",
+      resolvedNode = "24.21.0",
+    ) =>
       template.replace(/\$\{\{([\s\S]*?)\}\}/gu, (_, expression: string) =>
         String(
-          runInNewContext(expression.replace(/inputs\.([a-z-]+)/gu, 'inputs["$1"]'), {
+          runInNewContext(expression.replace(/\.([A-Za-z_][\w-]*)/gu, '["$1"]'), {
             github: { repository: "openclaw/openclaw", run_id: runId, run_attempt: runAttempt },
-            inputs: { "build-all-cache-scope": "full", "node-version": "24.x" },
+            inputs: { "build-all-cache-scope": "full", "node-version": requestedNode },
             runner: { os: "Linux", arch: "X64" },
+            steps: { "setup-node": { outputs: { "resolved-version": resolvedNode } } },
             hashFiles: () => "unchanged-source",
           }),
         ),
@@ -3303,6 +3390,71 @@ server.listen(0, "127.0.0.1", () => {
       );
     }
     expect(cacheStep.with["restore-keys"]).not.toContain("hashFiles");
+    const warmerKey = renderCacheKey(cacheStep.with.key, 10, 1);
+    const releasePrefix = renderCacheKey(cacheStep.with["restore-keys"], 11, 1, "24.21.0").trim();
+    expect(warmerKey.startsWith(releasePrefix)).toBe(true);
+    for (const resolvedNode of ["24.22.0", "26.7.0"]) {
+      const otherRuntimePrefix = renderCacheKey(
+        cacheStep.with["restore-keys"],
+        11,
+        1,
+        "24.x",
+        resolvedNode,
+      ).trim();
+      expect(warmerKey.startsWith(otherRuntimePrefix)).toBe(false);
+    }
+  });
+
+  it("warms full builds with the release runtime without changing test cache selectors", () => {
+    const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
+    const npm = parse(readFileSync(".github/workflows/openclaw-npm-preflight.yml", "utf8"));
+    const frv = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
+    const steps = warmer.jobs.warm.steps as WorkflowStep[];
+    const setup = expectDefined(
+      steps.find((step) => step.id === "setup-node-env"),
+      "test setup",
+    );
+    const buildSetup = expectDefined(
+      steps.find((step) => step.with?.["build-all-cache-scope"] === "full"),
+      "release build setup",
+    );
+    const buildVersion = String(buildSetup.with?.["node-version"]).replace(
+      /\$\{\{ env\.([A-Z_]+) \}\}/gu,
+      (_: string, key: string) => warmer.env[key],
+    );
+    expect(buildVersion).toBe(npm.env.NODE_VERSION);
+    expect(buildVersion).toBe(frv.env.NODE_VERSION);
+    expect(buildSetup.if).toBe("${{ matrix.platform == 'linux' }}");
+    expect(buildSetup.with?.["install-deps"]).toBe("false");
+    expect(setup.with).not.toHaveProperty("node-version");
+    expect(setup.with).not.toHaveProperty("build-all-cache-scope");
+    const build = expectDefined(
+      steps.find((step) => step.name === "Warm build cache"),
+      "build",
+    );
+    const save = expectDefined(
+      steps.find((step) => step.name === "Save build-all cache"),
+      "save",
+    );
+    expect(save.with?.key).toBe(`\${{ steps.${buildSetup.id}.outputs.build-all-cache-key }}`);
+    const restore = expectDefined(
+      steps.find((step) => step.name === "Restore test Node runtime"),
+      "restore test runtime",
+    );
+    expect(restore.with?.["node-version"]).toBe("${{ steps.test-node.outputs.version }}");
+    expect(restore.with?.["cache-mode"]).toBe("off");
+    expect(restore.with?.["install-deps"]).toBe("false");
+    const ordered = [
+      setup,
+      steps.find((step) => step.id === "test-node"),
+      steps.find((step) => step.name === "Save compiled Vitest workers"),
+      buildSetup,
+      build,
+      save,
+      restore,
+      steps.find((step) => step.name === "Warm transform and compile caches"),
+    ].map((step) => steps.indexOf(expectDefined(step, "ordered warming step")));
+    expect(ordered).toEqual(ordered.toSorted((a, b) => a - b));
   });
 
   it("persists Node 26 minimum declarations through trusted bounded artifacts", () => {
@@ -3906,6 +4058,51 @@ server.listen(0, "127.0.0.1", () => {
     );
   });
 
+  it.each([true, false])(
+    "pins qualification comparison inputs when workflow equals candidate: %s",
+    (sameRevision) => {
+      const step = readCiWorkflow().jobs.preflight.steps.find(
+        (entry: WorkflowStep) => entry.name === "Resolve exact diff base",
+      );
+      const root = tempDirs.make("frozen-ci-base-");
+      const head = "a".repeat(40);
+      const workflow = sameRevision ? head : "b".repeat(40);
+      const base = sameRevision ? head : "c".repeat(40);
+      const output = path.join(root, "output");
+      const result = runWorkflowShellScript(
+        `git() { [[ "$*" == "rev-parse HEAD" ]] || return 1; printf "%s\\n" "$TEST_HEAD"; }
+gh() {
+  [[ "$*" == "api --method GET repos/openclaw/openclaw/compare/$WORKFLOW_REVISION...$TEST_HEAD --jq .merge_base_commit.sha" ]] || return 1
+  printf "%s\\n" "$TEST_BASE"
+}
+${step.run}`,
+        {
+          cwd: root,
+          env: {
+            PATH: process.env.PATH,
+            DEFAULT_BRANCH: "main",
+            DISPATCH_ID: "full-release-validation-123",
+            EVENT_BASE_SHA: "",
+            GITHUB_EVENT_NAME: "workflow_dispatch",
+            GITHUB_REPOSITORY: "openclaw/openclaw",
+            GITHUB_OUTPUT: output,
+            RELEASE_GATE: "false",
+            TARGET_CONTEXT_REF: "release/2026.9.6",
+            WORKFLOW_REVISION: workflow,
+            TEST_HEAD: head,
+            TEST_BASE: base,
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(readWorkflowOutputs(output)).toMatchObject({
+        default_sha: workflow,
+        sha: base,
+        head_sha: head,
+      });
+    },
+  );
+
   it("keeps manual candidates separate from trusted cache authority", () => {
     const workflow = readCiWorkflow();
     const preflight = workflow.jobs.preflight;
@@ -4426,6 +4623,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const result = spawnSync(
         "bash",
         [
+          "--noprofile",
+          "--norc",
           "-c",
           `set -euo pipefail\n${discoveryBlock}\nprintf 'result=%s\\n' "$CRABBOX_AWS_SSH_CIDRS"`,
         ],
@@ -4444,14 +4643,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
       for (const invalidIp of ["999.0.0.1", "203.0.113.7."]) {
         writeFileSync(callCount, "0\n");
-        const invalidResult = spawnSync("bash", ["-c", `set -euo pipefail\n${discoveryBlock}`], {
-          encoding: "utf8",
-          env: {
-            CURL_CALL_COUNT: callCount,
-            CURL_SUCCESS_IP: invalidIp,
-            PATH: `${fakeBin}:${process.env.PATH}`,
+        const invalidResult = spawnSync(
+          "bash",
+          ["--noprofile", "--norc", "-c", `set -euo pipefail\n${discoveryBlock}`],
+          {
+            encoding: "utf8",
+            env: {
+              CURL_CALL_COUNT: callCount,
+              CURL_SUCCESS_IP: invalidIp,
+              PATH: `${fakeBin}:${process.env.PATH}`,
+            },
           },
-        });
+        );
         expect(invalidResult.status).toBe(1);
         expect(invalidResult.stderr).toContain(
           "Could not resolve GitHub runner public IPv4 for AWS SSH ingress.",
@@ -5039,6 +5242,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         env: {
           TASK: task,
           RUN_BUNDLED_TESTS: String(eventName !== "pull_request"),
+          RUN_PR_MADGE_IMPORT_CYCLES: String(eventName === "pull_request"),
+          RUN_PR_KYSELY_GUARDRAILS: String(eventName === "pull_request"),
+          SPLIT_PR_GUARDS: "false",
           GITHUB_EVENT_NAME: eventName,
           CHECKOUT_KIND: "linux-node",
           CHECKOUT_BASE_SHA: String(checkoutBase),
@@ -5839,7 +6045,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(installRipgrepStep).toMatchObject({
       if: "matrix.requires_ripgrep == true && runner.os == 'Linux'",
-      run: expect.stringContaining("apt-get install -y --no-install-recommends ripgrep"),
+      uses: "./.ci-harness/.github/actions/setup-ripgrep",
     });
     expect(nodeTestJob.steps.indexOf(buildRuntimeStep)).toBeLessThan(
       nodeTestJob.steps.indexOf(runStep),

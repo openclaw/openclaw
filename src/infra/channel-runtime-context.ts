@@ -5,23 +5,6 @@ import type {
 
 const NOOP_DISPOSE = () => {};
 
-function resolveScopedRuntimeContextRegistry(params: {
-  channelRuntime: ChannelRuntimeSurface;
-}): ChannelRuntimeSurface["runtimeContexts"] {
-  const runtimeContexts = params.channelRuntime?.runtimeContexts;
-  if (
-    runtimeContexts &&
-    typeof runtimeContexts.register === "function" &&
-    typeof runtimeContexts.get === "function" &&
-    typeof runtimeContexts.watch === "function"
-  ) {
-    return runtimeContexts;
-  }
-  throw new Error(
-    "channelRuntime must provide runtimeContexts.register/get/watch; pass createPluginRuntime().channel or omit channelRuntime.",
-  );
-}
-
 /** Registers a channel-scoped runtime context, returning null when no runtime registry exists. */
 export function registerChannelRuntimeContext(
   params: ChannelRuntimeContextKey & {
@@ -85,7 +68,17 @@ export function createTaskScopedChannelRuntime<T extends ChannelRuntimeSurface>(
       dispose: NOOP_DISPOSE,
     };
   }
-  const runtimeContexts = resolveScopedRuntimeContextRegistry({ channelRuntime: baseRuntime });
+  const runtimeContexts = baseRuntime.runtimeContexts;
+  if (
+    !runtimeContexts ||
+    typeof runtimeContexts.register !== "function" ||
+    typeof runtimeContexts.get !== "function" ||
+    typeof runtimeContexts.watch !== "function"
+  ) {
+    throw new Error(
+      "channelRuntime must provide runtimeContexts.register/get/watch; pass createPluginRuntime().channel or omit channelRuntime.",
+    );
+  }
 
   const trackedLeases = new Set<{ dispose: () => void }>();
   const scopedRuntime = {

@@ -6,12 +6,15 @@ import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as userProfileList from "../state/user-profile-list.js";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createCodeModeTools } from "./code-mode.js";
 import { resolveCoreToolFactoryFamily } from "./core-tool-factory-descriptors.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "./cron-creator-authority-context.js";
+import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import {
   shouldIncludePrimarySessionToolForOpenClawTools,
@@ -66,6 +69,44 @@ function expectToolNamed(
   }
   return tool;
 }
+
+it("keeps top-level tool argument names distinct from the required schema keyword", () => {
+  const config: OpenClawConfig = {
+    agents: { entries: { main: {} } },
+    tools: { swarm: true },
+  };
+  const directTools = createOpenClawCodingTools({
+    config,
+    sessionKey: "agent:main:main",
+    wrapBeforeToolCallHook: false,
+    toolConstructionPlan: {
+      includeBaseCodingTools: true,
+      includeShellTools: true,
+      includeChannelTools: false,
+      includeOpenClawTools: true,
+      includePluginTools: false,
+    },
+  });
+  const codeModeTools = createCodeModeTools({ config, agentId: "main" });
+  expect(toolNames(directTools)).toEqual(expect.arrayContaining(["exec", "agents_wait"]));
+  expect(toolNames(codeModeTools)).toEqual(["exec", "wait"]);
+  const completionTools = finalizeAgentToolAvailability([createLazyExecTool()]);
+  expect(completionTools[0]!.parameters).not.toHaveProperty(["properties", "background"]);
+  expect(completionTools[0]!.parameters).not.toHaveProperty(["properties", "yieldMs"]);
+  const surfaces = {
+    direct: directTools,
+    codeMode: codeModeTools,
+    completion: completionTools,
+  };
+  // Kimi confuses a top-level argument named required with JSON Schema's keyword.
+  for (const [surface, tools] of Object.entries(surfaces)) {
+    for (const tool of tools) {
+      expect
+        .soft(tool.parameters, `${surface}:${tool.name}`)
+        .not.toHaveProperty(["properties", "required"]);
+    }
+  }
+});
 
 describe("openclaw-tools progress_card gating", () => {
   afterEach(() => {

@@ -8,7 +8,7 @@ import type {
 } from "./verification-manager.js";
 
 type MatrixCryptoFacadeClient = {
-  getCrypto: () => unknown;
+  getCrypto: () => MatrixVerificationCryptoApi | undefined;
   getUserId: () => string | null;
 };
 
@@ -48,9 +48,9 @@ export function createMatrixCryptoFacade(deps: {
     run: (...args: TArgs) => TResult,
   ) {
     return async (...args: TArgs): Promise<Awaited<TResult>> => {
-      const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
+      const crypto = deps.client.getCrypto();
       const userId = deps.client.getUserId();
-      if (userId && typeof crypto?.getVerificationRequestsToDeviceInProgress === "function") {
+      if (userId && crypto) {
         for (const request of crypto.getVerificationRequestsToDeviceInProgress(userId)) {
           manager.trackVerificationRequest(request);
         }
@@ -106,11 +106,7 @@ export function createMatrixCryptoFacade(deps: {
     },
     listVerifications: withTrackedVerifications(manager.listVerifications.bind(manager)),
     ensureVerificationDmTracked: async ({ roomId, userId }: { roomId: string; userId: string }) => {
-      const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
-      const request =
-        typeof crypto?.findVerificationRequestDMInProgress === "function"
-          ? crypto.findVerificationRequestDMInProgress(roomId, userId)
-          : undefined;
+      const request = deps.client.getCrypto()?.findVerificationRequestDMInProgress(roomId, userId);
       if (!request) {
         return null;
       }
@@ -122,8 +118,7 @@ export function createMatrixCryptoFacade(deps: {
       deviceId?: string;
       roomId?: string;
     }) => {
-      const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
-      return await deps.verificationManager.requestVerification(crypto, params);
+      return await deps.verificationManager.requestVerification(deps.client.getCrypto(), params);
     },
     acceptVerification: withTrackedVerifications(manager.acceptVerification.bind(manager)),
     cancelVerification: withTrackedVerifications(manager.cancelVerification.bind(manager)),

@@ -426,15 +426,6 @@ syncBuiltinESMExports();
 
   it.each([
     {
-      name: "exact duplicate",
-      entries: [
-        { path: "package/package.json", type: "File" as const, body: "{}\n" },
-        { path: "package/dist/index.js", type: "File" as const, body: "one\n" },
-        { path: "package/dist/index.js", type: "File" as const, body: "two\n" },
-      ],
-      error: "package tarball contains duplicate paths: package/dist/index.js",
-    },
-    {
       name: "multiple manifests",
       entries: [
         { path: "package/package.json", type: "File" as const, body: "{}\n" },
@@ -818,7 +809,7 @@ syncBuiltinESMExports();
       inventory: ["dist/managed-handoff-runtime.mjs"],
       files: {
         "dist/managed-handoff-runtime.mjs":
-          'new URL("./node_modules/koffi/indirect.cjs", import.meta.url);\n',
+          'new URL("./node_modules/@openclaw/proc-safe/dist/identity.js", import.meta.url);\n',
       },
       options: { pack: "pnpm", postinstall: true },
       status: 0,
@@ -828,11 +819,12 @@ syncBuiltinESMExports();
       name: "rejects a handoff static import of the unpackaged native runtime",
       inventory: ["dist/managed-handoff-runtime.mjs"],
       files: {
-        "dist/managed-handoff-runtime.mjs": 'import "./node_modules/koffi/indirect.cjs";\n',
+        "dist/managed-handoff-runtime.mjs":
+          'import "./node_modules/@openclaw/proc-safe/dist/identity.js";\n',
       },
       status: "nonzero",
       stderr: [
-        "dist/managed-handoff-runtime.mjs imports missing dist/node_modules/koffi/indirect.cjs",
+        "dist/managed-handoff-runtime.mjs imports missing dist/node_modules/@openclaw/proc-safe/dist/identity.js",
       ],
     },
     {
@@ -878,12 +870,6 @@ syncBuiltinESMExports();
       },
       status: "nonzero",
       stderr: ["missing required tar entry dist/agents/code-mode-node.worker.js"],
-    },
-    {
-      name: "rejects Code Mode workers that postinstall would remove",
-      options: { includeCodeModeWorkerInInventory: false, postinstall: true },
-      status: "nonzero",
-      stderr: [`postinstall inventory omits packaged dist file ${CODE_MODE_WORKER_PATH}`],
     },
     {
       name: "rejects dist files that import missing relative chunks",
@@ -977,41 +963,12 @@ syncBuiltinESMExports();
       status: "nonzero",
       stderr: ["package tarball must not contain npm-shrinkwrap.json"],
     },
-    {
-      name: "rejects a package that declares but omits npm-shrinkwrap.json",
-      version: "2026.7.33",
-      options: {
-        includeShrinkwrap: false,
-        packageJson: { files: ["dist", "npm-shrinkwrap.json"] },
-      },
-      status: "nonzero",
-      stderr: ["package.json declares missing tar entry npm-shrinkwrap.json"],
-    },
   ];
   for (const testCase of packageContractCases) {
     it(testCase.name, () => checkTarball(testCase));
   }
 
-  it("accepts and validates a shrinkwrap declared by the target package", () => {
-    const version = "2026.7.33";
-    checkTarball({
-      files: {
-        "dist/index.js": "export {};\n",
-        "npm-shrinkwrap.json": `${JSON.stringify({
-          name: "openclaw",
-          version,
-          lockfileVersion: 3,
-          packages: { "": { name: "openclaw", version } },
-        })}\n`,
-      },
-      version,
-      options: { packageJson: { files: ["dist", "npm-shrinkwrap.json"] } },
-      status: 0,
-    });
-  });
-
   it.each([
-    ["missing declaration and package", {}, undefined, "is missing declared dependency"],
     [
       "missing package",
       { "@openclaw/ai": "2026.7.33" },

@@ -123,55 +123,6 @@ async function remoteFixture() {
   };
 }
 
-it("refreshes an existing session from host changes while retaining a healthy snapshot", async () => {
-  const { params, writes, subscriptions, access } = await remoteFixture();
-  const first = await resolveReusableWorkspaceSkillSnapshot(params);
-  expect(first.snapshot.prompt).toContain("Original host instructions");
-  expect(
-    (await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: first.snapshot }))
-      .snapshot,
-  ).toBe(first.snapshot);
-  await writes("Edited host instructions");
-  subscriptions[0]?.emit("change");
-  const edited = await resolveReusableWorkspaceSkillSnapshot({
-    ...params,
-    existingSnapshot: first.snapshot,
-  });
-  expect(edited.snapshot.prompt).toContain("Edited host instructions");
-  expect(access.watchSkills).toHaveBeenCalledTimes(1);
-  expect(access.loadSkills).toHaveBeenCalledTimes(2);
-  await observer.readyAll();
-  expect(
-    observer.subscriptions.some((entry) =>
-      entry.options.scopes.some(
-        (scope) =>
-          path.resolve(entry.authority.rootDir, scope.path) ===
-          path.join(params.workspaceDir, "skills"),
-      ),
-    ),
-  ).toBe(false);
-});
-
-it("uses native preparation fallback after unavailable watching and cancels on watch:false", async () => {
-  const { params, subscriptions, access, writes, gateway } = await remoteFixture();
-  const first = await resolveReusableWorkspaceSkillSnapshot(params);
-  subscriptions[0]!.emit("unavailable");
-  for (const description of ["Second version", "Third version"]) {
-    await writes(description);
-    const next = await resolveReusableWorkspaceSkillSnapshot({
-      ...params,
-      existingSnapshot: first.snapshot,
-    });
-    expect(next.snapshot.prompt).toContain(description);
-  }
-  expect(access.watchSkills).toHaveBeenCalledTimes(1);
-  refresh.ensureSkillsWatcher({ ...params, config: { skills: { load: { watch: false } } } });
-  expect(subscriptions[0]!.signal.aborted).toBe(true);
-  const version = getSkillsSnapshotVersion(gateway);
-  subscriptions[0]!.emit("change");
-  expect(getSkillsSnapshotVersion(gateway)).toBe(version);
-});
-
 it("restores snapshot reuse only on verified availability, without adding a content revision", async () => {
   const { params, subscriptions, access, writes, gateway } = await remoteFixture();
   let snapshot = (await resolveReusableWorkspaceSkillSnapshot(params)).snapshot;

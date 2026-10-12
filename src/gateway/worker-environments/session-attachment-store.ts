@@ -104,7 +104,7 @@ export function hasWorkerEnvironmentSessionAttachment(
 export function createWorkerEnvironmentSessionAttachmentStore(options: {
   db: DatabaseSync;
   now: () => number;
-  createIntent: (db: DatabaseSync, input: WorkerEnvironmentIntentInput) => WorkerEnvironmentRecord;
+  createIntent: (input: WorkerEnvironmentIntentInput) => WorkerEnvironmentRecord;
   getEnvironment: (db: DatabaseSync, environmentId: string) => WorkerEnvironmentRecord | undefined;
 }) {
   const { db, now } = options;
@@ -138,7 +138,7 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
           );
         }
       }
-      const environment = options.createIntent(db, input);
+      const environment = options.createIntent(input);
       if (environment.state !== "requested") {
         throw new Error("Environment request already belongs to an earlier allocation");
       }
@@ -151,7 +151,7 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
         last_used_at_ms: at,
         closed_at_ms: null,
       };
-      executeSqliteQuerySync(
+      const row = executeSqliteQueryTakeFirstSync(
         db,
         query(db)
           .insertInto("worker_environment_session_attachments")
@@ -161,23 +161,25 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
             agent_id: input.agentId,
             ...values,
           })
-          .onConflict((oc) => oc.column("session_id").doUpdateSet(values)),
+          .onConflict((oc) => oc.column("session_id").doUpdateSet(values))
+          .returningAll(),
       );
-      return { attachment: get(db, input.sessionId)!, environment };
+      return { attachment: fromRow(row!), environment };
     },
     closeSessionAttachment(this: void, sessionId) {
       const current = get(db, sessionId);
       if (!current || current.closedAtMs !== null) {
         return current;
       }
-      executeSqliteQuerySync(
+      const row = executeSqliteQueryTakeFirstSync(
         db,
         query(db)
           .updateTable("worker_environment_session_attachments")
           .set({ closed_at_ms: now() })
-          .where("session_id", "=", sessionId),
+          .where("session_id", "=", sessionId)
+          .returningAll(),
       );
-      return get(db, sessionId);
+      return row ? fromRow(row) : undefined;
     },
     cancelSessionAttachmentReservation(this: void, record) {
       const current = get(db, record.sessionId);

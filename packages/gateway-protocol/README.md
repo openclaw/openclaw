@@ -4,7 +4,7 @@ Typed schemas, inferred TypeScript types, and runtime validators for the OpenCla
 Gateway WebSocket protocol.
 
 The current wire protocol is version 4. General clients must use v4; authenticated
-node clients and lightweight probes may use the N-1 window during rolling upgrades.
+node clients and lightweight connectivity checks may use the N-1 window during rolling upgrades.
 See the [Gateway protocol specification](https://docs.openclaw.ai/gateway/protocol)
 for transport, authentication, roles, scopes, and complete frame examples.
 
@@ -124,7 +124,7 @@ const handshake = {
 };
 ```
 
-Nodes and probes use `MIN_NODE_PROTOCOL_VERSION` and
+Nodes and diagnostic clients use `MIN_NODE_PROTOCOL_VERSION` and
 `MIN_PROBE_PROTOCOL_VERSION`, respectively. A capability advertises client support;
 it does not grant authorization.
 

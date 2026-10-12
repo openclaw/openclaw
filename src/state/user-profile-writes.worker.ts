@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   GATEWAY_OWNER_PROFILE_ID,
   type UsersMergeResult,
+  type UserProfile as UserProfileListItem,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
@@ -15,6 +17,7 @@ import {
   USER_PROFILE_AVATAR_MIME_TYPES,
 } from "../shared/avatar-limits.js";
 import { CHANNEL_IDENTITY_PROVIDER } from "./user-channel-identities.js";
+import type { UserGitHubConnectionCommit } from "./user-github-connections.types.js";
 import { ensureUserPreferencesSchema } from "./user-preferences.store.js";
 import { normalizeProfileEmail as normalizeEmail } from "./user-profile-email.kernel.js";
 import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
@@ -22,6 +25,7 @@ import {
   applyVerifiedGitHubIdentity,
   githubAuthenticationSubject,
   selectProfileAccessEntries,
+  selectUserProfileGitHubIdentities,
 } from "./user-profile-github-identity.js";
 import { readUserProfileEmailBindings } from "./user-profile-identity.read.js";
 import { projectUserProfileDisplay, publishUserProfilesChange } from "./user-profile-list.js";
@@ -37,16 +41,20 @@ import {
   setUserProfileEmailBinding,
   requireResolvedUserProfileMetadataById,
   userProfilesDb,
+  toUserProfile,
+  selectUserProfileEmails,
+  userProfileAvatarPresence,
 } from "./user-profiles-internal.js";
 import { mergeUserProfiles } from "./user-profiles-merge.js";
 import {
   ensureUserProfileRoleSchema,
   ensureUserProfilesSchema,
+  hasEnsuredUserProfileRoleSchema,
   UserProfileMergeError,
   UserProfileNotFoundError,
   UserProfileOwnerError,
 } from "./user-profiles-schema.js";
-import { normalizeInitialDisplayName, selectUserProfileListItemById } from "./user-profiles.js";
+import { normalizeInitialDisplayName } from "./user-profiles.js";
 import type {
   ProfileDisplayRow,
   UserProfileEmailBinding,
@@ -58,7 +66,6 @@ type GitHubAuthenticationAlias =
   | { kind: "email"; email: string }
   | { kind: "github-login"; login: string };
 
-type UserProfileListItem = ReturnType<typeof selectUserProfileListItemById>;
 type UserProfileAvatarError =
   | { code: "avatar_too_large"; maxBytes: number }
   | { code: "unsupported_avatar_mime"; mime: string };
@@ -74,7 +81,37 @@ type PendingPublication = {
   display: Set<string>;
   profiles: Set<string>;
   identities: Set<string>;
+  githubConnections: UserGitHubConnectionCommit;
 };
+
+function selectUserProfileListItemById(db: DatabaseSync, profileId: string): UserProfileListItem {
+  const kysely = userProfilesDb(db);
+  const profile = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("user_profiles")
+      .select([
+        "id",
+        "display_name",
+        "avatar_mime",
+        "merged_into",
+        ...(hasEnsuredUserProfileRoleSchema(db) ? (["role"] as const) : []),
+        "created_at",
+        "updated_at",
+        userProfileAvatarPresence,
+      ])
+      .where("id", "=", profileId),
+  );
+  if (!profile) {
+    throw new UserProfileNotFoundError(profileId);
+  }
+  return {
+    ...toUserProfile(profile),
+    emails: selectUserProfileEmails(db, profileId),
+    githubIdentity: selectUserProfileGitHubIdentities(db, [profileId]).get(profileId) ?? null,
+    hasAvatar: profile.has_avatar === 1,
+  };
+}
 
 export function createUserProfileWriteOperation<Input, Output>(
   type: string,
@@ -106,6 +143,11 @@ export function createUserProfileWriteOperation<Input, Output>(
           display: new Set(),
           profiles: new Set(),
           identities: new Set(),
+          githubConnections: {
+            kind: "user-github-connection",
+            changedOwners: [],
+            retiredProfileIds: [],
+          },
         };
         pending = current;
         try {
@@ -162,6 +204,10 @@ export function createUserProfileWriteOperation<Input, Output>(
             }),
             after: ids.map((id) => [id, after.get(id)]),
             emailBindings,
+            ...(current.githubConnections.changedOwners.length ||
+            current.githubConnections.retiredProfileIds.length
+              ? { githubConnections: current.githubConnections }
+              : {}),
           };
           requestSqliteWorkerOperationAdmission({ stage: "commit", facts: publication });
           deferSqlitePostCommitPublication(db, () => committed.push(publication));
@@ -193,6 +239,10 @@ export function createUserProfileWriteOperation<Input, Output>(
       authority: (...ids) => ids.forEach((id) => pending?.profiles.add(id)),
       identity: (...ids) => ids.forEach((id) => pending?.identities.add(id)),
       publish: (...ids) => ids.forEach((id) => pending?.display.add(id)),
+      publishGitHubConnections: (receipt) => {
+        pending?.githubConnections.changedOwners.push(...receipt.changedOwners);
+        pending?.githubConnections.retiredProfileIds.push(...receipt.retiredProfileIds);
+      },
     };
     const owned = { ...options, mutation };
     try {

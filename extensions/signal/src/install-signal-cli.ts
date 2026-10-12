@@ -166,7 +166,6 @@ async function resolveBrewSignalCliPath(brewExe: string): Promise<string | null>
         await fs.access(candidate);
         return candidate;
       } catch {
-        // Fall back to searching the prefix
         return findSignalCliBinary(prefix);
       }
     }
@@ -214,7 +213,6 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
       argv: [cliPath, "--version"],
       timeoutMs: 10_000,
     });
-    // Output is typically "signal-cli 0.13.24"
     version = vResult.stdout.trim().replace(/^signal-cli\s+/, "") || undefined;
   } catch {
     // non-critical; leave version undefined

@@ -126,7 +126,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     {
       abortSignal: opts.abortSignal,
       jitterRatio: 0.2,
-      shouldReconnect: ({ outcome }) => outcome === "rejected",
+      reconnectAfterClose: false,
       onError: (err) => {
         runtime.error?.(`mattermost: API auth failed: ${String(err)}`);
         publishMattermostRecoveringStatus(opts.statusSink, err);

@@ -3,7 +3,7 @@ summary: "How OpenClaw discovers Ollama models implicitly, plus narrow smoke tes
 read_when:
   - You want to know which models OpenClaw discovers and how
   - You need capability, reasoning, or cost detection rules
-  - You want a narrow text or vision probe that skips the agent tool surface
+  - You want a narrow text or vision check that skips the agent tool surface
 title: "Ollama model discovery"
 sidebarTitle: "Model discovery"
 ---
@@ -28,9 +28,12 @@ ollama list
 openclaw models list
 ```
 
-A **nonempty** `models.providers.ollama.models` list selects manual models and
-skips discovery. When Ollama is in the agent's model scope, an explicit
-self-hosted endpoint with `models: []` remains eligible for discovery;
+When Ollama is in the agent's model scope, an explicit self-hosted endpoint is
+discovered even when `models.providers.ollama.models` lists models, as setup
+saves them. Configured models keep their settings; other installed chat models
+appear beside them, so a model pulled later shows up on the next model-list
+refresh without a config edit or restart. To list only configured models, set
+`models.mode: "replace"` or `plugins.entries.ollama.config.discovery.enabled: false`.
 `models.providers.ollama.apiKey` alone does not select that provider for Gateway
 model browsing.
 
@@ -53,7 +56,7 @@ confirms metadata — typos still fail as unknown models.
 
 ### Smoke tests
 
-For a narrow text probe that skips the full agent tool surface:
+For a narrow text check that skips the full agent tool surface:
 
 ```bash
 OLLAMA_API_KEY=ollama-local \
@@ -64,7 +67,7 @@ OLLAMA_API_KEY=ollama-local \
     --json
 ```
 
-Add `--file` with an image for a lean vision-model probe (accepts PNG/JPEG/WebP;
+Add `--file` with an image for a lean vision-model check (accepts PNG/JPEG/WebP;
 non-image files are rejected before Ollama is called — use
 `openclaw infer audio transcribe` for audio):
 

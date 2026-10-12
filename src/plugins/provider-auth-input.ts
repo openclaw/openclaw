@@ -90,17 +90,6 @@ export function normalizeTokenProviderInput(
   return normalizeOptionalLowercaseString(tokenProvider);
 }
 
-/** Normalizes secret input mode values accepted by provider setup. */
-export function normalizeSecretInputModeInput(
-  secretInputMode: string | null | undefined,
-): SecretInputMode | undefined {
-  const normalized = normalizeOptionalLowercaseString(secretInputMode);
-  if (normalized === "plaintext" || normalized === "ref") {
-    return normalized;
-  }
-  return undefined;
-}
-
 /** Resolves an API key from CLI options first, then environment or prompt fallback. */
 export async function ensureApiKeyFromOptionEnvOrPrompt(
   params: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0] & {

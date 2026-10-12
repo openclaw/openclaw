@@ -19,7 +19,6 @@ import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-ad
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
   hasRegisteredSessionPendingInputOwner,
-  projectSessionPendingInput,
   type SessionPendingInputPage,
   type SessionPendingInput,
 } from "./session-accessor.sqlite-pending-inputs.js";
@@ -28,6 +27,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import type { IncognitoHistoryTarget } from "./session-incognito-history-contract.js";
 import type {
@@ -37,6 +37,7 @@ import type {
   PendingInputHistoryReceipt,
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
+import { projectSessionPendingInput } from "./session-pending-input-value.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -82,7 +83,10 @@ function applyReceipt(snapshot: PendingInputHistorySnapshot, receipt: PendingInp
 
 /** Inactive until P7d. Accepted reconciliation retains its actor through native settlement. */
 export function createIncognitoPendingInputHistoryReader(params: {
-  actor: Pick<IncognitoAgentDatabaseExecution, "path" | "sessions" | "assertCurrent">;
+  actor: Pick<
+    IncognitoAgentDatabaseExecution,
+    "path" | "sessions" | "assertCurrent" | "assertReadable"
+  >;
   authority: IncognitoSessionAuthority;
   target: IncognitoHistoryTarget;
 }) {
@@ -135,6 +139,8 @@ export function createIncognitoPendingInputHistoryReader(params: {
       options: { limit?: number; before?: number } = {},
     ): Promise<SessionPendingInputPage> {
       const { rows, total, nextBefore } = await readRows(options);
+      assertCurrent();
+      actor.assertReadable();
       return {
         items: rows.toReversed().map(projectSessionPendingInput),
         total: total ?? 0,
@@ -143,6 +149,8 @@ export function createIncognitoPendingInputHistoryReader(params: {
     },
     async read(id: string): Promise<SessionPendingInput | undefined> {
       const row = (await readRows({ id, limit: 1 })).rows[0];
+      assertCurrent();
+      actor.assertReadable();
       return row ? projectSessionPendingInput(row) : undefined;
     },
   };
@@ -347,6 +355,18 @@ export async function listSessionPendingInputs(
   scope: Scope,
   options: { limit?: number; before?: number } = {},
 ): Promise<SessionPendingInputPage> {
+  const incognito = captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    return createIncognitoPendingInputHistoryReader({
+      ...incognito,
+      target: {
+        sessionKey: scope.sessionKey,
+        sessionId: scope.sessionId,
+        lifecycleRevision: incognito.actor.sessions.readSharing(scope.sessionKey)?.entry
+          ?.lifecycleRevision,
+      },
+    }).list(options);
+  }
   const { rows, total, nextBefore } = await readPendingInputRows(scope, options);
   return {
     items: rows.toReversed().map(projectSessionPendingInput),
@@ -359,6 +379,18 @@ export async function readSessionPendingInput(
   scope: Scope,
   id: string,
 ): Promise<SessionPendingInput | undefined> {
+  const incognito = captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    return createIncognitoPendingInputHistoryReader({
+      ...incognito,
+      target: {
+        sessionKey: scope.sessionKey,
+        sessionId: scope.sessionId,
+        lifecycleRevision: incognito.actor.sessions.readSharing(scope.sessionKey)?.entry
+          ?.lifecycleRevision,
+      },
+    }).read(id);
+  }
   const row = (await readPendingInputRows(scope, { id, limit: 1 })).rows[0];
   return row ? projectSessionPendingInput(row) : undefined;
 }

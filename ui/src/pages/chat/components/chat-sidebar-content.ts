@@ -44,9 +44,9 @@ import {
   safeMediaAttachmentHref,
 } from "./chat-attachment-href.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
-import "./chat-audio-player.ts";
-import "../../../components/mcp-app-panel.ts";
-import "./chat-video-player.ts";
+import "./chat-audio-player.tsx";
+import "../../../components/solid/mcp-app-panel.tsx";
+import "./chat-video-player.tsx";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import { isPdfAttachment } from "./chat-pdf-preview.ts";
 import type {
@@ -55,7 +55,7 @@ import type {
   ChatDetailPanelContent,
 } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
-import { isTextAttachment } from "./chat-text-attachment.ts";
+import { isTextAttachment } from "./chat-text-attachment.tsx";
 import "./session-diff-panel.ts";
 
 registerFilePreviewEnglish();
@@ -123,7 +123,6 @@ function renderSidebarAttachment(
       .label=${content.title}
       .mimeType=${content.mimeType ?? ""}
       .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
-      .downloadHref=${src ?? ""}
     ></openclaw-chat-pdf-preview>`;
   }
   if (
@@ -244,29 +243,27 @@ export function buildRawContent(
   if (!content) {
     return null;
   }
-  if (content.kind === "markdown" || content.kind === "file") {
-    const rawText = content.rawText ?? content.content;
-    return {
-      kind: "markdown",
-      content: formatFencedCodeBlock(
-        rawText,
-        content.kind === "file" ? content.language : undefined,
-      ),
+  const textDocument = content.kind === "markdown" || content.kind === "file";
+  const rawText = content.rawText ?? (textDocument ? content.content : "");
+  if (!textDocument && !rawText.trim()) {
+    return null;
+  }
+  return {
+    kind: "markdown",
+    content: formatFencedCodeBlock(
       rawText,
-      fileLinkSessionKey:
-        content.kind === "file"
-          ? content.sessionFileSource?.sessionKey
-          : content.fileLinkSessionKey,
-    };
-  }
-  if (content.rawText?.trim()) {
-    return {
-      kind: "markdown",
-      content: formatFencedCodeBlock(content.rawText, "json"),
-      rawText: content.rawText,
-    };
-  }
-  return null;
+      content.kind === "file" ? content.language : textDocument ? undefined : "json",
+    ),
+    rawText,
+    ...(textDocument
+      ? {
+          fileLinkSessionKey:
+            content.kind === "file"
+              ? content.sessionFileSource?.sessionKey
+              : content.fileLinkSessionKey,
+        }
+      : {}),
+  };
 }
 
 type MarkdownSidebarProps = {

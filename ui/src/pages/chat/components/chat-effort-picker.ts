@@ -8,10 +8,7 @@ import type {
   ChatFastModeSelectState,
   ChatFastModeSelectValue,
 } from "../../../lib/chat/model-select-state.ts";
-import {
-  normalizeThinkingOptionValue,
-  type ChatThinkingSelectState,
-} from "../../../lib/chat/thinking.ts";
+import type { ChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 registerModelControlsEnglish();
@@ -40,7 +37,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
     return nothing;
   }
   const selection = params.thinking.selection;
-  const effortIsOff = normalizeThinkingOptionValue(selection.value) === "off";
+  const effortIsOff = selection.value === "off";
   const effortFraction =
     effortIsOff || selection.kind === "unanchored"
       ? 0
@@ -75,21 +72,18 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
       ? params.fastMode.label
       : t("chat.modelControls.fast");
   const triggerLabel = showReasoning ? reasoningValueText : t("chat.modelControls.speed");
-  const triggerTitle = showReasoning
-    ? params.fastMode.active
-      ? `${triggerLabel} · ${speedLabel}`
-      : triggerLabel
-    : `${triggerLabel}: ${params.fastMode.label}`;
-  const commitThinking = (value: string) => {
-    void params
-      .onThinkingSelect(value, params.sessionKey)
-      .finally(() => params.onRequestUpdate?.());
-    params.onRequestUpdate?.();
-  };
-  const commitFastMode = (value: ChatFastModeSelectValue) => {
-    void params
-      .onFastModeSelect(value, params.sessionKey)
-      .finally(() => params.onRequestUpdate?.());
+  const triggerTitle = [
+    showReasoning
+      ? params.fastMode.active
+        ? `${triggerLabel} · ${speedLabel}`
+        : triggerLabel
+      : `${triggerLabel}: ${params.fastMode.label}`,
+    params.fastMode.hint,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const refreshAfterSelection = (pending: Promise<unknown>) => {
+    void pending.finally(() => params.onRequestUpdate?.());
     params.onRequestUpdate?.();
   };
   const speedOptions: { value: ChatFastModeSelectValue; label: string; disabled?: boolean }[] = [
@@ -189,7 +183,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
     if (params.thinkingDisabled || !stop || stop.value === selectedThinkingValue) {
       return;
     }
-    commitThinking(stop.value);
+    refreshAfterSelection(params.onThinkingSelect(stop.value, params.sessionKey));
   };
   const onUnanchoredSliderClick = (event: MouseEvent) => {
     const input = event.currentTarget as HTMLInputElement;
@@ -371,7 +365,9 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
                                     event.preventDefault();
                                     return;
                                   }
-                                  commitThinking(onlyStop.value);
+                                  refreshAfterSelection(
+                                    params.onThinkingSelect(onlyStop.value, params.sessionKey),
+                                  );
                                 }}
                               >
                                 <span>${onlyStop.label}</span>
@@ -422,7 +418,9 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
                               !option.disabled &&
                               option.value !== params.fastMode.currentOverride
                             ) {
-                              commitFastMode(option.value);
+                              refreshAfterSelection(
+                                params.onFastModeSelect(option.value, params.sessionKey),
+                              );
                             }
                           }}
                         >

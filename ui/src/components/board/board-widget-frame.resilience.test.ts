@@ -1,13 +1,32 @@
-import { render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
-import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { BoardWidgetFrameLifecycle } from "./board-widget-frame.tsx";
 
 let lifecycle: BoardWidgetFrameLifecycle | undefined;
+const disposers: Array<() => void> = [];
+function mountFrame(
+  owner: BoardWidgetFrameLifecycle,
+  widget: BoardWidget | (() => BoardWidget),
+  root: HTMLElement,
+) {
+  const [revision, setRevision] = createSignal(0);
+  disposers.push(mountSolid(() => owner.render(widget, revision), { container: root }).unmount);
+  flush();
+  return () => {
+    setRevision((value) => value + 1);
+    flush();
+  };
+}
 afterEach(() => {
   lifecycle?.disconnect();
   lifecycle = undefined;
+  for (const dispose of disposers.splice(0)) {
+    dispose();
+  }
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -55,7 +74,7 @@ it("resumes its board bridge after suspension rolls back without reconnecting", 
     root: () => root,
     widget: () => widget,
   });
-  render(lifecycle.render(widget), root);
+  mountFrame(lifecycle, widget, root);
   lifecycle.update();
   const frame = root.querySelector("iframe")!;
   const notify = (data: object, ports: MessagePort[] = []) =>
@@ -142,8 +161,9 @@ it("keeps a stalled inner document mounted, offers retry, and accepts only the c
       connection: { gatewayUrl: "https://gateway.example" },
     },
   } as ApplicationContext;
+  let updateView = () => {};
   const update = () => {
-    render(lifecycle!.render(widget), root);
+    updateView();
     lifecycle!.update();
   };
   const refresh = vi.fn(async () => {});
@@ -159,6 +179,7 @@ it("keeps a stalled inner document mounted, offers retry, and accepts only the c
     root: () => root,
     widget: () => widget,
   });
+  updateView = mountFrame(lifecycle, widget, root);
   update();
   const frame = root.querySelector("iframe")!;
   const post = vi.spyOn(frame.contentWindow!, "postMessage");
@@ -195,3 +216,60 @@ it("keeps a stalled inner document mounted, offers retry, and accepts only the c
   expect(frame.style.opacity).toBe("");
   expect(root.querySelector('[role="status"] button')).toBeNull();
 });
+
+it.each(["current", "revision", "replacement", "reconnect"] as const)(
+  "publishes a failed refresh only for its admitted frame lifecycle (%s)",
+  async (transition) => {
+    let widget: BoardWidget = {
+      name: "weather",
+      revision: 1,
+      tabId: "main",
+      contentKind: "html",
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+    };
+    const refreshResult = createDeferred();
+    const refreshFrame = vi.fn(() => refreshResult.promise);
+    const root = document.createElement("div");
+    document.body.append(root);
+    let updateView = () => {};
+    lifecycle = new BoardWidgetFrameLifecycle({
+      active: () => true,
+      connected: () => root.isConnected,
+      context: () => undefined,
+      refreshFrame: () => refreshFrame,
+      requestUpdate: () => updateView(),
+      reportContentHeight: () => {},
+      scrollBy: () => {},
+      resolveFrameUrl: () => (name, revision) => `/widget/${name}/${revision}`,
+      root: () => root,
+      widget: () => widget,
+    });
+    lifecycle.connect();
+    updateView = mountFrame(lifecycle, () => widget, root);
+    const frame = root.querySelector("iframe")!;
+    frame.dispatchEvent(new Event("error"));
+    expect(refreshFrame).toHaveBeenCalledExactlyOnceWith("weather");
+
+    if (transition === "reconnect") {
+      lifecycle.disconnect();
+      lifecycle.connect();
+    } else if (transition !== "current") {
+      const previous = widget;
+      widget =
+        transition === "revision" ? { ...widget, revision: 2 } : { ...widget, name: "stocks" };
+      lifecycle.widgetChanged(previous, widget);
+      updateView();
+    }
+    refreshResult.reject(new Error("Retired refresh failed"));
+    await refreshResult.promise.catch(() => undefined);
+    await Promise.resolve();
+    flush();
+
+    expect(lifecycle.error).toBe(transition === "current" ? "Retired refresh failed" : "");
+    expect(root.querySelector("iframe")).toBe(frame);
+    expect(frame.getAttribute("src")).toBe(`/widget/${widget.name}/${widget.revision}`);
+  },
+);

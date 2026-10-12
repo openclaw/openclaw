@@ -11,10 +11,9 @@ import { isBrowserRuntimeRunning } from "./browser/server-context.lifecycle.js";
 type BrowserControlOwner = "server" | "service";
 
 let state: BrowserServerState | null = null;
-let owner: BrowserControlOwner | null = null;
 let lifecycleTail = Promise.resolve();
-let completedEffectiveStops = 0;
 let pendingLifecycles = 0;
+let pendingStops = 0;
 
 /** Serialize complete Browser runtime start/stop workflows. */
 function enqueueBrowserControlLifecycle<T>(run: () => Promise<T>): Promise<T> {
@@ -29,14 +28,13 @@ function enqueueBrowserControlLifecycle<T>(run: () => Promise<T>): Promise<T> {
   return result;
 }
 
-/** Queue startup, but never turn a request made during shutdown into a post-stop restart. */
+/** Serialize startup with the runtime's stop workflow. */
 export function withBrowserControlStart<T>(run: () => Promise<T>): Promise<T> {
-  const effectiveStopsAtRequest = completedEffectiveStops;
+  if (pendingStops > 0) {
+    return Promise.reject(new BrowserProfileUnavailableError("Browser runtime is stopping."));
+  }
   return enqueueBrowserControlLifecycle(() => {
-    if (
-      completedEffectiveStops !== effectiveStopsAtRequest ||
-      (state ? !isBrowserRuntimeRunning(state) : false)
-    ) {
+    if (state && !isBrowserRuntimeRunning(state)) {
       throw new BrowserProfileUnavailableError("Browser runtime is stopping.");
     }
     return run();
@@ -66,7 +64,6 @@ export async function ensureBrowserControlRuntime(params: {
   server?: Server | null;
   port: number;
   resolved: BrowserServerState["resolved"];
-  owner: BrowserControlOwner;
 }): Promise<BrowserServerState> {
   if (state && isBrowserRuntimeRunning(state)) {
     if (params.server) {
@@ -75,7 +72,6 @@ export async function ensureBrowserControlRuntime(params: {
       state.server = params.server;
       state.port = params.port;
       state.resolved = { ...params.resolved, controlPort: params.port };
-      owner = "server";
     }
     return state;
   }
@@ -88,7 +84,6 @@ export async function ensureBrowserControlRuntime(params: {
     port: params.port,
     resolved: params.resolved,
   });
-  owner = params.owner;
   return state;
 }
 
@@ -98,27 +93,27 @@ export function stopBrowserControlRuntime(params: {
   closeServer?: boolean;
   onWarn: (message: string) => void;
 }): Promise<BrowserServerState | null> {
+  pendingStops += 1;
   return enqueueBrowserControlLifecycle(async () => {
     const current = state;
     if (!current) {
       return null;
     }
-    if (params.requestedBy === "service" && current.server && owner === "server") {
+    if (params.requestedBy === "service" && current.server) {
       // The background service must not close a runtime currently claimed by the
       // visible HTTP server; otherwise CLI/browser calls lose their control port.
       return null;
     }
     await stopBrowserRuntime({
       current,
-      getState: () => state,
       clearState: () => {
         state = null;
-        owner = null;
       },
       closeServer: params.closeServer,
       onWarn: params.onWarn,
     });
-    completedEffectiveStops += 1;
     return current;
+  }).finally(() => {
+    pendingStops -= 1;
   });
 }

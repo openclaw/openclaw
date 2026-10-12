@@ -1,42 +1,27 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import "./resizable-divider.ts";
 
 let container: HTMLDivElement;
 
-type ResizableDivider = HTMLElement & {
-  orientation: "horizontal" | "vertical";
-  splitRatio: number;
-  measureRatio?: () => number;
-  updateComplete: Promise<boolean>;
-};
-
 function nextFrame() {
-  return new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
+  vi.advanceTimersToNextFrame();
 }
 
 async function renderDivider() {
-  render(
-    html`
-      <div id="split-root">
-        <resizable-divider
-          .splitRatio=${0.6}
-          .minRatio=${0.4}
-          .maxRatio=${0.7}
-          .label=${"Resize sidebar"}
-        ></resizable-divider>
-      </div>
-    `,
-    container,
-  );
-
-  const root = container.querySelector<HTMLDivElement>("#split-root");
-  const divider = container.querySelector<ResizableDivider>("resizable-divider");
+  const root = document.createElement("div");
+  root.id = "split-root";
+  const divider = document.createElement("resizable-divider");
+  divider.splitRatio = 0.6;
+  divider.minRatio = 0.4;
+  divider.maxRatio = 0.7;
+  divider.label = "Resize sidebar";
+  root.append(divider);
+  mountSolid(() => root, { container });
   expect(root?.id).toBe("split-root");
   expect(divider?.tagName.toLowerCase()).toBe("resizable-divider");
   if (!root || !divider) {
@@ -56,7 +41,7 @@ async function renderDivider() {
   }));
 
   await divider.updateComplete;
-  await nextFrame();
+  nextFrame();
   return divider;
 }
 
@@ -80,13 +65,14 @@ function expectLastResizeRatio(resized: ReturnType<typeof vi.fn>, splitRatio: nu
 
 describe("resizable-divider", () => {
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     container = document.createElement("div");
     document.body.append(container);
   });
 
   afterEach(() => {
-    render(nothing, container);
     container.remove();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -112,18 +98,22 @@ describe("resizable-divider", () => {
     expect(divider.getAttribute("aria-valuenow")).toBe("55");
   });
 
-  it("localizes the fallback separator label", async () => {
+  it("updates the fallback separator label when the locale changes", async () => {
     i18n.registerTranslation("pt-BR", {
       common: {
         resizeSplitView: "Redimensionar visualização dividida",
       },
     });
-    await i18n.setLocale("pt-BR");
+    await i18n.setLocale("en");
     try {
-      render(html`<resizable-divider></resizable-divider>`, container);
-      const divider = container.querySelector<ResizableDivider>("resizable-divider");
-      await divider?.updateComplete;
-      expect(divider?.getAttribute("aria-label")).toBe("Redimensionar visualização dividida");
+      const divider = document.createElement("resizable-divider");
+      mountSolid(() => divider, { container });
+      await divider.updateComplete;
+      expect(divider.getAttribute("aria-label")).toBe("Resize split view");
+
+      await i18n.setLocale("pt-BR");
+      flush();
+      expect(divider.getAttribute("aria-label")).toBe("Redimensionar visualização dividida");
     } finally {
       await i18n.setLocale("en");
     }
@@ -223,7 +213,7 @@ describe("resizable-divider", () => {
     dispatchPointer(document, "pointermove", 220, 7);
     dispatchPointer(document, "pointermove", 120, 7);
     expect(resized).not.toHaveBeenCalled();
-    await nextFrame();
+    nextFrame();
     expectLastResizeRatio(resized, 0.65);
     expect(resized).toHaveBeenCalledTimes(1);
     expect(resizeEnded).not.toHaveBeenCalled();
@@ -309,6 +299,8 @@ describe("resizable-divider", () => {
     dispatchPointer(divider, "pointerdown", 100);
     dispatchPointer(document, "pointermove", 120);
     divider.remove();
+    // The bridge preserves roots during same-turn reparenting.
+    await Promise.resolve();
 
     expectLastResizeRatio(resized, 0.65);
     expectLastResizeRatio(resizeEnded, 0.65);

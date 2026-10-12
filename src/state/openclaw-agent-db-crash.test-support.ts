@@ -18,6 +18,11 @@ const fixtures = process.argv.slice(2).map((agentId) => {
     BEGIN IMMEDIATE;
     INSERT INTO auth_profile_state VALUES ('killed-write', '{}', 2);
   `);
+  if (agentId === "checkpointed-wal") {
+    database.db.exec(
+      "ROLLBACK; PRAGMA wal_checkpoint(TRUNCATE); BEGIN IMMEDIATE; INSERT INTO auth_profile_state VALUES ('killed-write', '{}', 2)",
+    );
+  }
   const pageSize = Number(database.db.prepare("PRAGMA page_size").get()?.page_size);
   const rootPage = Number(
     database.db.prepare("SELECT rootpage FROM sqlite_schema WHERE name='auth_profile_store'").get()

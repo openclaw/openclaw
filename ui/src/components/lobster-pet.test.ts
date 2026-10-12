@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import { resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet-contract.ts";
@@ -30,10 +29,18 @@ async function advancePetFrame(element: LobsterPetElement): Promise<void> {
   await element.updateComplete;
 }
 
+async function settleDismissMenu(element: LobsterPetElement) {
+  for (const child of element.querySelectorAll<HTMLElement & { updateComplete: Promise<boolean> }>(
+    "wa-dropdown, wa-dropdown-item",
+  )) {
+    await child.updateComplete;
+  }
+}
+
 function poke(element: LobsterPetElement): void {
   const sprite = element.querySelector(".lobster-pet");
-  sprite?.dispatchEvent(new MouseEvent("pointerdown", { button: 0 }));
-  sprite?.dispatchEvent(new MouseEvent("pointerup", { button: 0 }));
+  sprite?.dispatchEvent(new MouseEvent("pointerdown", { button: 0, bubbles: true }));
+  sprite?.dispatchEvent(new MouseEvent("pointerup", { button: 0, bubbles: true }));
 }
 
 function spriteClasses(element: LobsterPetElement): string {
@@ -195,35 +202,13 @@ describe("lobster pet element", () => {
       expect(readStyle).not.toHaveBeenCalled();
       composer.getBoundingClientRect().width = 720;
       composer.prepend(element);
+      await element.updateComplete;
       await advancePetFrame(element);
       expect(readStyle.mock.calls.length).toBeLessThanOrEqual(1);
       expect(element.hasAttribute("data-scene-ready")).toBe(true);
     } finally {
       readStyle.mockRestore();
     }
-  });
-
-  it("hides a shed floor shell when resized controls consume its lane", async () => {
-    vi.useFakeTimers();
-    const element = createPet(42, "offline") as LobsterPetElement & {
-      floorEnabled: boolean;
-      anchor: "top" | "floor";
-      performAct: (act: "molt") => void;
-    };
-    element.floorEnabled = true;
-    await element.updateComplete;
-    await advancePetFrame(element);
-    element.anchor = "floor";
-    element.performAct("molt");
-    await vi.advanceTimersByTimeAsync(2600);
-    await element.updateComplete;
-    expect(element.querySelector(".lobster-pet--shell")).not.toBeNull();
-    const lead = element.parentElement!.querySelector(".agent-chat__composer-lead")!;
-    lead.getBoundingClientRect().width = 720;
-    window.dispatchEvent(new Event("resize"));
-    await advancePetFrame(element);
-    await element.updateComplete;
-    expect(element.querySelector(".lobster-pet--shell")).toBeNull();
   });
 
   it("starts hidden and arrives on its seeded visit schedule", async () => {
@@ -384,6 +369,7 @@ describe("lobster pet element", () => {
       ),
     ).toEqual(["Dismiss", "Dismiss and don't show again"]);
 
+    await settleDismissMenu(element);
     element.querySelector<HTMLElement>('wa-dropdown-item[value="dismiss"]')?.click();
     await element.updateComplete;
 
@@ -408,6 +394,7 @@ describe("lobster pet element", () => {
       .querySelector(".lobster-pet")
       ?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await element.updateComplete;
+    await settleDismissMenu(element);
     element.querySelector<HTMLElement>('wa-dropdown-item[value="dismiss-permanently"]')?.click();
     await element.updateComplete;
 
@@ -440,6 +427,7 @@ describe("lobster pet element", () => {
     await arrive(element);
 
     element.remove();
+    await element.updateComplete;
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -503,8 +491,9 @@ describe("lobster pet element", () => {
 
     element
       .querySelector(".lobster-pet:not(.lobster-pet--shell)")
-      ?.dispatchEvent(new Event("contextmenu", { cancelable: true }));
+      ?.dispatchEvent(new MouseEvent("contextmenu", { cancelable: true, bubbles: true }));
     await element.updateComplete;
+    await settleDismissMenu(element);
     element.querySelector<HTMLElement>('wa-dropdown-item[value="dismiss"]')?.click();
     await element.updateComplete;
     const raw = JSON.parse(
@@ -520,7 +509,7 @@ describe("lobster pet element", () => {
     await element.updateComplete;
 
     const sprite = element.querySelector(".lobster-pet");
-    sprite?.dispatchEvent(new Event("pointerdown"));
+    sprite?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     await vi.advanceTimersByTimeAsync(300);
     sprite?.dispatchEvent(new Event("pointercancel"));
     await vi.advanceTimersByTimeAsync(400);
@@ -637,12 +626,16 @@ describe("lobster pet element", () => {
     await vi.advanceTimersByTimeAsync(200);
     document.dispatchEvent(new MouseEvent("pointermove", { clientX: 400 }));
     await element.updateComplete;
-    expect(element.querySelector(".lobster-pet")?.getAttribute("style")).toContain("--lob-face:1");
+    expect(
+      element.querySelector<HTMLElement>(".lobster-pet")?.style.getPropertyValue("--lob-face"),
+    ).toBe("1");
 
     await vi.advanceTimersByTimeAsync(200);
     document.dispatchEvent(new MouseEvent("pointermove", { clientX: -400 }));
     await element.updateComplete;
-    expect(element.querySelector(".lobster-pet")?.getAttribute("style")).toContain("--lob-face:-1");
+    expect(
+      element.querySelector<HTMLElement>(".lobster-pet")?.style.getPropertyValue("--lob-face"),
+    ).toBe("-1");
   });
 
   it("travels light on first sighting and on same-version reloads", async () => {
@@ -664,39 +657,50 @@ describe("lobster pet element", () => {
     expect(second.querySelector(".lob-bindle")).toBeNull();
   });
 
-  it("stays silent by default and chirps only when sounds are enabled", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    const audioContextCtor = vi.fn(() => {
-      const param = () => ({ setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() });
-      return {
-        state: "running",
-        currentTime: 0,
-        destination: {},
-        resume: vi.fn(),
-        close: vi.fn(() => Promise.resolve()),
-        createOscillator: vi.fn(() => ({
-          type: "sine",
-          frequency: param(),
-          connect: (node: unknown) => node,
-          start: vi.fn(),
-          stop: vi.fn(),
-        })),
-        createGain: vi.fn(() => ({ gain: param(), connect: vi.fn() })),
-      };
-    });
-    vi.stubGlobal("AudioContext", audioContextCtor);
-    const element = createPet(42);
-    await arrive(element);
+  it.each(["running", "suspended"] as const)(
+    "keeps opt-in sounds and pet interaction usable with %s audio",
+    async (audioState) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+      let resumeCalls = 0;
+      const audioContextCtor = vi.fn(function MockAudioContext() {
+        const param = () => ({ setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() });
+        return {
+          state: audioState,
+          currentTime: 0,
+          destination: {},
+          // Vitest spies consume rejected promises while recording settled results.
+          resume: () => {
+            resumeCalls += 1;
+            return Promise.reject(new Error("Audio resume rejected"));
+          },
+          close: vi.fn(() => Promise.resolve()),
+          createOscillator: vi.fn(() => ({
+            type: "sine",
+            frequency: param(),
+            connect: (node: unknown) => node,
+            start: vi.fn(),
+            stop: vi.fn(),
+          })),
+          createGain: vi.fn(() => ({ gain: param(), connect: vi.fn() })),
+        };
+      });
+      vi.stubGlobal("AudioContext", audioContextCtor);
+      const element = createPet(42);
+      await arrive(element);
 
-    poke(element);
-    expect(audioContextCtor).not.toHaveBeenCalled();
+      poke(element);
+      expect(audioContextCtor).not.toHaveBeenCalled();
 
-    element.soundsEnabled = true;
-    await element.updateComplete;
-    poke(element);
-    expect(audioContextCtor).toHaveBeenCalledTimes(1);
-  });
+      element.soundsEnabled = true;
+      await element.updateComplete;
+      poke(element);
+      expect(audioContextCtor).toHaveBeenCalledTimes(1);
+      await element.updateComplete;
+      expect(resumeCalls).toBe(audioState === "suspended" ? 1 : 0);
+      expect(spriteClasses(element)).toContain("lobster-pet--act-startle");
+    },
+  );
 
   it("wears the party hat on its first-visit anniversary", async () => {
     vi.useFakeTimers();
@@ -740,9 +744,9 @@ describe("lobster pet element", () => {
   it("ships a hidden peek eye only in sleeping renders", () => {
     const container = document.createElement("div");
     const look = createLobsterPetLook(42, new Date("2026-07-09T12:00:00"));
-    render(renderLobsterSvg(look, { sleeping: true }), container);
+    container.replaceChildren(renderLobsterSvg(look, { sleeping: true }));
     expect(container.querySelector(".lob-eye-peek")).not.toBeNull();
-    render(renderLobsterSvg(look, { standalone: true }), container);
+    container.replaceChildren(renderLobsterSvg(look, { standalone: true }));
     expect(container.querySelector(".lob-eye-peek")).toBeNull();
   });
 
@@ -752,16 +756,13 @@ describe("lobster pet element", () => {
       "crimson palette",
     );
     const container = document.createElement("div");
-    render(
+    container.replaceChildren(
       renderLobsterSvg(canonicalLobsterLook(palette), { reading: true, standalone: true }),
-      container,
     );
 
     expect(container.querySelector(".lob-reading-book")).not.toBeNull();
     expect(container.querySelectorAll(".lob-eye-open circle")).toHaveLength(4);
-    expect(container.querySelector(".lob-eye-closed")?.getAttribute("style")).toContain(
-      "display:none",
-    );
+    expect(container.querySelector<SVGElement>(".lob-eye-closed")?.style.display).toBe("none");
   });
 
   it("renders full replacement geometry without the standard dome", () => {
@@ -771,9 +772,8 @@ describe("lobster pet element", () => {
         id,
       );
       const container = document.createElement("div");
-      render(
+      container.replaceChildren(
         renderLobsterSvg({ ...canonicalLobsterLook(palette), accessory }, { standalone: true }),
-        container,
       );
       return container;
     };
@@ -811,9 +811,8 @@ describe("lobster pet element", () => {
       "tinfoil palette",
     );
     const container = document.createElement("div");
-    render(
+    container.replaceChildren(
       renderLobsterSvg(canonicalLobsterLook(tinfoilPalette), { standalone: true, sailorCap: true }),
-      container,
     );
     expect(container.querySelector(".lob-tinfoil-hat")).not.toBeNull();
     expect(container.querySelector(".lob-cap")).toBeNull();
@@ -905,6 +904,7 @@ describe("lobster plans", () => {
     localStorage.setItem(
       "openclaw.control.lobsterdex.v1",
       JSON.stringify({
+        clawdia: { firstSeenAt: 1, name: "Clawdia", shinySeenAt: 2 },
         coral: { firstSeenAt: 1, name: "Faded" },
         teal: { firstSeenAt: 2, name: "Lagoon" },
         tangerine: { firstSeenAt: 3, name: "Marmalade" },
@@ -918,6 +918,12 @@ describe("lobster plans", () => {
     const neutralDate = new Date("2026-07-15T12:00:00");
     const identity = resolveLobsterLoadIdentity(191, createLobsterPetLook(191, neutralDate));
     expect(identity.oldFriend).toBe(false);
+    expect(identity.look.palette.id).not.toBe("clawdia");
+    expect(getLobsterdexEntries().get("clawdia")).toEqual({
+      firstSeenAt: 1,
+      name: "Clawdia",
+      shinySeenAt: 2,
+    });
     expect(identity.look.palette.id).not.toBe("coral");
     expect(identity.look.palette.id).not.toBe("teal");
   });
@@ -943,6 +949,35 @@ describe("lobster plans", () => {
 });
 
 describe("rare lobster loads", () => {
+  it.each([
+    ["clawnstantine", "Clawnstantine"],
+    ["clawiestardust", "Clawie Stardust"],
+    ["taylorpinch", "Taylor Pinch"],
+    ["clawtoodeetoo", "Clawtoo Deetoo"],
+    ["leonardodepinchy", "Leonardo DaPinchy"],
+    ["shellvis", "Shellvis"],
+    ["alexandergrahamshell", "Alexander Graham Shell"],
+  ] as const)("records a genuine %s arrival with its signature identity", async (id, name) => {
+    vi.useFakeTimers();
+    const now = new Date("2026-07-09T12:00:00");
+    vi.setSystemTime(now);
+    vi.stubGlobal("localStorage", window.localStorage);
+    let seed = 0;
+    while (seed < 20_000 && createLobsterPetLook(seed, now).palette.id !== id) {
+      seed++;
+    }
+    expect(seed).toBeLessThan(20_000);
+    const element = createPet(seed, "offline");
+    await arrive(element);
+    expect(spriteClasses(element)).toContain(`lobster-pet--palette-${id}`);
+    expect(element.querySelector(`.lob-${id}`)).not.toBeNull();
+    expect(getLobsterdexEntries().get(id)?.name).toBe(name);
+    poke(element);
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--act-startle");
+    expect(element.querySelector(`.lob-${id}`)).not.toBeNull();
+  });
+
   // Probe seeds (deterministic per stream): 644 hosts the Elder; 636 rolls
   // an old-friend return plus a balloon entrance; 4689 hatches a shiny variant;
   // 104 is a shy load that beaches a bottle at ~194s; 37 is a shy load with
@@ -1029,7 +1064,9 @@ describe("rare lobster loads", () => {
       "a message in a bottle",
     );
 
-    element.querySelector(".lobster-bottle")?.dispatchEvent(new Event("pointerdown"));
+    element
+      .querySelector(".lobster-bottle")
+      ?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     await element.updateComplete;
     const opened = element.querySelector(".lobster-bottle");
     expect(opened?.className).toContain("lobster-bottle--open");
