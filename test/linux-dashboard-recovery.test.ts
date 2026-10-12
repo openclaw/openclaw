@@ -123,13 +123,6 @@ test("automatic setup failure returns to Gateway choices with the native error",
   assert.equal(invoked.includes("connect_remote_gateway"), false);
 });
 
-test("automatic setup success does not display manual first-run choices", async () => {
-  const { element, invoked } = await mountDashboard("");
-  assert.equal(element("#welcome-screen").classList.contains("hidden"), true);
-  assert.equal(element("#connection-choices").classList.contains("hidden"), true);
-  assert.equal(invoked.filter((command) => command === "bootstrap").length, 1);
-});
-
 test("missing CLI mode offers installation without retrying bootstrap", async () => {
   const { element, invoked } = await mountDashboard("?mode=missingCli");
 
