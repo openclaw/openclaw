@@ -464,7 +464,9 @@ function normalizeAttempt(record: Record<string, unknown>): WorkboardRunAttempt 
 
 function normalizeComment(record: Record<string, unknown>): WorkboardComment | null {
   const id = normalizeOptionalString(record.id);
-  const body = normalizeBoundedString(record.body, undefined, 2000, "comment body");
+  // addComment still rejects oversized operator input. Cap here so dispatch
+  // and other card writes can heal already-stored bodies instead of aborting.
+  const body = capText(normalizeOptionalString(record.body), 2000);
   const createdAt = normalizeTimestamp(record.createdAt, 0);
   if (!id || !body || !createdAt) {
     return null;
