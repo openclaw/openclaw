@@ -11,6 +11,7 @@ import {
   getSecretRedactionRegistryRevision,
   redactSensitiveText,
 } from "./openclaw-runtime-io.js";
+import { isCronRunSessionKey } from "./openclaw-runtime-paths.js";
 import {
   assertBoundIncognitoMemorySyncAccess,
   captureIncognitoMemoryReader,
@@ -22,7 +23,6 @@ import {
   HEARTBEAT_TOKEN,
   hasInterSessionUserProvenance,
   isCompactionCheckpointTranscriptFileName,
-  isCronRunSessionKey,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
   isIncognitoOpenClawAgentSqlitePath,

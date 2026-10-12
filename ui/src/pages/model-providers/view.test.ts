@@ -471,20 +471,26 @@ describe("renderModelProviders", () => {
     expect(container.querySelector('[data-provider-id="openai"]')).toBeNull();
   });
 
-  it("renders credential provenance and probe results", () => {
+  it("renders credential provenance and per-credential request timing without aggregate timing", () => {
     const container = mount(
       props({
         probeResults: {
           openai: {
             provider: "openai",
             status: "ok",
-            latencyMs: 145,
+            latencyMs: 9_145,
             results: [
               {
                 profileId: "openai:default",
                 label: "Default profile",
                 status: "ok",
                 latencyMs: 145,
+              },
+              {
+                profileId: "openai:secondary",
+                label: "Secondary profile",
+                status: "ok",
+                latencyMs: 320,
               },
             ],
           },
@@ -495,9 +501,18 @@ describe("renderModelProviders", () => {
     expect(text(provider)).toContain("Credentials for Writer");
     expect(text(provider)).toContain("Global usage and cost");
     expect(text(provider)).toContain("API key from environment (OPENAI_API_KEY)");
-    expect(text(provider)).toContain("Connected");
-    expect(text(provider)).toContain("145 ms");
-    expect(text(provider)).toContain("Default profile");
+    expect(text(provider?.querySelector(".model-providers__probe-summary") ?? null)).toBe(
+      "Connected",
+    );
+    expect(
+      [...(provider?.querySelectorAll(".model-providers__probe-target") ?? [])].map((target) =>
+        [...target.querySelectorAll("span")].map(text),
+      ),
+    ).toEqual([
+      ["Default profile", "Connected · Request round-trip: 145 ms"],
+      ["Secondary profile", "Connected · Request round-trip: 320 ms"],
+    ]);
+    expect(text(provider)).not.toContain("9145");
   });
 
   it("puts model recovery first when credentials expose no selectable models", () => {
@@ -636,6 +651,9 @@ describe("renderModelProviders", () => {
     expect(text(probe)).toContain("Configured credential · openai/gpt-5.6-sol");
     expect(text(probe)).toContain("Profile Default · openai/gpt-5.6-sol");
     expect(text(probe)).toContain("Update or remove it, then retry");
+    const targets = probe?.querySelectorAll(".model-providers__probe-target");
+    expect(text(targets?.[0] ?? null)).not.toContain("Request round-trip");
+    expect(text(targets?.[1] ?? null)).toContain("Request round-trip: 145 ms");
   });
 
   it("renders categorized probe errors", () => {
@@ -650,6 +668,7 @@ describe("renderModelProviders", () => {
               {
                 label: "API key",
                 status: "billing",
+                latencyMs: 280,
                 error: "Account has no credits",
               },
             ],
@@ -660,6 +679,9 @@ describe("renderModelProviders", () => {
     const probe = container.querySelector(".model-providers__probe--error");
     expect(text(probe)).toContain("Billing problem");
     expect(text(probe)).toContain("Account has no credits");
+    expect(text(probe?.querySelector(".model-providers__probe-target") ?? null)).toContain(
+      "Billing problem · Request round-trip: 280 ms",
+    );
   });
 
   it("presents no-model probe results as a setup state, not a connection failure", () => {

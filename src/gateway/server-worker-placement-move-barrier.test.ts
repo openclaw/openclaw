@@ -516,6 +516,7 @@ describe("worker placement move destination", () => {
         const { createGatewayWorkerPlacementRuntime } =
           await import("./server-worker-placement-startup.js");
         createGatewayWorkerPlacementRuntime({
+          initialPlacements: [],
           scheduler: createTestGatewayScheduler(),
           getCommittedRuntimeConfig: getRuntimeConfig,
           cancelSessionWork: vi.fn(async () => {}),

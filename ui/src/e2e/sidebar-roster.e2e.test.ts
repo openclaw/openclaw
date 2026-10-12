@@ -16,6 +16,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 import {
   chooseSidebarOwner,
@@ -471,14 +472,16 @@ suite.define(() => {
         await expectFocused(activeAgentTile);
         await page.keyboard.press("Escape");
         await expect.poll(() => workspaceMenu.count()).toBe(0);
+        // Keep pending hover hints out of the keyboard-only mobile flow.
+        await page.mouse.move(-1, -1);
         await page.setViewportSize({ width: 390, height: 844 });
-        // The preceding chip click leaves the pointer inside the sliding drawer.
-        await page.mouse.move(389, 843);
         const drawerToggle = page
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first();
         // Keep keyboard navigation free of hover tooltips while the drawer slides in.
+        await page.mouse.move(389, 843);
         await drawerToggle.press("Enter");
+        await waitForMobileSidebarDrawerOpen(page);
         for (const trigger of [chip, workspace]) {
           if (trigger === workspace) {
             await chip.press("Enter");

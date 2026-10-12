@@ -8,7 +8,7 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { renderChatPropsInto } from "./chat-view.test-helpers.ts";
-import { resetChatComposerState } from "./components/chat-composer.ts";
+import { resetChatComposerState } from "./components/chat-composer.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,

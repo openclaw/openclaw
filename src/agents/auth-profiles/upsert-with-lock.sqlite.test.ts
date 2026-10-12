@@ -220,13 +220,21 @@ describe("auth profile batch persistence", () => {
         expires: Date.now() + 60_000,
       };
       const fence = createOAuthRefreshFence({ profileId, credential });
+      const siblingId = "openai:sibling";
+      const sibling = { ...credential, refresh: "sibling-refresh" };
 
-      saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir);
+      saveAuthProfileStore(
+        { version: 1, profiles: { [profileId]: credential, [siblingId]: sibling } },
+        agentDir,
+      );
       let queuedWrite: Promise<void> | undefined;
       await withOAuthProfileLock({ profileId, provider: credential.provider }, async () => {
         queuedWrite = persistAuthProfileBatch({
           agentDir,
-          profiles: [{ profileId, credential }],
+          profiles: [
+            { profileId, credential },
+            { profileId: siblingId, credential: { ...sibling, access: "new-sibling-access" } },
+          ],
           resetFailureState: true,
           allowOAuthGenerationReplacement: true,
         }).then(() => undefined);
@@ -251,6 +259,7 @@ describe("auth profile batch persistence", () => {
         "Refused to restore fenced OAuth refresh generation",
       );
       expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toEqual(rotated);
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles[siblingId]).toEqual(sibling);
     });
   });
 

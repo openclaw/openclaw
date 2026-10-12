@@ -292,27 +292,35 @@ export function readExactSessionEntriesWithLifecycle(
       request.projection === "full" ||
       request.projection === "exact") &&
     !request.manualCompact &&
-    !request.lifecycleSessionKey &&
     !request.replyInitializationSessionKey &&
     request.sessionKeys.length <= MAX_SESSION_ROW_FACTS_KEYS
   ) {
     const result = readDatabase(
       (database) => {
-        const source = captureSessionEntryReadSource(database, request.expectedIdentity);
-        const identity = readOpenClawAgentDatabaseIdentity(database);
-        const facts = readExactSessionEntryFactsInDatabase(
-          database,
-          request.sessionKeys,
-          request.snapshotFields ?? "full",
-        );
-        captureSessionEntryReadSource(database, request.expectedIdentity);
-        return {
-          kind: "session-exact-entries" as const,
-          ...facts,
-          source,
-          databaseIdentity: { ...identity, identity: source.databaseIdentity },
-          lifecycleTimestamps: {},
+        const read = () => {
+          const source = captureSessionEntryReadSource(database, request.expectedIdentity);
+          const identity = readOpenClawAgentDatabaseIdentity(database);
+          const facts = readExactSessionEntryFactsInDatabase(
+            database,
+            request.sessionKeys,
+            request.snapshotFields ?? "full",
+          );
+          return {
+            kind: "session-exact-entries" as const,
+            ...facts,
+            source,
+            databaseIdentity: { ...identity, identity: source.databaseIdentity },
+            lifecycleTimestamps: resolveSessionLifecycleTimestampsWithHeader({
+              entry: facts.entries.find(
+                ({ sessionKey }) => sessionKey === request.lifecycleSessionKey,
+              )?.entry,
+              agentId: database.agentId,
+              sessionKey: request.lifecycleSessionKey,
+              readHeader: ({ sessionId }) => readTranscriptHeaderFromDatabase(database, sessionId),
+            }),
+          };
         };
+        return request.lifecycleSessionKey ? snapshot(database, read) : read();
       },
       { ...request.database, env: request.env },
     );
