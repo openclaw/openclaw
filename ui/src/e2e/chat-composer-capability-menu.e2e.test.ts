@@ -508,6 +508,44 @@ suite.define(() => {
     });
   });
 
+  it("lists discovered connector tools when Tool access is reopened after a run", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["chat.metadata", "chat.startup", "tools.effective"],
+        methodResponses: {
+          "config.get": configResponse({
+            github: { url: "https://mcp.example.test", enabled: true },
+          }),
+          "sessions.list": sessionsList(),
+          "tools.effective": undiscoveredMcpToolsResponse(),
+        },
+      });
+      const notice = "MCP tools will appear here after an agent run discovers them.";
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = await openMenu(page);
+      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
+      await expect.poll(() => menu.getByText(notice).isVisible()).toBe(true);
+
+      // A run discovers the connector's tools without changing the catalog cache key.
+      await gateway.setMethodResponse("tools.effective", effectiveToolsResponse());
+      await menu.getByRole("menuitem", { name: "Back" }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
+      await expect
+        .poll(() =>
+          menu
+            .locator('wa-dropdown-item[value^="mcp-tool:"]')
+            .locator(".agent-chat__capability-menu-label > span:first-child")
+            .allTextContents(),
+        )
+        .toEqual(["list-issues", "search-items", "search_items"]);
+      await expect.poll(() => menu.getByText(notice).count()).toBe(0);
+      expect(await gateway.getRequests("tools.effective")).toHaveLength(2);
+    });
+  });
+
   it("uses the generic empty state for an unscoped discovery notice", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, {

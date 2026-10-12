@@ -366,6 +366,43 @@ describe("ChatComposerCapabilityHost", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("refetches effective tools each time Tool access is opened", async () => {
+    const context = createContext({ appliedConfigHash: "config-a", runtimeConfig: {} });
+    context.gateway.snapshot.hello = gatewayHelloForMethods(["sessions.patch", "tools.effective"]);
+    const beforeRun = { agentId: "main", groups: [], profile: "before-run" };
+    const afterRun = { agentId: "main", groups: [], profile: "after-run" };
+    const request = vi.fn().mockResolvedValueOnce(beforeRun).mockResolvedValueOnce(afterRun);
+    const state = createState();
+    state.client = { request } as unknown as GatewayBrowserClient;
+    const session = { key: "main" } as GatewaySessionRow;
+    const menu = (toolAccessOpen = false) =>
+      host.props(context, state, session, "main", toolAccessOpen);
+    // The host notifies once a request settles and its result is published.
+    let published = deferred();
+    const host = new ChatComposerCapabilityHost(() => {
+      if (!menu().toolsEffectiveLoading) {
+        published.resolve();
+      }
+    });
+    const openToolAccess = (times: number) => {
+      published = deferred();
+      for (let open = 0; open < times; open += 1) {
+        menu().onOpenToolAccess?.("github");
+      }
+      return published.promise;
+    };
+
+    await openToolAccess(1);
+    expect(menu().toolsEffectiveResult).toBe(beforeRun);
+    menu(true);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    const reopened = openToolAccess(2);
+    expect(request).toHaveBeenCalledTimes(2);
+    await reopened;
+    expect(menu().toolsEffectiveResult).toBe(afterRun);
+  });
+
   it("keeps the newest tools after connector configuration changes away and back", async () => {
     const host = new ChatComposerCapabilityHost(vi.fn());
     const context = createContext({ appliedConfigHash: "config-a", runtimeConfig: {} });

@@ -97,17 +97,18 @@ export class ChatComposerCapabilityHost {
     context: ApplicationContext,
     state: ChatPageHost,
     agentId: string,
-    retryError = false,
+    refresh = false,
   ): void {
     const client = state.client;
     const sessionKey = state.sessionKey;
     const { cacheKey, requestKey } = this.effectiveToolsKeys(context, state, agentId);
+    // The key does not change when a run discovers MCP tools, so an explicit open refetches.
     if (
       !state.connected ||
       !client ||
-      this.effectiveTools?.key === cacheKey ||
       this.effectiveToolsRequest?.key === cacheKey ||
-      (!retryError && this.effectiveToolsErrorKey === cacheKey)
+      (!refresh &&
+        (this.effectiveTools?.key === cacheKey || this.effectiveToolsErrorKey === cacheKey))
     ) {
       return;
     }
