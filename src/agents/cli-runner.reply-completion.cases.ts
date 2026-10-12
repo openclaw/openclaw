@@ -178,6 +178,75 @@ export function registerCliReplyCompletionTests({
     },
   );
 
+  it.each([
+    { name: "final", final: true, interSession: false, expected: "success" },
+    { name: "progress", final: false, interSession: false, expected: "error" },
+    { name: "inter-session transcript-only", final: true, interSession: true, expected: "error" },
+  ] as const)(
+    "settles NO_REPLY after a targetless WebChat $name send through the internal sink",
+    async ({ final, interSession, expected }) => {
+      const text = "answer delivered through the internal sink";
+      supervisorSpawnMock.mockImplementationOnce(async (input) => {
+        completeToolCall(
+          {
+            captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+            toolName: "message",
+            args: { action: "send", message: text, final },
+          },
+          {
+            content: [
+              {
+                type: "text",
+                text: "Sent visible reply to the current source conversation via internal-ui.",
+              },
+            ],
+            details: {
+              status: "ok",
+              deliveryStatus: "sent",
+              channel: "webchat",
+              target: "current-run",
+              sourceReplyTranscriptOwner: true,
+              sourceReplySink: "internal-ui",
+              sourceReply: { text },
+              message: text,
+              dryRun: false,
+              sourceReplyDeliveryMode: "message_tool_only",
+              messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
+            },
+          },
+        );
+        input.onStdout?.(
+          `${JSON.stringify({ type: "result", session_id: "claude-session", result: SILENT_REPLY_TOKEN })}\n`,
+        );
+        return makeManagedRun();
+      });
+      const context = createContext({
+        sessionKey: "agent:main:dashboard:4d1d7313-43bf-4498-906b-4f6212e4a5b1",
+        runId: "run-webchat-internal-sink",
+        sourceReplyDeliveryMode: "automatic",
+        messageChannel: "webchat",
+        messageProvider: "webchat",
+        terminalReplyExpectation: "required",
+        ...(interSession
+          ? {
+              inputProvenance: {
+                kind: "inter_session" as const,
+                sourceSessionKey: "agent:main:main",
+                sourceTool: "sessions_send",
+              },
+            }
+          : {}),
+      });
+      context.backendResolved.config.output = "jsonl";
+
+      const result = await run(context);
+
+      expect(result.didSendViaMessagingTool).toBe(true);
+      expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe(expected);
+      expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([false, true])(
     "requires child continuation custody before accepting NO_REPLY (completion=%s)",
     async (expectsCompletionMessage) => {
