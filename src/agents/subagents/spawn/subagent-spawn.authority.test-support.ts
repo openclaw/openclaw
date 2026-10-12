@@ -149,7 +149,7 @@ export function installSpawnAttachmentFixture(params: {
   stateDir: string;
   admitted: Parameters<typeof getAdmittedRunDelegatedAuthority>[0];
   pauseAt?: "directory" | "files";
-  entered: () => void;
+  entered: () => void | Promise<void>;
   release: Promise<void>;
 }) {
   const root = path.join(params.stateDir, "attachments", "subagents", "main");
@@ -164,7 +164,7 @@ export function installSpawnAttachmentFixture(params: {
         lateWrites.push("directory");
       }
       if (params.pauseAt === "directory") {
-        params.entered();
+        await params.entered();
         await params.release;
       }
     }
@@ -189,7 +189,7 @@ export function installSpawnAttachmentFixture(params: {
         const result = await store.writeText(...args);
         expect(await fs.readFile(path.join(rootDir, args[0]), "utf8")).toBe("synthetic attachment");
         if (params.pauseAt === "directory" || params.pauseAt === "files") {
-          params.entered();
+          await params.entered();
           await params.release;
         }
         return result;

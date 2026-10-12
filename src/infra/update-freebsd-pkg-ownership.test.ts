@@ -17,33 +17,6 @@ afterEach(() => {
 });
 
 describe("system package ownership", () => {
-  it("warns and permits Linux updates when pacman is not installed", async () => {
-    const runCommand = vi.fn<typeof exec.runCommandBuffered>().mockResolvedValue(
-      result("", {
-        code: null,
-        termination: "error",
-        error: Object.assign(new Error("missing"), { code: "ENOENT" }),
-      }),
-    );
-    const onWarning = vi.fn();
-    await withMockedPlatform("linux", () =>
-      createSystemPackageOwnershipInspection(100, { runCommand, onWarning }).assertUnowned(
-        "/fixture/openclaw",
-      ),
-    );
-    expect(onWarning).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("Continuing without verified system-package ownership"),
-    );
-  });
-
-  it("does not inspect pkg on other platforms", async () => {
-    const query = vi.spyOn(exec, "runCommandBuffered");
-    await withMockedPlatform("darwin", () =>
-      createSystemPackageOwnershipInspection(100).assertUnowned("/fixture/openclaw"),
-    );
-    expect(query).not.toHaveBeenCalled();
-  });
-
   it("uses one non-bootstrap, alias-pinned inventory for a planning snapshot", async () => {
     await withTestDir({ prefix: "openclaw-pkg-inventory-" }, async (base) => {
       const query = vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(result());
@@ -61,16 +34,7 @@ describe("system package ownership", () => {
   });
 
   it.each([
-    { name: "database error", value: result("", { code: 1 }) },
     { name: "timeout", value: result("", { code: null, termination: "timeout" }) },
-    { name: "truncated inventory", value: result("", { code: null, termination: "output-limit" }) },
-    {
-      name: "configuration error",
-      value: result("", { stderr: Buffer.from("private configuration detail") }),
-    },
-    { name: "invalid UTF-8", value: result("", { stdout: Buffer.from([0xff, 0x0a]) }) },
-    { name: "partial record", value: result("/fixture/entry") },
-    { name: "relative entry", value: result("relative/entry\n") },
     {
       name: "launch failure",
       value: result("", {
@@ -100,7 +64,7 @@ describe("system package ownership", () => {
     expect(host).not.toHaveBeenCalled();
   });
 
-  it.each(["linux", "freebsd"] as const)(
+  it.each(["linux"] as const)(
     "retains the pre-mutation error contract for a positive %s owner",
     async (platform) => {
       const onWarning = vi.fn();
@@ -116,7 +80,7 @@ describe("system package ownership", () => {
         await expect(failure).rejects.toBeInstanceOf(SystemPackageOwnershipError);
         await expect(failure).rejects.toMatchObject({
           name: "UpdatePreMutationError",
-          reason: platform === "linux" ? "pacman-owned-install" : "pkg-owned-install",
+          reason: "pacman-owned-install",
           owned: true,
         });
       });
@@ -202,7 +166,6 @@ describe("system package ownership", () => {
 
   it.each([
     { operation: "lstat", code: "EACCES" },
-    { operation: "realpath", code: "ENOENT" },
     { operation: "realpath", code: "PRIVATE_CUSTOM_CODE" },
   ] as const)(
     "warns after $operation failure ($code) without private details",

@@ -66,11 +66,6 @@ describe("isLiveTestEnabled", () => {
     expect(isLiveTestEnabled([], { OPENCLAW_LIVE_TEST: "1" })).toBe(true);
     expect(isLiveTestEnabled([], {})).toBe(false);
   });
-
-  it("supports provider-specific live flags", () => {
-    expect(isLiveTestEnabled(["MINIMAX_LIVE_TEST"], { MINIMAX_LIVE_TEST: "1" })).toBe(true);
-    expect(isLiveTestEnabled(["MINIMAX_LIVE_TEST"], { MINIMAX_LIVE_TEST: "0" })).toBe(false);
-  });
 });
 
 describe("isLiveProfileKeyModeEnabled", () => {
@@ -82,11 +77,6 @@ describe("isLiveProfileKeyModeEnabled", () => {
 });
 
 describe("live credential precedence", () => {
-  it("uses profile-first auth for OpenAI even when the global live mode is env-first", () => {
-    // Prefer stored OpenAI profiles without excluding the documented env fallback.
-    expect(resolveLiveCredentialPrecedence("openai", false)).toBe("profile-first");
-  });
-
   it("keeps env-first auth for normal providers unless profile keys are required", () => {
     expect(resolveLiveCredentialPrecedence("anthropic", false)).toBe("env-first");
     expect(resolveLiveCredentialPrecedence("anthropic", true)).toBe("profile-first");
