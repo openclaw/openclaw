@@ -29,7 +29,7 @@ import {
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import {
