@@ -28,6 +28,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryCursor } from "./chat-history-pagination.ts";
 import { matchesCompactionOperation } from "./chat-progress.ts";
+import { reconcileChatReasoning, type ChatReasoningHost } from "./chat-reasoning.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import type { CompactionStatus, ProviderPolicyNotice } from "./tool-stream-contract.ts";
 
@@ -48,17 +49,18 @@ const CHAT_PROJECTION_SCOPE_KEYS = [
   "activeLeafEntryId",
 ] as const;
 
-type ChatSessionProjectionOwner = ChatComposerScope & {
-  sessionKey: string;
-  chatMessages: unknown[];
-  chatHistoryCursor?: ChatHistoryCursor;
-  chatSubmissions?: ApplicationChatSubmissions;
-  currentSessionId?: string | null;
-  chatDisplayedLeafEntryId?: string | null;
-  compactionStatus?: CompactionStatus | null;
-  compactionClearTimer?: number | null;
-  providerPolicyNotice?: ProviderPolicyNotice | null;
-};
+type ChatSessionProjectionOwner = ChatComposerScope &
+  ChatReasoningHost & {
+    sessionKey: string;
+    chatMessages: unknown[];
+    chatHistoryCursor?: ChatHistoryCursor;
+    chatSubmissions?: ApplicationChatSubmissions;
+    currentSessionId?: string | null;
+    chatDisplayedLeafEntryId?: string | null;
+    compactionStatus?: CompactionStatus | null;
+    compactionClearTimer?: number | null;
+    providerPolicyNotice?: ProviderPolicyNotice | null;
+  };
 
 function resetCompactionProjection(owner: ChatSessionProjectionOwner): void {
   if (owner.compactionClearTimer != null) {
@@ -262,6 +264,10 @@ export function getChatSessionProjection(
   return scopedProjection;
 }
 
+export function getChatRunProjection(owner: object, runId: string) {
+  return chatSessionProjections.get(owner)?.projection?.runs[runId];
+}
+
 export function getChatRunOwner(owner: object): string | undefined {
   return chatSessionProjections.get(owner)?.runId;
 }
@@ -271,7 +277,13 @@ export function getChatRunOwnerSessionKey(owner: object): string | undefined {
   return current?.runId ? current.projection?.scope.sessionKey : undefined;
 }
 
-export function setChatRunOwner(owner: object, runId: string | undefined): void {
+export function setChatRunOwner(
+  owner: object & ChatReasoningHost,
+  runId: string | undefined,
+): void {
+  if (runId && owner.chatReasoning?.runId !== runId) {
+    owner.chatReasoning = null;
+  }
   const current = chatSessionProjections.get(owner);
   chatSessionProjections.set(owner, {
     ...current,
@@ -296,6 +308,7 @@ export function publishChatSessionProjection(
       "agentId",
     ]);
     if (sessionChanged) {
+      owner.chatReasoning = null;
       owner.providerPolicyNotice = null;
     }
     // Appending the completed marker advances the active leaf. Retain its live
@@ -314,6 +327,7 @@ export function publishChatSessionProjection(
     projection,
     runId: retainedRunId,
   });
+  reconcileChatReasoning(owner, projection, current?.projection?.messages);
   // Run-only transitions share the transcript array. Preserve their ownership
   // updates above without traversing or republishing every displayed row.
   if (current?.projection?.messages === projection.messages) {
@@ -638,6 +652,7 @@ export function reduceChatSessionProjection(
         ),
       ),
     );
+    owner.chatReasoning = null;
     delete owner.chatHistoryCursor;
     resetCompactionProjection(owner);
     owner.providerPolicyNotice = null;

@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createSqliteCommitReceipt } from "../../infra/sqlite-commit-receipt.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -11,12 +10,15 @@ import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-c
 import {
   sessionSharingEntriesEqual,
   type SessionEntryProjectionFacts,
-  type SessionEntryReplacementPostimage,
   type SessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
-import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
+import {
+  prepareExactSessionEntryRowReads,
+  type ResolvedSessionEntryRow,
+} from "./session-accessor.sqlite-entry-read.js";
 import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revision.js";
+import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import {
   deleteLegacySessionEntryRows,
   readExactSessionEntryRow,
@@ -35,14 +37,24 @@ import type {
 } from "./session-accessor.sqlite-replacement-types.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import {
+  captureSessionEntryPublicationSource,
+  discardSessionEntryPublicationSource,
+  hasSessionEntryPublicationCapacity,
+} from "./session-entry-publication-source.js";
+import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
+import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
 
-/** Receipts carry only publication facts, never saved prompts or maintenance payloads. */
+/** Display metadata and bounded full-entry facts share the writer's final persisted read. */
 export function prepareSessionEntryReplacementPublication(
   result: SessionEntryReplacementCommitted,
   database: OpenClawAgentDatabase,
+  options?: { captureFullFacts?: boolean; postimages?: SessionEntryWritePostimages },
 ): SessionEntryReplacementPublication {
   const archived = new Set(
     result.maintenancePlans.flatMap((plan) =>
@@ -51,38 +63,50 @@ export function prepareSessionEntryReplacementPublication(
   );
   const invalidated = new Set([...result.membershipInvalidatedKeys, ...archived]);
   const current = new Map<string, SessionEntry>();
+  const fullEntries = options?.captureFullFacts ? new Map<string, SessionEntry>() : undefined;
   const projection = new Map<string, SessionEntryProjectionFacts>();
   const unavailableParticipantKeys = new Set<string>();
   let readCommitted: ReturnType<typeof prepareExactSessionEntryRowReads> | undefined;
   for (const key of result.current.keys()) {
-    readCommitted ??= prepareExactSessionEntryRowReads(
-      database,
-      [...result.current.keys()],
-      "list",
-      undefined,
-      {
-        includeBoardPresence: true,
-        includeMembership: true,
-        onParticipantProjectionError: (sessionKey) => unavailableParticipantKeys.add(sessionKey),
-      },
-    );
-    // Read the final persisted bytes and side tables after assignment, alias moves and maintenance.
-    const committed = readCommitted(key);
-    if (!committed) {
-      throw new Error(`Session publication lost its committed metadata: ${key}`);
+    const postimage = options?.postimages?.get(key);
+    let committed: ResolvedSessionEntryRow | undefined;
+    if (!postimage) {
+      // Owners without a complete write receipt still acquire their final projection here.
+      readCommitted ??= prepareExactSessionEntryRowReads(
+        database,
+        [...result.current.keys()].filter((currentKey) => !options?.postimages?.has(currentKey)),
+        fullEntries ? "full" : "list",
+        undefined,
+        {
+          includeBoardPresence: true,
+          includeMembership: true,
+          onParticipantProjectionError: (sessionKey) => unavailableParticipantKeys.add(sessionKey),
+        },
+      );
+      committed = readCommitted(key);
     }
-    const memberIds: unknown = JSON.parse(committed.row.member_ids_json ?? "null");
+    const memberIds: unknown = JSON.parse(
+      postimage?.sideTables.memberIdsJson ?? committed?.row.member_ids_json ?? "null",
+    );
     if (
       !Array.isArray(memberIds) ||
       !memberIds.every((id): id is string => typeof id === "string")
     ) {
       throw new Error(`Session publication lost its committed membership: ${key}`);
     }
-    current.set(key, freezeJsonSnapshot(committed.entry));
+    const committedEntry = postimage?.entry ?? committed?.entry;
+    if (!committedEntry) {
+      throw new Error(`Session publication lost its committed metadata: ${key}`);
+    }
+    const entry = freezeJsonSnapshot(
+      attachSessionEntrySnapshots({ ...committedEntry }, {}, "list"),
+    );
+    current.set(key, entry);
     if (unavailableParticipantKeys.has(key)) {
       continue;
     }
-    const { entry } = committed;
+    fullEntries?.set(key, freezeJsonSnapshot(committedEntry));
+    const projectedEntry = committedEntry;
     projection.set(
       key,
       freezeJsonSnapshot({
@@ -90,53 +114,36 @@ export function prepareSessionEntryReplacementPublication(
           key,
           isInternalSessionEffectsKey(key)
             ? null
-            : (normalizeOptionalString(entry.category) ?? null),
+            : (normalizeOptionalString(projectedEntry.category) ?? null),
           memberIds,
           {
-            ...(entry.participants ? { participants: entry.participants } : {}),
-            ...(entry.participantCount === undefined
+            ...(projectedEntry.participants ? { participants: projectedEntry.participants } : {}),
+            ...(projectedEntry.participantCount === undefined
               ? {}
-              : { participantCount: entry.participantCount }),
+              : { participantCount: projectedEntry.participantCount }),
           },
-          entry.sessionId,
+          projectedEntry.sessionId,
         ],
-        hasBoard: committed.row.board_present === 1,
-        activitySummaryWatermark: readSessionActivitySummary(entry)
-          ? readSessionTranscriptWatermarkInDatabase(database, entry.sessionId)
+        hasBoard: postimage?.sideTables.hasBoard ?? committed?.row.board_present === 1,
+        activitySummaryWatermark: readSessionActivitySummary(projectedEntry)
+          ? readSessionTranscriptWatermarkInDatabase(database, projectedEntry.sessionId)
           : undefined,
       }),
     );
   }
   const source = getAdmittedSqliteSchemaFacts(database.db)
-    ? {
+    ? captureSessionEntryPublicationSource(database.db, {
         ...readOpenClawAgentDatabaseIdentity(database),
-        revision: readSessionNodesGeneration(database.db),
-      }
+        // Actor receipts carry the complete postimage at the native writer revision.
+        ...(!readSessionActorTransactionState(database)
+          ? { revision: readSessionNodesGeneration(database.db) }
+          : {}),
+      })
     : undefined;
   const changedKeys = [
     ...new Set([...result.previous.keys(), ...result.current.keys(), ...archived]),
   ];
-  const receipt =
-    source &&
-    createSqliteCommitReceipt<SessionEntryReplacementPostimage, typeof source>({
-      source,
-      domain: "session-entry-replacement",
-      keys: changedKeys,
-      readFact(key) {
-        const entry = current.get(key);
-        const facts = projection.get(key);
-        if (entry && facts) {
-          return { kind: "postimage", value: { entry, projection: facts } };
-        }
-        if (entry && unavailableParticipantKeys.has(key)) {
-          return { kind: "postimage", value: { entry, participantProjectionUnavailable: true } };
-        }
-        return result.previous.has(key) && !current.has(key)
-          ? { kind: "absent" }
-          : { kind: "unknown" };
-      },
-    });
-  return {
+  const publication: SessionEntryReplacementPublication = {
     kind: "session-entry-replacements",
     transcriptPublication: readStagedSessionTranscriptAuthority(database),
     pendingArchiveRecovery: result.pendingArchiveRecovery,
@@ -163,6 +170,7 @@ export function prepareSessionEntryReplacementPublication(
       ]),
     ),
     current,
+    ...(fullEntries ? { fullEntries } : {}),
     projection,
     ...(unavailableParticipantKeys.size > 0
       ? { unavailableParticipantKeys: [...unavailableParticipantKeys] }
@@ -174,9 +182,25 @@ export function prepareSessionEntryReplacementPublication(
         previousEntry: result.previous.get(sessionKey),
       }),
     ),
-    ...(source ? { source, receipt } : {}),
+    ...(source ? { source } : {}),
     changedKeys,
   };
+  boundSessionEntryReplacementPublication(publication);
+  return publication;
+}
+
+/** Keep every required receipt fact when its optional full snapshots exceed one bounded envelope. */
+export function boundSessionEntryReplacementPublication(
+  publication: SessionEntryReplacementPublication,
+  envelope: unknown = publication,
+): void {
+  if (!publication.fullEntries || hasSessionEntryPublicationCapacity(envelope)) {
+    return;
+  }
+  delete publication.fullEntries;
+  if (publication.source) {
+    discardSessionEntryPublicationSource(publication.source);
+  }
 }
 
 /** One SQL owner serves admitted worker writes and the native rollback exception. */
@@ -186,6 +210,7 @@ export function commitSessionEntryReplacementsInDatabase(
   beforeReplacements: () => void,
   refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
   onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
+  postimages?: SessionEntryWritePostimages,
 ): SessionEntryReplacementCommitted {
   if (input.labelClaim) {
     assertSessionCreationLabelAvailable(
@@ -202,9 +227,11 @@ export function commitSessionEntryReplacementsInDatabase(
   ) {
     throw new Error("SQLite session label owners changed before replacement");
   }
-  const transactionEntries = new Map<string, SessionEntry>();
+  const transactionRows = new Map<string, ResolvedSessionEntryRow>();
+  const windows = new Map<string, SessionEntryWindowRow | null>();
+  const writtenPostimages: SessionEntryWritePostimages = postimages ?? new Map();
   for (const sessionKey of input.validationKeys) {
-    const transactionRow = readExactSessionEntryRow(database, sessionKey);
+    const transactionRow = readExactSessionEntryRow(database, sessionKey, "full", undefined, true);
     const expectedRow = input.expectedRows.get(sessionKey);
     if (
       transactionRow?.row.entry_json !== expectedRow?.row.entry_json ||
@@ -213,7 +240,11 @@ export function commitSessionEntryReplacementsInDatabase(
       throw new Error(`SQLite session entry changed before replacement for ${sessionKey}`);
     }
     if (transactionRow) {
-      transactionEntries.set(sessionKey, transactionRow.entry);
+      transactionRows.set(sessionKey, transactionRow);
+      const window = transactionRow.row.window;
+      if (window !== undefined) {
+        windows.set(transactionRow.entry.sessionId, window);
+      }
     }
   }
   beforeReplacements();
@@ -233,15 +264,20 @@ export function commitSessionEntryReplacementsInDatabase(
       replacement.sessionKey,
       ...(replacement.previousSessionKeys ?? []),
     ].flatMap((sessionKey) => {
-      const entry = transactionEntries.get(sessionKey);
+      const entry = transactionRows.get(sessionKey)?.entry;
       return entry ? [{ entry, sessionKey }] : [];
     });
     const selectedBefore = sourceEntries.toSorted(
       (left, right) => (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0),
     )[0]?.entry;
     for (const { entry, sessionKey } of sourceEntries) {
-      previous.set(sessionKey, entry);
+      if (!previous.has(sessionKey)) {
+        previous.set(sessionKey, entry);
+      }
     }
+    const canonical = transactionRows.get(replacement.sessionKey);
+    const canonicalFacts = canonical && captureSessionEntrySnapshot(canonical);
+    const previousWindow = windows.get(replacement.entry.sessionId);
     const written = writeSessionEntry(
       database,
       replacement.sessionKey,
@@ -249,7 +285,14 @@ export function commitSessionEntryReplacementsInDatabase(
       {
         ...(input.consumePendingReset ? { consumePendingReset: true } : {}),
         previousEntry: selectedBefore ?? null,
-        canonicalPreviousEntry: transactionEntries.get(replacement.sessionKey) ?? null,
+        canonicalPreviousEntry: canonical?.entry ?? null,
+        canonicalPreviousRow: canonical?.row,
+        canonicalPreviousWindow:
+          previousWindow !== undefined
+            ? { sessionId: replacement.entry.sessionId, row: previousWindow }
+            : canonicalFacts?.window,
+        canonicalPreviousSideTables: canonicalFacts?.sideTables,
+        postimages: writtenPostimages,
       },
     );
     deleteLegacySessionEntryRows(
@@ -258,8 +301,30 @@ export function commitSessionEntryReplacementsInDatabase(
       replacement.sessionKey,
       {
         rehomeMembers: selectedBefore?.sessionId === replacement.entry.sessionId,
+        validatedEntries: new Map(
+          [...transactionRows].map(([key, selected]) => [key, selected.entry]),
+        ),
+        postimages: writtenPostimages,
       },
     );
+    // Each later replacement starts from the preceding write, including shared physical windows.
+    const postimage = writtenPostimages.get(replacement.sessionKey);
+    if (postimage) {
+      transactionRows.set(replacement.sessionKey, {
+        entry: postimage.entry,
+        row: {
+          ...postimage.row,
+          member_ids_json: postimage.sideTables.memberIdsJson,
+          board_present: postimage.sideTables.hasBoard ? 1 : 0,
+        },
+      });
+      windows.set(postimage.entry.sessionId, postimage.window);
+    }
+    for (const previousKey of replacement.previousSessionKeys ?? []) {
+      if (previousKey !== replacement.sessionKey) {
+        transactionRows.delete(previousKey);
+      }
+    }
     if (replacement.previousSessionKeys?.some((key) => key !== replacement.sessionKey)) {
       membershipInvalidatedKeys.push(replacement.sessionKey);
     }
@@ -270,7 +335,7 @@ export function commitSessionEntryReplacementsInDatabase(
     const { sessionKey, owner } = input.ownerAssignment;
     if (
       !current.has(sessionKey) ||
-      !replaceSessionOwnerInTransaction(database, sessionKey, owner)
+      !replaceSessionOwnerInTransaction(database, sessionKey, owner, writtenPostimages)
     ) {
       throw new Error("Session owner assignment lost its creation target");
     }
@@ -282,10 +347,25 @@ export function commitSessionEntryReplacementsInDatabase(
           database,
           maintenance,
           () => preservation,
-          onArchived,
+          (sessionKey, previousEntry, currentEntry) => {
+            if (!previous.has(sessionKey)) {
+              previous.set(sessionKey, previousEntry);
+            }
+            current.set(sessionKey, currentEntry);
+            onArchived?.(sessionKey, previousEntry, currentEntry);
+          },
           refreshCandidates,
+          writtenPostimages,
         )
       : emptySessionEntryMaintenancePlan();
+  for (const sessionKey of current.keys()) {
+    const postimage = writtenPostimages.get(sessionKey);
+    if (postimage) {
+      current.set(sessionKey, postimage.entry);
+    } else {
+      current.delete(sessionKey);
+    }
+  }
   return {
     // Fresh creation must not retry another session's failed export.
     pendingArchiveRecovery:

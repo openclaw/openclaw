@@ -12,6 +12,7 @@ import {
   isEmbeddedAgentRunActive,
   resolveActiveEmbeddedRunOwner,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import { killSubagentRunAdmin } from "../../agents/subagents/registry/subagent-control-kill.js";
 import { ensureSubagentControllerOwnsRun } from "../../agents/subagents/registry/subagent-control-scope.js";
 import type { SubagentRequestSessionOrigin } from "../../agents/subagents/registry/subagent-exec-request-ownership.js";
@@ -27,6 +28,7 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
+import { captureSessionWorkRunInterruptions } from "../../sessions/session-lifecycle-admission.js";
 import { captureWorkerInferenceForSession, createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunById, isChatAbortControllerEntryAbortable } from "../chat-abort.js";
 import { abortQueuedChatTurnById } from "../chat-queued-turns.js";
@@ -318,6 +320,23 @@ function prepareChatSessionAbort(
   const embeddedController = sessionEmbeddedRun
     ? params.context.chatAbortControllers.get(sessionEmbeddedRun.runId)
     : undefined;
+  const canCaptureAdmittedRuns =
+    params.stopEmbeddedRun && !params.runId && params.sessionKey !== "global";
+  const admittedRuns =
+    canCaptureAdmittedRuns && persistedSessionId && session?.storePath
+      ? captureSessionWorkRunInterruptions({
+          scope: session.storePath,
+          identities: [...sessionKeys, persistedSessionId],
+          accept: (run) =>
+            run.sessionKey !== undefined &&
+            sessionKeys.includes(run.sessionKey) &&
+            (!run.agentId || !params.agentId || run.agentId === params.agentId) &&
+            run.sessionId === (params.requiredSessionId ?? persistedSessionId) &&
+            run.runId !== sessionEmbeddedRun?.runId &&
+            !params.context.chatAbortControllers.has(run.runId) &&
+            acceptsRequest(run),
+        })
+      : [];
   const persistSessionAbort = createSessionAbortPersistence({
     sessionKey: session?.canonicalKey ?? params.sessionKey,
     agentId: session?.agentId ?? params.agentId,
@@ -396,6 +415,7 @@ function prepareChatSessionAbort(
   let snapshots: AbortedPartialSnapshot[] = [];
   let workerCancellationPersistence: Promise<string[]> | undefined;
   let embeddedAbortPersistence: Promise<void> | undefined;
+  const admittedAbortPersistence: Promise<void>[] = [];
   // Reentrant cancellation can revoke the next effect. Keep committed outcomes
   // available to the partial-persistence owner even when abort() then throws.
   const result: ChatSessionAbortResult = { aborted: false, runIds: [], unauthorized: false };
@@ -438,6 +458,23 @@ function prepareChatSessionAbort(
         recordRun(sessionEmbeddedRun.runId);
         embeddedAbortPersistence = persistSessionAbort(sessionEmbeddedRun);
         void embeddedAbortPersistence.catch(() => undefined);
+      }
+    }
+    for (const admitted of admittedRuns) {
+      params.assertCurrent?.();
+      const { runId, sessionId } = admitted.run;
+      if (
+        !sessionId ||
+        params.context.chatAbortControllers.has(runId) ||
+        runId === sessionEmbeddedRun?.runId
+      ) {
+        continue;
+      }
+      if (admitted.interrupt(createAgentRunDirectAbortError())) {
+        recordRun(runId);
+        const persistence = persistSessionAbort({ runId, sessionId, startedAtMs: undefined });
+        void persistence.catch(() => undefined);
+        admittedAbortPersistence.push(persistence);
       }
     }
     params.assertCurrent?.();
@@ -592,7 +629,7 @@ function prepareChatSessionAbort(
     abort: abortAuthorizedRuns,
     async finish() {
       const abortedRunIds = new Set(result.runIds);
-      const [worker, partial, exec, embedded] = await Promise.allSettled([
+      const [worker, partial, exec, embedded, ...admitted] = await Promise.allSettled([
         workerCancellationPersistence,
         result.aborted && snapshots.length > 0
           ? persistAbortedPartials({
@@ -602,10 +639,11 @@ function prepareChatSessionAbort(
           : undefined,
         commands.settle(),
         embeddedAbortPersistence,
+        ...admittedAbortPersistence,
       ]);
       // A captured session failure can also surface through partial persistence.
       const failures = new Set<unknown>();
-      for (const settled of [worker, partial, exec, embedded]) {
+      for (const settled of [worker, partial, exec, embedded, ...admitted]) {
         if (settled.status === "rejected") {
           failures.add(settled.reason);
         }
@@ -686,7 +724,11 @@ export async function abortChatRunsForSessionKeyWithPartials(
   }
   return {
     ...result,
-    aborted: result.aborted || Boolean(descendants?.killed) || Boolean(descendants?.execAborted),
+    aborted:
+      result.aborted ||
+      Boolean(descendants?.killed) ||
+      Boolean(descendants?.continuationRetired) ||
+      Boolean(descendants?.execAborted),
     descendants,
     ...(warning ? { warning } : {}),
   };

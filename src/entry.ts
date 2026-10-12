@@ -3,7 +3,6 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { format } from "node:util";
-import { disableExitUnsafeCompilers } from "./bootstrap/node-exit-safe-compilers.js";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
@@ -39,7 +38,7 @@ import {
   isNodeHostLauncherChild,
   requestNodeHostLauncherBootstrap,
 } from "./node-host/launcher-client.js";
-import { defaultRuntime } from "./runtime.js";
+import { defaultRuntime, ExitError } from "./runtime.js";
 
 // Recovery must not select executables from workspace/global dotenv values.
 const inheritedRuntimeEnv = { ...process.env };
@@ -121,13 +120,21 @@ const isEntryMain = isMainModule({
   wrapperEntryPairs: [...ENTRY_WRAPPER_PAIRS],
 });
 if (isEntryMain) {
-  disableExitUnsafeCompilers();
+  try {
+    await runEntryMain();
+  } catch (error) {
+    if (!(error instanceof ExitError)) {
+      throw error;
+    }
+    process.exitCode = error.code;
+  }
 }
-if (!isEntryMain) {
-  // Imported as a dependency — skip all entry-point side effects.
-} else if (isUpdateAdmissionInvocation(resolveCliArgvInvocation(process.argv))) {
-  await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv));
-} else {
+
+async function runEntryMain(): Promise<void> {
+  if (isUpdateAdmissionInvocation(resolveCliArgvInvocation(process.argv))) {
+    await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv));
+    return;
+  }
   const entryFile = fileURLToPath(import.meta.url);
   const installRoot = resolveEntryInstallRoot(entryFile);
   installDistEsmResolveFastPath(import.meta.url);
@@ -152,7 +159,8 @@ if (!isEntryMain) {
     new URL("../node-host-launcher.mjs", import.meta.url).href
   );
   if (await runNodeHostLauncher({ entryPath: entryFile, packageRoot: installRoot })) {
-    process.exit(process.exitCode ?? 0);
+    process.exitCode ??= 0;
+    return;
   }
   gatewayEntryStartupTrace.mark("bootstrap");
 
@@ -193,13 +201,14 @@ if (!isEntryMain) {
           execArgv: plan.argv.slice(0, plan.argv.length - process.argv.length + 1),
           env: plan.env,
         });
-        process.exit(0);
+        process.exitCode = 0;
+        return true;
       }
 
       // The child environment was already snapshotted. Load dotenv only to format
       // the parent trace; command-specific dotenv ordering remains child-owned.
       const writeError = await prepareCliDiagnosticBlockWriter();
-      runCliRespawnPlan(plan, undefined, writeError);
+      await runCliRespawnPlan(plan, undefined, writeError);
       // Parent must not continue running the CLI.
       return true;
     }
@@ -212,14 +221,16 @@ if (!isEntryMain) {
       const parsedContainer = parseCliContainerArgs(process.argv);
       if (!parsedContainer.ok) {
         await writeCapturedCliArgumentError(parsedContainer.error);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
 
       const parsed = parseCliProfileArgs(parsedContainer.argv);
       if (!parsed.ok) {
         // Keep it simple; Commander will handle rich help/errors after we strip flags.
         await writeCapturedCliArgumentError(parsed.error);
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
 
       const containerTargetName = resolveCliContainerTarget(process.argv);
@@ -230,7 +241,8 @@ if (!isEntryMain) {
       }
       if (containerTargetName && parsed.profile) {
         await writeCapturedCliArgumentError("--container cannot be combined with --profile/--dev");
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
       gatewayEntryStartupTrace.mark("argv");
 
@@ -287,7 +299,8 @@ export async function tryHandleRootHelpFastPath(argv: string[]): Promise<boolean
     const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
     const writeError = await prepareCliDiagnosticBlockWriter();
     await writeError(`[openclaw] Failed to display help: ${detail}\n`);
-    return process.exit(1);
+    process.exitCode = 1;
+    return true;
   }
 }
 

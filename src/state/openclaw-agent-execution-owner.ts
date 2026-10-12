@@ -6,7 +6,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { retainSqliteWorkerErrorCode } from "../infra/sqlite-worker-contract.js";
-import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
+import {
+  assertExistingDatabaseIdentity,
+  type DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -25,7 +28,6 @@ import {
   registerOpenClawAgentDatabaseAsyncResource,
 } from "./openclaw-agent-db-resources.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
-import { watchAgentDatabaseExecutionConfig } from "./openclaw-agent-execution-config.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseExecutionScope,
@@ -73,12 +75,13 @@ export function createAgentDatabaseExecution(
   const { agentId, pathname, identity, initialIdentity, expectedCreationIdentity } = prepared;
   const context = captureOpenClawStateWorkerContext({ env: options.env });
   const executionOptions = { agentId, path: pathname, env: context.environment };
+  const deletionCleanup = getAgentDeletionDatabaseCleanup(executionOptions);
+  const cleanupOwner = deletionCleanup?.ownsDatabase ? deletionCleanup : undefined;
   const creationClaim = creationClaims.captureAgentCreationClaim(options);
   const aliases = new Map<string, () => void>();
   const assertAgentAdmitted = captureAgentDatabaseAdmission(agentId, { env: context.environment });
   let retired = false;
   let revoked = false;
-  let retainIdle = true;
   let borrowers = 0;
   const acceptedWork = createAgentDatabaseAcceptedWork();
   let creationIdentity = expectedCreationIdentity;
@@ -89,7 +92,6 @@ export function createAgentDatabaseExecution(
   let cleanupFailure: { error: unknown } | undefined;
   let closing: Promise<void> | undefined;
   let unregisterShared: (() => void) | undefined;
-  let unregisterConfig: (() => void) | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let idleDrainListener: Disposable | undefined;
 
@@ -125,7 +127,6 @@ export function createAgentDatabaseExecution(
     }
     unregisterAgent();
     unregisterShared?.();
-    unregisterConfig?.();
   };
 
   const assertCurrent = () => {
@@ -320,15 +321,15 @@ export function createAgentDatabaseExecution(
     },
     borrow(borrowedPath, expected, creating, requestedPath) {
       const cleanup = getAgentDeletionDatabaseCleanup({ ...executionOptions, path: borrowedPath });
-      if (cleanup?.worker && !generation?.isPrepared()) {
-        registerAgentDeletionExecutionCleanup(
-          owner,
-          { ...executionOptions, path: borrowedPath },
-          () => drainAgentDatabaseResources({ path: borrowedPath, agentId }, async () => {}),
-        );
-      }
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
       const creatingTarget = creating ? Object.freeze({ ...creating }) : undefined;
+      if (fileIdentity) {
+        assertExistingDatabaseIdentity(
+          borrowedPath,
+          `file:${fileIdentity.physicalIdentity}`,
+          fileIdentity.birthtime,
+        );
+      }
       const assertReferenceCurrent = (nativeIdentity?: AgentDatabaseExecutionFileIdentity) => {
         assertCurrent();
         assertBorrowedAgentDatabaseFileIdentity({
@@ -414,7 +415,6 @@ export function createAgentDatabaseExecution(
         assertCurrent: assertBorrowed,
         captureGenerationClaim,
         capturePreparedGenerationClaim() {
-          assertBorrowed();
           if (
             agentDatabaseLifecycle.pending.has(pathname) ||
             nativeClosing ||
@@ -422,6 +422,7 @@ export function createAgentDatabaseExecution(
             generation?.failure() ||
             !generation?.isPrepared()
           ) {
+            assertBorrowed();
             return undefined;
           }
           return captureGenerationClaim();
@@ -513,12 +514,11 @@ export function createAgentDatabaseExecution(
               }
             }
             borrowers -= 1;
-            if (borrowers !== 0 || retired || cleanupFailure) {
+            if (borrowers !== 0 || retired || cleanupFailure || cleanupOwner) {
               return;
             }
             const drainSignal = getGatewayRestartDrainSignal();
-            const canRetain = () =>
-              retainIdle && generation && !nativeClosing && !drainSignal.aborted;
+            const canRetain = () => generation && !nativeClosing && !drainSignal.aborted;
             try {
               for (const idle of executionState.idle) {
                 if (!canRetain() || executionState.idle.size < MAX_IDLE_EXECUTORS) {
@@ -568,6 +568,15 @@ export function createAgentDatabaseExecution(
       // A reborrow may have retained the owner or started its next native generation.
       if (borrowers === 0 && !generation) {
         finishRetirement();
+      }
+    },
+    async retireForCleanup() {
+      if (!cleanupOwner) {
+        // Accepted writes keep their original owner through publication and settlement.
+        while (acceptedWork.pending.size > 0) {
+          await Promise.allSettled(acceptedWork.pending.keys());
+        }
+        await owner.close();
       }
     },
     close() {
@@ -628,14 +637,11 @@ export function createAgentDatabaseExecution(
   try {
     retainAlias(pathname);
     retainAlias(identity.canonicalPath);
-    unregisterConfig = watchAgentDatabaseExecutionConfig(agentId, context.environment, () => {
-      // Routing changes retire warm retention, not borrowers of the captured physical store.
-      // Keep the owner registered until native cleanup settles so pinned reborrows can join it.
-      retainIdle = false;
-      if (borrowers === 0) {
-        void owner.closeIdle().catch(reportCleanupFailure);
-      }
-    });
+    registerAgentDeletionExecutionCleanup(owner, executionOptions, () =>
+      drainAgentDatabaseResources({ path: pathname, agentId }, async () => {}, cleanupOwner),
+    );
+    // Config changes do not drain captured executors; unused stores expire normally.
+    // Callers resolve new routing, while accepted work keeps its original physical store.
     unregisterShared = registerOpenClawStateDatabaseAsyncResource({
       close: async (sharedIdentity) => {
         if (!sharedIdentity || sharedIdentity.key === context.admission.identity.key) {
@@ -652,7 +658,6 @@ export function createAgentDatabaseExecution(
   } catch (error) {
     unregisterAgent();
     unregisterShared?.();
-    unregisterConfig?.();
     throw error;
   }
 }

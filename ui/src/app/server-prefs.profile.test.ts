@@ -1,28 +1,27 @@
-/* @vitest-environment jsdom */
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
+import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { resetServerUiPref, selectThemeSettings } from "./server-prefs-controls.ts";
+import { selectThemeSettings, resetServerUiPref } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
-import { extractServerUiPrefs, type SyncedPrefKey } from "./server-prefs-state.ts";
+import {
+  applyServerUiPrefs,
+  refreshProfileAppearancePrefs,
+  resolveServerUiPrefState,
+  extractServerUiPrefs,
+} from "./server-prefs-reconcile.ts";
+import type { SyncedPrefKey } from "./server-prefs-state.ts";
 import {
   configWithPrefs,
   createServerPrefsWriter,
   type RequestMock,
 } from "./server-prefs.test-support.ts";
-import {
-  applyServerUiPrefs,
-  flushServerUiPrefs,
-  pushServerUiPrefs,
-  refreshProfileAppearancePrefs,
-  resetServerUiPrefsSync,
-  resolveServerUiPrefState,
-} from "./server-prefs.ts";
+import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
 const profileId = "profile-ada";
@@ -54,6 +53,24 @@ afterEach(() => {
 });
 
 describe("profile-bound appearance preferences", () => {
+  it("publishes default navigation on first authenticated profile adoption", async () => {
+    patchSettings({ sidebarEntries: ["route:usage"] });
+    let published = loadSettings();
+    const onApplied = vi.fn(() => {
+      published = loadSettings();
+    });
+    const request = vi.fn(async (_method: string) => ({
+      status: "ok",
+      entries: {},
+    }));
+    await refreshProfileAppearancePrefs(
+      readOptions(createWriter(request), {}, profileId, onApplied),
+    );
+    expect(onApplied).toHaveBeenCalledOnce();
+    expect(published.sidebarEntries).toEqual([]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["users.prefs.get"]);
+  });
+
   it("preserves imported definitions and only resets design overrides when activation changes", () => {
     const customTheme = createImportedCustomThemeFixture();
     patchSettings({
@@ -106,13 +123,14 @@ describe("profile-bound appearance preferences", () => {
     await refreshProfileAppearancePrefs(readOptions(writer, config, profileId, onApplied));
 
     expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {
-      keys: Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
+      keys: [...Object.values(UI_APPEARANCE_PREFERENCE_KEYS), "ui.sidebarEntries"],
     });
     expect(onApplied).toHaveBeenCalledWith({
       theme: "knot",
       themeMode: "dark",
       accent: "#abc123",
       fontUi: "geist",
+      sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
     });
     expect(loadSettings().fontChat).toBeUndefined();
     expect(loadSettings().tabIcon).toBeUndefined();

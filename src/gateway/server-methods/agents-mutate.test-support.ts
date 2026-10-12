@@ -120,6 +120,7 @@ export function deletionJournal(
     sessionsDir: "/journal/sessions",
     createdAt: 1,
     cleanupCompleted: false,
+    phase: "retiring",
     deleteFiles: true,
     databasePaths: [],
     cleanupPaths: [],
@@ -278,6 +279,21 @@ export function expectRespondOk(
   const payload = expectRecordFields(mockCallArg(respond, 0, 1), expected);
   expect(mockCallArg(respond, 0, 2)).toBeUndefined();
   return payload;
+}
+
+export function expectPendingDeletion(
+  respond: ReturnType<typeof vi.fn>,
+  expected: Record<string, unknown>,
+) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    expect.objectContaining(expected),
+    expect.objectContaining({
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("deletion cleanup is still pending"),
+    }),
+  );
+  return expectRecordFields(mockCallArg(respond, 0, 1), expected);
 }
 
 export function expectRespondErrorContaining(respond: ReturnType<typeof vi.fn>, text: string) {

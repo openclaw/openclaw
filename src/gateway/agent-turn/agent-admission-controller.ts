@@ -199,16 +199,22 @@ export function createAgentAdmissionController(params: {
     if (admission) {
       return;
     }
+    const isSettling = () => admittedRunAbort?.entry?.terminalOutcomeObserved === true;
+    const getAbortReason = () => admittedRunAbort?.controller.signal.reason;
     admission =
       consumeExpectedSessionWorkAdmission({
         constraint: params.expectedSession,
         scope,
         identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
         onInterrupt: interrupt,
+        isSettling,
+        getAbortReason,
       }) ??
       (await beginSessionWorkAdmission({
+        agentId: params.getResolvedSessionAgentId() ?? params.getAgentId(),
         scope,
-        isSettling: () => admittedRunAbort?.entry?.terminalOutcomeObserved === true,
+        isSettling,
+        getAbortReason,
         identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
         ...(params.admissionOwner ? { owner: params.admissionOwner } : {}),
         assertAllowed: () => {

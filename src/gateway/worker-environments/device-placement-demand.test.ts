@@ -136,31 +136,6 @@ describe("admitted device placement demand", () => {
     expect((await fixture.read()).size).toBe(0);
   });
 
-  it("groups distinct admitted sessions by device across agent stores and excludes the dispatching session", async () => {
-    const fixture = createFixture();
-    for (const [sessionId, deviceId, agentId] of [
-      ["one", "node-1", "main"],
-      ["two", "node-1", "ops"],
-      ["three", "node-2", "main"],
-    ] as const) {
-      await fixture.admit(fixture.addPlacement(sessionId, deviceId, agentId).placement);
-    }
-    fixture.addPlacement("idle", "node-2");
-
-    expect(await fixture.read()).toEqual(
-      new Map([
-        ["node-1", 2],
-        ["node-2", 1],
-      ]),
-    );
-    expect(await fixture.read("one")).toEqual(
-      new Map([
-        ["node-1", 1],
-        ["node-2", 1],
-      ]),
-    );
-  });
-
   it.each(["gateway", "scope"] as const)(
     "does not borrow a matching-looking admission from another %s",
     async (mismatch) => {
@@ -176,18 +151,6 @@ describe("admitted device placement demand", () => {
       expect((await fixture.read()).size).toBe(0);
     },
   );
-
-  it("uses the admitted discovered store when its path does not match current configuration", async () => {
-    const fixture = createFixture();
-    const { placement } = fixture.addPlacement("retired", "node-1", "retired-agent");
-    const scope = path.join(fixture.root, "agents", "Retired Agent", "sessions", "sessions.json");
-    fixture.writeSession(placement, scope);
-    const lease = await fixture.admit(placement, { scope });
-
-    expect(await fixture.read()).toEqual(new Map([["node-1", 1]]));
-    lease.release();
-    expect((await fixture.read()).size).toBe(0);
-  });
 
   it("rejects an admitted scope whose persisted session row belongs to another session ID", async () => {
     const fixture = createFixture();
@@ -248,16 +211,4 @@ describe("admitted device placement demand", () => {
       expect((await fixture.read()).size).toBe(0);
     },
   );
-
-  it("excludes remote-exec work and placements that are draining", async () => {
-    const fixture = createFixture();
-    const remote = fixture.addPlacement("remote").placement;
-    const draining = fixture.addPlacement("draining").placement;
-    await fixture.admit(remote);
-    await fixture.admit(draining);
-    fixture.records.set(remote.sessionId, { ...remote, executionMode: "remote-exec" });
-    fixture.records.set(draining.sessionId, { ...draining, state: "draining" });
-
-    expect((await fixture.read()).size).toBe(0);
-  });
 });

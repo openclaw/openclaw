@@ -129,7 +129,13 @@ function toolCall(args: Record<string, unknown> = {}, signature?: string, id = "
   };
 }
 
-type StreamEvent = { type: string; delta?: string; reason?: string };
+type StreamEvent = {
+  type: string;
+  delta?: string;
+  reason?: string;
+  partial?: AssistantMessage;
+  contentIndex?: number;
+};
 
 type GoogleLifecycleParams = Parameters<typeof runGoogleGenerateContentLifecycle>[0];
 type GoogleGenerateContentStream = ReturnType<
@@ -222,6 +228,10 @@ describe("Google stream projection", () => {
       "done",
     ]);
     expect(output.responseId).toBe("response-1");
+    const toolDelta = events.find((event) => event.type === "toolcall_delta");
+    expect(toolDelta?.partial?.content[toolDelta.contentIndex ?? -1]).toMatchObject({
+      partialJson: '{"query":"cats"}',
+    });
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toEqual([
       { type: "thinking", thinking: "thinking", thinkingSignature: "dGhpbms=" },

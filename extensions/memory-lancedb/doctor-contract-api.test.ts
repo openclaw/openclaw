@@ -140,6 +140,23 @@ describe("memory-lancedb doctor migration", () => {
     migratedConnection.close();
   });
 
+  test("uses the migration state directory for an unconfigured database", async () => {
+    const params = migrationParams();
+    params.config = {};
+    params.stateDir = path.join(getTmpDir(), "state");
+    const dbPath = path.join(params.stateDir, "memory", "lancedb");
+    await createLegacyTable(dbPath);
+    const migration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
+
+    await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
+      preview: [expect.stringContaining(dbPath)],
+    });
+    await expect(migration.migrateLegacyState(params)).resolves.toMatchObject({
+      changes: [expect.stringContaining("Assigned 1 legacy Memory LanceDB row")],
+    });
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+  });
+
   test("keeps literal $ patterns in home when expanding a tilde dbPath", async () => {
     const home = path.join(getTmpDir(), "home$&d");
     const dollarDbPath = path.join(home, "lancedb-dollar");

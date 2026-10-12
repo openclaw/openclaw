@@ -142,10 +142,11 @@ function withStores<T>(run: (dbPath: string) => Promise<T>): Promise<T> {
 }
 
 describe("workboard sqlite batch card read", () => {
-  it("reopens without repeating admitted schema installation or column checks", async () => {
+  it("opens and reads without freshness probes or repeated schema admission", async () => {
     await withStores(async (dbPath) => {
       for (let opened = 0; opened < 2; opened += 1) {
         sqliteStatements.schema.length = 0;
+        sqliteStatements.executed.length = 0;
         const stores = createKernelStores(dbPath);
         try {
           if (opened === 0) {
@@ -154,6 +155,8 @@ describe("workboard sqlite batch card read", () => {
             expect(sqliteStatements.schema).toEqual([]);
           }
           expect(await stores.cards.entries()).toEqual([]);
+          expect(await stores.cards.entries()).toEqual([]);
+          expect(sqliteStatements.executed.filter((sql) => /data_version/i.test(sql))).toEqual([]);
         } finally {
           await stores.close();
         }

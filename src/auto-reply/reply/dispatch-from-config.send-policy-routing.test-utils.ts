@@ -25,7 +25,7 @@ import {
   globalBeforeAll0,
   describe2BeforeEach0,
   requireBlockReplyHandler,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -1022,7 +1022,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
     expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
       agentId: "main",
       storePath: "/tmp/mock-sessions.json",

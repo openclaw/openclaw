@@ -32,7 +32,7 @@ function pollRegistryStoreOptions(env?: NodeJS.ProcessEnv) {
 }
 
 function openPollRegistryStore(env?: NodeJS.ProcessEnv) {
-  return getTelegramRuntime().state.openKeyedStore<TelegramPollRegistryEntry>(
+  return getTelegramRuntime().state.openKeyedStoreV2<TelegramPollRegistryEntry>(
     pollRegistryStoreOptions(env),
   );
 }
@@ -157,19 +157,6 @@ export async function findTelegramPollRegistryEntry(params: {
   const stored = await openPollRegistryStore(params.env).lookup(
     telegramPollRegistryKey(params.accountId, params.pollId),
   );
-  return normalizePollRegistryEntry(stored);
-}
-
-/** Retained for hosts whose ingress monitor does not support inspectAsync. */
-export function findTelegramPollRegistryEntrySync(params: {
-  accountId?: string;
-  pollId: string;
-  env?: NodeJS.ProcessEnv;
-}): TelegramPollRegistryEntry | null {
-  const store = getTelegramRuntime().state.openSyncKeyedStore<TelegramPollRegistryEntry>(
-    pollRegistryStoreOptions(params.env),
-  );
-  const stored = store.lookup(telegramPollRegistryKey(params.accountId, params.pollId));
   return normalizePollRegistryEntry(stored);
 }
 

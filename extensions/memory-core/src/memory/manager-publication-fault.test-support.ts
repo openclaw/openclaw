@@ -8,7 +8,6 @@ export type PublicationFaultInput = MemoryPublicationConnection & {
   failRollback: boolean;
   failClose: boolean;
   throwResultFailure: boolean;
-  failDiscard?: boolean;
   failBindingClose?: boolean;
 };
 
@@ -87,9 +86,6 @@ export function bindSqliteWorkerBackend(
   const originalExec = db.exec.bind(db);
   const originalClose = db.close.bind(db);
   db.exec = (sql) => {
-    if (input.failDiscard && sql === "DELETE FROM temp.memory_publication_input") {
-      throw new Error("injected staging discard failure");
-    }
     if (input.failRollback && sql === "ROLLBACK") {
       throw new Error("injected rollback failure");
     }
@@ -124,11 +120,10 @@ export function bindSqliteWorkerBackend(
       db.exec = originalExec;
       db.close = originalClose;
       if (db.isOpen) {
-        const closed = backend.close();
+        backend.close();
         if (input.failBindingClose) {
           throw new Error("injected binding cleanup failure");
         }
-        return closed;
       }
     },
   };

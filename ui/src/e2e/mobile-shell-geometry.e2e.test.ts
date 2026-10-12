@@ -4,6 +4,7 @@ import { expect, type Page } from "playwright/test";
 import { it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -376,6 +377,44 @@ suite.define(() => {
           .waitFor();
         if (scenario.standalone) {
           await activateStandaloneStyles(page, scenario.largeUnit ? top : 0);
+        }
+        const firstMessage = page.locator(".chat-group.user").first();
+        const bubble = firstMessage.locator(".chat-bubble").first();
+        const details = page.locator(".chat-details-toggle");
+        const initialFrame = await takeControlUiScreenshotFrame(page, bubble, [details, textarea], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(artifacts, "details-transcript.png"), initialFrame.png);
+        if (mobile) {
+          await bubble.tap();
+        } else {
+          await bubble.hover();
+        }
+        const actions = firstMessage.locator(".chat-group-footer-actions");
+        await expect(actions.locator(".chat-copy-btn")).toBeVisible();
+        const hoverFrame = await takeControlUiScreenshotFrame(page, bubble, [details, actions], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(artifacts, "details-message-actions.png"), hoverFrame.png);
+        const detailsBox = (await details.boundingBox())!;
+        const transcriptBoxes = await Promise.all([bubble.boundingBox(), actions.boundingBox()]);
+        await writeFile(
+          path.join(artifacts, "details-geometry.json"),
+          JSON.stringify({
+            details: detailsBox,
+            bubble: transcriptBoxes[0],
+            actions: transcriptBoxes[1],
+          }),
+        );
+        for (const box of transcriptBoxes) {
+          expect(
+            box &&
+              (detailsBox.x + detailsBox.width <= box.x ||
+                box.x + box.width <= detailsBox.x ||
+                detailsBox.y + detailsBox.height <= box.y ||
+                box.y + box.height <= detailsBox.y),
+            `${name}: Details must clear the first message and its actions`,
+          ).toBe(true);
         }
         await waitForWatchedSessionKey(gateway, "agent:main:main");
         await gateway.emitGatewayEvent("controlUi.sessionPullRequests.changed", {

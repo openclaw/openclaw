@@ -40,6 +40,7 @@ export function createDispatchFixture(
     candidateOwned?: boolean;
     admissionAcceptedFailure?: boolean;
     admissionMovedRef?: boolean;
+    advanceMainBeforeAdmission?: number;
     admissionWrongRunSha?: boolean;
     admissionRevokedActor?: boolean;
     admissionFailedUpload?: boolean;
@@ -693,6 +694,7 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
             : "",
           MOCK_WORKFLOW_SHA: options.candidateOwned ? targetSha : workflowSha,
           MOCK_VERIFIER_SHA: workflowSha,
+          MOCK_ADVANCED_P_PATH: admissionCapturePath + ".advanced",
           GIT_AUTHOR_NAME: "Release Fixture",
           GIT_AUTHOR_EMAIL: "release-fixture@openclaw.invalid",
           GIT_COMMITTER_NAME: "Release Fixture",

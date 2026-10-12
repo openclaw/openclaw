@@ -3,6 +3,11 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
@@ -261,8 +266,9 @@ describe("agent roster resolution", () => {
     expect(unrelatedEntryReads).toBe(0);
   });
 
-  it("prepares one immutable fleet roster", () => {
-    const config = captureRuntimeConfig({
+  it.each(["captured", "published"])("prepares one %s fleet roster per generation", (kind) => {
+    const previous = getRuntimeConfigSnapshot();
+    const source = {
       agents: {
         ownership: "explicit" as const,
         defaults: { systemAgent: { agentId: "agent-0" } },
@@ -270,7 +276,11 @@ describe("agent roster resolution", () => {
           Array.from({ length: 200 }, (_, index) => [`agent-${index}`, { name: `${index}` }]),
         ),
       },
-    });
+    };
+    const config = kind === "captured" ? captureRuntimeConfig(source) : source;
+    if (kind === "published") {
+      setRuntimeConfigSnapshot(config);
+    }
     const entries = vi.spyOn(agentRoster, "listAgentEntriesWithSource");
     const ids = vi.spyOn(agentRoster, "listAgentIds");
     try {
@@ -282,9 +292,26 @@ describe("agent roster resolution", () => {
       }
       // One point-lookup index and one configured-owner membership projection.
       expect(entries.mock.calls.length + ids.mock.calls.length).toBeLessThanOrEqual(2);
+      if (kind === "published") {
+        source.agents.entries["agent-0"]!.name = "Replacement";
+        source.agents.defaults.systemAgent.agentId = "agent-199";
+        setRuntimeConfigSnapshot(source);
+        expect(resolveAgentConfig(source, "agent-0")?.name).toBe("Replacement");
+        expect(tryResolveLegacyCompatibilityAgentId(source)).toBe("agent-199");
+        clearRuntimeConfigSnapshot();
+        source.agents.entries["agent-0"]!.name = "Unbound";
+        expect(resolveAgentConfig(source, "agent-0")?.name).toBe("Unbound");
+      }
     } finally {
       entries.mockRestore();
       ids.mockRestore();
+      if (kind === "published") {
+        if (previous) {
+          setRuntimeConfigSnapshot(previous);
+        } else {
+          clearRuntimeConfigSnapshot();
+        }
+      }
     }
   });
 

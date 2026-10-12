@@ -31,9 +31,11 @@ export function createNativeSubagentAssignmentStore(params: {
       });
   return {
     assertCurrent,
-    read: () => {
+    read: async () => {
+      const assignments =
+        (await bindingStore.readNativeSubagentAssignments?.(identity, owner)) ?? [];
       assertCurrent();
-      return bindingStore.readNativeSubagentAssignments?.(identity, owner) ?? [];
+      return assignments;
     },
     record: mutate("record-native-subagent-assignment"),
     consume: mutate("consume-native-subagent-assignment"),

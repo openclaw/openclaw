@@ -452,7 +452,7 @@ const enSettings = {
       noImage: "No image",
       coldOnly: "Cold only",
       captureUnsupportedHint:
-        "Workers use an existing compatible snapshot when one is available and otherwise provision cold. Each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on this profile to stop capture attempts.",
+        "Workers use an existing compatible snapshot when one is available and otherwise provision cold. Capture attempts are skipped until warmImages.refreshAfter has elapsed since the refusal. Set settings.warmImage: false on this profile to stop capture attempts.",
       pending: "Pending",
       created: "Created {age}",
       lastUsed: "Last used {age}",
@@ -837,6 +837,9 @@ const enSettings = {
       disabled: "Disabled",
       fallback: "Fallback Model",
       noFallback: "No fallback model",
+      clearFallbacks: "No fallback model (remove all {count})",
+      moreFallbackOne: "1 more fallback after this one",
+      moreFallbacks: "{count} more fallbacks after this one",
       selectModel: "Select a model",
       noModels: "Configure a chat provider to select a primary, utility, or fallback model.",
       discoveringMore: "Discovering more models…",

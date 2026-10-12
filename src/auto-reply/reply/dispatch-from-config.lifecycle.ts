@@ -5,11 +5,12 @@ import {
   isRestartRecoveryTombstone,
   isSessionWorkStartInvalidatedError,
 } from "../../config/sessions/lifecycle.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import {
-  loadSessionEntryReadOnly,
-  patchSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
-import {
+  composeSessionSourceAssertion,
   sessionEntryCommitGuardOptions,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
@@ -83,6 +84,9 @@ async function restoreArchivedDispatchSession(params: {
   ) {
     return entry;
   }
+  const scope = { sessionKey, storePath };
+  const actor = captureIncognitoSessionSource(scope);
+  const metadata = actor ? captureSessionEntryMetadataRead(scope) : undefined;
   let placementContext = params.placementContext;
   if (!placementContext) {
     try {
@@ -102,6 +106,7 @@ async function restoreArchivedDispatchSession(params: {
     if (
       currentEntry.sessionId !== snapshotSessionId ||
       currentEntry.archivedAt !== snapshotArchivedAt ||
+      (actor && currentEntry.lifecycleRevision !== entry.lifecycleRevision) ||
       isRestartRecoveryTombstone(currentEntry)
     ) {
       return false;
@@ -127,8 +132,18 @@ async function restoreArchivedDispatchSession(params: {
     scope: storePath,
     identities: [sessionKey, snapshotSessionId],
     run: async () => {
-      const scope = { sessionKey, storePath };
-      const currentEntry = loadSessionEntryReadOnly(scope);
+      const currentEntry = actor
+        ? "kind" in actor
+          ? undefined
+          : (
+              await actor.actor.sessions.read(
+                { assertCurrent: () => metadata!.assertCurrent() },
+                { sessionKey },
+                actor.admissionSignal,
+              )
+            ).entry
+        : await readSessionEntryReadOnlyInWorker(scope);
+      metadata?.assertCurrent();
       if (
         !currentEntry ||
         !canRestore(currentEntry, {
@@ -140,7 +155,16 @@ async function restoreArchivedDispatchSession(params: {
       ) {
         return currentEntry;
       }
-      let assertCommitAllowed: SessionSourceAssertion | undefined;
+      let assertCommitAllowed: SessionSourceAssertion | undefined = metadata
+        ? () => {
+            const current = metadata.readCurrent();
+            if (!current || !canRestore(current)) {
+              throw new DispatchSessionRefreshRequiredError(
+                new Error("Session changed while restoring archived work. Retry the request."),
+              );
+            }
+          }
+        : undefined;
       if (currentEntry.worktree) {
         const { restoreSessionWorktree } =
           await import("../../sessions/session-worktree-lifecycle.js");
@@ -148,10 +172,13 @@ async function restoreArchivedDispatchSession(params: {
         assertCommitAllowed = await restoreSessionWorktree({
           entry: currentEntry,
           scope,
-          commitGuard: await prepareSessionWorkerPlacementMutationCheckAsync({
-            context: placementContext,
-            sessionId: currentEntry.sessionId,
-          }),
+          commitGuard: composeSessionSourceAssertion([
+            assertCommitAllowed,
+            await prepareSessionWorkerPlacementMutationCheckAsync({
+              context: placementContext,
+              sessionId: currentEntry.sessionId,
+            }),
+          ]),
         });
       }
       const updatedEntry = await patchSessionEntryCore(
@@ -310,7 +337,7 @@ export function createDispatchReplyOperationCoordinator(params: {
         resetTriggered: dispatchResetTriggered,
         allowRestartTombstoneParentFork,
         allowRestartTombstoneReset,
-      } = resolveDispatchResetAdmission({
+      } = await resolveDispatchResetAdmission({
         agentId: params.agentId,
         cfg: params.cfg,
         ctx: params.ctx,

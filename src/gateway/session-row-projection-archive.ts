@@ -22,8 +22,7 @@ export function createSessionRowProjectionArchive(params: {
   referenced: NonNullable<Parameters<typeof records.readSessionRowLineage>[4]>;
 }) {
   const materialized = new Set<string>();
-  const readPins = new Map<symbol, ReadonlySet<string>>();
-  const pinCounts = new Map<string, number>();
+  const readPins = new Set<ReadonlySet<string>>();
   let limit = DEFAULT_ARCHIVED_MATERIALIZED_ROWS;
   function demote(row: records.Row): records.Row {
     const id = records.identity(row);
@@ -42,17 +41,9 @@ export function createSessionRowProjectionArchive(params: {
       if (materialized.size <= limit) {
         break;
       }
-      if (!pinCounts.has(id)) {
+      if (![...readPins].some((pins) => pins.has(id))) {
         demote(params.rows.get(id)!);
       }
-    }
-  }
-  function unpin(id: string) {
-    const count = pinCounts.get(id)!;
-    if (count === 1) {
-      pinCounts.delete(id);
-    } else {
-      pinCounts.set(id, count - 1);
     }
   }
   function markRelated(
@@ -153,37 +144,17 @@ export function createSessionRowProjectionArchive(params: {
     },
     // Disjoint prepared pages retain their own rows across worker and placement yields.
     retainRows(this: void) {
-      const token = Symbol("archived session rows");
-      readPins.set(token, new Set());
+      let pins: ReadonlySet<string> = new Set();
+      readPins.add(pins);
       return {
         update(ids: readonly string[]) {
-          const previous = readPins.get(token);
-          if (!previous) {
-            return;
-          }
-          const next = new Set(ids);
-          for (const id of previous) {
-            if (!next.has(id)) {
-              unpin(id);
-            }
-          }
-          for (const id of next) {
-            if (!previous.has(id)) {
-              pinCounts.set(id, (pinCounts.get(id) ?? 0) + 1);
-            }
-          }
-          readPins.set(token, next);
+          readPins.delete(pins);
+          pins = new Set(ids);
+          readPins.add(pins);
           trim();
         },
         release() {
-          const ids = readPins.get(token);
-          if (!ids) {
-            return;
-          }
-          readPins.delete(token);
-          for (const id of ids) {
-            unpin(id);
-          }
+          readPins.delete(pins);
           trim();
         },
       };
@@ -192,7 +163,6 @@ export function createSessionRowProjectionArchive(params: {
     clear() {
       materialized.clear();
       readPins.clear();
-      pinCounts.clear();
     },
     describe(row: records.Row | undefined) {
       if (row?.entry?.archivedAt === undefined) {

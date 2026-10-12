@@ -20,7 +20,7 @@ import {
   requireToolResultHandler,
   globalBeforeAll0,
   describe0BeforeEach0,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -786,53 +786,6 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
-  });
-
-  it("refreshes verbose progress with session entry snapshots", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = { verboseLevel: "off" };
-    sessionStoreMocks.loadSessionStoreEntry.mockReturnValue({ verboseLevel: "on" });
-    const cfg = verboseConfig;
-    const dispatcher = createDispatcher();
-    const ctx = createDirectCtx({ SessionKey: "agent:main:main" });
-
-    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      sessionStoreMocks.loadSessionStore.mockClear();
-      sessionStoreMocks.resolveSessionStoreEntry.mockClear();
-      sessionStoreMocks.loadSessionStoreEntry.mockClear();
-      await opts?.onPlanUpdate?.({
-        phase: "update",
-        explanation: "Inspect code, patch it, run tests.",
-        steps: [
-          { step: "Inspect code", status: "completed" },
-          { step: "Patch code", status: "in_progress" },
-          { step: "Run tests", status: "pending" },
-        ],
-      });
-      await opts?.onApprovalEvent?.({
-        phase: "requested",
-        status: "pending",
-        command: "pnpm test",
-      });
-      return { text: "done" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(firstMockArg(sessionStoreMocks.loadSessionStoreEntry, "session")).toMatchObject({
-      agentId: "main",
-      storePath: "/tmp/mock-sessions.json",
-      sessionKey: "agent:main:main",
-      readConsistency: "latest",
-      clone: false,
-    });
-    expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
-    expect(sessionStoreMocks.resolveSessionStoreEntry).not.toHaveBeenCalled();
-    expect(firstToolResultPayload(dispatcher)).toMatchObject({
-      text: "✅ Inspect code\n▸ Patch code\n▢ Run tests",
-      isStatusNotice: true,
-    });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 

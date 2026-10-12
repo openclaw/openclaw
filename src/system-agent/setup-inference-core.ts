@@ -406,31 +406,20 @@ export function validateSetupInferenceOwnerEvidence(params: {
   configuredHarnessId?: string;
   auth: AgentExecutionAuthBinding;
 }): Extract<ActivateSetupInferenceResult, { ok: false }> | undefined {
+  let reason: string | undefined;
   if (
     !params.auth.authFingerprint &&
     (!params.auth.runtimeOwnerFingerprint ||
       !params.auth.runtimeOwnerKind ||
       !params.auth.runtimeOwnerId?.trim())
   ) {
-    return {
-      ok: false,
-      status: "unknown",
-      error:
-        "Inference succeeded, but its runtime did not report an owner that OpenClaw can safely reuse. No default model was changed.",
-    };
-  }
-  if (
+    reason = "its runtime did not report an owner that OpenClaw can safely reuse";
+  } else if (
     params.runner === "cli" &&
     (!params.auth.runtimeArtifactFingerprint || !params.auth.runtimeArtifactId?.trim())
   ) {
-    return {
-      ok: false,
-      status: "unknown",
-      error:
-        "Inference succeeded, but its CLI executable/package artifact could not be safely reused. No default model was changed.",
-    };
-  }
-  if (params.runner === "embedded") {
+    reason = "its CLI executable/package artifact could not be safely reused";
+  } else if (params.runner === "embedded") {
     const successfulHarnessId = params.auth.agentHarnessId?.trim();
     const configuredHarnessId = params.configuredHarnessId?.trim();
     if (
@@ -439,29 +428,24 @@ export function validateSetupInferenceOwnerEvidence(params: {
         configuredHarnessId !== "auto" &&
         successfulHarnessId !== configuredHarnessId)
     ) {
-      return {
-        ok: false,
-        status: "unknown",
-        error:
-          "Inference succeeded, but its exact agent harness could not be safely reused. No default model was changed.",
-      };
-    }
-    if (
+      reason = "its exact agent harness could not be safely reused";
+    } else if (
       successfulHarnessId !== "openclaw" &&
       (params.auth.runtimeOwnerKind !== "plugin-harness" ||
         params.auth.runtimeOwnerId?.trim() !== successfulHarnessId ||
         !params.auth.runtimeArtifactFingerprint ||
         !params.auth.runtimeArtifactId?.trim())
     ) {
-      return {
-        ok: false,
-        status: "unknown",
-        error:
-          "Inference succeeded, but its agent harness artifact could not be safely reused. No default model was changed.",
-      };
+      reason = "its agent harness artifact could not be safely reused";
     }
   }
-  return undefined;
+  return reason
+    ? {
+        ok: false,
+        status: "unknown",
+        error: `Inference succeeded, but ${reason}. No default model was changed.`,
+      }
+    : undefined;
 }
 
 /** CLI backends need a hard tool-free mode; the probe must not let a CLI act on the host. */
@@ -550,7 +534,7 @@ export type StageContext = {
   routeAgentId: string;
   agentDir: string;
   workspace: string;
-  credentialsSaved: boolean;
+  effects: { credentialsSaved: boolean };
   beforePersistentEffect: (effect?: "credential") => Promise<void>;
 };
 

@@ -8,8 +8,10 @@ description: Regenerate OpenClaw release changelog sections from git history bef
 Use this for changelog rewrites and GitHub release-note source text. For regular
 beta/stable, prepare complete notes before final-source qualification when
 possible; Code SHA may then also be Release SHA. Editorial work may overlap
-Code validation. If notes change afterward, a genuine CHANGELOG-only descendant
-may use the existing product-evidence reuse policy. For
+Code validation. Do not rerun it per validation-recovery backport; when backports
+replace the Code SHA, rerun it once after the final Code SHA is green, as a
+genuine CHANGELOG-only descendant under the existing product-evidence reuse
+policy ([timing](../release-openclaw-maintainer/references/preparation.md#changelog-and-release-notes)). For
 extended-stable, run it before final exact-head validation and tagging. Do not
 rerun it for tooling retries, resumed publication, or promotion.
 Use it with `release-openclaw-maintainer`; this skill owns changelog content,

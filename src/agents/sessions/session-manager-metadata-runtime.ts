@@ -1,8 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
-import {
-  getCliHistoryWriter,
-  type CliHistoryWriter,
-} from "../../config/sessions/cli-history-boundary.js";
+import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import type { IncognitoSessionActor } from "../../config/sessions/session-incognito-actor.js";
 import { toIncognitoManagerCommand } from "../../config/sessions/session-incognito-manager-contract.js";
 import type {
@@ -27,6 +24,7 @@ import type {
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { captureSessionMessageAdmission } from "./session-manager-message-admission.js";
+import { prepareSessionManagerMetadataCommand } from "./session-manager-metadata-command.js";
 import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
 import {
   createSessionManagerPublicationHooks,
@@ -160,41 +158,8 @@ export async function withSessionMetadataWorker<T>(
   try {
     const value = await operation({
       execute: async (command, commandOptions) => {
-        cliWriter = getCliHistoryWriter({ ...command.input.scope, storePath: database.path });
+        cliWriter = prepareSessionManagerMetadataCommand(command, database.path, admission.control);
         assertMetadataCurrent();
-        if (
-          command.type === "session.transcript.appendMessage" ||
-          command.type === "session.metadata.append"
-        ) {
-          command.input = {
-            ...command.input,
-            cliWriter: cliWriter && {
-              runId: cliWriter.runId,
-              authFingerprint: cliWriter.authFingerprint,
-              lifecycleRevision: cliWriter.lifecycleRevision,
-            },
-          };
-        }
-        if (command.type === "session.transcript.appendMessage") {
-          Object.assign(command.input, admission.control);
-        }
-        if (
-          command.type === "session.transcript.rewrite" &&
-          "entries" in command.input &&
-          admission.control.pendingInput
-        ) {
-          command.input.pendingInput = admission.control.pendingInput;
-        }
-        if (
-          "event" in command.input &&
-          typeof command.input.event !== "string" &&
-          command.input.message
-        ) {
-          command.input.message = {
-            ...command.input.message,
-            ...admission.control,
-          };
-        }
         const reply = await worker.execute(command, assertMetadataCurrent, commandOptions);
         if (!reply.ok) {
           throw new SessionTranscriptWriterClaimReboundError(reply.refusal);

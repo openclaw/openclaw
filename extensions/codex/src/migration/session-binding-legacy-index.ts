@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import {
+  canonicalPathFromExistingAncestor,
+  isPathInside,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type LegacySessionIndexEntry = {
@@ -75,4 +80,28 @@ function isSafeLegacySessionId(value: unknown): value is string {
   return (
     trimmed.length > 0 && trimmed.length <= 255 && /^[A-Za-z0-9][A-Za-z0-9._:@-]*$/.test(trimmed)
   );
+}
+
+// Doctor-only locator for retired file-backed session indexes. Active runtime
+// never resolves these paths; migration needs them only to find old sidecars.
+export async function resolveLegacySessionFileLocator(
+  sessionsDir: string,
+  entry: { sessionFile?: string },
+  sessionId: string,
+): Promise<string> {
+  const base = path.resolve(sessionsDir);
+  const fallback = path.join(base, `${sessionId}.jsonl`);
+  const sessionFile = entry.sessionFile?.trim();
+  if (!sessionFile) {
+    return fallback;
+  }
+  const candidate = path.resolve(base, sessionFile);
+  const [canonicalBase, canonicalCandidate] = await Promise.all([
+    canonicalPathFromExistingAncestor(base),
+    canonicalPathFromExistingAncestor(candidate),
+  ]);
+  if (!isPathInside(canonicalBase, canonicalCandidate)) {
+    throw new Error("legacy session file locator escapes its session directory");
+  }
+  return candidate;
 }

@@ -32,10 +32,23 @@ const buildIdentity = z.strictObject({
   }),
 });
 
+const releaseRetention = z.strictObject({
+  version: z.literal(1),
+  mode: z.literal("inspect"),
+  keepVerifiedGenerations: z.literal(3),
+  pins: z.array(z.strictObject({ sha: generation.shape.sha, identity: generation.shape.identity })),
+});
+
+export const ImmutableRetainedGenerationSchema = generation.extend({
+  publishedRevision: z.number().int().nonnegative(),
+  verifiedRevision: z.number().int().nonnegative().nullable(),
+});
+
 export const ImmutableInstallDescriptorSchema = z
   .strictObject({
-    version: z.union([z.literal(1), z.literal(2)]),
+    version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
     activationEnabled: z.literal(true).optional(),
+    releaseRetention: releaseRetention.optional(),
     kind: z.literal("immutable"),
     root: absolutePath,
     rootIdentity: packageActivationIdentitySchema,
@@ -56,8 +69,11 @@ export const ImmutableInstallDescriptorSchema = z
     source: z.literal("https://github.com/openclaw/openclaw.git"),
     build: buildIdentity.optional(),
   })
-  .refine((value) => (value.version === 2) === (value.activationEnabled === true), {
-    message: "Immutable activation requires an explicitly enabled version-2 adoption.",
+  .refine((value) => (value.version !== 1) === (value.activationEnabled === true), {
+    message: "Immutable activation requires an explicitly enabled version-2 or version-3 adoption.",
+  })
+  .refine((value) => !value.releaseRetention || value.version === 3, {
+    message: "Immutable release retention requires an explicitly adopted version-3 bridge.",
   });
 
 export const ImmutablePreparedGenerationSchema = generation.extend({
@@ -141,6 +157,7 @@ export const ImmutableInstallRecordSchema = z.strictObject({
   descriptor: ImmutableInstallDescriptorSchema,
   prepared: ImmutablePreparedGenerationSchema.nullable(),
   activation: activationState.optional(),
+  releases: z.array(ImmutableRetainedGenerationSchema).optional(),
 });
 
 export type ImmutableInstallDescriptor = z.infer<typeof ImmutableInstallDescriptorSchema>;

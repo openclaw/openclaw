@@ -51,7 +51,7 @@ function createStore(params?: {
 }
 
 describe("discord auto presence", () => {
-  it("maps overloaded cooldown to dnd", () => {
+  it("maps overloaded cooldown to dnd", async () => {
     const now = Date.now();
     const updatePresence = vi.fn();
     const controller = createController({
@@ -65,7 +65,7 @@ describe("discord auto presence", () => {
       loadAuthStore: () =>
         createStore({ cooldownUntil: now + 60_000, failureCounts: { overloaded: 2 } }),
     });
-    controller.start();
+    await controller.start();
 
     expect(updatePresence).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -75,7 +75,7 @@ describe("discord auto presence", () => {
     );
   });
 
-  it("reports degraded availability when no auth profiles exist", () => {
+  it("reports degraded availability when no auth profiles exist", async () => {
     const updatePresence = vi.fn();
     const controller = createController({
       accountId: "default",
@@ -83,7 +83,7 @@ describe("discord auto presence", () => {
       gateway: { isConnected: true, updatePresence },
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
-    controller.start();
+    await controller.start();
     expect(updatePresence).toHaveBeenCalledWith({
       since: null,
       activities: [{ name: "Custom Status", type: 4, state: "runtime degraded" }],
@@ -92,7 +92,7 @@ describe("discord auto presence", () => {
     });
   });
 
-  it("clears expired cooldowns without sending presence while disconnected", () => {
+  it("clears expired cooldowns without sending presence while disconnected", async () => {
     const now = Date.now();
     const store = createStore({ cooldownUntil: now - 1, failureCounts: { rate_limit: 1 } });
     const updatePresence = vi.fn();
@@ -102,7 +102,7 @@ describe("discord auto presence", () => {
       gateway: { isConnected: false, updatePresence },
       loadAuthStore: () => store,
     });
-    controller.start();
+    await controller.start();
     expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBeUndefined();
     expect(updatePresence).not.toHaveBeenCalled();
   });
@@ -129,7 +129,7 @@ describe("discord auto presence", () => {
       loadAuthStore: () => store,
     });
 
-    controller.start();
+    await controller.start();
 
     store = createStore();
     await controller.advance(5_000);
@@ -175,10 +175,10 @@ describe("discord auto presence", () => {
       loadAuthStore: () => store,
     });
 
-    controller.start();
+    await controller.start();
     await controller.advance(60_000);
     expect(updatePresence).toHaveBeenCalledTimes(1);
-    controller.refresh();
+    await controller.refresh();
 
     expect(updatePresence).toHaveBeenCalledTimes(2);
     expect(updatePresence.mock.calls).toEqual([
@@ -217,8 +217,8 @@ describe("discord auto presence", () => {
       loadAuthStore: () => createStore(),
     });
 
-    controller.start();
-    controller.refresh();
+    await controller.start();
+    await controller.refresh();
     await controller.stop();
 
     expect(controller.enabled).toBe(false);

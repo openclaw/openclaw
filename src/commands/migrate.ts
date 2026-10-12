@@ -7,7 +7,6 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { promptYesNo } from "../cli/prompt.js";
-import { getRuntimeConfig } from "../config/config.js";
 import { redactMigrationPlan, summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import { withPluginMigrationProviders } from "../plugins/migration-provider-runtime.js";
 import type {
@@ -235,8 +234,7 @@ function logNoCodexSelection(runtime: RuntimeEnv, plan: MigrationPlan): void {
 
 /** Lists available migration providers as JSON or terse terminal rows. */
 export async function migrateListCommand(runtime: RuntimeEnv, opts: { json?: boolean } = {}) {
-  const cfg = getRuntimeConfig();
-  return await withPluginMigrationProviders({ cfg }, async (registered) => {
+  return await withPluginMigrationProviders({}, async (registered) => {
     const providers = registered.map((provider) => ({
       id: provider.id,
       label: provider.label,

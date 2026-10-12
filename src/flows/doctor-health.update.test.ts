@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   outro: vi.fn(),
   confirmCustody: vi.fn<() => Promise<boolean>>(),
   config: vi.fn<() => OpenClawConfig>(),
+  disposeConfig: vi.fn<() => Promise<void>>(async () => undefined),
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   packageRoot: vi.fn<() => string | undefined>(),
   stateMigrationReceipts: [] as LegacyStateMigrationStepReceipt[],
@@ -84,8 +85,10 @@ vi.mock("../commands/doctor-platform-notes.js", () => ({
   noteStartupOptimizationHints: () => undefined,
 }));
 
+// mock-isolation: Exercise Doctor flow outcomes without config preparation or plugin resources.
 vi.mock("../commands/doctor-config-flow.js", () => ({
   loadAndMaybeMigrateDoctorConfig: async () => ({
+    [Symbol.asyncDispose]: mocks.disposeConfig,
     cfg: mocks.config(),
     shouldWriteConfig: true,
     stateMigrationStepReceipts: mocks.stateMigrationReceipts,
@@ -122,6 +125,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
     mocks.updateCommand.mockReset();
     mocks.triageCommand.mockReset().mockResolvedValue(undefined);
     mocks.config.mockReset().mockReturnValue({});
+    mocks.disposeConfig.mockClear();
     mocks.packageRoot.mockReturnValue(undefined);
     mocks.outro.mockClear();
     mocks.runContributions.mockReset().mockResolvedValue(undefined);
@@ -223,6 +227,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
         const inspectionWarning =
           "core/doctor/auth-profiles [update-inspection-deferred]: Run openclaw doctor after activation.";
         mocks.runContributions.mockImplementation(async (ctx) => {
+          expect(mocks.disposeConfig).not.toHaveBeenCalled();
           ctx.updateWarnings = [inspectionWarning];
           ctx.updateBudget = {
             agentCount: 480,
@@ -263,6 +268,7 @@ describe("runDoctorHealthFlow update outcomes", () => {
           } else {
             await runDoctorHealthFlow(runtime, { nonInteractive: true });
           }
+          expect(mocks.disposeConfig).toHaveBeenCalledOnce();
           const result = await consumeUpdatePostInstallDoctorResult(resultPath);
           expect(result?.status).toBe(refused ? "error" : "ok");
           expect(result?.warnings).toHaveLength(refused ? 2 : noisy ? 32 : 4);

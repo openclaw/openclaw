@@ -144,16 +144,11 @@ async function mutateBackground(
         assertCurrent: options.assertCurrent,
         signal: options.signal,
         createAdmission: () => {
-          let stage: "transaction" | "commit" | "complete" = "transaction";
           return {
-            admission: createSqliteWorkerOperationAdmission((request, grant) => {
+            admission: createSqliteWorkerOperationAdmission((_request, grant) => {
               context.admission.assertCurrent();
               options.signal?.throwIfAborted();
               options.assertCurrent?.();
-              if (request.stage !== stage || request.facts !== undefined) {
-                throw new Error("Background mutation requires exact transaction admission");
-              }
-              stage = stage === "transaction" ? "commit" : "complete";
               grant();
             }),
             nativeLocations: [context.admission.databasePath],

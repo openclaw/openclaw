@@ -218,9 +218,9 @@ describe("QA web acquisition across the real scenario DSL", () => {
         const reason = captures[0]?.api.signal?.reason;
         expect(reason).toBeInstanceOf(Error);
         expect(reason).toHaveProperty("message", "QA scenario flow timed out after 30ms");
-        await expect(rawSteps[0]).resolves.toBe(reason);
         const failedOpen = await openings[0];
         expect(failedOpen).toBeInstanceOf(AggregateError);
+        await expect(rawSteps[0]).resolves.toBe(failedOpen);
         if (!(failedOpen instanceof AggregateError)) {
           throw failedOpen;
         }

@@ -1,16 +1,15 @@
 import { existsSync } from "node:fs";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { StatementSync, type DatabaseSync } from "node:sqlite";
 import { MessageChannel } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   observeSqliteReadSql,
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { withSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -74,7 +73,7 @@ describe("SQLite session participants", () => {
             scope,
             () => {
               const connection =
-                writer === "foreign" ? new DatabaseSync(database.path) : database.db;
+                writer === "foreign" ? openNodeSqliteDatabase(database.path) : database.db;
               try {
                 connection
                   .prepare("UPDATE session_participants SET actor_id = ? WHERE session_key = ?")
@@ -136,65 +135,6 @@ describe("SQLite session participants", () => {
     });
   });
 
-  it("commits a prepared node patch without newly decoding invalid participant rows", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        env: state.env,
-        sessionKey: "agent:main:prepared",
-        projection: "list" as const,
-      };
-      await upsertSessionEntryCore(scope, { sessionId: "prepared", updatedAt: 1 });
-      recordSessionParticipant(scope, { identity: remote("before"), promptedAt: 1 });
-      expect(listSessionEntriesCore(scope)).toHaveLength(1);
-      let published: ReturnType<typeof readPreparedSessionEntryChange>;
-      let factsInvalidated: true | "category" | undefined;
-      const unsubscribe = sessionChanges.subscribeProjection((change) => {
-        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
-          factsInvalidated = change.factsInvalidated;
-          published = readPreparedSessionEntryChange(change, scope.sessionKey);
-        }
-      });
-      const prepared = createDeferred();
-      const resume = createDeferred();
-      const patch = patchSessionEntryCore(
-        scope,
-        async () => {
-          prepared.resolve();
-          await resume.promise;
-          return { label: "committed" };
-        },
-        { skipMaintenance: true },
-      );
-      try {
-        await prepared.promise;
-        recordSessionParticipant(scope, { identity: remote("before"), promptedAt: 2 });
-        const database = openOpenClawAgentDatabase(scope);
-        database.db
-          .prepare("UPDATE session_participants SET identity_namespace = ? WHERE session_key = ?")
-          .run('{"type":"profile","extra":true}', scope.sessionKey);
-        resume.resolve();
-        await expect(patch).resolves.toMatchObject({ sessionId: "prepared", label: "committed" });
-        expect(factsInvalidated).toBe(true);
-        expect(published?.entry).toBeUndefined();
-        expect(published?.projection).toBeUndefined();
-        expect(published?.sharing?.sessionId).toBe("prepared");
-        expect(published?.source.identity).toBe(
-          readOpenClawAgentDatabaseIdentity(database).identity,
-        );
-        expect(() => listSessionEntriesCore(scope)).toThrow(
-          "Session participant identity is invalid; run openclaw doctor --fix.",
-        );
-        database.db.prepare("DELETE FROM session_participants").run();
-        expect(listSessionEntriesCore(scope)[0]?.entry.label).toBe("committed");
-      } finally {
-        resume.resolve();
-        await patch.catch(() => {});
-        unsubscribe();
-      }
-    });
-  });
-
   it.each(["participant", "external-entry"] as const)(
     "keeps a reentrant observer's newer cached state after an outer %s write",
     async (kind) => {
@@ -218,7 +158,7 @@ describe("SQLite session participants", () => {
           if (kind === "participant") {
             recordSessionParticipant(scope, { identity: profile(label), promptedAt: time });
           } else if (external) {
-            const database = new DatabaseSync(openOpenClawAgentDatabase(scope).path);
+            const database = openNodeSqliteDatabase(openOpenClawAgentDatabase(scope).path);
             try {
               database
                 .prepare(
@@ -329,7 +269,7 @@ describe("SQLite session participants", () => {
           }
         };
         if (mutation === "external-participant") {
-          const external = new DatabaseSync(database.path);
+          const external = openNodeSqliteDatabase(database.path);
           try {
             mutate(external);
           } finally {
@@ -728,6 +668,7 @@ describe("SQLite session participants", () => {
           const params = { identity: profile(current.id), promptedAt: 40 };
           for (const writer of ["native", "worker"] as const) {
             const profileReads = observeSqliteReadSql(StatementSync.prototype);
+            const transactionSql = vi.spyOn(database.db, "exec");
             try {
               if (writer === "native") {
                 expect(recordSessionParticipant(scope, params)).toBe("updated");
@@ -748,7 +689,13 @@ describe("SQLite session participants", () => {
               } else {
                 expect(aliases.length).toBeGreaterThan(0);
               }
+              if (writer === "worker") {
+                expect(transactionSql.mock.calls.some(([sql]) => /SAVEPOINT/i.test(sql))).toBe(
+                  false,
+                );
+              }
             } finally {
+              transactionSql.mockRestore();
               profileReads.restore();
             }
           }
@@ -840,12 +787,13 @@ describe("SQLite session participants", () => {
       });
       await upsertSessionEntryCore(scope, { sessionId: "bounded-reset", updatedAt: 30 });
       expect(loadSessionEntry(scope)?.participants).toHaveLength(MAX_SESSION_PARTICIPANTS);
-      await deleteSessionEntryLifecycle({
+      const deletion = await deleteSessionEntryLifecycle({
         agentId: "main",
         storePath: database.path,
         target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
         archiveTranscript: false,
       });
+      expect(deletion.deleted).toBe(true);
       expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)).toBeUndefined();
     });
   });

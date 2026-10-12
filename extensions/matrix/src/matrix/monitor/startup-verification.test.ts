@@ -103,7 +103,7 @@ describe("ensureMatrixStartupVerification", () => {
   beforeEach(() => {
     setMatrixRuntime({
       state: {
-        openKeyedStore: (options: OpenKeyedStoreOptions) =>
+        openKeyedStoreV2: (options: OpenKeyedStoreOptions) =>
           createPluginStateKeyedStoreForTests("matrix", options),
       },
     } as unknown as PluginRuntime);

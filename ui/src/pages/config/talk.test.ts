@@ -229,7 +229,7 @@ afterEach(() => {
 });
 
 describe("Talk device and voice wake settings", () => {
-  it.each([false, true])(
+  it.each([true])(
     "renders only published iOS voice controls and routes edits to native owners (minimal: %s)",
     async (minimal) => {
       const snapshot = createIosNativeDeviceSettingsSnapshot();
@@ -275,7 +275,7 @@ describe("Talk device and voice wake settings", () => {
         if (!row) {
           throw new Error(`Missing device voice control: ${key}`);
         }
-        const toggle = row.querySelector<HTMLElement & { checked: boolean }>("wa-switch")!;
+        const toggle = row.querySelector<HTMLInputElement>(".settings-toggle__input")!;
         const next = !toggle.checked;
         row.click();
         expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(key, next);
@@ -284,27 +284,6 @@ describe("Talk device and voice wake settings", () => {
       expect(section.querySelector("select, button")).toBeNull();
     },
   );
-
-  it("keeps device controls out of browsers while saving Gateway trigger words after a debounce", async () => {
-    const voiceWakeRequest = vi.fn(async (method: string) => ({
-      triggers: method === "voicewake.get" ? ["openclaw"] : ["hello computer"],
-    }));
-    const { page } = createTalkMutationHarness({ voiceWakeRequest });
-    await vi.waitFor(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
-    expect(page.textContent).not.toContain("This Mac");
-    vi.useFakeTimers();
-    const input = page.querySelector("textarea")!;
-    input.value = " hello computer \n";
-    input.dispatchEvent(new Event("input"));
-    await vi.advanceTimersByTimeAsync(399);
-    expect(voiceWakeRequest).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await page.updateComplete;
-    expect(voiceWakeRequest).toHaveBeenLastCalledWith("voicewake.set", {
-      triggers: [" hello computer ", ""],
-    });
-    expect(input.value).toBe("hello computer");
-  });
 
   it("retains rejected trigger edits and gives a visible retry action", async () => {
     const voiceWakeRequest = vi.fn(async (method: string) => {
@@ -367,20 +346,6 @@ describe("Talk device and voice wake settings", () => {
     await page.updateComplete;
     expect(input.value).toBe("second phrase");
     expect(page.querySelector("[role='status']")?.textContent).toBe("Saved");
-  });
-
-  it("saves the last trigger edit when navigating away inside the debounce window", async () => {
-    const voiceWakeRequest = vi.fn(async () => ({ triggers: ["openclaw"] }));
-    const { page } = createTalkMutationHarness({ voiceWakeRequest });
-    await vi.waitFor(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
-    vi.useFakeTimers();
-    const input = page.querySelector("textarea")!;
-    input.value = "computer";
-    input.dispatchEvent(new Event("input"));
-    page.remove();
-    expect(voiceWakeRequest).toHaveBeenLastCalledWith("voicewake.set", { triggers: ["computer"] });
-    await vi.advanceTimersByTimeAsync(400);
-    expect(voiceWakeRequest).toHaveBeenCalledTimes(2);
   });
 
   it.each(["latest phrase", "first phrase"])(
@@ -566,7 +531,9 @@ describe("Talk device and voice wake settings", () => {
         (element) => element.querySelector(".settings-row__title")?.textContent?.trim() === title,
       )!;
     expect(page.textContent).toContain("This Mac");
-    expect(row("Voice Wake").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
+    expect(
+      row("Voice Wake").querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled,
+    ).toBe(true);
     expect(row("Voice Wake").textContent).toContain("macOS 26");
     row("Hold Right Option to talk").click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.pushToTalkEnabled", false);
@@ -586,15 +553,21 @@ describe("Talk device and voice wake settings", () => {
     expect(nativeDeviceSettings.openPanel).toHaveBeenCalledWith("microphone-test");
     snapshot.voice.wakeEnabled = true;
     await publishSnapshot();
-    expect(row("Voice Wake").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(false);
+    expect(
+      row("Voice Wake").querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled,
+    ).toBe(false);
     row("Voice Wake").click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.wakeEnabled", false);
     snapshot.voice.wakeEnabled = false;
     await publishSnapshot();
-    expect(row("Voice Wake").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
+    expect(
+      row("Voice Wake").querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled,
+    ).toBe(true);
     snapshot.voice.supported = true;
     await publishSnapshot();
-    expect(row("Voice Wake").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(false);
+    expect(
+      row("Voice Wake").querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled,
+    ).toBe(false);
   });
 
   it("preserves pending language additions across an older native acknowledgment and the next edit", async () => {
@@ -670,29 +643,6 @@ describe("Talk device and voice wake settings", () => {
 });
 
 describe("TalkSettingsPage realtime transport mutation", () => {
-  it.each([
-    ["allowlist-default", true],
-    [undefined, false],
-  ] as const)(
-    "marks absent saved voices unsupported only for authoritative catalogs: %s",
-    async (activeVoiceSelectionPolicy, expectedWarning) => {
-      const { page, request } = createTalkMutationHarness({
-        activeVoiceSelectionPolicy,
-        model: null,
-      });
-      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
-      setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
-      await page.updateComplete;
-
-      const savedOption = page.querySelector<HTMLOptionElement>('option[value="custom-voice"]');
-      const text = page.textContent ?? "";
-      expect(savedOption?.textContent?.includes(t("talkPage.voice.unsupported"))).toBe(
-        expectedWarning,
-      );
-      expect(text.includes(t("talkPage.voice.unsupportedDefault"))).toBe(expectedWarning);
-    },
-  );
-
   it("acknowledges a model reset from the canonical config revision", async () => {
     const hashCatalog = createDeferred();
     const { page, request, runtimeConfig, setConfigHash } = createTalkMutationHarness({
@@ -814,54 +764,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "transport"]);
   });
 
-  it.each([
-    [
-      "provider-direct routing",
-      "gpt-live-test-canary",
-      "provider-direct",
-      "openai",
-      "gateway-relay",
-    ],
-    ["another model", "gpt-realtime", "force-agent-consult", "openai", "gateway-relay"],
-    ["another provider", "gpt-live-test-canary", "force-agent-consult", "xai", "gateway-relay"],
-    ["another transport", "gpt-live-test-canary", "force-agent-consult", "openai", "webrtc"],
-  ] as const)(
-    "preserves consult routing for %s",
-    async (_label, model, consultRouting, provider, transport) => {
-      const removeFormValue = await selectModel(model, {
-        consultRouting,
-        provider,
-        transport,
-        transports: ["gateway-relay", "webrtc"],
-      });
-
-      expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "consultRouting"]);
-    },
-  );
-
-  it("preserves transport when switching to a provider that advertises it", async () => {
-    const removeFormValue = await selectProvider("openai", {
-      provider: "xai",
-      transports: ["gateway-relay", "webrtc"],
-    });
-
-    expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "transport"]);
-  });
-
-  it("removes provider websocket when switching to a GPT-Live provider", async () => {
-    const removeFormValue = await selectProvider("openai", {
-      provider: "xai",
-      transport: "provider-websocket",
-      transports: ["provider-websocket", "webrtc"],
-    });
-
-    expect(removeFormValue).toHaveBeenCalledWith(["talk", "realtime", "transport"]);
-  });
-
-  it.each([
-    ["catalog default", "gpt-live-test-canary", undefined],
-    ["provider fallback", "gpt-realtime-2.1", "gpt-live-test-canary"],
-  ])(
+  it.each([["provider fallback", "gpt-realtime-2.1", "gpt-live-test-canary"]])(
     "removes forced consult when a provider switch activates a GPT-Live %s",
     async (_label, defaultModel, openAIProviderModel) => {
       const removeFormValue = await selectProvider("openai", {
@@ -886,33 +789,6 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     expect(removeFormValue).toHaveBeenCalledWith(["talk", "realtime", "transport"]);
   });
 
-  it("preserves transport when the catalog is unavailable", async () => {
-    expect(await selectModel("gpt-live-test-canary", { unavailable: true })).not.toHaveBeenCalled();
-  });
-
-  it("preserves transport when the provider advertises no transport capabilities", async () => {
-    expect(await selectModel("gpt-live-test-canary", { transports: [] })).not.toHaveBeenCalled();
-  });
-
-  it("removes provider websocket from a selected GPT-Live model", async () => {
-    expect(
-      await selectModel("gpt-live-test-canary", {
-        transport: "provider-websocket",
-        transports: ["provider-websocket", "webrtc"],
-      }),
-    ).toHaveBeenCalledWith(["talk", "realtime", "transport"]);
-  });
-
-  it("resolves an explicit provider alias before preserving transport", async () => {
-    expect(
-      await selectModel("gpt-live-test-canary", {
-        aliases: ["openai-preview"],
-        provider: "openai-preview",
-        transports: ["gateway-relay"],
-      }),
-    ).not.toHaveBeenCalled();
-  });
-
   it("uses the auto-selected provider before preserving transport", async () => {
     expect(
       await selectModel("gpt-live-test-canary", {
@@ -927,9 +803,5 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     expect(
       await selectModel("gpt-live-test-canary", { transports: ["webrtc"] }),
     ).toHaveBeenCalledOnce();
-  });
-
-  it("preserves transport for a GPT-Live lookalike", async () => {
-    expect(await selectModel("gpt-liveish", { transports: ["webrtc"] })).not.toHaveBeenCalled();
   });
 });

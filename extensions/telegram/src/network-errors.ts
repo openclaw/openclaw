@@ -117,6 +117,12 @@ function classifyTelegramTransientNetworkError(err: unknown) {
   );
 }
 
+export function hasTelegramNetworkErrorCode(err: unknown): boolean {
+  return collectTelegramErrorCandidates(err).some(
+    (candidate) => classifyTelegramTransientNetworkError(candidate) !== undefined,
+  );
+}
+
 function getNumericHttpStatus(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;

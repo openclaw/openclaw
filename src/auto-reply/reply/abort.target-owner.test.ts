@@ -29,7 +29,7 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import { captureSessionEntryCurrentCheck } from "../../config/sessions/session-entry-current-check.js";
+import { captureSessionEntryCurrentCheckInternal } from "../../config/sessions/session-entry-current-check.js";
 import {
   publishSystemEventStoreConfig,
   resolvePhysicalSessionStorePath,
@@ -756,7 +756,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     async (replacement) => {
       const state = await setupStop();
       if (replacement === "prepared writer") {
-        const current = await captureSessionEntryCurrentCheck({
+        const current = await captureSessionEntryCurrentCheckInternal({
           agentId: "main",
           storePath: state.storePath,
           sessionKey,

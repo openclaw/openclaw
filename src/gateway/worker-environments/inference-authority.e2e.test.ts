@@ -10,6 +10,7 @@ import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import { AuthStorage } from "../../agents/sessions/auth-storage.js";
+import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -27,10 +28,12 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
-import { executeWorkerInference } from "./inference-runtime.js";
+import { executeWorkerInference } from "./inference.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
-import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
+import { bindWorkerTurnCapabilities, bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
+import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
+import { prepareWorkerTurnModel } from "./worker-turn-model.js";
 
 // This release-tier composition protects the authority-to-provider boundary that
 // isolated auth-hook tests cannot prove. No runtime, credentials, or claim owner is mocked.
@@ -172,6 +175,8 @@ it("fences real admitted worker credential exchange and inference I/O", async ({
               "revoked-claim",
               "revoked-run",
               "revoked-exchange",
+              "revoked-prepared-claim",
+              "revoked-prepared-run",
             ] as const) {
               effects.length = 0;
               exchangeArrived = createDeferred();
@@ -231,36 +236,75 @@ it("fences real admitted worker credential exchange and inference I/O", async ({
                 releaseAgentRunDelegatedAuthority(runAuthority);
               }
               const installed = vi.spyOn(AuthStorage.prototype, "setRuntimeApiKey");
+              const isCurrent = () =>
+                claimAuthority.isCurrent() && validateAgentRunDelegatedAuthority(runAuthority);
+              const toolSurface = createWorkerGatewayToolRuntime({
+                assertCurrent() {},
+                signal,
+                prepare: async () => ({
+                  tools: [],
+                  presentation: createToolSurfacePresentationForTest(),
+                  policy: {
+                    workspaceOnly: true,
+                    readOnly: true,
+                    applyPatchEnabled: false,
+                    applyPatchWorkspaceOnly: true,
+                    imageSanitization: {},
+                  },
+                }),
+              });
               try {
-                const pending = executeWorkerInference({
-                  identity: {
-                    environmentId: active.environmentId,
-                    credentialHash: "synthetic-worker-hash",
-                    bundleHash: "synthetic-bundle-hash",
-                    sessionId: session.sessionId,
-                    runId: claim.runId,
-                    turnClaim: claim,
-                    ownerEpoch: active.activeOwnerEpoch,
-                    rpcSetVersion: 1,
-                    protocolFeatures: ["worker-inference-v1"],
-                    credentialExpiresAtMs: Date.now() + 60_000,
-                  },
-                  request: {
-                    sessionId: mode === "wrong-session" ? "foreign-session" : session.sessionId,
-                    runId: claim.runId,
-                    turnId: `turn-${mode}`,
-                    runEpoch: active.activeOwnerEpoch,
-                    modelRef: { provider, model: "model" },
-                    context: { messages: [{ role: "user", content: "Say allowed", timestamp: 1 }] },
-                    options: { maxTokens: 16 },
-                  },
-                  config,
-                  sessionTarget: target,
-                  signal,
-                  isCurrent: () =>
-                    claimAuthority.isCurrent() && validateAgentRunDelegatedAuthority(runAuthority),
-                  emit: () => {},
-                });
+                const pending = (async () => {
+                  if (isCurrent() && mode !== "wrong-session") {
+                    const { inference } = await prepareWorkerTurnModel({
+                      target,
+                      modelRef: { provider, model: "model" },
+                      runtimeSnapshot: lease.snapshot,
+                      inferencePlacement: "gateway",
+                      turn: { abortSignal: signal, workspaceDir: state.workspaceDir },
+                      assertCurrent: () => {
+                        if (!isCurrent()) {
+                          throw new Error("Worker inference source is no longer current");
+                        }
+                      },
+                    });
+                    bindWorkerTurnCapabilities(placements, claim, { inference, toolSurface });
+                    if (mode === "revoked-prepared-claim") {
+                      await placements.releaseTurn(claim);
+                    } else if (mode === "revoked-prepared-run") {
+                      releaseAgentRunDelegatedAuthority(runAuthority);
+                    }
+                  }
+                  return executeWorkerInference({
+                    identity: {
+                      environmentId: active.environmentId,
+                      credentialHash: "synthetic-worker-hash",
+                      bundleHash: "synthetic-bundle-hash",
+                      sessionId: session.sessionId,
+                      runId: claim.runId,
+                      turnClaim: claim,
+                      ownerEpoch: active.activeOwnerEpoch,
+                      rpcSetVersion: 1,
+                      protocolFeatures: ["worker-inference-v1"],
+                      credentialExpiresAtMs: Date.now() + 60_000,
+                    },
+                    request: {
+                      sessionId: mode === "wrong-session" ? "foreign-session" : session.sessionId,
+                      runId: claim.runId,
+                      turnId: `turn-${mode}`,
+                      runEpoch: active.activeOwnerEpoch,
+                      modelRef: { provider, model: "model" },
+                      context: {
+                        messages: [{ role: "user", content: "Say allowed", timestamp: 1 }],
+                      },
+                      options: { maxTokens: 16 },
+                    },
+                    sessionTarget: target,
+                    signal,
+                    isCurrent,
+                    emit: () => {},
+                  });
+                })();
                 // Attach immediately so a rejected asynchronous exchange cannot become unhandled.
                 const settled = pending.then(
                   (value) => ({ value }),
@@ -308,9 +352,13 @@ it("fences real admitted worker credential exchange and inference I/O", async ({
                     });
                   }
                   expect(effects).toEqual(
-                    holdExchange ? [{ path: "/auth", authorized: true }] : [],
+                    holdExchange || mode.startsWith("revoked-prepared-")
+                      ? [{ path: "/auth", authorized: true }]
+                      : [],
                   );
-                  expect(installed.mock.calls.length).toBe(0);
+                  if (!mode.startsWith("revoked-prepared-")) {
+                    expect(installed.mock.calls.length).toBe(0);
+                  }
                 }
                 console.info(
                   `authority-boundary ${mode}: auth=${effects.filter((effect) => effect.path === "/auth").length} inference=${effects.filter((effect) => effect.path !== "/auth").length} installed=${installed.mock.calls.length} ${mode === "allowed" ? "success" : "rejected"}`,
@@ -318,6 +366,7 @@ it("fences real admitted worker credential exchange and inference I/O", async ({
               } finally {
                 finishExchange.resolve();
                 installed.mockRestore();
+                await toolSurface.close();
                 releaseAgentRunDelegatedAuthority(runAuthority);
                 claimAuthority.release();
                 if (placements.get(session.sessionId)?.turnClaim) {

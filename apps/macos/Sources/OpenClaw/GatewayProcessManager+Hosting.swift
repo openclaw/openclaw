@@ -293,6 +293,7 @@ extension GatewayProcessManager {
             }
             guard self.isCurrentGatewayStart(startGeneration) else { return }
             let environment = try self.appHostedEnvironment(runtime: runtime)
+            try OpenClawConfigFile.ensureAppHostedGatewayAuth(environment: environment)
             let pid = try await self.childSupervisor.start(configuration: .init(
                 bun: runtime.bun,
                 packageRoot: runtime.packageRoot,
@@ -369,7 +370,7 @@ extension GatewayProcessManager {
             purpose: .child, port: port, generation: generation, readinessPID: pid)
         let terminal = await self.observeGatewayReadiness(
             context: context,
-            deadlinePolicy: .migration(window: 6, tolerance: GatewayLaunchAgentManager.startupMigrationTolerance),
+            deadlinePolicy: .startup(timeout: GatewayLaunchAgentManager.startupMigrationTolerance),
             clock: self.readinessClock)
         if await self.publishGatewayReadinessTerminal(terminal, context: context) {
             do { try await BundledRuntime.garbageCollectAfterHealthy() } catch {

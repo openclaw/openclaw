@@ -14,10 +14,7 @@ import {
   type CodexAppServerClient,
 } from "./client.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
-import {
-  isCodexAppServerStartSelectionChangedError,
-  retireSharedCodexAppServerClientIfCurrent,
-} from "./shared-client.js";
+import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 export const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
@@ -258,7 +255,6 @@ export function shouldRetireCodexStartupClient(
   // Model-independent preflights preserve healthy conversations. A handoff with
   // an uncertain native write owns its retirement at the resume boundary.
   return (
-    !isCodexAppServerStartSelectionChangedError(cause) &&
     !isCodexAppServerOverloadError(cause) &&
     !(cause instanceof AgentHarnessPreflightError && cause.scope === undefined) &&
     (isCodexAppServerBrokenPipeError(cause) || !spawnedBy)

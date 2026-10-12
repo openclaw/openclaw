@@ -9,7 +9,7 @@ import {
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.ts";
-import type { DashboardsRouteData } from "./view.ts";
+import type { DashboardsRouteData } from "./view.tsx";
 
 export function dashboardsRouteData(
   context: ApplicationContext,

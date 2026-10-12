@@ -143,14 +143,13 @@ describe.skipIf(process.platform === "win32")("completed package receipt history
       } finally {
         platform.mockRestore();
       }
+      const second = await prepare();
       if (scenario === "helper-replaced" || scenario === "anchor-replaced") {
-        await settlePendingPackageActivation(first.packageRoot);
         const preserved = scenario === "helper-replaced" ? "control/recovery.mjs" : "note.txt";
         expect(
           fs.readFileSync(`${first.anchor}.superseded-${first.operationId}/${preserved}`, "utf8"),
         ).toBe("historical replacement");
       }
-      const second = await prepare();
       expect(second.operationId).not.toBe(first.operationId);
       expect(openPackageActivationJournal(second.anchor).read().phase).toBe("prepared");
     },

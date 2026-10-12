@@ -157,10 +157,13 @@ export async function inspectPluginMigrationAvailability(params: {
             }
             // A private rehearsal copy is already bound to an explicit local payload. The
             // updating parent does not own an install record for that copy, so waiting for
-            // package convergence would hide its Doctor contract from the canary. Ordinary
+            // package convergence would hide its Doctor contract from the canary. A present
+            // `source: "path"` install is operator-managed: package convergence skips it, so
+            // waiting would only move the same contract to a second Doctor. Unrecorded
             // config paths stay deferred because their source may be stale during an update.
             const availableWithoutPackageConvergence =
               (bundled && !blocked) ||
+              (!unavailable && context.records[pluginId]?.source === "path") ||
               (plugin?.origin === "config" &&
                 rehearsalRoot !== undefined &&
                 isPathInside(rehearsalRoot, plugin.rootDir) &&

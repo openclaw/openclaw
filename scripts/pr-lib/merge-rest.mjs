@@ -649,6 +649,10 @@ function asyncMergeResponse(repo, pr, head, uuid, payload) {
     requireEvidence(OID.test(details.sha ?? ""), "async merge result has no valid commit");
   }
   requireEvidence(
+    result.status === "merged" || details.sha == null,
+    "unmerged async result unexpectedly contains a commit",
+  );
+  requireEvidence(
     response.status !== "202" || result.status === "pending",
     "async acceptance did not return a pending request UUID",
   );

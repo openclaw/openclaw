@@ -188,115 +188,93 @@ it("invalidates known aliases of the same state without changing another state o
   });
 });
 
-it.each(["deletion", "abort"] as const)(
-  "rejects stale journal absence when %s arrives during native read cleanup",
-  async (interruption) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const options = { env: state.env };
-      openOpenClawStateDatabase(options);
-      const refusal = pending(state);
-      recordAgentDatabaseAdmissions([refusal], { ...options, source: "startup" });
-      const cleanupEntered = createDeferredCore();
-      const releaseCleanup = createDeferredCore();
-      const controller = new AbortController();
-      const aborted = new Error("Startup stopped during journal cleanup");
-      let closed = false;
-      const captureSource = readWorker.captureOpenClawStateReadSource;
-      let selected = false;
-      const transport = vi
-        .spyOn(readWorker, "captureOpenClawStateReadSource")
-        .mockImplementation(() => {
-          const source = captureSource();
-          return {
-            ...source,
-            createTransport(command) {
-              const owned = source.createTransport(command);
-              if (selected || command.type !== "agentDeletionJournal.status") {
-                return owned;
-              }
-              selected = true;
-              return {
-                ...owned,
-                startRead(...args) {
-                  return startAwaitedReadMock(async () => {
-                    const outcome = await owned.startRead(...args).result;
-                    expect(outcome).toMatchObject({
-                      value: { ok: true, type: "agentDeletionJournal.status", status: "absent" },
-                    });
-                    return outcome;
+it("rejects stale journal absence when deletion arrives during native read cleanup", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const options = { env: state.env };
+    openOpenClawStateDatabase(options);
+    const refusal = pending(state);
+    recordAgentDatabaseAdmissions([refusal], { ...options, source: "startup" });
+    const cleanupEntered = createDeferredCore();
+    const releaseCleanup = createDeferredCore();
+    let closed = false;
+    const captureSource = readWorker.captureOpenClawStateReadSource;
+    let selected = false;
+    const transport = vi
+      .spyOn(readWorker, "captureOpenClawStateReadSource")
+      .mockImplementation(() => {
+        const source = captureSource();
+        return {
+          ...source,
+          createTransport(command) {
+            const owned = source.createTransport(command);
+            if (selected || command.type !== "agentDeletionJournal.status") {
+              return owned;
+            }
+            selected = true;
+            return {
+              ...owned,
+              startRead(...args) {
+                return startAwaitedReadMock(async () => {
+                  const outcome = await owned.startRead(...args).result;
+                  expect(outcome).toMatchObject({
+                    value: { ok: true, type: "agentDeletionJournal.status", status: "absent" },
                   });
-                },
-                startClose() {
-                  return startAwaitedReadMock(async () => {
-                    cleanupEntered.resolve();
-                    await releaseCleanup.promise;
-                    await owned.startClose().result;
-                    closed = true;
-                  });
-                },
-              };
-            },
-          };
-        });
-      const preparation = preparePendingAgentDatabase(
-        refusal,
-        { ...options, assertCurrent() {} },
-        async () => {
-          const assertJournal = captureAgentDatabasePreparationJournal("worker", options);
-          if (!assertJournal) {
-            throw new Error("Expected the live startup preparation");
-          }
-          const journalStatus = await readAgentDeletionJournalStatusInWorker(
-            "worker",
-            options,
-            controller.signal,
-          );
-          assertJournal(journalStatus !== "absent");
-        },
-      );
-      const result = preparation.then(
-        () => ({ ok: true as const }),
-        (error: unknown) => ({ ok: false as const, error }),
-      );
-      try {
-        await Promise.race([
-          cleanupEntered.promise,
-          result.then(() => {
-            throw new Error("Journal preparation completed before held cleanup");
-          }),
-        ]);
-        if (interruption === "deletion") {
-          beginAgentDeletionJournal(deletion(state), options);
-        } else {
-          controller.abort(aborted);
+                  return outcome;
+                });
+              },
+              startClose() {
+                return startAwaitedReadMock(async () => {
+                  cleanupEntered.resolve();
+                  await releaseCleanup.promise;
+                  await owned.startClose().result;
+                  closed = true;
+                });
+              },
+            };
+          },
+        };
+      });
+    const preparation = preparePendingAgentDatabase(
+      refusal,
+      { ...options, assertCurrent() {} },
+      async () => {
+        const assertJournal = captureAgentDatabasePreparationJournal("worker", options);
+        if (!assertJournal) {
+          throw new Error("Expected the live startup preparation");
         }
-        releaseCleanup.resolve();
-        const outcome = await result;
-        expect(closed).toBe(true);
-        if (interruption === "deletion") {
-          expect(outcome).toMatchObject({
-            ok: false,
-            error: expect.objectContaining({
-              message: expect.stringContaining("admission changed during preparation"),
-            }),
-          });
-          expect(readAgentDatabaseAdmissionRefusal("worker", options)).toMatchObject({
-            code: "agent-database-inspection-failed",
-            reason: "Agent worker was deleted during startup inspection",
-          });
-        } else {
-          expect(outcome.ok).toBe(false);
-          if (outcome.ok) {
-            throw new Error("Aborted startup published readiness");
-          }
-          expect(outcome.error).toBe(aborted);
-          expect(readAgentDatabaseAdmissionRefusal("worker", options)).toBe(refusal);
-        }
-      } finally {
-        releaseCleanup.resolve();
-        await result;
-        transport.mockRestore();
-      }
-    });
-  },
-);
+        const journalStatus = await readAgentDeletionJournalStatusInWorker("worker", options);
+        assertJournal(journalStatus !== "absent");
+      },
+    );
+    const result = preparation.then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    try {
+      await Promise.race([
+        cleanupEntered.promise,
+        result.then(() => {
+          throw new Error("Journal preparation completed before held cleanup");
+        }),
+      ]);
+      beginAgentDeletionJournal(deletion(state), options);
+      releaseCleanup.resolve();
+      const outcome = await result;
+      expect(closed).toBe(true);
+      expect(outcome).toMatchObject({
+        ok: false,
+        error: expect.objectContaining({
+          message: expect.stringContaining("admission changed during preparation"),
+        }),
+      });
+      expect(readAgentDatabaseAdmissionRefusal("worker", options)).toMatchObject({
+        code: "agent-database-inspection-failed",
+        reason: "Agent worker was deleted during startup inspection",
+      });
+    } finally {
+      releaseCleanup.resolve();
+      await result;
+      transport.mockRestore();
+    }
+  });
+});

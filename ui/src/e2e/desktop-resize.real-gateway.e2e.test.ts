@@ -279,7 +279,7 @@ suite.define(() => {
             },
             gateway: {
               auth: { mode: "trusted-proxy", password: gatewayToken, trustedProxy },
-              // The Gateway approves the local device; the fixture approves its command surface.
+              // The Gateway approves the local device and its initial command surface.
               nodes: { pairing: { autoApproveLocal: true } },
               controlUi: {
                 enabled: true,
@@ -431,15 +431,13 @@ suite.define(() => {
               JSON.stringify(
                 {
                   panel: await panel.evaluate((element) => ({
-                    html: element.shadowRoot?.innerHTML,
+                    html: element.innerHTML,
                     bounds: element.getBoundingClientRect().toJSON(),
-                    canvases: [...(element.shadowRoot?.querySelectorAll("canvas") ?? [])].map(
-                      (surface) => ({
-                        width: surface.width,
-                        height: surface.height,
-                        bounds: surface.getBoundingClientRect().toJSON(),
-                      }),
-                    ),
+                    canvases: [...element.querySelectorAll("canvas")].map((surface) => ({
+                      width: surface.width,
+                      height: surface.height,
+                      bounds: surface.getBoundingClientRect().toJSON(),
+                    })),
                   })),
                   sockets: await page.evaluate(() =>
                     (

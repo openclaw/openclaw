@@ -259,10 +259,12 @@ export default defineSingleProviderPluginEntry({
       return lower.startsWith("glm-5") || lower.startsWith("glm-4.7");
     },
     resolveUsageAuth: async (ctx) => {
-      const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-        providerIds: [PROVIDER_ID, "z-ai"],
-        envDirect: [ctx.env.ZAI_API_KEY, ctx.env.Z_AI_API_KEY],
-      });
+      const apiKey = (
+        await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
+          providerIds: [PROVIDER_ID, "z-ai"],
+          envDirect: [ctx.env.ZAI_API_KEY, ctx.env.Z_AI_API_KEY],
+        })
+      )?.[0];
       return apiKey ? { token: apiKey } : null;
     },
     fetchUsageSnapshot: async (ctx) => await fetchZaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
