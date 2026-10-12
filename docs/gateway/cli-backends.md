@@ -268,6 +268,87 @@ when that exact live session is replaced, and never apply to Bash. Policies
 that never prompt keep their existing behavior: `security: "deny"` rejects
 every request, and ask `off` with less than full security denies without asking.
 
+### Claude Code memory
+
+OpenClaw's workspace instructions and memory are the agent's memory, so
+ordinary `claude-cli` turns keep Claude Code's own memory out of the context:
+`~/.claude/CLAUDE.md`, `~/.claude/rules/`, any other `CLAUDE.md`,
+`CLAUDE.local.md`, or `.claude/rules/` file Claude Code would load, and its auto
+memory under `~/.claude/projects/`. Fresh and resumed turns pass Claude Code
+`--settings` with `autoMemoryEnabled: false` and `claudeMdExcludes` patterns,
+the same fields restricted runs use. The Codex harness likewise gives each
+agent its own Codex home by default.
+
+Earlier releases loaded this memory into every ordinary turn, including group
+and channel sessions that never receive the workspace `MEMORY.md`, and Claude
+Code's auto memory had the agent save notes under `~/.claude/projects/` instead
+of the workspace. To load Claude Code's memory again, opt out:
+
+```json5
+{
+  plugins: {
+    entries: {
+      anthropic: {
+        config: {
+          claudeCli: { excludeNativeMemory: false },
+        },
+      },
+    },
+  },
+}
+```
+
+The setting applies on the next turn without a Gateway restart. Claude Code
+records the memory it loaded in that session's history, so a session that
+started while the memory was loaded can still carry it when it resumes. Use
+`/reset` to start a clean session.
+
+To move existing Claude Code memory into OpenClaw:
+
+- **Auto memory:** `openclaw doctor` lists each `claude-cli` agent whose Claude
+  Code auto memory is no longer loaded, with the folder that holds it. Import
+  it from **Settings** → **Import Memory** in the Control UI: choose the agent,
+  then select the collection named after that project folder. To import from a
+  terminal instead, stop the Gateway and run the command Doctor prints:
+
+  ```bash
+  openclaw migrate claude --agent <agent-id> --from ~/.claude/projects/<workspace-key>/memory
+  ```
+
+  Both paths copy only the memory you chose into
+  `memory/imports/claude-code/`, where memory search indexes it, and leave the
+  source files in place. The Doctor note for an agent stops once its workspace
+  has a Claude Code import. See [Import from coding assistants](/concepts/memory#import-from-coding-assistants)
+  and [`openclaw migrate`](/cli/migrate).
+
+  Doctor reminds only while `excludeNativeMemory` is unset. If you do not want
+  that memory in OpenClaw, set the option explicitly to keep it out and end the
+  reminder:
+
+  ```bash
+  openclaw config set plugins.entries.anthropic.config.claudeCli.excludeNativeMemory true
+  ```
+
+  When `~/.claude/settings.json` sets `autoMemoryDirectory`, Claude Code keeps
+  its auto memory in that one directory instead, shared by every agent. Doctor
+  reports that directory and names the `claude-cli` agents that have no import
+  yet, and **Import Memory** lists it as its own collection. When the Gateway
+  runs with `CLAUDE_CONFIG_DIR`, Doctor and the import read that directory in
+  place of `~/.claude`.
+
+- **`~/.claude/CLAUDE.md`:** these rules apply to every Claude Code session on
+  the host, so OpenClaw does not copy them automatically. Move the rules an
+  agent needs into that agent's `AGENTS.md` or `USER.md`. Running
+  `openclaw migrate claude --agent <agent-id>` without `--from` appends the
+  whole file to `USER.md` and imports the auto memory of every Claude Code
+  project.
+
+Admin-managed `CLAUDE.md` still applies because Claude Code does not allow
+excluding it. Side questions already start Claude Code in safe mode, and
+restricted runs keep their stricter settings. Runs placed on a paired node keep
+that node's own Claude Code memory, because the node does not accept Gateway
+settings.
+
 ### Native Bash and the exec allowlist
 
 When a run retains native `Bash`, `ask: "on-miss"` makes the `claude-cli` backend check commands

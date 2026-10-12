@@ -501,7 +501,9 @@ export async function executePreparedCliRun(
           );
         }
         const executionBaseArgs = nodePlacement
-          ? stripGatewayLocalClaudeArgs(resolvedExecutionArgs ?? baseArgsWithSkills)
+          ? stripGatewayLocalClaudeArgs(resolvedExecutionArgs ?? baseArgsWithSkills, {
+              exactToolAvailability: params.cliToolAvailability !== undefined,
+            })
           : (resolvedExecutionArgs ?? baseArgsWithSkills);
         const args = buildCliArgs({
           backend: nodePlacement

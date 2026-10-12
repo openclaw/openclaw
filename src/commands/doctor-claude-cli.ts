@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -15,6 +16,7 @@ import {
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
@@ -31,6 +33,78 @@ type ClaudeCliDiscoveryApi = {
     options: { pathStrategy: "direct" },
   ) => { executable: string } | undefined;
 };
+
+type ClaudeCliMemoryApi = {
+  excludesClaudeNativeMemoryByDefault: (cfg: OpenClawConfig) => boolean;
+};
+
+// The Claude memory import stops scanning a directory tree at the same number of entries.
+const CLAUDE_MEMORY_SCAN_LIMIT = 20_000;
+
+/** Describes the Markdown files the Claude memory import would find, subfolders included. */
+function describeMarkdownFiles(dirPath: string): string | undefined {
+  const pending = [dirPath];
+  let count = 0;
+  let visited = 0;
+  let capped = false;
+  scan: while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) {
+      break;
+    }
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      visited += 1;
+      if (visited > CLAUDE_MEMORY_SCAN_LIMIT) {
+        capped = true;
+        break scan;
+      }
+      if (entry.isDirectory()) {
+        pending.push(path.join(current, entry.name));
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+        count += 1;
+      }
+    }
+  }
+  return count > 0 ? `${count}${capped ? "+" : ""} file(s)` : undefined;
+}
+
+/** Claude Code inherits CLAUDE_CONFIG_DIR, which relocates its settings and project memory. */
+function resolveClaudeHomeDir(env: NodeJS.ProcessEnv, defaultProjectDir: string): string {
+  const relocated = env.CLAUDE_CONFIG_DIR?.trim();
+  return relocated ? path.resolve(relocated) : path.resolve(defaultProjectDir, "..", "..");
+}
+
+/** Claude Code keeps auto memory in the user setting `autoMemoryDirectory` when one is set. */
+function resolveConfiguredAutoMemoryDir(
+  claudeHomeDir: string,
+  userHomeDir: string,
+): string | undefined {
+  let settings: unknown;
+  try {
+    settings = JSON.parse(fs.readFileSync(path.join(claudeHomeDir, "settings.json"), "utf8"));
+  } catch {
+    return undefined;
+  }
+  const configured = isRecord(settings) ? settings.autoMemoryDirectory : undefined;
+  const dir = typeof configured === "string" ? configured.trim() : "";
+  if (path.isAbsolute(dir)) {
+    return dir;
+  }
+  // Claude Code accepts only absolute paths or `~/`.
+  return dir.startsWith("~/") ? path.join(userHomeDir, dir.slice(2)) : undefined;
+}
+
+// The Control UI import runs inside the Gateway; `openclaw migrate` needs the Gateway stopped.
+const EXCLUDED_NATIVE_MEMORY_IMPORT =
+  "are no longer loaded into agent turns. Import them into OpenClaw memory from Control UI Settings → Import Memory";
+const EXCLUDED_NATIVE_MEMORY_OPTION =
+  "plugins.entries.anthropic.config.claudeCli.excludeNativeMemory";
 
 function isClaudeCliAuthenticated(commandPath: string, env: NodeJS.ProcessEnv): boolean {
   const result = spawnSync(commandPath, ["auth", "status", "--json"], {
@@ -153,6 +227,13 @@ export function noteClaudeCliHealth(
     delete authEnv[envName];
   }
   const authenticated = commandPath ? isClaudeCliAuthenticated(commandPath, authEnv) : false;
+  // The Anthropic plugin owns the exclusion. Doctor reminds about memory left in Claude Code
+  // only while the exclusion applies by default; an explicit value is the operator's decision.
+  const remindsNativeMemory =
+    loadBundledPluginPublicArtifactModuleFromCandidatesSync<ClaudeCliMemoryApi>({
+      dirName: "anthropic",
+      artifactCandidates: ["cli-memory-api.js"],
+    })?.excludesClaudeNativeMemoryByDefault(cfg) === true;
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const showAgentLabels =
     workspaceTargets.length > 1 ||
@@ -174,6 +255,23 @@ export function noteClaudeCliHealth(
     lines.push("- Claude auth: not logged in.");
     fixHints.push(`- Fix: run ${formatCliCommand("claude auth login")}.`);
   }
+
+  // Excluded Claude auto memory stays on disk. Its advisories carry no "- Fix:" so lint keeps
+  // them informational; they clear once the agent's workspace holds a Claude import.
+  const firstProjectDir = workspaceTargets[0]?.directories[1][0];
+  const configuredMemoryDir =
+    remindsNativeMemory && firstProjectDir
+      ? resolveConfiguredAutoMemoryDir(
+          resolveClaudeHomeDir(env, firstProjectDir),
+          path.resolve(firstProjectDir, "..", "..", ".."),
+        )
+      : undefined;
+  const hasClaudeImport = (workspaceDir: string) =>
+    probeDirectoryHealth(path.join(workspaceDir, "memory", "imports", "claude-code")) !== "missing";
+  const quoteArg = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+  const nativeMemoryChoice = `To keep loading them, set ${EXCLUDED_NATIVE_MEMORY_OPTION} to false. To leave them out and stop this note, run ${formatCliCommand(
+    `openclaw config set ${EXCLUDED_NATIVE_MEMORY_OPTION} true`,
+  )}.`;
 
   for (const target of workspaceTargets) {
     const agentLabel = showAgentLabels ? target.agentId : undefined;
@@ -201,6 +299,44 @@ export function noteClaudeCliHealth(
         fixHints.push(`- Fix: make ${targetLabel} ${remedy}`);
       }
     }
+
+    const [[workspaceDir], [projectDir]] = target.directories;
+    const nativeMemoryDir = path.join(
+      resolveClaudeHomeDir(env, projectDir),
+      "projects",
+      path.basename(projectDir),
+      "memory",
+    );
+    const nativeMemoryFiles =
+      remindsNativeMemory && !configuredMemoryDir
+        ? describeMarkdownFiles(nativeMemoryDir)
+        : undefined;
+    if (nativeMemoryFiles && !hasClaudeImport(workspaceDir)) {
+      lines.push(
+        `- ${agentLabel ? `Agent ${agentLabel} ` : ""}Claude Code memory: ${nativeMemoryFiles} in ${shortenHomePath(nativeMemoryDir)} ${EXCLUDED_NATIVE_MEMORY_IMPORT}, or stop the Gateway and run ${formatCliCommand(
+          `openclaw migrate claude --agent ${quoteArg(target.agentId)} --from ${quoteArg(nativeMemoryDir)}`,
+        )}. ${nativeMemoryChoice}`,
+      );
+    }
+  }
+
+  // autoMemoryDirectory replaces every project's memory folder. `migrate --from` scopes only a
+  // project `memory` folder, so this location has no scoped command. An import lands in one
+  // agent's workspace, so the note stays until every agent has one.
+  const configuredMemoryFiles = configuredMemoryDir
+    ? describeMarkdownFiles(configuredMemoryDir)
+    : undefined;
+  const agentsWithoutImport = workspaceTargets
+    .filter((target) => !hasClaudeImport(target.directories[0][0]))
+    .map((target) => target.agentId)
+    .toSorted((a, b) => a.localeCompare(b));
+  if (configuredMemoryDir && configuredMemoryFiles && agentsWithoutImport.length > 0) {
+    const forAgents = showAgentLabels
+      ? ` for ${agentsWithoutImport.length > 1 ? "agents" : "agent"} ${agentsWithoutImport.join(", ")}`
+      : "";
+    lines.push(
+      `- Claude Code memory: ${configuredMemoryFiles} in ${shortenHomePath(configuredMemoryDir)} (Claude Code autoMemoryDirectory) ${EXCLUDED_NATIVE_MEMORY_IMPORT}${forAgents}. ${nativeMemoryChoice}`,
+    );
   }
 
   if (lines.length > 0 && workspaceTargets.length > 1) {

@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 
+const LOAD_NATIVE_MEMORY_CONFIG = {
+  plugins: { entries: { anthropic: { config: { claudeCli: { excludeNativeMemory: false } } } } },
+};
+const NATIVE_MEMORY_EXCLUSION_SETTINGS =
+  '{"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
+
 describe("Claude CLI instruction isolation", () => {
   it.each([false, true])("isolates exact-tool execution (resume=%s)", (useResume) => {
     const backend = buildAnthropicCliBackend();
     expect(
       backend.resolveExecutionArgs?.({
+        // The default ordinary-run memory exclusion must not add a second --settings.
         workspaceDir: "/tmp",
         provider: "claude-cli",
         modelId: "claude-opus-4-8",
@@ -76,4 +83,32 @@ describe("Claude CLI instruction isolation", () => {
       "ScheduleWakeup,mcp__other__*",
     ]);
   });
+
+  it.each([false, true])(
+    "excludes Claude Code memory from ordinary runs unless the operator opts out (resume=%s)",
+    (useResume) => {
+      const backend = buildAnthropicCliBackend();
+      const baseArgs = (useResume ? backend.config.resumeArgs : backend.config.args) ?? [];
+      const resolve = (
+        config?: typeof LOAD_NATIVE_MEMORY_CONFIG,
+        executionMode: "agent" | "side-question" = "agent",
+      ) =>
+        backend.resolveExecutionArgs?.({
+          ...(config ? { config } : {}),
+          workspaceDir: "/tmp",
+          provider: "claude-cli",
+          modelId: "claude-opus-4-8",
+          executionMode,
+          useResume,
+          baseArgs,
+        });
+
+      expect(resolve()).toEqual([...baseArgs, "--settings", NATIVE_MEMORY_EXCLUSION_SETTINGS]);
+      expect(resolve(LOAD_NATIVE_MEMORY_CONFIG)).toEqual(baseArgs);
+      // Side questions already start Claude Code with --safe-mode.
+      expect(resolve(undefined, "side-question")).toEqual(
+        resolve(LOAD_NATIVE_MEMORY_CONFIG, "side-question"),
+      );
+    },
+  );
 });

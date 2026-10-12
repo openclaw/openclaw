@@ -31,8 +31,17 @@ const NODE_CLI_OMIT_VALUE_ARGS = new Set([
 // auto-approval, which must never cross the node's own approval boundary.
 const NODE_CLI_OMIT_VARIADIC_ARGS = new Set(["--mcp-config", "--allowedTools", "--allowed-tools"]);
 
-/** Remove Gateway-local file, plugin, MCP, and allow-list arguments. */
-export function stripGatewayLocalClaudeArgs(args: readonly string[]): string[] {
+/**
+ * Remove Gateway-local file, plugin, MCP, and allow-list arguments.
+ *
+ * Ordinary-run `--settings` carries Gateway operator preferences that the node
+ * does not accept, so the node keeps its own Claude configuration. Exact-tool
+ * runs keep theirs: the node rejects that run rather than lose its isolation.
+ */
+export function stripGatewayLocalClaudeArgs(
+  args: readonly string[],
+  options: { exactToolAvailability: boolean },
+): string[] {
   const result: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] ?? "";
@@ -41,7 +50,10 @@ export function stripGatewayLocalClaudeArgs(args: readonly string[]): string[] {
     if (NODE_CLI_OMIT_BARE_ARGS.has(name)) {
       continue;
     }
-    if (NODE_CLI_OMIT_VALUE_ARGS.has(name)) {
+    if (
+      NODE_CLI_OMIT_VALUE_ARGS.has(name) ||
+      (name === "--settings" && !options.exactToolAvailability)
+    ) {
       if (equalsIndex < 0) {
         index += 1;
       }

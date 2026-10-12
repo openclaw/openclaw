@@ -7,6 +7,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
+import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { noteClaudeCliHealth } from "./doctor-claude-cli.js";
@@ -36,11 +37,14 @@ const defaultClaudeConfig = {
   },
 };
 
+const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+
 async function withTempHome<T>(
   run: (params: { homeDir: string; workspaceDir: string; commandPath: string }) => Promise<T> | T,
+  homeName = "home",
 ): Promise<T> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-claude-cli-"));
-  const homeDir = path.join(root, "home");
+  const homeDir = path.join(root, homeName);
   const workspaceDir = path.join(root, "workspace");
   fs.mkdirSync(homeDir, { recursive: true });
   fs.mkdirSync(workspaceDir, { recursive: true });
@@ -52,6 +56,7 @@ async function withTempHome<T>(
     return await withEnvAsync(
       {
         HOME: homeDir,
+        CLAUDE_CONFIG_DIR: undefined,
         OPENCLAW_HOME: homeDir,
         OPENCLAW_STATE_DIR: path.join(homeDir, ".openclaw"),
         PATH: binDir,
@@ -160,6 +165,181 @@ describe("noteClaudeCliHealth", () => {
     });
   });
 
+  it("points at the import for excluded Claude auto memory until the workspace has one", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+      const memoryDir = path.join(projectDir, "memory");
+      // The import copies subfolders too, so the count includes them.
+      fs.mkdirSync(path.join(memoryDir, "topics"), { recursive: true });
+      fs.writeFileSync(path.join(memoryDir, "MEMORY.md"), "- [Fact](topics/fact.md)\n");
+      fs.writeFileSync(path.join(memoryDir, "topics", "fact.md"), "fact\n");
+      mockClaudeAuthentication(true);
+
+      const noteFn = vi.fn();
+      noteClaudeCliHealth(defaultClaudeConfig, { workspaceDir, noteFn });
+      const body = noteBody(noteFn);
+      expect(body).toContain("Claude Code memory: 2 file(s)");
+      expect(body).toContain("Control UI Settings → Import Memory, or stop the Gateway and run");
+      expect(body).toContain(
+        `openclaw migrate claude --agent ${quote("main")} --from ${quote(memoryDir)}`,
+      );
+      expect(body).toContain(
+        "config set plugins.entries.anthropic.config.claudeCli.excludeNativeMemory true",
+      );
+      expect(body).not.toContain("- Fix:");
+
+      // Either explicit value is the operator's decision, so the reminder stops.
+      for (const excludeNativeMemory of [false, true]) {
+        const decided = vi.fn();
+        noteClaudeCliHealth(
+          {
+            ...defaultClaudeConfig,
+            plugins: {
+              entries: { anthropic: { config: { claudeCli: { excludeNativeMemory } } } },
+            },
+          },
+          { workspaceDir, noteFn: decided },
+        );
+        expect(decided).not.toHaveBeenCalled();
+      }
+
+      fs.mkdirSync(path.join(workspaceDir, "memory", "imports", "claude-code"), {
+        recursive: true,
+      });
+      const imported = vi.fn();
+      noteClaudeCliHealth(defaultClaudeConfig, { workspaceDir, noteFn: imported });
+      expect(imported).not.toHaveBeenCalled();
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "quotes the excluded Claude memory import source for the shell",
+    async () => {
+      await withTempHome(({ homeDir, workspaceDir }) => {
+        const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+        const memoryDir = path.join(projectDir, "memory");
+        fs.mkdirSync(memoryDir, { recursive: true });
+        fs.writeFileSync(path.join(memoryDir, "MEMORY.md"), "- fact\n");
+        mockClaudeAuthentication(true);
+
+        const noteFn = vi.fn();
+        noteClaudeCliHealth(defaultClaudeConfig, { workspaceDir, noteFn });
+        expect(noteBody(noteFn)).toContain(`--from '${memoryDir.replace("'", "'\\''")}'`);
+      }, "O'Brien");
+    },
+  );
+
+  it("reports a configured Claude autoMemoryDirectory instead of the project folder", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+      // Stale files in the default folder must not produce guidance for the wrong source.
+      fs.mkdirSync(path.join(projectDir, "memory"), { recursive: true });
+      fs.writeFileSync(path.join(projectDir, "memory", "MEMORY.md"), "- stale\n");
+      fs.mkdirSync(path.join(homeDir, "claude-notes"));
+      fs.writeFileSync(path.join(homeDir, "claude-notes", "MEMORY.md"), "- fact\n");
+      fs.writeFileSync(
+        path.join(homeDir, ".claude", "settings.json"),
+        JSON.stringify({ autoMemoryDirectory: "~/claude-notes" }),
+      );
+      mockClaudeAuthentication(true);
+
+      const noteFn = vi.fn();
+      noteClaudeCliHealth(defaultClaudeConfig, { workspaceDir, noteFn });
+      const body = noteBody(noteFn);
+      expect(body).toContain(
+        `Claude Code memory: 1 file(s) in $OPENCLAW_HOME${path.sep}claude-notes (Claude Code autoMemoryDirectory)`,
+      );
+      expect(body).toContain("Control UI Settings → Import Memory");
+      expect(body).not.toContain("migrate claude");
+      expect(body).not.toContain("- Fix:");
+    });
+  });
+
+  it("keeps the configured-directory note for agents without an import", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      resolveModelAgentRuntimeMetadataMock.mockReturnValue({ id: "claude-cli", source: "model" });
+      const root = path.dirname(workspaceDir);
+      const runtimeModel = "anthropic/claude-opus-4-7";
+      const agent = (id: string) => {
+        const workspace = path.join(root, `workspace-${id}`);
+        fs.mkdirSync(workspace, { recursive: true });
+        return {
+          workspace,
+          model: runtimeModel,
+          models: { [runtimeModel]: { agentRuntime: { id: "claude-cli" } } },
+        };
+      };
+      const config = {
+        agents: {
+          defaults: { model: { primary: runtimeModel } },
+          entries: { alpha: agent("alpha"), beta: agent("beta") },
+        },
+      };
+      fs.mkdirSync(path.join(homeDir, "claude-notes"));
+      fs.writeFileSync(path.join(homeDir, "claude-notes", "MEMORY.md"), "- fact\n");
+      fs.mkdirSync(path.join(homeDir, ".claude"), { recursive: true });
+      fs.writeFileSync(
+        path.join(homeDir, ".claude", "settings.json"),
+        JSON.stringify({ autoMemoryDirectory: "~/claude-notes" }),
+      );
+      mockClaudeAuthentication(true);
+      const importInto = (id: string) =>
+        fs.mkdirSync(path.join(root, `workspace-${id}`, "memory", "imports", "claude-code"), {
+          recursive: true,
+        });
+
+      const none = vi.fn();
+      noteClaudeCliHealth(config, { noteFn: none });
+      expect(noteBody(none)).toContain("Import Memory for agents alpha, beta.");
+
+      // An import lands in one agent's workspace; the other agent still has no copy.
+      importInto("alpha");
+      const one = vi.fn();
+      noteClaudeCliHealth(config, { noteFn: one });
+      expect(noteBody(one)).toContain("Import Memory for agent beta.");
+
+      importInto("beta");
+      const both = vi.fn();
+      noteClaudeCliHealth(config, { noteFn: both });
+      expect(both).not.toHaveBeenCalled();
+    });
+  });
+
+  it("locates excluded Claude memory under CLAUDE_CONFIG_DIR", async () => {
+    await withTempHome(async ({ homeDir, workspaceDir }) => {
+      const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+      // The default profile's memory is not what the relocated profile loads.
+      fs.mkdirSync(path.join(projectDir, "memory"), { recursive: true });
+      fs.writeFileSync(path.join(projectDir, "memory", "MEMORY.md"), "- stale\n");
+      const profileDir = path.join(homeDir, "claude-profile");
+      const memoryDir = path.join(profileDir, "projects", path.basename(projectDir), "memory");
+      fs.mkdirSync(memoryDir, { recursive: true });
+      fs.writeFileSync(path.join(memoryDir, "MEMORY.md"), "- fact\n");
+      fs.writeFileSync(path.join(memoryDir, "fact.md"), "fact\n");
+      mockClaudeAuthentication(true);
+
+      await withEnvAsync({ CLAUDE_CONFIG_DIR: profileDir }, async () => {
+        const noteFn = vi.fn();
+        noteClaudeCliHealth(defaultClaudeConfig, { workspaceDir, noteFn });
+        const body = noteBody(noteFn);
+        expect(body).toContain("Claude Code memory: 2 file(s)");
+        expect(body).toContain(`--from ${quote(memoryDir)}`);
+
+        fs.mkdirSync(path.join(homeDir, "claude-notes"));
+        fs.writeFileSync(path.join(homeDir, "claude-notes", "MEMORY.md"), "- fact\n");
+        fs.writeFileSync(
+          path.join(profileDir, "settings.json"),
+          JSON.stringify({ autoMemoryDirectory: "~/claude-notes" }),
+        );
+        const configured = vi.fn();
+        noteClaudeCliHealth(defaultClaudeConfig, { workspaceDir, noteFn: configured });
+        expect(noteBody(configured)).toContain(
+          `Claude Code memory: 1 file(s) in $OPENCLAW_HOME${path.sep}claude-notes (Claude Code autoMemoryDirectory)`,
+        );
+      });
+    });
+  });
+
   it("reports when Claude CLI owns no active login", async () => {
     await withTempHome(({ workspaceDir }) => {
       const noteFn = vi.fn();
@@ -241,7 +421,7 @@ describe("noteClaudeCliHealth", () => {
   });
 
   // Registered CLI entry; routed by test/vitest/vitest.commands.config.ts.
-  it.each(["cyclic project", "native installation"])(
+  it.each(["cyclic project", "native installation", "excluded native memory"])(
     "doctor --lint --only core/doctor/claude-cli reports %s at final output",
     async (scenario) => {
       clearHealthChecksForTest();
@@ -254,6 +434,10 @@ describe("noteClaudeCliHealth", () => {
         fs.mkdirSync(path.dirname(projectDir), { recursive: true });
         if (scenario === "cyclic project") {
           fs.symlinkSync(projectDir, projectDir, process.platform === "win32" ? "junction" : "dir");
+        } else if (scenario === "excluded native memory") {
+          // The import reminder is advisory: lint must stay clean.
+          fs.mkdirSync(path.join(projectDir, "memory"), { recursive: true });
+          fs.writeFileSync(path.join(projectDir, "memory", "MEMORY.md"), "- fact\n");
         }
         fs.writeFileSync(
           configPath,
