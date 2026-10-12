@@ -493,6 +493,13 @@ describe("subagent registry seam flow", () => {
     });
 
     vi.setSystemTime(now + 62_000);
+    // The promoted member settles its own session cleanup during this pass and
+    // republishes its row to stamp `cleanupCompletedAt`. That retires the
+    // identity read the group-archive pass holds — by design: a replaced row
+    // must never be deleted against a stale session identity. The group is
+    // archived on the next pass, once the row is stable.
+    await mod.testing.sweepOnceForTests();
+    expect(mod.getSubagentRunByRunId("run-collector-confirmed")).toBeDefined();
     await mod.testing.sweepOnceForTests();
     expect(mod.getSubagentRunByRunId("run-collector-confirmed")).toBeUndefined();
     expect(mod.getSubagentRunByRunId("run-collector-unconfirmed")).toBeUndefined();

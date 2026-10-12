@@ -442,7 +442,13 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       expect(result.status).toBe("accepted");
       const childSessionKey = expectDefined(result.childSessionKey, "accepted child session");
       const events = (await listSessionStateEventsSince(childSessionKey, "main", 0)).events;
-      expect(events.map((event) => event.kind)).toEqual(["created", "child_spawned"]);
+      // The stubbed dispatch accepts without a real run, so the registry fails
+      // the child moments later. That terminal signal is recorded for real now
+      // that the shared persistence fixture replays terminal events instead of
+      // dropping them, so assert the spawn prefix and bound what may follow.
+      const kinds = events.map((event) => event.kind);
+      expect(kinds.slice(0, 2)).toEqual(["created", "child_spawned"]);
+      expect(kinds.slice(2).filter((kind) => kind !== "run_failed")).toEqual([]);
       const spawned = expectDefined(events[1], "spawned signal");
       expect(spawned).toMatchObject({ actorId: "agent:main:main", runId: result.runId });
       expect(

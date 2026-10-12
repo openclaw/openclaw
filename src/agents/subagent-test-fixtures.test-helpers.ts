@@ -75,6 +75,9 @@ export async function configureMockSubagentRegistryPersistence(methods: {
   persistRegistryRows: MockSubagentRegistryRows;
 }) {
   const worker = await import("../state/openclaw-state-worker-store.js");
+  const { runOpenClawStateWriteTransaction } = await import("../state/openclaw-state-db.js");
+  const { recordSessionStateEventInDatabase } =
+    await import("../sessions/session-state-events.kernel.js");
   const { rowToSubagentRunRecord } =
     await import("./subagents/registry/subagent-registry.store.codec.js");
   const { subagentRunRowVersion } =
@@ -121,13 +124,28 @@ export async function configureMockSubagentRegistryPersistence(methods: {
               );
               await methods.persistRegistryRows(rows, [...rows.keys(), ...write.deleteRunIds]);
               options?.assertCurrent?.();
+              // The rows are in memory, but the durable terminal signals this
+              // write carries are not a registry row: they are session-state
+              // events a reader observes through `listSessionStateEventsSince`.
+              // Dropping them made every "does the owner publish the signal?"
+              // assertion vacuous, so record them for real. This stays
+              // synchronous on purpose: an extra await here would delay row
+              // publication past timers the completion-ordering cases depend on.
+              const notices = write.terminalEvents?.length
+                ? runOpenClawStateWriteTransaction((writer) =>
+                    write.terminalEvents!.flatMap(
+                      ({ event, now }) =>
+                        recordSessionStateEventInDatabase(writer.db, event, now).notices,
+                    ),
+                  )
+                : [];
               return {
                 writeId: write.writeId,
                 versions: new Map([
                   ...values.map((row) => [row.run_id, subagentRunRowVersion(row)] as const),
                   ...write.deleteRunIds.map((id) => [id, null] as const),
                 ]),
-                notices: [],
+                notices,
               };
             },
           ),

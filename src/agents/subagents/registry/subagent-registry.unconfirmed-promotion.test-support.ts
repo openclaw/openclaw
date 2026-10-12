@@ -573,9 +573,13 @@ export function registerUnconfirmedChildPromotionTests(fixture: SubagentRegistry
     });
     await vi.advanceTimersByTimeAsync(500);
     // Re-read: completion publishes a new row, so `run` above is the preimage.
-    expect(findRequesterRun("run-expiry-grace-sweep")?.execution.status).toBe("terminal");
-    // Completion commits the task through the real async task store before it
-    // announces; that takes real time, not fake time.
+    // Completion commits the terminal row, its durable signal and the task
+    // through the real async state worker before it announces; that takes real
+    // time, not fake time, so both waits below are wall-clock.
+    await vi.waitFor(
+      () => expect(findRequesterRun("run-expiry-grace-sweep")?.execution.status).toBe("terminal"),
+      { timeout: 15_000, interval: 50 },
+    );
     await vi.waitFor(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce(), {
       timeout: 15_000,
       interval: 50,
