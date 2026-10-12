@@ -10,8 +10,26 @@ import type {
 } from "../loading/workspace-skill-sources.types.js";
 import type { SkillSnapshot } from "../types.js";
 
+export function captureSkillsDiscoveryEnvironment() {
+  return {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    OPENCLAW_HOME: process.env.OPENCLAW_HOME,
+    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+    OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+    OPENCLAW_BUNDLED_SKILLS_DIR: process.env.OPENCLAW_BUNDLED_SKILLS_DIR,
+    OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
+    PREFIX: process.env.PREFIX,
+    ANDROID_DATA: process.env.ANDROID_DATA,
+  };
+}
+
+export type SkillsDiscoveryEnvironment = ReturnType<typeof captureSkillsDiscoveryEnvironment>;
+
 export type SkillsSourcePlanInput = {
   workspaceDir: string;
+  environment: SkillsDiscoveryEnvironment;
   options?: Omit<WorkspaceSkillSourcePlanOptions, "pluginMetadataSnapshot" | "pluginSkillRoots">;
   pluginContributions?: PluginSkillContribution[];
   acpRuntimeAvailable: boolean;
@@ -24,12 +42,21 @@ export type SkillsDiscoveryInput =
       requests: Array<{
         key: string;
         request: WorkspaceSkillSourceRequest;
+        environment: SkillsDiscoveryEnvironment;
         plan?: { input: SkillsSourcePlanInput; scope?: "gateway" };
       }>;
       path: string | undefined;
     }
-  | { kind: "project"; input: SkillSnapshotProjectionInput }
-  | { kind: "status"; input: Parameters<typeof readWorkspaceSkillStatusFacts>[0] };
+  | {
+      kind: "project";
+      input: SkillSnapshotProjectionInput;
+      environment: SkillsDiscoveryEnvironment;
+    }
+  | {
+      kind: "status";
+      input: Parameters<typeof readWorkspaceSkillStatusFacts>[0];
+      environment: SkillsDiscoveryEnvironment;
+    };
 
 export type SkillsDiscoveryResult = {
   key: string;

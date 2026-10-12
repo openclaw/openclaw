@@ -682,6 +682,7 @@ describe("skills-remote", () => {
           checkConnectivity,
           invoke,
         });
+        recordRemoteNodeInfo(testRemoteSession(nodeId, { platform, commands: params.commands }));
         let admitted = false;
         refresh = owner.track(() =>
           runWithGatewayIndependentRootWorkAdmission(
@@ -713,6 +714,7 @@ describe("skills-remote", () => {
         expect(invoke).toHaveBeenCalledTimes(platform === "darwin" ? 1 : 0);
       } finally {
         owner.beginClose();
+        await closeSkillsWatchers();
         await vi.runAllTimersAsync();
         await Promise.allSettled([refresh, closing]);
         removeRemoteNodeInfo(nodeId);

@@ -9,12 +9,15 @@ import { getSkillsResourceVersion, getSkillsSnapshotVersion } from "./refresh-st
 import {
   closeSkillsWatchers,
   prepareLocalSkillSources,
+  prepareSkillSourcePlan,
+  projectSkillSnapshot,
   refreshSkillsDiscovery,
 } from "./refresh.js";
 
 const temporary = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     await closeSkillsWatchers(true);
+    vi.unstubAllEnvs();
     vi.useRealTimers();
     cleanup();
   }),
@@ -77,6 +80,73 @@ it("coalesces passive edits until the minute boundary and shares one worker", as
   await vi.advanceTimersByTimeAsync(1);
   expect(await descriptions()).toEqual(["Final"]);
   expect(await descriptions(request(other))).toEqual(["Other"]);
+});
+
+it("keeps each source environment while refreshing a reused worker's plans and prompt paths", async () => {
+  const firstHome = temporary.make("skills-first-home-");
+  const secondHome = temporary.make("skills-second-home-");
+  const setEnvironment = (home: string) => {
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+    vi.stubEnv("OPENCLAW_HOME", path.join(home, "effective-home"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
+    vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", path.join(home, "bundled"));
+  };
+  const writeManaged = (home: string, description: string) =>
+    writeSkill({
+      dir: path.join(home, ".openclaw", "skills", "guide"),
+      name: "guide",
+      description,
+    });
+  await writeManaged(firstHome, "First namespace");
+  await writeManaged(secondHome, "Second namespace");
+  const config = { plugins: { enabled: false }, skills: { load: { extraDirs: ["~/extra"] } } };
+  const prepare = async (home: string) => {
+    setEnvironment(home);
+    const planned = await prepareSkillSourcePlan(workspace, { config });
+    expect(planned.plan).toMatchObject({
+      userHomeDir: home,
+      stateDir: path.join(home, ".openclaw"),
+      managedSkillsDir: path.join(home, ".openclaw", "skills"),
+      bundledSkillsDir: path.join(home, "bundled"),
+      roots: expect.arrayContaining([
+        expect.objectContaining({ dir: path.join(home, "effective-home", "extra") }),
+      ]),
+    });
+    const input = { ...request(), sourcePlan: planned.plan };
+    const options = { plan: { input: planned.input } };
+    return { input, options, sources: await prepareLocalSkillSources(input, options) };
+  };
+  const first = await prepare(firstHome);
+  expect(first.sources.entries.map((entry) => entry.skill.description)).toEqual([
+    "First namespace",
+  ]);
+  const second = await prepare(secondHome);
+  expect(second.sources.entries.map((entry) => entry.skill.description)).toEqual([
+    "Second namespace",
+  ]);
+  await write("Second workspace", secondHome);
+  const workspaceSources = await prepareLocalSkillSources(request(secondHome));
+  const snapshot = await projectSkillSnapshot({
+    workspaceDir: workspace,
+    eligible: workspaceSources.entries,
+  });
+  expect(snapshot.prompt).toContain("~/skills/guide/SKILL.md");
+  expect(snapshot.prompt).not.toContain(secondHome);
+
+  await writeManaged(firstHome, "First namespace updated");
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(
+    (await prepareLocalSkillSources(first.input, first.options)).entries.map(
+      (entry) => entry.skill.description,
+    ),
+  ).toEqual(["First namespace updated"]);
+  expect(
+    (await prepareLocalSkillSources(second.input, second.options)).entries.map(
+      (entry) => entry.skill.description,
+    ),
+  ).toEqual(["Second namespace"]);
 });
 
 it("keeps watch=false passive state fixed while explicit refresh remains immediate", async () => {
@@ -142,9 +212,11 @@ it("discovers new agent-plugin children during the passive worker pass", async (
   const skillRoot = path.join(pluginRoot, "skills");
   await writeSkill({ dir: path.join(skillRoot, "first"), name: "first", description: "First" });
   const input = request();
+  const prepared = await prepareSkillSourcePlan(workspace, { workspaceOnly: true });
   const options = {
     plan: {
       input: {
+        ...prepared.input,
         workspaceDir: workspace,
         options: {
           config: { plugins: { enabled: false } },

@@ -1,6 +1,7 @@
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import { pinConfigDir } from "../../utils.js";
 import { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import {
   resolvePluginSkillRoots,
@@ -19,8 +20,20 @@ import {
 import type {
   SkillsDiscoveryInput,
   SkillsDiscoveryOutput,
+  SkillsDiscoveryEnvironment,
   SkillsSourcePlanInput,
 } from "./discovery-worker-contract.js";
+
+function applyEnvironment(environment: SkillsDiscoveryEnvironment) {
+  for (const [key, value] of Object.entries(environment)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  pinConfigDir();
+}
 
 function resolveInputPlan(input: SkillsSourcePlanInput) {
   // Each pass observes new/replaced plugin roots instead of reusing old filesystem facts.
@@ -47,16 +60,19 @@ function resolveInputPlan(input: SkillsSourcePlanInput) {
 }
 
 serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
-  // This private worker only receives the discovery owner's typed requests.
+  // SAFETY: This private worker only receives the discovery owner's typed requests.
   const request = input as SkillsDiscoveryInput;
   channel?.consumeInput();
   if (request.kind === "plan") {
+    applyEnvironment(request.input.environment);
     return { kind: "plan", plan: resolveInputPlan(request.input) };
   }
   if (request.kind === "project") {
+    applyEnvironment(request.environment);
     return { kind: "project", snapshot: buildSkillSnapshotProjection(request.input) };
   }
   if (request.kind === "status") {
+    applyEnvironment(request.environment);
     return { kind: "status", facts: readWorkspaceSkillStatusFacts(request.input) };
   }
   if (request.path === undefined) {
@@ -67,7 +83,8 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
   const plans = new Map<string, ReturnType<typeof resolveInputPlan>>();
   return {
     kind: "scan",
-    results: request.requests.map(({ key, request: sourceRequest, plan }) => {
+    results: request.requests.map(({ key, request: sourceRequest, environment, plan }) => {
+      applyEnvironment(environment);
       let resolvedPlan = sourceRequest.sourcePlan;
       if (plan) {
         const planKey = JSON.stringify(plan.input);

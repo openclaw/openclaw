@@ -439,7 +439,7 @@ async function prepareCapturedWorkspaceSkillEntries(
 /** Acquire host source tiers before the native node/execution/Library merge. */
 export async function prepareWorkspaceSkillEntries(
   workspaceDir: string,
-  opts?: WorkspaceSkillLoadOptions & {
+  opts?: LocalWorkspaceSkillLoadOptions & {
     entries?: SkillEntry[];
     status?: { skillCardKey?: string };
   },
@@ -551,7 +551,7 @@ function resolveWorkspaceSkillLoad(
 /** Runtime preparation shares discovery and filtering with synchronous SDK inventory reads. */
 export async function prepareWorkspaceSkills(
   workspaceDir: string,
-  opts?: WorkspaceSkillLoadOptions,
+  opts?: LocalWorkspaceSkillLoadOptions,
   assertCurrent?: () => void,
 ): Promise<SkillEntry[]> {
   return (await prepareWorkspaceSkillSelection(workspaceDir, opts, "runtime", assertCurrent))

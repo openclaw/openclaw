@@ -22,11 +22,13 @@ import type {
   WorkspaceSkillSources,
 } from "../loading/workspace-skill-sources.types.js";
 import type { SkillSnapshot } from "../types.js";
-import type {
-  SkillsDiscoveryInput,
-  SkillsDiscoveryResult,
-  SkillsDiscoveryOutput,
-  SkillsSourcePlanInput,
+import {
+  captureSkillsDiscoveryEnvironment,
+  type SkillsDiscoveryEnvironment,
+  type SkillsDiscoveryInput,
+  type SkillsDiscoveryResult,
+  type SkillsDiscoveryOutput,
+  type SkillsSourcePlanInput,
 } from "./discovery-worker-contract.js";
 import {
   closeRemoteSkillsWatchers,
@@ -47,6 +49,7 @@ const PASSIVE_REFRESH_MS = 60_000;
 const MAX_SOURCES = 128;
 type Source = {
   request: WorkspaceSkillSourceRequest;
+  environment: SkillsDiscoveryEnvironment;
   watch: boolean;
   dirty: boolean;
   sources?: WorkspaceSkillSources;
@@ -121,6 +124,7 @@ function scanDirtySources(): Promise<void> {
             requests: selected.map(([key, source]) => ({
               key,
               request: source.request,
+              environment: source.environment,
               plan: source.plan,
             })),
             path: process.env.PATH,
@@ -210,8 +214,11 @@ export async function prepareLocalSkillSources(
   if (state.closing) {
     await state.closing;
   }
+  const environment = options.plan?.input.environment ?? captureSkillsDiscoveryEnvironment();
   const key = JSON.stringify(
-    options.plan ? { ...request, sourcePlan: undefined, plan: options.plan } : request,
+    options.plan
+      ? { ...request, sourcePlan: undefined, plan: options.plan }
+      : { ...request, environment },
   );
   let source = state.sources.get(key);
   if (!source) {
@@ -225,7 +232,13 @@ export async function prepareLocalSkillSources(
         reason: "watch",
       });
     }
-    source = { request, plan: options.plan, watch: options.watch !== false, dirty: true };
+    source = {
+      request,
+      environment,
+      plan: options.plan,
+      watch: options.watch !== false,
+      dirty: true,
+    };
     state.sources.set(key, source);
   } else {
     // An opt-out read must not withdraw another consumer's passive observation.
@@ -255,6 +268,7 @@ export async function prepareSkillSourcePlan(
   const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config: options.config });
   const input: SkillsSourcePlanInput = {
     workspaceDir,
+    environment: captureSkillsDiscoveryEnvironment(),
     options: {
       config: options.config,
       agentId: options.agentId,
@@ -304,7 +318,10 @@ export async function projectSkillSnapshot(
   if (state.closing) {
     await state.closing;
   }
-  const result = await pool().run({ kind: "project", input }, { timeoutMs: 120_000 });
+  const result = await pool().run(
+    { kind: "project", input, environment: captureSkillsDiscoveryEnvironment() },
+    { timeoutMs: 120_000 },
+  );
   if (result.kind !== "project") {
     throw new Error("Unexpected Skills projection response");
   }
@@ -317,7 +334,10 @@ export async function prepareSkillStatusFacts(
   if (state.closing) {
     await state.closing;
   }
-  const result = await pool().run({ kind: "status", input }, { timeoutMs: 120_000 });
+  const result = await pool().run(
+    { kind: "status", input, environment: captureSkillsDiscoveryEnvironment() },
+    { timeoutMs: 120_000 },
+  );
   if (result.kind !== "status") {
     throw new Error("Unexpected Skills status response");
   }

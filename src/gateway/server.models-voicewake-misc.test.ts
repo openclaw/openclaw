@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
@@ -215,7 +216,7 @@ describe("gateway server models + voicewake", () => {
       agentDiscoveryMock.enabled = true;
       agentDiscoveryMock.models = startupModels;
       await publishConfiguredModelRuntimeSnapshots({
-        cfg: getRuntimeConfig(),
+        cfg: await captureRuntimeConfigAsyncReader()(),
       });
     };
     const readMethods = [

@@ -758,9 +758,9 @@ export default defineConfig({
       { reason: "interrupted" },
       { reason: "passed" },
       { unhandledErrors: 1 },
-      { failedModules: 5 },
+      { failedModules: 4 },
       { failedModules: 7 },
-      { suiteErrors: 5 },
+      { suiteErrors: 4 },
       { suiteErrors: 7 },
     ]) {
       faults.push([
