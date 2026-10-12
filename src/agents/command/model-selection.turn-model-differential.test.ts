@@ -151,14 +151,6 @@ vi.mock("./model-ref.js", () => ({
       : { provider: defaultProvider, model: raw };
   },
 }));
-vi.mock("./runtime-loaders.js", () => ({
-  loadTranscriptResolveRuntime: async () => ({
-    resolveSessionTranscriptFile: async (params: { sessionEntry?: SessionEntry }) => ({
-      sessionEntry: params.sessionEntry,
-      sessionFile: "/tmp/turn-model-session.jsonl",
-    }),
-  }),
-}));
 
 const { resolveEmbeddedModelSelection } = await import("./model-selection.js");
 

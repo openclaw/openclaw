@@ -93,14 +93,6 @@ export type StreamGroupOptions = StreamMessageOptions & {
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
 };
 
-export function renderSolidStreamGroupParts(
-  parts: StreamGroupPart[],
-  opts: StreamGroupOptions,
-  presentation: "standalone" | "continuation",
-) {
-  return <StreamGroupParts parts={parts} options={opts} presentation={presentation} />;
-}
-
 export function StreamGroupParts(props: {
   parts: StreamGroupPart[];
   options: StreamGroupOptions;

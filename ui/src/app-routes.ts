@@ -76,10 +76,17 @@ export type SolidRouteProps<Data = unknown> = {
   presented: boolean;
 };
 
-type AppRouteModule = {
-  render?: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
-  /** Mounted once per route renderer; props follow the current loader and presentation. */
-  renderSolid?: (props: SolidRouteProps) => JSX.Element;
+type AppRouteModule = (
+  | {
+      render: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+      renderSolid?: never;
+    }
+  | {
+      render?: never;
+      /** Mounted once per route renderer; props follow the current loader and presentation. */
+      renderSolid: (props: SolidRouteProps) => JSX.Element;
+    }
+) & {
   /** Optional lower-sidebar content owned by the same route and loader as the page. */
   renderSidebar?: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
   retainOnNavigate?: boolean;

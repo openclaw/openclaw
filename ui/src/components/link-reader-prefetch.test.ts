@@ -1,15 +1,18 @@
 /* @vitest-environment jsdom */
-import { html, nothing, render } from "lit";
+import { html, render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   PRESENTATION_CHANGED_EVENT,
   type PresentationBinding,
+  type PresentationValue,
 } from "../lit/presentation-binding.ts";
 import { installTestLinkReader, TEST_LINK_READER } from "../test-helpers/link-reader.ts";
+import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
 import { prefetchLinkReader } from "./link-reader-prefetch-request.ts";
-import { linkReaderPrefetch } from "./link-reader-prefetch.ts";
 import * as linkTargets from "./link-reader-target.ts";
+import { linkReaderPrefetchRef } from "./markdown-element-refs-solid.ts";
 
 vi.mock("./link-reader-prefetch-request.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./link-reader-prefetch-request.ts")>()),
@@ -45,14 +48,37 @@ let provider: HTMLElement;
 let idleCallbacks: Map<number, IdleRequestCallback>;
 let nextIdleHandle: number;
 let presentation: PresentationBinding | undefined;
+type PrefetchInput = readonly [string, PresentationValue, boolean];
+let view: ReturnType<typeof renderSolidRef> | undefined;
+let linkRoot: HTMLDivElement | undefined;
+let updateInput: (input: PrefetchInput) => void;
 
 function renderLinks(links = [href(1)], session = "first", active = true, connected = true) {
+  const input: PrefetchInput = [session, active ? (presentation ?? true) : false, connected];
+  const root = (linkRoot ??= document.createElement("div"));
   render(
-    html`<div ${linkReaderPrefetch(session, active ? (presentation ?? true) : false, connected)}>
-      ${links.map((url) => html`<a class="markdown-github-link" href=${url}>Item</a>`)}
-    </div>`,
-    container,
+    html`${links.map((url) => html`<a class="markdown-github-link" href=${url}>Item</a>`)}`,
+    root,
   );
+  if (view) {
+    updateInput(input);
+  } else {
+    view = renderSolidRef(
+      () => {
+        const [values, setValues] = createSignal(input);
+        updateInput = (next) => setValues(next);
+        return linkReaderPrefetchRef(values);
+      },
+      { container, targetElement: root },
+    );
+  }
+  flush();
+}
+
+function unmountLinks() {
+  view?.unmount();
+  view = undefined;
+  linkRoot = undefined;
 }
 
 function flushIdleScans() {
@@ -111,7 +137,7 @@ describe("GitHub preview warming", () => {
     observer().intersect(links);
     await vi.advanceTimersByTimeAsync(200);
     expect(prefetch).toHaveBeenCalledTimes(1);
-    // Bind the external provider after Lit connects the template's root.
+    // Keep the external provider bound while the parent refreshes.
     await show();
     const scan = vi.spyOn(container.firstElementChild!, "querySelectorAll");
     await show();
@@ -151,7 +177,7 @@ describe("GitHub preview warming", () => {
   });
 
   afterEach(() => {
-    render(nothing, container);
+    unmountLinks();
     provider.remove();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -410,7 +436,7 @@ describe("GitHub preview warming", () => {
         vi.spyOn(document, "hidden", "get").mockReturnValue(true);
         document.dispatchEvent(new Event("visibilitychange"));
       } else {
-        render(nothing, container);
+        unmountLinks();
       }
       if (!started) {
         expect(idleCallbacks.size).toBe(0);

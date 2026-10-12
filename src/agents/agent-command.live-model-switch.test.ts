@@ -445,13 +445,6 @@ vi.mock("../config/sessions.js", () => ({
   ),
 }));
 
-vi.mock("../config/sessions/transcript-resolve.runtime.js", () => ({
-  resolveSessionTranscriptFile: async (params: { sessionEntry?: SessionEntry }) => ({
-    sessionFile: params.sessionEntry?.sessionFile ?? "/tmp/session.jsonl",
-    sessionEntry: params.sessionEntry ?? { sessionId: "session-1", updatedAt: Date.now() },
-  }),
-}));
-
 vi.mock("./internal-session-effects.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./internal-session-effects.js")>()),
   prepareInternalSessionEffectsSession: (...args: unknown[]) =>

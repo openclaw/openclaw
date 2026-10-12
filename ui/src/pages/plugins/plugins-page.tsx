@@ -12,7 +12,8 @@ export const PluginsPage = defineSolidBridge<PluginsPageProps>(
   "openclaw-plugins-page",
   (props, host) => {
     const context = useApplication();
-    const [revision, setRevision] = createSignal(0);
+    // Domain notifications can arrive while a legacy child commits.
+    const [revision, setRevision] = createSignal(0, { ownedWrite: true });
     const page = new PluginsPageController({
       context: () => context,
       notify: () => setRevision((value) => value + 1),

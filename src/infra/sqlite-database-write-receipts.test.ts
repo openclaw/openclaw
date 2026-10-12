@@ -15,6 +15,7 @@ it("invalidates a scope registered by another isolate during an accepted write",
     descriptor: -1,
     descriptorOwner: 0,
     generationId: "receipt-test",
+    physicalIdentity: { key: "file:1:1", birthtime: "0" },
     generation: new SharedArrayBuffer(
       Int32Array.BYTES_PER_ELEMENT * Object.keys(SqliteDatabaseGenerationSlot).length,
     ),

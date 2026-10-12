@@ -12,7 +12,6 @@ import {
   getSubagentRunsForRequesterSession,
   getSubagentRunsForChildSession,
 } from "./subagent-registry-memory.js";
-import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import {
   isRestartRecoveryLifecycleCurrent,
   ownsSubagentSessionExecution,
@@ -23,7 +22,12 @@ import type {
   RestartRecoveryResult,
 } from "./subagent-registry-restart-recovery-types.js";
 import type { SubagentSessionEffects } from "./subagent-registry.types.js";
-import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
+import {
+  hasRequesterCompletionCohort,
+  isRequesterCompletionCohortCurrent,
+  isRequesterSettleWakeForRun,
+} from "./subagent-requester-settle-identity.js";
+import { latestSubagentRun } from "./subagent-run-generation.js";
 import { resolveCompletionFromSessionEntry } from "./subagent-session-reconciliation.js";
 
 export async function recoverInterruptedSubagentRow(
@@ -114,25 +118,16 @@ export async function recoverInterruptedSubagentRow(
         return false;
       }
       const children = new Map(
-        [...getSubagentRunsForRequesterSession(childSessionKey)]
-          .filter(
-            (child) =>
-              getLatestSubagentRunForChild(
-                getSubagentRunsForChildSession(child.childSessionKey, child.childAgentId),
-                child,
-              ) === child,
-          )
-          .map((child) => [child.runId, child]),
+        [...getSubagentRunsForRequesterSession(childSessionKey)].map((child) => [
+          child.runId,
+          child,
+        ]),
       );
       return [...children.values()].some((child) => {
         const wake = child.requesterSettleWake;
         return (
           wake?.status === "dispatching" &&
-          ((wake.requesterYieldBatch === true && wake.rearmGeneration !== undefined) ||
-            wake.batchRunIds?.some((id) => {
-              const member = children.get(id);
-              return member !== undefined && isQuietSubagentRestartContinuation(member);
-            })) &&
+          (hasRequesterCompletionCohort(child) || isQuietSubagentRestartContinuation(child)) &&
           isRequesterSettleWakeForRun({
             entry: child,
             runId,
@@ -144,6 +139,11 @@ export async function recoverInterruptedSubagentRow(
             const member = children.get(id);
             return (
               member !== undefined &&
+              isRequesterCompletionCohortCurrent(
+                member,
+                (key, matches, agentId) =>
+                  latestSubagentRun(getSubagentRunsForChildSession(key, agentId), matches) ?? null,
+              ) &&
               (member.expectsCompletionMessage === true ||
                 isQuietSubagentRestartContinuation(member)) &&
               !member.collect &&
