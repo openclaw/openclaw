@@ -161,26 +161,41 @@ describe("runTasksWithConcurrency", () => {
     const second = createTask(1);
     const third = createTask(2);
     const fourth = createTask(3);
-    const tasks = [first, second, third, fourth].map((task) => task.run);
+    const heldTasks = [first, second, third, fourth];
+    const taskSettlements: Promise<unknown>[] = [];
+    const tasks = heldTasks.map((task) => () => {
+      const result = task.run();
+      taskSettlements.push(Promise.allSettled([result]));
+      return result;
+    });
 
     const resultPromise = runTasksWithConcurrency({ tasks, limit: 2 });
-    await withTestTimeout(first.started, 1_000, "task 0 did not start");
-    await withTestTimeout(second.started, 1_000, "task 1 did not start");
+    const resultSettled = Promise.allSettled([resultPromise]);
+    try {
+      await withTestTimeout(first.started, 1_000, "task 0 did not start");
+      await withTestTimeout(second.started, 1_000, "task 1 did not start");
 
-    second.release();
-    await withTestTimeout(third.started, 1_000, "task 2 did not start after releasing task 1");
+      second.release();
+      await withTestTimeout(third.started, 1_000, "task 2 did not start after releasing task 1");
 
-    first.release();
-    await withTestTimeout(fourth.started, 1_000, "task 3 did not start after releasing task 0");
+      first.release();
+      await withTestTimeout(fourth.started, 1_000, "task 3 did not start after releasing task 0");
 
-    third.release();
-    fourth.release();
+      third.release();
+      fourth.release();
 
-    const result = await resultPromise;
-    expect(result.hasError).toBe(false);
-    expect(result.firstError).toBeUndefined();
-    expect(result.results).toEqual([1, 2, 3, 4]);
-    expect(peak).toBeLessThanOrEqual(2);
+      const result = await resultPromise;
+      expect(result.hasError).toBe(false);
+      expect(result.firstError).toBeUndefined();
+      expect(result.results).toEqual([1, 2, 3, 4]);
+      expect(peak).toBeLessThanOrEqual(2);
+    } finally {
+      for (const task of heldTasks) {
+        task.release();
+      }
+      await resultSettled;
+      await Promise.all(taskSettlements);
+    }
   });
 
   it("stops scheduling after first failure in stop mode", async () => {
@@ -248,6 +263,7 @@ describe("runTasksWithConcurrency", () => {
     const releaseInFlight = createDeferred();
     const inFlightSettled = createDeferred();
     const started: number[] = [];
+    const taskSettlements: Promise<unknown>[] = [];
     const run = runTasksWithConcurrency({
       tasks: [
         async () => {
@@ -264,19 +280,30 @@ describe("runTasksWithConcurrency", () => {
           started.push(2);
           return 30;
         },
-      ],
+      ].map((task) => () => {
+        const result = task();
+        taskSettlements.push(Promise.allSettled([result]));
+        return result;
+      }),
       limit: 2,
       errorMode: "stop",
       throwOnError: true,
     });
 
-    await expect(run).rejects.toBe(err);
-    releaseInFlight.resolve();
-    await inFlightSettled.promise;
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(started).toEqual([0, 1]);
+    const runSettled = Promise.allSettled([run]);
+    try {
+      await expect(run).rejects.toBe(err);
+      releaseInFlight.resolve();
+      await inFlightSettled.promise;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      expect(started).toEqual([0, 1]);
+    } finally {
+      releaseInFlight.resolve();
+      await runSettled;
+      await Promise.all(taskSettlements);
+    }
   });
 
   it("keeps scheduling after an early rejection in continue mode", async () => {
