@@ -16,6 +16,8 @@ export type SessionPendingInputOwner = Omit<
   authority?: SessionPendingInputAuthority;
   /** Published only after the exact input was consumed by a committed transcript write. */
   consumed?: true;
+  /** The committed aggregate retains its source owners until their turn finishes. */
+  promotedOwner?: SessionPendingInputOwner;
   /** Prompt authority is revoked; this owner still holds terminal disposition custody. */
   settling?: true;
   finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;

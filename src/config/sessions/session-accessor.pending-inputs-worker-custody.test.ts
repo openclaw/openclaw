@@ -1,16 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { authenticatedProfileUnavailableError } from "../../gateway/server-methods/gateway-client-identity.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
 import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
+import { SessionSharingProfileFactsChangedError } from "../../gateway/session-mutation-authorization-error.js";
 import { resolveSessionMutationAuthorizationAsync } from "../../gateway/session-sharing-authorization-async.js";
 import {
   roleClient,
   rolePolicyConfig,
   sharingPolicyClient,
 } from "../../gateway/session-sharing.test-utils.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { withSessionTranscriptWriteLock } from "../../plugin-sdk/session-transcript-runtime.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { StoreWriterTiming } from "../../shared/store-writer-queue.js";
@@ -23,12 +27,14 @@ import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
+  appendTranscriptMessage,
   appendTranscriptMessageSync,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
   bindSessionPendingInputSources,
+  getForeignLiveSessionPendingInputEntries,
   listSessionPendingInputs,
   stageSessionPendingInput,
   type SessionPendingInputReceipt,
@@ -184,6 +190,292 @@ describe("accepted input worker custody", () => {
         receipt = undefined;
       }
     });
+  });
+});
+
+async function withForeignCustody(
+  run: (fixture: {
+    scope: { agentId: string; sessionKey: string; sessionId: string };
+    stage: (id: string) => Promise<{
+      receipt: SessionPendingInputReceipt;
+      profileId: string;
+      authority: NonNullable<SessionPendingInputReceiptAuthority>;
+    }>;
+    receipts: SessionPendingInputReceipt[];
+  }) => Promise<void>,
+) {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = rolePolicyConfig();
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:foreign-custody",
+      sessionId: "foreign-session",
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      visibility: "read-only",
+      createdActor: { type: "human", source: "profile", id: "another-profile" },
+    });
+    const receipts: SessionPendingInputReceipt[] = [];
+    const stage = async (id: string) => {
+      const profile = ensureProfileForEmail(`foreign-${id}@example.test`);
+      setUserProfileRole(profile.id, "view");
+      const client = sharingPolicyClient({ user: profile.id });
+      const profileId = profile.id;
+      await addSessionMember(scope, { identityId: profileId, addedBy: "another-profile" });
+      const resolved = await resolveSessionMutationAuthorizationAsync({
+        client,
+        method: "chat.send",
+        requestParams: scope,
+        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
+      });
+      expect(resolved.error).toBeNull();
+      const authorization = resolved.authorization!;
+      const receipt = await stageSessionPendingInput(scope, {
+        runId: `foreign-${id}`,
+        message: {
+          role: "user",
+          content: `Original request ${id}`,
+          timestamp: 100,
+          idempotencyKey: `foreign-${id}:user`,
+        },
+        assertCurrent: authorization.assertCurrent,
+        assertAdmittedCurrent: authorization.assertCurrent,
+        authority: authorization.admittedInputAuthority,
+      });
+      if (!receipt?.runAsync || !authorization.admittedInputAuthority) {
+        throw new Error("Expected worker-prepared authorized custody");
+      }
+      receipts.push(receipt);
+      return { receipt, profileId, authority: authorization.admittedInputAuthority };
+    };
+    try {
+      await run({ scope, stage, receipts });
+    } finally {
+      for (const receipt of receipts) {
+        receipt.finish("interrupted");
+      }
+      await Promise.all(receipts.map(async (receipt) => receipt.settled?.()));
+    }
+  });
+}
+
+type SessionPendingInputReceiptAuthority = Parameters<
+  typeof stageSessionPendingInput
+>[1]["authority"];
+
+it("discovers authorized foreign live input without host SQL and observes revocation", async () => {
+  await withForeignCustody(async ({ scope, stage }) => {
+    const { receipt, profileId } = await stage("member");
+    const host = observeHostDataSql();
+    try {
+      expect(await getForeignLiveSessionPendingInputEntries(scope)).toEqual(
+        new Map([[receipt.inputId, "foreign-member:user"]]),
+      );
+      expect(host.queries).toEqual([]);
+    } finally {
+      host.restore();
+    }
+    expect(await receipt.runAsync!(() => getForeignLiveSessionPendingInputEntries(scope))).toEqual(
+      new Map(),
+    );
+    await removeSessionMember(scope, profileId);
+    expect(await getForeignLiveSessionPendingInputEntries(scope)).toEqual(new Map());
+  });
+});
+
+it.each([
+  "revoked",
+  "finished",
+  "rotated",
+  "cancelled",
+  "registered",
+  "promoted",
+  "profile-changed",
+  "non-provider-profile-changed",
+  "repeated-profile-changed",
+  "current-promoted",
+  "aggregate-revoked",
+] as const)(
+  "rechecks foreign custody after %s during another owner's authority preparation",
+  async (change) => {
+    await withForeignCustody(async ({ scope, stage, receipts }) => {
+      const first = await stage("first");
+      const second = await stage("second");
+      let aggregateMember: string | undefined;
+      if (change === "aggregate-revoked") {
+        const third = await stage("aggregate-source");
+        aggregateMember = third.profileId;
+        const aggregate = bindSessionPendingInputSources([first.receipt, third.receipt], {
+          role: "user",
+          content: "Collected requests",
+          timestamp: 100,
+          idempotencyKey: "foreign-aggregate:user",
+        })!;
+        receipts.push(aggregate);
+        await aggregate.runAsync!(() =>
+          appendTranscriptMessage(scope, { message: aggregate.message }),
+        );
+      }
+      const entered = createDeferred();
+      const release = createDeferred();
+      const enteredAgain = createDeferred();
+      const releaseAgain = createDeferred();
+      const profileRace =
+        change === "non-provider-profile-changed" || change === "repeated-profile-changed";
+      const provider = profileRace ? first : second;
+      const original = provider.authority.withCurrent.bind(provider.authority);
+      let preparations = 0;
+      const held = vi
+        .spyOn(provider.authority, "withCurrent")
+        .mockImplementation(async (consume) => {
+          preparations++;
+          if (preparations === (profileRace ? 2 : 1)) {
+            entered.resolve();
+            await release.promise;
+          } else if (change === "repeated-profile-changed" && preparations === 4) {
+            enteredAgain.resolve();
+            await releaseAgain.promise;
+          }
+          return original(consume);
+        });
+      const controller = new AbortController();
+      const discover = () => getForeignLiveSessionPendingInputEntries(scope, controller.signal);
+      const pending =
+        change === "current-promoted" ? first.receipt.runAsync!(discover) : discover();
+      const outcome = pending.then(
+        (entries) => ({ entries }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await entered.promise;
+        const expected = new Map([[second.receipt.inputId, "foreign-second:user"]]);
+        if (change === "revoked") {
+          await removeSessionMember(scope, first.profileId);
+        } else if (change === "aggregate-revoked") {
+          await removeSessionMember(scope, aggregateMember!);
+        } else if (change === "finished") {
+          first.receipt.finish("interrupted");
+        } else if (change === "rotated") {
+          rotateAgentEventLifecycleGeneration();
+          expected.clear();
+        } else if (change === "cancelled") {
+          controller.abort(new Error("Cancelled foreign discovery"));
+        } else if (change === "promoted" || change === "current-promoted") {
+          const aggregate = bindSessionPendingInputSources([first.receipt], {
+            role: "user",
+            content: "Promoted request",
+            timestamp: 100,
+            idempotencyKey: "foreign-promoted:user",
+          })!;
+          receipts.push(aggregate);
+          const promoted = await aggregate.runAsync!(() =>
+            appendTranscriptMessage(scope, { message: aggregate.message }),
+          );
+          expect(promoted).toBeDefined();
+          if (change === "promoted") {
+            expected.set(promoted!.messageId, "foreign-promoted:user");
+          }
+        } else {
+          expected.set(first.receipt.inputId, "foreign-first:user");
+          if (change === "registered") {
+            const late = await stage("late");
+            expected.set(late.receipt.inputId, "foreign-late:user");
+          } else {
+            setUserProfileRole(profileRace ? second.profileId : first.profileId, "write");
+          }
+        }
+        release.resolve();
+        if (change === "repeated-profile-changed") {
+          await enteredAgain.promise;
+          setUserProfileRole(second.profileId, "view");
+          releaseAgain.resolve();
+          expect(await outcome).toMatchObject({ error: expect.any(Error) });
+          expect(await getForeignLiveSessionPendingInputEntries(scope)).toEqual(expected);
+        } else if (change === "cancelled") {
+          expect(await outcome).toMatchObject({ error: new Error("Cancelled foreign discovery") });
+        } else {
+          expect(await outcome).toEqual({ entries: expected });
+        }
+      } finally {
+        release.resolve();
+        releaseAgain.resolve();
+        await outcome;
+        held.mockRestore();
+      }
+    });
+  },
+);
+
+it.each([
+  { failure: "worker", phase: "preparation" },
+  { failure: "worker", phase: "collection" },
+  { failure: "profile", phase: "preparation" },
+  { failure: "profile", phase: "collection" },
+] as const)(
+  "keeps live foreign custody when $failure authority fails during $phase",
+  async ({ failure, phase }) => {
+    await withForeignCustody(async ({ scope, stage }) => {
+      const first = await stage("first");
+      const second = await stage("second");
+      const error =
+        failure === "worker"
+          ? new Error("Synthetic sharing worker failure")
+          : new SessionSharingProfileFactsChangedError(
+              authenticatedProfileUnavailableError(),
+              () => ({}),
+            );
+      const original = first.authority.withCurrent.bind(first.authority);
+      let calls = 0;
+      const held = vi.spyOn(first.authority, "withCurrent").mockImplementation(async (consume) => {
+        calls++;
+        if (calls === (phase === "preparation" ? 1 : 2)) {
+          throw error;
+        }
+        return original(consume);
+      });
+      try {
+        // Inconclusive authority cannot prove that the still-live request released its input.
+        await expect(getForeignLiveSessionPendingInputEntries(scope)).rejects.toBe(error);
+      } finally {
+        held.mockRestore();
+      }
+      expect(await getForeignLiveSessionPendingInputEntries(scope)).toEqual(
+        new Map([
+          [first.receipt.inputId, "foreign-first:user"],
+          [second.receipt.inputId, "foreign-second:user"],
+        ]),
+      );
+    });
+  },
+);
+
+it("releases a revoked foreign owner after its earlier profile refresh", async () => {
+  await withForeignCustody(async ({ scope, stage }) => {
+    const provider = await stage("provider");
+    const refreshed = await stage("refreshed");
+    const original = provider.authority.withCurrent.bind(provider.authority);
+    let calls = 0;
+    // Calls 2 and 4 collect for every owner; each change lands after that pass's preparation.
+    const held = vi.spyOn(provider.authority, "withCurrent").mockImplementation(async (consume) => {
+      calls++;
+      if (calls === 2) {
+        // Membership still grants access; only the prepared profile facts become stale.
+        setUserProfileRole(refreshed.profileId, "suggest");
+      } else if (calls === 4) {
+        await removeSessionMember(scope, refreshed.profileId);
+      }
+      return original(consume);
+    });
+    try {
+      expect(await getForeignLiveSessionPendingInputEntries(scope)).toEqual(
+        new Map([[provider.receipt.inputId, "foreign-provider:user"]]),
+      );
+      expect(calls).toBe(4);
+    } finally {
+      held.mockRestore();
+    }
   });
 });
 
