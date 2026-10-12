@@ -11,7 +11,6 @@ import type {
   PluginHookLlmOutputEvent,
 } from "../../plugins/hook-types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { forgetPromptBuildDrainCacheForRun } from "../plugin-turn-context.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
 import { takeHookMessageLoader } from "./lifecycle-hook-messages.js";
 
@@ -90,7 +89,6 @@ export function runAgentHarnessLlmOutputHook(
 async function executeAgentHarnessAgentEndHook(
   params: AgentHarnessHookParams<PluginHookAgentEndEvent> & { unrefTimeout?: boolean },
 ): Promise<void> {
-  forgetPromptBuildDrainCacheForRun(params.ctx.runId);
   const loadMessages = takeHookMessageLoader(params.event);
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("agent_end")) {

@@ -18,6 +18,7 @@ import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcri
 import { withEnvAsync } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { forgetPromptBuildDrainCacheForRun } from "../plugin-turn-context.js";
+import { awaitAgentHarnessAgentEndHook } from "./lifecycle-hook-helpers.js";
 import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-harness-injection-");
@@ -61,6 +62,11 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
             });
           const first = await build();
           expect(first.prompt.match(/queued workflow context/g)).toHaveLength(1);
+          // A failed attempt ends before its retry; the retry must still see the drained note.
+          await awaitAgentHarnessAgentEndHook({
+            event: { runId: "harness-injection-run", messages: [], success: false },
+            ctx: { runId: "harness-injection-run", sessionKey, agentId: "main" },
+          });
           expect((await build()).prompt).toBe(first.prompt);
           expect(
             loadSessionEntryReadOnly({ sessionKey, storePath })?.pluginNextTurnInjections,
