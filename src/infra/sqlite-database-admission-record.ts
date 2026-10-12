@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { BigIntStats } from "node:fs";
+import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import { setEnvironmentData, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
+  isSoleDatabaseFileDescriptor,
   readDatabaseIdentityBirthtime,
   normalizeDatabasePath,
   readDatabaseFileIdentity,
@@ -284,6 +285,28 @@ export class SqliteDatabaseAdmissionRegistry {
     this.observeLocation(location, record.identity);
     this.publish(record);
     return record;
+  }
+
+  /** Only the joined lifecycle owner may release a retained descriptor. */
+  retireDescriptor(record: Admission, options: { requireSoleDescriptor?: boolean }): void {
+    if (isSqliteDatabaseAdmissionRetired(record)) {
+      return;
+    }
+    const file = fs.fstatSync(record.descriptor, { bigint: true });
+    if (
+      file.nlink > 1n ||
+      (options.requireSoleDescriptor && !isSoleDatabaseFileDescriptor(record.descriptor, file))
+    ) {
+      return;
+    }
+    const cell = new Int32Array(record.generation);
+    if (Atomics.compareExchange(cell, SqliteDatabaseGenerationSlot.retired, 0, 1) === 0) {
+      Atomics.add(cell, SqliteDatabaseGenerationSlot.schemaRevision, 1);
+      Atomics.add(cell, SqliteDatabaseGenerationSlot.factRevision, 1);
+      fs.closeSync(record.descriptor);
+    }
+    this.records.delete(record.identity);
+    this.publish(record);
   }
 
   publish(record?: Admission): void {

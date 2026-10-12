@@ -723,8 +723,8 @@ it.skipIf(process.platform !== "linux")(
       expect(() =>
         assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: fixture.state.env }),
       ).not.toThrow();
-      // Idle eviction releases custody promptly, without a TRUNCATE restart seal.
-      expect(readSqliteDatabaseCleanClose(agent.path)).toBe(false);
+      // The released worker owner seals before unrelated sidecars settle.
+      expect(readSqliteDatabaseCleanClose(agent.path)).toBe(true);
       await vi.advanceTimersByTimeAsync(4_999);
       operation.complete();
       release.resolve();
@@ -739,7 +739,7 @@ it.skipIf(process.platform !== "linux")(
       expect(() =>
         assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: fixture.state.env }),
       ).not.toThrow();
-      expect(readSqliteDatabaseCleanClose(agent.path)).toBe(false);
+      expect(readSqliteDatabaseCleanClose(agent.path)).toBe(true);
       closeOpenClawAgentDatabasesForTest(fixture.state.stateDir);
       resetGatewayWorkAdmission();
       const gate = schema.agentDatabaseIntegrityBeforeMutationSteps;

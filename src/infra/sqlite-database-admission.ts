@@ -32,10 +32,7 @@ import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-recei
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import { schemaAdmission } from "./sqlite-schema-admission.js";
-import {
-  isSoleDatabaseFileDescriptor,
-  type DatabaseFileIdentity,
-} from "./sqlite-worker-identity.js";
+import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export {
   readSqliteDatabaseAdmissions,
@@ -681,24 +678,7 @@ export function retireSqliteDatabaseAdmissionForPath(
     state.localSchemaRevisions.delete(observed);
   }
   const record = observed ? state.registry.records.get(observed) : undefined;
-  if (!record || isRetired(record)) {
-    return;
-  }
-  const file = fs.fstatSync(record.descriptor, { bigint: true });
-  if (
-    file.nlink > 1n ||
-    (options.requireSoleDescriptor && !isSoleDatabaseFileDescriptor(record.descriptor, file))
-  ) {
-    return;
-  }
-  const cell = new Int32Array(record.generation);
-  if (Atomics.compareExchange(cell, SqliteDatabaseGenerationSlot.retired, 0, 1) === 0) {
-    Atomics.add(cell, SqliteDatabaseGenerationSlot.schemaRevision, 1);
-    Atomics.add(cell, SqliteDatabaseGenerationSlot.factRevision, 1);
-    fs.closeSync(record.descriptor);
-  }
-  state.registry.records.delete(record.identity);
-  state.registry.publish(record);
+  if (record) state.registry.retireDescriptor(record, options);
 }
 
 export function getSqliteDatabaseSchemaRevision(database: DatabaseSync): number | undefined {

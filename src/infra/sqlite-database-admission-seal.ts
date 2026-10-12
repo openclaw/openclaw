@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { threadId } from "node:worker_threads";
-import { OPENCLAW_DATABASE_SEAL_SCHEMA } from "../state/openclaw-database-seal-schema.js";
+import { SQLITE_DATABASE_SEAL_SCHEMA } from "../state/openclaw-database-seal-schema.js";
 import {
   invalidateSqliteCleanCloseSeal,
   readSqliteCleanCloseSeal,
@@ -88,7 +88,7 @@ export class SqliteDatabaseCleanCloseSeals {
     this.loaded.add(record);
     const seal = readSqliteCleanCloseSeal(
       record.location,
-      OPENCLAW_DATABASE_SEAL_SCHEMA,
+      SQLITE_DATABASE_SEAL_SCHEMA,
       fs.fstatSync(record.descriptor, { bigint: true }),
     );
     if (!seal || typeof seal.facts !== "string") return;
@@ -156,7 +156,7 @@ export class SqliteDatabaseCleanCloseSeals {
           return false;
         const written = writeSqliteCleanCloseSeal(
           record.location,
-          OPENCLAW_DATABASE_SEAL_SCHEMA,
+          SQLITE_DATABASE_SEAL_SCHEMA,
           file,
           { verifiedAt, facts: serialized },
         );

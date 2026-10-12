@@ -24,6 +24,7 @@ import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/sessi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   readSqliteDatabaseCleanClose,
+  retireSqliteDatabaseAdmissionForPath,
   revokeSqliteDatabaseAdmissionsForPath,
 } from "../infra/sqlite-database-admission.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
@@ -203,7 +204,7 @@ it.for([
       sessionKey: `agent:${agentId}:retained`,
     };
     const healthyAgentId = agentId === "main" ? "worker" : "main";
-    openOpenClawAgentDatabase({ agentId: healthyAgentId, env });
+    const healthyPath = openOpenClawAgentDatabase({ agentId: healthyAgentId, env }).path;
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     await persistSessionTranscriptTurn(scope, {
       messages: [
@@ -236,6 +237,10 @@ it.for([
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     await closeStateDatabaseForTest();
+    // A new process reloads sealed facts instead of retaining the test reset's revoked cells.
+    for (const pathname of [healthyPath, agentPath]) {
+      retireSqliteDatabaseAdmissionForPath(pathname);
+    }
     if (outcome !== "fast") {
       // Unclean external mutation requires the writable owner's integrity gate.
       revokeSqliteDatabaseAdmissionsForPath(agentPath);

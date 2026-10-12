@@ -208,11 +208,15 @@ export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
   ) {
     // Lease rows use the admitted owner; legacy/native bootstrap still needs its
     // separate integrity-proven connection before the full schema can be opened.
-    return runOpenClawStateWriteTransaction(
+    const result = runOpenClawStateWriteTransaction(
       ({ db }) => callback(db),
       { env: options.env, path: database.path },
       { operationLabel: "state.startup-checkpoint.write" },
     );
+    if (options.sealOnClose) {
+      stateDbCache.closeOpenClawStateDatabaseByPath(database.path);
+    }
+    return result;
   }
   return withOpenClawStateStartupCheckpointConnection(callback, options, ensureSchema);
 }
