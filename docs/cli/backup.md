@@ -362,6 +362,10 @@ Verification and restore, including of older refs, read only the manifest,
 schema, and declared table files. Extra files are ignored and never become
 database content. Missing or non-regular declared artifacts still fail, as do
 invalid database identities, table hashes, row counts, or SQLite integrity.
+Agent restores validate the recorded supported schema version and preserve it;
+they do not migrate historical data during verification. Newer unsupported
+versions and mismatched ownership/version markers still fail. Run `openclaw
+doctor --fix` when adopting an older restored database for the current runtime.
 
 With `--all`, only agents removed from the configuration have their scopes
 pruned. If a configured agent's database is missing or cannot pass snapshot

@@ -3,11 +3,84 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { ensureOpenClawAgentSchema } from "../state/openclaw-agent-db-schema.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
+
+it("restores a supported historical agent schema without migrating its data or admitting newer versions", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-historical-agent-"));
+  const sourcePath = path.join(root, "source.sqlite");
+  const outputPath = path.join(root, "dump");
+  const targetPath = path.join(root, "restored.sqlite");
+  const version = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
+  const expected = { value: 9_223_372_036_854_775_806n, bytes: "000102FF" };
+  try {
+    const source = new DatabaseSync(sourcePath);
+    try {
+      // Build the complete historical representation through its canonical owner,
+      // rather than relabeling a current schema with an older PRAGMA.
+      ensureOpenClawAgentSchema(source, "main", sourcePath, version);
+      source.exec("CREATE TABLE compatibility_probe (value INTEGER, bytes BLOB) STRICT");
+      source
+        .prepare("INSERT INTO compatibility_probe VALUES (?, ?)")
+        .run(expected.value, Buffer.from([0, 1, 2, 255]));
+    } finally {
+      source.close();
+    }
+    const manifest = await dumpGitBackupDatabase({
+      snapshotPath: sourcePath,
+      outputPath,
+      identity: { role: "agent", agentId: "main" },
+    });
+    const restored = await restoreGitBackupDirectory({
+      sourcePath: outputPath,
+      targetPath,
+      expectedIdentity: { role: "agent", agentId: "main" },
+    });
+    expect(restored.manifest.userVersion).toBe(version);
+    expect(restored.tables.every((table) => table.ok)).toBe(true);
+    const database = new DatabaseSync(targetPath, { readOnly: true });
+    try {
+      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
+      const statement = database.prepare(
+        "SELECT value, hex(bytes) AS bytes FROM compatibility_probe",
+      );
+      statement.setReadBigInts(true);
+      expect(statement.get()).toEqual(expected);
+      expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
+    } finally {
+      database.close();
+    }
+
+    for (const invalidVersion of [
+      OPENCLAW_AGENT_SCHEMA_VERSION,
+      OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+    ]) {
+      await fs.writeFile(
+        path.join(outputPath, "manifest.json"),
+        JSON.stringify({
+          ...manifest,
+          userVersion: invalidVersion,
+        }),
+      );
+      const refusedTarget = path.join(root, `invalid-${invalidVersion}.sqlite`);
+      await expect(
+        restoreGitBackupDirectory({
+          sourcePath: outputPath,
+          targetPath: refusedTarget,
+          expectedIdentity: { role: "agent", agentId: "main" },
+        }),
+      ).rejects.toThrow(/schema version/u);
+      await expect(fs.stat(refusedTarget)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-text-"));

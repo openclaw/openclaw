@@ -17,7 +17,12 @@ import {
 } from "../infra/sqlite-schema-sql.js";
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
+import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
+import {
+  assertAgentSchemaVersion,
+  assertSupportedAgentSchemaVersion,
+  getOpenClawAgentMigrationSchema,
+} from "../state/openclaw-agent-db-schema-helpers.js";
 import { getOpenClawStateRuntimeSchema } from "../state/openclaw-state-schema-compatibility.js";
 import {
   AGENT_SECRET_TABLE_NAMES,
@@ -466,9 +471,25 @@ function validateRestoredOwner(
   database: DatabaseSync,
   databasePath: string,
   identity: GitBackupIdentity,
+  userVersion: number,
 ): void {
   assertSqliteIntegrity(database, databasePath);
-  buildSnapshotValidator(identity)(database, databasePath);
+  if (identity.role === "agent") {
+    assertOpenClawAgentDatabaseOwner(database, {
+      agentId: identity.agentId,
+      pathname: databasePath,
+    });
+    assertSupportedAgentSchemaVersion(database, databasePath);
+    // Restore the recorded representation; current-runtime admission and migration
+    // belong to Doctor, not lossless verification of a historical Git snapshot.
+    assertAgentSchemaVersion(
+      database,
+      { agentId: identity.agentId, pathname: databasePath, version: userVersion },
+      getOpenClawAgentMigrationSchema(userVersion),
+    );
+  } else {
+    buildSnapshotValidator(identity)(database, databasePath);
+  }
 }
 
 /** Load and hash one JSONL table without retaining the whole artifact. */
@@ -623,9 +644,9 @@ export async function restoreGitBackupDirectory(params: {
     database.exec(
       restoreIdentity.role === "global"
         ? getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false })
-        : OPENCLAW_AGENT_SCHEMA_SQL,
+        : getOpenClawAgentMigrationSchema(manifest.userVersion),
     );
-    validateRestoredOwner(database, stagedPath, restoreIdentity);
+    validateRestoredOwner(database, stagedPath, restoreIdentity, manifest.userVersion);
     const tables: GitBackupTableResult[] = [];
     for (const [table, expected] of Object.entries(manifest.tables)) {
       const actual = await serializeGitBackupTable(database, table);
@@ -651,7 +672,7 @@ export async function restoreGitBackupDirectory(params: {
       validatePublished: async (publishedPath) => {
         const published = openNodeSqliteDatabase(publishedPath, { readOnly: true });
         try {
-          validateRestoredOwner(published, publishedPath, restoreIdentity);
+          validateRestoredOwner(published, publishedPath, restoreIdentity, manifest.userVersion);
         } finally {
           published.close();
         }
