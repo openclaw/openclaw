@@ -1,5 +1,4 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
-import { createDedupeCache } from "../../../infra/dedupe.js";
 import { isValidAgentId, normalizeAgentIdStrict } from "../../../routing/session-key.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -96,17 +95,21 @@ export function resolveSubagentChildAuthority(
   };
 }
 
-const legacyWarnings = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
+// Legacy runs are a closed population (new runs record ownership), so this set stays bounded;
+// an LRU smaller than that population re-warned every run on every recovery sweep.
+const warnedLegacyRuns = new Set<string>();
 export function warnLegacySubagentAuthority(
   entry: SubagentRunRecord,
   warn: (message: string, meta?: Record<string, unknown>) => void,
 ): void {
-  if (
-    resolveSubagentChildAuthority(entry).status !== "legacy-unverified" ||
-    legacyWarnings.check(JSON.stringify([entry.runId, entry.createdAt, entry.generation]))
-  ) {
+  if (resolveSubagentChildAuthority(entry).status !== "legacy-unverified") {
     return;
   }
+  const key = JSON.stringify([entry.runId, entry.createdAt, entry.generation]);
+  if (warnedLegacyRuns.has(key)) {
+    return;
+  }
+  warnedLegacyRuns.add(key);
   warn(
     "Subagent original session identity or lifecycle revision is unavailable; requester work continues with child-session effects suppressed.",
     { runId: entry.runId },
