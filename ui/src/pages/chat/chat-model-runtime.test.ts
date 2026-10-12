@@ -6,7 +6,7 @@ import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { switchChatModel } from "./chat-session.ts";
-import { renderChatModelControls } from "./components/chat-model-controls.ts";
+import { renderChatModelControls } from "./components/chat-model-controls.tsx";
 
 const model: ModelCatalogEntry = {
   id: "gpt-5.6-sol",

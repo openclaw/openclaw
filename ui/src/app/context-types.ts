@@ -14,7 +14,7 @@ import type {
 } from "../lib/chat/chat-types.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import type { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.ts";
+import type { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.tsx";
 import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ControlUiPluginCapability } from "../plugins/control-ui-capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";

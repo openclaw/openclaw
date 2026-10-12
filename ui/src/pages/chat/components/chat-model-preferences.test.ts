@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { nothing, render } from "lit";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
-import { renderChatModelControls } from "./chat-model-controls.ts";
+import { renderChatModelControls } from "./chat-model-controls.tsx";
 
 type Props = Parameters<typeof renderChatModelControls>[0];
 

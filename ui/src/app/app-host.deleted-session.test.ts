@@ -29,7 +29,7 @@ import {
   consumePaneSessionHandoff,
   preparePaneSessionHandoff,
 } from "../pages/chat/chat-pane-shared.ts";
-import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.tsx";
 /* @vitest-environment jsdom */
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";

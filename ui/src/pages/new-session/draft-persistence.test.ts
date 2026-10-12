@@ -5,7 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.tsx";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { restoreDraft, retainDraft } from "./draft-navigation-handoff.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
