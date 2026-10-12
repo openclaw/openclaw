@@ -1,19 +1,28 @@
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../cron/normalize.js";
+import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import type { GatewayCronServiceContract } from "../gateway/server-cron-contract.js";
+import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import type { PluginHookGatewayCronService } from "./hook-gateway.types.js";
+import type { OpenClawPluginServiceContext } from "./plugin-registration.types.js";
+
+type PluginServiceCron = NonNullable<
+  ReturnType<NonNullable<OpenClawPluginServiceContext["getCron"]>>
+>;
 
 export type PluginServiceCronHost = Pick<
   GatewayCronServiceContract,
-  Exclude<keyof PluginHookGatewayCronService, "isEnabled"> | "status"
+  Exclude<keyof PluginHookGatewayCronService, "isEnabled"> | "status" | "enqueueRun"
 >;
 
 export function createPluginServiceCronGetter(params: {
   getCron: () => PluginServiceCronHost | null | undefined;
   lease: PluginRuntimeCapabilityLease;
   isStopping: () => boolean;
-}): () => PluginHookGatewayCronService | undefined {
-  let current: { cron: PluginServiceCronHost; service: PluginHookGatewayCronService } | undefined;
+  resolveGatewayContext?: GatewayContextResolver;
+}): () => PluginServiceCron | undefined {
+  const runScheduled = createScheduledGatewayRunner(params.resolveGatewayContext);
+  let current: { cron: PluginServiceCronHost; service: PluginServiceCron } | undefined;
   const assertServiceActive = () => {
     params.lease.assertActive("cron scheduler");
     if (params.isStopping()) {
@@ -37,7 +46,11 @@ export function createPluginServiceCronGetter(params: {
     };
     // A retained handle owns one scheduler. Recheck at the store lock, not only
     // before awaiting it, so replacement cannot admit an old queued write.
-    const service: PluginHookGatewayCronService = {
+    const service: PluginServiceCron = {
+      enqueueRun: async (id, mode) => {
+        commitGuard();
+        return await runScheduled(() => cron.enqueueRun(id, mode, { commitGuard }));
+      },
       isEnabled: async () => {
         commitGuard();
         const { enabled } = await cron.status();

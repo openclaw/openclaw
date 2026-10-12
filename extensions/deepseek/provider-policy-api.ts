@@ -3,9 +3,6 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-typ
 import { DEEPSEEK_MODEL_CATALOG } from "./models.js";
 import { resolveDeepSeekV4ThinkingProfile } from "./thinking.js";
 
-type ModelDefinitionDraft = Partial<ModelDefinitionConfig> &
-  Pick<ModelDefinitionConfig, "id" | "name">;
-
 type CatalogMetadataSnapshot = Pick<ModelDefinitionConfig, "contextWindow" | "cost" | "maxTokens">;
 
 // Onboarding wrote these catalog-owned values into user config in prior releases.
@@ -34,19 +31,6 @@ const PREVIOUS_BUNDLED_METADATA: Record<string, CatalogMetadataSnapshot> = {
 };
 
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-
-/**
- * Build a lookup from the bundled DeepSeek model catalog so we can hydrate
- * missing metadata (contextWindow, cost, maxTokens) into user-configured
- * model rows without overwriting explicit overrides.
- */
-function buildCatalogIndex(): Map<string, ModelDefinitionConfig> {
-  const index = new Map<string, ModelDefinitionConfig>();
-  for (const model of DEEPSEEK_MODEL_CATALOG) {
-    index.set(model.id, model);
-  }
-  return index;
-}
 
 function isPositiveNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -82,7 +66,7 @@ function hasSameCost(left: unknown, right: ModelDefinitionConfig["cost"] | undef
 }
 
 function isShippedZeroCostAliasSnapshot(
-  raw: ModelDefinitionDraft,
+  raw: ModelDefinitionConfig,
   previous: CatalogMetadataSnapshot | undefined,
 ): boolean {
   return (
@@ -94,7 +78,7 @@ function isShippedZeroCostAliasSnapshot(
 }
 
 function isPreviousBundledMetadataSnapshot(
-  raw: ModelDefinitionDraft,
+  raw: ModelDefinitionConfig,
   previous: CatalogMetadataSnapshot | undefined,
 ): boolean {
   if (!previous) {
@@ -122,65 +106,53 @@ export function normalizeConfig(params: {
     return providerConfig;
   }
 
-  const catalog = buildCatalogIndex();
+  const catalog = new Map(DEEPSEEK_MODEL_CATALOG.map((model) => [model.id, model]));
   let mutated = false;
 
   const nextModels = providerConfig.models.map((model) => {
-    const raw = model as ModelDefinitionDraft;
-    const catalogEntry = catalog.get(raw.id);
+    const catalogEntry = catalog.get(model.id);
     if (!catalogEntry) {
       return model;
     }
-    const previousEntry = PREVIOUS_BUNDLED_METADATA[raw.id];
-    const hasPreviousBundledMetadata = isPreviousBundledMetadataSnapshot(raw, previousEntry);
-
-    let modelMutated = false;
-    const patched: Record<string, unknown> = {};
+    const hasPreviousBundledMetadata = isPreviousBundledMetadataSnapshot(
+      model,
+      PREVIOUS_BUNDLED_METADATA[model.id],
+    );
+    const patched: Partial<ModelDefinitionConfig> = {};
 
     // Refresh only whole snapshots written by prior releases. A partial match can
     // be an intentional user cap, so per-field refresh would silently erase it.
-    if (
-      (!isPositiveNumber(raw.contextWindow) ||
-        (hasPreviousBundledMetadata && raw.contextWindow !== catalogEntry.contextWindow)) &&
-      isPositiveNumber(catalogEntry.contextWindow)
-    ) {
-      patched.contextWindow = catalogEntry.contextWindow;
-      modelMutated = true;
+    for (const key of ["contextWindow", "maxTokens"] as const) {
+      if (
+        (!isPositiveNumber(model[key]) ||
+          (hasPreviousBundledMetadata && model[key] !== catalogEntry[key])) &&
+        isPositiveNumber(catalogEntry[key])
+      ) {
+        patched[key] = catalogEntry[key];
+      }
     }
 
-    // Hydrate maxTokens from catalog when missing or not a positive number.
     if (
-      (!isPositiveNumber(raw.maxTokens) ||
-        (hasPreviousBundledMetadata && raw.maxTokens !== catalogEntry.maxTokens)) &&
-      isPositiveNumber(catalogEntry.maxTokens)
-    ) {
-      patched.maxTokens = catalogEntry.maxTokens;
-      modelMutated = true;
-    }
-
-    // Hydrate missing cost or refresh a known catalog-owned snapshot from a prior release.
-    if (
-      (!hasCostValues(raw.cost) || hasPreviousBundledMetadata) &&
+      (!hasCostValues(model.cost) || hasPreviousBundledMetadata) &&
       hasCostValues(catalogEntry.cost) &&
-      !hasSameCost(raw.cost, catalogEntry.cost)
+      !hasSameCost(model.cost, catalogEntry.cost)
     ) {
       patched.cost = catalogEntry.cost;
-      modelMutated = true;
     }
 
-    if (!modelMutated) {
+    if (Object.keys(patched).length === 0) {
       return model;
     }
 
     mutated = true;
-    return { ...raw, ...patched };
+    return { ...model, ...patched };
   });
 
   if (!mutated) {
     return providerConfig;
   }
 
-  return { ...providerConfig, models: nextModels as ModelDefinitionConfig[] };
+  return { ...providerConfig, models: nextModels };
 }
 
 export function resolveThinkingProfile(params: { provider: string; modelId: string }) {

@@ -1,16 +1,18 @@
-// Session path helpers keep stores and transcripts inside agent-owned session directories.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { safeRealpathSync } from "../../infra/boundary-path.js";
-import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
+import { expandHomePrefix, resolveRequiredHomeDir, resolveUserPath } from "../../infra/home-dir.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  resolveExplicitIncognitoAgentSqliteTarget,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import { resolveStateDir } from "../state-dir.js";
 import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
 
@@ -25,6 +27,15 @@ export type SessionStorePathScope = {
 export function resolveExplicitSessionStorePathForScope(
   scope: SessionStorePathScope,
 ): string | undefined {
+  const explicit = resolveExplicitIncognitoAgentSqliteTarget(scope.storePath, {
+    agentId: isIncognitoSessionKey(scope.sessionKey)
+      ? resolveAgentIdFromSessionKey(scope.sessionKey)
+      : scope.agentId,
+    env: scope.env,
+  });
+  if (explicit) {
+    return explicit.path;
+  }
   if (isIncognitoSessionKey(scope.sessionKey)) {
     return resolveIncognitoOpenClawAgentSqlitePath({
       agentId: resolveAgentIdFromSessionKey(scope.sessionKey),
@@ -42,7 +53,7 @@ export function resolveConcreteSessionStorePath(storePath: string | undefined): 
   return trimmed;
 }
 
-function resolveAgentSessionsDir(
+export function resolveSessionTranscriptsDirForAgent(
   agentId: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
@@ -55,16 +66,8 @@ function resolveAgentSessionsDir(
   return path.join(root, "agents", id, "sessions");
 }
 
-export function resolveSessionTranscriptsDirForAgent(
-  agentId: string,
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
-): string {
-  return resolveAgentSessionsDir(agentId, env, homedir);
-}
-
 export function resolveDefaultSessionStorePath(agentId: string): string {
-  return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
+  return path.join(resolveSessionTranscriptsDirForAgent(agentId), "sessions.json");
 }
 
 /** Store selectors and explicit databases share the owning agent's session artifact directory. */
@@ -119,10 +122,7 @@ function resolveSessionsDir(opts?: SessionFilePathOptions): string {
   if (sessionsDir) {
     return path.resolve(sessionsDir);
   }
-  if (!opts?.agentId?.trim()) {
-    throw new Error("Session storage path requires an explicit agent id.");
-  }
-  return resolveAgentSessionsDir(opts.agentId);
+  return resolveSessionTranscriptsDirForAgent(opts?.agentId ?? "");
 }
 
 function resolvePathFromAgentSessionsDir(
@@ -172,17 +172,10 @@ function resolveSiblingAgentSessionsDir(
 ): string | undefined {
   // Multi-agent stores share a common .../agents/<id>/sessions shape; sibling resolution keeps
   // persisted absolute files portable across active agent stores.
-  const resolvedBase = path.resolve(baseSessionsDir);
-  if (path.basename(resolvedBase) !== "sessions") {
-    return undefined;
-  }
-  const baseAgentDir = path.dirname(resolvedBase);
-  const baseAgentsDir = path.dirname(baseAgentDir);
-  if (path.basename(baseAgentsDir) !== "agents") {
-    return undefined;
-  }
-  const rootDir = path.dirname(baseAgentsDir);
-  return path.join(rootDir, "agents", normalizeAgentId(agentId), "sessions");
+  const agentsDir = resolveAgentsDirFromSessionStorePath(
+    path.join(baseSessionsDir, "sessions.json"),
+  );
+  return agentsDir ? path.join(agentsDir, normalizeAgentId(agentId), "sessions") : undefined;
 }
 
 function resolveAgentSessionsPathParts(
@@ -268,7 +261,7 @@ function resolvePathWithinSessionsDir(
         }
       }
       return resolvePathFromAgentSessionsDir(
-        resolveAgentSessionsDir(normalizedAgentId),
+        resolveSessionTranscriptsDirForAgent(normalizedAgentId),
         realTrimmed,
       );
     };
@@ -330,7 +323,11 @@ export function resolveSessionTranscriptPath(
   agentId: string,
   topicId?: string | number,
 ): string {
-  return resolveSessionTranscriptPathInDir(sessionId, resolveAgentSessionsDir(agentId), topicId);
+  return resolveSessionTranscriptPathInDir(
+    sessionId,
+    resolveSessionTranscriptsDirForAgent(agentId),
+    topicId,
+  );
 }
 export function resolveSessionFilePathCore(
   sessionId: string,
@@ -367,6 +364,15 @@ export function resolveSessionStorePathCore(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) {
+  return resolveSessionStorePathWithContext(store, opts, { cwd: resolveUserPath(".") });
+}
+
+/** Internal async readers capture their relative-path base before yielding. */
+export function resolveSessionStorePathWithContext(
+  store: string | undefined,
+  opts: { agentId?: string; env?: NodeJS.ProcessEnv } | undefined,
+  context: { cwd: string },
+) {
   const env = opts?.env ?? process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   if (!store) {
@@ -374,35 +380,27 @@ export function resolveSessionStorePathCore(
       throw new SessionStoreAgentIdRequiredError();
     }
     const agentId = normalizeAgentId(opts.agentId);
-    return path.join(resolveAgentSessionsDir(agentId, env, homedir), "sessions.json");
+    return path.join(resolveSessionTranscriptsDirForAgent(agentId, env, homedir), "sessions.json");
   }
-  if (store.includes("{agentId}")) {
+  let expandedStore = store;
+  if (expandedStore.includes("{agentId}")) {
     if (!opts?.agentId?.trim()) {
       throw new SessionStoreAgentIdRequiredError();
     }
     const agentId = normalizeAgentId(opts.agentId);
-    const expanded = store.replaceAll("{agentId}", agentId);
-    if (expanded.startsWith("~")) {
-      return path.resolve(
-        expandHomePrefix(expanded, {
-          home: resolveRequiredHomeDir(env, homedir),
-          env,
-          homedir,
-        }),
-      );
-    }
-    return path.resolve(expanded);
+    expandedStore = expandedStore.replaceAll("{agentId}", agentId);
   }
-  if (store.startsWith("~")) {
+  if (expandedStore.startsWith("~")) {
     return path.resolve(
-      expandHomePrefix(store, {
+      context.cwd,
+      expandHomePrefix(expandedStore, {
         home: resolveRequiredHomeDir(env, homedir),
         env,
         homedir,
       }),
     );
   }
-  return path.resolve(store);
+  return path.resolve(context.cwd, expandedStore);
 }
 
 export function resolveAgentsDirFromSessionStorePath(storePath: string): string | undefined {

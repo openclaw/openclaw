@@ -217,15 +217,14 @@ describe("AppSidebar session source lifecycle", () => {
     await menu.updateComplete;
     expect(menu.forkFromLastCompleted).toBe(true);
     menu.onAction({ kind: "fork" });
+    await vi.dynamicImportSettled();
 
-    await vi.waitFor(() =>
-      expect(sessions.create).toHaveBeenCalledWith({
-        parentSessionKey: "agent:main:active",
-        fork: true,
-        forkFrom: "last-completed",
-        agentId: "main",
-      }),
-    );
+    expect(sessions.create).toHaveBeenCalledWith({
+      parentSessionKey: "agent:main:active",
+      fork: true,
+      forkFrom: "last-completed",
+      agentId: "main",
+    });
   });
 
   it("resets per-agent cached results when the sessions source changes", async () => {
@@ -312,7 +311,7 @@ describe("AppSidebar session source lifecycle", () => {
     await sidebar.updateComplete;
     const cachedResult = sidebar.sessionData.sessionsResult;
     const pinnedEntry = () =>
-      sidebar.querySelector(`[data-sidebar-entry="session:${key}"] [data-session-key="${key}"]`);
+      sidebar.querySelector(`.sidebar-rail [data-sidebar-entry="session:${key}"] a`);
 
     expect(pinnedEntry()).not.toBeNull();
 
@@ -339,7 +338,22 @@ describe("AppSidebar session source lifecycle", () => {
     reconnectList.resolve(unpinned.result);
     await vi.waitFor(() => expect(sessions.canonicalListRevision).toBe(2));
     await sidebar.updateComplete;
+    expect(pinnedEntry()).not.toBeNull();
+    expect(sidebar.sidebarEntries).toEqual([`session:${key}`]);
+    sidebar.onUpdateSidebarEntries = (entries) => {
+      sidebar.sidebarEntries = entries;
+    };
+    await sidebar.sidebarMenus.preloadMenuRenderer();
+    pinnedEntry()!.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+    );
+    await sidebar.updateComplete;
+    sidebar
+      .querySelector(".sidebar-rail-pin-menu")!
+      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "remove" } } }));
+    await sidebar.updateComplete;
     expect(pinnedEntry()).toBeNull();
+    expect(sidebar.sidebarEntries).toEqual([]);
   });
 
   it("clears cached session views when the Gateway connection changes", async () => {

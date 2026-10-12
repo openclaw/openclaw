@@ -1,22 +1,12 @@
 // Whatsapp socket shutdown confirms the underlying Baileys transport is closed.
 import type { WASocket } from "baileys";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 const SOCKET_CLOSE_TIMEOUT_MS = 15_000;
 
 async function withCloseTimeout(task: Promise<unknown>, operationName: string): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([
-    task,
-    new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`WhatsApp ${operationName} timed out`)),
-        SOCKET_CLOSE_TIMEOUT_MS,
-      );
-    }),
-  ]).finally(() => {
-    if (timer) {
-      clearTimeout(timer);
-    }
+  await withTimeout(task, SOCKET_CLOSE_TIMEOUT_MS, {
+    message: `WhatsApp ${operationName} timed out`,
   });
 }
 

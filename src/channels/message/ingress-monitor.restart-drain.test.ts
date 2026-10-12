@@ -98,8 +98,8 @@ function runRestartDrainFixture(stateDir: string): Promise<RestartDrainProof> {
     let failure: Error | undefined;
     let stderr = "";
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
-    const startupTimer = setTimeout(() => {
-      failure = new Error("Gateway restart fixture did not commit drain within 30 seconds");
+    const completionTimer = setTimeout(() => {
+      failure = new Error("Gateway restart fixture did not finish within 30 seconds");
       child.kill();
     }, 30_000);
     childStderr.setEncoding("utf8");
@@ -111,11 +111,14 @@ function runRestartDrainFixture(stateDir: string): Promise<RestartDrainProof> {
         return;
       }
       if (message.type === "ingress-restart-drain-committed") {
-        clearTimeout(startupTimer);
         idleTimer = setTimeout(() => {
           failure = new Error("Ingress did not become idle within 3 seconds of restart drain");
           child.kill();
         }, 3_000);
+        return;
+      }
+      if (message.type === "ingress-restart-idle") {
+        clearTimeout(idleTimer);
         return;
       }
       if (message.type === "ingress-restart-proof" && "proof" in message) {
@@ -126,7 +129,7 @@ function runRestartDrainFixture(stateDir: string): Promise<RestartDrainProof> {
       failure = error;
     });
     child.on("close", (code, signal) => {
-      clearTimeout(startupTimer);
+      clearTimeout(completionTimer);
       clearTimeout(idleTimer);
       if (failure) {
         reject(

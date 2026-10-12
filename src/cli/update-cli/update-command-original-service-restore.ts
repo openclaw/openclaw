@@ -2,6 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import { readDaemonRuntimePinForInstall } from "../../daemon/runtime-pin-state.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { fingerprintGatewayServiceDefinition } from "../../daemon/service-rebind.js";
+import {
+  hasGatewayServiceDefinitionOverrides,
+  resolveManagedGatewayServiceCommand,
+} from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import {
@@ -16,6 +20,7 @@ export async function restoreOriginalManagedServiceDefinition(params: {
   original: OriginalManagedServiceRuntime;
   run: NonNullable<UpdateCommandOptions["run"]>;
   assertCurrent: () => void;
+  onGatewayStartAttempted?: () => void;
   stdout: NodeJS.WritableStream;
   timeoutMs?: number;
 }): Promise<void> {
@@ -55,7 +60,7 @@ export async function restoreOriginalManagedServiceDefinition(params: {
           throw new Error("Service replacement is not this update's own rebind.");
         }
         const command = original.definition.command;
-        if (command.managedOverrides || command.managedDefinition || command.reloadPending) {
+        if (hasGatewayServiceDefinitionOverrides(command) || command.reloadPending) {
           throw new Error(
             "Retained service has operator-owned definition overrides; restoration refused.",
           );
@@ -63,6 +68,7 @@ export async function restoreOriginalManagedServiceDefinition(params: {
         if (expectedPin.revision !== original.definition.reboundRuntimePin) {
           throw new Error("Runtime intent changed after this update rebind; restoration refused.");
         }
+        const definition = resolveManagedGatewayServiceCommand(command) ?? command;
         await resolveGatewayService().install({
           env,
           stdout: params.stdout,
@@ -78,11 +84,12 @@ export async function restoreOriginalManagedServiceDefinition(params: {
               true,
             );
             assertOwned();
+            params.onGatewayStartAttempted?.();
           },
-          programArguments: [...command.programArguments],
-          workingDirectory: command.workingDirectory,
-          environment: { ...command.environment },
-          environmentValueSources: { ...command.environmentValueSources },
+          programArguments: [...definition.programArguments],
+          workingDirectory: definition.workingDirectory,
+          environment: { ...definition.environment },
+          environmentValueSources: { ...definition.environmentValueSources },
         });
         assertOwned();
         const restored = await resolveGatewayService().readCommand(env, { requireEffective: true });

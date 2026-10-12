@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
 import { resolveOpenClawPluginToolsForOptions } from "../agents/openclaw-plugin-tools.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -8,8 +8,10 @@ import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationRegistryScope } from "./runtime/generation-state.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import { acquirePluginToolInspectionRegistry } from "./tools.js";
+import { resolveRuntimeWebSearchProviders } from "./web-search-providers.runtime.js";
 
 afterEach(() => {
   clearPluginMetadataLifecycleCaches();
@@ -35,7 +37,10 @@ function writeToolPlugin(params: {
     path.join(params.root, "openclaw.plugin.json"),
     JSON.stringify({
       id: params.id,
-      contracts: { tools: [`${params.id}_tool`] },
+      contracts: {
+        tools: [`${params.id}_tool`],
+        ...(params.id === "shared" ? { webSearchProviders: ["inspection-search"] } : {}),
+      },
       configSchema: { type: "object", additionalProperties: false },
     }),
   );
@@ -49,6 +54,14 @@ module.exports = { id: ${JSON.stringify(params.id)}, register(api) {
   event("register", { mode: api.registrationMode });
   api.lifecycle.onDispose(() => event("dispose"));
   if (${params.failure === "registration"}) throw new Error("fixture admission failed");
+  if (${params.id === "shared"}) {
+    api.registerWebSearchProvider({
+      id: "inspection-search", label: "Inspection search", hint: "Synthetic search",
+      envVars: [], placeholder: "", signupUrl: "https://example.com", credentialPath: "",
+      getCredentialValue() {}, setCredentialValue() {},
+      createTool() { throw new Error("Inspection must not execute search providers"); }
+    });
+  }
   api.registerTool((context) => {
     const details = { agentId: context.agentId, workspaceDir: context.workspaceDir };
     event("factory", details);
@@ -148,6 +161,25 @@ describe("plugin tool inspection ownership", () => {
                 );
               const alphaTools = resolve(scopes[0]!);
               const betaTools = resolve(scopes[1]!);
+              const registry = inspection.registry;
+              assert(registry, "Expected the selected inspection registry");
+              const resolveProviders = () =>
+                resolveRuntimeWebSearchProviders({
+                  config,
+                  onlyPluginIds: ["shared"],
+                  manifestRecords: loadContext.manifestRegistry?.plugins,
+                });
+              const resolveSearch = (generation: boolean) =>
+                withPluginRuntimeRegistryScope(inspection.registry, () =>
+                  generation
+                    ? withPluginRuntimeGenerationRegistryScope(registry, resolveProviders)
+                    : resolveProviders(),
+                );
+              for (const generation of [false, true]) {
+                expect(resolveSearch(generation).map((provider) => provider.id)).toEqual([
+                  "inspection-search",
+                ]);
+              }
               expect(alphaTools.map((tool) => tool.name)).toEqual(["shared_tool"]);
               expect(betaTools.map((tool) => tool.name).toSorted()).toEqual([
                 "shared_tool",
@@ -203,6 +235,11 @@ describe("plugin tool inspection ownership", () => {
                   .toSorted(),
               ).toEqual(["broken", "shared", "worker"]);
               expect(() => resolve(scopes[0]!)).toThrow("Plugin tool inspection has been released");
+              for (const generation of [false, true]) {
+                expect(() => resolveSearch(generation)).toThrow(
+                  "Plugin tool inspection has been released",
+                );
+              }
             } finally {
               await inspection.release();
             }

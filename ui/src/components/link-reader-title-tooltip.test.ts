@@ -7,6 +7,7 @@ import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import type { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
+import { settleTooltip } from "./tooltip.test-support.ts";
 
 const runtimeLoad = vi.hoisted(() => {
   let release!: () => void;
@@ -153,6 +154,7 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
       (inside ? provider : document.body).append(control);
       control.focus();
       await vi.advanceTimersByTimeAsync(200);
+      await settleTooltip(tooltip()!);
       expect(titleIsOpen()).toBe(true);
       expect(tooltip()?.content).toBe("Ordinary title hint");
       control.blur();
@@ -278,6 +280,7 @@ it("keeps rendered GitHub links free of native titles across preview closure and
   await vi.advanceTimersByTimeAsync(200);
   const tooltip =
     document.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip");
+  await settleTooltip(tooltip!);
   expect(tooltip?.content).toBe("Read the documentation");
   expect(
     tooltip?.shadowRoot?.querySelector<HTMLElement & { open: boolean }>("wa-tooltip")?.open,

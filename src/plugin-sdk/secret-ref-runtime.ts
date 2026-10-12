@@ -3,11 +3,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
+import { createSecretFileAtomic } from "@openclaw/fs-safe/secret";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginIntegrationSecretProviderConfig } from "../config/types.secrets.js";
-import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import {
   assertValidPluginModelProviderId,
   assertValidPluginSecretProviderAlias,
@@ -19,8 +20,6 @@ import {
   resolveTrustedExecutablePath,
   resolveTrustedPlanDirectoryPath,
 } from "../secrets/trusted-plan-path.js";
-
-type PlanFileIdentity = { dev: bigint; ino: bigint };
 
 type SecretRefSetupCommand = {
   command(name: string): SecretRefSetupCommand;
@@ -80,7 +79,10 @@ type PluginSecretRefSetupCliParams = {
 };
 
 function throwPlanFileError(error: unknown, planPath: string): never {
-  if ((error as NodeJS.ErrnoException)?.code === "EEXIST") {
+  if (
+    (error as NodeJS.ErrnoException)?.code === "EEXIST" ||
+    (error instanceof FsSafeError && error.code === "secret-exists")
+  ) {
     throw new Error(`Plan path already exists; choose a new --plan-out path: ${planPath}`, {
       cause: error,
     });
@@ -102,45 +104,18 @@ async function writeSecretPlanFile(params: {
     ).catch((error: unknown) => throwPlanFileError(error, params.planPath));
     return;
   }
-  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-  let identity: PlanFileIdentity | undefined;
   try {
-    handle = await fs.open(params.planPath, "wx", 0o600);
-    identity = await handle.stat({ bigint: true });
-    await handle.chmod(0o600);
-    if (((await handle.stat()).mode & 0o777) !== 0o600) {
-      throw new Error("Unable to verify owner-only permissions for the generated plan file.");
-    }
-    const pathStat = await fs.lstat(params.planPath, { bigint: true });
-    const handleStat = await handle.stat({ bigint: true });
-    // Keep the pathname and open handle bound to the same new file before secrets are written.
-    if (
-      pathStat.isSymbolicLink() ||
-      !sameFileIdentity(identity, handleStat) ||
-      !sameFileIdentity(identity, pathStat)
-    ) {
-      throw new Error("Generated plan path changed during permission setup.");
-    }
-    await handle.writeFile(params.content, "utf8");
-    await handle.sync();
+    const rootDir = await fs.realpath(path.dirname(params.planPath));
+    await createSecretFileAtomic({
+      rootDir,
+      filePath: path.join(rootDir, path.basename(params.planPath)),
+      content: params.content,
+      // Plans can live in trusted, readable directories without changing their permissions.
+      dirMode: (await fs.stat(rootDir)).mode & 0o7777,
+      durable: "file",
+    });
   } catch (error) {
-    await handle?.close().catch(() => undefined);
-    if ((error as NodeJS.ErrnoException)?.code === "EEXIST") {
-      throwPlanFileError(error, params.planPath);
-    }
-    if (identity) {
-      try {
-        const current = await fs.lstat(params.planPath, { bigint: true });
-        if (!current.isSymbolicLink() && sameFileIdentity(current, identity)) {
-          await fs.rm(params.planPath, { force: true });
-        }
-      } catch {
-        // The write failure is authoritative; cleanup is best effort.
-      }
-    }
-    throw error;
-  } finally {
-    await handle?.close().catch(() => undefined);
+    throwPlanFileError(error, params.planPath);
   }
 }
 
@@ -256,22 +231,23 @@ export function createPluginSecretRefSetupCli(params: PluginSecretRefSetupCliPar
     };
   };
 
+  const parseMapping = (value: string, flag: string, targetPlaceholder: string) => {
+    const separator = value.indexOf("=");
+    if (separator <= 0 || separator === value.length - 1) {
+      throw new Error(
+        `Invalid ${flag} value "${value}". Use <${targetPlaceholder}>=<${params.secretIdPlaceholder}>.`,
+      );
+    }
+    return [value.slice(0, separator).trim(), value.slice(separator + 1).trim()] as const;
+  };
+
   const parseProviderKeyMappings = (values: string[] | undefined): SecretRefProviderMapping[] =>
     (values ?? []).map((value) => {
-      const separator = value.indexOf("=");
-      if (separator <= 0 || separator === value.length - 1) {
-        throw new Error(
-          `Invalid --provider-key value "${value}". Use <model-provider-id>=<${params.secretIdPlaceholder}>.`,
-        );
-      }
-      const providerId = value.slice(0, separator).trim();
+      const [providerId, secretId] = parseMapping(value, "--provider-key", "model-provider-id");
       assertValidPluginModelProviderId("--provider-key", providerId);
       return {
         providerId,
-        secretId: params.normalizeSecretId(
-          `--provider-key ${providerId}`,
-          value.slice(separator + 1).trim(),
-        ),
+        secretId: params.normalizeSecretId(`--provider-key ${providerId}`, secretId),
       };
     });
 
@@ -279,20 +255,9 @@ export function createPluginSecretRefSetupCli(params: PluginSecretRefSetupCliPar
     values: string[] | undefined,
   ): SecretRefConfigTargetMapping[] =>
     (values ?? []).map((value) => {
-      const separator = value.indexOf("=");
-      if (separator <= 0 || separator === value.length - 1) {
-        throw new Error(
-          `Invalid --target value "${value}". Use <openclaw-config-path>=<${params.secretIdPlaceholder}>.`,
-        );
-      }
-      const target = parsePluginSecretTargetSpecifier(
-        params.productName,
-        value.slice(0, separator).trim(),
-      );
-      const secretId = params.normalizeSecretId(
-        `--target ${target.path}`,
-        value.slice(separator + 1).trim(),
-      );
+      const [targetPath, valueId] = parseMapping(value, "--target", "openclaw-config-path");
+      const target = parsePluginSecretTargetSpecifier(params.productName, targetPath);
+      const secretId = params.normalizeSecretId(`--target ${target.path}`, valueId);
       return Object.assign(
         { path: target.path, secretId },
         target.agentId ? { agentId: target.agentId } : {},

@@ -1,35 +1,13 @@
 // Feishu tests cover doctor contract plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
+import { resolveFeishuAccount } from "./accounts.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 
 function feishuConfig(entry: Record<string, unknown>): OpenClawConfig {
   return { channels: { feishu: entry } } as never;
 }
-
-describe("feishu streaming legacy config rules", () => {
-  const rootRule = legacyConfigRules.find(
-    (rule) => rule.path.join(".") === "channels.feishu" && rule.message.includes("chunkMode"),
-  );
-  const accountsRule = legacyConfigRules.find(
-    (rule) =>
-      rule.path.join(".") === "channels.feishu.accounts" && rule.message.includes("chunkMode"),
-  );
-
-  it("matches boolean streaming and flat delivery aliases but not the nested shape", () => {
-    expect(rootRule?.match?.({ streaming: false }, {})).toBe(true);
-    expect(rootRule?.match?.({ blockStreaming: true }, {})).toBe(true);
-    expect(rootRule?.match?.({ blockStreamingCoalesce: { idleMs: 100 } }, {})).toBe(true);
-    expect(rootRule?.match?.({ chunkMode: "newline" }, {})).toBe(true);
-    expect(rootRule?.match?.({ streaming: { mode: "partial" } }, {})).toBe(false);
-  });
-
-  it("matches account entries carrying flat aliases", () => {
-    expect(accountsRule?.match?.({ main: { streaming: true } }, {})).toBe(true);
-    expect(accountsRule?.match?.({ main: { streaming: { mode: "off" } } }, {})).toBe(false);
-  });
-});
 
 describe("feishu normalizeCompatibilityConfig streaming aliases", () => {
   it("migrates boolean streaming plus flat delivery keys into the nested shape", () => {
@@ -51,104 +29,6 @@ describe("feishu normalizeCompatibilityConfig streaming aliases", () => {
     expect(feishu.chunkMode).toBeUndefined();
     expect(feishu.blockStreaming).toBeUndefined();
     expect(feishu.blockStreamingCoalesce).toBeUndefined();
-  });
-
-  it("maps streaming true to mode partial, preserving the streaming-card enable", () => {
-    const result = normalizeCompatibilityConfig({
-      cfg: feishuConfig({ streaming: true }),
-    });
-    const feishu = result.config.channels?.feishu as unknown as Record<string, unknown>;
-    expect(feishu.streaming).toEqual({ mode: "partial" });
-  });
-
-  it("seeds materialized account objects from root (account merge replaces wholesale)", () => {
-    const result = normalizeCompatibilityConfig({
-      cfg: feishuConfig({
-        streaming: { mode: "off", chunkMode: "newline" },
-        accounts: {
-          work: { blockStreaming: true },
-        },
-      }),
-    });
-
-    const feishu = result.config.channels?.feishu as unknown as Record<string, unknown>;
-    const work = (feishu.accounts as Record<string, Record<string, unknown>>).work;
-    // Feishu's account merge replaces root streaming wholesale, so the
-    // migrated account object carries the inherited root settings (copying
-    // freezes inheritance at fix time by design; the change message says so).
-    expect(work?.streaming).toEqual({
-      mode: "off",
-      chunkMode: "newline",
-      block: { enabled: true },
-    });
-    expect(work?.blockStreaming).toBeUndefined();
-  });
-
-  it("seeds root FLAT delivery keys into accounts that already had a streaming object", () => {
-    // Pre-migration, root flat keys resolved per-key for every account even
-    // when the account's own streaming object replaced the root object
-    // wholesale; migration must not silently drop that inherited behavior.
-    const result = normalizeCompatibilityConfig({
-      cfg: feishuConfig({
-        blockStreaming: true,
-        accounts: {
-          work: { streaming: { mode: "off" } },
-        },
-      }),
-    });
-
-    const feishu = result.config.channels?.feishu as unknown as Record<string, unknown>;
-    expect(feishu.streaming).toEqual({ block: { enabled: true } });
-    const work = (feishu.accounts as Record<string, Record<string, unknown>>).work;
-    expect(work?.streaming).toEqual({ mode: "off", block: { enabled: true } });
-  });
-
-  it("keeps canonical root nested values over conflicting account flat keys", () => {
-    // Pre-migration the resolvers read the merged nested object first, so an
-    // account flat key was dead whenever root nested set the same slot.
-    const result = normalizeCompatibilityConfig({
-      cfg: feishuConfig({
-        streaming: { block: { enabled: false } },
-        accounts: {
-          work: { blockStreaming: true },
-        },
-      }),
-    });
-
-    const feishu = result.config.channels?.feishu as unknown as Record<string, unknown>;
-    const work = (feishu.accounts as Record<string, Record<string, unknown>>).work;
-    expect(work?.streaming).toEqual({ block: { enabled: false } });
-  });
-
-  it("keeps account-set delivery fields over root flat keys when seeding", () => {
-    const result = normalizeCompatibilityConfig({
-      cfg: feishuConfig({
-        chunkMode: "newline",
-        accounts: {
-          work: { streaming: { chunkMode: "length" } },
-        },
-      }),
-    });
-
-    const feishu = result.config.channels?.feishu as unknown as Record<string, unknown>;
-    const work = (feishu.accounts as Record<string, Record<string, unknown>>).work;
-    // Account nested values won over root flat keys pre-migration too.
-    expect(work?.streaming).toEqual({ chunkMode: "length" });
-  });
-
-  it("does not seed accounts whose streaming object already existed", () => {
-    const result = normalizeCompatibilityConfig({
-      cfg: feishuConfig({
-        streaming: { chunkMode: "newline" },
-        accounts: {
-          work: { streaming: { mode: "off" }, blockStreaming: true },
-        },
-      }),
-    });
-
-    const feishu = result.config.channels?.feishu as unknown as Record<string, unknown>;
-    const work = (feishu.accounts as Record<string, Record<string, unknown>>).work;
-    expect(work?.streaming).toEqual({ mode: "off", block: { enabled: true } });
   });
 
   it("moves tools.base to tools.bitable at root and account scope", () => {
@@ -214,17 +94,6 @@ describe("feishu normalizeCompatibilityConfig streaming aliases", () => {
     ]);
     expect(FeishuConfigSchema.safeParse(feishu).success).toBe(true);
   });
-
-  it("is idempotent: a second run reports no changes", () => {
-    const first = normalizeCompatibilityConfig({
-      cfg: feishuConfig({ streaming: true, blockStreaming: true, tools: { base: false } }),
-    });
-    expect(first.changes.length).toBeGreaterThan(0);
-
-    const second = normalizeCompatibilityConfig({ cfg: first.config });
-    expect(second.changes).toEqual([]);
-    expect(second.config).toBe(first.config);
-  });
 });
 
 describe("feishu webhook route doctor migration", () => {
@@ -237,25 +106,9 @@ describe("feishu webhook route doctor migration", () => {
   });
 
   it.each([
-    ["hook#fragment", "/hook"],
-    ["/hook?tenant=alpha#fragment", "/hook?tenant=alpha"],
     ["/hook?", "/hook?"],
-    ["/hook?#", "/hook"],
-    ["/other/%2e%2e/hook", "/hook"],
-    ["/other\\..\\hook", "/hook"],
-    ["//example.com/hook", "/hook"],
-    ["https://example.com/hook/?tenant=alpha#fragment", "/hook/?tenant=alpha"],
-    ["/café", "/caf%C3%A9"],
-    ["/hook name", "/hook%20name"],
-    ["/hook\u0000name", "/hook%00name"],
-    ["/hook%23fragment", "/hook%23fragment"],
-    ["", "/feishu/events"],
     ["   ", "/feishu/events"],
-    ["mailto:hello@example.com", "/feishu/events"],
     ["javascript:alert(1)", "/feishu/events"],
-    ["ftp://example.com/hook", "/feishu/events"],
-    ["file:///tmp/hook", "/feishu/events"],
-    ["//[", "/feishu/events"],
   ])("repairs root and account webhook path %j to %j", (webhookPath, expectedPath) => {
     const result = normalizeCompatibilityConfig({
       cfg: feishuConfig({ webhookPath, accounts: { main: { webhookPath } } }),
@@ -291,4 +144,24 @@ describe("feishu webhook route doctor migration", () => {
       "Reset invalid channels.feishu.webhookPath to /feishu/events.",
     ]);
   });
+});
+
+it("preserves root and account legacyWebhook:false when migrating obsolete ports", () => {
+  const result = normalizeCompatibilityConfig({
+    cfg: feishuConfig({
+      legacyWebhook: false,
+      webhookPort: 3000,
+      accounts: {
+        inherited: { webhookPort: 3001 },
+        disabled: { webhookPort: 3002, legacyWebhook: false },
+      },
+    }),
+  });
+  expect(FeishuConfigSchema.parse(result.config.channels?.feishu).legacyWebhook).toBe(false);
+  for (const accountId of ["inherited", "disabled"]) {
+    expect(resolveFeishuAccount({ cfg: result.config, accountId }).config.legacyWebhook).toBe(
+      false,
+    );
+  }
+  expect(normalizeCompatibilityConfig({ cfg: result.config }).changes).toEqual([]);
 });

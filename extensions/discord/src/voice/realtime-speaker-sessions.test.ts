@@ -431,14 +431,14 @@ defineDiscordVoiceTests(
       let leaving: ReturnType<typeof manager.leave> | undefined;
       try {
         pendingProvider.close.mockReturnValueOnce(pending.promise);
-        close.mockImplementationOnce(
-          function (this: InstanceType<typeof DiscordRealtimeSpeakerSession>) {
-            close.mockRestore();
-            return Promise.resolve(this.close()).then(() => {
-              throw new Error("Speaker cleanup failed");
-            });
-          },
-        );
+        close.mockImplementationOnce(function (
+          this: InstanceType<typeof DiscordRealtimeSpeakerSession>,
+        ) {
+          close.mockRestore();
+          return Promise.resolve(this.close()).then(() => {
+            throw new Error("Speaker cleanup failed");
+          });
+        });
         leaving = manager.leave({ guildId: entry.guildId });
         await vi.waitFor(() =>
           expect(loggerWarnMock).toHaveBeenCalledWith(

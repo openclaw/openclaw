@@ -1,11 +1,16 @@
+import type {
+  TerminalExitEvent,
+  TerminalOpenResult,
+} from "../../../packages/gateway-protocol/src/schema/terminal.js";
 import type { TerminalUploadFile, TerminalUploadResult } from "../../infra/terminal-file-upload.js";
-import type { LocalTerminalBackendSpawner, TerminalBackend } from "./backend.js";
+import type { spawnTerminalPty } from "../../process/terminal-pty.js";
+import type { TerminalBackend } from "./backend.js";
 import type { TerminalOutputController } from "./output-flow-control.js";
 import type { TerminalOutputRing } from "./output-ring.js";
 
 export type TerminalEventSink = (connId: string, event: string, payload: unknown) => void;
 
-export type TerminalExitReason = "process_exit" | "closed" | "disconnected" | "detached" | "error";
+export type TerminalExitReason = NonNullable<TerminalExitEvent["reason"]>;
 
 export type AgentTerminalOwner = {
   kind: "agent";
@@ -50,11 +55,14 @@ export type TerminalSession = {
 };
 
 export type TerminalSessionManagerOptions = {
+  withOpenAdmission?: (
+    request: TerminalOpenRequest,
+    run: (request: TerminalOpenRequest) => Promise<TerminalOpenOutcome>,
+  ) => Promise<TerminalOpenOutcome>;
   emit: TerminalEventSink;
   getBufferedAmount?: (connId: string) => number | undefined;
-  spawn?: LocalTerminalBackendSpawner;
+  spawn?: typeof spawnTerminalPty;
   maxSessions?: number;
-  env?: NodeJS.ProcessEnv;
   /** Detach grace; 0 preserves kill-on-disconnect. Gateway wiring owns its default. */
   detachGraceMs?: number;
   maxDetachedSessions?: number;
@@ -80,7 +88,7 @@ export type TerminalOpenRequest = {
 };
 
 export type TerminalOpenOutcome =
-  | { ok: true; sessionId: string; agentId: string; cwd: string; shell: string }
+  | ({ ok: true } & Omit<TerminalOpenResult, "confined" | "title">)
   | { ok: false; code: "limit" | "spawn_failed" | "closed"; message: string };
 
 export type TerminalAgentActionOutcome =

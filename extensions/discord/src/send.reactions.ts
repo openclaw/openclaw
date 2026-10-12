@@ -8,7 +8,6 @@ import {
 import {
   buildReactionIdentifier,
   createDiscordClient,
-  formatReactionEmoji,
   normalizeReactionEmoji,
 } from "./send.shared.js";
 import type { DiscordReactionSummary, DiscordReactOpts } from "./send.types.js";
@@ -17,41 +16,21 @@ function resolveDiscordReactionClient(opts: DiscordReactOpts) {
   if (opts.rest && opts.cfg && opts.accountId) {
     return createDiscordClient(opts);
   }
-  if (!opts.cfg) {
-    throw new Error(
-      "Discord reactions requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-    );
-  }
   const cfg = requireRuntimeConfig(opts.cfg, "Discord reactions");
   return createDiscordClient({ ...opts, cfg });
 }
 
-export async function reactMessageDiscord(
-  channelId: string,
-  messageId: string,
-  emoji: string,
-  opts: DiscordReactOpts,
-) {
-  const { rest, request } = resolveDiscordReactionClient(opts);
-  const encoded = normalizeReactionEmoji(emoji);
-  await request(() => createOwnMessageReaction(rest, channelId, messageId, encoded), "react");
-  return { ok: true };
+function reactionMutation(operation: typeof createOwnMessageReaction, label: string) {
+  return async (channelId: string, messageId: string, emoji: string, opts: DiscordReactOpts) => {
+    const { rest, request } = resolveDiscordReactionClient(opts);
+    const encoded = normalizeReactionEmoji(emoji);
+    await request(() => operation(rest, channelId, messageId, encoded), label);
+    return { ok: true };
+  };
 }
 
-export async function removeReactionDiscord(
-  channelId: string,
-  messageId: string,
-  emoji: string,
-  opts: DiscordReactOpts,
-) {
-  const { rest, request } = resolveDiscordReactionClient(opts);
-  const encoded = normalizeReactionEmoji(emoji);
-  await request(
-    () => deleteOwnMessageReaction(rest, channelId, messageId, encoded),
-    "reaction-remove",
-  );
-  return { ok: true };
-}
+export const reactMessageDiscord = reactionMutation(createOwnMessageReaction, "react");
+export const removeReactionDiscord = reactionMutation(deleteOwnMessageReaction, "reaction-remove");
 
 export async function removeOwnReactionsDiscord(
   channelId: string,
@@ -99,9 +78,6 @@ export async function fetchReactionsDiscord(
     "reaction-list",
   );
   const reactions = message.reactions ?? [];
-  if (reactions.length === 0) {
-    return [];
-  }
   const limit =
     typeof opts.limit === "number" && Number.isFinite(opts.limit)
       ? Math.min(Math.max(Math.floor(opts.limit), 1), 100)
@@ -122,7 +98,7 @@ export async function fetchReactionsDiscord(
       emoji: {
         id: reaction.emoji.id ?? null,
         name: reaction.emoji.name ?? null,
-        raw: formatReactionEmoji(reaction.emoji),
+        raw: identifier,
       },
       count: reaction.count,
       users: users.map((user) => ({

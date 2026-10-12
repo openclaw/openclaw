@@ -18,16 +18,9 @@ vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
 
 import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";
 
+type CompletionParams = Parameters<typeof completeWithPreparedSimpleCompletionModel>[0];
 const context = { messages: [{ role: "user" as const, content: "pong", timestamp: 1 }] };
-
-function completionRequests() {
-  return mocks.complete.mock.calls.map(([model, completionContext, options]) => ({
-    model,
-    context: completionContext,
-    options,
-  }));
-}
-
+const auth = { apiKey: "test-key", source: "test", mode: "api-key" } as const;
 const baseModel = {
   provider: "openai",
   id: "gpt-5.4",
@@ -40,6 +33,20 @@ const baseModel = {
   contextWindow: 128000,
   maxTokens: 4096,
 } satisfies Model<"openai-responses">;
+
+function complete(
+  params: Omit<CompletionParams, "context" | "auth"> & { auth?: CompletionParams["auth"] },
+) {
+  return completeWithPreparedSimpleCompletionModel({ context, auth, ...params });
+}
+
+function completionRequests() {
+  return mocks.complete.mock.calls.map(([model, completionContext, options]) => ({
+    model,
+    context: completionContext,
+    options,
+  }));
+}
 
 beforeEach(() => {
   mocks.complete.mockReset();
@@ -60,6 +67,87 @@ describe("prepared completion import boundary", () => {
 });
 
 describe("completeWithPreparedSimpleCompletionModel", () => {
+  it.each<{
+    name: string;
+    patch?: Partial<Model>;
+    reasoning: NonNullable<CompletionParams["options"]>["reasoning"];
+    expected?: string;
+    preparedApi?: string;
+  }>([
+    {
+      name: "custom Ultra",
+      patch: { provider: "custom", id: "synthetic-model" },
+      reasoning: "ultra",
+      expected: "high",
+    },
+    {
+      name: "non-reasoning Ultra",
+      patch: { provider: "custom", id: "synthetic-model", reasoning: false },
+      reasoning: "ultra",
+      expected: "off",
+    },
+    {
+      name: "disabled native effort",
+      patch: { compat: { supportsReasoningEffort: false } },
+      reasoning: "ultra",
+    },
+    { name: "explicit max", reasoning: "max", expected: "max" },
+    { name: "explicit off", reasoning: "off", expected: "off" },
+    { name: "native Ultra", reasoning: "ultra", expected: "xhigh" },
+    { name: "adaptive", reasoning: "adaptive", expected: "medium" },
+    { name: "unspecified", reasoning: undefined },
+    {
+      name: "prepared Sonnet alias",
+      patch: {
+        provider: "anthropic",
+        id: "production-sonnet",
+        name: "Production Sonnet",
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+        params: { canonicalModelId: "claude-sonnet-5" },
+      },
+      reasoning: "off",
+      expected: "off",
+      preparedApi: "openclaw-provider-simple:anthropic:production-sonnet",
+    },
+  ])(
+    "preserves transport reasoning for $name",
+    async ({ patch, reasoning, expected, preparedApi }) => {
+      const model: Model = { ...baseModel, ...patch };
+      const preparedModel = preparedApi ? { ...model, api: preparedApi } : model;
+      mocks.prepareModel.mockReturnValueOnce(preparedModel);
+      await complete({ model, options: { reasoning } });
+      if (expected === undefined) {
+        expect(completionRequests()[0]?.options).not.toHaveProperty("reasoning");
+      }
+      expect(completionRequests()).toEqual([
+        {
+          model: preparedModel,
+          context,
+          options: { ...(expected ? { reasoning: expected } : {}), apiKey: auth.apiKey },
+        },
+      ]);
+    },
+  );
+
+  it("passes only selected auth facts to transport preparation", async () => {
+    await complete({
+      model: baseModel,
+      auth: {
+        apiKey: "test-access-token",
+        source: "profile:test",
+        profileId: "test:profile",
+        mode: "oauth",
+        authFlow: "test-subscription",
+      },
+    });
+    expect(mocks.prepareModel.mock.calls[0]?.[0]).toMatchObject({
+      auth: { mode: "oauth", authFlow: "test-subscription" },
+    });
+    expect(mocks.prepareModel.mock.calls[0]?.[0]).not.toHaveProperty("auth.apiKey");
+    expect(completionRequests()[0]?.options.apiKey).toBe("test-access-token");
+  });
+
   it("stops before transport preparation when its owner retires during host initialization", async () => {
     const retired = new Error("Completion owner retired.");
     let current = true;
@@ -71,106 +159,72 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
         }
       },
     });
-    const completion = completeWithPreparedSimpleCompletionModel({
-      model,
-      auth: { apiKey: "test-key", source: "test", mode: "api-key" },
-      context,
-    });
+    const completion = complete({ model });
     current = false;
-
     await expect(completion).rejects.toBe(retired);
     expect(mocks.prepareModel).not.toHaveBeenCalled();
     expect(mocks.complete).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "openai-completions",
-    "openai-responses",
-    "anthropic-messages",
-    "google-generative-ai",
-  ] as const)(
-    "gives standalone OpenCode %s completions distinct routing identities",
-    async (api) => {
-      for (let index = 0; index < 2; index++) {
-        await completeWithPreparedSimpleCompletionModel({
-          model: {
-            ...baseModel,
-            api,
-            provider: "opencode-go",
-            baseUrl: "https://opencode.ai/zen/go/v1",
-          },
-          auth: { apiKey: "test-key", source: "test", mode: "api-key" },
-          context,
-        });
-      }
-      const [first, second] = completionRequests();
-      const firstId = first?.options.headers?.["x-opencode-session"];
-      const secondId = second?.options.headers?.["x-opencode-session"];
-      expect(firstId).toEqual(expect.any(String));
-      expect(firstId.length).toBeGreaterThan(0);
-      expect(secondId).toEqual(expect.any(String));
-      expect(secondId).not.toBe(firstId);
-      expect(first?.options.sessionId).toBeUndefined();
-    },
-  );
-
-  it.each<{
-    options: { headers: Record<string, string>; sessionId?: string };
-    expected: Record<string, string>;
-  }>([
-    {
-      options: { headers: { "X-OpenCode-Session": "caller-owned", "X-Custom": "keep" } },
-      expected: { "X-OpenCode-Session": "caller-owned", "X-Custom": "keep" },
-    },
-    {
-      options: { sessionId: "conversation-a", headers: { "X-Custom": "keep" } },
-      expected: { "x-opencode-session": "conversation-a", "X-Custom": "keep" },
-    },
-  ])("preserves caller routing options $options", async ({ options, expected }) => {
-    const original = structuredClone(options);
+  it("gives standalone OpenCode completions distinct routing identities", async () => {
     for (let index = 0; index < 2; index++) {
-      await completeWithPreparedSimpleCompletionModel({
+      await complete({
         model: { ...baseModel, provider: "opencode-go", baseUrl: "https://opencode.ai/zen/go/v1" },
-        auth: { apiKey: "test-key", source: "test", mode: "api-key" },
-        context,
-        options,
       });
     }
-    expect(completionRequests().map((request) => request.options.headers)).toEqual([
-      expected,
-      expected,
-    ]);
-    expect(options).toEqual(original);
+    const [first, second] = completionRequests();
+    const firstId = first?.options.headers?.["x-opencode-session"];
+    const secondId = second?.options.headers?.["x-opencode-session"];
+    expect(firstId).toEqual(expect.any(String));
+    expect(firstId.length).toBeGreaterThan(0);
+    expect(secondId).toEqual(expect.any(String));
+    expect(secondId).not.toBe(firstId);
+    expect(first?.options.sessionId).toBeUndefined();
   });
 
-  it("preserves an explicit model routing header", async () => {
-    const model = {
+  it.each<{
+    name: string;
+    patch?: Partial<Model>;
+    options?: CompletionParams["options"];
+    expectedHeaders?: Record<string, string>;
+  }>([
+    {
+      name: "caller header",
+      options: { headers: { "X-OpenCode-Session": "caller-owned", "X-Custom": "keep" } },
+      expectedHeaders: { "X-OpenCode-Session": "caller-owned", "X-Custom": "keep" },
+    },
+    {
+      name: "caller session",
+      options: { sessionId: "conversation-a", headers: { "X-Custom": "keep" } },
+      expectedHeaders: { "x-opencode-session": "conversation-a", "X-Custom": "keep" },
+    },
+    { name: "model header", patch: { headers: { "X-OpenCode-Session": "caller-owned" } } },
+    { name: "proxy endpoint", patch: { baseUrl: "https://proxy.example/v1" } },
+    { name: "insecure endpoint", patch: { baseUrl: "http://opencode.ai/zen/go/v1" } },
+  ])("preserves routing options for $name", async ({ patch, options, expectedHeaders }) => {
+    const original = structuredClone(options);
+    const model: Model = {
       ...baseModel,
       provider: "opencode-go",
       baseUrl: "https://opencode.ai/zen/go/v1",
-      headers: { "X-OpenCode-Session": "caller-owned" },
+      ...patch,
     };
-    await completeWithPreparedSimpleCompletionModel({
-      model,
-      auth: { apiKey: "test-key", source: "test", mode: "api-key" },
-      context,
+    const originalModelHeaders = structuredClone(model.headers);
+    for (let index = 0; index < 2; index++) {
+      await complete({ model, options });
+    }
+    expect(completionRequests().map((request) => request.options.headers)).toEqual([
+      expectedHeaders,
+      expectedHeaders,
+    ]);
+    expect(completionRequests()[0]?.model.headers).toEqual(originalModelHeaders);
+    expect(completionRequests()[0]?.options).toEqual({
+      ...options,
+      apiKey: auth.apiKey,
+      ...(expectedHeaders ? { headers: expectedHeaders } : {}),
     });
-    const [request] = completionRequests();
-    expect(request?.model.headers).toEqual({ "X-OpenCode-Session": "caller-owned" });
-    expect(request?.options.headers).toBeUndefined();
+    expect(options).toEqual(original);
   });
-
-  it.each(["https://proxy.example/v1", "http://opencode.ai/zen/go/v1"])(
-    "does not add routing identity to %s",
-    async (baseUrl) => {
-      await completeWithPreparedSimpleCompletionModel({
-        model: { ...baseModel, provider: "opencode-go", baseUrl },
-        auth: { apiKey: "test-key", source: "test", mode: "api-key" },
-        context,
-      });
-      expect(completionRequests()[0]?.options).toEqual({ apiKey: "test-key" });
-    },
-  );
 
   it("prepares provider-owned stream APIs before running a completion", async () => {
     const model = {
@@ -189,112 +243,26 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       models: { providers: { ollama: { baseUrl: "http://remote-ollama:11434", models: [] } } },
     };
     mocks.prepareModel.mockReturnValueOnce(preparedModel);
-
-    await completeWithPreparedSimpleCompletionModel({
+    await complete({
       model,
       auth: { apiKey: "ollama-local", source: "models.json (local marker)", mode: "api-key" },
       cfg,
-      context,
     });
-
     expect(mocks.prepareModel).toHaveBeenCalledWith({
       apiRegistry: expect.anything(),
       model,
       cfg,
+      auth: { mode: "api-key", authFlow: undefined },
     });
     expect(completionRequests()).toEqual([
       { model: preparedModel, context, options: { apiKey: "ollama-local" } },
     ]);
   });
 
-  it.each([
-    ["openai", "gpt-5.4", "max", "max"],
-    ["openai", "gpt-5.4", "off", "off"],
-    ["kimi", "k3", "max", "max"],
-    ["kimi", "k3", "off", "off"],
-    ["anthropic", "claude-opus-4-7", "max", "max"],
-    ["anthropic", "claude-opus-4-7", "off", "off"],
-    ["google", "gemini-3-pro-preview", "off", "off"],
-    ["openai", "gpt-5.4", "ultra", "max"],
-    ["openai", "gpt-5.4", "adaptive", "medium"],
-    ["openai", "gpt-5.4", undefined, undefined],
-  ] as const)(
-    "preserves %s/%s reasoning %s for its transport",
-    async (provider, id, reasoning, expected) => {
-      const model: Model = { ...baseModel, provider, id, name: id };
-      await completeWithPreparedSimpleCompletionModel({
-        model,
-        auth: { apiKey: "sk-test", source: "env:OPENAI_API_KEY", mode: "api-key" },
-        context,
-        options: { reasoning },
-      });
-      expect(completionRequests()).toEqual([
-        {
-          model,
-          context,
-          options: { ...(expected ? { reasoning: expected } : {}), apiKey: "sk-test" },
-        },
-      ]);
-    },
-  );
-
-  it.each([undefined, "default", "priority"] as const)(
-    "passes service tier %s to simple completions",
-    async (serviceTier) => {
-      await completeWithPreparedSimpleCompletionModel({
-        model: baseModel,
-        auth: { apiKey: "test", source: "test", mode: "api-key" },
-        context,
-        options: serviceTier ? { serviceTier } : {},
-      });
-      expect(completionRequests()[0]?.options).toEqual({
-        apiKey: "test",
-        ...(serviceTier ? { serviceTier } : {}),
-      });
-    },
-  );
-
   it("carries strict visibility internally without adding a wire option", async () => {
-    await completeWithPreparedSimpleCompletionModel({
-      model: baseModel,
-      auth: { apiKey: "test", source: "models.json", mode: "api-key" },
-      context,
-      options: { strictReasoningTags: true },
-    });
+    await complete({ model: baseModel, options: { strictReasoningTags: true } });
     const options = mocks.complete.mock.calls[0]?.[2] as object | undefined;
     expect(reasoningTagTextPolicy.isStrict(options)).toBe(true);
     expect(Object.keys(options ?? {})).toEqual(["apiKey"]);
-  });
-
-  it("preserves explicit off for a prepared Claude Sonnet 5 alias", async () => {
-    const model = {
-      provider: "anthropic",
-      id: "production-sonnet",
-      name: "Production Sonnet",
-      api: "anthropic-messages",
-      baseUrl: "https://api.anthropic.com",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      params: { canonicalModelId: "claude-sonnet-5" },
-    } satisfies Model<"anthropic-messages">;
-    const preparedModel = {
-      ...model,
-      api: "openclaw-provider-simple:anthropic:production-sonnet",
-    } satisfies Model;
-    mocks.prepareModel.mockReturnValueOnce(preparedModel);
-
-    await completeWithPreparedSimpleCompletionModel({
-      model,
-      auth: { apiKey: "sk-test", source: "env:ANTHROPIC_API_KEY", mode: "api-key" },
-      context,
-      options: { reasoning: "off" },
-    });
-
-    expect(completionRequests()).toEqual([
-      { model: preparedModel, context, options: { reasoning: "off", apiKey: "sk-test" } },
-    ]);
   });
 });

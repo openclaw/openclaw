@@ -36,6 +36,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
       // Restore this probe when transformed Fetch bodies forward cancellation under Bun.
       testContext.skip();
     }
+    const timesOut = mode === "late-preparation" || mode === "callback-tail";
     const roots = createSyncSuiteTempRootTracker("exec-reviewer-resources");
     const root = fs.realpathSync(roots.makeTempDir());
     fs.mkdirSync(path.join(root, "provider"));
@@ -195,6 +196,9 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
               agentId: "main",
               reviewer: { timeoutMs: 5000 },
             });
+            if (timesOut) {
+              vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+            }
             first = parent.track(() => reviewer(input));
             const started = mode === "late-preparation" ? heldWorkStarted.promise : arrived.promise;
             await Promise.race([
@@ -210,7 +214,13 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
               await heldWorkStarted.promise;
             }
             if (mode !== "overlap") {
+              if (timesOut) {
+                await vi.advanceTimersByTimeAsync(5000);
+              }
               const decision = await first;
+              if (timesOut) {
+                vi.useRealTimers();
+              }
               // Only project the public decision; prepared objects include runtime environment data.
               expect(decision).toMatchObject({
                 decision: "ask",
@@ -255,6 +265,9 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
               await after[Symbol.asyncDispose]();
             }
           } finally {
+            if (timesOut) {
+              vi.useRealTimers();
+            }
             finishWork.resolve();
             requests.forEach(finish);
             await first?.catch(() => {});

@@ -128,8 +128,15 @@ export async function readArtwork(shell: Locator) {
     );
     const canvasLabel = color(description ? getComputedStyle(description).color : mutedColor);
     const transcriptColor = transcript ? color(getComputedStyle(transcript).color) : null;
-    const placeholder = composer?.querySelector("textarea");
-    const placeholderStyle = placeholder ? getComputedStyle(placeholder, "::placeholder") : null;
+    // Ellipsized composers paint a sibling while the native placeholder is
+    // transparent. Measure the element that supplies the visible hint.
+    const placeholder = composer?.querySelector(".agent-chat__composer-placeholder");
+    const textarea = composer?.querySelector("textarea");
+    const placeholderStyle = placeholder
+      ? getComputedStyle(placeholder)
+      : textarea
+        ? getComputedStyle(textarea, "::placeholder")
+        : null;
     const composerLabel = color(placeholderStyle?.color ?? mutedColor);
     composerLabel[3] = composerLabel[3]! * Number(placeholderStyle?.opacity ?? 1);
     const baseColor = color(canvasColor);

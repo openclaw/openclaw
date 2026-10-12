@@ -293,6 +293,7 @@ suite.define(() => {
       const [session] = sessions.sessions;
       const gateway = await installMockGateway(page, {
         featureMethods: ["desktop.observe", "environments.list"],
+        deferredMethods: ["environments.status"],
         methodResponses: {
           "sessions.list": {
             ...sessions,
@@ -315,6 +316,14 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
+      // Settle automatic discovery of the chat's worker before opening another target.
+      await gateway.waitForRequest("environments.status", {
+        match: { environmentId: "other-worker" },
+      });
+      await gateway.rejectDeferred("environments.status", {
+        code: "UNAVAILABLE",
+        message: "session desktop is unavailable",
+      });
       await openDirectDesktop(page, "worker-desktop-1");
 
       const panel = page.locator("openclaw-desktop-panel");
@@ -329,7 +338,14 @@ suite.define(() => {
       await panel.getByRole("button", { name: "Retry", exact: true }).click();
 
       await expect
-        .poll(async () => (await gateway.getRequests("environments.status")).length)
+        .poll(
+          async () =>
+            (
+              await gateway.getRequests("environments.status", {
+                environmentId: "worker-desktop-1",
+              })
+            ).length,
+        )
         .toBe(2);
       const observeRequest = await gateway.waitForRequest("desktop.observe");
       expect(observeRequest.params).toEqual({
@@ -358,7 +374,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["desktop.observe", "environments.list"],
         methodResponses: {
-          "sessions.list": sessionsList("active"),
+          "sessions.list": sessionsList("local"),
           "environments.list": { environments: [] },
           "desktop.observe": {
             transport: "rfb",
@@ -376,6 +392,11 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("environments.status")).length)
         .toBe(inventoryCount + 1);
+      await page
+        .locator("openclaw-desktop-panel")
+        .getByRole("status", { name: "Connecting to desktop…", exact: true })
+        .waitFor();
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
       await page.evaluate(() => {
         window.dispatchEvent(
           new CustomEvent("openclaw:desktop-toggle", { detail: { open: false } }),
@@ -434,7 +455,7 @@ suite.define(() => {
       const bottom = await panel.evaluate((element) => {
         document.documentElement.style.setProperty("--oc-terminal-reserve-bottom", "40px");
         document.documentElement.style.setProperty("--oc-browser-reserve-bottom", "80px");
-        const section = element.shadowRoot?.querySelector<HTMLElement>(".bp--right");
+        const section = element.querySelector<HTMLElement>(".bp--right");
         return section ? getComputedStyle(section).bottom : null;
       });
       expect(bottom).toBe("120px");
@@ -666,13 +687,13 @@ suite.define(() => {
         await browserButton.evaluate((element) => getComputedStyle(element).backgroundColor),
       ).toBe("rgba(0, 0, 0, 0)");
       const stageUsesAppBackground = await panel.evaluate((element) => {
-        const stage = element.shadowRoot?.querySelector<HTMLElement>(".desktop-surface");
+        const stage = element.querySelector<HTMLElement>(".desktop-surface");
         if (!stage) {
           return false;
         }
         const reference = document.createElement("div");
         reference.style.background = "var(--bg)";
-        element.shadowRoot?.append(reference);
+        element.append(reference);
         const matches =
           getComputedStyle(stage).backgroundColor === getComputedStyle(reference).backgroundColor;
         reference.remove();
@@ -682,10 +703,8 @@ suite.define(() => {
 
       const takeControl = panel.getByRole("button", { name: "Take control", exact: true });
       const overlayCoversStage = await panel.evaluate((element) => {
-        const stage = element.shadowRoot?.querySelector<HTMLElement>(".desktop-stage");
-        const overlay = element.shadowRoot?.querySelector<HTMLElement>(
-          ".desktop-stage__take-control",
-        );
+        const stage = element.querySelector<HTMLElement>(".desktop-stage");
+        const overlay = element.querySelector<HTMLElement>(".desktop-stage__take-control");
         if (!stage || !overlay) {
           return false;
         }
@@ -862,11 +881,10 @@ suite.define(() => {
         // Observe both terminal outcomes so the broken stream fails without waiting for a missing frame.
         const outcome = () =>
           panel.evaluate((element) => {
-            if (element.shadowRoot?.textContent?.includes("Desktop disconnected:")) {
+            if (element.textContent?.includes("Desktop disconnected:")) {
               return "disconnected";
             }
-            const canvas =
-              element.shadowRoot?.querySelector<HTMLCanvasElement>(".desktop-surface canvas");
+            const canvas = element.querySelector<HTMLCanvasElement>(".desktop-surface canvas");
             const pixel = canvas?.getContext("2d")?.getImageData(0, 0, 1, 1).data;
             return pixel && [...pixel].join(",") === "24,180,160,255" ? "frame" : null;
           });

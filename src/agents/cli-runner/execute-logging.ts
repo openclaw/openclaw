@@ -1,42 +1,7 @@
-import crypto from "node:crypto";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
 
-function buildCliLogArgs(params: {
-  args: string[];
-  systemPromptArg?: string;
-  modelArg?: string;
-  imageArg?: string;
-  argsPrompt?: string;
-}): string[] {
-  const logArgs: string[] = [];
-  for (let i = 0; i < params.args.length; i += 1) {
-    const arg = params.args[i] ?? "";
-    if (arg === params.systemPromptArg) {
-      const systemPromptValue = params.args[i + 1] ?? "";
-      logArgs.push(arg, `<systemPrompt:${systemPromptValue.length} chars>`);
-      i += 1;
-      continue;
-    }
-    if (arg === params.modelArg) {
-      logArgs.push(arg, params.args[i + 1] ?? "");
-      i += 1;
-      continue;
-    }
-    if (arg === params.imageArg) {
-      logArgs.push(arg, "<image>");
-      i += 1;
-      continue;
-    }
-    logArgs.push(arg);
-  }
-  if (params.argsPrompt) {
-    const promptIndex = logArgs.indexOf(params.argsPrompt);
-    if (promptIndex >= 0) {
-      logArgs[promptIndex] = `<prompt:${params.argsPrompt.length} chars>`;
-    }
-  }
-  return logArgs;
-}
 const CLI_ENV_AUTH_LOG_KEYS = [
   "AI_GATEWAY_API_KEY",
   "ANTHROPIC_API_KEY",
@@ -92,47 +57,12 @@ export function parseCliBackendPreserveEnv(raw: string | undefined): Set<string>
   }
   if (trimmed.startsWith("[")) {
     try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      return new Set(
-        Array.isArray(parsed)
-          ? parsed.filter((entry): entry is string => typeof entry === "string")
-          : [],
-      );
+      return new Set(filterStringEntries(JSON.parse(trimmed)));
     } catch {
       return new Set();
     }
   }
-  return new Set(
-    trimmed
-      .split(/[,\s]+/)
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0),
-  );
-}
-function listPresentCliEnvKeys(
-  env: Record<string, string | undefined>,
-  keys: readonly string[],
-): string[] {
-  return keys.filter((key) => {
-    const value = env[key];
-    return typeof value === "string" && value.length > 0;
-  });
-}
-function formatCliEnvKeyList(keys: readonly string[]): string {
-  return keys.length > 0 ? keys.join(",") : "none";
-}
-function buildCliEnvMcpLog(childEnv: Record<string, string>): string {
-  return [
-    `token=${childEnv.OPENCLAW_MCP_TOKEN ? "set" : "missing"}`,
-    `capture=${childEnv.OPENCLAW_MCP_CLI_CAPTURE_KEY ? "set" : "missing"}`,
-  ].join(" ");
-}
-function fingerprintCliSessionId(sessionId?: string): string {
-  const trimmed = sessionId?.trim();
-  if (!trimmed) {
-    return "none";
-  }
-  return crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
+  return new Set(trimmed.split(/[,\s]+/).filter(Boolean));
 }
 function formatCliSessionReuseLogState(reusableSession: CliReusableSession): string {
   switch (reusableSession.mode) {
@@ -145,11 +75,9 @@ function formatCliSessionReuseLogState(reusableSession: CliReusableSession): str
     case "none":
       return "none";
   }
-  const exhaustive: never = reusableSession;
-  return exhaustive;
+  return reusableSession;
 }
 
-/** Builds the compact execution summary logged before a CLI backend run. */
 export function buildCliExecLogLine(params: {
   provider: string;
   model: string;
@@ -161,6 +89,7 @@ export function buildCliExecLogLine(params: {
   reusableSession: CliReusableSession;
   hasHistoryPrompt: boolean;
 }): string {
+  const resumeSessionId = params.useResume ? params.resolvedSessionId?.trim() : undefined;
   return [
     `cli exec: provider=${params.provider}`,
     `model=${params.model}`,
@@ -168,29 +97,9 @@ export function buildCliExecLogLine(params: {
     `trigger=${params.trigger ?? "unknown"}`,
     `useResume=${params.useResume ? "true" : "false"}`,
     `session=${params.cliSessionId ? "present" : "none"}`,
-    `resumeSession=${params.useResume ? fingerprintCliSessionId(params.resolvedSessionId) : "none"}`,
+    `resumeSession=${resumeSessionId ? sha256Hex(resumeSessionId).slice(0, 12) : "none"}`,
     `reuse=${formatCliSessionReuseLogState(params.reusableSession)}`,
     `historyPrompt=${params.hasHistoryPrompt ? "present" : "none"}`,
-  ].join(" ");
-}
-
-/** Summarizes auth-related env keys preserved or cleared for a CLI child process. */
-function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
-  const hostKeys = listPresentCliEnvKeys(process.env, CLI_ENV_AUTH_LOG_KEYS);
-  const childKeys = listPresentCliEnvKeys(childEnv, CLI_ENV_AUTH_LOG_KEYS);
-  const childKeySet = new Set(childKeys);
-  const clearedKeys = hostKeys.filter((key) => !childKeySet.has(key));
-  const runtimeHostKeys = listPresentCliEnvKeys(process.env, CLI_ENV_RUNTIME_LOG_KEYS);
-  const runtimeChildKeys = listPresentCliEnvKeys(childEnv, CLI_ENV_RUNTIME_LOG_KEYS);
-  const runtimeChildKeySet = new Set(runtimeChildKeys);
-  const runtimeClearedKeys = runtimeHostKeys.filter((key) => !runtimeChildKeySet.has(key));
-  return [
-    `host=${formatCliEnvKeyList(hostKeys)}`,
-    `child=${formatCliEnvKeyList(childKeys)}`,
-    `cleared=${formatCliEnvKeyList(clearedKeys)}`,
-    `runtimeHost=${formatCliEnvKeyList(runtimeHostKeys)}`,
-    `runtimeChild=${formatCliEnvKeyList(runtimeChildKeys)}`,
-    `runtimeCleared=${formatCliEnvKeyList(runtimeClearedKeys)}`,
   ].join(" ");
 }
 
@@ -204,10 +113,45 @@ export function logCliInvocation(params: {
   argsPrompt?: string;
   log: (message: string) => void;
 }): void {
-  const logArgs = buildCliLogArgs(params);
+  const logArgs: string[] = [];
+  for (let i = 0; i < params.args.length; i += 1) {
+    const arg = params.args[i] ?? "";
+    logArgs.push(arg);
+    if (arg === params.systemPromptArg || arg === params.modelArg || arg === params.imageArg) {
+      const value = params.args[i + 1] ?? "";
+      logArgs.push(
+        arg === params.systemPromptArg
+          ? `<systemPrompt:${value.length} chars>`
+          : arg === params.modelArg
+            ? value
+            : "<image>",
+      );
+      i += 1;
+    }
+  }
+  if (params.argsPrompt) {
+    const promptIndex = logArgs.indexOf(params.argsPrompt);
+    if (promptIndex >= 0) {
+      logArgs[promptIndex] = `<prompt:${params.argsPrompt.length} chars>`;
+    }
+  }
   params.log(`cli argv: ${params.command} ${logArgs.join(" ")}`);
-  params.log(`cli env auth: ${buildCliEnvAuthLog(params.env)}`);
+  const childEnv = params.env;
+  const formatKeys = (keys: readonly string[], labels: readonly string[]) => {
+    const present = (env: Record<string, string | undefined>) =>
+      keys.filter((key) => typeof env[key] === "string" && env[key].length > 0);
+    const host = present(process.env);
+    const child = present(childEnv);
+    return [host, child, host.filter((key) => !child.includes(key))]
+      .map((values, index) => `${labels[index]}=${values.join(",") || "none"}`)
+      .join(" ");
+  };
+  params.log(
+    `cli env auth: ${formatKeys(CLI_ENV_AUTH_LOG_KEYS, ["host", "child", "cleared"])} ${formatKeys(CLI_ENV_RUNTIME_LOG_KEYS, ["runtimeHost", "runtimeChild", "runtimeCleared"])}`,
+  );
   if (params.env.OPENCLAW_MCP_TOKEN) {
-    params.log(`cli env mcp: ${buildCliEnvMcpLog(params.env)}`);
+    params.log(
+      `cli env mcp: token=set capture=${params.env.OPENCLAW_MCP_CLI_CAPTURE_KEY ? "set" : "missing"}`,
+    );
   }
 }

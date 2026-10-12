@@ -4,9 +4,16 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../infra/sqlite-schema-facts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawRegisteredAgentDatabase } from "./openclaw-agent-db-contract.js";
-import { detectOpenClawStateDatabaseSchemaMigrationsFromDatabase } from "./openclaw-state-db-schema-repair.js";
+import {
+  assertCanonicalAgentDatabasesPrimaryKey,
+  detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
+} from "./openclaw-state-db-schema-repair.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
 
@@ -14,13 +21,25 @@ type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_da
   sqlite_master: { name: string; type: string };
 };
 
+// Admission owns schema revisions; current writers cannot reintroduce legacy migration rows.
+const migratedSchemas = new WeakSet<SqliteSchemaFacts>();
+
 /** Read durable registrations from an already opened live or captured database. */
 export function readOpenClawAgentDatabaseRegistryRows(database: DatabaseSync, pathname: string) {
   const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database);
-  const registryTable = executeSqliteQueryTakeFirstSync(
-    database,
-    db.selectFrom("sqlite_master").select("type").where("name", "=", "agent_databases"),
-  );
+  const schema = getAdmittedSqliteSchemaFacts(database);
+  const registryTable = schema
+    ? schema.tables.has("agent_databases")
+      ? { type: "table" }
+      : schema.views.has("agent_databases") ||
+          schema.indexes.has("agent_databases") ||
+          schema.triggers.has("agent_databases")
+        ? { type: "invalid" }
+        : undefined
+    : executeSqliteQueryTakeFirstSync(
+        database,
+        db.selectFrom("sqlite_master").select("type").where("name", "=", "agent_databases"),
+      );
   if (!registryTable) {
     return [];
   }
@@ -51,14 +70,20 @@ export function readRegisteredAgentDatabaseRows(
   pathname: string,
   artifactPreserving: boolean,
 ): OpenClawRegisteredAgentDatabase[] {
-  const schemaMigrations = detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
-    database,
-    pathname,
-  );
-  if (!artifactPreserving && schemaMigrations.length > 0) {
-    throw new Error(
-      `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
-    );
+  if (artifactPreserving) {
+    assertCanonicalAgentDatabasesPrimaryKey(database, pathname);
+  } else {
+    const schema = getAdmittedSqliteSchemaFacts(database);
+    if (!schema || !migratedSchemas.has(schema)) {
+      if (detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0) {
+        throw new Error(
+          `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
+        );
+      }
+      if (schema) {
+        migratedSchemas.add(schema);
+      }
+    }
   }
   return readOpenClawAgentDatabaseRegistryRows(database, pathname).map((row) => ({
     agentId: normalizeAgentId(row.agent_id),

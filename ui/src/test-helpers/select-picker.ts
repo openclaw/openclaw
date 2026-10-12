@@ -1,18 +1,10 @@
-import { afterEach } from "vitest";
+import { onTestFinished } from "vitest";
 import type { SelectPicker } from "../components/select-picker.ts";
-
-const mounted = new Set<HTMLElement>();
-afterEach(() => {
-  for (const container of mounted) {
-    container.remove();
-  }
-  mounted.clear();
-});
 
 export async function updatePickers(container: HTMLElement) {
   if (!container.isConnected) {
     document.body.append(container);
-    mounted.add(container);
+    onTestFinished(() => container.remove());
   }
   await Promise.all(
     [...container.querySelectorAll<SelectPicker>("openclaw-select-picker")].map(

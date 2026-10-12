@@ -66,6 +66,28 @@ describe("projectSessionDisplayMessage", () => {
     expect(preview?.text).toBe("Read the deployment guide");
   });
 
+  test.each([
+    ["nested label brackets", "[Report [Q3]](LONG)", "Read the Report [Q3] and then deploy."],
+    [
+      "balanced destination parentheses",
+      "[report](LONG/report_(Q3))",
+      "Read the report and then deploy.",
+    ],
+    [
+      "escaped destination parentheses",
+      "[report](LONG/report\\)Q3)",
+      "Read the report and then deploy.",
+    ],
+  ])("flattens links with %s before bounding a preview", (_label, link, expected) => {
+    const longUrl = `https://example.com/${"x".repeat(SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS)}`;
+    const preview = projectSessionDisplayMessage(
+      { role: "assistant", content: `Read the ${link.replace("LONG", longUrl)} and then deploy.` },
+      { flattenMarkdown: true },
+    );
+
+    expect(preview?.text).toBe(expected);
+  });
+
   test("preserves quoted directive examples", () => {
     const quoted = "Use `[[reply_to_current]]` literally.";
     expect(projectSessionDisplayMessage({ role: "assistant", content: quoted })?.text).toBe(quoted);

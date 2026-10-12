@@ -12,17 +12,21 @@ import {
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
+function envRef(id: string) {
+  return { source: "env", provider: "default", id } as const;
+}
+
+function voiceTts(id: string, options: { enabled?: boolean } = {}) {
+  return { ...options, tts: { providers: { openai: { apiKey: envRef(id) } } } };
+}
+
 describe("secrets runtime snapshot discord surface", () => {
   it("resolves active Discord token refs for the default account", async () => {
     const topLevelSnapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
         channels: {
           discord: {
-            token: {
-              source: "env",
-              provider: "default",
-              id: "DISCORD_BOT_TOKEN",
-            },
+            token: envRef("DISCORD_BOT_TOKEN"),
           },
         },
       }),
@@ -38,19 +42,11 @@ describe("secrets runtime snapshot discord surface", () => {
       config: asConfig({
         channels: {
           discord: {
-            token: {
-              source: "env",
-              provider: "default",
-              id: "DISCORD_BOT_TOKEN",
-            },
+            token: envRef("DISCORD_BOT_TOKEN"),
             accounts: {
               default: {
                 enabled: true,
-                token: {
-                  source: "env",
-                  provider: "default",
-                  id: "DISCORD_DEFAULT_ACCOUNT_TOKEN",
-                },
+                token: envRef("DISCORD_DEFAULT_ACCOUNT_TOKEN"),
               },
             },
           },
@@ -64,11 +60,7 @@ describe("secrets runtime snapshot discord surface", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(accountSnapshot.config.channels?.discord?.token).toEqual({
-      source: "env",
-      provider: "default",
-      id: "DISCORD_BOT_TOKEN",
-    });
+    expect(accountSnapshot.config.channels?.discord?.token).toEqual(envRef("DISCORD_BOT_TOKEN"));
     expect(accountSnapshot.config.channels?.discord?.accounts?.default?.token).toBe(
       "default-account-token",
     );
@@ -143,12 +135,12 @@ describe("secrets runtime snapshot discord surface", () => {
         channels: {
           discord: {
             pluralkit: {
-              token: { source: "env", provider: "default", id: "DISCORD_DEFAULT_PK_TOKEN" },
+              token: envRef("DISCORD_DEFAULT_PK_TOKEN"),
             },
             accounts: {
               second: {
                 pluralkit: {
-                  token: { source: "env", provider: "default", id: "DISCORD_SECOND_PK_TOKEN" },
+                  token: envRef("DISCORD_SECOND_PK_TOKEN"),
                 },
               },
             },
@@ -177,11 +169,7 @@ describe("secrets runtime snapshot discord surface", () => {
         config: asConfig({
           channels: {
             discord: {
-              token: {
-                source: "env",
-                provider: "default",
-                id: "MISSING_DISCORD_BASE_TOKEN",
-              },
+              token: envRef("MISSING_DISCORD_BASE_TOKEN"),
               accounts: {
                 work: {
                   enabled: true,
@@ -206,19 +194,11 @@ describe("secrets runtime snapshot discord surface", () => {
             accounts: {
               broken: {
                 enabled: true,
-                token: {
-                  source: "env",
-                  provider: "default",
-                  id: "MISSING_DISCORD_BROKEN_TOKEN",
-                },
+                token: envRef("MISSING_DISCORD_BROKEN_TOKEN"),
               },
               healthy: {
                 enabled: true,
-                token: {
-                  source: "env",
-                  provider: "default",
-                  id: "DISCORD_HEALTHY_TOKEN",
-                },
+                token: envRef("DISCORD_HEALTHY_TOKEN"),
               },
             },
           },
@@ -230,11 +210,9 @@ describe("secrets runtime snapshot discord surface", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.discord?.accounts?.broken?.token).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MISSING_DISCORD_BROKEN_TOKEN",
-    });
+    expect(snapshot.config.channels?.discord?.accounts?.broken?.token).toEqual(
+      envRef("MISSING_DISCORD_BROKEN_TOKEN"),
+    );
     expect(snapshot.config.channels?.discord?.accounts?.healthy?.token).toBe("fixture-value");
     expect(snapshot.degradedOwners).toMatchObject([
       {
@@ -252,11 +230,7 @@ describe("secrets runtime snapshot discord surface", () => {
       config: asConfig({
         channels: {
           discord: {
-            token: {
-              source: "env",
-              provider: "default",
-              id: "MISSING_DISCORD_DEFAULT_TOKEN",
-            },
+            token: envRef("MISSING_DISCORD_DEFAULT_TOKEN"),
             accounts: {
               default: {
                 enabled: true,
@@ -271,11 +245,9 @@ describe("secrets runtime snapshot discord surface", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.discord?.token).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MISSING_DISCORD_DEFAULT_TOKEN",
-    });
+    expect(snapshot.config.channels?.discord?.token).toEqual(
+      envRef("MISSING_DISCORD_DEFAULT_TOKEN"),
+    );
     expect(snapshot.warnings.map((warning) => warning.path)).toContain("channels.discord.token");
   });
 
@@ -286,11 +258,7 @@ describe("secrets runtime snapshot discord surface", () => {
           discord: {
             pluralkit: {
               enabled: false,
-              token: {
-                source: "env",
-                provider: "default",
-                id: "MISSING_DISCORD_PLURALKIT_TOKEN",
-              },
+              token: envRef("MISSING_DISCORD_PLURALKIT_TOKEN"),
             },
           },
         },
@@ -300,11 +268,9 @@ describe("secrets runtime snapshot discord surface", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.discord?.pluralkit?.token).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MISSING_DISCORD_PLURALKIT_TOKEN",
-    });
+    expect(snapshot.config.channels?.discord?.pluralkit?.token).toEqual(
+      envRef("MISSING_DISCORD_PLURALKIT_TOKEN"),
+    );
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
       "channels.discord.pluralkit.token",
     );
@@ -313,15 +279,14 @@ describe("secrets runtime snapshot discord surface", () => {
   it.each([true, false])(
     "resolves Discord persona refs with root inheritance=%s",
     async (inheritsRoot) => {
-      const ref = (id: string) => ({ source: "env", provider: "default", id }) as const;
       const voice = (id: string, enabled = true) => ({
         enabled,
         mode: "stt-tts",
         tts: {
           persona: "reader.uk",
-          personas: { "reader.uk": { providers: { mock: { apiKey: ref(id) } } } },
+          personas: { "reader.uk": { providers: { mock: { apiKey: envRef(id) } } } },
         },
-        realtime: { providers: { openai: { apiKey: ref(`${id}_REALTIME`) } } },
+        realtime: { providers: { openai: { apiKey: envRef(`${id}_REALTIME`) } } },
       });
       const snapshot = await prepareSecretsRuntimeSnapshot({
         config: asConfig({
@@ -346,7 +311,7 @@ describe("secrets runtime snapshot discord surface", () => {
       });
       const discord = snapshot.config.channels?.discord;
       expect(discord?.voice?.tts?.personas?.["reader.uk"]?.providers?.mock?.apiKey).toEqual(
-        inheritsRoot ? "root-fixture-key" : ref("TEST_TTS_DISCORD_ROOT"),
+        inheritsRoot ? "root-fixture-key" : envRef("TEST_TTS_DISCORD_ROOT"),
       );
       expect(
         discord?.accounts?.work?.voice?.tts?.personas?.["reader.uk"]?.providers?.mock?.apiKey,
@@ -361,7 +326,7 @@ describe("secrets runtime snapshot discord surface", () => {
         expect(
           discord?.accounts?.[accountId]?.voice?.tts?.personas?.["reader.uk"]?.providers?.mock
             ?.apiKey,
-        ).toEqual(ref(id));
+        ).toEqual(envRef(id));
         expect(inactivePaths).toContain(
           `channels.discord.accounts.${accountId}.voice.tts.personas["reader.uk"].providers.mock.apiKey`,
         );
@@ -372,7 +337,7 @@ describe("secrets runtime snapshot discord surface", () => {
         ),
       ).toBe(!inheritsRoot);
       expect(discord?.accounts?.work?.voice?.realtime?.providers?.openai?.apiKey).toEqual(
-        ref("TEST_TTS_DISCORD_WORK_REALTIME"),
+        envRef("TEST_TTS_DISCORD_WORK_REALTIME"),
       );
       expect(inactivePaths).toContain(
         "channels.discord.accounts.work.voice.realtime.providers.openai.apiKey",
@@ -386,37 +351,11 @@ describe("secrets runtime snapshot discord surface", () => {
       config: asConfig({
         channels: {
           discord: {
-            voice: {
-              enabled: false,
-              tts: {
-                providers: {
-                  openai: {
-                    apiKey: {
-                      source: "env",
-                      provider: "default",
-                      id: "MISSING_DISCORD_VOICE_TTS_OPENAI",
-                    },
-                  },
-                },
-              },
-            },
+            voice: voiceTts("MISSING_DISCORD_VOICE_TTS_OPENAI", { enabled: false }),
             accounts: {
               work: {
                 enabled: true,
-                voice: {
-                  enabled: false,
-                  tts: {
-                    providers: {
-                      openai: {
-                        apiKey: {
-                          source: "env",
-                          provider: "default",
-                          id: "MISSING_DISCORD_WORK_VOICE_TTS_OPENAI",
-                        },
-                      },
-                    },
-                  },
-                },
+                voice: voiceTts("MISSING_DISCORD_WORK_VOICE_TTS_OPENAI", { enabled: false }),
               },
             },
           },
@@ -427,18 +366,12 @@ describe("secrets runtime snapshot discord surface", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.discord?.voice?.tts?.providers?.openai?.apiKey).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MISSING_DISCORD_VOICE_TTS_OPENAI",
-    });
+    expect(snapshot.config.channels?.discord?.voice?.tts?.providers?.openai?.apiKey).toEqual(
+      envRef("MISSING_DISCORD_VOICE_TTS_OPENAI"),
+    );
     expect(
       snapshot.config.channels?.discord?.accounts?.work?.voice?.tts?.providers?.openai?.apiKey,
-    ).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MISSING_DISCORD_WORK_VOICE_TTS_OPENAI",
-    });
+    ).toEqual(envRef("MISSING_DISCORD_WORK_VOICE_TTS_OPENAI"));
     const warningPaths = snapshot.warnings.map((warning) => warning.path);
     expect(warningPaths).toContain("channels.discord.voice.tts.providers.openai.apiKey");
     expect(warningPaths).toContain(
@@ -451,17 +384,9 @@ describe("secrets runtime snapshot discord surface", () => {
       config: asConfig({
         channels: {
           discord: {
-            voice: {
-              tts: {
-                providers: {
-                  openai: {
-                    apiKey: { source: "env", provider: "default", id: "DISCORD_BASE_TTS_OPENAI" },
-                  },
-                },
-              },
-            },
+            voice: voiceTts("DISCORD_BASE_TTS_OPENAI"),
             pluralkit: {
-              token: { source: "env", provider: "default", id: "DISCORD_BASE_PK_TOKEN" },
+              token: envRef("DISCORD_BASE_PK_TOKEN"),
             },
             accounts: {
               enabledInherited: {
@@ -469,41 +394,13 @@ describe("secrets runtime snapshot discord surface", () => {
               },
               enabledOverride: {
                 enabled: true,
-                voice: {
-                  tts: {
-                    providers: {
-                      openai: {
-                        apiKey: {
-                          source: "env",
-                          provider: "default",
-                          id: "DISCORD_ENABLED_OVERRIDE_TTS_OPENAI",
-                        },
-                      },
-                    },
-                  },
-                },
+                voice: voiceTts("DISCORD_ENABLED_OVERRIDE_TTS_OPENAI"),
               },
               disabledOverride: {
                 enabled: false,
-                voice: {
-                  tts: {
-                    providers: {
-                      openai: {
-                        apiKey: {
-                          source: "env",
-                          provider: "default",
-                          id: "DISCORD_DISABLED_OVERRIDE_TTS_OPENAI",
-                        },
-                      },
-                    },
-                  },
-                },
+                voice: voiceTts("DISCORD_DISABLED_OVERRIDE_TTS_OPENAI"),
                 pluralkit: {
-                  token: {
-                    source: "env",
-                    provider: "default",
-                    id: "DISCORD_DISABLED_OVERRIDE_PK_TOKEN",
-                  },
+                  token: envRef("DISCORD_DISABLED_OVERRIDE_PK_TOKEN"),
                 },
               },
             },
@@ -530,17 +427,9 @@ describe("secrets runtime snapshot discord surface", () => {
     expect(
       snapshot.config.channels?.discord?.accounts?.disabledOverride?.voice?.tts?.providers?.openai
         ?.apiKey,
-    ).toEqual({
-      source: "env",
-      provider: "default",
-      id: "DISCORD_DISABLED_OVERRIDE_TTS_OPENAI",
-    });
+    ).toEqual(envRef("DISCORD_DISABLED_OVERRIDE_TTS_OPENAI"));
     expect(snapshot.config.channels?.discord?.accounts?.disabledOverride?.pluralkit?.token).toEqual(
-      {
-        source: "env",
-        provider: "default",
-        id: "DISCORD_DISABLED_OVERRIDE_PK_TOKEN",
-      },
+      envRef("DISCORD_DISABLED_OVERRIDE_PK_TOKEN"),
     );
     const warningPaths = snapshot.warnings.map((warning) => warning.path);
     expect(warningPaths).toContain(
@@ -554,35 +443,11 @@ describe("secrets runtime snapshot discord surface", () => {
       config: asConfig({
         channels: {
           discord: {
-            voice: {
-              tts: {
-                providers: {
-                  openai: {
-                    apiKey: {
-                      source: "env",
-                      provider: "default",
-                      id: "DISCORD_UNUSED_BASE_TTS_OPENAI",
-                    },
-                  },
-                },
-              },
-            },
+            voice: voiceTts("DISCORD_UNUSED_BASE_TTS_OPENAI"),
             accounts: {
               enabledOverride: {
                 enabled: true,
-                voice: {
-                  tts: {
-                    providers: {
-                      openai: {
-                        apiKey: {
-                          source: "env",
-                          provider: "default",
-                          id: "DISCORD_ENABLED_ONLY_TTS_OPENAI",
-                        },
-                      },
-                    },
-                  },
-                },
+                voice: voiceTts("DISCORD_ENABLED_ONLY_TTS_OPENAI"),
               },
               disabledInherited: {
                 enabled: false,
@@ -602,11 +467,9 @@ describe("secrets runtime snapshot discord surface", () => {
       snapshot.config.channels?.discord?.accounts?.enabledOverride?.voice?.tts?.providers?.openai
         ?.apiKey,
     ).toBe("enabled-only-tts-openai");
-    expect(snapshot.config.channels?.discord?.voice?.tts?.providers?.openai?.apiKey).toEqual({
-      source: "env",
-      provider: "default",
-      id: "DISCORD_UNUSED_BASE_TTS_OPENAI",
-    });
+    expect(snapshot.config.channels?.discord?.voice?.tts?.providers?.openai?.apiKey).toEqual(
+      envRef("DISCORD_UNUSED_BASE_TTS_OPENAI"),
+    );
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
       "channels.discord.voice.tts.providers.openai.apiKey",
     );
@@ -617,31 +480,11 @@ describe("secrets runtime snapshot discord surface", () => {
       config: asConfig({
         channels: {
           discord: {
-            voice: {
-              tts: {
-                providers: {
-                  openai: {
-                    apiKey: { source: "env", provider: "default", id: "DISCORD_BASE_TTS_OK" },
-                  },
-                },
-              },
-            },
+            voice: voiceTts("DISCORD_BASE_TTS_OK"),
             accounts: {
               enabledOverride: {
                 enabled: true,
-                voice: {
-                  tts: {
-                    providers: {
-                      openai: {
-                        apiKey: {
-                          source: "env",
-                          provider: "default",
-                          id: "DISCORD_ENABLED_OVERRIDE_TTS_MISSING",
-                        },
-                      },
-                    },
-                  },
-                },
+                voice: voiceTts("DISCORD_ENABLED_OVERRIDE_TTS_MISSING"),
               },
             },
           },
@@ -655,19 +498,13 @@ describe("secrets runtime snapshot discord surface", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.discord?.voice?.tts?.providers?.openai?.apiKey).toEqual({
-      source: "env",
-      provider: "default",
-      id: "DISCORD_BASE_TTS_OK",
-    });
+    expect(snapshot.config.channels?.discord?.voice?.tts?.providers?.openai?.apiKey).toEqual(
+      envRef("DISCORD_BASE_TTS_OK"),
+    );
     expect(
       snapshot.config.channels?.discord?.accounts?.enabledOverride?.voice?.tts?.providers?.openai
         ?.apiKey,
-    ).toEqual({
-      source: "env",
-      provider: "default",
-      id: "DISCORD_ENABLED_OVERRIDE_TTS_MISSING",
-    });
+    ).toEqual(envRef("DISCORD_ENABLED_OVERRIDE_TTS_MISSING"));
     expect(snapshot.warnings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

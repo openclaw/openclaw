@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { isMissingPathError } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
-import { replaceFileAtomicSync } from "./replace-file.js";
 
 export const LEGACY_AGENT_DIR_RECEIPT = ".legacy-agent-dir-migration.json";
 

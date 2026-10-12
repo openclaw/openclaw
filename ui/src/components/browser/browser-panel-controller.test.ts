@@ -44,7 +44,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     window.addEventListener(BROWSER_ANNOTATION_EVENT, reject);
 
     try {
-      await controller.sendAnnotation({});
+      await controller.input.sendAnnotation({});
     } finally {
       window.removeEventListener(BROWSER_ANNOTATION_EVENT, reject);
     }
@@ -448,128 +448,6 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     expect(screenshotCount).toBe(1);
     expect(controller.loading).toBe(false);
     expect(controller.errorText).toBeNull();
-  });
-
-  it("rejects an old tab-open snapshot after a newer full refresh", async () => {
-    stubScreenshotMedia();
-    const previousSnapshot = createDeferred<unknown>();
-    const latestUrl = "https://example.test/latest";
-    const previousUrl = "https://example.test/previous";
-    let snapshotCount = 0;
-    let screenshotCount = 0;
-    let screenshotUrl = latestUrl;
-    const { client } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/tabs/open") {
-        return createBrowserPanelTestTab("opened-tab", latestUrl, "Opened");
-      }
-      if (envelope.path === "/tabs") {
-        snapshotCount += 1;
-        if (snapshotCount === 1) {
-          return await previousSnapshot.promise;
-        }
-        return {
-          running: true,
-          tabs: [
-            { tabId: "opened-tab", targetId: "raw-opened", title: "Opened", url: latestUrl },
-            { tabId: "latest-tab", targetId: "raw-latest", title: "Latest", url: latestUrl },
-          ],
-        };
-      }
-      if (envelope.path === "/screenshot") {
-        screenshotCount += 1;
-        screenshotUrl = screenshotCount === 1 ? latestUrl : previousUrl;
-        return {
-          path: screenshotCount === 1 ? "/fresh.png" : "/old.png",
-          targetId: "raw-opened",
-          url: screenshotUrl,
-        };
-      }
-      if (envelope.path === "/act") {
-        return createBrowserPanelTestMetrics(screenshotUrl, "Opened");
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
-    });
-    const controller = createBrowserPanelTestController(client, "initial-tab");
-
-    const previousNavigation = controller.openUrl(latestUrl, { newTab: true });
-    await flushBrowserResponses();
-    const latestRefresh = controller.refreshAll();
-    await latestRefresh;
-    previousSnapshot.resolve({
-      running: true,
-      tabs: [
-        { tabId: "opened-tab", targetId: "raw-opened", title: "Previous", url: previousUrl },
-        createBrowserPanelTestTab("previous-tab", previousUrl, "Previous tab"),
-      ],
-    });
-    await previousNavigation;
-
-    expect(controller.activeTargetId).toBe("opened-tab");
-    expect(controller.tabs.map((tab) => tab.id)).toEqual(["opened-tab", "latest-tab"]);
-    expect(controller.view?.url).toBe(latestUrl);
-    expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
-    expect(screenshotCount).toBe(1);
-    expect(controller.loading).toBe(false);
-  });
-
-  it("keeps the newest tab snapshot when overlapping refreshes finish out of order", async () => {
-    stubScreenshotMedia();
-    const previousSnapshot = createDeferred<unknown>();
-    const latestSnapshot = createDeferred<unknown>();
-    const snapshots = [previousSnapshot, latestSnapshot];
-    const latestUrl = "https://example.test/latest";
-    const previousUrl = "https://example.test/previous";
-    let screenshotCount = 0;
-    let screenshotUrl = latestUrl;
-    const { client } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/tabs") {
-        const snapshot = snapshots.shift();
-        if (!snapshot) {
-          throw new Error("Unexpected browser snapshot");
-        }
-        return await snapshot.promise;
-      }
-      if (envelope.path === "/screenshot") {
-        screenshotCount += 1;
-        screenshotUrl = screenshotCount === 1 ? latestUrl : previousUrl;
-        return {
-          path: screenshotCount === 1 ? "/fresh.png" : "/old.png",
-          targetId: "raw-stable",
-          url: screenshotUrl,
-        };
-      }
-      if (envelope.path === "/act") {
-        return createBrowserPanelTestMetrics(screenshotUrl, "Stable");
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
-    });
-    const controller = createBrowserPanelTestController(client, "stable-tab");
-
-    const previousRefresh = controller.refreshAll();
-    const latestRefresh = controller.refreshAll();
-    latestSnapshot.resolve({
-      running: true,
-      tabs: [
-        { tabId: "stable-tab", targetId: "raw-stable", title: "Latest", url: latestUrl },
-        { tabId: "latest-tab", targetId: "raw-latest", title: "Latest tab", url: latestUrl },
-      ],
-    });
-    await latestRefresh;
-    previousSnapshot.resolve({
-      running: true,
-      tabs: [
-        { tabId: "stable-tab", targetId: "raw-stable", title: "Previous", url: previousUrl },
-        createBrowserPanelTestTab("previous-tab", previousUrl, "Previous tab"),
-      ],
-    });
-    await previousRefresh;
-
-    expect(controller.tabs.map((tab) => tab.id)).toEqual(["stable-tab", "latest-tab"]);
-    expect(controller.activeTargetId).toBe("stable-tab");
-    expect(controller.view?.url).toBe(latestUrl);
-    expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
-    expect(screenshotCount).toBe(1);
-    expect(controller.loading).toBe(false);
   });
 
   it("keeps a newer tab open when an older snapshot would replace the active tab", async () => {

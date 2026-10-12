@@ -17,6 +17,7 @@ export function describeExecTool(params?: {
         ];
   const base = [
     ...continuation,
+    "Omit host to use the session's configured host.",
     params?.hasCronTool ? "No sleep loops for reminders/follow-ups; use automations." : undefined,
     "TTY CLI/UI/coding agent: pty=true.",
   ]

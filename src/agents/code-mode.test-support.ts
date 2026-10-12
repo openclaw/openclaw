@@ -1,6 +1,10 @@
 import { expect, vi } from "vitest";
+import type { CodeModeConfig as CodeModeToolsConfig } from "../config/types.tools.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
+import { normalizeCodeModeTimeoutResult } from "./code-mode-errors.js";
+import type { CodeModeExecutorContinuation } from "./code-mode-executor-types.js";
+import { runCodeModeExecutor } from "./code-mode-executor.js";
 import { resolveCodeModeHeadlessConfig } from "./code-mode-runtime.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
 import {
@@ -9,7 +13,6 @@ import {
   removeExpiredRuns,
   resumingRunIds,
 } from "./code-mode-state.js";
-import { normalizeCodeModeTimeoutResult, runCodeModeWorker } from "./code-mode-worker.js";
 import { createCodeModeTools } from "./code-mode.js";
 import {
   createToolSearchCatalogRef,
@@ -19,18 +22,28 @@ import {
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
+const directContinuations = new Set<CodeModeExecutorContinuation>();
+
 export const testing = {
   activeRuns,
   resumingRunIds,
   codeModeReplayIdForToolCall,
   removeExpiredRuns,
   normalizeCodeModeTimeoutResult,
-  runCodeModeWorker,
+  runCodeModeExecutor: async (...args: Parameters<typeof runCodeModeExecutor>) => {
+    const result = await runCodeModeExecutor(...args);
+    if (result.status === "waiting") {
+      directContinuations.add(result.continuation);
+    }
+    return result;
+  },
   resolveCodeModeHeadlessConfig,
 };
 
-export function resetCodeModeTestState(): void {
-  disposeAllCodeModeRuns();
+export async function resetCodeModeTestState(): Promise<void> {
+  await disposeAllCodeModeRuns();
+  await Promise.all([...directContinuations].map((continuation) => continuation.dispose()));
+  directContinuations.clear();
 }
 
 export function fakeTool(name: string, description: string): AnyAgentTool {
@@ -155,11 +168,14 @@ export function expectCodeModeSharedBudget(
 
 export function createHeadlessCodeModeHarness(
   tools: AnyAgentTool[] = [],
-  options: { swarmEnabled?: boolean } = {},
+  options: { swarmEnabled?: boolean; codeMode?: CodeModeToolsConfig } = {},
 ): ToolSearchToolContext {
   const config = {
     tools: {
-      codeMode: { enabled: false, timeoutMs: 60_000 },
+      codeMode:
+        typeof options.codeMode === "object"
+          ? { enabled: false, timeoutMs: 60_000, ...options.codeMode }
+          : (options.codeMode ?? { enabled: false, timeoutMs: 60_000 }),
       ...(options.swarmEnabled ? { swarm: true } : {}),
     },
   } as never;
@@ -178,11 +194,19 @@ export function createCodeModeHarness(
     agentId?: string;
     catalogRef?: ToolSearchCatalogRef;
     codeModeSkills?: readonly CodeModeSkill[];
+    codeMode?: CodeModeToolsConfig;
     forceRestartSafeTools?: boolean;
   } = {},
 ) {
   const catalogRef = params.catalogRef ?? createToolSearchCatalogRef();
-  const config = { tools: { codeMode: true } } as never;
+  const config = {
+    tools: {
+      codeMode:
+        typeof params.codeMode === "object"
+          ? { enabled: true, ...params.codeMode }
+          : (params.codeMode ?? true),
+    },
+  };
   const ctx = {
     config,
     runtimeConfig: config,

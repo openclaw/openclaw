@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
-import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
+import { resolveRealtimeVoiceAgentContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
 import {
   createRealtimeVoiceBridgeSession,
   createTalkSessionController,
@@ -16,6 +16,7 @@ import {
   type TalkEvent,
   type TalkEventInput,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { startFaceTimeAudioPump } from "./audio-pump.js";
 import type { FaceTimeConfig } from "./config.js";
 import { createFaceTimeConsultController } from "./talk-consult-controller.js";
@@ -103,11 +104,9 @@ export async function startFaceTimeTalkDriver(params: {
   let lastInputAudioStatusAt = 0;
   let callMediaTimestampMs = 0;
   let modelMediaGeneration = 1;
-  let responseGeneration = 0;
   let response:
     | {
         id?: string;
-        generation: number;
         startTimestampMs: number;
         playbackStartFrame: number;
         outcome?: RealtimeVoiceResponseOutcome;
@@ -120,7 +119,6 @@ export async function startFaceTimeTalkDriver(params: {
   let activated = false;
   let providerReady = false;
   const providerReadyDeferred = createDeferred<void>();
-  let providerConnectPromise: Promise<void> | undefined;
   let audioReadyPromise: Promise<void> | undefined;
   let interruptProviderConnect: (() => void) | undefined;
   let mediaSuspensionError: Error | undefined;
@@ -157,9 +155,9 @@ export async function startFaceTimeTalkDriver(params: {
     if (failurePromise) {
       return failurePromise;
     }
-    failurePromise = Promise.resolve(params.onFailure?.(error)).then((safeToClose) => {
-      return safeToClose !== false;
-    });
+    failurePromise = Promise.resolve(params.onFailure?.(error)).then(
+      (safeToClose) => safeToClose !== false,
+    );
     return failurePromise;
   };
 
@@ -221,17 +219,11 @@ export async function startFaceTimeTalkDriver(params: {
   };
 
   const remember = (input: TalkEventInput) => talk.emit(input);
-  const ensureTurn = () => {
-    const turn = talk.ensureTurn({ payload: { callUUID: params.callUUID } });
-    return turn.turnId;
-  };
+  const ensureTurn = () => talk.ensureTurn({ payload: { callUUID: params.callUUID } }).turnId;
   const finishOutputAudio = (reason: string) => {
     talk.finishOutputAudio({ payload: { reason } });
   };
-  const endTurn = (reason: string) => {
-    const ended = talk.endTurn({ payload: { reason } });
-    return ended.ok;
-  };
+  const endTurn = (reason: string) => talk.endTurn({ payload: { reason } }).ok;
   const playedCurrentResponseMs = () =>
     response === undefined
       ? 0
@@ -281,7 +273,6 @@ export async function startFaceTimeTalkDriver(params: {
     }
     response = {
       id: responseId,
-      generation: ++responseGeneration,
       startTimestampMs: callMediaTimestampMs,
       playbackStartFrame: pump?.playedAudioFrames() ?? 0,
     };
@@ -392,261 +383,241 @@ export async function startFaceTimeTalkDriver(params: {
       }
       return safeToClose;
     },
-    onPlaybackDrained() {
-      finishDrainedResponse();
-    },
+    onPlaybackDrained: finishDrainedResponse,
   });
-  const connectProvider = async () => {
-    if (providerConnectPromise) {
-      return await providerConnectPromise;
-    }
-    providerConnectPromise = (async () => {
-      let removeAbortListener: (() => void) | undefined;
-      let readinessTimer: NodeJS.Timeout | undefined;
-      const interrupted = new Promise<never>((_resolve, reject) => {
-        const interrupt = () => reject(new Error("FaceTime talk startup aborted"));
-        interruptProviderConnect = interrupt;
-        params.signal?.addEventListener("abort", interrupt, { once: true });
-        removeAbortListener = () => params.signal?.removeEventListener("abort", interrupt);
-        if (params.signal?.aborted || stopped || mediaSuspended) {
-          interrupt();
-        }
+  const providerConnect = (async () => {
+    let removeAbortListener: (() => void) | undefined;
+    const interrupted = new Promise<never>((_resolve, reject) => {
+      const interrupt = () => reject(new Error("FaceTime talk startup aborted"));
+      interruptProviderConnect = interrupt;
+      params.signal?.addEventListener("abort", interrupt, { once: true });
+      removeAbortListener = () => params.signal?.removeEventListener("abort", interrupt);
+      if (params.signal?.aborted || stopped || mediaSuspended) {
+        interrupt();
+      }
+    });
+    const prepareAndConnect = async () => {
+      const providerResolution = resolveFaceTimeRealtimeProvider({
+        config: params.config,
+        fullConfig: params.fullConfig,
+        agentId: consultAgentId,
       });
-      const readinessTimedOut = new Promise<never>((_resolve, reject) => {
-        readinessTimer = setTimeout(() => {
-          reject(new Error("Realtime provider was not ready within 15 seconds"));
-        }, REALTIME_READY_TIMEOUT_MS);
-        readinessTimer.unref?.();
+      const agentContextResolution = resolveRealtimeVoiceAgentContextInstructions({
+        config: params.fullConfig,
+        agentId: consultAgentId,
+        sessionKey: requesterSessionKey,
+        warn: (message) => params.logger.warn?.(`[facetime] realtime agent context: ${message}`),
       });
-      const prepareAndConnect = async () => {
-        const providerResolution = resolveFaceTimeRealtimeProvider({
-          config: params.config,
-          fullConfig: params.fullConfig,
-          agentId: consultAgentId,
-        });
-        const bootstrapContextResolution = resolveRealtimeBootstrapContextInstructions({
-          config: params.fullConfig,
-          agentId: consultAgentId,
-          sessionKey: requesterSessionKey,
-          warn: (message) =>
-            params.logger.warn?.(`[facetime] realtime bootstrap context: ${message}`),
-        }).catch((error: unknown) => {
-          params.logger.warn?.(
-            `[facetime] realtime bootstrap context unavailable: ${formatErrorMessage(error)}`,
-          );
-          return undefined;
-        });
-        const [resolved, bootstrapContext] = await Promise.all([
-          providerResolution,
-          bootstrapContextResolution,
-        ]);
-        if (params.signal?.aborted || stopped || mediaSuspended) {
-          throw new Error("FaceTime talk startup aborted");
-        }
-        bridge = createRealtimeVoiceBridgeSession({
-          provider: resolved.provider,
-          capabilities: resolved.capabilities,
-          cfg: params.fullConfig,
-          agentId: consultAgentId,
-          providerConfig: resolved.providerConfig,
-          audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-          // Configured voice/personality instructions remain customizable, but the
-          // authoritative-agent boundary must not disappear when they are replaced.
-          instructions: buildRealtimeInstructions({
-            instructions: params.config.realtime.instructions,
-            bootstrapContext,
-            toolPolicy: params.config.realtime.toolPolicy,
-          }),
-          autoRespondToAudio: true,
-          triggerGreetingOnReady: false,
-          initialGreetingInstructions: initialGreeting.instructions,
-          markStrategy: "ack-immediately",
-          tools: resolveRealtimeVoiceAgentConsultTools(params.config.realtime.toolPolicy, [
-            FACETIME_END_CALL_TOOL,
-          ]),
-          audioSink: {
-            isOpen: () => !stopped && !mediaSuspended,
-            sendAudio(audio, metadata) {
-              if (stopped || mediaSuspended) {
-                return;
-              }
-              const turnId = ensureTurn();
-              if (!response) {
-                startResponse();
-              }
-              talk.startOutputAudio({ turnId, payload: { callUUID: params.callUUID } });
-              remember({
-                type: "output.audio.delta",
-                turnId,
-                payload: { byteLength: audio.byteLength },
-              });
-              pump?.writeOutputAudio(audio, metadata);
-            },
-            getPlaybackState: () => pump.getPlaybackState(),
-            clearAudio() {
-              if (stopped || mediaSuspended) {
-                return;
-              }
-              pump?.clearOutputAudio();
-              resetResponsePlayback();
-              finishOutputAudio("clear");
-            },
-          },
-          onTranscript(role, text, final) {
+      const [resolved, bootstrapContext] = await Promise.all([
+        providerResolution,
+        agentContextResolution,
+      ]);
+      if (params.signal?.aborted || stopped || mediaSuspended) {
+        throw new Error("FaceTime talk startup aborted");
+      }
+      bridge = createRealtimeVoiceBridgeSession({
+        provider: resolved.provider,
+        capabilities: resolved.capabilities,
+        cfg: params.fullConfig,
+        agentId: consultAgentId,
+        providerConfig: resolved.providerConfig,
+        audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+        // Configured voice/personality instructions remain customizable, but the
+        // authoritative-agent boundary must not disappear when they are replaced.
+        instructions: buildRealtimeInstructions({
+          instructions: params.config.realtime.instructions,
+          bootstrapContext,
+          toolPolicy: params.config.realtime.toolPolicy,
+        }),
+        autoRespondToAudio: true,
+        triggerGreetingOnReady: false,
+        initialGreetingInstructions: initialGreeting.instructions,
+        markStrategy: "ack-immediately",
+        tools: resolveRealtimeVoiceAgentConsultTools(params.config.realtime.toolPolicy, [
+          FACETIME_END_CALL_TOOL,
+        ]),
+        audioSink: {
+          isOpen: () => !stopped && !mediaSuspended,
+          sendAudio(audio, metadata) {
             if (stopped || mediaSuspended) {
               return;
             }
             const turnId = ensureTurn();
+            if (!response) {
+              startResponse();
+            }
+            talk.startOutputAudio({ turnId, payload: { callUUID: params.callUUID } });
             remember({
-              type:
-                role === "assistant"
-                  ? final
-                    ? "output.text.done"
-                    : "output.text.delta"
-                  : final
-                    ? "transcript.done"
-                    : "transcript.delta",
+              type: "output.audio.delta",
               turnId,
-              payload: role === "assistant" ? { text } : { role, text },
-              final,
+              payload: { byteLength: audio.byteLength },
             });
-            if (role === "user" && final) {
-              if (text.trim()) {
-                initialGreeting.cancel();
-              } else {
-                initialGreeting.schedule();
-              }
-              remember({
-                type: "input.audio.committed",
-                turnId,
-                payload: { callUUID: params.callUUID },
-                final: true,
-              });
-            }
-            if (final) {
-              appendTranscript({ role, text });
-            }
+            pump?.writeOutputAudio(audio, metadata);
           },
-          onEvent(event) {
+          getPlaybackState: () => pump.getPlaybackState(),
+          clearAudio() {
             if (stopped || mediaSuspended) {
               return;
             }
-            if (!(event.direction === "client" && event.type === "input_audio_buffer.append")) {
-              remember({
-                type: "health.changed",
-                payload: {
-                  name: `${event.direction}:${event.type}`,
-                  message: event.detail,
-                },
-              });
-            }
-            if (event.type === "response.created") {
-              startResponse(event.responseId);
-            } else if (event.type === "session.continuity.reset") {
-              resetProviderContinuity();
-            } else if (event.type === "response.done") {
-              if (!event.responseId && suppressNextUnkeyedLegacyTerminal) {
-                suppressNextUnkeyedLegacyTerminal = false;
-              } else {
-                finishResponseOutcome(
-                  {
-                    status: "completed",
-                    ...(event.responseId ? { responseId: event.responseId } : {}),
-                  },
-                  false,
-                );
-              }
-            } else if (event.type === "error") {
-              remember({
-                type: "session.error",
-                payload: { message: event.detail ?? "Realtime provider error" },
-                final: true,
-              });
-            }
+            pump?.clearOutputAudio();
+            resetResponsePlayback();
+            finishOutputAudio("clear");
           },
-          onResponseDone(outcome) {
-            finishResponseOutcome(outcome, true);
-          },
-          onToolCall: consultController.handleToolCall,
-          onReady() {
-            if (!stopped && !mediaSuspended) {
-              remember({ type: "session.ready", payload: { callUUID: params.callUUID } });
-              providerReadyDeferred.resolve();
-            }
-          },
-          onError(error) {
-            if (stopped || mediaSuspended) {
-              return;
+        },
+        onTranscript(role, text, final) {
+          if (stopped || mediaSuspended) {
+            return;
+          }
+          const turnId = ensureTurn();
+          remember({
+            type:
+              role === "assistant"
+                ? final
+                  ? "output.text.done"
+                  : "output.text.delta"
+                : final
+                  ? "transcript.done"
+                  : "transcript.delta",
+            turnId,
+            payload: role === "assistant" ? { text } : { role, text },
+            final,
+          });
+          if (role === "user" && final) {
+            if (text.trim()) {
+              initialGreeting.cancel();
+            } else {
+              initialGreeting.schedule();
             }
             remember({
-              type: "session.error",
-              payload: { message: formatErrorMessage(error) },
+              type: "input.audio.committed",
+              turnId,
+              payload: { callUUID: params.callUUID },
               final: true,
             });
-            params.logger.warn(`[facetime] realtime bridge failed: ${formatErrorMessage(error)}`);
-            if (!providerReady && !startupSettled) {
-              signalStartupFailure(error);
+          }
+          if (final) {
+            appendTranscript({ role, text });
+          }
+        },
+        onEvent(event) {
+          if (stopped || mediaSuspended) {
+            return;
+          }
+          if (!(event.direction === "client" && event.type === "input_audio_buffer.append")) {
+            remember({
+              type: "health.changed",
+              payload: {
+                name: `${event.direction}:${event.type}`,
+                message: event.detail,
+              },
+            });
+          }
+          if (event.type === "response.created") {
+            startResponse(event.responseId);
+          } else if (event.type === "session.continuity.reset") {
+            resetProviderContinuity();
+          } else if (event.type === "response.done") {
+            if (!event.responseId && suppressNextUnkeyedLegacyTerminal) {
+              suppressNextUnkeyedLegacyTerminal = false;
+            } else {
+              finishResponseOutcome(
+                {
+                  status: "completed",
+                  ...(event.responseId ? { responseId: event.responseId } : {}),
+                },
+                false,
+              );
             }
-          },
-          onClose(reason) {
-            if (stopped || mediaSuspended) {
-              return;
-            }
-            finishOutputAudio(reason);
-            remember({ type: "session.closed", payload: { reason }, final: true });
-            const error = new Error(`Realtime bridge closed unexpectedly: ${reason}`);
+          } else if (event.type === "error") {
+            remember({
+              type: "session.error",
+              payload: { message: event.detail ?? "Realtime provider error" },
+              final: true,
+            });
+          }
+        },
+        onResponseDone(outcome) {
+          finishResponseOutcome(outcome, true);
+        },
+        onToolCall: consultController.handleToolCall,
+        onReady() {
+          if (!stopped && !mediaSuspended) {
+            remember({ type: "session.ready", payload: { callUUID: params.callUUID } });
+            providerReadyDeferred.resolve();
+          }
+        },
+        onError(error) {
+          if (stopped || mediaSuspended) {
+            return;
+          }
+          remember({
+            type: "session.error",
+            payload: { message: formatErrorMessage(error) },
+            final: true,
+          });
+          params.logger.warn(`[facetime] realtime bridge failed: ${formatErrorMessage(error)}`);
+          if (!providerReady && !startupSettled) {
             signalStartupFailure(error);
-            void (async () => {
-              await suspendMedia("provider-closed");
-              const safeToClose = await reportFailure(error);
-              if (safeToClose) {
-                await close("provider-closed");
-              }
-            })();
-          },
-        });
-        await bridge.connect();
-      };
-      try {
-        // Provider connect() may return before the server's setup-complete
-        // event. onReady is the contract that the session can accept audio.
-        await Promise.race([
-          Promise.all([prepareAndConnect(), providerReadyDeferred.promise]),
-          startupFailurePromise,
-          interrupted,
-          readinessTimedOut,
-        ]);
-        if (startupFailure) {
-          throw startupFailure;
-        }
-        if (params.signal?.aborted || stopped || mediaSuspended) {
-          throw new Error("FaceTime talk startup aborted");
-        }
-        startupSettled = true;
-        providerReady = true;
-      } catch (error) {
-        const normalized = error instanceof Error ? error : new Error(String(error));
-        await suspendMedia(
-          params.signal?.aborted || stopped ? "startup-aborted" : "connect-failed",
-        );
-        // Lifecycle cancellation starts carrier shutdown; it does not confirm
-        // closure. Retain process-tap suppression until its owner confirms safety.
-        const safeToClose = stopped || (await reportFailure(normalized));
-        if (safeToClose) {
-          await close(params.signal?.aborted || stopped ? "startup-aborted" : "connect-failed");
-        }
-        throw normalized;
-      } finally {
-        if (readinessTimer) {
-          clearTimeout(readinessTimer);
-        }
-        interruptProviderConnect = undefined;
-        removeAbortListener?.();
+          }
+        },
+        onClose(reason) {
+          if (stopped || mediaSuspended) {
+            return;
+          }
+          finishOutputAudio(reason);
+          remember({ type: "session.closed", payload: { reason }, final: true });
+          const error = new Error(`Realtime bridge closed unexpectedly: ${reason}`);
+          signalStartupFailure(error);
+          void (async () => {
+            await suspendMedia("provider-closed");
+            const safeToClose = await reportFailure(error);
+            if (safeToClose) {
+              await close("provider-closed");
+            }
+          })();
+        },
+      });
+      await bridge.connect();
+    };
+    try {
+      // Provider connect() may return before the server's setup-complete
+      // event. onReady is the contract that the session can accept audio.
+      await raceWithTimeout(
+        () =>
+          Promise.race([
+            Promise.all([prepareAndConnect(), providerReadyDeferred.promise]),
+            startupFailurePromise,
+            interrupted,
+          ]),
+        REALTIME_READY_TIMEOUT_MS,
+        () => {
+          throw new Error("Realtime provider was not ready within 15 seconds");
+        },
+        { ref: false },
+      );
+      if (startupFailure) {
+        throw startupFailure;
       }
-    })();
-    return await providerConnectPromise;
-  };
-  const providerConnect = connectProvider();
+      if (params.signal?.aborted || stopped || mediaSuspended) {
+        throw new Error("FaceTime talk startup aborted");
+      }
+      startupSettled = true;
+      providerReady = true;
+    } catch (error) {
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      await suspendMedia(params.signal?.aborted || stopped ? "startup-aborted" : "connect-failed");
+      // Lifecycle cancellation starts carrier shutdown; it does not confirm
+      // closure. Retain process-tap suppression until its owner confirms safety.
+      const safeToClose = stopped || (await reportFailure(normalized));
+      if (safeToClose) {
+        await close(params.signal?.aborted || stopped ? "startup-aborted" : "connect-failed");
+      }
+      throw normalized;
+    } finally {
+      interruptProviderConnect = undefined;
+      removeAbortListener?.();
+    }
+  })();
   void providerConnect.catch(() => {});
   try {
     await Promise.race([pump.suppressionReady(), startupFailurePromise]);
@@ -675,9 +646,7 @@ export async function startFaceTimeTalkDriver(params: {
       });
       await audioReadyPromise;
     },
-    processOutputSuppressed() {
-      return pump?.processOutputSuppressed() ?? false;
-    },
+    processOutputSuppressed: pump.processOutputSuppressed,
     realtimeActive() {
       return providerReady && !mediaSuspended && !stopped;
     },

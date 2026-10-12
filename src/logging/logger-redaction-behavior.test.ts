@@ -1,12 +1,19 @@
 // Logger redaction behavior tests cover secret scrubbing before log writes.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { markSqliteNativeOpenFailure } from "../infra/sqlite-error-diagnostics.js";
+import { PluginStateStoreError } from "../plugin-state/plugin-state-store.types.js";
+import {
+  capturePluginStateWorkerFailure,
+  restorePluginStateWorkerFailure,
+} from "../plugin-state/plugin-state-worker-errors.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import {
@@ -41,6 +48,7 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
   resetLogger();
   setLoggerOverride(null);
+  vi.restoreAllMocks();
 });
 
 afterAll(async () => {
@@ -48,28 +56,80 @@ afterAll(async () => {
 });
 
 describe("file log redaction", () => {
-  it("redacts credential fields before writing JSONL file logs", async () => {
-    const logPath = logPathTracker.nextPath();
-    setLoggerOverride({ level: "info", file: logPath });
+  it.each([
+    { canonical: false, aggregate: false },
+    { canonical: true, aggregate: false },
+    { canonical: false, aggregate: true },
+    { canonical: true, aggregate: true },
+  ])(
+    "retains plugin-state failure origin and redacted causes (canonical=$canonical, aggregate=$aggregate)",
+    async ({ canonical, aggregate }) => {
+      const logPath = logPathTracker.nextPath();
+      setLoggerOverride({ level: "info", file: logPath });
+      const native = Object.assign(
+        new Error(`Permission denied; Authorization: Bearer ${secret}`),
+        {
+          code: "EACCES",
+          errno: -13,
+          privateData: "unrelated stored value",
+        },
+      );
+      const cause = aggregate
+        ? new AggregateError([native], "Synthetic admission failed", {
+            cause: new Error("Synthetic cleanup failed"),
+          })
+        : new Error("Synthetic admission failed", { cause: native });
+      if (cause instanceof AggregateError) {
+        cause.errors.push(cause);
+      }
+      if (canonical) {
+        markSqliteNativeOpenFailure(cause);
+      }
+      const owner = { pid: 12345, threadId: 7, version: "2026.9.6" };
+      const original = new PluginStateStoreError("Failed to open the plugin state database.", {
+        code: "PLUGIN_STATE_OPEN_FAILED",
+        operation: "entries",
+        path: "/synthetic/state/openclaw.sqlite",
+        owner,
+        cause,
+      });
+      const error = restorePluginStateWorkerFailure(
+        structuredClone(capturePluginStateWorkerFailure(original)),
+      );
+      getChildLogger({ subsystem: "plugin-state-proof" }).warn(
+        { error },
+        "Background update failed",
+      );
 
-    getLogger().info({ apiKey: secret, message: "provider configured" });
-
-    const content = await readLogFile(logPath);
-    expect(content).toContain("provider configured");
-    expect(content).toContain('"apiKey"');
-    expect(content).not.toContain(secret);
-  });
-
-  it("redacts bearer tokens in file log message strings", async () => {
-    const logPath = logPathTracker.nextPath();
-    setLoggerOverride({ level: "info", file: logPath });
-
-    getLogger().warn({ message: `Authorization: Bearer ${secret}` });
-
-    const content = await readLogFile(logPath);
-    expect(content).toContain("Authorization: Bearer");
-    expect(content).not.toContain(secret);
-  });
+      const content = await readLogFile(logPath);
+      const record = JSON.parse(content.trim());
+      const nativeDetails = {
+        message: expect.stringContaining("Permission denied"),
+        errorCode: "EACCES",
+        errno: -13,
+      };
+      expect(record["1"].error).toMatchObject({
+        name: "PluginStateStoreError",
+        message: "Failed to open the plugin state database.",
+        code: "PLUGIN_STATE_OPEN_FAILED",
+        operation: "entries",
+        path: "/synthetic/state/openclaw.sqlite",
+        owner,
+        cause: {
+          message: "Synthetic admission failed",
+          ...(aggregate
+            ? {
+                cause: { message: "Synthetic cleanup failed" },
+                errors: [nativeDetails, { message: "Additional SQLite error cause omitted" }],
+              }
+            : { cause: nativeDetails }),
+        },
+      });
+      expect(content).not.toContain(secret);
+      expect(content).not.toContain("unrelated stored value");
+      expect(record["1"].error).not.toHaveProperty("stack");
+    },
+  );
 
   it("redacts structured authorization fields before writing JSONL file logs", async () => {
     const logPath = logPathTracker.nextPath();
@@ -294,15 +354,16 @@ describe("file log redaction", () => {
     setLoggerOverride({ level: "info", file: logPath });
     const hostnames = ["", "lr-macbook", "changed-host"];
     const resolvedHostnames: string[] = [];
-    loggerTest.setHostnameResolverForTests(() => {
+    const logger = getLogger();
+    vi.spyOn(os, "hostname").mockImplementation(() => {
       const hostname = hostnames.shift() ?? "changed-host";
       resolvedHostnames.push(hostname);
       return hostname;
     });
 
-    getLogger().info({ route: "/api/health" }, "first request");
-    getLogger().info({ route: "/api/health" }, "second request");
-    getLogger().info({ route: "/api/health" }, "third request");
+    logger.info({ route: "/api/health" }, "first request");
+    logger.info({ route: "/api/health" }, "second request");
+    logger.info({ route: "/api/health" }, "third request");
 
     const records = (await readLogFile(logPath))
       .trim()

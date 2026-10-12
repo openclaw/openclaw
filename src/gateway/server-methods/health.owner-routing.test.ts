@@ -9,6 +9,7 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import * as childRuntime from "../../infra/child-runtime-viability.js";
 import { beginLifecycleWriteCustody } from "../../infra/lifecycle-write-custody.js";
 import { recordStartupMigrationWarnings } from "../../infra/state-migrations.messages.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
@@ -47,6 +48,46 @@ async function callStatus(
   return respond;
 }
 
+function healthSnapshot(stateDir: string, overrides: Partial<HealthSummary> = {}): HealthSummary {
+  return {
+    ok: true,
+    ts: Date.now(),
+    durationMs: 1,
+    channels: {},
+    channelOrder: [],
+    channelLabels: {},
+    heartbeatSeconds: 0,
+    agents: [],
+    sessions: { path: path.join(stateDir, "sessions.json"), count: 0, recent: [] },
+    ...overrides,
+  };
+}
+
+function createHealthReader(
+  snapshot: HealthSummary,
+  getEventLoopHealth?: () => HealthSummary["eventLoop"],
+) {
+  const context = {
+    getHealthCache: () => snapshot,
+    refreshHealthSnapshot: vi.fn(async () => snapshot),
+    getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+    getEventLoopHealth,
+    logHealth: { error: vi.fn() },
+  };
+  return async (probe = false) => {
+    const respond = vi.fn();
+    await healthHandlers.health!({
+      req: {} as never,
+      params: { probe },
+      respond: respond as never,
+      context: context as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+    return respond;
+  };
+}
+
 describe("Gateway status owner routing", () => {
   it("reports only the current host's recorded shutdown budget and resident PID", async () => {
     await withStateDirEnv("openclaw-gateway-budget-status-", async ({ stateDir }) => {
@@ -72,6 +113,9 @@ describe("Gateway status owner routing", () => {
         for (const timeoutMs of [25_000, 325_000]) {
           recorded = { timeoutMs, reserveMs: 10_000, nativeStopBudget: true };
           const response = await callStatus(config, undefined, {}, host.capability);
+          expect(response).toHaveBeenCalledOnce();
+          expect(response.mock.calls[0]?.[0]).toBe(true);
+          expect(response.mock.calls[0]?.[2]).toBeUndefined();
           expect(response.mock.calls[0]?.[1]).toMatchObject({
             pid: process.pid,
             shutdownBudget: {
@@ -106,39 +150,10 @@ describe("Gateway status owner routing", () => {
           pendingAgents: ["second"],
           stage: "workspace plugins; agent second",
         };
-        const snapshot: HealthSummary = {
-          ok: true,
-          ts: Date.now(),
-          durationMs: 1,
-          channels: {},
-          channelOrder: [],
-          channelLabels: {},
-          heartbeatSeconds: 0,
-          agents: [],
-          sessions: { path: path.join(stateDir, "sessions.json"), count: 0, recent: [] },
-          modelRuntime: degraded,
-        };
-        const refreshHealthSnapshot = vi.fn(async () => snapshot);
-        const read = async () => {
-          if (surface === "status") {
-            return callStatus(config);
-          }
-          const respond = vi.fn();
-          await healthHandlers.health!({
-            req: {} as never,
-            params: { probe: surface === "refreshed health" },
-            respond: respond as never,
-            context: {
-              getHealthCache: () => snapshot,
-              refreshHealthSnapshot,
-              getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-              logHealth: { error: vi.fn() },
-            } as never,
-            client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-            isWebchatConnect: () => false,
-          });
-          return respond;
-        };
+        const snapshot = healthSnapshot(stateDir, { modelRuntime: degraded });
+        const readHealth = createHealthReader(snapshot);
+        const read = () =>
+          surface === "status" ? callStatus(config) : readHealth(surface === "refreshed health");
 
         setPreparedModelRuntimeStartupStatus(degraded);
         const acquiring = await read();
@@ -150,6 +165,46 @@ describe("Gateway status owner routing", () => {
         const recovered = await read();
         expect(recovered.mock.calls[0]?.[0]).toBe(true);
         expect(recovered.mock.calls[0]?.[1].modelRuntime).toEqual(complete);
+      });
+    },
+  );
+
+  it.each([
+    { changeDuringRead: true, reset: false },
+    { changeDuringRead: true, reset: true },
+    { changeDuringRead: false, reset: true },
+  ])(
+    "keeps live diagnostics out of cached health ($changeDuringRead, $reset)",
+    async ({ changeDuringRead, reset }) => {
+      await withStateDirEnv("openclaw-gateway-health-diagnostics-", async ({ stateDir }) => {
+        const initial = {
+          degraded: false,
+          degradedSinceMs: null,
+          reasons: [],
+          intervalMs: 1_000,
+          delayP99Ms: 20,
+          delayMaxMs: 25,
+          utilization: 0.2,
+          cpuCoreRatio: 0.1,
+        } satisfies NonNullable<HealthSummary["eventLoop"]>;
+        const cached = healthSnapshot(stateDir, { eventLoop: initial });
+        const removed = {
+          execPath: "/opt/homebrew/Cellar/node@24/24.20.0/bin/node",
+          available: false,
+        };
+        const read = vi.spyOn(childRuntime, "readChildRuntimeViability").mockReturnValue(removed);
+        let current: HealthSummary["eventLoop"] = changeDuringRead ? initial : undefined;
+        const next = reset ? undefined : { ...initial, cpuCoreRatio: 1.2 };
+        const request = createHealthReader(cached, () => current)();
+        current = next;
+        const respond = await request;
+        expect(respond).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[1].eventLoop).toBe(next);
+        expect(respond.mock.calls[0]?.[3]).toEqual({ cached: true });
+        expect(cached.eventLoop).toBe(initial);
+        expect(read).toHaveBeenCalled();
+        expect(respond.mock.calls[0]?.[1].childRuntime).toEqual(removed);
+        expect(cached).not.toHaveProperty("childRuntime");
       });
     },
   );
@@ -198,44 +253,65 @@ describe("Gateway status owner routing", () => {
     });
   });
 
-  it("reports current startup recovery failures with restricted details until their store heals", async () => {
-    await withStateDirEnv("openclaw-gateway-recovery-warning-", async ({ stateDir }) => {
-      const target = { agentId: "main", storePath: path.join(stateDir, "sessions.json") };
-      const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      const config = { agents: { entries: { main: {} } }, session: { store: target.storePath } };
-      const outcome = { ok: false, error: new Error("private store temporarily locked") } as const;
-      try {
-        recordStartupRecoveryStoreResult({ target, lifecycleGeneration, outcome });
-        const reader = await callStatus(config);
-        expect(reader.mock.calls[0]?.[1].startupRecoveryWarning).toContain("1 session store");
-        expect(reader.mock.calls[0]?.[1].startupRecoveryWarning).not.toContain("private store");
-        const admin = await callStatus(config, ["operator.admin"]);
-        expect(admin.mock.calls[0]?.[1].startupRecoveryWarning).toContain(
-          "private store temporarily locked",
-        );
+  it.each(["startupRecoveryWarning", "startupMigrationWarning"] as const)(
+    "restricts %s details to admins while retaining the reader's repair hint",
+    async (field) => {
+      await withStateDirEnv("openclaw-gateway-startup-warning-", async ({ stateDir }) => {
+        const target = { agentId: "main", storePath: path.join(stateDir, "sessions.json") };
+        const lifecycleGeneration = getAgentEventLifecycleGeneration();
+        const config = { agents: { entries: { main: {} } }, session: { store: target.storePath } };
+        const recovery = field === "startupRecoveryWarning";
+        const warning = recovery
+          ? "private store temporarily locked"
+          : `EACCES: permission denied, open '${path.join(stateDir, "private-bindings.json")}'`;
+        const hint = recovery
+          ? "1 session store"
+          : 'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
+        const outcome = { ok: false, error: new Error(warning) } as const;
+        try {
+          if (recovery) {
+            recordStartupRecoveryStoreResult({ target, lifecycleGeneration, outcome });
+          } else {
+            recordStartupMigrationWarnings([warning]);
+          }
+          const reader = await callStatus(config);
+          expect(reader.mock.calls[0]?.[0]).toBe(true);
+          expect(reader.mock.calls[0]?.[1][field]).toContain(hint);
+          expect(reader.mock.calls[0]?.[1][field]).not.toContain(stateDir);
+          expect(reader.mock.calls[0]?.[1][field]).not.toContain(
+            recovery ? "private store" : "EACCES",
+          );
+          const admin = await callStatus(config, ["operator.admin"]);
+          expect(admin.mock.calls[0]?.[0]).toBe(true);
+          expect(admin.mock.calls[0]?.[1][field]).toContain(warning);
+          if (!recovery) {
+            expect(admin.mock.calls[0]?.[1][field]).toContain(hint);
+            return;
+          }
 
-        recordStartupRecoveryStoreResult({ target, lifecycleGeneration, outcome: { ok: true } });
-        const healed = await callStatus(config, ["operator.admin"]);
-        expect(healed.mock.calls[0]?.[1].startupRecoveryWarning).toBeUndefined();
+          recordStartupRecoveryStoreResult({ target, lifecycleGeneration, outcome: { ok: true } });
+          const healed = await callStatus(config, ["operator.admin"]);
+          expect(healed.mock.calls[0]?.[1].startupRecoveryWarning).toBeUndefined();
 
-        rotateAgentEventLifecycleGeneration();
-        recordStartupRecoveryStoreResult({ target, lifecycleGeneration, outcome });
-        const restarted = await callStatus(config, ["operator.admin"]);
-        expect(restarted.mock.calls[0]?.[1].startupRecoveryWarning).toBeUndefined();
-      } finally {
-        rotateAgentEventLifecycleGeneration();
-      }
-    });
-  });
+          rotateAgentEventLifecycleGeneration();
+          recordStartupRecoveryStoreResult({ target, lifecycleGeneration, outcome });
+          const restarted = await callStatus(config, ["operator.admin"]);
+          expect(restarted.mock.calls[0]?.[1].startupRecoveryWarning).toBeUndefined();
+        } finally {
+          rotateAgentEventLifecycleGeneration();
+        }
+      });
+    },
+  );
 
-  it.each(["main", "molty"])(
+  it.each(["main", "molty", undefined])(
     "uses recorded owner %s for status and public main aliases",
     async (agentId) => {
       await withStateDirEnv("openclaw-gateway-status-owner-", async ({ stateDir }) => {
         const config = {
           agents: {
             ownership: "explicit",
-            defaults: { systemAgent: { agentId } },
+            ...(agentId ? { defaults: { systemAgent: { agentId } } } : {}),
             entries: { main: {}, molty: {} },
           },
           session: { store: path.join(stateDir, "agents", "{agentId}", "sessions.json") },
@@ -275,12 +351,18 @@ describe("Gateway status owner routing", () => {
                 workersCreated: 0,
                 activeTasks: 0,
                 pendingTasks: 0,
+                workerFailures: 0,
               },
             },
           }),
         );
         expect(respond.mock.calls[0]?.[2]).toBeUndefined();
-        expect(resolveRequestedSessionAgentId(config, "main")).toEqual({ ok: true, agentId });
+        const selected = resolveRequestedSessionAgentId(config, "main");
+        if (agentId) {
+          expect(selected).toEqual({ ok: true, agentId });
+        } else {
+          expect(selected).toMatchObject({ ok: false });
+        }
         expect(resolveRequestedSessionAgentId(config, "agent:molty:main")).toEqual({
           ok: true,
           agentId: "molty",
@@ -292,51 +374,4 @@ describe("Gateway status owner routing", () => {
       });
     },
   );
-
-  it("requires selection for a public main alias without a recorded default", () => {
-    expect(
-      resolveRequestedSessionAgentId(
-        { agents: { ownership: "explicit", entries: { main: {}, molty: {} } } },
-        "main",
-      ),
-    ).toMatchObject({ ok: false });
-  });
-
-  it("keeps single-agent status unchanged", async () => {
-    await withStateDirEnv("openclaw-gateway-status-single-", async ({ stateDir }) => {
-      const respond = await callStatus({
-        agents: { entries: { main: {} } },
-        session: { store: path.join(stateDir, "sessions.json") },
-      });
-
-      expect(respond).toHaveBeenCalledTimes(1);
-      expect(respond.mock.calls[0]?.[0]).toBe(true);
-      expect(respond.mock.calls[0]?.[2]).toBeUndefined();
-    });
-  });
-
-  it("limits startup migration details to admin status while readers retain the repair hint", async () => {
-    await withStateDirEnv("openclaw-gateway-status-warning-", async ({ stateDir }) => {
-      const warning = `EACCES: permission denied, open '${path.join(stateDir, "private-bindings.json")}'`;
-      recordStartupMigrationWarnings([warning]);
-      const config = {
-        agents: { entries: { main: {} } },
-        session: { store: path.join(stateDir, "sessions.json") },
-      };
-      const hint =
-        'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
-
-      const reader = await callStatus(config);
-      const readerPayload = reader.mock.calls[0]?.[1];
-      expect(reader.mock.calls[0]?.[0]).toBe(true);
-      expect(readerPayload.startupMigrationWarning).toContain(hint);
-      expect(readerPayload.startupMigrationWarning).not.toContain(stateDir);
-      expect(readerPayload.startupMigrationWarning).not.toContain("EACCES");
-
-      const admin = await callStatus(config, ["operator.admin"]);
-      expect(admin.mock.calls[0]?.[0]).toBe(true);
-      expect(admin.mock.calls[0]?.[1].startupMigrationWarning).toContain(warning);
-      expect(admin.mock.calls[0]?.[1].startupMigrationWarning).toContain(hint);
-    });
-  });
 });

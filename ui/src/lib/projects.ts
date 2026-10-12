@@ -12,6 +12,7 @@ type ProjectCatalogSnapshot = {
 };
 export type ProjectCatalog = {
   readonly snapshot: ProjectCatalogSnapshot;
+  readonly loading: boolean;
   subscribe: (listener: () => void) => () => void;
   refresh: (invalidate?: boolean) => Promise<void>;
 };
@@ -88,11 +89,7 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
     pending = null;
     snapshot = { result: null, repositories: [], ready: false };
   };
-  const notify = () => {
-    for (const listener of listeners) {
-      listener();
-    }
-  };
+  const notify = () => listeners.forEach((listener) => listener());
   const synchronize = () => {
     const next = gateway.snapshot;
     const nextSignature = JSON.stringify([
@@ -146,9 +143,6 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
         },
         () => {
           synchronize();
-          if (connection.isCurrent(scope)) {
-            snapshot = { ...snapshot, ready: true };
-          }
         },
       )
       .finally(() => {
@@ -167,16 +161,28 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
       }
       return snapshot;
     },
+    get loading() {
+      return pending !== null;
+    },
     refresh,
     subscribe(listener) {
       listeners.add(listener);
       if (!unsubscribe) {
-        unsubscribe = gateway.subscribe(() => {
+        const unsubscribeGateway = gateway.subscribe(() => {
           if (synchronize()) {
             notify();
             void refresh();
           }
         });
+        const unsubscribeEvents = gateway.subscribeEvents((event) => {
+          if (event.event === "config.changed") {
+            void refresh(true);
+          }
+        });
+        unsubscribe = () => {
+          unsubscribeGateway();
+          unsubscribeEvents();
+        };
       }
       synchronize();
       if (!snapshot.ready) {

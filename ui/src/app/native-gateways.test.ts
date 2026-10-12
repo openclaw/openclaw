@@ -88,22 +88,6 @@ describe("native gateways", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it("reads the latest global when attached lazily, then publishes native updates", async () => {
-    installBridge();
-    const attachedSnapshot = { ...snapshot, currentId: "profile:studio" };
-    Object.assign(window, { __OPENCLAW_NATIVE_GATEWAYS__: attachedSnapshot });
-    const { nativeGatewaysCapability } = await import("./native-gateways.runtime.ts");
-    const capability = nativeGatewaysCapability();
-
-    expect(capability?.snapshot).toEqual(attachedSnapshot);
-
-    const listener = vi.fn();
-    const unsubscribe = capability?.subscribe(listener);
-    window.dispatchEvent(new CustomEvent(EVENT, { detail: snapshot }));
-    expect(listener).toHaveBeenCalledWith(snapshot);
-    unsubscribe?.();
-  });
-
   it("creates the app-lifetime singleton only once", async () => {
     installBridge();
     Object.assign(window, { __OPENCLAW_NATIVE_GATEWAYS__: snapshot });

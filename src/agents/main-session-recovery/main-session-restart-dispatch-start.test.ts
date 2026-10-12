@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentTurnIo } from "../../gateway/agent-turn/types.js";
 import {
   registerChatAbortController,
@@ -30,13 +30,15 @@ const globalLane = "recovery-capacity-global";
 const startTurn = vi.hoisted(() => vi.fn<(params: { io: AgentTurnIo }) => Promise<void>>());
 
 vi.mock("../../gateway/server-methods.js", () => ({
-  authorizeGatewayRequestPreDispatch: async () => ({ error: null }),
   createRequestGatewayMethodRegistry: () => ({ isControlPlaneWrite: () => false }),
   runWithGatewayRequestEnvelope: async (
     _method: string,
     _client: unknown,
     run: () => Promise<unknown>,
   ) => await run(),
+}));
+vi.mock("../../gateway/server-methods/request-authorization.js", () => ({
+  authorizeGatewayRequestPreDispatch: async () => ({ error: null }),
 }));
 vi.mock("../../gateway/agent-turn/agent-request-preflight.js", () => ({
   prepareAgentRequestPreflight: ({ request }: { request: unknown }) => ({ request }),
@@ -75,6 +77,7 @@ describe("restart recovery startup ownership", () => {
     const preparation = createDeferred();
     const registered = createDeferred();
     const finish = createDeferred();
+    const executionEntered = createDeferred();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const timeoutMs = 60_000;
     const registration = registerChatAbortController({
@@ -148,6 +151,7 @@ describe("restart recovery startup ownership", () => {
         await lanes.enqueueSession(() =>
           lanes.enqueueGlobal(async () => {
             registration.markExecutionStarted();
+            executionEntered.resolve();
             if (stage !== "cached queue") {
               io.emitExecutionStarted?.();
             }
@@ -193,6 +197,14 @@ describe("restart recovery startup ownership", () => {
         setCommandLaneConcurrency(blockedLane, 1);
       }
       if (stage === "cached queue") {
+        if (!execution) {
+          throw new Error("expected recovery execution to be registered");
+        }
+        await awaitGateBeforeSettlement(
+          executionEntered.promise,
+          execution,
+          "recovery execution settled before entering its task",
+        );
         await vi.advanceTimersByTimeAsync(10_000);
       }
       expect(onSettled).not.toHaveBeenCalled();

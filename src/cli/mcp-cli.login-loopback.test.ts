@@ -29,14 +29,17 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.runtime }));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  defaultRuntime: mocks.runtime,
+}));
 vi.mock("../mcp/channel-server.js", () => ({ serveOpenClawChannelMcp: vi.fn() }));
 vi.mock("../agents/mcp-oauth.js", () => ({
   clearMcpOAuthCredentials: vi.fn(),
   clearMcpOAuthRequesters: vi.fn(),
   clearMcpOAuthServer: vi.fn(),
   completeMcpOAuthAuthorization: mocks.completeMcpOAuthAuthorization,
-  countMcpOAuthPrincipals: vi.fn(() => 0),
+  countMcpOAuthPrincipals: vi.fn(async () => 0),
   readMcpOAuthCredentialsStatus: mocks.readMcpOAuthCredentialsStatus,
   startMcpOAuthAuthorization: mocks.startMcpOAuthAuthorization,
 }));

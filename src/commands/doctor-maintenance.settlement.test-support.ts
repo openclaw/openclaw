@@ -1,0 +1,319 @@
+import * as childProcess from "node:child_process";
+import { promisify as promisifyCaptured } from "node:util";
+import { afterEach, beforeEach, expect, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type {
+  maybeStopManagedServiceBeforeMutableUpdate,
+  PreManagedServiceStop,
+  revalidateManagedGatewayServiceAfterUpdate,
+} from "../cli/update-cli/update-command-service-maintenance.js";
+import type { GatewayService, readGatewayServiceState } from "../daemon/service.js";
+import type { recordUpdateRunStep, finishUpdateRun } from "../infra/update-run-ledger.js";
+import { resolveCommandProcessSignal, retainCommandProcessCleanup } from "../process/exec-spawn.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import type { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease.js";
+import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+
+const boundary = vi.hoisted(() => ({
+  external: vi.fn(),
+  readLeases: vi.fn<typeof readActiveOpenClawAgentDatabaseLeasesReadOnly>(),
+  gatewayAcquire: vi.fn(),
+  admission: vi.fn(),
+  authority: vi.fn(),
+  scopeAssert: undefined as undefined | (() => void),
+  ownerAssert: vi.fn(),
+  schemas: vi.fn(),
+  lease: vi.fn(),
+  step: vi.fn<typeof recordUpdateRunStep>(),
+  finish: vi.fn<typeof finishUpdateRun>(),
+  owner: vi.fn(),
+  sleep: vi.fn(),
+  stop: vi.fn<typeof maybeStopManagedServiceBeforeMutableUpdate>(),
+  read: vi.fn<typeof readGatewayServiceState>(),
+  command: vi.fn<GatewayService["readCommand"]>(),
+  revalidate: vi.fn<typeof revalidateManagedGatewayServiceAfterUpdate>(),
+  repair: vi.fn(async () => ({})),
+  restart: vi.fn(),
+  health: vi.fn(),
+  resume: vi.fn(),
+  complete: vi.fn(),
+  close: vi.fn(),
+  release: vi.fn(),
+  unlock: vi.fn(),
+  log: vi.fn(),
+  native: vi.fn(() => {
+    throw new Error("Doctor settlement controls cannot start or inspect native processes");
+  }),
+}));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const { promisify } = await import("node:util");
+  const guarded = {
+    spawn: vi.fn(actual.spawn).mockImplementation(boundary.native),
+    spawnSync: vi.fn(actual.spawnSync).mockImplementation(boundary.native),
+    fork: vi.fn(actual.fork).mockImplementation(boundary.native),
+    exec: vi.fn(actual.exec).mockImplementation(boundary.native),
+    execSync: vi.fn(actual.execSync).mockImplementation(boundary.native),
+    execFile: vi.fn(actual.execFile).mockImplementation(boundary.native),
+    execFileSync: vi.fn(actual.execFileSync).mockImplementation(boundary.native),
+  };
+  Object.defineProperty(guarded.exec, promisify.custom, {
+    value: vi.fn(promisify(actual.exec)).mockImplementation(boundary.native),
+  });
+  Object.defineProperty(guarded.execFile, promisify.custom, {
+    value: vi.fn(promisify(actual.execFile)).mockImplementation(boundary.native),
+  });
+  return { ...actual, ...guarded, default: { ...actual, ...guarded } };
+});
+vi.mock("../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/paths.js")>()),
+  isDefaultInstallIdentity: () => true,
+}));
+vi.mock("../config/config.js", () => ({
+  readConfigFileSnapshot: async () => ({ config: {} }),
+}));
+vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-service-repair-policy.js")>()),
+  shouldManageGatewayService: async () => true,
+  isServiceRepairExternallyManaged: boundary.external,
+  resolveUpdateParentGatewayActivation: () => undefined,
+}));
+vi.mock("./doctor-update-refusal.js", () => ({
+  recordUpdateDoctorRefusal: vi.fn(),
+  resolveUpdateDoctorGitRecovery: async () => undefined,
+}));
+vi.mock("../infra/update-run-ledger.js", () => ({
+  listUpdateRuns: () => [],
+  recordUpdateRunRepairContinuation: vi.fn(),
+  createUpdateRun: () => ({ runId: "typed-refusal-run" }),
+  adoptUpdateRun: vi.fn(),
+  finishUpdateRun: boundary.finish,
+  heartbeatUpdateRun: vi.fn(),
+  recordUpdateRunDiagnostic: vi.fn(),
+  recordUpdateRunPhase: vi.fn(),
+  recordUpdateRunStep: boundary.step,
+}));
+vi.mock("../infra/update-run-activity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-run-activity.js")>()),
+  inspectUpdateRepairDriverAdmission: boundary.admission,
+}));
+vi.mock("../utils/sleep.js", () => ({ sleep: boundary.sleep }));
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: boundary.sleep,
+}));
+vi.mock("../infra/gateway-owner-lease.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-owner-lease.js")>()),
+  readGatewayOwnerLease: boundary.owner,
+}));
+vi.mock("./doctor-maintenance-inspection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-maintenance-inspection.js")>()),
+  readDoctorGatewayOwnerLease: boundary.owner,
+}));
+vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
+  acquireGatewayLock: boundary.gatewayAcquire,
+}));
+vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-db-async-lifecycle.js")>()),
+  createOpenClawDatabaseMaintenanceScope: () => {
+    let closing: Promise<void> | undefined;
+    return {
+      run: <T>(operation: () => T) => operation(),
+      close: () =>
+        (closing ??= (async () => {
+          await boundary.close();
+        })().catch((error: unknown) => {
+          closing = undefined;
+          throw error;
+        })),
+    };
+  },
+}));
+vi.mock("../state/openclaw-state-maintenance-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-maintenance-context.js")>()),
+  admitOpenClawMaintenanceLiveAuthorityReads: () => {},
+}));
+vi.mock("../state/openclaw-agent-db-lease.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-agent-db-lease.js")>()),
+  assertNoOpenClawAgentDatabaseLeasesReadOnly: boundary.lease,
+  readActiveOpenClawAgentDatabaseLeasesReadOnly: boundary.readLeases,
+}));
+vi.mock("../state/openclaw-database-preflight.js", () => ({
+  preflightOpenClawDatabaseSchemas: boundary.schemas,
+  assertOpenClawDatabasesReady: async () => {},
+}));
+vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
+  maybeStopManagedServiceBeforeMutableUpdate: boundary.stop,
+  revalidateManagedGatewayServiceAfterUpdate: boundary.revalidate,
+}));
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: () => ({ readCommand: boundary.command, restart: boundary.restart }),
+  readGatewayServiceState: boundary.read,
+}));
+vi.mock("../daemon/service-operation-lock.js", () => ({
+  withGatewayServiceOperationLock: async (
+    _env: NodeJS.ProcessEnv,
+    run: (assertCurrent: () => void) => Promise<unknown>,
+  ) => {
+    const previous = boundary.scopeAssert;
+    let active = true;
+    const assertCurrent = () => {
+      if (!active) {
+        throw new Error("native operation custody retired");
+      }
+      boundary.authority();
+    };
+    boundary.scopeAssert = assertCurrent;
+    try {
+      return await run(assertCurrent);
+    } finally {
+      active = false;
+      boundary.scopeAssert = previous;
+      boundary.unlock();
+    }
+  },
+}));
+vi.mock("./doctor-gateway-services.js", () => ({
+  maybeRepairGatewayServiceConfig: boundary.repair,
+}));
+vi.mock("./doctor-prompter.js", () => ({ createDoctorPrompter: () => ({}) }));
+vi.mock("../cli/update-cli/update-command-service-plan.js", () => ({
+  resolveUpdatedGatewayRestartPort: async () => 18789,
+}));
+vi.mock("../cli/daemon-cli/restart-health.js", async () => ({
+  waitForGatewayHealthyRestart: boundary.health,
+  renderRestartDiagnostics: (await import("../cli/daemon-cli/restart-health-diagnostics.js"))
+    .renderRestartDiagnostics,
+}));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const root = "/synthetic/doctor-install";
+const nativeFunctions = [
+  childProcess.spawn,
+  childProcess.spawnSync,
+  childProcess.fork,
+  childProcess.exec,
+  childProcess.execSync,
+  childProcess.execFile,
+  childProcess.execFileSync,
+  promisifyCaptured(childProcess.exec),
+  promisifyCaptured(childProcess.execFile),
+];
+let stopped: PreManagedServiceStop;
+beforeEach(() => {
+  vi.resetAllMocks();
+  for (const native of nativeFunctions) {
+    vi.mocked(native).mockImplementation(boundary.native);
+  }
+  boundary.external.mockReturnValue(false);
+  boundary.readLeases.mockReturnValue([]);
+  boundary.schemas.mockResolvedValue({ indeterminate: [] });
+  boundary.scopeAssert = undefined;
+  boundary.admission.mockReturnValue({ kind: "recovery", runs: [] });
+  boundary.gatewayAcquire.mockImplementation(() => ({
+    release: boundary.release,
+    assertCurrent: (assertPolicy?: () => void) => {
+      boundary.ownerAssert();
+      assertPolicy?.();
+    },
+    run<T>(operation: () => T): T {
+      boundary.ownerAssert();
+      return operation();
+    },
+  }));
+  vi.stubEnv("OPENCLAW_PROFILE", "default");
+  vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/doctor-state");
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", "/synthetic/doctor-state/openclaw.json");
+  vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
+  vi.spyOn(process, "kill").mockImplementation(boundary.native);
+  const serviceEnv = {
+    OPENCLAW_STATE_DIR: "/synthetic/doctor-state",
+    OPENCLAW_CONFIG_PATH: "/synthetic/doctor-state/openclaw.json",
+  };
+  const verdict = {
+    kind: "owned" as const,
+    root,
+    fingerprint: "fixture",
+    refreshDefinition: false,
+  };
+  stopped = {
+    stopped: true,
+    inspected: true,
+    runtimeInspected: true,
+    running: false,
+    offline: true,
+    serviceEnv,
+    serviceUpdateVerdict: verdict,
+    windowsTaskAutoStartRecovery: {
+      suspended: Promise.resolve(true),
+      beginMutation: () => {},
+      assertRecoveryCurrent: () => {},
+      restore: boundary.resume,
+      handoff: () => {},
+      complete: boundary.complete,
+      interrupted: () => false,
+    },
+  };
+  boundary.stop.mockImplementation(async (params) => {
+    if (params.phase === "inspect") {
+      return { ...stopped, stopped: false, running: true, offline: false };
+    }
+    params.onStopped?.(stopped);
+    return stopped;
+  });
+  const command = { programArguments: ["/synthetic/node", `${root}/openclaw.mjs`, "gateway"] };
+  boundary.command.mockResolvedValue(command);
+  boundary.revalidate.mockResolvedValue(verdict);
+  boundary.read.mockResolvedValue({
+    installed: true,
+    running: false,
+    env: serviceEnv,
+    command,
+    loadState: { status: "loaded" },
+    runtime: { status: "stopped" },
+  });
+  boundary.health.mockResolvedValue({ outcome: "ready", healthy: true });
+  boundary.native.mockImplementation(() => {
+    throw new Error("Doctor settlement controls cannot start or inspect native processes");
+  });
+});
+afterEach(() => {
+  try {
+    expect(boundary.native).not.toHaveBeenCalled();
+  } finally {
+    // Retained runtime owners can outlive this module; restore captured callables in place.
+    for (const native of nativeFunctions) {
+      vi.mocked(native).mockReset();
+    }
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  }
+});
+
+function begin(assertCurrent?: () => void) {
+  return beginDoctorMaintenance({
+    root,
+    options: { repair: true, nonInteractive: true },
+    runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+    assertCurrent,
+  });
+}
+
+function cleanupBarrier() {
+  const cleanup = createDeferredCore<"forced" | "uncertain">();
+  const joining = createDeferredCore();
+  return {
+    cleanup,
+    joining: joining.promise,
+    retain() {
+      retainCommandProcessCleanup(cleanup.promise);
+      resolveCommandProcessSignal()?.addEventListener("abort", () => joining.resolve(), {
+        once: true,
+      });
+    },
+  };
+}
+
+export { begin, boundary, cleanupBarrier, root, stopped, tempDirs };

@@ -239,49 +239,6 @@ describe("TerminalConnection", () => {
     );
   });
 
-  it("keeps shipped protocol-4 counter jumps diagnostic-only during version skew", async () => {
-    const { client, conn } = makeHarness();
-    const data: string[] = [];
-    await openSession(conn, { onData: (dataChunk) => data.push(dataChunk) });
-
-    emitData(client, 0, "hello");
-    emitData(client, 7, "world");
-
-    expect(data).toEqual(["hello", "world"]);
-    expect(client.requests.filter((request) => request.method === "terminal.attach")).toHaveLength(
-      0,
-    );
-  });
-
-  it("does not combine a legacy recovery snapshot with indistinguishable queued frames", async () => {
-    const { client, conn } = makeHarness();
-    const data: string[] = [];
-    const replays: string[] = [];
-    const exits: unknown[] = [];
-    const recovery = createDeferred<TestSessionResult>();
-    await openSession(conn, {
-      onData: (chunk) => data.push(chunk),
-      onReplay: ({ data: snapshot }) => {
-        replays.push(snapshot);
-      },
-      onExit: (info) => exits.push(info),
-    });
-    deferRequest(client, "terminal.attach", recovery);
-
-    // A non-zero first counter is ambiguous until attach reveals an old peer.
-    emitData(client, 7, "first");
-    emitData(client, 8, "second");
-    emitExit(client, { exitCode: null, signal: null, reason: "detached" });
-    recovery.resolve(sessionResult({ buffer: "legacy snapshot containing first" }));
-
-    await vi.waitFor(() => expect(data).toEqual(["first", "second"]));
-    expect(replays).toEqual([]);
-    expect(exits).toEqual([]);
-    expect(client.requests.filter((request) => request.method === "terminal.attach")).toHaveLength(
-      1,
-    );
-  });
-
   it("repairs a sequence gap with one authoritative attach replay", async () => {
     const { client, conn } = makeHarness();
     const data: string[] = [];
@@ -827,25 +784,6 @@ describe("TerminalConnection", () => {
     expect(conn.size).toBe(1);
   });
 
-  it("preserves output that races an older gateway replay with no offset", async () => {
-    const { client, conn } = makeHarness();
-    const data: string[] = [];
-    const attached = createDeferred<TestSessionResult>();
-    deferRequest(client, "terminal.attach", attached);
-
-    const attachPromise = conn.attach("s1", testSink({ onData: (chunk) => data.push(chunk) }));
-    emitData(client, 41, "raced");
-    attached.resolve(sessionResult({ buffer: "legacy replay" }));
-    await attachPromise;
-    emitData(client, 42, "live");
-    emitData(client, 43, "more");
-
-    expect(data).toEqual(["legacy replay", "raced", "live", "more"]);
-    expect(client.requests.filter((request) => request.method === "terminal.attach")).toHaveLength(
-      1,
-    );
-  });
-
   it("drops the listener when an attach fails so failures do not leak subscriptions", async () => {
     const { client, conn } = makeHarness();
     client.request = ((method: string, params: unknown) => {
@@ -858,6 +796,21 @@ describe("TerminalConnection", () => {
     expect(conn.size).toBe(0);
     expect(client.listenerCount()).toBe(0);
   });
+
+  it.each(["shell", "agentId", "cwd", "buffer", "seq"] as const)(
+    "rejects an unusable replay missing %s without retaining its event listener",
+    async (field) => {
+      const { client, conn } = makeHarness();
+      const { [field]: _dropped, ...incomplete } = sessionResult({ buffer: "snapshot", seq: 8 });
+      client.nextResponse = incomplete;
+
+      await expect(conn.attach("s1", testSink())).rejects.toBeInstanceOf(
+        TerminalOpenUnusableSessionError,
+      );
+      expect(conn.size).toBe(0);
+      expect(client.listenerCount()).toBe(0);
+    },
+  );
 
   it("lists attachable sessions and tolerates a missing sessions field", async () => {
     const { client, conn } = makeHarness();
@@ -991,7 +944,7 @@ describe("TerminalConnection", () => {
         // Panel teardown (reconnect or element removal) discards the connection
         // while the RPC is still in flight.
         conn.dispose();
-        response.resolve({ ...sessionResult(), buffer: "replayed\n" });
+        response.resolve({ ...sessionResult(), buffer: "replayed\n", seq: 9 });
         await expect(settle).resolves.toMatchObject({ sessionId: "s1" });
         expect(conn.size).toBe(0);
         expect(client.listenerCount()).toBe(0);

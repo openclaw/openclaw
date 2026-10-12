@@ -1,5 +1,9 @@
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, onTestFinished, vi } from "vitest";
+import type { AgentsListResult } from "../api/types.ts";
+import type { ApplicationGateway } from "../app/context.ts";
 import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
+import { storeSidebarSessionOwnerFilter } from "../components/app-sidebar-session-types.ts";
 import { disposeSidebarContextLifecycles } from "./app-sidebar-context-lifecycle.ts";
 import { settleLitElements } from "./lit-settle.ts";
 import { createStorageMock } from "./storage.ts";
@@ -58,6 +62,8 @@ export function setupSidebarTest() {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
     await vi.dynamicImportSettled();
     // Removing a prompt's DOM does not settle its promise or release its reentrancy guard.
@@ -99,3 +105,37 @@ export function focusSidebarPersonWithKeyboard(target: HTMLElement): void {
   onTestFinished(() => keyboardFocus.mockRestore());
   target.focus();
 }
+
+/** Select a view through its actual fixed rail control. */
+export async function selectSidebarView(
+  sidebar: HTMLElement & Pick<AppSidebarSessionNavigationElement, "updateComplete">,
+  view: "pages" | "sessions" | "online",
+): Promise<void> {
+  const button = sidebar.querySelector<HTMLButtonElement>(`[data-navigation-view="${view}"]`);
+  if (!button) {
+    throw new Error(`Expected sidebar ${view} control`);
+  }
+  button.click();
+  await sidebar.updateComplete;
+}
+
+// General sidebar cases exercise all rows; default-owner regressions mount directly.
+export function seedSidebarEveryonePreference(gateway: ApplicationGateway): void {
+  const selfUserId = gateway.snapshot.selfUser?.id;
+  if (!selfUserId) {
+    return;
+  }
+  const gatewayUrl = gateway.connection.gatewayUrl;
+  const key = `openclaw.control.sidebarSessionOwnerFilter.v1:${gatewayOriginScope(gatewayUrl)}:${encodeURIComponent(selfUserId)}`;
+  if (localStorage.getItem(key) === null) {
+    storeSidebarSessionOwnerFilter(gatewayUrl, selfUserId, { ownerId: null, involvingMe: false });
+  }
+}
+
+export const manyAgents = (count: number) =>
+  ({
+    defaultId: "agent-1",
+    mainKey: "main",
+    scope: "per-sender",
+    agents: Array.from({ length: count }, (_, index) => ({ id: `agent-${index + 1}` })),
+  }) as AgentsListResult;

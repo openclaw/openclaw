@@ -34,9 +34,7 @@ function listWhatsAppAuthDirs(
   const oauthDir = resolveOAuthDir(env);
   const accountsRoot = path.join(oauthDir, "whatsapp");
   const channel = cfg.channels?.whatsapp;
-  const authDirs = new Set<string>([oauthDir, path.join(accountsRoot, DEFAULT_ACCOUNT_ID)]);
-
-  addAccountAuthDirs(authDirs, DEFAULT_ACCOUNT_ID, undefined, accountsRoot, env);
+  const authDirs = new Set<string>([path.join(accountsRoot, DEFAULT_ACCOUNT_ID)]);
 
   if (channel?.defaultAccount?.trim()) {
     addAccountAuthDirs(

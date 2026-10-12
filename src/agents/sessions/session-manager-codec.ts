@@ -4,6 +4,7 @@ import { buildSessionContext as buildCoreSessionContext } from "../../../package
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
 import { logWarn } from "../../logger.js";
+import { projectModelContextMessages } from "../../shared/model-context-message.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import type {
@@ -11,6 +12,7 @@ import type {
   FileEntry,
   SessionContext,
   SessionEntry,
+  SessionHeader,
 } from "./session-manager-types.js";
 
 export {
@@ -20,6 +22,21 @@ export {
   parseParentLinkedOpaqueEntry,
   partitionSessionFileEntries,
 } from "../../config/sessions/session-entry-codec.js";
+
+export function isTalkRealtimeVoiceEntry(entry: SessionEntry): boolean {
+  if (
+    entry.type !== "message" ||
+    (entry.message.role !== "user" && entry.message.role !== "assistant")
+  ) {
+    return false;
+  }
+  const provenance: unknown = Reflect.get(entry.message, "provenance");
+  return (
+    isRecord(provenance) &&
+    provenance.kind === "realtime_voice" &&
+    provenance.sourceChannel === "talk"
+  );
+}
 
 export function isSessionContextMetadataEntry(entry: SessionEntry): boolean {
   return (
@@ -107,22 +124,25 @@ export function migrateSessionEntries(entries: FileEntry[]): void {
   migrateToCurrentVersion(entries);
 }
 
-export function parseSessionEntries(content: string): FileEntry[] {
-  return parseJsonlEntries(content);
+export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {
+  const boundary = entries.findLast(
+    (entry) => entry.type === "reset" || entry.type === "compaction",
+  );
+  return boundary?.type === "compaction" ? boundary : null;
 }
 
-export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    // SAFETY: The reverse index stays within the canonical session entries.
-    const entry = entries[index]!;
-    if (entry.type === "reset") {
-      return null;
-    }
-    if (entry.type === "compaction") {
-      return entry;
+export function cloneSessionModelContextEntries(
+  header: SessionHeader | null,
+  branch: readonly SessionEntry[],
+): FileEntry[] {
+  // Public manager entries are mutable; preserve durable bytes before publication.
+  const events = structuredClone([...(header ? [header] : []), ...branch]);
+  for (const entry of events) {
+    if (entry.type === "message") {
+      entry.message = projectModelContextMessages([entry.message])[0]!;
     }
   }
-  return null;
+  return events;
 }
 
 export function buildSessionContext(
@@ -140,13 +160,7 @@ export function buildSessionContext(
     }
   }
 
-  let byId = contextById;
-  if (!byId) {
-    byId = new Map<string, SessionEntry>();
-    for (const entry of contextEntries) {
-      byId.set(entry.id, entry);
-    }
-  }
+  const byId = contextById ?? new Map(contextEntries.map((entry) => [entry.id, entry]));
 
   if (leafId === null) {
     return { messages: [], thinkingLevel: "off", model: null };
@@ -169,7 +183,7 @@ export function buildSessionContext(
   return buildCoreSessionContext(path as CoreSessionTreeEntry[]) as SessionContext;
 }
 
-function parseJsonlEntries(content: string): FileEntry[] {
+export function parseSessionEntries(content: string): FileEntry[] {
   const entries: FileEntry[] = [];
   let skipped = 0;
   for (const line of content.trim().split("\n")) {

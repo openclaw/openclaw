@@ -8,7 +8,11 @@ import {
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
-import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "./diagnostic.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import { startGatewayDiagnosticHeartbeat, stopGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
 const native = vi.hoisted(() => {
@@ -42,10 +46,12 @@ afterEach(() => {
 });
 
 it("owns demand, queued GC batches, and disable/re-enable through the existing heartbeat", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
   const now = vi.spyOn(performance, "now").mockReturnValue(100);
   const durations: number[] = [];
-  const start = () => startDiagnosticHeartbeat({}, { sampleLiveness: () => null });
+  const start = () =>
+    startGatewayDiagnosticHeartbeat(scheduler, {}, { sampleLiveness: () => null });
   const publicUnsubscribe = onDiagnosticEvent(() => {});
   let unsubscribe = () => {};
   try {
@@ -65,9 +71,9 @@ it("owns demand, queued GC batches, and disable/re-enable through the existing h
       },
       { include: ["diagnostic.gc"] },
     );
-    await vi.advanceTimersByTimeAsync(29_999);
+    await clock.advanceBy(29_999);
     expect(native.observers).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(1);
+    await clock.advanceBy(1);
     const first = native.observers[0]!;
     expect(first.observe).toHaveBeenCalledExactlyOnceWith({ entryTypes: ["gc"] });
     start();
@@ -82,7 +88,7 @@ it("owns demand, queued GC batches, and disable/re-enable through the existing h
 
     setDiagnosticsEnabledForProcess(false);
     first.deliver([{ startTime: 150, duration: 99 }]);
-    stopDiagnosticHeartbeat();
+    stopGatewayDiagnosticHeartbeat();
     expect(first.disconnect).toHaveBeenCalledTimes(1);
     now.mockReturnValue(200);
     setDiagnosticsEnabledForProcess(true);
@@ -97,9 +103,9 @@ it("owns demand, queued GC batches, and disable/re-enable through the existing h
 
     unsubscribe();
     expect(hasInternalDiagnosticEventInterest("diagnostic.gc")).toBe(false);
-    await vi.advanceTimersByTimeAsync(30_000);
+    await clock.advanceBy(30_000);
     expect(native.observers[1]!.disconnect).toHaveBeenCalledTimes(1);
-    stopDiagnosticHeartbeat();
+    stopGatewayDiagnosticHeartbeat();
     expect(native.observers[1]!.disconnect).toHaveBeenCalledTimes(1);
   } finally {
     unsubscribe();

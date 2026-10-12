@@ -1,7 +1,10 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
-import type { MusicGenerationProvider } from "openclaw/plugin-sdk/music-generation";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import type {
+  MusicGenerationModeCapabilities,
+  MusicGenerationProvider,
+} from "openclaw/plugin-sdk/music-generation";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import type {
   VideoGenerationModeCapabilities,
   VideoGenerationProvider,
@@ -26,8 +29,10 @@ export const GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS = [4, 6, 8] as const;
 export const GOOGLE_VIDEO_MIN_DURATION_SECONDS = GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[0];
 export const GOOGLE_VIDEO_MAX_DURATION_SECONDS = GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[2];
 
-function isGoogleProviderConfigured(ctx: VideoGenerationProviderConfiguredContext): boolean {
-  return isProviderApiKeyConfigured({ provider: "google", ...ctx });
+function isGoogleProviderConfiguredAsync(
+  ctx: VideoGenerationProviderConfiguredContext,
+): Promise<boolean> {
+  return isProviderApiKeyConfiguredAsync({ provider: "google", ...ctx });
 }
 
 function createGoogleVideoCommonCapabilities() {
@@ -45,7 +50,7 @@ function createGoogleVideoCommonCapabilities() {
 
 export function createGoogleImageGenerationProviderMetadata(): Omit<
   ImageGenerationProvider,
-  "generateImage" | "isConfigured"
+  "generateImage" | "isConfigured" | "isConfiguredAsync"
 > {
   return {
     id: "google",
@@ -95,34 +100,28 @@ export function createGoogleMusicGenerationProviderMetadata(): Omit<
   MusicGenerationProvider,
   "generateMusic"
 > {
+  const createModeCapabilities = (maxInputImages?: number): MusicGenerationModeCapabilities => ({
+    maxTracks: 1,
+    ...(maxInputImages === undefined ? {} : { maxInputImages }),
+    supportsLyrics: true,
+    supportsInstrumental: true,
+    supportsFormat: true,
+    supportedFormatsByModel: {
+      [DEFAULT_GOOGLE_MUSIC_MODEL]: ["mp3"],
+      [GOOGLE_PRO_MUSIC_MODEL]: ["mp3", "wav"],
+    },
+  });
   return {
     id: "google",
     label: "Google",
     defaultModel: DEFAULT_GOOGLE_MUSIC_MODEL,
     models: [DEFAULT_GOOGLE_MUSIC_MODEL, GOOGLE_PRO_MUSIC_MODEL],
-    isConfigured: isGoogleProviderConfigured,
+    isConfiguredAsync: isGoogleProviderConfiguredAsync,
     capabilities: {
-      generate: {
-        maxTracks: 1,
-        supportsLyrics: true,
-        supportsInstrumental: true,
-        supportsFormat: true,
-        supportedFormatsByModel: {
-          [DEFAULT_GOOGLE_MUSIC_MODEL]: ["mp3"],
-          [GOOGLE_PRO_MUSIC_MODEL]: ["mp3", "wav"],
-        },
-      },
+      generate: createModeCapabilities(),
       edit: {
         enabled: true,
-        maxTracks: 1,
-        maxInputImages: GOOGLE_MAX_INPUT_IMAGES,
-        supportsLyrics: true,
-        supportsInstrumental: true,
-        supportsFormat: true,
-        supportedFormatsByModel: {
-          [DEFAULT_GOOGLE_MUSIC_MODEL]: ["mp3"],
-          [GOOGLE_PRO_MUSIC_MODEL]: ["mp3", "wav"],
-        },
+        ...createModeCapabilities(GOOGLE_MAX_INPUT_IMAGES),
       },
     },
   };
@@ -141,7 +140,7 @@ export function createGoogleVideoGenerationProviderMetadata(): Omit<
       "veo-3.1-generate-preview",
       "veo-3.1-lite-generate-preview",
     ],
-    isConfigured: isGoogleProviderConfigured,
+    isConfiguredAsync: isGoogleProviderConfiguredAsync,
     capabilities: {
       generate: {
         maxVideos: 1,

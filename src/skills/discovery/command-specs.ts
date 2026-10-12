@@ -1,4 +1,3 @@
-// Skill command spec helpers expose skill-provided commands to model/tool surfaces.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -10,11 +9,9 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSkillTelemetrySource } from "../loading/source.js";
-import {
-  filterWorkspaceSkills,
-  loadVisibleSkills,
-  prepareWorkspaceSkills,
-} from "../loading/workspace-skill-loader.js";
+import { filterSkillEntries } from "../loading/workspace-skill-filter.js";
+import { loadVisibleSkills, prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { resolveSkillFileHost } from "../skill-file-host.js";
 import type {
   SkillEligibilityContext,
   SkillCommandSpec,
@@ -23,50 +20,37 @@ import type {
 } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { sanitizeSkillCommandName, SKILL_COMMAND_MAX_LENGTH } from "./command-name.js";
-import { filterUserInvocableSkillEntries, isSkillPromptVisible } from "./skill-index.js";
+import { recordSkillCommandFileHost } from "./skill-command-provenance.js";
+import { isSkillPromptVisible, isSkillUserInvocable } from "./skill-index.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = createDedupeCache({ ttlMs: 0, maxSize: 1024 });
 
 // De-duplicate noisy skill command diagnostics across large workspace scans.
-function debugSkillCommandOnce(
+function logSkillCommandOnce(
   messageKey: string,
   message: string,
   meta?: Record<string, unknown>,
+  level: "debug" | "trace" = "debug",
 ) {
   if (skillCommandDebugOnce.check(messageKey)) {
     return;
   }
-  skillsLogger.debug(message, meta);
-}
-
-function traceSkillCommandOnce(
-  messageKey: string,
-  message: string,
-  meta?: Record<string, unknown>,
-) {
-  if (skillCommandDebugOnce.check(messageKey)) {
-    return;
-  }
-  skillsLogger.trace(message, meta);
+  skillsLogger[level](message, meta);
 }
 
 function resolveUniqueSkillCommandName(base: string, used: Set<string>): string {
-  const normalizedBase = normalizeLowercaseStringOrEmpty(base);
-  if (!used.has(normalizedBase)) {
+  if (!used.has(base)) {
     return base;
   }
   for (let index = 2; index < 1000; index += 1) {
     const suffix = `_${index}`;
-    const maxBaseLength = Math.max(1, SKILL_COMMAND_MAX_LENGTH - suffix.length);
-    const trimmedBase = base.slice(0, maxBaseLength);
-    const candidate = `${trimmedBase}${suffix}`;
-    const candidateKey = normalizeLowercaseStringOrEmpty(candidate);
-    if (!used.has(candidateKey)) {
+    const candidate = `${base.slice(0, SKILL_COMMAND_MAX_LENGTH - suffix.length)}${suffix}`;
+    if (!used.has(candidate)) {
       return candidate;
     }
   }
-  return `${base.slice(0, Math.max(1, SKILL_COMMAND_MAX_LENGTH - 2))}_x`;
+  return `${base.slice(0, SKILL_COMMAND_MAX_LENGTH - 2)}_x`;
 }
 
 type WorkspaceSkillCommandOptions = {
@@ -108,11 +92,7 @@ export function buildWorkspaceSkillCommandSpecs(
 ): SkillCommandSpec[] {
   const loadOptions = { ...resolveCommandSkillLoadOptions(opts), gatewayOnly: opts?.gatewayOnly };
   const eligible = opts?.entries
-    ? filterWorkspaceSkills(opts.entries, {
-        config: opts?.config,
-        skillFilter: loadOptions.skillFilter,
-        eligibility: opts?.eligibility,
-      })
+    ? filterSkillEntries(opts.entries, loadOptions)
     : loadVisibleSkills(workspaceDir, loadOptions);
   return assembleWorkspaceSkillCommandSpecs(workspaceDir, eligible, opts);
 }
@@ -123,11 +103,14 @@ export async function prepareWorkspaceSkillCommandSpecs(
   opts: Omit<WorkspaceSkillCommandOptions, "entries" | "eligibility"> & {
     eligibility: SkillEligibilityContext;
   },
+  assertCurrent?: () => void,
 ): Promise<SkillCommandSpec[]> {
-  const eligible = await prepareWorkspaceSkills(workspaceDir, {
-    ...resolveCommandSkillLoadOptions(opts),
-    eligibility: opts.eligibility,
-  });
+  const eligible = await prepareWorkspaceSkills(
+    workspaceDir,
+    resolveCommandSkillLoadOptions(opts),
+    assertCurrent,
+  );
+  assertCurrent?.();
   return assembleWorkspaceSkillCommandSpecs(workspaceDir, eligible, opts);
 }
 
@@ -136,52 +119,56 @@ function assembleWorkspaceSkillCommandSpecs(
   eligible: SkillEntry[],
   opts?: WorkspaceSkillCommandOptions,
 ): SkillCommandSpec[] {
-  const userInvocable = filterUserInvocableSkillEntries(eligible);
+  const userInvocable = eligible.filter(isSkillUserInvocable);
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {
     used.add(normalizeLowercaseStringOrEmpty(reserved));
+    used.add(sanitizeSkillCommandName(reserved));
   }
 
   const specs: SkillCommandSpec[] = [];
-  for (const entry of userInvocable) {
-    const rawName = entry.skill.name;
+  const claimName = (rawName: string, bundle = false) => {
+    const prefix = bundle ? "bundle-" : "";
+    const label = bundle ? "bundle" : "skill";
+    const level = bundle ? "debug" : "trace";
     const base = sanitizeSkillCommandName(rawName);
     if (base !== rawName) {
-      traceSkillCommandOnce(
-        `sanitize:${rawName}:${base}`,
-        `Sanitized skill command name "${rawName}" to "/${base}".`,
+      logSkillCommandOnce(
+        `${prefix}sanitize:${rawName}:${base}`,
+        `Sanitized ${label} command name "${rawName}" to "/${base}".`,
         { rawName, sanitized: `/${base}` },
+        level,
       );
     }
     const unique = resolveUniqueSkillCommandName(base, used);
     if (unique !== base) {
-      traceSkillCommandOnce(
-        `dedupe:${rawName}:${unique}`,
-        `De-duplicated skill command name for "${rawName}" to "/${unique}".`,
+      logSkillCommandOnce(
+        `${prefix}dedupe:${rawName}:${unique}`,
+        `De-duplicated ${label} command name for "${rawName}" to "/${unique}".`,
         { rawName, deduped: `/${unique}` },
+        level,
       );
     }
-    used.add(normalizeLowercaseStringOrEmpty(unique));
+    used.add(unique);
+    return unique;
+  };
+  for (const entry of userInvocable) {
+    const rawName = entry.skill.name;
+    const unique = claimName(rawName);
     const description = entry.skill.description?.trim() || rawName;
     const dispatch = entry.disableCommandDispatch
       ? undefined
       : (() => {
-          const kindRaw = normalizeLowercaseStringOrEmpty(
-            entry.frontmatter?.["command-dispatch"] ??
-              entry.frontmatter?.["command_dispatch"] ??
-              "",
-          );
-          if (!kindRaw || kindRaw !== "tool") {
+          const readCommandField = (key: string) =>
+            entry.frontmatter?.[key] ?? entry.frontmatter?.[key.replaceAll("-", "_")] ?? "";
+          const kindRaw = normalizeLowercaseStringOrEmpty(readCommandField("command-dispatch"));
+          if (kindRaw !== "tool") {
             return undefined;
           }
 
-          const toolName = (
-            entry.frontmatter?.["command-tool"] ??
-            entry.frontmatter?.["command_tool"] ??
-            ""
-          ).trim();
+          const toolName = readCommandField("command-tool").trim();
           if (!toolName) {
-            debugSkillCommandOnce(
+            logSkillCommandOnce(
               `dispatch:missingTool:${rawName}`,
               `Skill command "/${unique}" requested tool dispatch but did not provide command-tool. Ignoring dispatch.`,
               { skillName: rawName, command: unique },
@@ -189,14 +176,9 @@ function assembleWorkspaceSkillCommandSpecs(
             return undefined;
           }
 
-          const argModeRaw = normalizeOptionalLowercaseString(
-            entry.frontmatter?.["command-arg-mode"] ??
-              entry.frontmatter?.["command_arg_mode"] ??
-              "",
-          );
-          const argMode = !argModeRaw || argModeRaw === "raw" ? "raw" : null;
-          if (!argMode) {
-            debugSkillCommandOnce(
+          const argModeRaw = normalizeOptionalLowercaseString(readCommandField("command-arg-mode"));
+          if (argModeRaw && argModeRaw !== "raw") {
+            logSkillCommandOnce(
               `dispatch:badArgMode:${rawName}:${argModeRaw}`,
               `Skill command "/${unique}" requested tool dispatch but has unknown command-arg-mode. Falling back to raw.`,
               { skillName: rawName, command: unique, argMode: argModeRaw },
@@ -206,7 +188,7 @@ function assembleWorkspaceSkillCommandSpecs(
           return { kind: "tool", toolName, argMode: "raw" } as const;
         })();
 
-    specs.push({
+    const spec: SkillCommandSpec = {
       name: unique,
       displayName: entry.skill.displayName ?? rawName,
       skillFile: canonicalizePath(entry.skill.filePath),
@@ -215,7 +197,12 @@ function assembleWorkspaceSkillCommandSpecs(
       modelVisible: isSkillPromptVisible(entry),
       skillSource: resolveSkillTelemetrySource(entry.skill),
       ...(dispatch ? { dispatch } : {}),
-    });
+    };
+    const fileHost = resolveSkillFileHost(entry.skill);
+    if (fileHost) {
+      recordSkillCommandFileHost(spec, fileHost);
+    }
+    specs.push(spec);
   }
 
   const bundleCommands = loadEnabledClaudeBundleCommands({
@@ -223,25 +210,8 @@ function assembleWorkspaceSkillCommandSpecs(
     cfg: opts?.config,
   });
   for (const entry of bundleCommands) {
-    const base = sanitizeSkillCommandName(entry.rawName);
-    if (base !== entry.rawName) {
-      debugSkillCommandOnce(
-        `bundle-sanitize:${entry.rawName}:${base}`,
-        `Sanitized bundle command name "${entry.rawName}" to "/${base}".`,
-        { rawName: entry.rawName, sanitized: `/${base}` },
-      );
-    }
-    const unique = resolveUniqueSkillCommandName(base, used);
-    if (unique !== base) {
-      debugSkillCommandOnce(
-        `bundle-dedupe:${entry.rawName}:${unique}`,
-        `De-duplicated bundle command name for "${entry.rawName}" to "/${unique}".`,
-        { rawName: entry.rawName, deduped: `/${unique}` },
-      );
-    }
-    used.add(normalizeLowercaseStringOrEmpty(unique));
     specs.push({
-      name: unique,
+      name: claimName(entry.rawName, true),
       skillName: entry.rawName,
       description: entry.description,
       modelVisible: false,

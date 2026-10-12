@@ -1,6 +1,5 @@
-// Logbook analysis pipeline: frames -> observations -> revised timeline cards.
-// Pure parsing/validation lives here so tests can cover it without the SDK.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { asRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { dayKeyFor } from "./day.js";
 import { CARD_CATEGORIES } from "./prompts.js";
 import type { LogbookCard, LogbookCardDraft, LogbookDistraction } from "./types.js";
@@ -59,7 +58,6 @@ function clockToMs(day: string, clock: string): number | null {
   return date.getTime();
 }
 
-/** Strips code fences and extracts the outermost JSON array/object from model text. */
 function extractJsonPayload(raw: string): string {
   const cleaned = raw.replaceAll("```json", "").replaceAll("```", "").trim();
   const firstBracket = cleaned.search(/[[{]/);
@@ -87,20 +85,15 @@ export function parseObservationSegments(params: {
   } catch {
     return [];
   }
-  const list = Array.isArray(parsed)
-    ? parsed
-    : parsed &&
-        typeof parsed === "object" &&
-        Array.isArray((parsed as { segments?: unknown }).segments)
-      ? (parsed as { segments: unknown[] }).segments
-      : [];
+  const candidate = Array.isArray(parsed) ? parsed : asRecord(parsed).segments;
+  const list = Array.isArray(candidate) ? candidate : [];
   const segments: ParsedSegment[] = [];
   for (const entry of list) {
     if (!entry || typeof entry !== "object") {
       continue;
     }
     const record = entry as Record<string, unknown>;
-    const description = typeof record.description === "string" ? record.description.trim() : "";
+    const description = normalizeOptionalString(record.description);
     const startMs = typeof record.start === "string" ? clockToMs(params.day, record.start) : null;
     const endMs = typeof record.end === "string" ? clockToMs(params.day, record.end) : null;
     if (!description || startMs === null || endMs === null) {
@@ -112,17 +105,6 @@ export function parseObservationSegments(params: {
   }
   return segments.toSorted((a, b) => a.startMs - b.startMs);
 }
-
-type RawCard = {
-  startTime?: unknown;
-  endTime?: unknown;
-  category?: unknown;
-  title?: unknown;
-  summary?: unknown;
-  detailedSummary?: unknown;
-  distractions?: unknown;
-  appSites?: unknown;
-};
 
 type CardParseResult = { ok: true; drafts: LogbookCardDraft[] } | { ok: false; error: string };
 
@@ -155,7 +137,7 @@ function parseDistractions(day: string, value: unknown): LogbookDistraction[] {
     const record = entry as Record<string, unknown>;
     const startMs = typeof record.startTime === "string" ? clockToMs(day, record.startTime) : null;
     const endMs = typeof record.endTime === "string" ? clockToMs(day, record.endTime) : null;
-    const title = typeof record.title === "string" ? record.title.trim() : "";
+    const title = normalizeOptionalString(record.title);
     if (startMs === null || endMs === null || !title || endMs <= startMs) {
       continue;
     }
@@ -164,12 +146,7 @@ function parseDistractions(day: string, value: unknown): LogbookDistraction[] {
   return distractions;
 }
 
-export function parseCardsJson(params: {
-  raw: string;
-  day: string;
-  windowStartMs: number;
-  windowEndMs: number;
-}): CardParseResult {
+export function parseCardsJson(params: { raw: string; day: string }): CardParseResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(extractJsonPayload(params.raw));
@@ -186,9 +163,9 @@ export function parseCardsJson(params: {
       problems.push(`Card ${index}: not an object.`);
       return;
     }
-    const raw = entry as RawCard;
-    const title = typeof raw.title === "string" ? raw.title.trim() : "";
-    const summary = typeof raw.summary === "string" ? raw.summary.trim() : "";
+    const raw = entry as Record<string, unknown>;
+    const title = normalizeOptionalString(raw.title);
+    const summary = normalizeOptionalString(raw.summary);
     const startMs = typeof raw.startTime === "string" ? clockToMs(params.day, raw.startTime) : null;
     const endMs = typeof raw.endTime === "string" ? clockToMs(params.day, raw.endTime) : null;
     if (startMs === null || endMs === null) {
@@ -203,17 +180,14 @@ export function parseCardsJson(params: {
       problems.push(`Card ${index}: title and summary are required.`);
       return;
     }
-    const appSites =
-      raw.appSites && typeof raw.appSites === "object"
-        ? (raw.appSites as Record<string, unknown>)
-        : {};
+    const appSites = asRecord(raw.appSites);
     drafts.push({
       day: params.day,
       startMs,
       endMs,
       title,
       summary,
-      detail: typeof raw.detailedSummary === "string" ? raw.detailedSummary.trim() : "",
+      detail: normalizeOptionalString(raw.detailedSummary) ?? "",
       category: normalizeCategory(raw.category),
       appPrimary: normalizeDomain(appSites.primary),
       appSecondary: normalizeDomain(appSites.secondary),
@@ -243,6 +217,12 @@ export function parseCardsJson(params: {
       };
     }
     if (overlapMs > 0) {
+      if (current.endMs <= previous.endMs) {
+        return {
+          ok: false,
+          error: `Card ${normalized.length}: endTime must be after the previous card's endTime.`,
+        };
+      }
       // Trim sub-minute overlaps instead of round-tripping to the model again.
       normalized.push({ ...current, startMs: previous.endMs });
     } else {
@@ -252,7 +232,7 @@ export function parseCardsJson(params: {
   return { ok: true, drafts: normalized };
 }
 
-/** Sub-minute slack so minute-rounded model times do not fail coverage checks. */
+/** Slack so minute-rounded model times do not fail coverage checks. */
 const COVERAGE_TOLERANCE_MS = 2 * 60 * 1000;
 
 function formatClockForError(ms: number): string {
@@ -272,38 +252,34 @@ export function validateCardCoverage(params: {
   requiredSpans: Array<{ startMs: number; endMs: number }>;
   windowStartMs: number;
   windowEndMs: number;
-  toleranceMs?: number;
 }): { ok: true } | { ok: false; error: string } {
-  const tolerance = params.toleranceMs ?? COVERAGE_TOLERANCE_MS;
   const problems: string[] = [];
   for (const draft of params.drafts) {
     if (
-      draft.startMs < params.windowStartMs - tolerance ||
-      draft.endMs > params.windowEndMs + tolerance
+      draft.startMs < params.windowStartMs - COVERAGE_TOLERANCE_MS ||
+      draft.endMs > params.windowEndMs + COVERAGE_TOLERANCE_MS
     ) {
       problems.push(
         `Card ${formatClockForError(draft.startMs)}-${formatClockForError(draft.endMs)} lies outside the revision window ${formatClockForError(params.windowStartMs)}-${formatClockForError(params.windowEndMs)}.`,
       );
     }
   }
-  const covered = params.drafts
-    .map((draft) => ({ startMs: draft.startMs, endMs: draft.endMs }))
-    .toSorted((a, b) => a.startMs - b.startMs);
+  const covered = params.drafts.toSorted((a, b) => a.startMs - b.startMs);
   for (const span of params.requiredSpans) {
     let cursor = span.startMs;
     for (const interval of covered) {
       if (interval.endMs <= cursor) {
         continue;
       }
-      if (interval.startMs > cursor + tolerance) {
+      if (interval.startMs > cursor + COVERAGE_TOLERANCE_MS) {
         break;
       }
       cursor = Math.max(cursor, interval.endMs);
-      if (cursor >= span.endMs - tolerance) {
+      if (cursor >= span.endMs - COVERAGE_TOLERANCE_MS) {
         break;
       }
     }
-    if (cursor < span.endMs - tolerance) {
+    if (cursor < span.endMs - COVERAGE_TOLERANCE_MS) {
       problems.push(
         `Time ${formatClockForError(Math.max(cursor, span.startMs))}-${formatClockForError(span.endMs)} from the previous timeline is not covered; do not drop existing cards or observed time.`,
       );
@@ -315,7 +291,6 @@ export function validateCardCoverage(params: {
   return { ok: true };
 }
 
-/** Union of the revision window: previous draft cards plus the new batch range. */
 export function revisionWindow(params: {
   batchStartMs: number;
   batchEndMs: number;
@@ -330,7 +305,6 @@ export function revisionWindow(params: {
   return { startMs, endMs };
 }
 
-/** Groups pending frames into one batch window, splitting on large gaps. */
 export function selectBatchFrames(params: {
   frames: Array<{ id: number; capturedAtMs: number }>;
   /** Close an in-progress window immediately instead of waiting for elapse. */
@@ -390,7 +364,6 @@ export function selectBatchFrames(params: {
   };
 }
 
-/** Picks the frame closest to a card's midpoint as its keyframe. */
 export function pickKeyframeId(
   card: { startMs: number; endMs: number },
   frames: Array<{ id: number; capturedAtMs: number }>,

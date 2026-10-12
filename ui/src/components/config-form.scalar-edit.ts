@@ -14,16 +14,8 @@ type ScalarEditState = {
 const scalarEditState = new WeakMap<HTMLInputElement, ScalarEditState>();
 
 export function scalarValueBranch(value: unknown): ScalarValueBranch | undefined {
-  if (typeof value === "string") {
-    return "string";
-  }
-  if (typeof value === "number") {
-    return "number";
-  }
-  if (typeof value === "boolean") {
-    return "boolean";
-  }
-  return undefined;
+  const type = typeof value;
+  return type === "string" || type === "number" || type === "boolean" ? type : undefined;
 }
 
 export function syncScalarEditIdentity(
@@ -73,12 +65,6 @@ export function finishScalarEdit(target: HTMLInputElement): void {
   }
 }
 
-export function finishScalarEditFromEvent(event: Event): void {
-  if (event.currentTarget instanceof HTMLInputElement) {
-    finishScalarEdit(event.currentTarget);
-  }
-}
-
 const scalarInputState = new WeakMap<
   HTMLInputElement,
   {
@@ -90,9 +76,18 @@ const scalarInputState = new WeakMap<
   }
 >();
 
-export function setControlValidity(target: HTMLInputElement, message: string): boolean {
+export function setControlValidity(
+  target: HTMLInputElement | HTMLTextAreaElement,
+  message: string,
+  errorContainer = ".settings-row",
+): boolean {
   target.setCustomValidity(message);
   target.setAttribute("aria-invalid", String(Boolean(message)));
+  const error = target.closest(errorContainer)?.querySelector<HTMLElement>(".cfg-field__error");
+  if (error) {
+    error.hidden = !message;
+    error.textContent = message;
+  }
   return !message;
 }
 

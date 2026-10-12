@@ -1,64 +1,81 @@
 // Gateway health route tests cover the machine-readable fast path and its error contract.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNonExitingRuntimeEnv } from "../../test-utils/plugin-runtime-env.js";
 import { runGatewayHealthJsonRoute } from "./health-route.js";
 
+const mocks = vi.hoisted(() => ({
+  callGateway: vi.fn(),
+  readNonObservingHealthConfig: vi.fn(),
+  emitReachableGatewayAuthDiagnostic: vi.fn(),
+  formatGatewayAuthErrorJson: vi.fn(),
+  formatGatewayClientRequestErrorJson: vi.fn(),
+  formatGatewayTransportErrorJson: vi.fn(),
+  loadHealth: vi.fn(),
+  loadCall: vi.fn(),
+}));
+
 describe("runGatewayHealthJsonRoute", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.resetAllMocks();
+    mocks.readNonObservingHealthConfig.mockResolvedValue({});
+    mocks.emitReachableGatewayAuthDiagnostic.mockResolvedValue(false);
+    vi.doMock("../gateway-rpc.js", () => ({ callGatewayFromCliWithTransport: mocks.callGateway }));
+    vi.doMock("../../commands/health.js", () => {
+      mocks.loadHealth();
+      return {
+        readNonObservingHealthConfig: mocks.readNonObservingHealthConfig,
+        emitReachableGatewayAuthDiagnostic: mocks.emitReachableGatewayAuthDiagnostic,
+      };
+    });
+    vi.doMock("../../gateway/call.js", () => {
+      mocks.loadCall();
+      return {
+        formatGatewayAuthErrorJson: mocks.formatGatewayAuthErrorJson,
+        formatGatewayClientRequestErrorJson: mocks.formatGatewayClientRequestErrorJson,
+        formatGatewayTransportErrorJson: mocks.formatGatewayTransportErrorJson,
+      };
+    });
+  });
+  afterEach(() => {
+    vi.doUnmock("../gateway-rpc.js");
+    vi.doUnmock("../../commands/health.js");
+    vi.doUnmock("../../gateway/call.js");
+  });
+
   it("writes successful JSON without loading error-only dependencies", async () => {
     const runtime = createNonExitingRuntimeEnv();
-    const callGateway = vi.fn(async () => ({ ok: true, durationMs: 6 }));
-    const readNonObservingHealthConfig = vi.fn(async () => ({}));
-    const emitReachableGatewayAuthDiagnostic = vi.fn(async () => false);
-    const formatGatewayAuthErrorJson = vi.fn();
-    const formatGatewayClientRequestErrorJson = vi.fn();
-    const formatGatewayTransportErrorJson = vi.fn();
+    mocks.callGateway.mockResolvedValue({ ok: true, durationMs: 6 });
 
-    await runGatewayHealthJsonRoute(
-      {
-        rpc: { json: true, timeout: "10000" },
-      },
-      runtime,
-      {
-        callGateway,
-        readNonObservingHealthConfig,
-        emitReachableGatewayAuthDiagnostic: emitReachableGatewayAuthDiagnostic as never,
-        formatGatewayAuthErrorJson: formatGatewayAuthErrorJson as never,
-        formatGatewayClientRequestErrorJson: formatGatewayClientRequestErrorJson as never,
-        formatGatewayTransportErrorJson: formatGatewayTransportErrorJson as never,
-      },
-    );
+    await runGatewayHealthJsonRoute({ rpc: { json: true, timeout: "10000" } }, runtime);
 
-    expect(callGateway).toHaveBeenCalledWith(
+    expect(mocks.callGateway).toHaveBeenCalledWith(
       "health",
       { json: true, timeout: "10000" },
       undefined,
       { defaultTimeoutMs: 10_000, sharedStateMode: "read-only" },
     );
     expect(runtime.writeJson).toHaveBeenCalledWith({ ok: true, durationMs: 6 }, 2);
-    expect(readNonObservingHealthConfig).not.toHaveBeenCalled();
-    expect(emitReachableGatewayAuthDiagnostic).not.toHaveBeenCalled();
-    expect(formatGatewayAuthErrorJson).not.toHaveBeenCalled();
-    expect(formatGatewayClientRequestErrorJson).not.toHaveBeenCalled();
-    expect(formatGatewayTransportErrorJson).not.toHaveBeenCalled();
+    expect(mocks.loadHealth).not.toHaveBeenCalled();
+    expect(mocks.loadCall).not.toHaveBeenCalled();
+    expect(mocks.readNonObservingHealthConfig).not.toHaveBeenCalled();
+    expect(mocks.emitReachableGatewayAuthDiagnostic).not.toHaveBeenCalled();
+    expect(mocks.formatGatewayAuthErrorJson).not.toHaveBeenCalled();
+    expect(mocks.formatGatewayClientRequestErrorJson).not.toHaveBeenCalled();
+    expect(mocks.formatGatewayTransportErrorJson).not.toHaveBeenCalled();
   });
 
   it("projects a local port into the routed config", async () => {
     const runtime = createNonExitingRuntimeEnv();
-    const callGateway = vi.fn(async () => ({ ok: true }));
-    const readNonObservingHealthConfig = vi.fn(async () => ({
-      gateway: { auth: { mode: "token" as const } },
-    }));
+    mocks.callGateway.mockResolvedValue({ ok: true });
+    mocks.readNonObservingHealthConfig.mockResolvedValue({ gateway: { auth: { mode: "token" } } });
 
     await runGatewayHealthJsonRoute(
-      {
-        rpc: { json: true, timeout: "10000" },
-        localPortOverride: 19083,
-      },
+      { rpc: { json: true, timeout: "10000" }, localPortOverride: 19083 },
       runtime,
-      { callGateway, readNonObservingHealthConfig },
     );
 
-    expect(callGateway).toHaveBeenCalledWith(
+    expect(mocks.callGateway).toHaveBeenCalledWith(
       "health",
       expect.objectContaining({
         localPortOverride: 19083,
@@ -74,25 +91,16 @@ describe("runGatewayHealthJsonRoute", () => {
   it("leaves local config resolution failures to the root CLI renderer", async () => {
     const runtime = createNonExitingRuntimeEnv();
     const error = new Error("config unavailable");
-    const callGateway = vi.fn();
+    mocks.readNonObservingHealthConfig.mockRejectedValue(error);
 
     await expect(
       runGatewayHealthJsonRoute(
-        {
-          rpc: { json: true, timeout: "10000" },
-          localPortOverride: 19083,
-        },
+        { rpc: { json: true, timeout: "10000" }, localPortOverride: 19083 },
         runtime,
-        {
-          callGateway,
-          readNonObservingHealthConfig: vi.fn(async () => {
-            throw error;
-          }),
-        },
       ),
     ).rejects.toBe(error);
 
-    expect(callGateway).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(runtime.writeJson).not.toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
@@ -100,20 +108,11 @@ describe("runGatewayHealthJsonRoute", () => {
 
   it("preserves structured transport errors", async () => {
     const runtime = createNonExitingRuntimeEnv();
-    const error = new Error("gateway unavailable");
-    const callGateway = vi.fn(async () => {
-      throw error;
-    });
+    mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
     const payload = { ok: false, error: { type: "gateway_transport_error" } };
+    mocks.formatGatewayTransportErrorJson.mockReturnValue(payload);
 
-    await runGatewayHealthJsonRoute({ rpc: { json: true, timeout: "10000" } }, runtime, {
-      callGateway,
-      readNonObservingHealthConfig: async () => ({}),
-      emitReachableGatewayAuthDiagnostic: vi.fn(async () => false) as never,
-      formatGatewayAuthErrorJson: vi.fn(() => null) as never,
-      formatGatewayClientRequestErrorJson: vi.fn(() => null) as never,
-      formatGatewayTransportErrorJson: vi.fn(() => payload) as never,
-    });
+    await runGatewayHealthJsonRoute({ rpc: { json: true, timeout: "10000" } }, runtime);
 
     expect(runtime.writeJson).toHaveBeenCalledWith(payload, 2);
     expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -122,9 +121,7 @@ describe("runGatewayHealthJsonRoute", () => {
   it("preserves structured Gateway health request errors", async () => {
     const runtime = createNonExitingRuntimeEnv();
     const error = new Error("health snapshot unavailable");
-    const callGateway = vi.fn(async () => {
-      throw error;
-    });
+    mocks.callGateway.mockRejectedValue(error);
     const payload = {
       ok: false,
       error: {
@@ -133,20 +130,12 @@ describe("runGatewayHealthJsonRoute", () => {
         message: "health snapshot unavailable",
       },
     };
-    const formatGatewayClientRequestErrorJson = vi.fn(() => payload);
-    const formatGatewayTransportErrorJson = vi.fn();
+    mocks.formatGatewayClientRequestErrorJson.mockReturnValue(payload);
 
-    await runGatewayHealthJsonRoute({ rpc: { json: true, timeout: "10000" } }, runtime, {
-      callGateway,
-      readNonObservingHealthConfig: async () => ({}),
-      emitReachableGatewayAuthDiagnostic: vi.fn(async () => false) as never,
-      formatGatewayAuthErrorJson: vi.fn(() => null) as never,
-      formatGatewayClientRequestErrorJson: formatGatewayClientRequestErrorJson as never,
-      formatGatewayTransportErrorJson: formatGatewayTransportErrorJson as never,
-    });
+    await runGatewayHealthJsonRoute({ rpc: { json: true, timeout: "10000" } }, runtime);
 
-    expect(formatGatewayClientRequestErrorJson).toHaveBeenCalledWith(error);
-    expect(formatGatewayTransportErrorJson).not.toHaveBeenCalled();
+    expect(mocks.formatGatewayClientRequestErrorJson).toHaveBeenCalledWith(error);
+    expect(mocks.formatGatewayTransportErrorJson).not.toHaveBeenCalled();
     expect(runtime.writeJson).toHaveBeenCalledWith(payload, 2);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
@@ -154,9 +143,7 @@ describe("runGatewayHealthJsonRoute", () => {
   it("preserves structured auth errors when reachability is unknown", async () => {
     const runtime = createNonExitingRuntimeEnv();
     const error = new Error("gateway health requires credentials");
-    const callGateway = vi.fn(async () => {
-      throw error;
-    });
+    mocks.callGateway.mockRejectedValue(error);
     const payload = {
       ok: false,
       error: {
@@ -164,22 +151,13 @@ describe("runGatewayHealthJsonRoute", () => {
         message: "gateway health requires credentials",
       },
     };
-    const formatGatewayAuthErrorJson = vi.fn(() => payload);
-    const formatGatewayClientRequestErrorJson = vi.fn(() => null);
-    const formatGatewayTransportErrorJson = vi.fn(() => null);
+    mocks.formatGatewayAuthErrorJson.mockReturnValue(payload);
 
-    await runGatewayHealthJsonRoute({ rpc: { json: true, timeout: "10000" } }, runtime, {
-      callGateway,
-      readNonObservingHealthConfig: async () => ({}),
-      emitReachableGatewayAuthDiagnostic: vi.fn(async () => false) as never,
-      formatGatewayAuthErrorJson: formatGatewayAuthErrorJson as never,
-      formatGatewayClientRequestErrorJson: formatGatewayClientRequestErrorJson as never,
-      formatGatewayTransportErrorJson: formatGatewayTransportErrorJson as never,
-    });
+    await runGatewayHealthJsonRoute({ rpc: { json: true, timeout: "10000" } }, runtime);
 
-    expect(formatGatewayAuthErrorJson).toHaveBeenCalledWith(error);
-    expect(formatGatewayClientRequestErrorJson).not.toHaveBeenCalled();
-    expect(formatGatewayTransportErrorJson).not.toHaveBeenCalled();
+    expect(mocks.formatGatewayAuthErrorJson).toHaveBeenCalledWith(error);
+    expect(mocks.formatGatewayClientRequestErrorJson).not.toHaveBeenCalled();
+    expect(mocks.formatGatewayTransportErrorJson).not.toHaveBeenCalled();
     expect(runtime.writeJson).toHaveBeenCalledWith(payload, 2);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });

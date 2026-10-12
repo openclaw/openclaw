@@ -2,10 +2,8 @@
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import { resolveGoogleMeetConfig } from "./config.js";
-import {
-  createGoogleMeetChromeNodeInvokePolicy,
-  GOOGLE_MEET_CHROME_NODE_COMMAND,
-} from "./node-invoke-policy.js";
+import { createGoogleMeetChromeNodeInvokePolicy } from "./node-invoke-policy.js";
+import { GOOGLE_MEET_NODE_COMMAND } from "./transports/google-meet-platform-constants.js";
 
 function createContext(params: unknown, pluginConfig: Record<string, unknown> = {}) {
   const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(async () => ({
@@ -14,7 +12,7 @@ function createContext(params: unknown, pluginConfig: Record<string, unknown> = 
   }));
   const ctx: OpenClawPluginNodeInvokePolicyContext = {
     nodeId: "node-1",
-    command: GOOGLE_MEET_CHROME_NODE_COMMAND,
+    command: GOOGLE_MEET_NODE_COMMAND,
     params,
     config: {} as never,
     pluginConfig,

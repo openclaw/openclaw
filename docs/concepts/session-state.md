@@ -50,7 +50,7 @@ A watcher is a session that holds a cursor (`session_watch_cursors`) on a target
 
 - **Implicit (spawn edges).** When a session spawns a sub-agent or ACP child, the parent's cursor is seeded automatically at the child's spawn version. Parents never subscribe manually.
 - **Ambient groups.** Under `session.groupScope: "per-group"`, the agent's main session watches its isolated group, room, and channel sessions after their first human turn. This is independent of `session.dmScope`. Routing a room into main needs no watch, because it already shares the main conversation.
-- **Explicit (`sessions_send watch: true`).** Any coordinator can watch a non-spawned target. Pass `watch: true` on `sessions_send`. After the send dispatches successfully, the sender is registered as a watcher of the session that actually received the message. Registration starts at the target's current state version — prior history never produces notices. The tool result reports `watched: true|false` when the parameter was set.
+- **Explicit (`sessions_send watch: true`).** A coordinator with normal status visibility can watch a non-spawned target. Pass `watch: true` on `sessions_send`. A per-agent `tools.agentToAgent.send` rule alone does not grant watch access to otherwise hidden sessions. After the send dispatches successfully, the sender is registered as a watcher of the session that actually received the message. Registration starts at the target's current state version — prior history never produces notices. The tool result reports `watched: true|false` when the parameter was set.
 
 Watcher identity must be an agent-qualified session key. Under `session.scope="global"` the shared `global` key is ambiguous across agents, so such sessions get the durable log and `changesSince` but no proactive notices.
 
@@ -63,6 +63,10 @@ against the current store.
 Watches clean themselves up: cursor rows expire with signal-log retention, are removed when the watcher session resets, and are removed with either session. A reset that has committed still clears its watches if a later cleanup step fails. There is no unwatch verb in v1.
 
 Watched Claude, Codex, OpenCode, and Pi sessions adopted from a session catalog are checked for direct upstream human activity on a fixed cadence. Pi monitoring starts after the session is in its append-only v3 format. Detected activity enters the same signal log and watcher flow as other direct human turns.
+
+Recent user text used to recognize OpenClaw-origin prompts comes from one transcript
+snapshot, including long histories. Concurrent replies or transcript resets cannot
+repeat a page or combine messages from different history windows.
 
 OpenCode detection is deliberately conservative. OpenCode's v1 tables do not preserve message provenance, so reporting ambiguous rows would create false alarms. Per-message provenance exists only in its v2 schema. OpenCode therefore does not report image-only turns, `@file`-mention-only turns, slash commands routed to a subagent, or turns from ACP clients that annotate content with an audience (mapped by OpenCode to `synthetic` or `ignored`). It also suppresses text matching any of the preceding 50 user messages, to catch compaction replay. A human deliberately repeating the same text within that window can therefore be missed.
 
@@ -113,6 +117,10 @@ The notice tells the watcher exactly what to do. `session_status` with `changesS
 ## Storage and limits
 
 History lives in the shared state database, bounded to 30 days and 50,000 rows. Per-session heads stay monotonic after pruning. Recording is best-effort. A failed append is logged and never fails the originating turn. `stateVersion` is therefore a signal-log head, not a transactional change-data-capture version.
+
+Child-run outcomes are recorded asynchronously, so waiting for the shared database does not block Gateway event handling. Completion joins the recording work, and a replaced or provisional run owner cannot claim the run's first terminal event.
+
+Recording rechecks the session's ownership after waiting for write admission. Concurrent metadata updates or writes to other sessions do not discard an otherwise current event.
 
 Current limits:
 

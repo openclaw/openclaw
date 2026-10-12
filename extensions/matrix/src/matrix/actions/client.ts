@@ -1,8 +1,8 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { MatrixClientReleaseMode } from "../client/shared.js";
+import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixRoomId } from "../send.js";
-import type { MatrixActionClient, MatrixActionClientOpts } from "./types.js";
-
-type MatrixActionClientStopMode = "stop" | "persist" | "discard";
+import type { MatrixActionClientOpts } from "./types.js";
 
 const loadMatrixActionClientRuntime = createLazyRuntimeModule(
   () => import("../client-bootstrap.js"),
@@ -10,8 +10,8 @@ const loadMatrixActionClientRuntime = createLazyRuntimeModule(
 
 export async function withResolvedActionClient<T>(
   opts: MatrixActionClientOpts,
-  run: (client: MatrixActionClient["client"], abortSignal?: AbortSignal) => Promise<T>,
-  mode: MatrixActionClientStopMode = "stop",
+  run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
+  mode: MatrixClientReleaseMode = "stop",
 ): Promise<T> {
   const { withResolvedRuntimeMatrixClient } = await loadMatrixActionClientRuntime();
   return await withResolvedRuntimeMatrixClient(opts, run, mode);
@@ -19,7 +19,7 @@ export async function withResolvedActionClient<T>(
 
 export async function withStartedActionClient<T>(
   opts: MatrixActionClientOpts,
-  run: (client: MatrixActionClient["client"], abortSignal?: AbortSignal) => Promise<T>,
+  run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
 ): Promise<T> {
   return await withResolvedActionClient({ ...opts, readiness: "started" }, run, "persist");
 }
@@ -27,11 +27,7 @@ export async function withStartedActionClient<T>(
 export async function withResolvedRoomAction<T>(
   roomId: string,
   opts: MatrixActionClientOpts,
-  run: (
-    client: MatrixActionClient["client"],
-    resolvedRoom: string,
-    abortSignal?: AbortSignal,
-  ) => Promise<T>,
+  run: (client: MatrixClient, resolvedRoom: string, abortSignal?: AbortSignal) => Promise<T>,
 ): Promise<T> {
   return await withResolvedActionClient(opts, async (client, abortSignal) => {
     const resolvedRoom = await resolveMatrixRoomId(client, roomId);

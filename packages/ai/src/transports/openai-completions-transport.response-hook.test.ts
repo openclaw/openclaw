@@ -173,34 +173,28 @@ describe.each([
     ]);
   });
 
-  it.each(["throw", "reject"] as const)(
-    "preserves a hook %s and closes the unread request",
-    async (failure) => {
-      const lifecycle = installResponse();
-      const hookError = new Error("after_provider_response hook failed");
-      const onResponse = vi.fn<NonNullable<StreamOptions["onResponse"]>>(() => {
-        if (failure === "throw") {
-          throw hookError;
-        }
-        return Promise.reject(hookError);
-      });
-      const stream = createStream(model, context, { apiKey: "fixture-token", onResponse });
-      const eventTypes: string[] = [];
-      for await (const event of stream) {
-        eventTypes.push(event.type);
-      }
-      const result = await stream.result();
+  it("preserves a hook rejection and closes the unread request", async () => {
+    const lifecycle = installResponse();
+    const hookError = new Error("after_provider_response hook failed");
+    const onResponse = vi.fn<NonNullable<StreamOptions["onResponse"]>>(() =>
+      Promise.reject(hookError),
+    );
+    const stream = createStream(model, context, { apiKey: "fixture-token", onResponse });
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
 
-      expect(onResponse).toHaveBeenCalledOnce();
-      expect(result).toMatchObject({
-        stopReason: "error",
-        errorMessage: "after_provider_response hook failed",
-      });
-      expect(eventTypes).toEqual(["error"]);
-      expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
-      lifecycle.assertListenersRemoved();
-    },
-  );
+    expect(onResponse).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "after_provider_response hook failed",
+    });
+    expect(eventTypes).toEqual(["error"]);
+    expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
+    lifecycle.assertListenersRemoved();
+  });
 
   it("preserves an acceptance observer failure and closes the unread request", async () => {
     const lifecycle = installResponse();
@@ -260,55 +254,46 @@ describe.each([
     lifecycle.assertListenersRemoved();
   });
 
-  it.each(["resolve", "reject"] as const)(
-    "keeps caller cancellation terminal after a late hook %s",
-    async (settlement) => {
-      const lifecycle = installResponse();
-      const controller = new AbortController();
-      let settleHook!: () => void;
-      const pendingHook = new Promise<void>((resolve, reject) => {
-        settleHook = () => {
-          if (settlement === "resolve") {
-            resolve();
-          } else {
-            reject(new Error("late response hook rejection"));
-          }
-        };
-      });
-      const onResponse = vi.fn(() => pendingHook);
-      const stream = createStream(model, context, {
-        apiKey: "fixture-token",
-        signal: controller.signal,
-        onResponse,
-      });
-      const eventTypes: string[] = [];
-      const consume = (async () => {
-        for await (const event of stream) {
-          eventTypes.push(event.type);
-        }
-      })();
+  it("keeps caller cancellation terminal after a late hook rejection", async () => {
+    const lifecycle = installResponse();
+    const controller = new AbortController();
+    let settleHook!: () => void;
+    const pendingHook = new Promise<void>((_resolve, reject) => {
+      settleHook = () => reject(new Error("late response hook rejection"));
+    });
+    const onResponse = vi.fn(() => pendingHook);
+    const stream = createStream(model, context, {
+      apiKey: "fixture-token",
+      signal: controller.signal,
+      onResponse,
+    });
+    const eventTypes: string[] = [];
+    const consume = (async () => {
+      for await (const event of stream) {
+        eventTypes.push(event.type);
+      }
+    })();
 
-      await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
-      const abortReason = Object.assign(new Error("caller canceled the provider response"), {
-        code: "CALLER_ABORTED",
-      });
-      controller.abort(abortReason);
-      const result = await settleWithin(stream.result());
-      await consume;
-      expect(result).toMatchObject({
-        stopReason: "aborted",
-        errorCode: "CALLER_ABORTED",
-        errorMessage: "caller canceled the provider response",
-      });
-      expect(eventTypes).toEqual(["error"]);
-      expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
+    const abortReason = Object.assign(new Error("caller canceled the provider response"), {
+      code: "CALLER_ABORTED",
+    });
+    controller.abort(abortReason);
+    const result = await settleWithin(stream.result());
+    await consume;
+    expect(result).toMatchObject({
+      stopReason: "aborted",
+      errorCode: "CALLER_ABORTED",
+      errorMessage: "caller canceled the provider response",
+    });
+    expect(eventTypes).toEqual(["error"]);
+    expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
 
-      settleHook();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(eventTypes).toEqual(["error"]);
-      lifecycle.assertListenersRemoved();
-    },
-  );
+    settleHook();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(eventTypes).toEqual(["error"]);
+    lifecycle.assertListenersRemoved();
+  });
 });

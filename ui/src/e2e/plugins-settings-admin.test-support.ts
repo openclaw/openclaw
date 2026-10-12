@@ -206,6 +206,10 @@ export const configMocks = {
                       additionalProperties: false,
                       properties: {
                         allowPromptInjection: { type: "boolean", title: "Allow prompt changes" },
+                        allowConversationAccess: {
+                          type: "boolean",
+                          title: "Read conversation context",
+                        },
                       },
                     },
                     config: {

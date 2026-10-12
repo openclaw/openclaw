@@ -1,6 +1,7 @@
 import type { CliDeps } from "../cli/deps.types.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -14,7 +15,7 @@ import type {
   SharedGatewayAuthClient,
   SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
-import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
+import type { ActivateRuntimeSecrets } from "./server-startup-config.types.js";
 import type { HookClientIpConfig } from "./server/hooks-request-handler.js";
 
 export type RuntimeSecretsPreflightParams = Omit<
@@ -40,14 +41,11 @@ type GatewayReloadLog = {
   error?: (msg: string) => void;
 };
 
-export type GatewayGmailRestartAbortController = {
-  abort: () => void;
-  signal: AbortSignal;
-};
-
 export type GatewayHotReloadPublication = {
   publish: (commit: () => Promise<void>, isCommitted: () => boolean) => Promise<void>;
   isCurrent: () => boolean;
+  /** A queued successor can finish model preparation without revoking this transaction. */
+  hasNewerConfig?: () => boolean;
   checkpoint?: () => Promise<void>;
   assertInvokerOwned?: () => void;
   sourceConfig: OpenClawConfig;
@@ -113,6 +111,12 @@ export class GatewayConfigReloadSupersededError extends Error {
   }
 }
 
+export function assertConfigReloadWriteSnapshot(snapshot: ConfigFileSnapshot): void {
+  if (!snapshot.exists || !snapshot.valid) {
+    throw new Error("Config write snapshot is missing or invalid; runtime application refused.");
+  }
+}
+
 export function createReloadCancellationError(superseded: boolean) {
   return superseded
     ? new GatewayConfigReloadSupersededError()
@@ -141,6 +145,7 @@ export type GatewayRuntimePublication = {
 };
 
 export type GatewayReloadHandlerParams = {
+  scheduler: GatewayScheduler;
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   /** Kept across cron rebuilds so a hot reload does not drop scheduler gateway context. */
@@ -164,11 +169,11 @@ export type GatewayReloadHandlerParams = {
     changedPaths: readonly string[];
     reloadPluginIds?: ReadonlySet<string>;
     pluginLifecycle?: GatewayReloadPlan["pluginLifecycle"];
-    /** Fence config consumers before drain; return their publication after successful rollback. */
+    /** Fence execution before drain; retire active facts only when replacement can begin. */
     prepareConfigEffects: (replacement: {
       pluginIds: ReadonlySet<string>;
       channels: ReadonlySet<ChannelKind>;
-    }) => () => Promise<void>;
+    }) => { retire: () => void; rollback: () => Promise<void> };
     commitRuntime: (publication?: GatewayRuntimePublication) => Promise<void>;
     env: NodeJS.ProcessEnv;
     isAborted?: () => boolean;
@@ -184,8 +189,8 @@ export type GatewayReloadHandlerParams = {
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;
   cronReconciliation: GatewayCronReconciliation;
-  createGmailRestartAbortController?: () => GatewayGmailRestartAbortController;
-  clearGmailRestartAbortController?: (controller: GatewayGmailRestartAbortController) => void;
+  createGmailRestartAbortController?: () => AbortController;
+  clearGmailRestartAbortController?: (controller: AbortController) => void;
   onCronRestart?: () => void;
   requestRecoveryRestart?: GatewayRestartEmitter;
   restartRecoveryAvailable?: boolean;

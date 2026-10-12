@@ -1,6 +1,3 @@
-// Session-stable source-reply mode for synthetic turns (heartbeat wakes,
-// system events, inter-session announcements) that reach the reply resolver
-// without dispatch's injected delivery-mode facts.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveEffectiveToolPolicy,
@@ -22,7 +19,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -30,26 +27,19 @@ import { resolveVisibleRepliesPolicy } from "./dispatch-from-config.harness-defa
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 
-/**
- * Resolves the session's stable source-reply mode the way dispatch does, from
- * a synthetic turn's restored context plus persisted session facts. Synthetic
- * turns keep their effective delivery mode, but CLI session reuse belongs to
- * the session's normal source-reply policy — every turn kind must derive the
- * same messageToolPolicyHash, or chat and heartbeat turns ping-pong the CLI
- * binding on each transition (#121485).
- */
-export function resolveSessionStableReplyMode(params: {
+/** Synthetic and chat turns must share messageToolPolicyHash to reuse CLI sessions (#121485). */
+export async function resolveSessionStableReplyMode(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
-  sessionEntry: SessionEntry;
+  sessionEntry?: SessionEntry;
   sessionAgentId: string;
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
   turnModelOverride?: string;
-}): SourceReplyDeliveryMode {
+}): Promise<SourceReplyDeliveryMode> {
   const { cfg, ctx, sessionEntry } = params;
   const chatType =
-    normalizeChatType(ctx.ChatType) ?? normalizeChatType(sessionEntry.chatType) ?? undefined;
+    normalizeChatType(ctx.ChatType) ?? normalizeChatType(sessionEntry?.chatType) ?? undefined;
   // A targetless internal turn uses the session's established reply policy;
   // changing that policy on a wake would invalidate its reusable CLI binding.
   const stableReplyContext = {
@@ -62,7 +52,7 @@ export function resolveSessionStableReplyMode(params: {
     Surface: normalizeOptionalString(ctx.Surface) ?? sessionDeliveryChannel(sessionEntry),
     ExplicitDeliverRoute: ctx.ExplicitDeliverRoute,
   };
-  const { harnessDefaultVisibleReplies } = resolveVisibleRepliesPolicy({
+  const { harnessDefaultVisibleReplies } = await resolveVisibleRepliesPolicy({
     cfg,
     chatType,
     ctx,
@@ -80,20 +70,12 @@ export function resolveSessionStableReplyMode(params: {
   if (candidateMode !== "message_tool_only") {
     return candidateMode;
   }
-  // Dispatch downgrades tool-only delivery to automatic when the message tool
-  // is policy-denied (source-reply-delivery-mode.ts availability gate); with a
-  // stable ctx that is the boolean's only effect, so apply it directly rather
-  // than re-deriving the whole mode. Sender fields are deliberately absent:
-  // session-stable policy cannot vary by sender.
+  // Match dispatch's availability downgrade without letting sender-specific
+  // permissions change the policy shared by all turns in this session.
   return resolveStableMessageToolAvailability(params) ? candidateMode : "automatic";
 }
 
-/**
- * Sender-independent message-tool availability for the session-stable mode.
- * One owner for dispatch's stable-mode downgrade and synthetic-turn binding
- * facts: sender-scoped denials apply to the sender's turn, never to the
- * session policy every turn kind must hash identically (#121485).
- */
+/** Shared by dispatch and synthetic turns; sender denials apply only to the individual turn. */
 export function resolveStableMessageToolAvailability(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
@@ -102,6 +84,41 @@ export function resolveStableMessageToolAvailability(params: {
   sessionKey?: string;
 }): boolean {
   const { cfg, ctx, sessionEntry } = params;
+  // Bare command/wake contexts need the same persisted group/account facts as live dispatch.
+  const groupPolicy = resolveGroupToolPolicy({
+    config: cfg,
+    sessionKey: params.sessionKey,
+    messageProvider: resolveOriginMessageProvider({
+      originatingChannel: ctx.OriginatingChannel ?? sessionDeliveryChannel(sessionEntry),
+      provider:
+        normalizeOptionalString(ctx.Provider ?? ctx.Surface) ??
+        sessionDeliveryOrigin(sessionEntry)?.provider,
+    }),
+    groupId: resolveGroupSessionKey(ctx)?.id ?? sessionEntry?.groupId,
+    groupChannel:
+      normalizeOptionalString(ctx.GroupChannel) ??
+      normalizeOptionalString(ctx.GroupSubject) ??
+      normalizeOptionalString(sessionEntry?.groupChannel) ??
+      normalizeOptionalString(sessionEntry?.subject),
+    groupSpace: normalizeOptionalString(ctx.GroupSpace),
+    accountId: ctx.AccountId ?? deliveryContextFromSession(sessionEntry)?.accountId,
+  });
+  return resolveReplyMessageToolAvailability({
+    ...params,
+    groupPolicy,
+    prefersMessageToolDelivery: true,
+  });
+}
+
+/** Applies the same profile, account, group, and delegation layers to every reply turn. */
+export function resolveReplyMessageToolAvailability(params: {
+  cfg: OpenClawConfig;
+  sessionAgentId: string;
+  sessionKey?: string;
+  groupPolicy: ReturnType<typeof resolveGroupToolPolicy>;
+  prefersMessageToolDelivery: boolean;
+}): boolean {
+  const { cfg, groupPolicy } = params;
   const {
     globalPolicy,
     globalProviderPolicy,
@@ -116,41 +133,14 @@ export function resolveStableMessageToolAvailability(params: {
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
   });
-  // Tool-only delivery force-allows the message tool at the profile layer
-  // (dispatch's runtimeProfileAlsoAllow); only outer deny layers can make it
-  // unavailable.
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
-    ...(profileAlsoAllow ?? []),
-    "message",
-  ]);
-  const providerProfilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(providerProfile), [
-    ...(providerProfileAlsoAllow ?? []),
-    "message",
-  ]);
-  // Direct callers (command prepare, synthetic wakes) may carry a bare ctx;
-  // fall back to the persisted session facts dispatch sees on live turns, or
-  // group/account-scoped policies resolve differently per producer.
-  const groupPolicy = resolveGroupToolPolicy({
-    config: cfg,
-    sessionKey: params.sessionKey,
-    messageProvider: resolveOriginMessageProvider({
-      originatingChannel:
-        ctx.OriginatingChannel ?? (sessionEntry ? sessionDeliveryChannel(sessionEntry) : undefined),
-      provider:
-        normalizeOptionalString(ctx.Provider ?? ctx.Surface) ??
-        (sessionEntry ? sessionDeliveryOrigin(sessionEntry)?.provider : undefined),
-    }),
-    groupId: resolveGroupSessionKey(ctx)?.id ?? sessionEntry?.groupId,
-    groupChannel:
-      normalizeOptionalString(ctx.GroupChannel) ??
-      normalizeOptionalString(ctx.GroupSubject) ??
-      normalizeOptionalString(sessionEntry?.groupChannel) ??
-      normalizeOptionalString(sessionEntry?.subject),
-    groupSpace: normalizeOptionalString(ctx.GroupSpace),
-    accountId:
-      ctx.AccountId ??
-      (sessionEntry ? deliveryContextFromSession(sessionEntry)?.accountId : undefined),
-  });
+  const profileAlsoAllowed = params.prefersMessageToolDelivery ? ["message"] : [];
+  const resolveProfile = (profileId: string | undefined, alsoAllow?: string[]) =>
+    mergeAlsoAllowPolicy(resolveToolProfilePolicy(profileId), [
+      ...(alsoAllow ?? []),
+      ...profileAlsoAllowed,
+    ]);
+  const profilePolicy = resolveProfile(profile, profileAlsoAllow);
+  const providerProfilePolicy = resolveProfile(providerProfile, providerProfileAlsoAllow);
   const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, { cfg });
   const subagentPolicy =
     params.sessionKey && isSubagentEnvelopeSession(params.sessionKey, { cfg, store: subagentStore })

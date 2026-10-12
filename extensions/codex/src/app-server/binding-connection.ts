@@ -26,11 +26,6 @@ export type CodexBindingAppServerConnection = {
   clientAuthProfileId: string | null | undefined;
 };
 
-type CodexSupervisionModelSelection = {
-  model: string;
-  modelProvider: string;
-};
-
 /** Connection selection excludes independently updated thread bookkeeping. */
 export function codexBindingConnectionSelection(binding: CodexAppServerThreadBinding | undefined) {
   return binding
@@ -75,7 +70,7 @@ export function assertCodexSessionRuntimeOwnership(
 /** Requires the native model pair after a supervised pending branch has materialized. */
 export function requireCodexSupervisionModelSelection(
   binding: Pick<CodexAppServerThreadBinding, "connectionScope" | "model" | "modelProvider">,
-): CodexSupervisionModelSelection {
+) {
   const model = binding.model?.trim();
   const modelProvider = binding.modelProvider?.trim();
   if (binding.connectionScope !== "supervision" || !model || !modelProvider) {

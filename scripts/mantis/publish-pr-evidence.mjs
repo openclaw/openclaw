@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Publishes evidence manifest artifacts and optional PR comments for Mantis proof.
 import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
@@ -36,24 +35,11 @@ import { readBoundedResponseText } from "../lib/bounded-response.mjs";
  *   title: string,
  * }} EvidenceManifest
  */
-/**
- * @typedef {{
- *   alt?: string,
- *   inline?: boolean,
- *   kind?: string,
- *   label?: string,
- *   lane?: string,
- *   path?: string,
- *   required?: boolean,
- *   targetPath?: string,
- *   width?: number,
- * }} ManifestArtifactEntry
- */
+/** @typedef {Partial<Omit<EvidenceArtifact, "source">>} ManifestArtifactEntry */
 /** @typedef {Omit<EvidenceManifest, "artifacts" | "manifestDir"> & { artifacts?: ManifestArtifactEntry[] }} EvidenceManifestFile */
 /** @typedef {{ accessKeyId: string, bucket: string, endpoint: string, publicBaseUrl: string, region: string, secretAccessKey: string }} ObjectStorageConfig */
 /** @typedef {(url: URL, init: { body: Buffer, headers: HeadersInit, method: string, signal: AbortSignal }) => Promise<Response>} ArtifactFetch */
 /** @typedef {{ body: Buffer, headers: HeadersInit, method: string, url: URL }} SignedPutRequest */
-/** @typedef {{ left: EvidenceArtifact, right: EvidenceArtifact }} EvidencePair */
 /**
  * @typedef {{
  *   artifactUrl?: string,
@@ -119,10 +105,6 @@ function requireArg(args, name) {
     throw new Error(`Missing --${name.replaceAll("_", "-")}.`);
   }
   return value;
-}
-/** @returns {EvidenceManifestFile} */
-function readJson(filePath) {
-  return JSON.parse(readFileSync(filePath, "utf8"));
 }
 function assertInside(parentDir, candidatePath, label) {
   const relative = path.relative(parentDir, candidatePath);
@@ -228,18 +210,8 @@ function reconcileEvidenceVerdict(manifest) {
 export function validateEvidenceManifestFile(manifestPath) {
   const resolvedManifest = path.resolve(manifestPath);
   const manifestDir = path.dirname(resolvedManifest);
-  const manifest = validateEvidenceManifest(readJson(resolvedManifest));
-  for (const artifact of manifest.artifacts ?? []) {
-    resolveArtifact(manifestDir, artifact);
-  }
-  writeFileSync(resolvedManifest, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  return manifest;
-}
-
-/**
- * @param {EvidenceManifestFile} manifest
- */
-function validateEvidenceManifest(manifest) {
+  /** @type {EvidenceManifestFile} */
+  const manifest = JSON.parse(readFileSync(resolvedManifest, "utf8"));
   if (manifest.schemaVersion !== MANTIS_EVIDENCE_SCHEMA_VERSION) {
     throw new Error(
       `Unsupported Mantis evidence manifest schema: ${manifest.schemaVersion}. Rerun the proof to create schema version 2 evidence.`,
@@ -248,11 +220,14 @@ function validateEvidenceManifest(manifest) {
   if (!manifest.id || !manifest.title || !manifest.scenario) {
     throw new Error("Mantis evidence manifest requires id, title, and scenario.");
   }
-  return reconcileEvidenceVerdict(manifest);
+  const reconciled = reconcileEvidenceVerdict(manifest);
+  for (const artifact of reconciled.artifacts ?? []) {
+    resolveArtifact(manifestDir, artifact);
+  }
+  writeFileSync(resolvedManifest, `${JSON.stringify(reconciled, null, 2)}\n`, "utf8");
+  return reconciled;
 }
 /**
- * Loads and validates an evidence manifest from disk.
- *
  * @param {string} manifestPath
  * @returns {EvidenceManifest}
  */
@@ -310,17 +285,11 @@ function digestHex(value) {
 function hmacBuffer(key, value) {
   return createHmac("sha256", key).update(value).digest();
 }
-function hmacHex(key, value) {
-  return createHmac("sha256", key).update(value).digest("hex");
-}
 function signingKey({ date, region, secretAccessKey }) {
   const dateKey = hmacBuffer(`AWS4${secretAccessKey}`, date);
   const regionKey = hmacBuffer(dateKey, region);
   const serviceKey = hmacBuffer(regionKey, "s3");
   return hmacBuffer(serviceKey, "aws4_request");
-}
-function s3Path({ bucket, key }) {
-  return `/${encodePathForUrl(bucket)}/${encodePathForUrl(key)}`;
 }
 function contentType(filePath) {
   const extension = path.extname(filePath).toLowerCase();
@@ -338,7 +307,9 @@ function contentType(filePath) {
 }
 /** @returns {SignedPutRequest} */
 function signedPutRequest({ artifact, body, config, key, now = new Date() }) {
-  const url = new URL(`${config.endpoint}${s3Path({ bucket: config.bucket, key })}`);
+  const url = new URL(
+    `${config.endpoint}/${encodePathForUrl(config.bucket)}/${encodePathForUrl(key)}`,
+  );
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/gu, "");
   const date = amzDate.slice(0, 8);
   const payloadHash = digestHex(body);
@@ -363,10 +334,10 @@ function signedPutRequest({ artifact, body, config, key, now = new Date() }) {
   ].join("\n");
   const scope = `${date}/${config.region}/s3/aws4_request`;
   const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, digestHex(canonicalRequest)].join("\n");
-  const signature = hmacHex(
+  const signature = hmacBuffer(
     signingKey({ date, region: config.region, secretAccessKey: config.secretAccessKey }),
     stringToSign,
-  );
+  ).toString("hex");
   return {
     body,
     headers: {
@@ -379,27 +350,17 @@ function signedPutRequest({ artifact, body, config, key, now = new Date() }) {
     url,
   };
 }
-function byLane(artifacts, kind) {
-  const lanes = new Map();
-  for (const artifact of artifacts) {
-    if (artifact.kind !== kind) {
-      continue;
-    }
-    lanes.set(artifact.lane, artifact);
-  }
-  return lanes;
-}
-function findPair(artifacts, kind, leftLane, rightLane) {
-  const lanes = byLane(artifacts, kind);
-  const left = lanes.get(leftLane);
-  const right = lanes.get(rightLane);
+function findPair(artifacts, kind) {
+  const left = artifacts.findLast(
+    (artifact) => artifact.kind === kind && artifact.lane === "baseline",
+  );
+  const right = artifacts.findLast(
+    (artifact) => artifact.kind === kind && artifact.lane === "candidate",
+  );
   return left && right ? { left, right } : null;
 }
 function renderPairTable({ pair, rawBase }) {
   const { left, right } = pair;
-  if (!left || !right) {
-    return "";
-  }
   return [
     '<table width="100%">',
     "  <thead>",
@@ -467,9 +428,6 @@ function laneLine(label, lane) {
   }
   return pieces.join("");
 }
-function publicSummary(manifest) {
-  return manifest.summary ?? "Mantis captured QA evidence for this scenario.";
-}
 function overallStatus(manifest) {
   const outcome = manifest.comparison?.outcome;
   if (outcome === "blocked" || outcome === "fail" || outcome === "pass") {
@@ -477,13 +435,6 @@ function overallStatus(manifest) {
   }
   const pass = manifest.comparison?.pass;
   return typeof pass === "boolean" ? String(pass) : "";
-}
-/**
- * @param {EvidenceManifest} manifest
- * @param {{ requestSource?: string }} [options]
- */
-export function shouldPublishPrComment() {
-  return true;
 }
 /** @param {RenderEvidenceCommentOptions} options */
 export function renderEvidenceComment({
@@ -499,9 +450,9 @@ export function renderEvidenceComment({
   const baseline = comparison.baseline;
   const candidate = comparison.candidate;
   const pairs = [
-    findPair(manifest.artifacts, "timeline", "baseline", "candidate"),
-    findPair(manifest.artifacts, "desktopScreenshot", "baseline", "candidate"),
-    findPair(manifest.artifacts, "motionPreview", "baseline", "candidate"),
+    findPair(manifest.artifacts, "timeline"),
+    findPair(manifest.artifacts, "desktopScreenshot"),
+    findPair(manifest.artifacts, "motionPreview"),
   ].filter((pair) => pair !== null);
   const pairedKeys = pairs.flatMap((pair) => [
     `${pair.left.kind}:${pair.left.lane}`,
@@ -511,7 +462,7 @@ export function renderEvidenceComment({
     marker,
     `## ${manifest.title}`,
     "",
-    `Summary: ${publicSummary(manifest)}`,
+    `Summary: ${manifest.summary ?? "Mantis captured QA evidence for this scenario."}`,
     "",
     `- Scenario: \`${manifest.scenario}\``,
   ];
@@ -542,8 +493,7 @@ export function renderEvidenceComment({
     lines.push(`- Overall: \`${overall}\``);
   }
   lines.push("");
-  const pairedSections = pairs.map((pair) => renderPairTable({ pair, rawBase }));
-  lines.push(...pairedSections);
+  lines.push(...pairs.map((pair) => renderPairTable({ pair, rawBase })));
   const singleTables = renderSingleImageTables({
     artifacts: manifest.artifacts,
     pairedKeys,
@@ -552,23 +502,14 @@ export function renderEvidenceComment({
   if (singleTables) {
     lines.push(singleTables);
   }
-  const motionClips = renderLinkList({
-    artifacts: manifest.artifacts,
-    kind: "motionClip",
-    rawBase,
-    title: "Motion-trimmed clips",
-  });
-  if (motionClips) {
-    lines.push(motionClips);
-  }
-  const fullVideos = renderLinkList({
-    artifacts: manifest.artifacts,
-    kind: "fullVideo",
-    rawBase,
-    title: "Full videos",
-  });
-  if (fullVideos) {
-    lines.push(fullVideos);
+  for (const [kind, title] of [
+    ["motionClip", "Motion-trimmed clips"],
+    ["fullVideo", "Full videos"],
+  ]) {
+    const links = renderLinkList({ artifacts: manifest.artifacts, kind, rawBase, title });
+    if (links) {
+      lines.push(links);
+    }
   }
   lines.push(`Raw QA files: ${treeUrl ?? rawBase}`);
   return `${lines.join("\n").replace(/\n{3,}/gu, "\n\n")}\n`;
@@ -769,10 +710,6 @@ export async function publishEvidence(rawArgs = process.argv.slice(2)) {
     runUrl: args.run_url,
     treeUrl: published.treeUrl,
   });
-  if (!shouldPublishPrComment(manifest, { requestSource: args.request_source })) {
-    console.log("Skipped Mantis QA evidence PR comment because the run did not capture proof.");
-    return;
-  }
   upsertPrComment({
     body,
     createMissing: args.create_missing !== "false",

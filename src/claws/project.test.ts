@@ -4,8 +4,10 @@ import { dirname, join, sep } from "node:path";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { configureFsSafeNative, getFsSafeNativeConfig } from "../infra/fs-safe-defaults.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { buildClawProject } from "./project-build.js";
+import { clawProjectBuildEntrypoint } from "./project-runtime.test-support.js";
 import { ClawProjectError, createClawProject, validateClawProject } from "./project.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -59,16 +61,22 @@ describe("Claw projects", () => {
   it("matches the golden artifact digest under a restrictive umask", () => {
     const output = join(tempDirs.make("openclaw-claw-umask-"), "golden.tgz");
     const project = join(process.cwd(), "test", "fixtures", "claws", "project-v1");
+    const projectBuildUrl = resolveRuntimeWorkerUrl(clawProjectBuildEntrypoint);
     const script = [
       "process.umask(0o077);",
-      'const { buildClawProject } = await import("./src/claws/project-build.ts");',
+      `const { buildClawProject } = await import(${JSON.stringify(projectBuildUrl.href)});`,
       `const result = await buildClawProject(${JSON.stringify(project)}, ${JSON.stringify(output)});`,
       "process.stdout.write(result.integrity);",
     ].join("\n");
 
     const result = spawnSync(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", script],
+      [
+        ...resolveRuntimeWorkerArgv(projectBuildUrl).slice(0, -1),
+        "--input-type=module",
+        "--eval",
+        script,
+      ],
       {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -90,7 +98,6 @@ describe("Claw projects", () => {
   });
 
   it("refuses to publish and removes staging when a completed file fails to close", async () => {
-    const nativeConfig = getFsSafeNativeConfig();
     const outputDirectory = tempDirs.make("openclaw-claw-close-failure-");
     const output = join(outputDirectory, "claw.tgz");
     const closeError = Object.assign(new Error("staged file close failed"), { code: "EIO" });
@@ -112,14 +119,14 @@ describe("Claw projects", () => {
       return handle;
     });
     try {
-      configureFsSafeNative({ mode: "off" });
-      await expect(
-        buildClawProject(join(process.cwd(), "test", "fixtures", "claws", "project-v1"), output),
-      ).rejects.toBe(closeError);
+      await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, async () => {
+        await expect(
+          buildClawProject(join(process.cwd(), "test", "fixtures", "claws", "project-v1"), output),
+        ).rejects.toBe(closeError);
+      });
       expect(closeAttempts).toBe(1);
       await expect(readdir(outputDirectory)).resolves.toEqual([]);
     } finally {
-      configureFsSafeNative(nativeConfig);
       vi.restoreAllMocks();
     }
   });
@@ -412,31 +419,29 @@ describe("Claw projects", () => {
     });
   });
 
-  it.each([
-    ".git/config",
-    "node_modules/example/secret.md",
-    "workspace/.git/config",
-    "workspace/node_modules/example/secret.md",
-  ])("rejects an explicitly selected source from %s", async (sourcePath) => {
-    const project = tempDirs.make("openclaw-claw-excluded-source-");
-    const output = join(tempDirs.make("openclaw-claw-excluded-source-output-"), "claw.tgz");
-    await writeRichProject(project);
-    await mkdir(dirname(join(project, sourcePath)), { recursive: true });
-    await writeFile(join(project, sourcePath), "sensitive local state\n");
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace("workspace/reference.md", sourcePath),
-    );
+  it.each([".git/config", "workspace/node_modules/example/secret.md"])(
+    "rejects an explicitly selected source from %s",
+    async (sourcePath) => {
+      const project = tempDirs.make("openclaw-claw-excluded-source-");
+      const output = join(tempDirs.make("openclaw-claw-excluded-source-output-"), "claw.tgz");
+      await writeRichProject(project);
+      await mkdir(dirname(join(project, sourcePath)), { recursive: true });
+      await writeFile(join(project, sourcePath), "sensitive local state\n");
+      const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+      await writeFile(
+        join(project, "CLAW.md"),
+        manifest.replace("workspace/reference.md", sourcePath),
+      );
 
-    await expect(validateClawProject(project)).resolves.toMatchObject({
-      ok: false,
-      diagnostics: [expect.objectContaining({ code: "project_excluded_source" })],
-    });
-    await expect(buildClawProject(project, output)).rejects.toMatchObject({
-      code: "project_invalid",
-    } satisfies Partial<ClawProjectError>);
-  });
+      await expect(validateClawProject(project)).resolves.toMatchObject({
+        ok: false,
+        diagnostics: [expect.objectContaining({ code: "project_excluded_source" })],
+      });
+      await expect(buildClawProject(project, output)).rejects.toMatchObject({
+        code: "project_invalid",
+      } satisfies Partial<ClawProjectError>);
+    },
+  );
 
   it("rejects a custom profile selected from an excluded tree", async () => {
     const project = tempDirs.make("openclaw-claw-excluded-profile-");

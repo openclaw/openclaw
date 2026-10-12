@@ -5,83 +5,60 @@ import { describe, expect, it, vi } from "vitest";
 import { createWorkboardCard } from "../../lib/workboard/test/index-helpers.ts";
 import { mountPage } from "./workboard-page.test-support.ts";
 
-describe("Workboard automation lifecycle", () => {
-  it.each(["job-planning", undefined])(
-    "links a board's automation only when attached: %s",
-    async (automationJobId) => {
-      const page = mountPage({ boardId: "planning" });
-      const boards = [
-        {
-          id: "planning",
-          total: 0,
-          active: 0,
+function mountAutomation(
+  boards: { id: string; automationJobId?: string }[],
+  loadJob: (params: unknown) => unknown,
+  cards: ReturnType<typeof createWorkboardCard>[] = [],
+) {
+  const page = mountPage({ boardId: "planning" });
+  const request = expectDefined(page.request.getMockImplementation(), "request implementation");
+  page.request.mockImplementation(async (method, params) => {
+    if (method === "workboard.cards.list") {
+      return {
+        cards,
+        boards: boards.map((board) => ({
+          total: cards.length,
+          active: cards.length,
           archived: 0,
           byStatus: {},
-          ...(automationJobId ? { automationJobId } : {}),
-        },
-      ];
-      const request = expectDefined(page.request.getMockImplementation(), "request implementation");
-      page.request.mockImplementation(async (method) => {
-        if (method === "workboard.cards.list") {
-          return { cards: [], boards };
-        }
-        if (method === "cron.get") {
-          return automationJob("job-planning", "Planning job");
-        }
-        return request(method);
-      });
-      page.fixture.connection.connected = true;
-      page.fixture.notify();
-      await vi.waitFor(() => expect(page.workboard.state.loaded).toBe(true));
-      if (automationJobId) {
-        await vi.waitFor(() =>
-          expect(
-            page.container
-              .querySelector("a.workboard-heading__automation-name")
-              ?.getAttribute("href"),
-          ).toBe("/automations?job=job-planning"),
-        );
-      } else {
-        expect(page.container.querySelector(".workboard-heading__automation-name")).toBeNull();
-      }
-    },
-  );
+          ...board,
+        })),
+      };
+    }
+    return method === "cron.get" ? loadJob(params) : request(method);
+  });
+  page.fixture.connection.connected = true;
+  page.fixture.notify();
+  return {
+    ...page,
+    heading: () => page.container.querySelector(".workboard-heading__automation-name"),
+  };
+}
+
+describe("Workboard automation lifecycle", () => {
+  it("omits the automation link when none is attached", async () => {
+    const page = mountAutomation([{ id: "planning" }], () =>
+      automationJob("job-planning", "Planning job"),
+    );
+    await vi.waitFor(() => expect(page.workboard.state.loaded).toBe(true));
+    expect(page.heading()).toBeNull();
+  });
 
   it("refreshes active automation on cron events and defers hidden updates until return", async () => {
-    const page = mountPage({ boardId: "planning" });
     const earlier = createDeferred<ReturnType<typeof automationJob>>();
     let loads = 0;
-    const request = expectDefined(page.request.getMockImplementation(), "request implementation");
-    page.request.mockImplementation(async (method) => {
-      if (method === "workboard.cards.list") {
-        return {
-          cards: [],
-          boards: [
-            {
-              id: "planning",
-              total: 0,
-              active: 0,
-              archived: 0,
-              byStatus: {},
-              automationJobId: "job-planning",
-            },
-          ],
-        };
-      }
-      if (method === "cron.get") {
-        loads += 1;
-        return loads === 1 ? earlier.promise : automationJob("job-planning", `Revision ${loads}`);
-      }
-      return request(method);
+    const page = mountAutomation([{ id: "planning", automationJobId: "job-planning" }], () => {
+      loads += 1;
+      return loads === 1 ? earlier.promise : automationJob("job-planning", `Revision ${loads}`);
     });
-    page.fixture.connection.connected = true;
-    page.fixture.notify();
     await vi.waitFor(() => expect(loads).toBe(1));
     page.fixture.emit("cron", { jobId: "other-job", action: "updated" });
     await Promise.resolve();
     expect(loads).toBe(1);
     page.fixture.emit("cron", { jobId: "job-planning", action: "updated" });
     await vi.waitFor(() => expect(page.container.textContent).toContain("Revision 2"));
+    expect(page.heading()).toBeInstanceOf(HTMLAnchorElement);
+    expect(page.heading()?.getAttribute("href")).toBe("/automations?job=job-planning");
     earlier.resolve(automationJob("job-planning", "Stale revision"));
     await earlier.promise;
     await new Promise((resolve) => {
@@ -89,9 +66,7 @@ describe("Workboard automation lifecycle", () => {
     });
     expect(page.container.textContent).not.toContain("Stale revision");
     page.present(false);
-    await vi.waitFor(() =>
-      expect(page.container.querySelector(".workboard-heading__automation-name")).toBeNull(),
-    );
+    await vi.waitFor(() => expect(page.heading()).toBeNull());
     page.fixture.emit("cron", { jobId: "job-planning", action: "finished" });
     await Promise.resolve();
     expect(loads).toBe(2);
@@ -104,29 +79,16 @@ describe("Workboard automation lifecycle", () => {
   });
 
   it("shares board and detail automation loading and ignores an earlier visit's late response", async () => {
-    const page = mountPage({ boardId: "planning" });
     const card = createWorkboardCard({
       id: "planning-card",
       metadata: { automation: { boardId: "planning" } },
     });
-    const boards = ["planning", "operations"].map((id) => ({
-      id,
-      total: 1,
-      active: 1,
-      archived: 0,
-      byStatus: {},
-      automationJobId: `job-${id}`,
-    }));
     const earlier = createDeferred<ReturnType<typeof automationJob>>();
     const current = createDeferred<ReturnType<typeof automationJob>>();
     let planningLoads = 0;
-    const request = expectDefined(page.request.getMockImplementation(), "request implementation");
-    page.request.mockImplementation(async (method, ...args) => {
-      if (method === "workboard.cards.list") {
-        return { cards: [card], boards };
-      }
-      if (method === "cron.get") {
-        const params: unknown = args[0];
+    const page = mountAutomation(
+      ["planning", "operations"].map((id) => ({ id, automationJobId: `job-${id}` })),
+      (params) => {
         if (
           params &&
           typeof params === "object" &&
@@ -137,11 +99,9 @@ describe("Workboard automation lifecycle", () => {
           return planningLoads === 1 ? earlier.promise : current.promise;
         }
         return automationJob("job-operations", "Operations job");
-      }
-      return request(method);
-    });
-    page.fixture.connection.connected = true;
-    page.fixture.notify();
+      },
+      [card],
+    );
     await vi.waitFor(() => expect(planningLoads).toBe(1));
     page.workboard.state.detailCardId = card.id;
     page.workboard.notify();
@@ -157,9 +117,7 @@ describe("Workboard automation lifecycle", () => {
     page.workboard.notify();
     current.resolve(automationJob("job-planning", "Current planning job"));
     await vi.waitFor(() => {
-      expect(
-        page.container.querySelector(".workboard-heading__automation-name")?.textContent,
-      ).toContain("Current planning job");
+      expect(page.heading()?.textContent).toContain("Current planning job");
       expect(page.container.querySelector(".workboard-detail")?.textContent).toContain(
         "Current planning job",
       );
@@ -170,9 +128,7 @@ describe("Workboard automation lifecycle", () => {
       setTimeout(resolve, 0);
     });
     expect(page.container.textContent).not.toContain("Stale planning job");
-    expect(
-      page.container.querySelector(".workboard-heading__automation-name")?.textContent,
-    ).toContain("Current planning job");
+    expect(page.heading()?.textContent).toContain("Current planning job");
     expect(page.container.querySelector(".workboard-detail")?.textContent).toContain(
       "Current planning job",
     );

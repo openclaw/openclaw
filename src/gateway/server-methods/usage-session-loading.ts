@@ -48,7 +48,7 @@ export async function discoverAllSessionsForUsage(params: {
   const requestedAgentId = normalizeOptionalString(params.agentId);
   const agents = requestedAgentId
     ? [{ id: normalizeAgentId(requestedAgentId) }]
-    : listGatewayAgentsBasic(params.config).agents;
+    : (await listGatewayAgentsBasic(params.config)).agents;
   const discovered = await runUsageAgentTasks(
     agents.map((agent) => async () => {
       const agentId = normalizeAgentId(agent.id);

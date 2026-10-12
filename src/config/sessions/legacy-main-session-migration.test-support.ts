@@ -57,6 +57,8 @@ export function setupLegacyMainSessionMigrationTests() {
     const root = fs.realpathSync.native(rawRoot);
     const stateDir = path.join(root, "state");
     fs.mkdirSync(stateDir, { recursive: true });
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
     return {
       cfg,
       env: { ...process.env, OPENCLAW_AGENT_DIR: undefined, OPENCLAW_STATE_DIR: stateDir },

@@ -71,9 +71,17 @@ suite.define(() => {
         const initialHistory = {
           messages: [],
           sessionId,
-          sessionInfo: { key: sessionKey, kind: "direct", hasActiveRun: false, status: "done" },
+          sessionInfo: {
+            key: sessionKey,
+            sessionId,
+            kind: "direct",
+            hasActiveRun: false,
+            status: "done",
+          },
         };
         const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessions: [initialHistory.sessionInfo],
           historyMessages: [],
           methodResponses: { "chat.startup": initialHistory, "chat.history": initialHistory },
         });
@@ -181,6 +189,7 @@ suite.define(() => {
           };
           const sessionInfo = {
             key: sessionKey,
+            sessionId,
             kind: "direct",
             activeRunIds: [runId],
             hasActiveRun: true,

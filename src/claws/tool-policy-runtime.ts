@@ -1,11 +1,10 @@
-import { listAgentEntries } from "../agents/agent-scope.js";
 import {
   registerRuntimeConfigSnapshotPreparer,
   type RuntimeConfigSnapshotPreparationContext,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import { digestClawAgentConfig } from "./agent-config-digest.js";
+import { CLAW_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION } from "./provenance-agent-origin.js";
 import {
   initializeCachedClawInstallSchemaVersions,
   prepareClawInstallSchemaVersions,
@@ -13,6 +12,10 @@ import {
   registerClawInstallSchemaVersionSnapshotListener,
 } from "./provenance-runtime-read.js";
 import { CLAW_INSTALL_RECORD_SCHEMA_VERSION } from "./provenance-schema-version.js";
+import {
+  collectClawToolPolicyCandidates,
+  type ClawToolPolicyCandidate,
+} from "./tool-policy-candidates.js";
 
 const frozenToolAllowPolicies = new WeakSet<object>();
 type PreparedClawToolPolicy =
@@ -20,7 +23,6 @@ type PreparedClawToolPolicy =
   | { kind: "legacy" }
   | { kind: "state-error"; error: unknown };
 const preparedClawToolPolicies = new WeakMap<object, PreparedClawToolPolicy>();
-type ClawToolPolicyCandidate = { agentId: string; agentConfigDigest: string; tools: object };
 let preparedCandidates: ClawToolPolicyCandidate[] = [];
 let preparedStateOptions: OpenClawStateDatabaseOptions = {};
 const uninitializedStateError = new Error(
@@ -37,9 +39,12 @@ export function isFrozenClawToolAllowPolicy(policy: object | undefined): boolean
   return policy ? frozenToolAllowPolicies.has(policy) : false;
 }
 
-function applyPreparedClawToolPolicyConsent(): void {
-  const snapshot = readCachedClawInstallSchemaVersions(preparedStateOptions);
-  for (const candidate of preparedCandidates) {
+function applyPreparedClawToolPolicyConsent(
+  candidates: readonly ClawToolPolicyCandidate[] = preparedCandidates,
+  stateOptions: OpenClawStateDatabaseOptions = preparedStateOptions,
+): void {
+  const snapshot = readCachedClawInstallSchemaVersions(stateOptions);
+  for (const candidate of candidates) {
     if (snapshot.kind === "uninitialized") {
       preparedClawToolPolicies.set(candidate.tools, {
         kind: "state-error",
@@ -70,32 +75,38 @@ function applyPreparedClawToolPolicyConsent(): void {
       });
       continue;
     }
-    if (
-      schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION &&
-      schemaVersionRead.agentConfigDigest !== candidate.agentConfigDigest
-    ) {
+    const adopted = schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION;
+    const current =
+      adopted || schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION;
+    try {
+      if (
+        current &&
+        schemaVersionRead.agentConfigDigest !==
+          (adopted
+            ? candidate.adoptedAgentConfigDigest(stateOptions.env)
+            : candidate.agentConfigDigest)
+      ) {
+        throw new Error("Claw agent configuration does not match its consent provenance.");
+      }
+    } catch (error) {
       preparedClawToolPolicies.set(candidate.tools, {
         kind: "state-error",
-        error: new Error("Claw agent configuration does not match its consent provenance."),
+        error,
       });
       continue;
     }
     preparedClawToolPolicies.set(candidate.tools, {
-      kind:
-        schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION
-          ? "current"
-          : "legacy",
+      kind: current ? "current" : "legacy",
     });
   }
 }
 
-function collectClawToolPolicyCandidates(config: OpenClawConfig): ClawToolPolicyCandidate[] {
-  return listAgentEntries(config).flatMap((agent) => {
-    const tools = agent.tools;
-    return tools && (tools.profile || tools.allow?.length)
-      ? [{ agentId: agent.id, agentConfigDigest: digestClawAgentConfig(agent), tools }]
-      : [];
-  });
+/** Bind a captured construction config to the owner's prepared provenance facts. */
+export function prepareCapturedClawToolPolicyConsent(
+  config: OpenClawConfig,
+  stateOptions: OpenClawStateDatabaseOptions,
+): void {
+  applyPreparedClawToolPolicyConsent(collectClawToolPolicyCandidates(config), stateOptions);
 }
 
 function replaceClawToolPolicyCandidates(
@@ -129,6 +140,7 @@ async function prepareClawToolPolicyConsentAsync(
   return () => {
     replaceClawToolPolicyCandidates(collectClawToolPolicyCandidates(config), {
       path: preparedSchemaVersions.path,
+      env: context.env,
     });
     preparedSchemaVersions.publish();
     applyPreparedClawToolPolicyConsent();

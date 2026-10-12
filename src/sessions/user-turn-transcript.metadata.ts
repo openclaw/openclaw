@@ -165,16 +165,17 @@ export function restorePreparedUserTurnOperationalMetaForRuntime<
   if (typeof senderIsOwner === "boolean") {
     runtimeMeta.senderIsOwner = senderIsOwner;
   }
+  const contentUnchanged = isDeepStrictEqual(
+    params.runtimeMessage.content,
+    params.preparedMessage.content,
+  );
   // A rewritten runtime input cannot retain an alternate copy of the original words.
-  if (!isDeepStrictEqual(params.runtimeMessage.content, params.preparedMessage.content)) {
+  if (!contentUnchanged) {
     delete runtimeMeta.workContext;
   }
   // Selections belong to the submitted bytes, not a hook's rewritten text.
   delete runtimeMeta.humanMentions;
-  if (
-    preparedMeta?.humanMentions !== undefined &&
-    isDeepStrictEqual(params.runtimeMessage.content, params.preparedMessage.content)
-  ) {
+  if (preparedMeta?.humanMentions !== undefined && contentUnchanged) {
     runtimeMeta.humanMentions = preparedMeta.humanMentions;
   }
   delete nextMessage["__openclaw"];
@@ -228,15 +229,10 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     originalMeta?.humanMentions === undefined && originalMeta?.workContext === undefined
       ? undefined
       : structuredClone(message.content);
-  const workContext =
-    originalMeta?.workContext === undefined ? undefined : structuredClone(originalMeta.workContext);
-  const humanMentions =
-    originalMeta?.humanMentions === undefined
-      ? undefined
-      : structuredClone(originalMeta.humanMentions);
+  const workContext = structuredClone(originalMeta?.workContext);
+  const humanMentions = structuredClone(originalMeta?.humanMentions);
   const display = message.display;
-  const intent =
-    originalMeta?.intent === undefined ? undefined : structuredClone(originalMeta.intent);
+  const intent = structuredClone(originalMeta?.intent);
   const senderIsOwner = originalMeta?.senderIsOwner;
   const replyToId = normalizeOptionalString(originalMeta?.replyToId);
   const originalReplyPreview = asOptionalRecord(originalMeta?.replyToPreview);
@@ -253,9 +249,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const lateMedia = originalMeta?.lateMedia === true;
   const originalMedia = originalMeta?.media;
   const media = Array.isArray(originalMedia) ? structuredClone(originalMedia) : undefined;
-  const originalMediaImageLayout = originalMeta?.mediaImageLayout;
-  const mediaImageLayout =
-    originalMediaImageLayout === undefined ? undefined : structuredClone(originalMediaImageLayout);
+  const mediaImageLayout = structuredClone(originalMeta?.mediaImageLayout);
   // Hooks receive the original message object and may mutate nested metadata in
   // place. Snapshot transport correlation before handing them that reference.
   const originalTransportRecord = asOptionalRecord(originalTransport);
@@ -289,12 +283,13 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     delete protectedMeta.intent;
   }
   // A redacting hook must not leave an alternate copy of the original text visible.
+  const contentUnchanged = isDeepStrictEqual(nextUserMessage.content, originalContent);
   delete protectedMeta.workContext;
-  if (workContext !== undefined && isDeepStrictEqual(nextUserMessage.content, originalContent)) {
+  if (workContext !== undefined && contentUnchanged) {
     protectedMeta.workContext = workContext;
   }
   delete protectedMeta.humanMentions;
-  if (humanMentions !== undefined && isDeepStrictEqual(nextUserMessage.content, originalContent)) {
+  if (humanMentions !== undefined && contentUnchanged) {
     protectedMeta.humanMentions = humanMentions;
   }
   delete protectedMeta.steerTargetRunId;

@@ -1,9 +1,9 @@
 import { randomInt } from "node:crypto";
-import { once } from "node:events";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import net, { type Socket } from "node:net";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { desktopProofTestReport } from "../../../scripts/lib/desktop-resize-proof.mts";
 import { hashWorkerCredential } from "../../../src/gateway/worker-environments/credential.js";
 import {
@@ -15,6 +15,8 @@ import {
 import { createWorkerEnvironmentStore } from "../../../src/gateway/worker-environments/store.js";
 import type { WorkerDesktopEndpoint, WorkerSshEndpoint } from "../../../src/plugins/types.js";
 import { runCommandWithTimeout } from "../../../src/process/exec.js";
+import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import type { DesktopClient } from "../components/desktop/desktop-client.ts";
 
 /** Serialized into the fixture page; observe the real client without replacing its transport. */
@@ -120,6 +122,7 @@ export function observeDesktopProofRfbLifecycle(element: Element) {
 
 export type DesktopResizeFixture = {
   carrier: "ssh" | "node";
+  bootstrapReceipt: WorkerAdmissionHandshake;
   ssh: WorkerSshEndpoint;
   identityPath: string;
   xauthorityPath?: string;
@@ -212,7 +215,7 @@ export async function observeDesktopEndpointPackets(port: number, signal: AbortS
       tails.set(socket, bytes.subarray(-9));
     }
   };
-  const server = net.createServer((client) => {
+  const acceptClient = (client: Socket) => {
     if (closed || peers.size >= 32) {
       fail("Desktop endpoint connection bound exceeded");
       client.destroy();
@@ -275,9 +278,15 @@ export async function observeDesktopEndpointPackets(port: number, signal: AbortS
     client.on("data", (chunk: Buffer) => observe(client, chunk));
     client.pipe(upstream);
     upstream.pipe(client);
+  };
+  signal.throwIfAborted();
+  const reservation = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () => net.createServer(acceptClient),
   });
+  const server = reservation.listener;
   const close = () =>
-    (closing ??= (async () => {
+    (closing ??= runQaGatewayFixture(async () => {
       closed = true;
       signal.removeEventListener("abort", abort);
       fail("Desktop endpoint observation ended before completion");
@@ -291,17 +300,9 @@ export async function observeDesktopEndpointPackets(port: number, signal: AbortS
             socket.destroy();
           }),
       );
-      await Promise.all([
-        ...stopped,
-        new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        }),
-      ]);
-    })());
+      await Promise.all([...stopped, reservation.releaseListener()]);
+    }, reservation.claim.release));
   const abort = () => fail("Desktop endpoint observation aborted before completion");
-  signal.throwIfAborted();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
   signal.addEventListener("abort", abort, { once: true });
   if (signal.aborted) {
     await close();
@@ -388,10 +389,11 @@ export async function readDesktopResizeFixture(file: string): Promise<DesktopRes
     !fixture.ssh?.hostKey ||
     !fixture.desktop?.passwordFilePath ||
     !fixture.fixedDesktop?.passwordFilePath ||
+    !fixture.bootstrapReceipt ||
     !hasPinnedProvenance(fixture.provenance)
   ) {
     throw new Error(
-      "Desktop resize proof requires a carrier, pinned SSH/VNC facts, and provenance",
+      "Desktop resize proof requires a carrier, build receipt, pinned SSH/VNC facts, and provenance",
     );
   }
   return fixture;
@@ -445,55 +447,58 @@ export async function writeDesktopResizeProvider(root: string, fixture: DesktopR
   return pluginDir;
 }
 
-export function seedDesktopResizeSources(fixture: DesktopResizeFixture, nodeDeviceId?: string) {
+export async function seedDesktopResizeSources(
+  fixture: DesktopResizeFixture,
+  nodeDeviceId?: string,
+) {
   if (fixture.carrier === "node" && !nodeDeviceId) {
-    throw new Error("Node desktop proof requires the actually admitted node device");
+    throw new Error("Node desktop proof requires the prepared node device identity");
   }
-  const store = createWorkerEnvironmentStore();
-  for (const [kind, environmentId] of Object.entries(resizeSources)) {
-    const intent = store.createIntent({
-      environmentId,
-      providerId: kind === "unmanaged" ? "desktop-unmanaged-fixture" : "desktop-resize-fixture",
-      profileId: "resize-fixture",
-      profileSnapshot: { executionMode: "remote-exec", settings: {} },
-      provisionOperationId: `provision:${environmentId}`,
-    });
-    const provisioning = store.transition({
-      environmentId,
-      from: intent.state,
-      to: "provisioning",
-    });
-    const desktop = kind === "fixed" ? fixture.fixedDesktop : fixture.desktop;
-    const owner = { leaseId: `lease:${environmentId}`, sharedHost: false, desktop };
-    const preparing =
-      fixture.carrier === "node"
-        ? provisioning
-        : store.transition({
-            environmentId,
-            from: provisioning.state,
-            to: "bootstrapping",
-            patch: { ...owner, sshEndpoint: fixture.ssh },
-          });
-    store.transition({
-      environmentId,
-      from: preparing.state,
-      to: "ready",
-      patch: {
-        ...(fixture.carrier === "node" ? { ...owner, nodeDeviceId, sshEndpoint: null } : {}),
-        // Synthetic provisioning receipt, not evidence of a cloud bootstrap.
-        bootstrapReceipt: {
-          bundleHash: "a".repeat(64),
-          openclawVersion: "2026.9.1",
-          protocolFeatures: [],
+  const store = await createWorkerEnvironmentStore();
+  try {
+    for (const [kind, environmentId] of Object.entries(resizeSources)) {
+      const intent = await store.createIntent({
+        environmentId,
+        providerId: kind === "unmanaged" ? "desktop-unmanaged-fixture" : "desktop-resize-fixture",
+        profileId: "resize-fixture",
+        profileSnapshot: { executionMode: "remote-exec", settings: {} },
+        provisionOperationId: `provision:${environmentId}`,
+      });
+      const provisioning = await store.transition({
+        environmentId,
+        from: intent.state,
+        to: "provisioning",
+      });
+      const desktop = kind === "fixed" ? fixture.fixedDesktop : fixture.desktop;
+      const owner = { leaseId: `lease:${environmentId}`, sharedHost: false, desktop };
+      const preparing =
+        fixture.carrier === "node"
+          ? provisioning
+          : await store.transition({
+              environmentId,
+              from: provisioning.state,
+              to: "bootstrapping",
+              patch: { ...owner, sshEndpoint: fixture.ssh },
+            });
+      await store.transition({
+        environmentId,
+        from: preparing.state,
+        to: "ready",
+        patch: {
+          ...(fixture.carrier === "node" ? { ...owner, nodeDeviceId, sshEndpoint: null } : {}),
+          // Match the running build so startup reconciliation preserves this provisioned fixture.
+          bootstrapReceipt: fixture.bootstrapReceipt,
+          credential: {
+            credentialHash: hashWorkerCredential(`desktop-resize-proof:${environmentId}`),
+            sessionId: null,
+            rpcSetVersion: 1,
+            expiresAtMs: Date.now() + 3_600_000,
+          },
         },
-        credential: {
-          credentialHash: hashWorkerCredential(`desktop-resize-proof:${environmentId}`),
-          sessionId: null,
-          rpcSetVersion: 1,
-          expiresAtMs: Date.now() + 3_600_000,
-        },
-      },
-    });
+      });
+    }
+  } finally {
+    await store.close();
   }
 }
 

@@ -87,7 +87,8 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
           permission-members: read
 
-      - name: Run immutable Crabbox proof and publish exact-head check
+      - name: Run immutable Crabbox proof
+        id: proof
         env:
           CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
           CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
@@ -95,4 +96,38 @@ jobs:
           CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           GH_APP_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
-        run: node scripts/pr-crabbox-gate-publisher.mjs
+        run: node scripts/pr-crabbox-gate-publisher.mjs --proof
+
+      # The proof can outlive the initial one-hour installation token.
+      - name: Refresh organization membership token for publication
+        id: publish-app-token
+        if: success() && steps.proof.outcome == 'success'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-members: read
+
+      - name: Refresh fallback organization membership token for publication
+        id: publish-app-token-fallback
+        if: success() && steps.proof.outcome == 'success' && steps.publish-app-token.outcome == 'failure'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        continue-on-error: true
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-members: read
+
+      - name: Verify proof and publish exact-head check with fresh authority
+        if: success() && steps.proof.outcome == 'success'
+        env:
+          CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
+          CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
+          CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
+          CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
+          CRABBOX_PROOF_RUN_ID: ${{ steps.proof.outputs.run_id }}
+          CRABBOX_PROOF_LEASE_ID: ${{ steps.proof.outputs.lease_id }}
+          GH_TOKEN: ${{ github.token }}
+          GH_APP_TOKEN: ${{ steps.publish-app-token.outputs.token || steps.publish-app-token-fallback.outputs.token }}
+        run: node scripts/pr-crabbox-gate-publisher.mjs --publish

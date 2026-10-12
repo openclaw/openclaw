@@ -1,15 +1,12 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import {
-  closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { SignalDaemonHandle } from "./daemon.js";
+import type { MonitorSignalOpts } from "./monitor.js";
 import { setSignalRuntime } from "./runtime.js";
 import { clearSignalRuntimeForTest } from "./runtime.test-support.js";
 import type { SignalIngressMonitor } from "./signal-ingress.js";
@@ -47,20 +44,27 @@ const signalToolResultSessionStore = vi.hoisted(() => ({ path: "" }));
 const signalToolResultIngressMonitor = vi.hoisted(() => ({
   current: undefined as SignalIngressMonitor | undefined,
 }));
-let signalToolResultStateDir: string | undefined;
+let signalToolResultState: OpenClawTestState | undefined;
 let signalToolResultIngressQueue: ReturnType<typeof createChannelIngressQueueForTests> | undefined;
 
-export function toSignalToolResultTestError(value: unknown, fallbackMessage: string): Error {
+function toSignalToolResultTestError(value: unknown, fallbackMessage: string): Error {
   return value instanceof Error ? value : new Error(fallbackMessage, { cause: value });
 }
 
-export async function waitForSignalToolResultIngressIdle() {
-  const queue = signalToolResultIngressQueue;
+export async function waitForSignalToolResultIngressDispatchIdle() {
   const monitor = signalToolResultIngressMonitor.current;
-  if (!queue || !monitor) {
+  if (!monitor) {
     throw new Error("Signal tool-result ingress monitor is not initialized");
   }
   await monitor.waitForIdle();
+}
+
+async function waitForSignalToolResultIngressIdle() {
+  const queue = signalToolResultIngressQueue;
+  if (!queue) {
+    throw new Error("Signal tool-result ingress monitor is not initialized");
+  }
+  await waitForSignalToolResultIngressDispatchIdle();
   // Canonical idle owns active delivery synchronization. Deferred debounce claims
   // settle later at turn adoption, so retain a bounded queue drain assertion.
   await vi.waitFor(
@@ -75,6 +79,40 @@ export async function waitForSignalToolResultIngressIdle() {
     },
     { interval: 10, timeout: 5_000 },
   );
+}
+
+export async function receiveSignalPayloads(params: {
+  payloads: unknown[];
+  opts?: Partial<MonitorSignalOpts>;
+}) {
+  const abortController = new AbortController();
+  let ingressError: Error | undefined;
+  streamMock.mockImplementation(async ({ onEvent }) => {
+    try {
+      for (const payload of params.payloads) {
+        await onEvent({
+          event: "receive",
+          data: JSON.stringify(payload),
+        });
+      }
+      await waitForSignalToolResultIngressIdle();
+    } catch (error) {
+      ingressError = toSignalToolResultTestError(error, "Signal ingress delivery failed");
+    } finally {
+      abortController.abort();
+    }
+  });
+
+  const { monitorSignalProvider } = await import("./monitor.js");
+  await monitorSignalProvider({
+    autoStart: false,
+    baseUrl: "http://127.0.0.1:8080",
+    abortSignal: abortController.signal,
+    ...params.opts,
+  });
+  if (ingressError) {
+    throw ingressError;
+  }
 }
 
 export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
@@ -94,7 +132,7 @@ export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   };
 }
 
-export let config: Record<string, unknown> = {};
+let config: Record<string, unknown> = {};
 
 export function setSignalToolResultTestConfig(next: Record<string, unknown>) {
   config = next;
@@ -151,16 +189,13 @@ export function createMockSignalDaemonHandle(
   overrides: {
     stop?: MockFn;
     exited?: Promise<SignalDaemonExitEvent>;
-    isExited?: () => boolean;
   } = {},
 ): SignalDaemonHandle {
   const stop = overrides.stop ?? (vi.fn() as unknown as MockFn);
   const exited = overrides.exited ?? new Promise<SignalDaemonExitEvent>(() => {});
-  const isExited = overrides.isExited ?? (() => false);
   return {
     stop: stop as unknown as () => Promise<void>,
     exited,
-    isExited,
   };
 }
 
@@ -184,7 +219,6 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
     ...actual,
     resolveStorePath: vi.fn(() => signalToolResultSessionStore.path),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
-    readSessionUpdatedAt: vi.fn(() => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
   };
 });
@@ -195,6 +229,13 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   );
   return {
     ...actual,
+    resolveInboundSessionEnvelopeContextAsync: vi.fn(
+      async ({ cfg }: Parameters<typeof actual.resolveInboundSessionEnvelopeContextAsync>[0]) => ({
+        storePath: signalToolResultSessionStore.path,
+        envelopeOptions: actual.resolveEnvelopeFormatOptions(cfg),
+        previousTimestamp: undefined,
+      }),
+    ),
     runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) => {
       const resolveTurn = params.adapter.resolveTurn;
       return await actual.runChannelInboundEvent({
@@ -312,18 +353,19 @@ export function installSignalToolResultTestHooks() {
   beforeEach(async () => {
     const [{ resetInboundDedupe }, { resetSystemEventsForTest }] = await Promise.all([
       import("openclaw/plugin-sdk/reply-runtime"),
-      import("openclaw/plugin-sdk/system-event-runtime"),
+      import("openclaw/plugin-sdk/test-fixtures"),
     ]);
     resetInboundDedupe();
-    const createdStateDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-signal-tool-result-state-"),
-    );
-    const stateDir = await fs.realpath(createdStateDir);
-    signalToolResultStateDir = stateDir;
+    signalToolResultState = await createOpenClawTestState({
+      prefix: "openclaw-signal-tool-result-state-",
+      layout: "state-only",
+    });
+    const stateDir = signalToolResultState.stateDir;
     signalToolResultSessionStore.path = path.join(stateDir, "sessions.json");
     signalToolResultIngressMonitor.current = undefined;
     signalToolResultIngressQueue = undefined;
     setSignalRuntime({
+      channel: createPluginRuntimeMock().channel,
       logging: {
         getChildLogger: () => ({
           debug: vi.fn(),
@@ -380,15 +422,12 @@ export function installSignalToolResultTestHooks() {
   });
 
   afterEach(async () => {
+    await signalToolResultIngressMonitor.current?.stop();
     clearSignalRuntimeForTest();
     signalToolResultIngressMonitor.current = undefined;
     signalToolResultIngressQueue = undefined;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    if (signalToolResultStateDir) {
-      await fs.rm(signalToolResultStateDir, { recursive: true, force: true });
-      signalToolResultStateDir = undefined;
-    }
+    await signalToolResultState?.cleanup();
+    signalToolResultState = undefined;
     signalToolResultSessionStore.path = "";
   });
 }

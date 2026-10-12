@@ -151,6 +151,8 @@ export class StartedSessionNavigation {
       document,
       from: "new-session",
       to: "chat",
+      router: context.router,
+      signal: context.lifecycleAbortSignal,
       prefersReducedMotion:
         globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
       navigate: () => {

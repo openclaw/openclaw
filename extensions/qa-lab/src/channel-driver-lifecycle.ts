@@ -12,12 +12,7 @@ export type QaChannelDriverLifecycleState =
   | { status: "stopped" }
   | { runtime: QaChannelDriverRuntime; status: "running" };
 
-export type QaChannelDriverLifecycle = {
-  readonly state: QaChannelDriverLifecycleState;
-  restart(): Promise<QaChannelDriverRuntime>;
-  start(): Promise<QaChannelDriverRuntime>;
-  stop(): Promise<void>;
-};
+export type QaChannelDriverLifecycle = ReturnType<typeof createQaChannelDriverLifecycle>;
 
 export type QaChannelDriverLifecycleScenarioId =
   | "cold-start"
@@ -45,7 +40,7 @@ export function createQaChannelDriverLifecycle(
     outputDir: string;
   },
   deps: QaChannelDriverLifecycleDeps = {},
-): QaChannelDriverLifecycle {
+) {
   const createAdapter = deps.createAdapter ?? createQaTransportAdapter;
   const discoverAdapterFactories = deps.listAdapterFactories ?? listAdapterFactories;
   let state: QaChannelDriverLifecycleState = { status: "stopped" };
@@ -85,7 +80,7 @@ export function createQaChannelDriverLifecycle(
     state = { status: "stopped" };
   };
 
-  const lifecycle: QaChannelDriverLifecycle = {
+  const lifecycle = {
     get state() {
       return state;
     },

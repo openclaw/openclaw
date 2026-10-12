@@ -40,10 +40,7 @@ describe("memory index", () => {
       activateFallbackProvider: (reason: string) => Promise<boolean>;
       beginSyncProviderGeneration: () => void;
       endSyncProviderGeneration: () => void;
-      indexFile: (
-        entry: IndexEntry,
-        options: { source: "memory"; content: string },
-      ) => Promise<void>;
+      indexFile: (entry: IndexEntry, source: "memory") => Promise<void>;
       db: {
         prepare: (sql: string) => {
           get: (...params: unknown[]) => { model?: string } | undefined;
@@ -80,9 +77,9 @@ describe("memory index", () => {
 
     fields.beginSyncProviderGeneration();
     try {
-      await fields.indexFile(first, { source: "memory", content: first.content });
+      await fields.indexFile(first, "memory");
       await expect(fields.activateFallbackProvider("local worker exited")).resolves.toBe(true);
-      await fields.indexFile(second, { source: "memory", content: second.content });
+      await fields.indexFile(second, "memory");
     } finally {
       fields.endSyncProviderGeneration();
     }
@@ -164,7 +161,6 @@ describe("memory index", () => {
         text: string,
         signal: AbortSignal | undefined,
         provider: QueryProvider,
-        markDegraded: boolean,
         providerRuntime: { inlineQueryTimeoutMs?: number },
       ) => Promise<number[]>;
     };
@@ -194,7 +190,7 @@ describe("memory index", () => {
     try {
       await vi.waitFor(() => expect(fields.provider).toBeNull());
       await expect(
-        fields.embedQueryWithRetry("alpha", undefined, provider, false, providerRuntime),
+        fields.embedQueryWithRetry("alpha", undefined, provider, providerRuntime),
       ).rejects.toThrow("timed out");
       expect(providerFixture.providerCloseCalls).toBe(0);
     } finally {
@@ -209,7 +205,7 @@ describe("memory index", () => {
     const manager = await getPersistentManager(createCfg({ provider: "openai" }));
     await manager.sync({ reason: "test" });
     const fields = manager as unknown as {
-      searchVector: () => Promise<unknown[]>;
+      searchVector: () => Promise<{ results: unknown[]; candidates: unknown[] }>;
       closing: boolean;
       closed: boolean;
     };
@@ -224,7 +220,7 @@ describe("memory index", () => {
     fields.searchVector = async () => {
       markVectorSearchStarted();
       await vectorSearchGate;
-      return [];
+      return { results: [], candidates: [] };
     };
 
     const generationReleaseStarted = createDeferred<void>();

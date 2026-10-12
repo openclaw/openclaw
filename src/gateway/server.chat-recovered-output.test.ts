@@ -4,6 +4,7 @@ import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -21,6 +22,7 @@ const answer = "The answer is 42.";
 const scenarios = ["continuation", "fallback", "terminal", "no-fallback", "settled-write"];
 const requests = new Map<string, Record<string, unknown>[]>();
 const events: ChatEvent[] = [];
+const publishedMessages = new Map<string, unknown[]>();
 let home: Awaited<ReturnType<typeof setupGatewayTempHome>>;
 let gateway: Awaited<ReturnType<typeof startGatewayWithClient>>;
 let provider: ReturnType<typeof createServer>;
@@ -153,7 +155,7 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
-        defaults: { workspace: home.workspaceDir, skipBootstrap: true },
+        defaults: { workspace: home.workspaceDir, skipBootstrap: true, utilityModel: "" },
         entries,
       },
       plugins: {
@@ -190,6 +192,17 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
         if (event.event === "chat") {
           events.push(event.payload as ChatEvent);
         }
+        if (
+          event.event === "session.message" &&
+          isRecord(event.payload) &&
+          typeof event.payload.sessionKey === "string" &&
+          isRecord(event.payload.message) &&
+          event.payload.message.role === "assistant"
+        ) {
+          const messages = publishedMessages.get(event.payload.sessionKey) ?? [];
+          messages.push(event.payload.message);
+          publishedMessages.set(event.payload.sessionKey, messages);
+        }
       },
     });
   }, 90_000);
@@ -219,6 +232,7 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
     "chat.send retains only the selected output after %s",
     async (scenario) => {
       const sessionKey = `agent:${scenario}:main`;
+      await gateway.client.request("sessions.messages.subscribe", { key: sessionKey });
       const started = await gateway.client.request<{ runId: string }>("chat.send", {
         sessionKey,
         message: "What is the answer?",
@@ -239,15 +253,20 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
       );
       if (failed) {
         expect(completed.status).toBe("error");
-        expect(messageText(history.messages.at(-1))).toBe(
-          `⚠️ LLM request failed (provider internal error). This is usually temporary — try again shortly.\n\n${prefix}`,
-        );
+        const failedReply = `⚠️ The AI service is having trouble. Please try again in a moment.\n\n${prefix}`;
+        expect(messageText(history.messages.at(-1))).toBe(failedReply);
+        expect(messageText(publishedMessages.get(sessionKey)?.at(-1))).toBe(failedReply);
         expect(terminal.some((event) => event.state === "error")).toBe(true);
         const deltas = events.filter(
           (event): event is Extract<ChatEvent, { state: "delta" }> =>
             event.runId === started.runId && event.state === "delta",
         );
-        expect(messageText(deltas.at(-1)?.message)).toBe(prefix);
+        const liveMessage = deltas.reduce<unknown>(
+          (previous, event) => mergeChatStreamMessage(previous, event),
+          undefined,
+        );
+        // Saved assistant content belongs to canonical publication, not the unsaved live tail.
+        expect(messageText(liveMessage)).toBe("");
       } else {
         expect(completed.status).toBe("ok");
         expect(completed.terminalReply?.text).toBe(answer);

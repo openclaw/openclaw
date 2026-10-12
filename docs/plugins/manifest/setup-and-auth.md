@@ -65,6 +65,7 @@ When a manifest choice is selected, setup resolves its `provider` and `method` i
 | `choiceHint`           | No       | `string`                                                              | Short helper text for the picker.                                                                                                                          |
 | `icon`                 | No       | HTTPS URL                                                             | Artwork shown beside this choice in supported onboarding clients.                                                                                          |
 | `website`              | No       | HTTPS URL                                                             | Product, sign-in, or installation page shown by supported onboarding clients.                                                                              |
+| `docsUrl`              | No       | HTTPS URL                                                             | Guide comparing the provider's connection methods, linked from the provider connection dialog.                                                             |
 | `assistantPriority`    | No       | `number`                                                              | Lower values sort earlier in assistant-driven interactive pickers.                                                                                         |
 | `assistantVisibility`  | No       | `"visible"` \| `"manual-only"` \| `"detected-only"`                   | Control picker visibility. `manual-only` permits manual selection; `detected-only` requires successful provider-owned discovery before offering the model. |
 | `deprecatedChoiceIds`  | No       | `string[]`                                                            | Legacy choice ids that should redirect users to this replacement choice.                                                                                   |
@@ -94,8 +95,8 @@ availability when the selected setup method runs.
 `assistantVisibility: "detected-only"` keeps the choice out of metadata-only
 setup, sign-in, enable, and install rows, including manual pickers. App-guided
 setup offers it only as a candidate returned by the provider's current
-`appGuidedSetup.detect` probe. Classic setup includes the provider choice only
-after `detectAvailability` succeeds. Both probes must apply the provider's
+`appGuidedSetup.detect` check. Classic setup includes the provider choice only
+after `detectAvailability` succeeds. Both checks must apply the provider's
 actual model eligibility rules. Explicit CLI auth-choice selection remains
 supported and the setup method still rechecks availability before activation.
 
@@ -136,7 +137,7 @@ for retry; a replacement remains inactive until the user accepts activation.
 A provider can also
 expose `appGuidedSetup.detectAvailability` to mark its setup choice as detected
 when the local service is reachable but no model qualifies for automatic setup.
-The availability probe is also read-only.
+The availability check is also read-only.
 
 ### Login choices
 
@@ -236,7 +237,7 @@ Set `requiresRuntime: false` only when those descriptors are sufficient for the 
 
 Because setup lookup can execute plugin-owned `setup-api` code, normalized `setup.providers[].id` and `setup.cliBackends[]` values must stay unique across discovered plugins. Ambiguous ownership fails closed instead of picking a winner from discovery order.
 
-When setup runtime executes, setup registry diagnostics report providers or CLI backends that `setup-api` registers without matching manifest declarations. CLI backend descriptors also report a missing runtime registration because setup lookup needs the registered backend configuration. Provider descriptors may remain metadata-only even when the same setup module contributes migrations, CLI backends, probes, or selected provider runtimes.
+When setup runtime executes, setup registry diagnostics report providers or CLI backends that `setup-api` registers without matching manifest declarations. CLI backend descriptors also report a missing runtime registration because setup lookup needs the registered backend configuration. Provider descriptors may remain metadata-only even when the same setup module contributes migrations, CLI backends, checks, or selected provider runtimes.
 
 ### setup fields
 
@@ -256,7 +257,7 @@ When setup runtime executes, setup registry diagnostics report providers or CLI 
 | `envVars`      | No       | `string[]` | Env vars that generic setup/status surfaces can check before plugin runtime loads.               |
 | `authEvidence` | No       | `object[]` | Cheap local auth evidence checks for providers that can authenticate through non-secret markers. |
 
-`authEvidence` is for provider-owned local credential markers that can be verified without loading runtime code. These checks must stay cheap and local: no network calls, no keychain or secret-manager reads, no shell commands, and no provider API probes.
+`authEvidence` is for provider-owned local credential markers that can be verified without loading runtime code. These checks must stay cheap and local: no network calls, no keychain or secret-manager reads, no shell commands, and no provider API checks.
 
 Supported evidence entries:
 

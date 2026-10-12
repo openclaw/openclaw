@@ -58,4 +58,54 @@ describe("session observer settings patches", () => {
     expect(option("GPT Mini")?.getAttribute("aria-disabled") === "true").toBe(true);
     expect(container.textContent).toContain("Explicit model catalog unavailable");
   });
+
+  it.each([
+    [
+      "anthropic/claude-haiku-4-5",
+      { id: "claude-cli", kind: "cli", label: "Claude CLI" },
+      "auto (anthropic/claude-haiku-4-5 · Claude CLI · native)",
+    ],
+    [
+      "anthropic/claude-haiku-4-5",
+      { id: "openclaw", kind: "api", label: "OpenClaw Default" },
+      "auto (anthropic/claude-haiku-4-5 · API · OpenClaw)",
+    ],
+    [
+      "openai/gpt-5-mini",
+      { id: "openclaw", kind: "api", label: "OpenClaw Default" },
+      "auto (openai/gpt-5-mini · API · OpenClaw)",
+    ],
+    [
+      "openai/gpt-5-mini",
+      { id: "codex", kind: "harness", label: "OpenAI Codex" },
+      "auto (openai/gpt-5-mini · OpenAI Codex)",
+    ],
+    [
+      "google/gemini-flash",
+      { id: "google-gemini-cli", kind: "cli", label: "Gemini CLI" },
+      "auto (google/gemini-flash · Gemini CLI · native)",
+    ],
+    [
+      "haiku",
+      { id: "openclaw", kind: "api", label: "OpenClaw Default" },
+      "auto (haiku · API · OpenClaw)",
+    ],
+    ["anthropic/claude-haiku-4-5", undefined, "auto (anthropic/claude-haiku-4-5)"],
+  ] as const)("names the resolved small model's route for %s on %o", (model, runtime, expected) => {
+    const container = document.createElement("div");
+    render(
+      renderSessionObserverSettings({
+        enabled: true,
+        utilityModel: undefined,
+        resolvedUtilityModel: { status: "auto", model, ...(runtime ? { runtime } : {}) },
+        models: [],
+        modelsUnavailable: false,
+        disabled: false,
+        onEnabledChange: () => undefined,
+        onUtilityModelChange: () => undefined,
+      }),
+      container,
+    );
+    expect(container.textContent).toContain(expected);
+  });
 });

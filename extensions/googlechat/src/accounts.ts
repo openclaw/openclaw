@@ -1,4 +1,3 @@
-// Googlechat plugin module implements accounts behavior.
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -6,6 +5,7 @@ import {
   type OpenClawConfig,
   resolveAccountEntry,
 } from "openclaw/plugin-sdk/account-resolution";
+import type { GoogleChatAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
@@ -19,7 +19,6 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
 import { MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES } from "./google-auth-limits.js";
-import type { GoogleChatAccountConfig } from "./types.config.js";
 
 type CredentialUnavailableDiagnostic = Extract<
   ReturnType<typeof tryReadSecretFileSync>,
@@ -40,9 +39,7 @@ export type ResolvedGoogleChatAccount = {
   credentialDiagnostics?: CredentialUnavailableDiagnostic[];
 };
 
-export type GoogleChatConfigAccessorAccount = {
-  config: GoogleChatAccountConfig;
-};
+export type GoogleChatConfigAccessorAccount = Pick<ResolvedGoogleChatAccount, "config">;
 
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
 const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
@@ -89,7 +86,7 @@ function mergeGoogleChatAccountConfig(
     ...defaultAccountShared,
     ...base,
     ...(botLoopProtection ? { botLoopProtection } : {}),
-  } as GoogleChatAccountConfig;
+  };
 }
 
 export function resolveGoogleChatConfigAccessorAccount(params: {
@@ -116,6 +113,25 @@ function parseServiceAccount(value: unknown): Record<string, unknown> | null {
   }
 
   return safeParseWithSchema(JsonRecordSchema, value);
+}
+
+function resolveCredentialsFile(file: string, source: "file" | "env", configPath: string) {
+  const result = tryReadSecretFileSync(
+    resolveUserPath(file),
+    "Google Chat service account file",
+    {
+      maxBytes: MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES,
+      rejectHardlinks: false,
+      rejectSymlink: false,
+    },
+    { configPath },
+  );
+  return {
+    credentialsFile: file,
+    source,
+    status: result.status,
+    ...(result.status === "configured_unavailable" ? { diagnostic: result.diagnostic } : {}),
+  };
 }
 
 function resolveCredentialsFromConfig(params: {
@@ -151,25 +167,11 @@ function resolveCredentialsFromConfig(params: {
 
   const file = normalizeOptionalString(account.serviceAccountFile);
   if (file) {
-    const resolvedFile = resolveUserPath(file);
-    const result = tryReadSecretFileSync(
-      resolvedFile,
-      "Google Chat service account file",
-      {
-        maxBytes: MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES,
-        rejectHardlinks: false,
-        rejectSymlink: false,
-      },
-      { configPath: `channels.googlechat.accounts.${accountId}.serviceAccountFile` },
+    return resolveCredentialsFile(
+      file,
+      "file",
+      `channels.googlechat.accounts.${accountId}.serviceAccountFile`,
     );
-    return result.status === "available"
-      ? { credentialsFile: file, source: "file", status: "available" }
-      : {
-          credentialsFile: file,
-          source: "file",
-          status: "configured_unavailable",
-          diagnostic: result.diagnostic,
-        };
   }
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
@@ -180,25 +182,7 @@ function resolveCredentialsFromConfig(params: {
     }
     const envFile = normalizeOptionalString(process.env[ENV_SERVICE_ACCOUNT_FILE]);
     if (envFile) {
-      const resolvedEnvFile = resolveUserPath(envFile);
-      const result = tryReadSecretFileSync(
-        resolvedEnvFile,
-        "Google Chat service account file",
-        {
-          maxBytes: MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES,
-          rejectHardlinks: false,
-          rejectSymlink: false,
-        },
-        { configPath: `env.${ENV_SERVICE_ACCOUNT_FILE}` },
-      );
-      return result.status === "available"
-        ? { credentialsFile: envFile, source: "env", status: "available" }
-        : {
-            credentialsFile: envFile,
-            source: "env",
-            status: "configured_unavailable",
-            diagnostic: result.diagnostic,
-          };
+      return resolveCredentialsFile(envFile, "env", `env.${ENV_SERVICE_ACCOUNT_FILE}`);
     }
   }
 

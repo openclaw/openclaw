@@ -1,8 +1,3 @@
-/**
- * Sandbox defaults and state paths.
- *
- * Centralizes image names, container prefixes, workspace paths, browser ports, and registry locations.
- */
 import path from "node:path";
 import { CHANNEL_IDS } from "../../channels/ids.js";
 import { STATE_DIR } from "../../config/paths.js";
@@ -69,6 +64,7 @@ export const DEFAULT_SANDBOX_BROWSER_NOVNC_PORT = 6080;
 export const DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS = 12_000;
 
 export const SANDBOX_AGENT_WORKSPACE_MOUNT = "/agent";
+export const SANDBOX_GITHUB_CONFIG_DIR = "/openclaw/github";
 
 export const SANDBOX_STATE_DIR = path.join(STATE_DIR, "sandbox");
 export const SANDBOX_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "containers.json");

@@ -3,6 +3,7 @@ import { constants as fsConstants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { inspectPathPermissions } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 const EXTENSION_ID_PATTERN = /^[a-p]{32}$/;
@@ -32,17 +33,6 @@ export type DiscoveredChromeStoreExtension = Omit<DiscoveredChromeExtension, "ex
   enabled: boolean;
   awaitingApproval: boolean;
 };
-export type ExtensionInstallDeps = {
-  platform?: NodeJS.Platform;
-  env?: NodeJS.ProcessEnv;
-  stateDir?: string;
-  homeDir?: string;
-  nodePath?: string;
-  nativeHostPath?: string;
-  now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
-};
-
 export async function approvedInstallRealpaths(
   installed: string,
   bundled: string,
@@ -62,7 +52,7 @@ export function generateChromeExtensionIdForPath(
   const isAbsolute =
     platform === "win32" ? path.win32.isAbsolute(canonicalPath) : path.isAbsolute(canonicalPath);
   if (!isAbsolute) {
-    throw new Error("Chrome extension ID paths must be canonical absolute paths");
+    throw new Error("Chrome extension ID paths must be resolved absolute paths");
   }
   let nativePath = canonicalPath;
   if (platform === "win32" && /^[a-z]:/u.test(nativePath)) {
@@ -75,8 +65,8 @@ export function generateChromeExtensionIdForPath(
   );
 }
 
-function homeDirectory(deps: ExtensionInstallDeps): string {
-  const value = deps.homeDir ?? deps.env?.HOME ?? deps.env?.USERPROFILE ?? os.homedir();
+function homeDirectory(): string {
+  const value = process.env.HOME ?? process.env.USERPROFILE ?? os.homedir();
   if (!value.trim()) {
     throw new Error("Could not resolve the user home directory.");
   }
@@ -84,93 +74,68 @@ function homeDirectory(deps: ExtensionInstallDeps): string {
 }
 
 /** Chromium-derived default user-data and user native-host roots. */
-export function chromeProductRoots(deps: ExtensionInstallDeps = {}): ChromeProductRoot[] {
-  const platform = deps.platform ?? process.platform;
-  const env = deps.env ?? process.env;
-  const home = homeDirectory({ ...deps, env });
+export function chromeProductRoots(): ChromeProductRoot[] {
+  const platform = process.platform;
+  const env = process.env;
+  const home = homeDirectory();
+  const root = (
+    product: ChromeProduct,
+    label: string,
+    userDataDir: string,
+    nativeManifestDir = path.join(userDataDir, "NativeMessagingHosts"),
+  ): ChromeProductRoot => ({ product, label, userDataDir, nativeManifestDir });
   if (platform === "darwin") {
     const appSupport = path.join(home, "Library", "Application Support");
     const testingData = path.join(appSupport, "Google", "Chrome for Testing");
     return [
-      {
-        product: "chrome",
-        label: "Google Chrome",
-        userDataDir: path.join(appSupport, "Google", "Chrome"),
-        nativeManifestDir: path.join(appSupport, "Google", "Chrome", "NativeMessagingHosts"),
-      },
-      {
-        product: "chrome-for-testing",
-        label: "Google Chrome for Testing",
-        userDataDir: testingData,
-        nativeManifestDir: path.join(testingData, "NativeMessagingHosts"),
-      },
+      root("chrome", "Google Chrome", path.join(appSupport, "Google", "Chrome")),
+      root("chrome-for-testing", "Google Chrome for Testing", testingData),
       // Chromium derives this root from user data; Chrome's public table
       // currently documents the no-space spelling. Cover both until aligned.
-      {
-        product: "chrome-for-testing",
-        label: "Google Chrome for Testing (documented host root)",
-        userDataDir: testingData,
-        nativeManifestDir: path.join(
-          appSupport,
-          "Google",
-          "ChromeForTesting",
-          "NativeMessagingHosts",
-        ),
-      },
-      {
-        product: "chromium",
-        label: "Chromium",
-        userDataDir: path.join(appSupport, "Chromium"),
-        nativeManifestDir: path.join(appSupport, "Chromium", "NativeMessagingHosts"),
-      },
+      root(
+        "chrome-for-testing",
+        "Google Chrome for Testing (documented host root)",
+        testingData,
+        path.join(appSupport, "Google", "ChromeForTesting", "NativeMessagingHosts"),
+      ),
+      root("chromium", "Chromium", path.join(appSupport, "Chromium")),
     ];
   }
   if (platform === "linux") {
     const configHome = path.resolve(
       env.CHROME_CONFIG_HOME?.trim() || env.XDG_CONFIG_HOME?.trim() || path.join(home, ".config"),
     );
-    const roots: Array<[ChromeProduct, string, string]> = [
-      ["chrome", "Google Chrome", "google-chrome"],
-      ["chrome-for-testing", "Google Chrome for Testing", "google-chrome-for-testing"],
-      ["chromium", "Chromium", "chromium"],
+    return [
+      root("chrome", "Google Chrome", path.join(configHome, "google-chrome")),
+      root(
+        "chrome-for-testing",
+        "Google Chrome for Testing",
+        path.join(configHome, "google-chrome-for-testing"),
+      ),
+      root("chromium", "Chromium", path.join(configHome, "chromium")),
     ];
-    return roots.map(([product, label, basename]) => ({
-      product: product as ChromeProduct,
-      label,
-      userDataDir: path.join(configHome, basename),
-      nativeManifestDir: path.join(configHome, basename, "NativeMessagingHosts"),
-    }));
   }
   if (platform === "win32") {
     const localAppData = env.LOCALAPPDATA?.trim();
     if (!localAppData) {
       return [];
     }
-    const roots: Array<[ChromeProduct, string, string]> = [
-      ["chrome", "Google Chrome", path.join("Google", "Chrome", "User Data")],
-      [
+    return [
+      root("chrome", "Google Chrome", path.join(localAppData, "Google", "Chrome", "User Data"), ""),
+      root(
         "chrome-for-testing",
         "Google Chrome for Testing",
-        path.join("Google", "Chrome for Testing", "User Data"),
-      ],
-      ["chromium", "Chromium", path.join("Chromium", "User Data")],
+        path.join(localAppData, "Google", "Chrome for Testing", "User Data"),
+        "",
+      ),
+      root("chromium", "Chromium", path.join(localAppData, "Chromium", "User Data"), ""),
     ];
-    return roots.map(([product, label, suffix]) => ({
-      product: product as ChromeProduct,
-      label,
-      userDataDir: path.join(localAppData, suffix),
-      nativeManifestDir: "",
-    }));
   }
   return [];
 }
 
-export function stableChromeExtensionDir(deps: ExtensionInstallDeps = {}): string {
-  return path.join(
-    path.resolve(deps.stateDir ?? resolveStateDir(deps.env)),
-    "browser",
-    "chrome-extension",
-  );
+export function stableChromeExtensionDir(): string {
+  return path.join(path.resolve(resolveStateDir()), "browser", "chrome-extension");
 }
 
 export async function pathInfo(
@@ -195,7 +160,18 @@ export async function assertOwnedPath(
   if (info.isSymbolicLink() || (kind === "file" ? !info.isFile() : !info.isDirectory())) {
     throw new Error(`Unsafe ${kind} at ${target}`);
   }
-  if (process.platform !== "win32") {
+  if (process.platform === "win32") {
+    const permissions = await inspectPathPermissions(target);
+    if (
+      !permissions.ok ||
+      permissions.source !== "windows-acl" ||
+      permissions.ownerTrusted !== true ||
+      permissions.groupWritable ||
+      permissions.worldWritable
+    ) {
+      throw new Error(`Refusing unsafe Windows owner or ACL at ${target}`);
+    }
+  } else {
     const uid = process.getuid?.();
     const ownerAllowed =
       uid === undefined || info.uid === uid || (policy.allowRootOwner === true && info.uid === 0);
@@ -206,8 +182,14 @@ export async function assertOwnedPath(
       throw new Error(`Refusing group/world-writable path at ${target}`);
     }
   }
-  if ((await fs.realpath(target)) !== path.resolve(target)) {
-    throw new Error(`Refusing non-canonical path at ${target}`);
+  const canonical = await fs.realpath(target);
+  const expected = path.resolve(target);
+  if (
+    process.platform === "win32"
+      ? canonical.toLowerCase() !== expected.toLowerCase()
+      : canonical !== expected
+  ) {
+    throw new Error(`Refusing unresolved path at ${target}`);
   }
 }
 
@@ -272,14 +254,11 @@ async function copyRuntimeTree(source: string, target: string): Promise<void> {
 }
 
 /** Copy/update the bundled extension with rollback-safe same-directory renames. */
-export async function installStableChromeExtension(
-  bundledDir: string,
-  deps: ExtensionInstallDeps = {},
-): Promise<string> {
+export async function installStableChromeExtension(bundledDir: string): Promise<string> {
   const source = await fs.realpath(path.resolve(bundledDir));
   await assertOwnedPath(source, "directory", { allowRootOwner: true });
-  const target = stableChromeExtensionDir(deps);
-  await ensurePrivateDirectory(path.resolve(deps.stateDir ?? resolveStateDir(deps.env)));
+  const target = stableChromeExtensionDir();
+  await ensurePrivateDirectory(path.resolve(resolveStateDir()));
   await ensurePrivateDirectory(path.dirname(target));
   const existing = await inspectInstalledCopy(target);
   if (existing.present && !existing.owned) {
@@ -331,15 +310,13 @@ async function approvedRealpaths(paths: readonly string[]): Promise<string[]> {
 export async function discoverChromeExtensionIds(params: {
   approvedDirs: readonly string[];
   storeExtensionId?: string;
-  deps?: ExtensionInstallDeps;
 }): Promise<{
   discovered: DiscoveredChromeExtension[];
   storeDiscovered: DiscoveredChromeStoreExtension[];
   issues: string[];
   identityMismatches: string[];
 }> {
-  const deps = params.deps ?? {};
-  const platform = deps.platform ?? process.platform;
+  const platform = process.platform;
   const approved = new Set(
     (await approvedRealpaths(params.approvedDirs)).map((value) => comparablePath(value, platform)),
   );
@@ -347,7 +324,7 @@ export async function discoverChromeExtensionIds(params: {
   const storeDiscovered: DiscoveredChromeStoreExtension[] = [];
   const issues: string[] = [];
   const identityMismatches: string[] = [];
-  for (const root of chromeProductRoots(deps)) {
+  for (const root of chromeProductRoots()) {
     if (!(await pathInfo(root.userDataDir))) {
       continue;
     }
@@ -403,6 +380,14 @@ export async function discoverChromeExtensionIds(params: {
               state?: unknown;
               disable_reasons?: unknown;
             };
+            const identity = {
+              product: root.product,
+              browser: root.label,
+              userDataDir: root.userDataDir,
+              profile: profileEntry.name,
+              securePreferencesPath: preferencesPath,
+              extensionId,
+            };
             if (
               extensionId === params.storeExtensionId &&
               entry.from_webstore === true &&
@@ -420,12 +405,7 @@ export async function discoverChromeExtensionIds(params: {
                 ? reasons.includes(8_192)
                 : typeof reasons === "number" && (reasons & 8_192) !== 0;
               storeDiscovered.push({
-                product: root.product,
-                browser: root.label,
-                userDataDir: root.userDataDir,
-                profile: profileEntry.name,
-                securePreferencesPath: preferencesPath,
-                extensionId,
+                ...identity,
                 enabled,
                 awaitingApproval,
               });
@@ -449,12 +429,7 @@ export async function discoverChromeExtensionIds(params: {
               continue;
             }
             discovered.push({
-              product: root.product,
-              browser: root.label,
-              userDataDir: root.userDataDir,
-              profile: profileEntry.name,
-              securePreferencesPath: preferencesPath,
-              extensionId,
+              ...identity,
               extensionPath: canonicalPath,
             });
           }
@@ -466,29 +441,25 @@ export async function discoverChromeExtensionIds(params: {
       }
     }
   }
-  const unique = new Map(
-    discovered.map((entry) => [
-      `${entry.product}\0${entry.profile}\0${entry.extensionId}\0${entry.extensionPath}`,
-      entry,
-    ]),
-  );
-  const uniqueStore = new Map(
-    storeDiscovered.map((entry) => [
-      `${entry.product}\0${entry.profile}\0${entry.extensionId}`,
-      entry,
-    ]),
-  );
+  const uniqueSorted = <T extends { product: ChromeProduct; profile: string; extensionId: string }>(
+    entries: T[],
+    suffix: (entry: T) => string,
+  ): T[] => {
+    const unique = new Map(
+      entries.map((entry) => [
+        `${entry.product}\0${entry.profile}\0${entry.extensionId}${suffix(entry)}`,
+        entry,
+      ]),
+    );
+    return [...unique.values()].toSorted((a, b) =>
+      `${a.product}/${a.profile}/${a.extensionId}`.localeCompare(
+        `${b.product}/${b.profile}/${b.extensionId}`,
+      ),
+    );
+  };
   return {
-    discovered: [...unique.values()].toSorted((a, b) =>
-      `${a.product}/${a.profile}/${a.extensionId}`.localeCompare(
-        `${b.product}/${b.profile}/${b.extensionId}`,
-      ),
-    ),
-    storeDiscovered: [...uniqueStore.values()].toSorted((a, b) =>
-      `${a.product}/${a.profile}/${a.extensionId}`.localeCompare(
-        `${b.product}/${b.profile}/${b.extensionId}`,
-      ),
-    ),
+    discovered: uniqueSorted(discovered, (entry) => `\0${entry.extensionPath}`),
+    storeDiscovered: uniqueSorted(storeDiscovered, () => ""),
     issues,
     identityMismatches,
   };

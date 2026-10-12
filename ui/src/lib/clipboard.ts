@@ -1,5 +1,3 @@
-// Clipboard copy helper shared by chat copy affordances.
-//
 // The async Clipboard API is only exposed in secure contexts (HTTPS or
 // localhost). On plain-HTTP deployments (e.g. LAN access) `navigator.clipboard`
 // is undefined, so calling it throws synchronously rather than rejecting. Guard

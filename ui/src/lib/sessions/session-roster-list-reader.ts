@@ -27,7 +27,9 @@ export function createSessionRosterListReader(
     }
     try {
       const issuedRevision = nextRevision();
-      const response = await requestSessionList(scope.client, options);
+      const response = await requestSessionList(scope.client, options, () =>
+        host.connection.isCurrent(scope),
+      );
       if (!host.connection.isCurrent(scope)) {
         return null;
       }

@@ -46,6 +46,37 @@ Related:
 - [Exec tool](/tools/exec)
 - [Exec approvals](/tools/exec-approvals)
 
+## Channel and subagent context
+
+Nodes advertising `system.run.execution-context.v1` receive optional
+`executionContext` on both `system.run.prepare` and `system.run`. Its only fields
+are `senderId`, `chatId` (nonempty strings), and `subagent` (`true` when present).
+The node injects `OPENCLAW_CHANNEL_CONTEXT` with the sender/chat identity JSON and
+`OPENCLAW_SUBAGENT_EXEC=1` into the child environment. These routing hints do not
+grant session, turn, or command approval authority, and do not modify approved argv.
+When context is present, it replaces both routing markers, including inherited
+values. Omitted fields do not retain a previous channel or subagent hint. Requests
+without typed context keep their existing environment behavior.
+
+Custom `env` overrides still follow the node's existing restrictions. Supporting
+this context does not enable arbitrary environment overrides on Windows companion
+nodes that reject them. A node must support the context through its preparation,
+approval, and launch paths before advertising the capability.
+
+Update both the Gateway and node to use this transport, and approve an updated
+node capability surface in **Devices** if requested after reconnecting. Older Gateways keep sending
+the markers through `env`; newer Gateways do the same for nodes without the
+capability. That compatibility path preserves existing behavior, including
+`custom-env-not-supported` on older Windows companions. The Gateway does not omit
+markers to bypass that rejection. An unsupported context request is rejected
+before dispatch; reconnecting a node without the capability does not silently
+downgrade a prepared request. No protocol-version or configuration change is needed.
+
+For `openclaw agent --local` connected to a remote Gateway, the CLI also checks the
+Gateway's advertised capability. An older Gateway selects the existing `env`
+transport even with an updated node. A Gateway downgrade after discovery rejects
+the typed request before dispatch rather than dropping its context.
+
 ## Invoking commands
 
 Low-level (raw RPC):
@@ -64,8 +95,35 @@ response. Streaming callers can set an inactivity deadline that starts with the
 first progress event and resets after later progress while retaining the
 invoke's separate hard timeout during approval and execution. Result, hard
 timeout, inactivity timeout, and node disconnect all discard pending stream
-state. Caller cancellation emits `node.invoke.cancel`; the node host then
+state. Caller cancellation emits `node.invoke.cancel` with the published
+`NodeInvokeCancelEvent` payload (`invokeId` and `nodeId`); the node host then
 terminates the matching process tree. Existing request/response commands are unchanged.
+
+## Codex sessions on a node
+
+A session host using the Codex runtime also needs the `codex` plugin installed and
+enabled in the **node host's** OpenClaw configuration. `--session-host` alone does not
+install or enable this plugin. On the node, install it if missing, then enable it:
+
+```bash
+openclaw plugins install @openclaw/codex
+openclaw plugins enable codex
+openclaw node restart
+```
+
+If you run `openclaw node run` in the foreground, stop and restart that process
+instead. Approve the node's updated command surface after it reconnects. The Gateway
+must also allow `codex.exec-server.stdio.v1` in `gateway.nodes.commands.allow` without
+a matching deny entry. Codex execution keeps its separate placement approval; enabling
+the plugin does not grant that approval.
+
+`environments.list` with `runtimeId: "codex"` reports a `requiredNodeCommand` state and
+an actionable `message` when the node does not advertise the command, awaits pairing
+approval, or is blocked by Gateway policy. A missing node advertisement requires
+installing and enabling the plugin on the node; changing the Gateway allowlist alone
+cannot add it. See [Install plugins](/cli/plugins/install) for installation sources.
+
+See [Codex paired-device placement](/plugins/codex-harness/placement#run-codex-on-a-paired-device).
 
 ## Exec node binding
 

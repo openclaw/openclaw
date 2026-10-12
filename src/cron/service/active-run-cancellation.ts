@@ -170,10 +170,7 @@ export async function waitForActiveCronTaskRuns(timeoutMs: number): Promise<{
   };
 }
 
-export function cancelActiveCronTaskRun(params: {
-  runId: string | undefined;
-  reason?: string;
-}): boolean {
+function cancelActiveCronTaskRun(params: { runId: string | undefined; reason?: string }): boolean {
   const runId = params.runId?.trim();
   if (!runId) {
     return false;

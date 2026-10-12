@@ -1,13 +1,12 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabaseRegistrationCommit } from "./openclaw-agent-db-contract.js";
 import * as registryListing from "./openclaw-agent-db-registry-listing.js";
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
 import * as validation from "./openclaw-agent-db-validation-cache.js";
 import {
-  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -52,46 +51,158 @@ function createFixture() {
     stateDatabaseIdentity: admission.identity.key,
   };
   const registrations = () => registryListing.readRegisteredAgentDatabases({ env }, false);
-  return { env, shared, target, admission, receipt, registrations };
+  const capture = (
+    overrides: Partial<
+      Parameters<typeof registryListing.captureOpenClawAgentDatabaseRegistration>[0]
+    > = {},
+  ) =>
+    registryListing.captureOpenClawAgentDatabaseRegistration({
+      agentId: target.agentId,
+      agentPath: target.path,
+      admission,
+      ...overrides,
+    });
+  return { env, shared, target, admission, receipt, registrations, capture };
 }
 
 function observeStores(database: ReturnType<typeof openOpenClawStateDatabase>) {
   const trace: Array<{ kind: "commit" | "stores"; inTransaction: boolean }> = [];
+  const facts: boolean[] = [];
+  subscriptions.add(
+    sessionChanges.subscribeFacts((change) => {
+      if (isSessionStoreTopologyChange(change)) {
+        facts.push(registryListing.isOpenClawAgentDatabaseRegistryChange(change));
+      }
+    }),
+  );
   const stop = sessionChanges.subscribe((change) => {
-    if ("all" in change && change.scope === "stores") {
+    if (isSessionStoreTopologyChange(change)) {
       trace.push({ kind: "stores", inTransaction: database.db.isTransaction });
     }
   });
   subscriptions.add(stop);
-  return { trace, stop };
+  return { trace, stop, facts };
 }
 
 describe("agent registration commit publication", () => {
-  it("records a registration witness only after outer COMMIT and before topology observers", () => {
-    const fixture = createFixture();
-    const { trace } = observeStores(fixture.shared);
-    const witness = vi.fn((_receipt: OpenClawAgentDatabaseRegistrationCommit) => {
-      trace.push({ kind: "commit", inTransaction: fixture.shared.db.isTransaction });
-    });
+  it.each([false, true])(
+    "clears pre-activation pending registration (admission throws=%s)",
+    async (throws) => {
+      const fixture = createFixture();
+      const assertCurrent = vi.fn(() => fixture.admission.assertCurrent());
+      const registration = fixture.capture({ admission: { ...fixture.admission, assertCurrent } });
+      registration.begin();
+      const prepared = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead(
+        { env: fixture.env },
+        () => false,
+      );
+      try {
+        await expect(prepared.read()).rejects.toThrow(
+          "Agent database registry ownership is changing during discovery",
+        );
+        if (throws) {
+          assertCurrent.mockImplementation(() => {
+            throw new Error("existing schema scope ended");
+          });
+          expect(() => registration.finish()).toThrow("existing schema scope ended");
+        }
+      } finally {
+        registration.finish();
+      }
+      const after = await prepared.read();
+      expect(after.result).toEqual({ status: "available", entries: [] });
+      expect(after.assertCurrent).not.toThrow();
+    },
+  );
 
-    runOpenClawStateWriteTransaction(
-      () => {
-        registerOpenClawAgentDatabase(fixture.target, witness);
+  it.each([false, true])(
+    "requires following the owned registration commit (follow=%s)",
+    async (followCommit) => {
+      const fixture = createFixture();
+      const snapshot = await registryListing
+        .prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: fixture.env }, () => false)
+        .read();
+      let follow = true;
+      const registration = fixture.capture({
+        onRegistryChange: (change) => {
+          if (follow) {
+            snapshot.followRegistration(change);
+          }
+        },
+      });
+      const other = fixture.capture({
+        agentId: "other",
+        agentPath: `${fixture.target.path}.other`,
+      });
+      try {
+        registration.begin();
+        expect(snapshot.assertCurrent).not.toThrow();
+        other.begin();
+        expect(snapshot.assertCurrent).toThrow("ownership is changing");
+        other.finish();
+        expect(snapshot.assertCurrent).not.toThrow();
+        follow = followCommit;
+        registration.recordCommitted(fixture.receipt);
+        if (followCommit) {
+          expect(snapshot.assertCurrent).not.toThrow();
+        } else {
+          expect(snapshot.assertCurrent).toThrow("registry changed");
+        }
+        registration.finish();
+        if (followCommit) {
+          expect(snapshot.assertCurrent).not.toThrow();
+        }
+      } finally {
+        other.finish();
+        registration.finish();
+      }
+    },
+  );
+
+  it.each(["COMMIT", "ROLLBACK"])(
+    "settles registration witnesses and topology after outer %s",
+    (outcome) => {
+      const fixture = createFixture();
+      const { trace, facts } = observeStores(fixture.shared);
+      const witness = vi.fn((_receipt: OpenClawAgentDatabaseRegistrationCommit) => {
+        trace.push({ kind: "commit", inTransaction: fixture.shared.db.isTransaction });
+      });
+
+      const rollback = new Error("rollback registration fixture");
+      const write = () =>
+        runOpenClawStateWriteTransaction(
+          () => {
+            registerOpenClawAgentDatabase(fixture.target, { committed: witness });
+            expect(witness).not.toHaveBeenCalled();
+            expect(trace).toEqual([]);
+            expect(facts).toEqual([]);
+            if (outcome === "ROLLBACK") {
+              throw rollback;
+            }
+          },
+          { env: fixture.env },
+        );
+
+      if (outcome === "ROLLBACK") {
+        expect(write).toThrow(rollback);
         expect(witness).not.toHaveBeenCalled();
         expect(trace).toEqual([]);
-      },
-      { env: fixture.env },
-    );
-
-    expect(witness).toHaveBeenCalledExactlyOnceWith(fixture.receipt);
-    expect(trace).toEqual([
-      { kind: "commit", inTransaction: false },
-      { kind: "stores", inTransaction: false },
-    ]);
-    expect(fixture.registrations()).toEqual([
-      expect.objectContaining({ agentId: fixture.target.agentId, path: fixture.target.path }),
-    ]);
-  });
+        expect(facts).toEqual([]);
+        expect(fixture.registrations()).toEqual([]);
+        return;
+      }
+      write();
+      expect(witness).toHaveBeenCalledExactlyOnceWith(fixture.receipt);
+      expect(facts).toEqual([true]);
+      expect(trace).toEqual([
+        { kind: "commit", inTransaction: false },
+        { kind: "stores", inTransaction: false },
+      ]);
+      expect(fixture.registrations()).toEqual([
+        expect.objectContaining({ agentId: fixture.target.agentId, path: fixture.target.path }),
+      ]);
+    },
+  );
 
   it("invalidates lazy registry snapshots across worker registration settlement", async () => {
     const fixture = createFixture();
@@ -100,19 +211,18 @@ describe("agent registration commit publication", () => {
     });
     const before = await prepared.read();
     expect(before.result).toEqual({ status: "available", entries: [] });
-    const registration = registryListing.captureOpenClawAgentDatabaseRegistration({
-      agentId: fixture.target.agentId,
-      agentPath: fixture.target.path,
-      admission: fixture.admission,
-    });
+    const registration = fixture.capture();
 
     registration.begin();
     expect(before.assertCurrent).toThrow("registry changed");
+    expect(prepared.assertCurrent).toThrow("registry changed");
     const during = await prepared.read();
+    prepared.assertCurrent();
+    expect(before.assertCurrent).toThrow("registry changed");
     expect(during.result).toEqual({ status: "available", entries: [] });
-    registerOpenClawAgentDatabase(fixture.target, (receipt) =>
-      registration.recordCommitted(receipt),
-    );
+    registerOpenClawAgentDatabase(fixture.target, {
+      committed: (receipt) => registration.recordCommitted(receipt),
+    });
     expect(during.assertCurrent).toThrow("registry changed");
     const committed = await prepared.read();
     committed.assertCurrent();
@@ -129,65 +239,34 @@ describe("agent registration commit publication", () => {
     });
   });
 
-  it("discards the registration witness and topology publication on outer rollback", () => {
+  it.each(["import artifact", "revoked start"])("does not register or publish a %s", (reason) => {
     const fixture = createFixture();
     const { trace } = observeStores(fixture.shared);
     const witness = vi.fn();
-    const rollback = new Error("rollback registration fixture");
+    const refused = new Error("Registration source revoked before its write");
+    const starting = vi.fn(() => {
+      throw refused;
+    });
+    const register = () =>
+      registerOpenClawAgentDatabase(
+        reason === "import artifact"
+          ? {
+              ...fixture.target,
+              path: path.join(fixture.env.OPENCLAW_STATE_DIR, "imports", "copy.sqlite"),
+            }
+          : fixture.target,
+        { starting, committed: witness },
+      );
 
-    expect(() =>
-      runOpenClawStateWriteTransaction(
-        () => {
-          registerOpenClawAgentDatabase(fixture.target, witness);
-          expect(witness).not.toHaveBeenCalled();
-          expect(trace).toEqual([]);
-          throw rollback;
-        },
-        { env: fixture.env },
-      ),
-    ).toThrow(rollback);
-
+    if (reason === "import artifact") {
+      register();
+      expect(starting).not.toHaveBeenCalled();
+    } else {
+      expect(register).toThrow(refused);
+    }
     expect(witness).not.toHaveBeenCalled();
     expect(trace).toEqual([]);
     expect(fixture.registrations()).toEqual([]);
-  });
-
-  it("does not witness or publish an import-artifact registration no-op", () => {
-    const fixture = createFixture();
-    const { trace } = observeStores(fixture.shared);
-    const witness = vi.fn();
-
-    registerOpenClawAgentDatabase(
-      {
-        ...fixture.target,
-        path: path.join(fixture.env.OPENCLAW_STATE_DIR, "imports", "copy.sqlite"),
-      },
-      witness,
-    );
-
-    expect(witness).not.toHaveBeenCalled();
-    expect(trace).toEqual([]);
-    expect(fixture.registrations()).toEqual([]);
-  });
-
-  it("does not repeat a registration witness for a cache hit or validated reopen", async () => {
-    const fixture = createFixture();
-    const witness = vi.fn();
-    const opened = openOpenClawAgentDatabase(fixture.target, undefined, witness);
-    expect(witness).toHaveBeenCalledExactlyOnceWith(fixture.receipt);
-    const before = fixture.registrations();
-    const { trace } = observeStores(fixture.shared);
-
-    expect(openOpenClawAgentDatabase(fixture.target, undefined, witness)).toBe(opened);
-    await closeOpenClawAgentDatabaseByPathAsync(fixture.target.path, fixture.target.agentId);
-    expect(opened.db.isOpen).toBe(false);
-    const reopened = openOpenClawAgentDatabase(fixture.target, undefined, witness);
-
-    expect(reopened.db === opened.db).toBe(false);
-    expect(reopened.db.isOpen).toBe(true);
-    expect(witness).toHaveBeenCalledExactlyOnceWith(fixture.receipt);
-    expect(trace).toEqual([]);
-    expect(fixture.registrations()).toEqual(before);
   });
 
   it("retains the registration witness when validation publication fails after COMMIT", () => {
@@ -199,7 +278,9 @@ describe("agent registration commit publication", () => {
       throw failure;
     });
 
-    expect(() => openOpenClawAgentDatabase(fixture.target, undefined, witness)).toThrow(failure);
+    expect(() =>
+      openOpenClawAgentDatabase(fixture.target, undefined, { committed: witness }),
+    ).toThrow(failure);
 
     expect(witness).toHaveBeenCalledExactlyOnceWith(fixture.receipt);
     expect(trace).toEqual([{ kind: "stores", inTransaction: false }]);
@@ -208,38 +289,29 @@ describe("agent registration commit publication", () => {
     ]);
   });
 
-  it.each([false, true])(
-    "publishes a real committed receipt only to its original shared generation (retired=%s)",
-    async (retired) => {
-      const fixture = createFixture();
-      const registration = registryListing.captureOpenClawAgentDatabaseRegistration({
-        agentId: fixture.target.agentId,
-        agentPath: fixture.target.path,
-        admission: fixture.admission,
-      });
-      const local = observeStores(fixture.shared);
-      registration.begin();
-      const witness = vi.fn((receipt: OpenClawAgentDatabaseRegistrationCommit) => {
-        registration.recordCommitted(receipt);
-      });
-      registerOpenClawAgentDatabase(fixture.target, witness);
-      expect(witness).toHaveBeenCalledExactlyOnceWith(fixture.receipt);
-      expect(local.trace).toEqual([{ kind: "stores", inTransaction: false }]);
-      local.stop();
+  it("refuses to publish a committed receipt into a replacement shared generation", async () => {
+    const fixture = createFixture();
+    const registration = fixture.capture();
+    const local = observeStores(fixture.shared);
+    registration.begin();
+    const witness = vi.fn((receipt: OpenClawAgentDatabaseRegistrationCommit) => {
+      registration.recordCommitted(receipt);
+    });
+    registerOpenClawAgentDatabase(fixture.target, { committed: witness });
+    expect(witness).toHaveBeenCalledExactlyOnceWith(fixture.receipt);
+    expect(local.trace).toEqual([{ kind: "stores", inTransaction: false }]);
+    local.stop();
 
-      if (retired) {
-        await closeOpenClawStateDatabaseAsync();
-        expect(() => fixture.admission.assertCurrent()).toThrow();
-      }
-      const current = openOpenClawStateDatabase({ env: fixture.env });
-      const parent = observeStores(current);
-      registration.finish();
-      registration.finish();
+    await closeOpenClawStateDatabaseAsync();
+    expect(() => fixture.admission.assertCurrent()).toThrow();
+    const current = openOpenClawStateDatabase({ env: fixture.env });
+    const parent = observeStores(current);
+    registration.finish();
+    registration.finish();
 
-      expect(parent.trace).toEqual(retired ? [] : [{ kind: "stores", inTransaction: false }]);
-      expect(fixture.registrations()).toEqual([
-        expect.objectContaining({ agentId: fixture.target.agentId, path: fixture.target.path }),
-      ]);
-    },
-  );
+    expect(parent.trace).toEqual([]);
+    expect(fixture.registrations()).toEqual([
+      expect.objectContaining({ agentId: fixture.target.agentId, path: fixture.target.path }),
+    ]);
+  });
 });

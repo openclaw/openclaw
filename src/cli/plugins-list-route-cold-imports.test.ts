@@ -1,4 +1,5 @@
 // The default plugin inventory route must render manifest facts without executing plugin code.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

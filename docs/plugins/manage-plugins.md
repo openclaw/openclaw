@@ -133,6 +133,7 @@ openclaw plugins disable <plugin-id>
 Toggles a plugin's config entry without touching installed files. Some
 bundled plugins (bundled model/speech providers, the bundled browser plugin)
 are enabled by default; others require `enable` after install.
+Repeating an already-applied enable or disable choice leaves the config file unchanged.
 
 ## Capability consent
 
@@ -216,6 +217,8 @@ still show declared capabilities.
 `openclaw plugins install --link <path>` creates a managed install record and
 requires capability consent even though it loads the plugin from its source
 directory. It is not the same as adding a bare `plugins.load.paths` entry.
+Both can use their own plugin-scoped keyed and blob state and ingress queues.
+Linking does not grant trust for hook agent turns or Gateway scope elevation.
 
 ## Install plugins
 
@@ -245,7 +248,7 @@ openclaw plugins install --link ./my-plugin
 Bare package specs install from npm, unless the name matches a bundled or
 official plugin id, in which case OpenClaw uses
 that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or
-`npm-pack:` for deterministic source selection. OpenClaw's bundled and official
+`npm-pack:` to select the source explicitly. OpenClaw's bundled and official
 catalog packages are trusted alongside ClawHub packages. New arbitrary npm,
 git, local path/archive, `npm-pack:`, or marketplace sources require
 `--force` in noninteractive installs after you review
@@ -301,8 +304,12 @@ owner update. Run `openclaw plugins reload <plugin-id>` after source or manifest
 edits. For API clients, `plugins.reload` takes `plugins: [{ pluginId }]` to reload
 one installed plugin, or multiple targets in the same request, and
 `plugins.refresh` refreshes the inventory.
-Both wait for runtime application and return `restartRequired: false` with a
-generation receipt. Explicit actions also work with `gateway.reload.mode: "off"`.
+Both wait for runtime application and return a generation receipt. Reloading
+unchanged bundled code or replacing captured external code returns
+`restartRequired: false`. If compiled bundled code remains loaded after its files
+change, or those files cannot be verified, reload reports `restartRequired: true`
+with a warning. Rebuild compiled output after editing source files, then restart
+the Gateway when the result requires it. Explicit actions also work with `gateway.reload.mode: "off"`.
 See [Plugin management RPCs](/gateway/protocol).
 
 Cleanup is best effort: disabling removes the plugin's registered capabilities
@@ -366,7 +373,7 @@ and memory/context slot selections reconciled before the new package/index
 state commits; retained/new children and unrelated plugins are preserved.
 
 If OpenClaw cannot prove exactly one package owner and a complete child list,
-update and uninstall fail closed without changing package files, config, or the
+update and uninstall are rejected without changing package files, config, or the
 installed index. Run `openclaw plugins registry --refresh`, inspect
 `openclaw plugins doctor`, and use `openclaw doctor --fix` for repairable legacy
 index state. If the ambiguity remains, reinstall the package before retrying.
@@ -376,7 +383,7 @@ exact version pins and explicit tags, including trusted official OpenClaw
 plugin records, because older automatic pins cannot be distinguished from an
 operator's intentional pin. When a newer default-line release exists,
 OpenClaw reports it and prints the explicit command that replaces the pin.
-Floating official records still follow the canonical channel resolver, which
+Floating official records still follow the shared channel resolver, which
 uses both `update.channel` and the installed core version.
 
 For an exact-pinned ClawHub record, deliberately return to the default release

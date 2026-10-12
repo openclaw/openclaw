@@ -40,12 +40,9 @@ vi.mock("openai", () => ({
               }
             },
           });
-          const iterable = createIterable();
-          return Object.assign(iterable, {
-            withResponse: async () => ({
-              data: createIterable(),
-              response: { status: 200, headers: new Headers({ "x-request-id": "req-parity" }) },
-            }),
+          return Object.assign(Promise.resolve(createIterable()), {
+            asResponse: async () =>
+              new Response(null, { status: 200, headers: { "x-request-id": "req-parity" } }),
           });
         },
       },
@@ -72,7 +69,8 @@ const openAiModel = {
   name: "GPT-5.5",
   api: "openai-completions",
   provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
+  // Managed official OpenAI reasoning tool turns use Responses; this covers the Chat wire.
+  baseUrl: "https://chat-proxy.example/v1",
   reasoning: true,
   input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -127,6 +125,10 @@ function makeOpenAiChunk(
     model: "gpt-5.5-response",
     choices: [{ index: 0, delta, finish_reason: finishReason }],
   };
+}
+
+function expectedThinking(thinking: string, thinkingSignature: string) {
+  return { type: "thinking", thinking, thinkingSignature };
 }
 
 const openAiInterleavedReasoningChunks = [
@@ -662,36 +664,16 @@ describe("provider and transport observable parity fixtures", () => {
     }
   });
 
-  it("marks content interrupted by native reasoning as commentary", async () => {
+  it("preserves unphased content when native reasoning resumes", async () => {
     for (const implementation of ["provider", "transport"] as const) {
       for (const chunks of [openAiInterleavedReasoningChunks, openAiCoalescedReasoningChunks]) {
         const result = await runOpenAi(implementation, "success", chunks);
 
         expect(result.terminal.content).toEqual([
-          {
-            type: "thinking",
-            thinking: "First thought.",
-            thinkingSignature: "reasoning_content",
-          },
-          {
-            type: "text",
-            text: "Interim.",
-            textSignature: expect.stringMatching(
-              /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-            ),
-          },
-          {
-            type: "thinking",
-            thinking: "Second thought.",
-            thinkingSignature: "reasoning_content",
-          },
-          {
-            type: "text",
-            text: "Final.",
-            textSignature: expect.stringMatching(
-              /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
-            ),
-          },
+          expectedThinking("First thought.", "reasoning_content"),
+          { type: "text", text: "Interim." },
+          expectedThinking("Second thought.", "reasoning_content"),
+          { type: "text", text: "Final." },
         ]);
       }
 
@@ -702,21 +684,9 @@ describe("provider and transport observable parity fixtures", () => {
       );
       expect(typedReasoningResult.terminal.content).toEqual([
         { type: "thinking", thinking: "First thought." },
-        {
-          type: "text",
-          text: "Interim.",
-          textSignature: expect.stringMatching(
-            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-          ),
-        },
+        { type: "text", text: "Interim." },
         { type: "thinking", thinking: "Second thought." },
-        {
-          type: "text",
-          text: "Final.",
-          textSignature: expect.stringMatching(
-            /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
-          ),
-        },
+        { type: "text", text: "Final." },
       ]);
 
       const structuredReasoningResult = await runOpenAi(
@@ -725,30 +695,10 @@ describe("provider and transport observable parity fixtures", () => {
         openAiStructuredReasoningChunks,
       );
       expect(structuredReasoningResult.terminal.content).toEqual([
-        {
-          type: "thinking",
-          thinking: "First thought.",
-          thinkingSignature: "reasoning_details",
-        },
-        {
-          type: "text",
-          text: "Interim.",
-          textSignature: expect.stringMatching(
-            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-          ),
-        },
-        {
-          type: "thinking",
-          thinking: "Second thought.",
-          thinkingSignature: "reasoning_details",
-        },
-        {
-          type: "text",
-          text: "Final.",
-          textSignature: expect.stringMatching(
-            /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
-          ),
-        },
+        expectedThinking("First thought.", "reasoning_details"),
+        { type: "text", text: "Interim." },
+        expectedThinking("Second thought.", "reasoning_details"),
+        { type: "text", text: "Final." },
       ]);
 
       const hiddenReasoningResult = await runOpenAi(
@@ -758,24 +708,10 @@ describe("provider and transport observable parity fixtures", () => {
         false,
       );
       expect(hiddenReasoningResult.terminal.content).toEqual([
-        {
-          type: "text",
-          text: "Interim.",
-          textSignature: expect.stringMatching(
-            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-          ),
-        },
-        {
-          type: "text",
-          text: "Final.",
-          textSignature: expect.stringMatching(
-            /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
-          ),
-        },
+        { type: "text", text: "Interim." },
+        { type: "text", text: "Final." },
       ]);
-      expect(hiddenReasoningResult.terminal.openclawDelivery).toEqual({
-        textPhaseRequiresTerminal: true,
-      });
+      expect(hiddenReasoningResult.terminal.openclawDelivery).toBeUndefined();
 
       const trailingReasoningResult = await runOpenAi(
         implementation,
@@ -783,17 +719,9 @@ describe("provider and transport observable parity fixtures", () => {
         openAiTrailingReasoningChunks,
       );
       expect(trailingReasoningResult.terminal.content).toEqual([
-        {
-          type: "thinking",
-          thinking: "First thought.",
-          thinkingSignature: "reasoning_content",
-        },
+        expectedThinking("First thought.", "reasoning_content"),
         { type: "text", text: "Answer." },
-        {
-          type: "thinking",
-          thinking: "Trailing thought.",
-          thinkingSignature: "reasoning_content",
-        },
+        expectedThinking("Trailing thought.", "reasoning_content"),
         { type: "text", text: " " },
       ]);
 
@@ -803,40 +731,16 @@ describe("provider and transport observable parity fixtures", () => {
         openAiInterleavedThenTrailingReasoningChunks,
       );
       expect(interleavedThenTrailingReasoningResult.terminal.content).toEqual([
-        {
-          type: "thinking",
-          thinking: "First thought.",
-          thinkingSignature: "reasoning_content",
-        },
-        {
-          type: "text",
-          text: "Interim.",
-          textSignature: expect.stringMatching(
-            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-          ),
-        },
-        {
-          type: "thinking",
-          thinking: "Second thought.",
-          thinkingSignature: "reasoning_content",
-        },
-        {
-          type: "text",
-          text: "Final.",
-          textSignature: expect.stringMatching(
-            /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
-          ),
-        },
-        {
-          type: "thinking",
-          thinking: "Trailing thought.",
-          thinkingSignature: "reasoning_content",
-        },
+        expectedThinking("First thought.", "reasoning_content"),
+        { type: "text", text: "Interim." },
+        expectedThinking("Second thought.", "reasoning_content"),
+        { type: "text", text: "Final." },
+        expectedThinking("Trailing thought.", "reasoning_content"),
       ]);
     }
   });
 
-  it("keeps interrupted text non-deliverable when the stream errors", async () => {
+  it("preserves unphased text when the stream errors", async () => {
     for (const implementation of ["provider", "transport"] as const) {
       const result = await runOpenAi(
         implementation,
@@ -849,23 +753,9 @@ describe("provider and transport observable parity fixtures", () => {
 
       expect(result.terminal.stopReason).toBe("error");
       expect(result.terminal.content).toEqual([
-        {
-          type: "thinking",
-          thinking: "First thought.",
-          thinkingSignature: "reasoning_content",
-        },
-        {
-          type: "text",
-          text: "Interim.",
-          textSignature: expect.stringMatching(
-            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-          ),
-        },
-        {
-          type: "thinking",
-          thinking: "Second thought.",
-          thinkingSignature: "reasoning_content",
-        },
+        expectedThinking("First thought.", "reasoning_content"),
+        { type: "text", text: "Interim." },
+        expectedThinking("Second thought.", "reasoning_content"),
       ]);
     }
   });
@@ -880,11 +770,7 @@ describe("provider and transport observable parity fixtures", () => {
 
         expect(result.terminal.content).toEqual([
           { type: "text", text: "Visible first." },
-          {
-            type: "thinking",
-            thinking: " Hidden second.",
-            thinkingSignature: "reasoning_details",
-          },
+          expectedThinking(" Hidden second.", "reasoning_details"),
           { type: "text", text: " Visible third." },
         ]);
       }
@@ -920,37 +806,11 @@ describe("provider and transport observable parity fixtures", () => {
       );
 
       expect(result.terminal.content).toEqual([
-        {
-          type: "text",
-          text: "Visible first.",
-          textSignature: expect.stringMatching(
-            /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
-          ),
-        },
-        {
-          type: "thinking",
-          thinking: " Hidden second.",
-          thinkingSignature: "reasoning_details",
-        },
-        {
-          type: "text",
-          text: "Interim.",
-          textSignature: expect.stringMatching(
-            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-          ),
-        },
-        {
-          type: "thinking",
-          thinking: "Hidden fourth.",
-          thinkingSignature: "reasoning_content",
-        },
-        {
-          type: "text",
-          text: "Final.",
-          textSignature: expect.stringMatching(
-            /^\{"v":1,"id":"final-answer-1-[0-9a-f]{24}","phase":"final_answer"\}$/u,
-          ),
-        },
+        { type: "text", text: "Visible first." },
+        expectedThinking(" Hidden second.", "reasoning_details"),
+        { type: "text", text: "Interim." },
+        expectedThinking("Hidden fourth.", "reasoning_content"),
+        { type: "text", text: "Final." },
       ]);
     }
   });

@@ -1,4 +1,3 @@
-// Interactive payload helpers normalize structured interactive UI payloads.
 import { asOptionalRecord as toRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -36,47 +35,35 @@ type QuestionPresentationAction =
 /** Core-owned model-picker action; channels serialize it only inside private envelopes. */
 export type ModelPickerAction = (
   | {
-      type: "model-picker";
-      version: 1;
-      snapshotToken: string;
       intent: "show-providers";
       cursor?: string;
     }
   | {
-      type: "model-picker";
-      version: 1;
-      snapshotToken: string;
       intent: "show-models";
       providerToken: string;
       cursor?: string;
     }
   | {
-      type: "model-picker";
-      version: 1;
-      snapshotToken: string;
       intent: "show-recents";
       cursor?: string;
     }
   | {
-      type: "model-picker";
-      version: 1;
-      snapshotToken: string;
       intent: "choose-model";
       providerToken: string;
       modelToken: string;
     }
   | {
-      type: "model-picker";
-      version: 1;
-      snapshotToken: string;
       intent: "choose-runtime";
       providerToken: string;
       modelToken: string;
       runtimeToken: string;
     }
-  | { type: "model-picker"; version: 1; snapshotToken: string; intent: "reset" }
-  | { type: "model-picker"; version: 1; snapshotToken: string; intent: "cancel" }
+  | { intent: "reset" }
+  | { intent: "cancel" }
 ) & {
+  type: "model-picker";
+  version: 1;
+  snapshotToken: string;
   /** Legacy command/callback payload fields are deliberately unavailable on picker actions. */
   readonly command?: never;
   readonly value?: never;
@@ -440,16 +427,6 @@ function normalizeModelPickerToken(value: unknown): string | undefined {
     : undefined;
 }
 
-function normalizeOptionalModelPickerCursor(
-  record: Record<string, unknown>,
-): { valid: true; cursor?: string } | { valid: false } {
-  if (record.cursor === undefined) {
-    return { valid: true };
-  }
-  const cursor = normalizeModelPickerToken(record.cursor);
-  return cursor ? { valid: true, cursor } : { valid: false };
-}
-
 function normalizeModelPickerAction(
   record: Record<string, unknown>,
 ): ModelPickerAction | undefined {
@@ -461,58 +438,36 @@ function normalizeModelPickerAction(
     return undefined;
   }
   const intent = record.intent;
-  if (intent === "show-providers" || intent === "show-recents") {
-    const cursor = normalizeOptionalModelPickerCursor(record);
-    return cursor.valid
-      ? {
-          type: "model-picker",
-          version: 1,
-          snapshotToken,
-          intent,
-          ...(cursor.cursor ? { cursor: cursor.cursor } : {}),
-        }
-      : undefined;
+  const base = { type: "model-picker", version: 1, snapshotToken } as const;
+  if (intent === "reset" || intent === "cancel") {
+    return { ...base, intent };
   }
-  if (intent === "show-models") {
+  if (intent === "show-providers" || intent === "show-recents" || intent === "show-models") {
+    const cursor = normalizeModelPickerToken(record.cursor);
+    if (record.cursor !== undefined && !cursor) {
+      return undefined;
+    }
+    if (intent !== "show-models") {
+      return { ...base, intent, ...(cursor ? { cursor } : {}) };
+    }
     const providerToken = normalizeModelPickerToken(record.providerToken);
-    const cursor = normalizeOptionalModelPickerCursor(record);
-    return providerToken && cursor.valid
-      ? {
-          type: "model-picker",
-          version: 1,
-          snapshotToken,
-          intent,
-          providerToken,
-          ...(cursor.cursor ? { cursor: cursor.cursor } : {}),
-        }
+    return providerToken
+      ? { ...base, intent, providerToken, ...(cursor ? { cursor } : {}) }
       : undefined;
   }
-  if (intent === "choose-model") {
+  if (intent === "choose-model" || intent === "choose-runtime") {
     const providerToken = normalizeModelPickerToken(record.providerToken);
     const modelToken = normalizeModelPickerToken(record.modelToken);
-    return providerToken && modelToken
-      ? { type: "model-picker", version: 1, snapshotToken, intent, providerToken, modelToken }
-      : undefined;
-  }
-  if (intent === "choose-runtime") {
-    const providerToken = normalizeModelPickerToken(record.providerToken);
-    const modelToken = normalizeModelPickerToken(record.modelToken);
+    if (!providerToken || !modelToken) {
+      return undefined;
+    }
+    if (intent === "choose-model") {
+      return { ...base, intent, providerToken, modelToken };
+    }
     const runtimeToken = normalizeModelPickerToken(record.runtimeToken);
-    return providerToken && modelToken && runtimeToken
-      ? {
-          type: "model-picker",
-          version: 1,
-          snapshotToken,
-          intent,
-          providerToken,
-          modelToken,
-          runtimeToken,
-        }
-      : undefined;
+    return runtimeToken ? { ...base, intent, providerToken, modelToken, runtimeToken } : undefined;
   }
-  return intent === "reset" || intent === "cancel"
-    ? { type: "model-picker", version: 1, snapshotToken, intent }
-    : undefined;
+  return undefined;
 }
 
 function normalizePresentationAction(raw: unknown): MessagePresentationAction | undefined {
@@ -660,6 +615,13 @@ function normalizeInteractiveBlock(raw: unknown): InteractiveReplyBlock | undefi
     const text = normalizeOptionalString(record.text);
     return text ? { type: "text", text } : undefined;
   }
+  return normalizeInteractiveControls(record, type);
+}
+
+function normalizeInteractiveControls(
+  record: Record<string, unknown>,
+  type: string | undefined,
+): MessagePresentationInteractiveBlock | undefined {
   if (type === "buttons") {
     const buttons = normalizeList(record.buttons, normalizeButton);
     return buttons.length > 0 ? { type: "buttons", buttons } : undefined;
@@ -696,16 +658,15 @@ function normalizeChartSegments(value: unknown): MessagePresentationChartSegment
     : undefined;
 }
 
-function normalizeChartCategories(value: unknown): string[] | undefined {
+function normalizeUniqueLabels(value: unknown): string[] | undefined {
   if (!Array.isArray(value) || value.length === 0) {
     return undefined;
   }
-  const categories = value.map((entry) => normalizeOptionalString(entry));
-  if (categories.some((entry) => !entry)) {
+  const labels = value.map((entry) => normalizeOptionalString(entry));
+  if (!labels.every((entry): entry is string => Boolean(entry))) {
     return undefined;
   }
-  const normalized = categories as string[];
-  return new Set(normalized).size === normalized.length ? normalized : undefined;
+  return new Set(labels).size === labels.length ? labels : undefined;
 }
 
 function normalizeChartSeries(params: {
@@ -753,7 +714,7 @@ function normalizeChartBlock(
   if (chartType !== "bar" && chartType !== "area" && chartType !== "line") {
     return undefined;
   }
-  const categories = normalizeChartCategories(record.categories);
+  const categories = normalizeUniqueLabels(record.categories);
   if (!categories) {
     return undefined;
   }
@@ -778,16 +739,8 @@ function normalizeTableBlock(
   record: Record<string, unknown>,
 ): MessagePresentationTableBlock | undefined {
   const caption = normalizeOptionalString(record.caption);
-  if (!caption || !Array.isArray(record.headers) || record.headers.length === 0) {
-    return undefined;
-  }
-  const headers = record.headers.map((header) => normalizeOptionalString(header));
-  if (
-    !headers.every((header): header is string => Boolean(header)) ||
-    new Set(headers).size !== headers.length ||
-    !Array.isArray(record.rows) ||
-    record.rows.length === 0
-  ) {
+  const headers = normalizeUniqueLabels(record.headers);
+  if (!caption || !headers || !Array.isArray(record.rows) || record.rows.length === 0) {
     return undefined;
   }
   const rows = record.rows.map((row) => {
@@ -872,27 +825,13 @@ function normalizePresentationBlock(
   if (type === "divider") {
     return { type: "divider" };
   }
-  if (type === "buttons") {
-    const buttons = normalizeList(record.buttons, normalizeButton);
-    return buttons.length > 0 ? { type: "buttons", buttons } : undefined;
-  }
-  if (type === "select") {
-    const options = normalizeList(record.options, normalizeOption);
-    return options.length > 0
-      ? {
-          type: "select",
-          placeholder: normalizeOptionalString(record.placeholder),
-          options,
-        }
-      : undefined;
-  }
   if (type === "chart") {
     return normalizeChartBlock(record);
   }
   if (type === "table") {
     return normalizeTableBlock(record);
   }
-  return undefined;
+  return normalizeInteractiveControls(record, type);
 }
 
 export function normalizeMessagePresentation(raw: unknown): MessagePresentation | undefined {
@@ -951,46 +890,30 @@ export function presentationToInteractiveReply(
       continue;
     }
     if (block.type === "buttons") {
-      const buttons = block.buttons
-        .filter((button) => resolveMessagePresentationButtonAction(button, { modelPicker: true }))
-        .map((button) => {
-          const interactiveButton: InteractiveReplyButton = {
-            label: button.label,
-            style: button.style,
-          };
-          if (button.action) {
-            interactiveButton.action = button.action;
-            const actionValue = resolveMessagePresentationActionValue(button.action);
-            if (actionValue) {
-              interactiveButton.value = actionValue;
-            } else if (button.action.type === "url") {
-              interactiveButton.url = button.action.url;
-            } else if (button.action.type === "web-app" && button.action.url) {
-              interactiveButton.webApp = { url: button.action.url };
-            }
-          } else {
-            if (button.value) {
-              interactiveButton.value = button.value;
-            }
-            if (button.url) {
-              interactiveButton.url = button.url;
-            }
-            const webApp = button.webApp ?? button.web_app;
-            if (webApp) {
-              interactiveButton.webApp = webApp;
-            }
-          }
-          if (button.priority !== undefined) {
-            interactiveButton.priority = button.priority;
-          }
-          if (button.disabled === true) {
-            interactiveButton.disabled = true;
-          }
-          if (button.reusable === true) {
-            interactiveButton.reusable = true;
-          }
-          return interactiveButton;
+      const buttons: InteractiveReplyButton[] = [];
+      for (const button of block.buttons.filter((candidate) =>
+        resolveMessagePresentationButtonAction(candidate, { modelPicker: true }),
+      )) {
+        const action = button.action;
+        const value = action ? resolveMessagePresentationActionValue(action) : button.value;
+        const url = action ? (action.type === "url" ? action.url : undefined) : button.url;
+        const webApp = action
+          ? action.type === "web-app" && action.url
+            ? { url: action.url }
+            : undefined
+          : (button.webApp ?? button.web_app);
+        buttons.push({
+          label: button.label,
+          style: button.style,
+          ...(action ? { action } : {}),
+          ...(value ? { value } : {}),
+          ...(url ? { url } : {}),
+          ...(webApp ? { webApp } : {}),
+          ...(button.priority !== undefined ? { priority: button.priority } : {}),
+          ...(button.disabled === true ? { disabled: true } : {}),
+          ...(button.reusable === true ? { reusable: true } : {}),
         });
+      }
       if (buttons.length > 0) {
         blocks.push({ type: "buttons", buttons });
       }
@@ -1009,22 +932,19 @@ export function presentationToInteractiveReply(
         type: "select",
         placeholder: block.placeholder,
         options: block.options.map((option) => {
-          const interactiveOption: InteractiveReplyOption = {
-            label: option.label,
-          };
-          if (option.action !== undefined) {
-            const action = resolveMessagePresentationOptionAction(option, { modelPicker: true });
-            if (action) {
-              interactiveOption.action = action;
-              const actionValue = resolveMessagePresentationActionValue(action);
-              if (actionValue) {
-                interactiveOption.value = actionValue;
-              }
-            }
-          } else if (option.value) {
-            interactiveOption.value = option.value;
-          }
-          return interactiveOption;
+          const action =
+            option.action !== undefined
+              ? resolveMessagePresentationOptionAction(option, { modelPicker: true })
+              : undefined;
+          const value =
+            option.action !== undefined
+              ? resolveMessagePresentationActionValue(action)
+              : option.value;
+          return Object.assign(
+            { label: option.label },
+            action ? { action } : {},
+            value ? { value } : {},
+          );
         }),
       });
     }
@@ -1256,7 +1176,7 @@ export function hasReplyPayloadContent(
   },
 ): boolean {
   return hasReplyContent({
-    text: options?.trimText ? payload.text?.trim() : payload.text,
+    text: payload.text,
     mediaUrl: payload.mediaUrl,
     mediaUrls: payload.mediaUrls,
     interactive: payload.interactive,

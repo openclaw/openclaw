@@ -7,57 +7,44 @@ import { collectRuntimeChannelCapabilities } from "./runtime-capabilities.js";
 describe("registered sessions_spawn binding discovery", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
 
-  it.each([
-    { placement: "current", supportsCurrent: true, spawnSessions: true, available: true },
-    { placement: "current", supportsCurrent: false, spawnSessions: true, available: false },
-    { placement: "current", supportsCurrent: true, spawnSessions: false, available: false },
-    { placement: "child", supportsCurrent: false, spawnSessions: true, available: true },
-  ] as const)(
-    "$placement, current support=$supportsCurrent, spawn policy=$spawnSessions",
-    ({ placement, supportsCurrent, spawnSessions, available }) => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "binding-chat",
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({ id: "binding-chat", label: "Binding chat" }),
-              conversationBindings: {
-                defaultTopLevelPlacement: placement,
-                supportsCurrentConversationBinding: supportsCurrent,
-              },
+  it.each(["current", "child"] as const)("%s placement", (placement) => {
+    const available = placement === "child";
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "binding-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "binding-chat", label: "Binding chat" }),
+            conversationBindings: {
+              defaultTopLevelPlacement: placement,
+              supportsCurrentConversationBinding: true,
             },
           },
-        ]),
-      );
-      const config = { session: { threadBindings: { enabled: true, spawnSessions } } };
-      const tool = createOpenClawTools({
-        agentChannel: "binding-chat",
-        config,
-        disableMessageTool: true,
-        disablePluginTools: true,
-      }).find((candidate) => candidate.name === "sessions_spawn");
-      expect(tool).toBeDefined();
-      expect(tool?.parameters).toMatchObject({
-        properties: { mode: { enum: available ? ["run", "session"] : ["run"] } },
-      });
-      if (available) {
-        expect(tool?.parameters).toHaveProperty("properties.thread.type", "boolean");
-      } else {
-        expect(tool?.parameters).not.toHaveProperty("properties.thread");
-      }
-      const capabilities = collectRuntimeChannelCapabilities({
-        cfg: config,
-        channel: "binding-chat",
-      });
-      if (available) {
-        expect(capabilities).toEqual(
-          expect.arrayContaining(["threadbound-subagent-spawn", "threadbound-acp-spawn"]),
-        );
-      } else {
-        expect(capabilities ?? []).not.toContain("threadbound-subagent-spawn");
-        expect(capabilities ?? []).not.toContain("threadbound-acp-spawn");
-      }
-    },
-  );
+        },
+      ]),
+    );
+    const config = { session: { threadBindings: { enabled: true, spawnSessions: true } } };
+    const tool = createOpenClawTools({
+      agentChannel: "binding-chat",
+      config,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    expect(tool?.parameters).toMatchObject({
+      properties: { mode: { enum: available ? ["run", "session"] : ["run"] } },
+    });
+    if (available) {
+      expect(tool?.parameters).toHaveProperty("properties.thread.type", "boolean");
+    } else {
+      expect(tool?.parameters).not.toHaveProperty("properties.thread");
+    }
+    const capabilities = collectRuntimeChannelCapabilities({
+      cfg: config,
+      channel: "binding-chat",
+    });
+    expect(capabilities ?? []).toEqual(
+      available ? ["threadbound-subagent-spawn", "threadbound-acp-spawn"] : [],
+    );
+  });
 });

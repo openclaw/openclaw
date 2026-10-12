@@ -166,7 +166,6 @@ suite.define(() => {
       await current.getByText("Loading active sessions…", { exact: true }).waitFor();
       const currentRequests = (await gateway.getRequests("sessions.list", { activeOnly: true }))
         .length;
-      await gateway.deferNext("sessions.list", { activeOnly: true });
       await gateway.emitGatewayEvent("sessions.changed", {
         key: "global",
         agentId: "main",
@@ -177,13 +176,11 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("sessions.list", listing(activeRows));
       await expect.poll(() => current.locator(".activity-current-work__row").count()).toBe(5);
-      await gateway.waitForRequest("sessions.list", {
-        after: currentRequests,
-        match: { activeOnly: true },
-      });
-      await expect.poll(() => current.getAttribute("aria-busy")).toBe("true");
-      await gateway.resolveDeferred("sessions.list");
+      // The completion fully reconciles this bounded snapshot; no catch-up RPC is needed.
       await expect.poll(() => current.getAttribute("aria-busy")).toBe("false");
+      expect(await gateway.getRequests("sessions.list", { activeOnly: true })).toHaveLength(
+        currentRequests,
+      );
       const work = current.locator('[data-session-key="global"][data-agent-id="work"]');
       await work.getByText("work global work", { exact: true }).waitFor();
       expect(await work.getAttribute("href")).toBe("/chat/work");

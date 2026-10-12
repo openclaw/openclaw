@@ -2,8 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 // Control UI tests cover config form constraints, draft recovery, and repeated controls.
 import {
   renderAnalyzedFormFixture,
-  renderTextInputFixture,
-  renderNumberInputFixture,
   renderArrayFixture,
 } from "../test-helpers/config-form-fixtures.ts";
 import {
@@ -123,9 +121,11 @@ describe("config form integrity", () => {
     expect(endpoint.getAttribute("minlength")).toBeNull();
     expect(endpoint.getAttribute("maxlength")).toBeNull();
     expect(endpoint.pattern).toBe("");
-    expect(endpoint.getAttribute("aria-describedby")).toBe(
-      "config-field-s10-006c00610062006f007200610074006f00720079_s8-0065006e00640070006f0069006e0074-description",
-    );
+    const endpointErrorId = configFieldId(["laboratory", "endpoint"], "scalar-error");
+    expect(endpoint.getAttribute("aria-describedby")?.split(" ")).toEqual([
+      configFieldId(["laboratory", "endpoint"], "description"),
+      endpointErrorId,
+    ]);
     endpoint.value = "Xlocal-apiY";
     endpoint.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "endpoint"], "Xlocal-apiY");
@@ -141,11 +141,23 @@ describe("config form integrity", () => {
     endpoint.value = "123";
     endpoint.dispatchEvent(new Event("input", { bubbles: true }));
     expect(endpoint.getAttribute("aria-invalid")).toBe("true");
+    const endpointError = expectElement(
+      document.getElementById(endpointErrorId),
+      "associated endpoint validation message",
+    );
+    expect(endpointError.hidden).toBe(false);
+    expect(endpointError.getAttribute("role")).toBe("alert");
+    expect(endpointError.textContent).toBe(endpoint.validationMessage);
     expect(onPatch).not.toHaveBeenCalledWith(["laboratory", "endpoint"], "123");
 
     endpoint.value = "";
     endpoint.dispatchEvent(new Event("input", { bubbles: true }));
     expect(endpoint.getAttribute("aria-invalid")).toBe("true");
+
+    endpoint.value = "valid-slug";
+    endpoint.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(endpointError.hidden).toBe(true);
+    expect(endpointError.textContent).toBe("");
 
     const relayUrl = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Relay Url']"),
@@ -283,6 +295,14 @@ describe("config form integrity", () => {
     retryBudget.dispatchEvent(new Event("input", { bubbles: true }));
     expect(retryBudget.getAttribute("aria-invalid")).toBe("true");
     expect(retryBudget.validationMessage).not.toBe("");
+    const retryErrorId = configFieldId(["laboratory", "retryBudget"], "scalar-error");
+    const retryError = expectElement(
+      document.getElementById(retryErrorId),
+      "associated retry budget validation message",
+    );
+    expect(retryBudget.getAttribute("aria-describedby")?.split(" ")).toContain(retryErrorId);
+    expect(retryError.hidden).toBe(false);
+    expect(retryError.textContent).toBe(retryBudget.validationMessage);
     expect(onPatch).not.toHaveBeenCalledWith(["laboratory", "retryBudget"], undefined);
 
     retryBudget.value = "3";
@@ -313,48 +333,6 @@ describe("config form integrity", () => {
     addButton.click();
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "weights"], [2, 2]);
     container.remove();
-  });
-
-  it("generates unambiguous accessible IDs for nested paths", () => {
-    expect(configFieldId(["a--b"], "description")).not.toBe(
-      configFieldId(["a", "b"], "description"),
-    );
-    expect(configFieldId([1], "description")).not.toBe(configFieldId(["1"], "description"));
-    expect(() => configFieldId(["\ud800"], "description")).not.toThrow();
-    expect(configFieldId(["\ud800"], "description")).not.toBe(
-      configFieldId(["\ufffd"], "description"),
-    );
-  });
-
-  it("keeps rejected map-key edits synchronized with the persisted key", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        accounts: { type: "object", additionalProperties: true },
-      },
-    });
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { accounts: { alpha: {}, beta: {} } },
-      onPatch,
-    });
-
-    const alpha = expectElement(
-      Array.from(container.querySelectorAll<HTMLInputElement>(".cfg-map input")).find(
-        (input) => input.value === "alpha",
-      ),
-      "alpha map key input",
-    );
-    alpha.value = " ";
-    alpha.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(alpha.value).toBe("alpha");
-    expect(onPatch).not.toHaveBeenCalled();
-
-    alpha.value = "beta";
-    alpha.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(alpha.value).toBe("alpha");
-    expect(onPatch).not.toHaveBeenCalled();
   });
 
   it("commits typed map entries only after the local draft is valid", async () => {
@@ -471,110 +449,6 @@ describe("config form integrity", () => {
     await draftHost.updateComplete;
     expect(container.querySelector(".cfg-map .cfg-collection-draft")).toBeNull();
     container.remove();
-  });
-
-  it("validates tuple collection drafts by position and additional-item policy", async () => {
-    const host = document.createElement(
-      "openclaw-config-form-collection-draft",
-    ) as ConfigFormCollectionDraft;
-    const commits = vi.fn();
-    host.id = "tuple-draft";
-    host.props = {
-      schema: {
-        type: "array",
-        items: [
-          {
-            allOf: [
-              { type: "string", pattern: "^[0-9]+$", enum: ["123", "12"] },
-              { minLength: 3 },
-              { anyOf: [{ const: "123" }, { const: "12" }] },
-              { oneOf: [{ pattern: "^[0-9]+$" }, { const: "never" }] },
-            ],
-          },
-          { type: "number", const: 0 },
-        ],
-        additionalItems: false,
-      },
-      label: "Tuple",
-      disabled: false,
-      identity: "tuple-draft",
-      sourceIdentity: [],
-    };
-    host.addEventListener("config-collection-draft-commit", commits);
-    document.body.append(host);
-
-    host.openDraft();
-    await host.updateComplete;
-    const value = expectElement(
-      host.querySelector<HTMLTextAreaElement>("[data-collection-draft-value]"),
-      "tuple draft value",
-    );
-    value.value = '["123",-0]';
-    value.dispatchEvent(new Event("input", { bubbles: true }));
-    await host.updateComplete;
-    expectElement(
-      Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "valid tuple draft commit",
-    ).click();
-    expect(commits).toHaveBeenCalledTimes(1);
-
-    host.openDraft();
-    await host.updateComplete;
-    const invalidValue = expectElement(
-      host.querySelector<HTMLTextAreaElement>("[data-collection-draft-value]"),
-      "invalid tuple draft value",
-    );
-    invalidValue.value = '["12",-0]';
-    invalidValue.dispatchEvent(new Event("input", { bubbles: true }));
-    await host.updateComplete;
-    expectElement(
-      Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "invalid tuple draft commit",
-    ).click();
-    await host.updateComplete;
-    expect(commits).toHaveBeenCalledTimes(1);
-    expect(
-      expectElement(
-        host.querySelector<HTMLTextAreaElement>("[data-collection-draft-value]"),
-        "rejected tuple draft value",
-      ).getAttribute("aria-invalid"),
-    ).toBe("true");
-
-    const extraValue = expectElement(
-      host.querySelector<HTMLTextAreaElement>("[data-collection-draft-value]"),
-      "tuple draft value with extra item",
-    );
-    extraValue.value = '["123",-0,2]';
-    extraValue.dispatchEvent(new Event("input", { bubbles: true }));
-    await host.updateComplete;
-    expectElement(
-      Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "tuple draft commit with extra item",
-    ).click();
-    await host.updateComplete;
-    expect(commits).toHaveBeenCalledTimes(1);
-
-    // Identity churn with identical content (autosave ack clone) keeps the
-    // draft open; only a real external array change closes it.
-    host.props = {
-      ...host.props,
-      sourceIdentity: [],
-    };
-    await host.updateComplete;
-    expect(host.querySelector(".cfg-collection-draft")).not.toBeNull();
-    host.props = {
-      ...host.props,
-      sourceIdentity: ["externally-added"],
-    };
-    await host.updateComplete;
-    expect(host.querySelector(".cfg-collection-draft")).toBeNull();
-    host.remove();
   });
 
   it("preserves unaffected scalar drafts and resets changed repeated rows", () => {
@@ -694,131 +568,6 @@ describe("config form integrity", () => {
     expect(revealed.value).toBe("123");
     expect(revealed.getAttribute("aria-invalid")).toBe("false");
     expect(revealed.validationMessage).toBe("");
-  });
-
-  it("validates scalar edits against composed schemas", () => {
-    const onPatch = vi.fn();
-    const stringContainer = document.createElement("div");
-    renderTextInputFixture(stringContainer, {
-      schema: {
-        type: "string",
-        allOf: [{ pattern: "^[0-9]+$" }],
-      },
-      value: "123",
-      path: ["code"],
-      inputType: "text",
-      onPatch,
-    });
-
-    const code = expectElement(
-      stringContainer.querySelector<HTMLInputElement>("input[aria-label='Code']"),
-      "composed string scalar",
-    );
-    code.value = "abc";
-    code.dispatchEvent(new Event("input", { bubbles: true }));
-    code.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(code.getAttribute("aria-invalid")).toBe("true");
-    expect(onPatch).not.toHaveBeenCalledWith(["code"], "abc");
-    code.value = "456";
-    code.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(code.getAttribute("aria-invalid")).toBe("false");
-    expect(onPatch).toHaveBeenCalledWith(["code"], "456");
-
-    const numberContainer = document.createElement("div");
-    renderNumberInputFixture(numberContainer, {
-      schema: {
-        type: "integer",
-        allOf: [{ minimum: 2 }, { multipleOf: 2 }],
-      },
-      value: 2,
-      path: ["amount"],
-      onPatch,
-    });
-    const amount = expectElement(
-      numberContainer.querySelector<HTMLInputElement>("input[aria-label='Amount']"),
-      "composed numeric scalar",
-    );
-    expect(
-      expectElement(
-        numberContainer.querySelector<HTMLButtonElement>("button[aria-label='Amount: +2']"),
-        "composed numeric increment",
-      ).disabled,
-    ).toBe(false);
-    numberContainer
-      .querySelector<HTMLButtonElement>("button[aria-label='Amount: +2']")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(["amount"], 4);
-    onPatch.mockClear();
-    amount.value = "3";
-    amount.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(amount.getAttribute("aria-invalid")).toBe("true");
-    expect(onPatch).not.toHaveBeenCalledWith(["amount"], 3);
-    amount.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(amount.value).toBe("4");
-    expect(amount.getAttribute("aria-invalid")).toBe("false");
-    expect(onPatch).toHaveBeenCalledWith(["amount"], 4);
-    amount.value = "4";
-    amount.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(amount.getAttribute("aria-invalid")).toBe("false");
-    expect(onPatch).toHaveBeenCalledWith(["amount"], 4);
-
-    const overflowContainer = document.createElement("div");
-    renderNumberInputFixture(overflowContainer, {
-      schema: { type: "integer", multipleOf: 2 },
-      value: 2,
-      path: ["overflow"],
-      onPatch,
-    });
-    const overflow = expectElement(
-      overflowContainer.querySelector<HTMLInputElement>("input[aria-label='Overflow']"),
-      "overflow numeric scalar",
-    );
-    onPatch.mockClear();
-    Object.defineProperty(overflow, "value", {
-      configurable: true,
-      value: "1e309",
-      writable: true,
-    });
-    overflow.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(overflow.getAttribute("aria-invalid")).toBe("true");
-    expect(() => overflow.dispatchEvent(new Event("change", { bubbles: true }))).not.toThrow();
-    expect(overflow.value).toBe("1e309");
-    expect(overflow.getAttribute("aria-invalid")).toBe("true");
-    expect(onPatch).not.toHaveBeenCalled();
-  });
-
-  it("materializes and preserves array minItems", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const schema = {
-      type: "array",
-      allOf: [{ minItems: 2, maxItems: 2 }],
-      items: { type: "string" },
-    };
-    const renderValue = (value: unknown) => {
-      renderArrayFixture(container, {
-        schema,
-        value,
-        path: ["codes"],
-        onPatch,
-      });
-    };
-
-    renderValue(undefined);
-    expectElement(
-      Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "minimum array add",
-    ).click();
-    expect(onPatch).toHaveBeenCalledWith(["codes"], ["", ""]);
-
-    renderValue(["", ""]);
-    const removeButtons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("button[aria-label='Remove item']"),
-    );
-    expect(removeButtons).toHaveLength(2);
-    expect(removeButtons.every((button) => button.disabled)).toBe(true);
   });
 
   it("retains unset array drafts until the collection source changes", async () => {

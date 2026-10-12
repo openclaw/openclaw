@@ -9,6 +9,7 @@ import {
   createChatFlowE2eSuite,
   captureUiProof,
   installMockGateway,
+  scrollChatThreadToTop,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 
@@ -75,53 +76,63 @@ async function expectPositionRailAtEnd(page: Page) {
 }
 
 suite.define(() => {
-  it("reveals the current marker when navigation and composer resize share a frame", async () => {
-    await suite.withPage(
-      { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          historyMessages: Array.from({ length: 80 }, (_, index) => ({
-            __openclaw: { id: `resize-navigation-${index}`, seq: index + 1 },
-            role: index % 2 === 0 ? "user" : "assistant",
-            content: [
-              {
-                type: "text",
-                text: `Conversation checkpoint ${index + 1}: review the notes and confirm the next step.`,
-              },
-            ],
-          })),
-        });
-        await page.addInitScript(createControlUiMockSameOriginGatewayScript());
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await page.locator(".chat-position-rail__track").waitFor();
-        await waitForChatScrollIdle(page);
-        await expectPositionRailAtEnd(page);
-        const transcript = page.locator(".chat-thread");
-        await transcript.hover();
-        await page.mouse.wheel(0, -30000);
-        await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
-        await expect
-          .poll(() => readPositionRailGeometry(page))
-          .toMatchObject({
-            currentVisible: true,
-            messageInViewport: true,
-            markerInViewport: true,
+  it.each([false, true])(
+    "reveals the current marker when navigation and composer resize share a frame (navigation first: %s)",
+    async (navigationFirst) => {
+      await suite.withPage(
+        { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
+        async ({ page }) => {
+          await installMockGateway(page, {
+            historyMessages: Array.from({ length: 80 }, (_, index) => ({
+              __openclaw: { id: `resize-navigation-${index}`, seq: index + 1 },
+              role: index % 2 === 0 ? "user" : "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: `Conversation checkpoint ${index + 1}: review the notes and confirm the next step.`,
+                },
+              ],
+            })),
           });
-        await waitForChatScrollIdle(page);
-        // Resize through the real input handler, then navigate before observer delivery.
-        await page.locator(".agent-chat__composer-combobox textarea").evaluate((element) => {
-          const textarea = element as HTMLTextAreaElement;
-          textarea.value = "Keep the review notes available.\n".repeat(6);
-          textarea.dispatchEvent(new Event("input", { bubbles: true }));
-          const thread = document.querySelector(".chat-thread")!;
-          thread.scrollTop = thread.scrollHeight;
-        });
-        await waitForChatScrollIdle(page);
-        await captureUiProof(suite, page, "rail-resize-navigation", "settled.png");
-        await expectPositionRailAtEnd(page);
-      },
-    );
-  });
+          await page.addInitScript(createControlUiMockSameOriginGatewayScript());
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.locator(".chat-position-rail__track").waitFor();
+          await waitForChatScrollIdle(page);
+          await expectPositionRailAtEnd(page);
+          const transcript = page.locator(".chat-thread");
+          await transcript.hover();
+          await page.mouse.wheel(0, -30000);
+          await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
+          await expect
+            .poll(() => readPositionRailGeometry(page))
+            .toMatchObject({
+              currentVisible: true,
+              messageInViewport: true,
+              markerInViewport: true,
+            });
+          await waitForChatScrollIdle(page);
+          // Apply input and navigation in one frame, before observer delivery.
+          await page
+            .locator(".agent-chat__composer-combobox textarea")
+            .evaluate((element, first) => {
+              const textarea = element as HTMLTextAreaElement;
+              const thread = document.querySelector(".chat-thread")!;
+              if (first) {
+                thread.scrollTop = thread.scrollHeight;
+              }
+              textarea.value = "Keep the review notes available.\n".repeat(6);
+              textarea.dispatchEvent(new Event("input", { bubbles: true }));
+              if (!first) {
+                thread.scrollTop = thread.scrollHeight;
+              }
+            }, navigationFirst);
+          await waitForChatScrollIdle(page);
+          await captureUiProof(suite, page, "rail-resize-navigation", "settled.png");
+          await expectPositionRailAtEnd(page);
+        },
+      );
+    },
+  );
 
   it.each([
     { count: 1, direction: "ltr" },
@@ -131,7 +142,7 @@ suite.define(() => {
     { count: 80, direction: "ltr" },
     { count: 80, direction: "rtl" },
   ])(
-    "keeps the rail anchored as Task progress and the composer grow ($count, $direction messages)",
+    "keeps the rail anchored as Details progress toggles and the composer grows ($count, $direction messages)",
     async ({ count, direction }) => {
       await suite.withPage(
         { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
@@ -150,7 +161,7 @@ suite.define(() => {
               content: [
                 {
                   type: "text",
-                  text: `${direction === "rtl" ? "راجع الملاحظات. " : ""}Conversation checkpoint ${index + 1}: review the notes and confirm the next step.`,
+                  text: `${direction === "rtl" ? "راجع الملاحظات. " : ""}Conversation checkpoint ${index + 1}: review the notes and confirm the next step.${count <= 8 && index === count - 1 ? "\n\nSupporting context keeps this small set of turns scrollable while testing the rail anchor.".repeat(16) : ""}`,
                 },
               ],
             })),
@@ -173,9 +184,28 @@ suite.define(() => {
             },
           });
           await page.addInitScript(createControlUiMockSameOriginGatewayScript());
+          if (direction === "rtl") {
+            await page.addInitScript(() => localStorage.setItem("openclaw.i18n.locale", "ar"));
+          }
           await page.goto(`${suite.server.baseUrl}chat`);
           await page.locator(`.chat-text[dir="${direction}"]`).first().waitFor();
-          const card = page.locator(".session-progress-card--composer");
+          if (count === 1 || count === 5) {
+            // These fixtures end with a clamped user message; expose its scrollable content.
+            await page.getByRole("button", { name: "Show more", exact: true }).click();
+            await waitForChatScrollIdle(page);
+            // Expanding a message preserves the reader position, so establish the baseline explicitly.
+            await page.locator(".chat-thread").focus();
+            await page.keyboard.press("End");
+            await waitForChatScrollIdle(page);
+          }
+          const card = page.locator('[data-progress-card-placement="details"]');
+          await card.waitFor({ state: "attached" });
+          expect(await card.isVisible()).toBe(false);
+          // Use the visible control directly so this also exercises the Arabic locale.
+          const detailsToggle = page.locator(".chat-details-toggle");
+          await detailsToggle.click();
+          const details = page.locator('.chat-details[role="dialog"]');
+          await details.waitFor();
           await card.waitFor();
           // Let the transcript settle before measuring the rail and toggling the card.
           await waitForChatScrollIdle(page);
@@ -200,6 +230,9 @@ suite.define(() => {
           const bounds = () =>
             track.evaluate((element) => element.getBoundingClientRect().toJSON());
           const collapsed = await bounds();
+          const transcriptBounds = (await page.locator(".chat-thread").boundingBox())!;
+          expect(collapsed.left).toBeGreaterThanOrEqual(transcriptBounds.x);
+          expect(collapsed.right).toBeLessThanOrEqual(transcriptBounds.x + transcriptBounds.width);
           const collapsedComposer = (await composer.boundingBox())!;
           if (count === 80 && direction === "ltr") {
             const transcript = page.locator(".chat-thread");
@@ -255,6 +288,7 @@ suite.define(() => {
           const assertAnchor = async (
             samples: ReturnType<typeof sampleAnchor>,
             allowShortTranscript = false,
+            anchor = { track: collapsed.top, tick: tickTop },
           ) => {
             for (const position of await samples) {
               expect(position.connected).toBe(true);
@@ -266,8 +300,8 @@ suite.define(() => {
                 continue;
               }
               expect(position.display).toBe("block");
-              expect(position.track).toBe(collapsed.top);
-              expect(position.tick).toBe(tickTop);
+              expect(position.track).toBe(anchor.track);
+              expect(position.tick).toBe(anchor.tick);
             }
           };
           for (const open of [true, false, true, false, true]) {
@@ -276,32 +310,36 @@ suite.define(() => {
             await expect
               .poll(() => card.evaluate((element) => (element as HTMLDetailsElement).open))
               .toBe(open);
-            if (open) {
-              await expect
-                .poll(async () => (await composer.boundingBox())!.height)
-                .toBeGreaterThan(collapsedComposer.height + 80);
-            } else {
-              await expect
-                .poll(async () => (await composer.boundingBox())!.height)
-                .toBe(collapsedComposer.height);
-            }
+            // Details overlays the conversation; progress no longer grows the composer.
+            await expect
+              .poll(async () => (await composer.boundingBox())!.height)
+              .toBe(collapsedComposer.height);
             await assertAnchor(samples);
             expect((await bounds()).top).toBe(collapsed.top);
             expect((await anchorTick.boundingBox())!.y).toBe(tickTop);
           }
+          await detailsToggle.click();
+          await details.waitFor({ state: "hidden" });
           const expandedHeight = (await marks.boundingBox())!.height;
+          const editor = page.locator(".agent-chat__composer-combobox textarea");
+          const beforeDraft = await editor.evaluate((element) => ({
+            height: element.getBoundingClientRect().height,
+            lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+          }));
+          const beforeDraftComposer = (await composer.boundingBox())!.height;
+          const expandedDraft = Array.from(
+            { length: 6 },
+            (_, index) => `Review note ${index + 1}: keep navigation visible.`,
+          ).join("\n");
           const textareaSamples = sampleAnchor();
-          await page
-            .locator(".agent-chat__composer-combobox textarea")
-            .fill(
-              Array.from(
-                { length: 6 },
-                (_, index) => `Review note ${index + 1}: keep navigation visible.`,
-              ).join("\n"),
-            );
+          await editor.fill(expandedDraft);
+          // Measure the six-line draft itself, without the former docked-progress height.
+          await expect
+            .poll(() => editor.evaluate((element) => element.getBoundingClientRect().height))
+            .toBeGreaterThanOrEqual(beforeDraft.height + beforeDraft.lineHeight * 4);
           await expect
             .poll(async () => (await composer.boundingBox())!.height)
-            .toBeGreaterThan(collapsedComposer.height + 180);
+            .toBeGreaterThan(beforeDraftComposer);
           await assertAnchor(textareaSamples);
           expect((await bounds()).top).toBe(collapsed.top);
           expect((await anchorTick.boundingBox())!.y).toBe(tickTop);
@@ -313,18 +351,53 @@ suite.define(() => {
           }
           if (count === 80 && direction === "ltr") {
             const textarea = page.locator(".agent-chat__composer-combobox textarea");
-            const goalSamples = sampleAnchor();
-            await textarea.fill("/goal");
-            await textarea.press("Enter");
-            await page.locator(".agent-chat__goal-mode").waitFor();
-            await assertAnchor(goalSamples);
-            const cancelSamples = sampleAnchor();
-            await textarea.press("Escape");
-            await page.locator(".agent-chat__goal-mode").waitFor({ state: "hidden" });
-            await assertAnchor(cancelSamples);
+            for (const coalesced of [false, true]) {
+              if (coalesced) {
+                const expansionSamples = sampleAnchor();
+                await textarea.fill(expandedDraft);
+                await assertAnchor(expansionSamples);
+              }
+              const goalSamples = sampleAnchor();
+              if (coalesced) {
+                // Both composer resizes can precede the next transcript observation.
+                await textarea.evaluate((element) => {
+                  const input = element as HTMLTextAreaElement;
+                  input.value = "/goal";
+                  input.dispatchEvent(new Event("input", { bubbles: true }));
+                  input.dispatchEvent(
+                    new KeyboardEvent("keydown", {
+                      key: "Enter",
+                      bubbles: true,
+                      cancelable: true,
+                    }),
+                  );
+                });
+              } else {
+                await textarea.fill("/goal");
+                await textarea.press("Enter");
+              }
+              await page.locator(".agent-chat__goal-mode").waitFor();
+              await assertAnchor(goalSamples);
+              await expect
+                .poll(() => readPositionRailGeometry(page))
+                .toMatchObject({ atEnd: true });
+              await expect
+                .poll(() => page.locator(".chat-scroll-to-bottom").getAttribute("data-visible"))
+                .toBe("false");
+              await captureUiProof(
+                suite,
+                page,
+                "rail-goal-resize",
+                coalesced ? "coalesced.png" : "native.png",
+              );
+              const cancelSamples = sampleAnchor();
+              await textarea.press("Escape");
+              await page.locator(".agent-chat__goal-mode").waitFor({ state: "hidden" });
+              await assertAnchor(cancelSamples);
+            }
             await gateway.setOnline(false);
             await gateway.closeLatest();
-            await page.locator('.agent-chat__composer-status[data-tone="info"]').waitFor();
+            await page.locator(".agent-chat__input--offline").waitFor();
             const queuedTexts = ["Review the next checkpoint", "Check the supporting notes"];
             for (const text of queuedTexts) {
               const queueSamples = sampleAnchor();
@@ -333,10 +406,30 @@ suite.define(() => {
               await page.locator(".chat-queue__item", { hasText: text }).waitFor();
               await assertAnchor(queueSamples, true);
             }
+            // Without docked progress, use a shorter window to reach the same rail cutoff.
+            await page.setViewportSize({ width: 1440, height: 600 });
+            // Window resizing moves the rail; only subsequent composer changes retain its anchor.
+            const resizedAnchor = await track.evaluate(
+              (element, index) =>
+                new Promise<{ track: number; tick: number }>((resolve) => {
+                  const observer = new ResizeObserver(() => {
+                    observer.disconnect();
+                    requestAnimationFrame(() => {
+                      const tick = element.querySelectorAll(".chat-position-rail__tick")[index]!;
+                      resolve({
+                        track: element.getBoundingClientRect().top,
+                        tick: tick.getBoundingClientRect().top,
+                      });
+                    });
+                  });
+                  observer.observe(element.closest(".chat-main__conversation")!);
+                }),
+              anchorIndex,
+            );
             const shortTranscriptSamples = sampleAnchor();
             await textarea.fill("Keep the complete review draft available.\n".repeat(12));
             await track.waitFor({ state: "hidden" });
-            await assertAnchor(shortTranscriptSamples, true);
+            await assertAnchor(shortTranscriptSamples, true, resizedAnchor);
             const transcriptContentHeight = () =>
               page.locator(".chat-thread").evaluate((element) => {
                 const style = getComputedStyle(element);
@@ -359,6 +452,7 @@ suite.define(() => {
                 .click();
             }
             await expect.poll(() => page.locator(".chat-queue__item").count()).toBe(0);
+            await page.setViewportSize({ width: 1440, height: 900 });
             await track.waitFor({ state: "visible" });
             await expect
               .poll(transcriptContentHeight)
@@ -421,6 +515,11 @@ suite.define(() => {
             );
           await expect.poll(() => preview.textContent()).toContain(`checkpoint ${count}:`);
           await expect.poll(previewClearsComposer).toBe(true);
+          const previewBounds = (await preview.boundingBox())!;
+          expect(previewBounds.x).toBeGreaterThanOrEqual(transcriptBounds.x);
+          expect(previewBounds.x + previewBounds.width).toBeLessThanOrEqual(
+            transcriptBounds.x + transcriptBounds.width,
+          );
           await markers.last().press("Escape");
           // The button is already visible; avoid locator hover's extra scrollIntoView.
           const point = await markers.last().evaluate((element) => {
@@ -469,10 +568,8 @@ suite.define(() => {
           await page.setViewportSize({ width: 390, height: 844 });
           await track.waitFor({ state: "hidden" });
           if (count === 80 && direction === "ltr") {
-            const transcript = page.locator(".chat-thread");
-            await transcript.hover();
-            await page.mouse.wheel(0, -30000);
-            await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
+            await waitForChatScrollIdle(page);
+            await scrollChatThreadToTop(page);
             await page.setViewportSize({ width: 1440, height: 1000 });
             await track.waitFor();
             await expect

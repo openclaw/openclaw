@@ -20,6 +20,7 @@ import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
+import { createReadToolDefinition } from "./tools/read.js";
 
 const API_KEY = process.env.ANTHROPIC_API_KEY?.trim() ?? "";
 const LIVE = isLiveTestEnabled() && API_KEY.length > 0;
@@ -61,9 +62,6 @@ function createResourceLoader(handlers: ExtensionHandlers = new Map()): Resource
     getSkills: () => ({ skills: [], diagnostics: [] }),
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => undefined,
-    getAppendSystemPrompt: () => [],
     extendResources: () => {},
     reload: async () => {},
   };
@@ -116,15 +114,13 @@ async function resolveLiveModel(
 
 async function createLiveSession(
   options: {
-    tools?: string[];
-    customTools?: ToolDefinition[];
+    customTools?: (cwd: string) => ToolDefinition[];
     handlers?: ExtensionHandlers;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "openclaw-agent-session-live-"));
   tempRoots.push(root);
   const cwd = join(root, "workspace");
-  const agentDir = join(root, "agent");
   const modelsPath = join(root, "models.json");
   await mkdir(cwd, { recursive: true });
   const authStorage = AuthStorage.inMemory();
@@ -139,16 +135,15 @@ async function createLiveSession(
       provider: { timeoutMs: PROVIDER_TIMEOUT_MS, maxRetryDelayMs: 0 },
     },
   });
+  const customTools = options.customTools?.(cwd) ?? [];
   const { session } = await createAgentSession({
+    systemPrompt: "Follow the user's instructions and use the supplied tools when requested.",
     cwd,
-    agentDir,
     model,
     thinkingLevel: "off",
-    noTools: "builtin",
-    tools: options.tools,
-    customTools: options.customTools,
+    tools: customTools.map((tool) => tool.name),
+    customTools,
     resourceLoader: createResourceLoader(options.handlers),
-    authStorage,
     modelRegistry,
     sessionManager,
     settingsManager,
@@ -187,7 +182,9 @@ describeLive("AgentSession live", () => {
       const secret = "fixture-live-tool-result-secret-0123456789";
       const marker = "VISIBLE_TOOL_RESULT_7319";
       registerSecretValueForRedaction(secret);
-      const { session, sessionManager, cwd } = await createLiveSession({ tools: ["read"] });
+      const { session, sessionManager, cwd } = await createLiveSession({
+        customTools: (workspace) => [createReadToolDefinition(workspace)],
+      });
       guardSessionManager(sessionManager, { config: {}, allowedToolNames: ["read"] });
       const fixtureName = "credential-fixture.txt";
       const fixturePath = join(cwd, fixtureName);
@@ -259,7 +256,7 @@ describeLive("AgentSession live", () => {
           };
         },
       };
-      const { session } = await createLiveSession({ customTools: [echoTool] });
+      const { session } = await createLiveSession({ customTools: () => [echoTool] });
 
       await session.prompt(
         "Call live_echo exactly once with text OK. After its result, reply with exactly OK.",

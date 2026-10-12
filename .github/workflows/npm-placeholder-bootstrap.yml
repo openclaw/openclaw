@@ -24,7 +24,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
 
 jobs:
   plan:
@@ -367,7 +367,7 @@ jobs:
                 echo "- \`${package_name}\`"
               done <<< "$created"
               echo
-              echo "Configure each package's trusted publisher for repository \`openclaw/openclaw\`, workflow \`plugin-npm-release.yml\`, and environment \`npm-release\`."
+              echo "Configure each package's trusted publisher for repository \`openclaw/openclaw\`, workflow \`plugin-npm-release.yml\`, and environment \`npm-publish\`."
             else
               echo "- None."
             fi
@@ -376,7 +376,7 @@ jobs:
             existing="$(jq -r '[.results[] | select(.newPackage == false) | .packageName] | .[]' "$results")"
             if [[ -n "$existing" ]]; then
               while IFS= read -r package_name; do
-                echo "- Inspect \`${package_name}\` trusted-publisher configuration for \`plugin-npm-release.yml\` / \`npm-release\`."
+                echo "- Inspect \`${package_name}\` trusted-publisher configuration for \`plugin-npm-release.yml\` / \`npm-publish\`."
               done <<< "$existing"
             else
               echo "- None."

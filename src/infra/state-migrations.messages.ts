@@ -2,6 +2,7 @@ import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import type {
   LegacyStateMigrationStepPlan,
   LegacyStateMigrationStepReceipt,
@@ -24,23 +25,35 @@ export function formatStartupMigrationFailure(errors: readonly string[]): string
   ].join("\n");
 }
 
-let startupMigrationWarning: string | undefined;
+let startupMigrationDetails: string | undefined;
+
+function formatStartupMigrationDetails(warnings: readonly string[]): string {
+  return sanitizeTerminalText(
+    redactSensitiveText([...new Set(warnings)].map((warning) => `- ${warning}`).join("\n"), {
+      mode: "tools",
+    }),
+  );
+}
+
+function boundStartupMigrationDetails(details: string): string {
+  return truncateWithMarker(details, 2000, {
+    marker: "… (see startup log)",
+    reserve: 20,
+    trimEnd: true,
+  });
+}
 
 /** The running Gateway owns this boot fact; status and Doctor must not rerun migrations to infer it. */
 export function recordStartupMigrationWarnings(warnings: readonly string[]): void {
   if (warnings.length === 0) {
     return;
   }
-  const details = sanitizeTerminalText(
-    redactSensitiveText([...new Set(warnings)].map((warning) => `- ${warning}`).join("\n"), {
-      mode: "tools",
-    }),
-  );
+  const details = formatStartupMigrationDetails(warnings);
   // Keep this boot fact until restart: a repeated preflight can skip already-checked migrations.
   // Bound model-visible diagnostics; the startup log retains the full redacted report.
-  const summary = `${truncateWithMarker(details, 2000, { marker: "… (see startup log)", reserve: 20, trimEnd: true })}\n${STARTUP_MIGRATION_FOLLOW_UP}`;
-  if (startupMigrationWarning !== summary) {
-    startupMigrationWarning = summary;
+  const summary = boundStartupMigrationDetails(details);
+  if (startupMigrationDetails !== summary) {
+    startupMigrationDetails = summary;
     createSubsystemLogger("state-migrations").warn(
       `Startup migration warnings; continuing with degraded state.\n${details}\n${STARTUP_MIGRATION_FOLLOW_UP}`,
     );
@@ -48,13 +61,20 @@ export function recordStartupMigrationWarnings(warnings: readonly string[]): voi
 }
 
 export function readStartupMigrationWarning(includeSensitive = true): string | undefined {
+  // Admission owns preparation outcomes; pending work is not a retained migration failure.
+  const admissionWarnings = listAgentDatabaseAdmissionRefusals()
+    .filter((refusal) => refusal.code !== "agent-database-inspection-pending")
+    .map((refusal) => `${refusal.reason}\n${refusal.repairHint}`);
+  const details = [startupMigrationDetails, formatStartupMigrationDetails(admissionWarnings)]
+    .filter(Boolean)
+    .join("\n");
+  if (!details) {
+    return undefined;
+  }
   // Migration errors can contain host paths; read-only status keeps only the repair hint.
-  return (
-    startupMigrationWarning &&
-    (includeSensitive
-      ? startupMigrationWarning
-      : `Startup migrations need attention. ${STARTUP_MIGRATION_FOLLOW_UP}`)
-  );
+  return includeSensitive
+    ? `${boundStartupMigrationDetails(details)}\n${STARTUP_MIGRATION_FOLLOW_UP}`
+    : `Startup migrations need attention. ${STARTUP_MIGRATION_FOLLOW_UP}`;
 }
 
 export function mergeNotices(sources: NoticeSource[]): string[] {
@@ -108,12 +128,17 @@ export class DoctorStateMigrationRefusalError extends Error {
 
   constructor(stepReceipts: readonly LegacyStateMigrationStepReceipt[]) {
     const refused = stepReceipts.filter((receipt) => receipt.outcome === "refused");
+    const isBlocked = (receipt: LegacyStateMigrationStepReceipt) =>
+      receipt.refusal?.code === "blocked-by-prior-refusal" ||
+      receipt.refusal?.code === "blocked-by-agent-database-refusal";
     const failureFacts = normalizeUpdateFailureFacts(
-      refused.flatMap((receipt) =>
-        receipt.refusal
-          ? [{ check: receipt.id, code: receipt.refusal.code, message: receipt.refusal.message }]
-          : [],
-      ),
+      refused
+        .toSorted((left, right) => Number(isBlocked(left)) - Number(isBlocked(right)))
+        .flatMap((receipt) =>
+          receipt.refusal
+            ? [{ check: receipt.id, code: receipt.refusal.code, message: receipt.refusal.message }]
+            : [],
+        ),
     );
     const onlyAgentOwnershipRefusals =
       refused.length > 0 &&

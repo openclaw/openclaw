@@ -4,9 +4,10 @@ import {
   ModelSelectionLockedError,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import {
-  getSessionEntry,
-  patchSessionEntry,
+  getSessionEntryAsync,
+  prepareSessionEntryPatch,
   resolveStorePath,
+  type SessionEntrySourceAuthority,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   isCodexAppServerNativeAuthProfile,
@@ -25,7 +26,7 @@ import {
 import {
   resolveCodexAppServerRequestModelSelection,
   resolveCodexBindingModelProviderFallback,
-} from "./app-server/thread-lifecycle.js";
+} from "./app-server/thread-model-selection.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 
 type ActiveTurn = {
@@ -125,41 +126,45 @@ export async function steerCodexConversationTurn(params: {
   return { steered: true, message: "Sent steer message to Codex." };
 }
 
-export async function setCodexConversationModel(params: {
+export async function setCodexConversationModel(input: {
   identity: CodexAppServerBindingIdentity;
   bindingStore: CodexAppServerBindingStore;
   binding: CodexAppServerThreadBinding | undefined;
   model: string;
-  pluginConfig?: unknown;
   agentDir?: string;
   config?: CodexAppServerBindingLookup["config"];
   storePath?: string;
   assertCurrent: () => void;
+  assertCommitAllowed?: SessionEntrySourceAuthority;
 }): Promise<string> {
+  const params = { ...input };
   const model = params.model.trim();
   if (!model) {
     return "Usage: /codex model <model>";
   }
-  const lookup = buildBindingLookup(params);
+  const lookup = buildCodexConversationAgentLookup(params);
   params.assertCurrent();
+  const assertCommitAllowed = params.assertCommitAllowed ?? params.assertCurrent;
   const binding = requirePreparedThreadBinding(params.binding);
   if (binding.connectionScope === "supervision") {
     throw new ModelSelectionLockedError();
   }
-  const modelProvider = resolveConversationControlModelProvider({
+  const modelProvider = await resolveThreadRequestModelProvider({
     authProfileId: binding.authProfileId,
-    bindingModel: binding.model,
-    bindingModelProvider: binding.modelProvider,
-    currentModel: model,
+    modelProvider: resolveCodexBindingModelProviderFallback({
+      bindingModel: binding.model,
+      bindingModelProvider: binding.modelProvider,
+      currentModel: model,
+    }),
     ...lookup,
   });
-  const modelSelection = resolveCodexAppServerRequestModelSelection({
+  const modelSelection = await resolveCodexAppServerRequestModelSelection({
     model,
     modelProvider,
     authProfileId: binding.authProfileId,
     ...lookup,
   });
-  const nextModelProvider = normalizeCodexAppServerBindingModelProvider({
+  const nextModelProvider = await normalizeCodexAppServerBindingModelProvider({
     authProfileId: binding.authProfileId,
     modelProvider: modelSelection.modelProvider,
     ...lookup,
@@ -174,7 +179,7 @@ export async function setCodexConversationModel(params: {
   if (identity.kind === "session" && identity.sessionKey) {
     // SessionEntry owns the desired model; retain the loaded binding until
     // lifecycle reconciliation can rotate its native generation safely.
-    const updated = await patchSessionEntry({
+    const updated = await prepareSessionEntryPatch({
       agentId: identity.agentId,
       storePath:
         params.storePath ??
@@ -182,8 +187,10 @@ export async function setCodexConversationModel(params: {
       sessionKey: identity.sessionKey,
       requireWriteSuccess: true,
       replaceEntry: true,
-      assertCommitAllowed: params.assertCurrent,
-      update: (entry) => {
+      authority: params.assertCommitAllowed
+        ? { kind: "source", source: params.assertCommitAllowed }
+        : { kind: "host", assertCurrent: params.assertCurrent },
+      prepare: (entry) => {
         if (entry.sessionId !== identity.sessionId) {
           throw new Error("Codex session changed while applying the model selection.");
         }
@@ -222,7 +229,7 @@ export async function setCodexConversationModel(params: {
         modelProvider: nextModelProvider,
         ...projectionPatch,
       },
-      params.assertCurrent,
+      assertCommitAllowed,
     );
   }
   return `Codex model set to ${formatCodexDisplayText(nextModel)}.`;
@@ -233,9 +240,6 @@ export async function setCodexConversationFastMode(params: {
   bindingStore: CodexAppServerBindingStore;
   binding: CodexAppServerThreadBinding | undefined;
   enabled?: boolean;
-  pluginConfig?: unknown;
-  agentDir?: string;
-  config?: CodexAppServerBindingLookup["config"];
   assertCurrent: () => void;
 }): Promise<string> {
   params.assertCurrent();
@@ -261,6 +265,7 @@ export async function setCodexConversationPermissions(params: {
   config?: CodexAppServerBindingLookup["config"];
   storePath?: string;
   assertCurrent: () => void;
+  sourceAuthority?: SessionEntrySourceAuthority;
   session: { agentId: string; sessionId: string; sessionKey: string };
 }): Promise<string> {
   params.assertCurrent();
@@ -270,7 +275,7 @@ export async function setCodexConversationPermissions(params: {
       agentId: params.session.agentId,
     });
   if (!params.mode) {
-    const entry = getSessionEntry({
+    const entry = await getSessionEntryAsync({
       agentId: params.session.agentId,
       hydrateSkillPromptRefs: false,
       readConsistency: "latest",
@@ -283,14 +288,16 @@ export async function setCodexConversationPermissions(params: {
     }
     return `Codex permissions: ${formatPermissionsMode(entry.permissionMode)}.`;
   }
-  const updated = await patchSessionEntry({
+  const updated = await prepareSessionEntryPatch({
     agentId: params.session.agentId,
     storePath,
     sessionKey: params.session.sessionKey,
     requireWriteSuccess: true,
     replaceEntry: true,
-    assertCommitAllowed: params.assertCurrent,
-    update: (entry) => {
+    authority: params.sourceAuthority
+      ? { kind: "source", source: params.sourceAuthority }
+      : { kind: "host", assertCurrent: params.assertCurrent },
+    prepare: (entry) => {
       if (entry.sessionId !== params.session.sessionId) {
         throw new Error("Codex session changed while applying the permission mode.");
       }
@@ -306,9 +313,6 @@ export async function setCodexConversationPermissions(params: {
 
 export function parseCodexFastModeArg(arg: string | undefined): boolean | undefined {
   const normalized = arg?.trim().toLowerCase();
-  if (!normalized || normalized === "status") {
-    return undefined;
-  }
   if (normalized === "on" || normalized === "true" || normalized === "fast") {
     return true;
   }
@@ -319,10 +323,7 @@ export function parseCodexFastModeArg(arg: string | undefined): boolean | undefi
 }
 
 export function parseCodexPermissionsModeArg(arg: string | undefined): PermissionsMode | undefined {
-  const normalized = arg?.trim().toLowerCase();
-  if (!normalized || normalized === "status") {
-    return undefined;
-  }
+  const normalized = arg?.trim().toLowerCase() ?? "";
   if (normalized === "yolo" || normalized === "full" || normalized === "full-access") {
     return "yolo";
   }
@@ -357,7 +358,7 @@ async function patchThreadBinding(
   }
 }
 
-function buildBindingLookup(params: {
+export function buildCodexConversationAgentLookup(params: {
   agentDir?: string;
   config?: CodexAppServerBindingLookup["config"];
 }): CodexAppServerBindingLookup {
@@ -368,23 +369,17 @@ function buildBindingLookup(params: {
   };
 }
 
-function resolveConversationControlModelProvider(params: {
-  authProfileId?: string;
-  bindingModel?: string;
-  bindingModelProvider?: string;
-  currentModel?: string;
-  agentDir?: string;
-  config?: CodexAppServerBindingLookup["config"];
-}): string | undefined {
-  const modelProvider = resolveCodexBindingModelProviderFallback({
-    currentModel: params.currentModel,
-    bindingModel: params.bindingModel,
-    bindingModelProvider: params.bindingModelProvider,
-  })?.trim();
+export async function resolveThreadRequestModelProvider(
+  params: CodexAppServerAuthProfileLookup & { modelProvider?: string },
+): Promise<string | undefined> {
+  const modelProvider = params.modelProvider?.trim();
   if (!modelProvider || modelProvider.toLowerCase() === "codex") {
     return undefined;
   }
-  if (isCodexAppServerNativeAuthProfile(params) && modelProvider.toLowerCase() === "openai") {
+  if (
+    modelProvider.toLowerCase() === "openai" &&
+    (await isCodexAppServerNativeAuthProfile(params))
+  ) {
     return undefined;
   }
   return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;

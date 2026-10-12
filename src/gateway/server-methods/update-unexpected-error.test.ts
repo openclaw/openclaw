@@ -7,7 +7,10 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import {
   adoptUpdateCampaignMock,
   cancelManagedServiceUpdateHandoffMock,
+  captureUpdateRunPayload,
+  detectRespawnSupervisorMock,
   invokeUpdateRun,
+  mockGlobalInstallSurface,
   resolveUpdateInstallSurfaceMock,
   resolveStartupInstallStatusMock,
   scheduleGatewayRestartMock,
@@ -17,13 +20,66 @@ import {
 } from "./update.test-harness.js";
 
 describe("update.run unexpected-error diagnostics", () => {
+  it("refuses exhausted Git discovery before adopting a campaign", async () => {
+    const root = "/tmp/openclaw-source";
+    resolveStartupInstallStatusMock.mockResolvedValueOnce({
+      root,
+      installReceipt: null,
+      status: {
+        root,
+        installKind: "git",
+        packageManager: "pnpm",
+        error: {
+          status: "failed",
+          message: "Git update facts unavailable after two probes",
+          timeoutMs: 45_000,
+        },
+      },
+    });
+    const payload = await captureUpdateRunPayload();
+    expect(payload?.result).toMatchObject({ status: "error", reason: "unexpected-error" });
+    expect(adoptUpdateCampaignMock).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+  });
+
+  it("logs a terminal failure at warning level with its public reason", async () => {
+    mockGlobalInstallSurface();
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(
+      new Error("synthetic helper launch failure"),
+    );
+    const logGateway = { warn: vi.fn(), info: vi.fn() };
+    let payload: { runId: string; result: UpdateRunResult } | undefined;
+    await invokeUpdateRun(
+      {},
+      (_ok, response) => {
+        payload = response as typeof payload;
+      },
+      undefined,
+      { logGateway },
+    );
+    const response = expectDefined(payload, "update response");
+    expect(response.result).toMatchObject({
+      status: "error",
+      reason: "managed-service-handoff-failed",
+    });
+    expect(logGateway.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `status=error reason=managed-service-handoff-failed error="Error code=Error"`,
+      ),
+    );
+    expect(logGateway.info).not.toHaveBeenCalledWith(
+      expect.stringContaining("update.run completed"),
+    );
+  });
+
   it("keeps the primary exception when optional history reads fail", async () => {
     const original = Object.assign(new TypeError("campaign admission failed"), { code: "EACCES" });
     adoptUpdateCampaignMock.mockImplementationOnce(() => {
       throw original;
     });
     const historyRead = vi
-      .spyOn(await import("../../infra/update-run-ledger.js"), "getUpdateRun")
+      .spyOn(await import("../../infra/update-run-reader.js"), "getUpdateRunAsync")
       .mockImplementation(() => {
         throw new Error("history lookup failed");
       });
@@ -77,18 +133,30 @@ describe("update.run unexpected-error diagnostics", () => {
       let restoreDiagnosticFailure: (() => void) | undefined;
       transferManagedServiceUpdateHandoffMock.mockImplementationOnce(async () => {
         if (recordingFailure !== "none") {
-          const codec = await import("../../infra/update-run-codec.js");
-          const encode = codec.encodeRun;
-          const write = vi.spyOn(codec, "encodeRun").mockImplementation((record, options) => {
-            const step = record.steps.find((entry) => entry.step === "requested");
-            if (
-              recordingFailure === "state" ? step?.status === "failed" : step?.failureFacts?.length
-            ) {
-              write.mockRestore();
-              throw new Error("diagnostic ledger is read-only");
-            }
-            return encode(record, options);
-          });
+          const worker = await import("../../state/openclaw-state-worker-store.js");
+          const run = worker.runOpenClawStateWorkerOperation;
+          const write = vi
+            .spyOn(worker, "runOpenClawStateWorkerOperation")
+            .mockImplementation((context, operation, options) =>
+              run(
+                context,
+                (scope) =>
+                  operation({
+                    execute: (command, executeOptions) => {
+                      const shouldFail =
+                        recordingFailure === "state"
+                          ? command.type === "updateRuns.recordStep"
+                          : command.type === "updateRuns.recordDiagnostics";
+                      if (shouldFail) {
+                        write.mockRestore();
+                        throw new Error("diagnostic ledger is read-only");
+                      }
+                      return scope.execute(command, executeOptions);
+                    },
+                  }),
+                options,
+              ),
+            );
           restoreDiagnosticFailure = () => write.mockRestore();
         }
         throw error;
@@ -121,6 +189,7 @@ describe("update.run unexpected-error diagnostics", () => {
               location: "src/infra/update-managed-service-handoff.ts:42:7",
               message: expect.stringContaining("Connection refused"),
             }),
+            expect.objectContaining({ code: "handoff-permission-denied" }),
           ],
         }),
       );
@@ -276,8 +345,13 @@ describe("update.run unexpected-error diagnostics", () => {
         expect(JSON.stringify(recordedRun)).not.toContain(privateText);
         expect(report.body).not.toContain(privateText);
       }
-      expect(logGateway.warn).toHaveBeenCalledOnce();
+      expect(logGateway.warn).toHaveBeenCalledTimes(2);
       expect(logGateway.warn).toHaveBeenCalledWith(expect.stringContaining("EACCES"));
+      expect(logGateway.warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `status=error reason=unexpected-error error="Error code=EACCES exitCode=1"`,
+        ),
+      );
     },
   );
 });

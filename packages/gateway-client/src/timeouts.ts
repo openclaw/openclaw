@@ -1,11 +1,4 @@
-function parsePositiveTimeoutSetting(value: string): number | undefined {
-  const trimmed = value.trim();
-  if (!/^\+?\d+$/u.test(trimmed)) {
-    return undefined;
-  }
-  const parsed = Number(trimmed);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
-}
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 
 function isTestRuntimeEnv(env: NodeJS.ProcessEnv): boolean {
   return (
@@ -14,12 +7,7 @@ function isTestRuntimeEnv(env: NodeJS.ProcessEnv): boolean {
     env.VITEST_POOL_ID !== undefined ||
     env.VITEST_WORKER_ID !== undefined ||
     env.NODE_ENV === "test" ||
-    (env !== process.env &&
-      (process.env.VITEST === "true" ||
-        process.env.VITEST === "1" ||
-        process.env.VITEST_POOL_ID !== undefined ||
-        process.env.VITEST_WORKER_ID !== undefined ||
-        process.env.NODE_ENV === "test"))
+    (env !== process.env && isTestRuntimeEnv(process.env))
   );
 }
 
@@ -105,7 +93,7 @@ export function getConnectChallengeTimeoutMsFromEnv(
 ): number | undefined {
   const raw = env.OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS;
   if (raw) {
-    const parsed = parsePositiveTimeoutSetting(raw);
+    const parsed = parseStrictPositiveInteger(raw);
     if (parsed !== undefined) {
       return resolveSafeTimeoutDelayMs(parsed);
     }
@@ -154,7 +142,7 @@ export function resolvePreauthHandshakeTimeoutMs(params?: {
     env.OPENCLAW_HANDSHAKE_TIMEOUT_MS ||
     (isTestRuntimeEnv(env) ? env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS : undefined);
   if (configuredTimeout) {
-    const parsed = parsePositiveTimeoutSetting(configuredTimeout);
+    const parsed = parseStrictPositiveInteger(configuredTimeout);
     if (parsed !== undefined) {
       return resolveSafeTimeoutDelayMs(parsed);
     }

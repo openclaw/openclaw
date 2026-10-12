@@ -1,6 +1,16 @@
 import { defineCodexBuildState } from "./build-state.js";
 
 export type CodexCatalogSource = { readonly closed: boolean };
+
+export function hasLiveCodexCatalogSource(sources: ReadonlySet<CodexCatalogSource>): boolean {
+  for (const source of sources) {
+    if (!source.closed) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const getSources = defineCodexBuildState("openclaw.codexCatalogSources", () => ({
   clients: new WeakMap<object, { closed: boolean }>(),
   values: new WeakMap<object, CodexCatalogSource>(),

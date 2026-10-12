@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applySuggestionToQuery,
+  buildDailyCsv,
   buildQuerySuggestions,
   buildSessionsCsv,
   buildUsageFilterOptions,
@@ -78,6 +79,30 @@ it("limits suggestions before matching while preserving raw option spelling", ()
 });
 
 describe("usage query CSV export", () => {
+  it("keeps daily headers aligned with numeric cells", () => {
+    expect(
+      buildDailyCsv([
+        {
+          date: "2026-09-23",
+          input: 1,
+          output: 2,
+          cacheRead: 3,
+          cacheWrite: 4,
+          totalTokens: 10,
+          inputCost: 0,
+          outputCost: -2,
+          cacheReadCost: 3,
+          cacheWriteCost: 4,
+          totalCost: -2,
+          missingCostEntries: 2,
+        },
+      ]),
+    ).toBe(
+      "date,inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,totalTokens,inputCost,outputCost,cacheReadCost,cacheWriteCost,totalCost\n" +
+        "2026-09-23,1,2,3,4,10,0,-2,3,4,-2",
+    );
+  });
+
   it("omits invalid session updated timestamps instead of throwing", () => {
     const csv = buildSessionsCsv([
       {

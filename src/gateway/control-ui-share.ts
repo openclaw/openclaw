@@ -83,21 +83,18 @@ export function resolveControlUiShareOrigin(
   req: IncomingMessage,
   publicOrigin?: string,
 ): string | null {
-  try {
-    const protocol = req.socket instanceof TLSSocket ? "https" : "http";
-    const address = new URL(publicOrigin ?? `${protocol}://${req.headers.host}`);
-    if (
-      !/^https?:$/u.test(address.protocol) ||
-      address.username ||
-      address.password ||
-      address.pathname !== "/" ||
-      address.search ||
-      address.hash
-    ) {
-      return null;
-    }
-    return address.origin;
-  } catch {
+  const protocol = req.socket instanceof TLSSocket ? "https" : "http";
+  const address = URL.parse(publicOrigin ?? `${protocol}://${req.headers.host}`);
+  if (
+    !address ||
+    !/^https?:$/u.test(address.protocol) ||
+    address.username ||
+    address.password ||
+    address.pathname !== "/" ||
+    address.search ||
+    address.hash
+  ) {
     return null;
   }
+  return address.origin;
 }

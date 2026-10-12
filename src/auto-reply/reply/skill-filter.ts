@@ -11,9 +11,6 @@ export function mergeSkillFilters(
   if (!channel || !agent) {
     return channel ?? agent;
   }
-  if (channel.length === 0 || agent.length === 0) {
-    return [];
-  }
   const agentSet = new Set(agent);
   return channel.filter((name) => agentSet.has(name));
 }

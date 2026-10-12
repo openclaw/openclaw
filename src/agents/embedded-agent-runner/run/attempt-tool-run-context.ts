@@ -51,8 +51,10 @@ export function buildEmbeddedAttemptToolRunContext(
     model?: Pick<EmbeddedRunAttemptParams["model"], "provider" | "id">;
     thinkLevel?: ThinkLevel;
     trigger?: EmbeddedRunTrigger;
+    continuesConversation?: boolean;
     jobId?: string;
     memoryFlushWritePath?: string;
+    memoryFlushTools?: RunEmbeddedAgentParams["memoryFlushTools"];
     toolsAllow?: string[];
     forceMessageTool?: boolean;
     swarmCollector?: boolean;
@@ -107,8 +109,10 @@ export function buildEmbeddedAttemptToolRunContext(
       ? { provider: params.model.provider, model: params.model.id }
       : undefined,
     trigger: params.trigger,
+    continuesConversation: params.continuesConversation,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,
+    memoryFlushTools: params.memoryFlushTools,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
     currentInboundAudio,

@@ -174,7 +174,7 @@ configured realtime API key, an `openai` API-key profile, then
 `OPENAI_API_KEY`. With none configured, browser Talk falls back to an OpenClaw
 ChatGPT OAuth profile and exchanges SDP through the Gateway's single-use offer
 broker, so the OAuth token never reaches the browser. A configured Platform
-credential that cannot be resolved fails closed instead of silently falling
+credential that cannot be resolved blocks the request instead of silently falling
 through to OAuth.
 
 iOS client-owned WebRTC and GA Gateway relay, including Android GA realtime,
@@ -210,7 +210,12 @@ Platform-key-only.
 | `realtime.consultRouting`                | -                                           | `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` routes finalized user transcripts through OpenClaw instead.                                                                              |
 | `realtime.instructions`                  | -                                           | Appends provider-facing system instructions to OpenClaw's built-in realtime prompt.                                                                                                                                                                            |
 
-`talk.catalog` exposes canonical provider ids and registry aliases. It exposes each provider's valid modes/transports/brain strategies/realtime audio formats/capability flags. It exposes the runtime-selected readiness result. First-party Talk clients should read that catalog instead of maintaining provider aliases locally. Treat an older Gateway that omits group readiness as unverified rather than definitively unconfigured. Streaming transcription providers are discovered through `talk.catalog.transcription`. The current Gateway relay uses the Voice Call streaming provider config until a dedicated Talk transcription config surface ships.
+Realtime Talk reads `talk.realtime`. If an older installation inherited realtime
+settings from Voice Call, Doctor copies them into Talk while preserving explicit
+Talk settings and backing up the config. Later Voice Call edits no longer change
+realtime Talk. See [Talk realtime migration](/gateway/doctor/config-migrations#talk-realtime-inheritance).
+
+`talk.catalog` exposes primary provider ids and registry aliases. It exposes each provider's valid modes/transports/brain strategies/realtime audio formats/capability flags. It exposes the runtime-selected readiness result. First-party Talk clients should read that catalog instead of maintaining provider aliases locally. Treat an older Gateway that omits group readiness as unverified rather than definitively unconfigured. Streaming transcription providers are discovered through `talk.catalog.transcription`. The current Gateway relay uses the Voice Call streaming provider config until a dedicated Talk transcription config surface ships.
 
 ## Notes
 

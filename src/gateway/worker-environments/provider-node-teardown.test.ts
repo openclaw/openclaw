@@ -5,8 +5,8 @@ import * as support from "./service.test-support.js";
 
 async function disconnectedNodeOwner(environmentId: string, sharedHost: boolean | null = false) {
   const deviceId = `node:${environmentId}`;
-  support.seedReadyNodeDesktop(environmentId);
-  const attached = support.testState.store.transition({
+  await support.seedReadyNodeDesktop(environmentId);
+  const attached = await support.testState.store.transition({
     environmentId,
     from: "ready",
     to: "attached",

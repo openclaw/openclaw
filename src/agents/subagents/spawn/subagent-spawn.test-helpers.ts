@@ -1,14 +1,42 @@
 // Subagent spawn test helpers install mocked runtime seams so sessions_spawn
 // tests can exercise orchestration without real gateway/session-store effects.
 import os from "node:os";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expect, vi } from "vitest";
+import "../../../test-utils/prepare-compiled-subprocesses.js";
+import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../../gateway/method-scopes.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
+import type { RegisterSubagentRunParams } from "../registry/subagent-registry-run-launch-record.js";
 import type {
   RegisterSubagentRunOptions,
-  RegisterSubagentRunParams,
+  SubagentRegistrationScope,
 } from "../registry/subagent-registry.types.js";
+import type { SpawnAcpResult } from "./acp-spawn-result.js";
+
+export function expectFailedAcpSpawn(
+  result: SpawnAcpResult,
+  status?: "error" | "forbidden",
+): Extract<SpawnAcpResult, { status: "error" | "forbidden" }> {
+  if (status) {
+    expect(result.status).toBe(status);
+  } else {
+    expect(result.status).not.toBe("accepted");
+  }
+  if (result.status === "accepted") {
+    throw new Error("Expected ACP spawn to fail");
+  }
+  return result;
+}
+
+export function expectAcceptedAcpSpawn(
+  result: SpawnAcpResult,
+): Extract<SpawnAcpResult, { status: "accepted" }> {
+  expect(result.status).toBe("accepted");
+  if (result.status !== "accepted") {
+    throw new Error("Expected ACP spawn to be accepted");
+  }
+  return result;
+}
 
 type MockFn = (...args: unknown[]) => unknown;
 type MockImplementationTarget = {
@@ -24,8 +52,53 @@ type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks"> &
     >
   >;
 type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
-  resetSubagentRegistryForTests: MockFn;
+  resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 };
+
+export function createSubagentRegistrationScopeForTest(
+  overrides: Partial<SubagentRegistrationScope> &
+    Pick<SubagentRegistrationScope, "settleFailedLaunch">,
+): SubagentRegistrationScope {
+  return {
+    canLaunch: () => true,
+    canAcceptLaunch: () => true,
+    canAbortAcceptedRun: () => true,
+    canCleanupSession: () => true,
+    canRetireReservation: () => true,
+    waitForClaim: () => undefined,
+    waitForRetirementPublication: () => undefined,
+    ...overrides,
+  };
+}
+
+export function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+export function latestMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[mock.mock.calls.length - 1];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+export function expectRegisteredSubagentRun(
+  mock: unknown,
+  expected: Partial<RegisterSubagentRunParams>,
+  options: Pick<RegisterSubagentRunOptions, "assertCurrent"> = {
+    assertCurrent: expect.any(Function),
+  },
+) {
+  expect(mock).toHaveBeenCalledWith(
+    expect.objectContaining(expected),
+    expect.objectContaining(options),
+  );
+}
 
 /** Orchestration fixtures assume a supported model; support policy has its own owner tests. */
 export async function supportedSpawnModelChoice(
@@ -102,12 +175,7 @@ export function createConfigOverride(overrides?: Record<string, unknown>) {
       defaults: {
         workspace: os.tmpdir(),
       },
-      list: [
-        {
-          id: "main",
-          workspace: "/tmp/workspace-main",
-        },
-      ],
+      entries: { main: { workspace: "/tmp/workspace-main" } },
     },
     ...overrides,
   });
@@ -131,14 +199,6 @@ export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementa
 
 function identityDeliveryContext(value: unknown) {
   return value;
-}
-
-function createDefaultSessionHelperMocks() {
-  return {
-    resolveMainSessionAlias: () => ({ mainKey: "main", alias: "main" }),
-    resolveInternalSessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",
-    resolveDisplaySessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",
-  };
 }
 
 /** Install an updateSessionStore mock that captures mutations in memory. */
@@ -200,7 +260,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
   forkSessionEntryFromParentMock?: MockFn;
   forkSessionFromParentMock?: MockFn;
   resolveContextEngineMock?: MockFn;
-  resolveParentForkDecisionMock?: MockFn;
   registerSubagentRunMock?: MockFn;
   startQueuedSubagentRunMock?: MockFn;
   settleFailedQueuedSubagentLaunchMock?: MockFn;
@@ -208,7 +267,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
   emitSessionLifecycleEventMock?: MockFn;
   hookRunner?: HookRunner;
   resolveAgentConfig?: (cfg: Record<string, unknown>, agentId: string) => unknown;
-  resolveAgentWorkspaceDir?: (cfg: Record<string, unknown>, agentId: string) => string;
   getSubagentDepthFromSessionStore?: (sessionKey: string, opts?: unknown) => number;
   countActiveRunsForSession?: (sessionKey: string) => number;
   listSwarmRunsForGroup?: (groupId: string) => unknown[];
@@ -254,11 +312,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
       };
     }>;
   };
-  resolveConversationDeliveryTarget?: (params: {
-    channel?: string;
-    conversationId?: string | number;
-    parentConversationId?: string | number;
-  }) => { to?: string; threadId?: string };
   workspaceDir?: string;
   sessionStorePath?: string;
   resetModules?: boolean;
@@ -269,13 +322,14 @@ export async function loadSubagentSpawnModuleForTest(params: {
     vi.resetModules();
   }
 
-  const resetSubagentRegistryForTests = vi.fn();
+  const resetSubagentRegistryForTests = vi.fn(async () => {});
 
   vi.doMock("../../provider-model-normalization.runtime.js", () => ({
     normalizeProviderModelIdWithRuntime: () => undefined,
   }));
 
-  vi.doMock("./subagent-spawn.runtime.js", () => ({
+  vi.doMock("./subagent-spawn.runtime.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./subagent-spawn.runtime.js")>()),
     callGateway: (opts: unknown) => params.callGatewayMock(opts),
     dispatchGatewayMethodInProcess: (...args: unknown[]) =>
       params.dispatchGatewayMethodInProcessMock?.(...args),
@@ -310,15 +364,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
           },
         };
       }),
-    forkSessionFromParent:
-      params.forkSessionFromParentMock ??
-      (async () => ({ sessionId: "forked-session-id", sessionFile: "/tmp/forked-session.jsonl" })),
     getGlobalHookRunner: () => params.hookRunner ?? { hasHooks: () => false },
     emitSessionLifecycleEvent: (...args: unknown[]) =>
       params.emitSessionLifecycleEventMock?.(...args),
-    formatThinkingLevels: (levels: string[]) => levels.join(", "),
-    normalizeThinkLevel: (level: unknown) => normalizeOptionalString(level),
-    DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT: 5,
     ADMIN_SCOPE: "operator.admin",
     AGENT_LANE_SUBAGENT: "subagent",
     getRuntimeConfig: () =>
@@ -327,48 +375,19 @@ export async function loadSubagentSpawnModuleForTest(params: {
     prepareModelChoice: params.prepareModelChoiceMock ?? supportedSpawnModelChoice,
     loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
       ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
-    loadSessionStore: params.loadSessionStoreMock ?? (() => ({})),
+    readSessionEntryReadOnlyInWorker: async (
+      scope: { storePath?: string; sessionKey: string },
+      assertCurrent: () => void,
+    ) => {
+      assertCurrent();
+      const store = (params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore;
+      const value = await Promise.resolve(store[scope.sessionKey]);
+      assertCurrent();
+      return value;
+    },
     ensureContextEnginesInitialized:
       params.ensureContextEnginesInitializedMock ?? (() => undefined),
     resolveContextEngine: params.resolveContextEngineMock ?? (async () => ({})),
-    resolveParentForkDecision:
-      params.resolveParentForkDecisionMock ??
-      (async (forkParams: { parentEntry?: { totalTokens?: unknown } }) => {
-        const maxTokens = 100_000;
-        const parentTokens =
-          typeof forkParams.parentEntry?.totalTokens === "number" &&
-          Number.isFinite(forkParams.parentEntry.totalTokens)
-            ? Math.floor(forkParams.parentEntry.totalTokens)
-            : undefined;
-        if (maxTokens > 0 && typeof parentTokens === "number" && parentTokens > maxTokens) {
-          return {
-            status: "skip",
-            reason: "parent-too-large",
-            maxTokens,
-            parentTokens,
-            message: `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); starting with isolated context instead.`,
-          };
-        }
-        return {
-          status: "fork",
-          maxTokens,
-          ...(typeof parentTokens === "number" ? { parentTokens } : {}),
-        };
-      }),
-    mergeSessionEntry: (
-      current: Record<string, unknown> | undefined,
-      next: Record<string, unknown>,
-    ) => ({
-      ...current,
-      ...next,
-    }),
-    updateSessionStore:
-      params.updateSessionStoreMock ??
-      (async (_storePath: string, mutator: SessionStoreMutator) => {
-        const store: SessionStore = {};
-        await mutator(store);
-        return store;
-      }),
     // Real scope resolver: spawn's admin-tier pinning depends on params-aware
     // sessions.patch policy, so a stub here would hide policy regressions.
     resolveLeastPrivilegeOperatorScopesForMethod,
@@ -392,6 +411,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
       });
       return updated ?? null;
     },
+    listSessionBindingsBySessionAsync: async (sessionKey: string) =>
+      params.getSessionBindingService?.().listBySession(sessionKey) ?? [],
     getSessionBindingService:
       params.getSessionBindingService ??
       (() => ({
@@ -405,13 +426,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
         },
         listBySession: () => [],
       })),
-    resolveConversationDeliveryTarget:
-      params.resolveConversationDeliveryTarget ??
-      ((targetParams: { channel?: string; conversationId?: string | number }) => ({
-        to: targetParams.conversationId
-          ? `channel:${String(targetParams.conversationId)}`
-          : undefined,
-      })),
     mergeDeliveryContext: (
       primary?: Record<string, unknown>,
       fallback?: Record<string, unknown>,
@@ -419,19 +433,17 @@ export async function loadSubagentSpawnModuleForTest(params: {
       ...fallback,
       ...primary,
     }),
-    resolveGatewaySessionStoreTarget: (targetParams: { key: string }) => ({
+    resolveGatewaySessionStoreTargetInWorker: async (targetParams: { key: string }) => ({
       agentId: "main",
       storePath: params.sessionStorePath ?? "/tmp/subagent-spawn-model-session.json",
       canonicalKey: targetParams.key,
       storeKeys: [targetParams.key],
+      store: params.loadSessionStoreMock?.(params.sessionStorePath) ?? {},
     }),
     normalizeDeliveryContext: identityDeliveryContext,
     resolveAgentConfig: params.resolveAgentConfig ?? (() => undefined),
-    resolveAgentWorkspaceDir:
-      params.resolveAgentWorkspaceDir ?? (() => params.workspaceDir ?? os.tmpdir()),
     resolveSandboxRuntimeStatus:
       params.resolveSandboxRuntimeStatus ?? (() => ({ sandboxed: false })),
-    ...createDefaultSessionHelperMocks(),
   }));
 
   vi.doMock("./subagent-depth.js", () => ({
@@ -439,43 +451,40 @@ export async function loadSubagentSpawnModuleForTest(params: {
   }));
 
   vi.doMock("../registry/subagent-registry.js", () => ({
-    completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
+    completeCollectorLaunchCleanup:
+      params.completeCollectorLaunchCleanupMock ?? vi.fn(async () => {}),
     countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
     registerSubagentRun: vi.fn(
-      (record: RegisterSubagentRunParams, options?: RegisterSubagentRunOptions) => {
+      async (record: RegisterSubagentRunParams, options?: RegisterSubagentRunOptions) => {
         if (!record.queued || !options?.retainOwnership) {
-          return params.registerSubagentRunMock?.(record, options);
+          await params.registerSubagentRunMock?.(record, options);
+          return;
         }
         let retained = false;
-        const result = params.registerSubagentRunMock?.(record, {
+        await params.registerSubagentRunMock?.(record, {
           ...options,
           retainOwnership(scope) {
             retained = true;
             options.retainOwnership?.(scope);
           },
         } satisfies RegisterSubagentRunOptions);
-        return Promise.resolve(result).then(() => {
-          // Successful queued registration transfers custody; stricter test scopes win.
-          if (!retained) {
-            options.retainOwnership?.({
-              canLaunch: () => true,
-              canAcceptLaunch: () => true,
-              canCleanupSession: () => true,
-              canRetireReservation: () => true,
-              waitForClaim: () => undefined,
+        // Successful queued registration transfers custody; stricter test scopes win.
+        if (!retained) {
+          options.retainOwnership?.(
+            createSubagentRegistrationScopeForTest({
               settleFailedLaunch: async (error) => {
-                params.settleFailedQueuedSubagentLaunchMock?.(record.runId, error);
+                await params.settleFailedQueuedSubagentLaunchMock?.(record.runId, error);
               },
-            });
-          }
-        });
+            }),
+          );
+        }
       },
     ),
     resetSubagentRegistryForTests,
     settleFailedQueuedSubagentLaunch:
-      params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(() => true),
-    startQueuedSubagentRun: params.startQueuedSubagentRunMock ?? vi.fn(() => true),
+      params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(async () => true),
+    startQueuedSubagentRun: params.startQueuedSubagentRunMock ?? vi.fn(async () => true),
   }));
 
   const subagentSpawnModule = await import("./subagent-spawn.js");
@@ -484,3 +493,93 @@ export async function loadSubagentSpawnModuleForTest(params: {
     resetSubagentRegistryForTests,
   };
 }
+
+type InheritedSpawnPreferenceCase = {
+  name: string;
+  task: string;
+  requesterState: Readonly<Record<string, unknown>>;
+  preferenceKey: "thinkingLevel" | "fastMode";
+  expected: string | boolean;
+  agentDefaults?: Readonly<Record<string, unknown>>;
+  requesterAgent?: Readonly<Record<string, unknown>>;
+  collect?: boolean;
+  requesterRunId?: string;
+  requesterThinkingLevel?: ThinkLevel;
+  thinkingOverride?: string;
+};
+
+const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
+  {
+    name: "inherits active-turn Ultra instead of the stored session thinking level",
+    task: "inherit active thinking",
+    requesterState: { thinkingLevel: "medium" },
+    requesterThinkingLevel: "ultra",
+    preferenceKey: "thinkingLevel",
+    expected: "ultra",
+  },
+  {
+    name: "inherits active-turn off instead of a stored Ultra override",
+    task: "inherit active thinking off",
+    requesterState: { thinkingLevel: "ultra" },
+    requesterThinkingLevel: "off",
+    preferenceKey: "thinkingLevel",
+    expected: "off",
+  },
+  {
+    name: "keeps explicit child thinking ahead of active-turn Ultra",
+    task: "override active thinking",
+    requesterState: { thinkingLevel: "medium" },
+    requesterThinkingLevel: "ultra",
+    thinkingOverride: "low",
+    preferenceKey: "thinkingLevel",
+    expected: "low",
+  },
+  {
+    name: "inherits requester fast mode for collector children",
+    task: "inherit fast mode",
+    requesterState: { fastMode: "auto" },
+    preferenceKey: "fastMode",
+    expected: "auto",
+    collect: true,
+    requesterRunId: "parent-run",
+  },
+  {
+    name: "inherits requester fast mode for ordinary children with default Swarm config",
+    task: "inherit ordinary fast mode",
+    requesterState: { fastMode: true },
+    preferenceKey: "fastMode",
+    expected: true,
+  },
+  {
+    name: "persists inherited requester thinking off",
+    task: "inherit thinking off",
+    requesterState: { thinkingLevel: "off" },
+    preferenceKey: "thinkingLevel",
+    expected: "off",
+  },
+  {
+    name: "inherits global thinkingDefault when caller session and agent have no stored thinking",
+    task: "inherit global thinking default",
+    requesterState: {},
+    agentDefaults: { thinkingDefault: "medium" },
+    preferenceKey: "thinkingLevel",
+    expected: "medium",
+  },
+  {
+    name: "applies requester-agent subagent thinking before active-turn thinking",
+    task: "requester policy thinking",
+    requesterState: { thinkingLevel: "high" },
+    requesterAgent: { subagents: { thinking: "medium" } },
+    requesterThinkingLevel: "ultra",
+    preferenceKey: "thinkingLevel",
+    expected: "medium",
+  },
+];
+
+export const inheritedSpawnCases = {
+  preferences: inheritedSpawnPreferenceCases,
+  permissionModes: [
+    { label: "default", mode: undefined },
+    { label: "guarded", mode: "guarded" },
+  ] as const,
+};

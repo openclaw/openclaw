@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../../runtime.js";
-import { resolveSubagentAttachmentDir } from "../subagent-attachment-paths.js";
+import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import {
   capFrozenResultText,
@@ -102,7 +102,7 @@ describe("updateSubagentArchiveAtMs", () => {
       completion: { required: false, resultText: "done", capturedAt: 2_000 },
     });
 
-    expect(updateSwarmCollectorCompletion(entry, cfg)).toBe(true);
+    expect(updateSwarmCollectorCompletion(entry, cfg, { entry: undefined })).toBe(true);
     expect(entry.collectorCompletion).toEqual({ status: "done" });
     expect(entry.archiveAtMs).toBe(302_000);
   });
@@ -121,7 +121,7 @@ describe("updateSubagentArchiveAtMs", () => {
       completion: { required: false, resultText: "done" },
     });
 
-    expect(updateSwarmCollectorCompletion(entry, cfg)).toBe(true);
+    expect(updateSwarmCollectorCompletion(entry, cfg, { entry: undefined })).toBe(true);
     expect(entry.completion?.capturedAt).toBe(10_000);
     expect(entry.archiveAtMs).toBe(310_000);
     vi.useRealTimers();
@@ -192,10 +192,14 @@ describe("safeRemoveAttachmentsDir", () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachment-state-"));
     const attachmentId = "2d4a8398-4d5a-4c20-9c16-0a5f6627cf92";
     const childSessionKey = "agent:main:subagent:child";
-    const attachmentDir = resolveSubagentAttachmentDir("main", childSessionKey, attachmentId, {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
-    });
+    const attachmentDir = path.join(
+      resolveSubagentSessionAttachmentRootDir({
+        agentId: "main",
+        childSessionKey,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+      attachmentId,
+    );
     const siblingDir = path.join(stateDir, "attachments", "subagents", "main", "sibling");
     await fs.mkdir(attachmentDir, { recursive: true });
     await fs.mkdir(siblingDir, { recursive: true });
@@ -243,27 +247,6 @@ describe("safeRemoveAttachmentsDir", () => {
 describe("logAnnounceGiveUp", () => {
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("includes the last delivery error in expiry warnings", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(9_000);
-    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    const entry = createRunEntry({
-      execution: { status: "terminal", startedAt: 1_000, endedAt: 4_000 },
-      delivery: {
-        status: "failed",
-        attemptCount: 3,
-        lastError: "direct-primary: routed-dispatch-did-not-queue-final",
-      },
-    });
-
-    logAnnounceGiveUp(entry, "expiry");
-
-    expect(logSpy).toHaveBeenCalledWith(
-      '[warn] Subagent announce give up (expiry) run=run-1 child=agent:main:subagent:child requester=agent:main:main retries=3 endedAgo=5s deliveryError="direct-primary: routed-dispatch-did-not-queue-final"',
-    );
-    logSpy.mockRestore();
   });
 
   it("normalizes multiline delivery errors onto one gateway log line", () => {

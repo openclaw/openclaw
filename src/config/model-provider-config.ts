@@ -51,6 +51,9 @@ export function createConfiguredProviderModelResolver<T extends { id: string }>(
   const canonicalize = (id: string) =>
     stripSelfProviderModelPrefix(provider, id) !== id ? id : canonicalizeModelId?.(id).trim() || id;
   let configuredModels: Map<string, T> | undefined;
+  let configuredModelsComplete = false;
+  let hasFallback = false;
+  let legacyRows: [string, T][] | undefined;
   return (modelId) => {
     const id = modelId.trim();
     if (!configuredModels) {
@@ -69,6 +72,7 @@ export function createConfiguredProviderModelResolver<T extends { id: string }>(
       for (const [candidate, row] of exactRows) {
         configuredModels.set(candidate, row);
       }
+      configuredModelsComplete = true;
     }
     const rows = configuredModels;
     const canonicalId = canonicalize(id);
@@ -78,9 +82,28 @@ export function createConfiguredProviderModelResolver<T extends { id: string }>(
     }
     // Declared equivalents precede legacy self-provider prefixes. The selected
     // namespace itself is never stripped or merged with a legacy row.
-    for (const [candidate, row] of rows) {
-      const legacy = stripSelfProviderModelPrefix(provider, candidate);
-      if (legacy !== candidate && (legacy === id || canonicalize(legacy.trim()) === canonicalId)) {
+    // One-shot callers keep the original short-circuit scan. Repeated fallbacks
+    // prepare only a completed index; callbacks can expose a partial one.
+    if (configuredModelsComplete && !legacyRows) {
+      if (hasFallback) {
+        legacyRows = [];
+        for (const [candidate, row] of rows) {
+          const legacy = stripSelfProviderModelPrefix(provider, candidate);
+          if (legacy !== candidate) {
+            legacyRows.push([legacy, row]);
+          }
+        }
+      }
+      hasFallback = true;
+    }
+    // A callback can reenter and prepare the projection while this scan is live.
+    const fallbackRows = legacyRows;
+    for (const [candidate, row] of fallbackRows ?? rows) {
+      const legacy = fallbackRows ? candidate : stripSelfProviderModelPrefix(provider, candidate);
+      if (
+        (fallbackRows !== undefined || legacy !== candidate) &&
+        (legacy === id || canonicalize(legacy.trim()) === canonicalId)
+      ) {
         return row;
       }
     }

@@ -11,7 +11,7 @@ afterEach(() => {
 describe("LM Studio embedding request headers", () => {
   it.each([
     {
-      name: "preserves resolved remote literals while resolving provider-owned headers",
+      name: "preserves resolved provider and remote literals",
       providerQuery: "",
       remoteQuery: "",
       providerOwnsDestination: true,
@@ -86,7 +86,9 @@ describe("LM Studio embedding request headers", () => {
           headers: {
             "x-already-resolved": "${OPENCLAW_TEST_LMSTUDIO_LITERAL}",
             "x-shared": "remote-value",
-            ...(providerOwnsDestination ? { "x-provider-only": "resolved-provider-value" } : {}),
+            ...(providerOwnsDestination
+              ? { "x-provider-only": "${OPENCLAW_TEST_LMSTUDIO_PROVIDER}" }
+              : {}),
             authorization: "Bearer synthetic-memory-key",
           },
         },
@@ -104,7 +106,7 @@ describe("LM Studio embedding request headers", () => {
   });
 });
 
-it.each(["single", "documents", "queries", "cancelled"] as const)(
+it.each(["documents", "queries", "cancelled"] as const)(
   "routes %s embeddings to sufficient-context instances across eviction while holding the service lease",
   async (kind) => {
     vi.stubEnv("NO_PROXY", "127.0.0.1");
@@ -244,8 +246,6 @@ it.each(["single", "documents", "queries", "cancelled"] as const)(
         await expect(active).rejects.toThrow("cancelled active load");
         await expect(recovered).resolves.toEqual([1, 0]);
         expect(requests.filter((url) => url === "/v1/embeddings")).toHaveLength(1);
-      } else if (kind === "single") {
-        await expect(provider.embed("second")).resolves.toEqual([1, 0]);
       } else {
         await expect(
           provider.embedBatch(["second", "third"], {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { enableNodeSqliteKyselyStatementCache } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import { runWithSqliteBusyTimeout, setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
@@ -12,16 +13,63 @@ export type ExistingSqliteTransaction = <T>(
   options?: SqliteTransactionOptions,
 ) => T;
 
+type ExistingSqliteReadOptions = {
+  busyTimeoutMs: number;
+  assertIdentity: () => void;
+  validate?: (database: DatabaseSync) => void;
+};
+type ExistingSqliteOperation<T> = (
+  database: DatabaseSync,
+  transact: ExistingSqliteTransaction,
+) => T;
+type RetainedReader = { database?: DatabaseSync };
+
+/** Reuse an admitted handle; every operation still owns its read snapshot. */
+export function createExistingSqliteRollbackReader(
+  pathname: string,
+  options: ExistingSqliteReadOptions,
+) {
+  const retained: RetainedReader = {};
+  let disposed = false;
+  const close = () => {
+    const database = retained.database;
+    retained.database = undefined;
+    if (database?.isOpen) {
+      database.close();
+    }
+  };
+  return Object.assign(
+    <T>(operation: ExistingSqliteOperation<T>): T => {
+      if (disposed || retained.database?.isTransaction) {
+        throw new Error("Existing SQLite reader is closed or already in use.");
+      }
+      try {
+        return withExistingSqliteRollbackDatabase(
+          pathname,
+          { ...options, write: false },
+          operation,
+          retained,
+        );
+      } catch (error) {
+        close();
+        throw error;
+      }
+    },
+    {
+      [Symbol.dispose]() {
+        disposed = true;
+        close();
+      },
+    },
+  );
+}
+
 /** Keep a SQLite-owned read lock until the existing writer has acquired its lock. */
 export function withExistingSqliteRollbackDatabase<T>(
   pathname: string,
-  options: {
-    write: boolean;
-    busyTimeoutMs: number;
-    assertIdentity: () => void;
-    validate: (database: DatabaseSync) => void;
-  },
-  operation: (database: DatabaseSync, transact: ExistingSqliteTransaction) => T,
+  options: ExistingSqliteReadOptions & { write: boolean },
+  operation: ExistingSqliteOperation<T>,
+  retained?: RetainedReader,
 ): T {
   options.assertIdentity();
   // SQLite may discard an orphan journal for a zero-page database. An existing
@@ -29,7 +77,12 @@ export function withExistingSqliteRollbackDatabase<T>(
   if (fs.statSync(pathname).size === 0) {
     throw new Error("Existing SQLite storage is empty.");
   }
-  const reader = openNodeSqliteDatabase(pathname, { readOnly: true });
+  const existing = retained?.database;
+  const reader = existing ?? openNodeSqliteDatabase(pathname, { readOnly: true });
+  if (retained && !retained.database) {
+    enableNodeSqliteKyselyStatementCache(reader);
+    retained.database = reader;
+  }
   let writer: DatabaseSync | undefined;
   let snapshotOpen = false;
   const releaseReader = () => {
@@ -39,17 +92,21 @@ export function withExistingSqliteRollbackDatabase<T>(
     try {
       // Bun's close_v2 can retain prepared statements until GC. End the native
       // snapshot explicitly so closing cannot leave its SHARED lock alive.
-      if (snapshotOpen) {
+      if (snapshotOpen && reader.isTransaction) {
+        reader.exec("PRAGMA locking_mode = NORMAL"); // sqlite-allow-raw -- Release locks even when snapshot validation failed.
         reader.exec("ROLLBACK"); // sqlite-allow-raw -- End our read-only snapshot before closing.
-        snapshotOpen = false;
       }
+      snapshotOpen = false;
     } finally {
-      reader.close();
+      if (!retained) {
+        reader.close();
+      }
     }
   };
   try {
-    options.assertIdentity();
-    setSqliteBusyTimeout(reader, options.busyTimeoutMs);
+    if (!existing) {
+      setSqliteBusyTimeout(reader, options.busyTimeoutMs);
+    }
     // Disable WAL shared-memory admission before the first pager read. A foreign
     // WAL database cannot acquire an exclusive writer lock through a read-only
     // connection, so SQLite refuses without creating WAL/SHM coordination files.
@@ -66,31 +123,25 @@ export function withExistingSqliteRollbackDatabase<T>(
     // Keep the snapshot open, but let ROLLBACK release its lock without waiting
     // for Bun to finalize retained statements after close_v2.
     reader.exec("PRAGMA locking_mode = NORMAL"); // sqlite-allow-raw -- Restore connection-local lock policy.
-    options.validate(reader);
-    options.assertIdentity();
+    if (!existing) {
+      options.validate?.(reader);
+    }
     if (!options.write) {
       return operation(reader, () => {
         throw new Error("Read-only SQLite observation cannot admit a writer.");
       });
     }
     writer = openNodeSqliteDatabase(resolveExistingSqliteFileUri(pathname));
-    options.assertIdentity();
     setSqliteBusyTimeout(writer, options.busyTimeoutMs);
     const database = writer;
-    let admitted = false;
     return operation(database, (write, transactionOptions) => {
-      if (admitted && !database.isTransaction) {
-        throw new Error("Existing SQLite write admission has already settled.");
-      }
-      options.assertIdentity();
       // Waiting while our reader blocks another writer's commit would deadlock.
       // Try once, then release the snapshot on BUSY; no recovery is attempted.
       return runWithSqliteBusyTimeout(database, 0, (restore) =>
         runSqliteImmediateTransactionSync(
           database,
           () => {
-            if (!admitted) {
-              admitted = true;
+            if (snapshotOpen) {
               releaseReader();
             }
             restore();

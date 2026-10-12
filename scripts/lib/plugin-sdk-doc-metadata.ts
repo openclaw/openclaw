@@ -60,16 +60,13 @@ export const pluginSdkDocMetadata = {
   "channel-ingress-runtime": {
     category: "channel",
   },
-  "channel-reply-pipeline": {
+  "channel-outbound": {
     category: "channel",
   },
   "channel-setup": {
     category: "channel",
   },
   "channel-dm-policy": {
-    category: "channel",
-  },
-  "command-auth": {
     category: "channel",
   },
   "command-status": {

@@ -1,30 +1,19 @@
-import { html, type ReactiveController, type TemplateResult } from "lit";
-import type { OpenClawLitElement } from "../lit/openclaw-element.ts";
-import { icons } from "./icons.ts";
+import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
+import type { PanelLifecycleController, SolidPanelController } from "./solid-panel-controller.ts";
 
-type FullscreenControllerOptions = {
-  section: () => HTMLElement | null;
-  onChange: () => void;
-  onError?: (message: string) => void;
-  enterLabel: () => string;
-  exitLabel: () => string;
-  unavailableLabel: () => string;
-  errorMessage: (error: unknown) => string;
-  buttonClass: string;
-  buttonSelector: string;
-  iconClass: string;
-};
-
-export class FullscreenController implements ReactiveController {
+export class DesktopFullscreenController implements PanelLifecycleController {
   active = false;
   errorText: string | null = null;
 
   private restoreFocus = false;
-  private readonly onFullscreenChange = () => this.handleFullscreenChange();
 
   constructor(
-    private readonly host: OpenClawLitElement,
-    private readonly options: FullscreenControllerOptions,
+    private readonly host: Pick<
+      SolidPanelController,
+      "renderRoot" | "addController" | "requestUpdate" | "updateComplete"
+    >,
+    private readonly onChange: () => void,
   ) {
     host.addController(this);
   }
@@ -36,79 +25,57 @@ export class FullscreenController implements ReactiveController {
   hostDisconnected(): void {
     document.removeEventListener("fullscreenchange", this.onFullscreenChange);
     this.restoreFocus = false;
-    if (this.fullscreenElement() === this.options.section()) {
+    if (this.ownsFullscreen()) {
       void document.exitFullscreen().catch(() => {});
     }
   }
 
-  renderButton(): TemplateResult {
-    const supported = this.supported();
-    const label = this.active
-      ? this.options.exitLabel()
-      : supported
-        ? this.options.enterLabel()
-        : this.options.unavailableLabel();
-    return html`<openclaw-tooltip .content=${label}>
-      <button
-        class=${this.options.buttonClass}
-        type="button"
-        aria-label=${label}
-        aria-pressed=${this.active ? "true" : "false"}
-        aria-disabled=${supported ? "false" : "true"}
-        @click=${() => void this.toggle()}
-      >
-        <span class=${this.options.iconClass} aria-hidden="true">
-          ${this.active ? icons.minimize : icons.maximize}
-        </span>
-      </button>
-    </openclaw-tooltip>`;
-  }
-
-  async exit(): Promise<void> {
-    if (!this.active) {
-      return;
-    }
+  private async exit(): Promise<void> {
     try {
       await document.exitFullscreen();
     } catch (error) {
-      this.setError(this.options.errorMessage(error));
+      this.setError(t("desktop.errors.fullscreenFailed", { error: formatUiError(error) }));
     }
   }
 
-  private fullscreenElement(): Element | null {
-    const shadowFullscreen =
-      this.host.renderRoot instanceof ShadowRoot ? this.host.renderRoot.fullscreenElement : null;
-    return shadowFullscreen ?? document.fullscreenElement;
+  private ownsFullscreen(): boolean {
+    const section = this.host.renderRoot.querySelector<HTMLElement>("section.bp");
+    if (!section) {
+      return false;
+    }
+    return document.fullscreenElement === section;
   }
 
-  private supported(): boolean {
+  supported(): boolean {
     return document.fullscreenEnabled && typeof Element.prototype.requestFullscreen === "function";
   }
 
-  private handleFullscreenChange(): void {
+  private readonly onFullscreenChange = (): void => {
     const wasActive = this.active;
-    this.active = this.fullscreenElement() === this.options.section();
-    this.options.onChange();
+    this.active = this.ownsFullscreen();
+    this.onChange();
     this.host.requestUpdate();
     if (wasActive && !this.active && this.restoreFocus) {
       // Escape and browser controls exit outside the component. Restore focus so
       // keyboard operators return to the control that changed the viewport.
       void this.host.updateComplete.then(() => {
-        this.host.renderRoot.querySelector<HTMLButtonElement>(this.options.buttonSelector)?.focus();
+        this.host.renderRoot
+          .querySelector<HTMLButtonElement>(".desktop-fullscreen-button")
+          ?.focus();
         this.restoreFocus = false;
       });
     }
-  }
+  };
 
-  private async toggle(): Promise<void> {
+  async toggle(): Promise<void> {
     this.setError(null);
     if (this.active) {
       await this.exit();
       return;
     }
-    const section = this.options.section();
+    const section = this.host.renderRoot.querySelector<HTMLElement>("section.bp");
     if (!section || !this.supported()) {
-      this.setError(this.options.unavailableLabel());
+      this.setError(t("desktop.fullscreenUnavailable"));
       return;
     }
     this.restoreFocus = true;
@@ -116,15 +83,12 @@ export class FullscreenController implements ReactiveController {
       await section.requestFullscreen();
     } catch (error) {
       this.restoreFocus = false;
-      this.setError(this.options.errorMessage(error));
+      this.setError(t("desktop.errors.fullscreenFailed", { error: formatUiError(error) }));
     }
   }
 
   private setError(errorText: string | null): void {
     this.errorText = errorText;
-    if (errorText) {
-      this.options.onError?.(errorText);
-    }
     this.host.requestUpdate();
   }
 }

@@ -220,8 +220,7 @@ suite.define(() => {
         const uploadError = page.locator(".tp-upload-card__error");
         await expect.poll(async () => await uploadError.textContent()).toContain(recoveryMessage);
         const displayedError = await uploadError.textContent();
-        expect(displayedError).toContain("[redacted path]");
-        expect(displayedError).not.toContain(privatePath);
+        expect(displayedError).toContain(privatePath);
         expect(displayedError).not.toContain("synthetic-terminal-secret-value");
         expect(await page.getByRole("button", { name: "Retry" }).isVisible()).toBe(true);
         expect((await gateway.getRequests("terminal.input")).length).toBe(0);
@@ -267,7 +266,7 @@ suite.define(() => {
         expect(pickedInput.data).not.toMatch(/[\r\n]/);
 
         await gateway.setMethodResponse("terminal.upload", { path: stagedDropPath, size: 3 });
-        await page.locator("wa-tab-panel.tp-viewport").evaluate((target) => {
+        await page.locator(".tp-viewport").evaluate((target) => {
           const transfer = new DataTransfer();
           transfer.items.add(new File([new Uint8Array([1, 2, 3])], "dropped.png"));
           target.dispatchEvent(

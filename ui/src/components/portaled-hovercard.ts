@@ -59,6 +59,11 @@ export class PortaledHovercardController {
     private readonly dismiss: () => void = close,
   ) {}
 
+  readonly handleCardPointerLeave = () => {
+    this.pointerOverCard = false;
+    this.scheduleClose();
+  };
+
   readonly handleTriggerKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
       this.dismiss();
@@ -182,7 +187,8 @@ export class PortaledHovercardController {
       clearPortaledHovercardTrigger(this.trigger);
     }
     this.trigger = trigger;
-    markPortaledHovercardTrigger(trigger);
+    trigger.setAttribute("aria-haspopup", "dialog");
+    trigger.setAttribute("aria-expanded", "false");
     this.observePresentation();
   }
 
@@ -255,22 +261,67 @@ export class PortaledHovercardController {
     this.clearCard();
     this.anchor = anchor;
     this.card = card;
-    this.attachCardHoldListeners(card);
-    this.placement = placement;
-    this.unmountContents = unmountContents ?? null;
-    this.stopPositioning = mountPortaledHovercard({
-      anchor,
-      trigger: this.trigger ?? anchor,
-      card,
-      placement,
-      observeVisualViewport,
-    });
-  }
-
-  private attachCardHoldListeners(card: HTMLDivElement): void {
+    card.addEventListener("keydown", this.handleCardKeyDown);
     card.addEventListener("pointerenter", this.handleCardPointerEnter);
     card.addEventListener("focusin", this.handleCardFocusIn);
     card.addEventListener("focusout", this.handleCardFocusOut);
+    this.placement = placement;
+    this.unmountContents = unmountContents ?? null;
+    const trigger = this.trigger ?? anchor;
+    // A modal drawer makes body siblings inert. Keep its card inside the same
+    // dialog, then use the existing menu top layer to escape clipping and stacking.
+    let owner: Element = document.body;
+    for (let ancestor: Element | null = anchor; ancestor; ancestor = composedParent(ancestor)) {
+      if (ancestor.localName === "openclaw-modal-dialog") {
+        owner = ancestor;
+        break;
+      }
+    }
+    owner.append(card);
+    promoteToPopoverTopLayer(card);
+    trigger.setAttribute("aria-controls", card.id);
+    trigger.setAttribute("aria-expanded", "true");
+    const position = () => positionPortaledHovercard(anchor, card, placement);
+    let frame: number | null = null;
+    const schedulePosition = () => {
+      if (frame === null) {
+        frame = requestAnimationFrame(() => {
+          frame = null;
+          position();
+        });
+      }
+    };
+    const handleScroll = (event: Event) => {
+      const source = event.composedPath()[0];
+      if (source === window || source === document) {
+        schedulePosition();
+        return;
+      }
+      // Transcript auto-scroll and scrolling inside the card cannot move a
+      // sidebar trigger. Only a scroll in its rendered ancestry needs geometry.
+      for (let node: Element | null = anchor; node; node = composedParent(node)) {
+        if (node === source) {
+          schedulePosition();
+          return;
+        }
+      }
+    };
+    window.addEventListener("resize", schedulePosition);
+    window.addEventListener("scroll", handleScroll, true);
+    if (observeVisualViewport) {
+      window.visualViewport?.addEventListener("resize", schedulePosition);
+      window.visualViewport?.addEventListener("scroll", schedulePosition);
+    }
+    position();
+    this.stopPositioning = () => {
+      if (frame !== null) {
+        cancelAnimationFrame(frame);
+      }
+      window.removeEventListener("resize", schedulePosition);
+      window.removeEventListener("scroll", handleScroll, true);
+      window.visualViewport?.removeEventListener("resize", schedulePosition);
+      window.visualViewport?.removeEventListener("scroll", schedulePosition);
+    };
   }
 
   clearCard(exitDurationMs = 0): void {
@@ -345,11 +396,6 @@ export class PortaledHovercardController {
   }
 }
 
-function markPortaledHovercardTrigger(trigger: HTMLElement): void {
-  trigger.setAttribute("aria-haspopup", "dialog");
-  trigger.setAttribute("aria-expanded", "false");
-}
-
 function clearPortaledHovercardTrigger(trigger: HTMLElement | null): void {
   trigger?.removeAttribute("aria-controls");
   trigger?.removeAttribute("aria-expanded");
@@ -363,75 +409,6 @@ export function createPortaledHovercard(id: string, className: string): HTMLDivE
   card.dataset.open = "true";
   card.setAttribute("role", "dialog");
   return card;
-}
-
-function mountPortaledHovercard(params: {
-  anchor: HTMLElement;
-  trigger: HTMLElement;
-  card: HTMLDivElement;
-  placement: PortaledHovercardPlacement;
-  observeVisualViewport?: boolean;
-}): () => void {
-  // A modal drawer makes body siblings inert. Keep its card inside the same
-  // dialog, then use the existing menu top layer to escape clipping and stacking.
-  let ancestor: Element | null = params.anchor;
-  let owner: Element = document.body;
-  while (ancestor) {
-    if (ancestor.localName === "openclaw-modal-dialog") {
-      owner = ancestor;
-      break;
-    }
-    const root = ancestor.getRootNode();
-    ancestor =
-      ancestor.assignedSlot ??
-      ancestor.parentElement ??
-      (root instanceof ShadowRoot ? root.host : null);
-  }
-  owner.append(params.card);
-  promoteToPopoverTopLayer(params.card);
-  params.trigger.setAttribute("aria-controls", params.card.id);
-  params.trigger.setAttribute("aria-expanded", "true");
-  const position = () => positionPortaledHovercard(params.anchor, params.card, params.placement);
-  let frame: number | null = null;
-  const schedulePosition = () => {
-    if (frame === null) {
-      frame = requestAnimationFrame(() => {
-        frame = null;
-        position();
-      });
-    }
-  };
-  const handleScroll = (event: Event) => {
-    const source = event.composedPath()[0];
-    if (source === window || source === document) {
-      schedulePosition();
-      return;
-    }
-    // Transcript auto-scroll and scrolling inside the card cannot move a
-    // sidebar trigger. Only a scroll in its rendered ancestry needs geometry.
-    for (let node: Element | null = params.anchor; node; node = composedParent(node)) {
-      if (node === source) {
-        schedulePosition();
-        return;
-      }
-    }
-  };
-  window.addEventListener("resize", schedulePosition);
-  window.addEventListener("scroll", handleScroll, true);
-  if (params.observeVisualViewport !== false) {
-    window.visualViewport?.addEventListener("resize", schedulePosition);
-    window.visualViewport?.addEventListener("scroll", schedulePosition);
-  }
-  position();
-  return () => {
-    if (frame !== null) {
-      cancelAnimationFrame(frame);
-    }
-    window.removeEventListener("resize", schedulePosition);
-    window.removeEventListener("scroll", handleScroll, true);
-    window.visualViewport?.removeEventListener("resize", schedulePosition);
-    window.visualViewport?.removeEventListener("scroll", schedulePosition);
-  };
 }
 
 function positionPortaledHovercard(

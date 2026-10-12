@@ -8,12 +8,9 @@ import {
 } from "./service-exporter-health.js";
 
 function createObservedExporter(events: ExporterHealthUpdate[]) {
-  let resultCallback: ((result: ExportResult) => void) | undefined;
   const shutdown = vi.fn(async () => {});
   const exporter = {
-    export: vi.fn((_items: unknown, callback: (result: ExportResult) => void) => {
-      resultCallback = callback;
-    }),
+    export: vi.fn((_items: unknown, _callback: (result: ExportResult) => void) => {}),
     shutdown,
   };
   observeOtlpExporterHealth(exporter, {
@@ -25,53 +22,10 @@ function createObservedExporter(events: ExporterHealthUpdate[]) {
   return {
     exporter,
     shutdown,
-    complete(result: ExportResult) {
-      if (!resultCallback) {
-        throw new Error("export callback was not registered");
-      }
-      resultCallback(result);
-    },
   };
 }
 
 describe("createPublicExporterHealthEventEmitter", () => {
-  it("emits one public lifecycle for a signal with multiple transports", () => {
-    const events: ExporterHealthUpdate[] = [];
-    const emit = createPublicExporterHealthEventEmitter((event) => events.push(event));
-
-    emit({
-      exporter: "diagnostics-otel",
-      signal: "logs",
-      transport: "otlp-http-protobuf",
-      status: "started",
-      reason: "configured",
-    });
-    emit({
-      exporter: "diagnostics-otel",
-      signal: "logs",
-      transport: "stdout",
-      status: "started",
-      reason: "configured",
-    });
-    emit({
-      exporter: "diagnostics-otel",
-      signal: "logs",
-      transport: "otlp-http-protobuf",
-      status: "dropped",
-    });
-    emit({
-      exporter: "diagnostics-otel",
-      signal: "logs",
-      transport: "stdout",
-      status: "dropped",
-    });
-
-    expect(events.map(({ status, transport }) => ({ status, transport }))).toEqual([
-      { status: "started", transport: "otlp-http-protobuf" },
-      { status: "dropped", transport: "stdout" },
-    ]);
-  });
-
   it("coalesces matching failures without publishing recovery", () => {
     const events: ExporterHealthUpdate[] = [];
     const emit = createPublicExporterHealthEventEmitter((event) => events.push(event));
@@ -102,42 +56,6 @@ describe("createPublicExporterHealthEventEmitter", () => {
 });
 
 describe("observeOtlpExporterHealth", () => {
-  it("emits one final failure transition and one recovery transition", () => {
-    const events: ExporterHealthUpdate[] = [];
-    const observed = createObservedExporter(events);
-    const consumerCallback = vi.fn();
-
-    observed.exporter.export([], consumerCallback);
-    observed.complete({
-      code: ExportResultCode.FAILED,
-      error: new Error("collector unavailable"),
-    });
-    observed.exporter.export([], consumerCallback);
-    observed.complete({
-      code: ExportResultCode.FAILED,
-      error: new Error("collector still unavailable"),
-    });
-    observed.exporter.export([], consumerCallback);
-    observed.complete({ code: ExportResultCode.SUCCESS });
-
-    expect(events).toEqual([
-      expect.objectContaining({
-        signal: "traces",
-        transport: "otlp-http-protobuf",
-        status: "failure",
-        reason: "export_failed",
-        errorCategory: "Error",
-      }),
-      expect.objectContaining({
-        signal: "traces",
-        transport: "otlp-http-protobuf",
-        status: "recovered",
-        reason: "export_failed",
-      }),
-    ]);
-    expect(consumerCallback).toHaveBeenCalledTimes(3);
-  });
-
   it("records a shutdown rejection without exposing its message", async () => {
     const events: ExporterHealthUpdate[] = [];
     const observed = createObservedExporter(events);

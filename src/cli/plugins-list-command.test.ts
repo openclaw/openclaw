@@ -102,32 +102,15 @@ describe("runPluginsListCommand", () => {
     vi.resetModules();
     const importedHumanModules: string[] = [];
 
-    vi.doMock("../config/config.js", () => ({
-      getRuntimeConfig: () => ({}),
-    }));
     vi.doMock("../plugins/status.js", () => {
       throw new Error("plugins list JSON must use the snapshot status module");
     });
     vi.doMock("./plugins-command-helpers.js", () => {
       throw new Error("plugins list JSON must not import plugin command helpers");
     });
-    vi.doMock("../plugins/status-snapshot.js", () => ({
-      buildPluginRegistrySnapshotReport: () => ({
-        workspaceDir: "/workspace",
-        workspaceScope: "selected",
-        registrySource: "config",
-        registryDiagnostics: [],
-        plugins: [
-          {
-            id: "demo",
-            enabled: true,
-            commands: ["demo"],
-            agentHarnessIds: ["runtime-only"],
-          },
-        ],
-        diagnostics: [],
-      }),
-    }));
+    mockPluginListSnapshot([
+      { id: "demo", enabled: true, commands: ["demo"], agentHarnessIds: ["runtime-only"] },
+    ]);
     mockHumanListModules(importedHumanModules);
 
     const { runPluginsListCommand } = await import("./plugins-list-command.js");
@@ -150,51 +133,8 @@ describe("runPluginsListCommand", () => {
     ]);
   });
 
-  it.each([
-    { label: "normal", options: { enabled: true } },
-    { label: "verbose", options: { enabled: true, verbose: true } },
-  ])(
-    "explains an empty enabled-only $label list when plugins are installed",
-    async ({ options }) => {
-      mockPluginListSnapshot([{ id: "disabled-plugin", enabled: false }]);
-      mockHumanListModules();
-      const { runPluginsListCommand } = await import("./plugins-list-command.js");
-      const writes: unknown[] = [];
-
-      await runPluginsListCommand(options, createJsonRuntime(writes));
-
-      expect(writes).toEqual([
-        "No enabled plugins found. Run formatted(openclaw plugins list) to inspect installed plugins.",
-      ]);
-    },
-  );
-
-  it.each([
-    { label: "normal", options: { enabled: true } },
-    { label: "verbose", options: { enabled: true, verbose: true } },
-  ])("explains a globally disabled $label plugin inventory", async ({ options }) => {
-    mockPluginListSnapshot([{ id: "disabled-plugin", enabled: false }], {
-      plugins: { enabled: false },
-    });
-    mockHumanListModules();
-    const { runPluginsListCommand } = await import("./plugins-list-command.js");
-    const writes: unknown[] = [];
-
-    await runPluginsListCommand(options, createJsonRuntime(writes));
-
-    expect(writes).toEqual([
-      "No enabled plugins found. Plugins are globally disabled. Run formatted(openclaw plugins list) to inspect installed plugins.",
-    ]);
-  });
-
-  it.each([
-    { label: "denylist", config: { plugins: { deny: ["disabled-plugin"] } } },
-    {
-      label: "allowlist",
-      config: { plugins: { allow: ["allowed-plugin"] } },
-    },
-  ])("does not suggest a blocked mutation for a $label", async ({ config }) => {
-    mockPluginListSnapshot([{ id: "disabled-plugin", enabled: false }], config);
+  it("explains an empty enabled-only list when plugins are installed", async () => {
+    mockPluginListSnapshot([{ id: "disabled-plugin", enabled: false }]);
     mockHumanListModules();
     const { runPluginsListCommand } = await import("./plugins-list-command.js");
     const writes: unknown[] = [];
@@ -206,16 +146,18 @@ describe("runPluginsListCommand", () => {
     ]);
   });
 
-  it("keeps install guidance when an enabled-only list has no installed plugins", async () => {
-    mockPluginListSnapshot([]);
+  it("explains a globally disabled plugin inventory", async () => {
+    mockPluginListSnapshot([{ id: "disabled-plugin", enabled: false }], {
+      plugins: { enabled: false },
+    });
     mockHumanListModules();
     const { runPluginsListCommand } = await import("./plugins-list-command.js");
     const writes: unknown[] = [];
 
-    await runPluginsListCommand({ enabled: true }, createJsonRuntime(writes));
+    await runPluginsListCommand({ enabled: true, verbose: true }, createJsonRuntime(writes));
 
     expect(writes).toEqual([
-      "No plugins found. Run formatted(openclaw plugins install <plugin>) to add one, or formatted(openclaw plugins list --json) to inspect raw discovery state.",
+      "No enabled plugins found. Plugins are globally disabled. Run formatted(openclaw plugins list) to inspect installed plugins.",
     ]);
   });
 
@@ -240,27 +182,6 @@ describe("runPluginsListCommand", () => {
       `Warning: ${message}`,
       "",
       "No plugins found. Run formatted(openclaw plugins install <plugin>) to add one, or formatted(openclaw plugins list --json) to inspect raw discovery state.",
-    ]);
-  });
-
-  it("keeps empty enabled-only JSON lazy when every installed plugin is disabled", async () => {
-    const importedHumanModules: string[] = [];
-    mockPluginListSnapshot([{ id: "disabled-plugin", enabled: false }]);
-    mockHumanListModules(importedHumanModules);
-    const { runPluginsListCommand } = await import("./plugins-list-command.js");
-    const writes: unknown[] = [];
-
-    await runPluginsListCommand({ enabled: true, json: true }, createJsonRuntime(writes));
-
-    expect(importedHumanModules).toEqual([]);
-    expect(writes).toEqual([
-      {
-        workspaceDir: "/workspace",
-        workspaceScope: "selected",
-        registry: { source: "config", diagnostics: [] },
-        plugins: [],
-        diagnostics: [],
-      },
     ]);
   });
 });

@@ -4,6 +4,7 @@ import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { describe, expect, it, onTestFailed } from "vitest";
 import { GatewayClient } from "../../packages/gateway-client/src/index.js";
+import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
   BUILD_STAMP_FILE,
   resolveGitHead,
@@ -13,7 +14,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
@@ -238,7 +239,11 @@ describe("Gateway Active Memory", () => {
             },
             gateway: { auth: { mode: "token", token } },
             hooks: { enabled: false },
-            models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
+            models: {
+              mode: "replace",
+              catalogRefresh: { enabled: false },
+              providers: { [provider.providerId]: provider.config },
+            },
             memory: { search: { rememberAcrossConversations: false } },
             plugins: {
               allow: ["active-memory", "memory-core", "openai"],
@@ -293,8 +298,12 @@ describe("Gateway Active Memory", () => {
           signal.throwIfAborted();
           await instance.startGateway();
           signal.throwIfAborted();
+          const sessionKey = "agent:main:main";
+          const runId = randomUUID();
           const connected = createDeferred();
+          const terminal = createDeferred<ChatEvent>();
           void connected.promise.catch(() => undefined);
+          void terminal.promise.catch(() => undefined);
           client = new GatewayClient({
             url: instance.url,
             token: instance.gatewayToken,
@@ -310,8 +319,24 @@ describe("Gateway Active Memory", () => {
             },
             onHelloOk: () => connected.resolve(),
             onConnectError: connected.reject,
-            onClose: (code, reason) =>
-              connected.reject(new Error(`Gateway closed during connect (${code}): ${reason}`)),
+            onClose: (code, reason) => {
+              const error = new Error(`Gateway closed during proof (${code}): ${reason}`);
+              connected.reject(error);
+              terminal.reject(error);
+            },
+            onEvent: (event) => {
+              if (event.event !== "chat") {
+                return;
+              }
+              const payload = event.payload as ChatEvent | undefined;
+              if (
+                payload?.runId === runId &&
+                payload.sessionKey === sessionKey &&
+                ["final", "error", "aborted"].includes(payload.state)
+              ) {
+                terminal.resolve(payload);
+              }
+            },
           });
           const abortConnect = () => connected.reject(signal.reason);
           signal.addEventListener("abort", abortConnect, { once: true });
@@ -323,7 +348,6 @@ describe("Gateway Active Memory", () => {
             signal.removeEventListener("abort", abortConnect);
           }
           signal.throwIfAborted();
-          const sessionKey = "agent:main:main";
           phase = "starting main turn";
           // Interactive chat supplies the finalized turn tool authority that recall requires.
           const accepted = await client.request<{ runId: string; status: string }>(
@@ -332,13 +356,18 @@ describe("Gateway Active Memory", () => {
               sessionKey,
               message: "What do I usually have for lunch?",
               deliver: false,
-              idempotencyKey: randomUUID(),
+              idempotencyKey: runId,
             },
             { signal },
           );
           signal.throwIfAborted();
           expect(accepted.status).toBe("started");
+          expect(accepted.runId).toBe(runId);
           phase = "waiting for main reply";
+          // Recall and the main turn use the test budget; agent.wait only checks final settlement.
+          const reply = await withinTest(terminal.promise, signal);
+          expect(reply.state, JSON.stringify(reply)).toBe("final");
+          phase = "waiting for main run settlement";
           const completed = await client.request<{ status: string }>(
             "agent.wait",
             { runId: accepted.runId, timeoutMs: 30_000 },

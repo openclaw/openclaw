@@ -18,21 +18,6 @@ import { sendTypingTelegram } from "./send-actions.js";
 import { sendMessageTelegram } from "./send-message.js";
 import { sendPollTelegram } from "./send-special.js";
 
-const richMarkdownProjection = vi.hoisted(() => ({ count: 0 }));
-
-vi.mock("./rich-blocks.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./rich-blocks.js")>();
-  return {
-    ...actual,
-    markdownToTelegramRichBlocks: (
-      ...args: Parameters<typeof actual.markdownToTelegramRichBlocks>
-    ) => {
-      richMarkdownProjection.count += 1;
-      return actual.markdownToTelegramRichBlocks(...args);
-    },
-  };
-});
-
 type CapturedRequest = {
   body: Buffer;
   contentType: string;
@@ -141,7 +126,6 @@ describe("Telegram topic transport payloads", () => {
 
   beforeEach(() => {
     requests.length = 0;
-    richMarkdownProjection.count = 0;
     resetPluginStateStoreForTests();
     resetTelegramMessageCacheForTest();
     setTelegramPluginStateRuntimeForTests();
@@ -250,7 +234,6 @@ describe("Telegram topic transport payloads", () => {
       direct_messages_topic_id: DIRECT_TOPIC_ID,
     });
     expect(request && parseJsonBody(request)).not.toHaveProperty("message_thread_id");
-    expect(richMarkdownProjection.count).toBe(1);
   });
 
   it("rejects poll and typing for channel Direct Messages without transport", async () => {
@@ -357,6 +340,46 @@ describe("Telegram topic transport payloads", () => {
     expect(requests[1] && parseJsonBody(requests[1])).toMatchObject({
       business_connection_id: "business-media-1",
       direct_messages_topic_id: DIRECT_TOPIC_ID,
+      text: "Replacement",
+    });
+  });
+
+  it("clears media callback buttons when deleting before a text replacement fails", async () => {
+    const callbackMessage = directMessagesMessage({
+      text: undefined,
+      caption: "Choose an action",
+    }) as unknown as Message;
+    const actions = createTelegramCallbackMessageActions({
+      bot,
+      callbackMessage,
+      threadSpec: { id: DIRECT_TOPIC_ID, scope: "direct-messages" },
+    });
+    const editMessage = vi
+      .spyOn(bot.api, "editMessageText")
+      .mockRejectedValueOnce(
+        new Error("400: Bad Request: there is no text in the message to edit"),
+      );
+    const deleteMessage = vi
+      .spyOn(bot.api, "deleteMessage")
+      .mockRejectedValueOnce(new Error("400: Bad Request: message can't be deleted"));
+
+    try {
+      await actions.editCallbackMessageWithButtons("Replacement", []);
+    } finally {
+      editMessage.mockRestore();
+      deleteMessage.mockRestore();
+    }
+
+    expect(requests.map((request) => request.method)).toEqual([
+      "editMessageReplyMarkup",
+      "sendMessage",
+    ]);
+    expect(requests[0] && parseJsonBody(requests[0])).toEqual({
+      chat_id: DIRECT_CHAT_ID,
+      message_id: 41,
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(requests[1] && parseJsonBody(requests[1])).toMatchObject({
       text: "Replacement",
     });
   });

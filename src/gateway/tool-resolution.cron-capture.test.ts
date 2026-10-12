@@ -22,7 +22,8 @@ import {
 } from "../infra/agent-run-registry.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
@@ -98,7 +99,6 @@ describe("MCP automation creator capture", () => {
   }> = [
     { label: "inherited native", toolsAllow: undefined, nativeExec: true, unreadableSchema: false },
     { label: "finite native", toolsAllow: ["exec"], nativeExec: true, unreadableSchema: false },
-    { label: "restricted MCP", toolsAllow: undefined, nativeExec: false, unreadableSchema: false },
     {
       label: "schema-filtered MCP",
       toolsAllow: undefined,
@@ -109,7 +109,7 @@ describe("MCP automation creator capture", () => {
     { label: "native excluded", nativeExec: true, nativeRestriction: "allow" },
   ];
   it.each(cases)(
-    "persists the final $label creator surface",
+    "persists the $label creator authority",
     async ({ toolsAllow, nativeExec, unreadableSchema, nativeRestriction }) => {
       const root = tempDirs.make("openclaw-cli-cron-capture-");
       const storePath = path.join(root, "cron", "jobs.json");
@@ -147,6 +147,8 @@ describe("MCP automation creator capture", () => {
         vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptions").mockReturnValue([tool]);
       }
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: false,
         defaultAgentId: "main",
@@ -229,9 +231,7 @@ describe("MCP automation creator capture", () => {
           execTarget: stored.toolsAllowExecTarget,
         });
         const capturesNativeExec = nativeExec && !nativeRestriction;
-        expect(stored.payload.toolsAllow).toEqual(
-          toolsAllow ?? ["automations", ...(capturesNativeExec ? ["exec"] : [])],
-        );
+        expect(stored.payload.toolsAllow).toEqual(toolsAllow ?? ["*"]);
         expect(stored.toolsAllowExecTarget).toEqual(
           capturesNativeExec ? { version: 1, host: "gateway" } : undefined,
         );

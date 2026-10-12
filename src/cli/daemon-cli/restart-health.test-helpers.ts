@@ -20,7 +20,7 @@ export const monotonicClock = { nowMs: 0 };
 export const sleep = vi.fn(async (ms: number) => {
   monotonicClock.nowMs += ms;
 });
-export const classifyPortListener = vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(
+export const classifyPortListener = vi.fn<(_listener: unknown) => PortListenerKind>(
   () => "gateway",
 );
 export const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>();
@@ -31,6 +31,7 @@ export function gatewayResponseError(message: string): GatewayProtocolRequestErr
   return error;
 }
 export const requestStartupProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
+export const requestReadinessProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
 
 vi.mock("../../gateway/local-http-probe.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../gateway/local-http-probe.js")>();
@@ -42,8 +43,21 @@ vi.mock("../../gateway/local-http-probe.js", async (importOriginal) => {
       const probe = actual.createConfiguredGatewayLocalProbe(...args);
       return {
         ...probe,
-        requestHttp: (params: Parameters<ConfiguredGatewayLocalProbe["requestHttp"]>[0]) =>
-          params.pathname === "/startupz" ? requestStartupProbe(params) : probe.requestHttp(params),
+        requestHttp: (params: Parameters<ConfiguredGatewayLocalProbe["requestHttp"]>[0]) => {
+          if (params.pathname === "/startupz") {
+            return requestStartupProbe(params);
+          }
+          // Only intercept readiness endpoints when a test provides an explicit
+          // implementation; otherwise fall through to the real loopback transport
+          // so existing real-HTTP readiness tests keep exercising real sockets.
+          if (
+            (params.pathname === "/healthz" || params.pathname === "/readyz") &&
+            requestReadinessProbe.getMockImplementation() !== undefined
+          ) {
+            return requestReadinessProbe(params);
+          }
+          return probe.requestHttp(params);
+        },
       };
     },
   };
@@ -54,7 +68,7 @@ export const readBestEffortConfig = vi.fn(async () => ({}));
 export const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn<
   (_opts: unknown) => Promise<{ auth: { token?: string; password?: string } }>
 >(async () => ({ auth: {} }));
-const hasActiveStartupMigrationLease = vi.fn<(_params?: unknown) => boolean>(() => false);
+export const hasActiveStartupMigrationLease = vi.fn<(_params?: unknown) => boolean>(() => false);
 
 export function createStartupMigrationActivityProbe(isActive: () => boolean) {
   return vi.fn<
@@ -79,7 +93,7 @@ export const resolveGatewayServiceProbeHosts = vi.fn<
 >(async () => ["127.0.0.1"]);
 
 vi.mock("../../infra/ports-format.js", () => ({
-  classifyPortListener: (listener: unknown, port: number) => classifyPortListener(listener, port),
+  classifyPortListener: (listener: unknown) => classifyPortListener(listener),
   formatPortDiagnostics: vi.fn(() => []),
 }));
 
@@ -259,6 +273,7 @@ export async function waitForStoppedFreeGatewayRestart(
 export function resetRestartHealthMocks() {
   requestStartupProbe.mockReset();
   requestStartupProbe.mockResolvedValue(null);
+  requestReadinessProbe.mockReset();
   monotonicClock.nowMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => monotonicClock.nowMs);
   inspectPortUsage.mockReset();

@@ -35,7 +35,7 @@ validate_pr_temp_storage() {
 path_is_docsish() {
   local path="$1"
   case "$path" in
-    CHANGELOG.md|AGENTS.md|CLAUDE.md|README*.md|docs/*|*.md|*.mdx|mintlify.json|docs.json)
+    CHANGELOG.md|AGENTS.md|CLAUDE.md|README*.md|docs/*|*.md|*.mdx|docs.json)
       return 0
       ;;
   esac
@@ -269,6 +269,36 @@ read_pr_view_json() {
   return 1
 }
 
+read_pr_observation() {
+  read_pr_view_json "$1" "number,url,title,state,isDraft,author,baseRefName,baseRefOid,baseRepository,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository"
+}
+
+use_pr_observation() {
+  local pr="$1" observation="$2" repository_url
+  repository_url=$(printf '%s\n' "$observation" | jq -er --argjson pr "$pr" '
+    .baseRepository as $repo |
+    select(.number == $pr and
+      ($repo.id | type == "string" and length > 0) and
+      ($repo.databaseId | type == "number" and . > 0 and floor == .) and
+      ($repo.nameWithOwner | type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
+      ($repo.url | type == "string" and test("^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") and endswith("/" + $repo.nameWithOwner)) and
+      .url == ($repo.url + "/pull/" + ($pr | tostring))) |
+    $repo.url') || {
+      echo "Invalid base repository identity for PR #$pr." >&2
+      return 1
+    }
+  PR_OBSERVATION="$observation"
+  PR_REPOSITORY_URL="$repository_url"
+  PR_REPOSITORY_SELECTOR="${GH_REPO:-}"
+  PR_REPOSITORY_HOST="${GH_HOST:-}"
+}
+
+pr_observe() {
+  local observation
+  observation=$(read_pr_observation "$1") || return 1
+  use_pr_observation "$1" "$observation"
+}
+
 pr_view_string_field() {
   local json="$1" field="$2" pr="$3" remedy="${4:-Retry the command.}" label value
   case "$field" in
@@ -293,7 +323,8 @@ wait_for_pr_head_sha() {
   local attempt
   for attempt in $(seq 1 "$max_attempts"); do
     local observed_sha
-    observed_sha=$(pr_gh pr view "$pr" --json headRefOid --jq .headRefOid) || return 1
+    pr_observe "$pr" || return 1
+    observed_sha=$(pr_view_string_field "$PR_OBSERVATION" headRefOid "$pr") || return 1
     if [ "$observed_sha" = "$expected_sha" ]; then
       return 0
     fi
@@ -526,6 +557,29 @@ remove_worktree_if_present() {
       return 1
     fi
   fi
+  # A child changing cwd does not release its parent session's working directory.
+  node - "$registered_path" <<'EOF_NODE' || return 1
+const { spawnSync } = require("node:child_process");
+const target = process.argv[2];
+const scan = spawnSync("lsof", ["-nP", "-d", "cwd", "-Fpn0"], {
+  encoding: "utf8", timeout: 30000, maxBuffer: 16 * 1024 * 1024,
+});
+if (scan.error || scan.status !== 0 || !scan.stdout) {
+  console.error(`Preserving ${target}: unable to inspect process working directories. Retry cleanup after checking lsof and session ownership.`);
+  process.exit(1);
+}
+let pid;
+for (const field of scan.stdout.split("\0")) {
+  const record = field.replace(/^\n/, "");
+  if (record.startsWith("p")) pid = record.slice(1);
+  if (!record.startsWith("n")) continue;
+  const cwd = record.slice(1);
+  if (cwd === target || cwd.startsWith(target + "/")) {
+    console.error(`Preserving ${target}: live process ${pid} has its cwd in this worktree. Defer cleanup until the owning session exits or releases its cwd.`);
+    process.exit(1);
+  }
+}
+EOF_NODE
   [ "${2:-false}" != true ] || return 0
   # One native removal owns both the path and its exact admin entry. A partial
   # deletion still fails; neither repository-wide prune nor orphan trash is safe.

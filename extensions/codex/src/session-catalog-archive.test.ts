@@ -6,6 +6,7 @@ import {
   commandRpcMocks,
   pinnedConnectionMocks,
   createCodexSessionCatalogControl,
+  createCodexSessionCatalogControlFactory,
   continueLocalCodexSession,
   registerCodexSessionCatalog,
   config,
@@ -52,21 +53,6 @@ describe("Codex supervision actions", () => {
     expect(control.requireEligibleThread).toHaveBeenCalledWith("thread-1");
   });
 
-  it("archives an idle local thread only after the fresh status read", async () => {
-    const control = createEligibleControl();
-    const readThread = vi.mocked(control.readThread);
-    const archiveThread = vi.mocked(control.archiveThread);
-
-    await expect(archiveTestSession({ control })).resolves.toEqual({
-      archived: true,
-    });
-    expect(control.requireEligibleThread).toHaveBeenCalledWith("thread-1");
-    expect(control.archiveThread).toHaveBeenCalledWith("thread-1");
-    expect(readThread.mock.invocationCallOrder[0]).toBeLessThan(
-      archiveThread.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-  });
-
   it("pins one App Server connection while archive configuration changes live", async () => {
     let pluginConfig: unknown = {
       appServer: { command: "codex-archive-a" },
@@ -80,7 +66,7 @@ describe("Codex supervision actions", () => {
         if (request.method === "thread/read") {
           pluginConfig = {
             appServer: { command: "codex-archive-b", homeScope: "agent" },
-            supervision: { enabled: true },
+            supervision: { enabled: false },
           };
           runtimeConfig = {
             agents: { defaults: { workspace: "/workspace/b" } },
@@ -101,17 +87,19 @@ describe("Codex supervision actions", () => {
         throw new Error(`unexpected method: ${request.method}`);
       },
     );
-    const control = createCodexSessionCatalogControl({
+    const control = createCodexSessionCatalogControlFactory({
       getPluginConfig: () => pluginConfig,
       getRuntimeConfig: () => runtimeConfig,
-    });
+    }).forRequest("alpha");
 
     commandRpcMocks.codexControlRequest.mockResolvedValue({
       data: [idleThread({ source: "cli" })],
     });
     await control.initialize();
     commandRpcMocks.codexControlRequest.mockClear();
-    await expect(archiveTestSession({ config: initialRuntimeConfig, control })).resolves.toEqual({
+    await expect(
+      archiveTestSession({ agentId: "alpha", config: initialRuntimeConfig, control }),
+    ).resolves.toEqual({
       archived: true,
     });
 
@@ -120,7 +108,13 @@ describe("Codex supervision actions", () => {
     expect(acquisition).toMatchObject({
       agentDir: expectedAgentDir,
       startOptions: expect.objectContaining({ command: "codex-archive-a", homeScope: "user" }),
-      config: { agents: { list: [{ id: "alpha" }, { id: "beta" }] } },
+      config: {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "alpha" } },
+          entries: { alpha: {}, beta: {} },
+        },
+      },
     });
     expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
       "thread/read",

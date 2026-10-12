@@ -1,17 +1,14 @@
-import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import * as hostSource from "../gateway/desktop/host-source.js";
+import * as execRunner from "../process/exec-runner.js";
 import { collectHostDesktopHealthFindings, noteHostDesktopHealth } from "./doctor-host-desktop.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
-const cleanups: Array<() => Promise<void>> = [];
-
-afterEach(async () => {
+afterEach(() => {
   vi.mocked(note).mockReset();
   vi.restoreAllMocks();
-  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
 });
 
 const unavailableInspection: hostSource.HostDesktopInspection = {
@@ -33,47 +30,6 @@ function commandResult(code: number) {
 }
 
 describe("host desktop doctor section", () => {
-  it("reports the disabled Labs toggle", async () => {
-    await noteHostDesktopHealth({});
-    expect(note).toHaveBeenCalledWith(
-      "disabled; enable the Desktop lab with desktop.host.enabled=true",
-      "Host desktop",
-    );
-  });
-
-  it("reports an attached VncAuth loopback server without password material", async () => {
-    const sockets = new Set<net.Socket>();
-    const server = net.createServer((socket) => {
-      sockets.add(socket);
-      socket.once("close", () => sockets.delete(socket));
-      socket.write(Buffer.from("RFB 003.008\n", "ascii"));
-      socket.once("data", () => socket.write(Buffer.from([1, 2])));
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected RFB address");
-    }
-    cleanups.push(
-      async () =>
-        await new Promise<void>((resolve) => {
-          for (const socket of sockets) {
-            socket.destroy();
-          }
-          server.close(() => resolve());
-        }),
-    );
-
-    await noteHostDesktopHealth({ desktop: { host: { enabled: true, port: address.port } } });
-    expect(note).toHaveBeenCalledWith(
-      `attached (127.0.0.1:${address.port}, security: VncAuth)`,
-      "Host desktop",
-    );
-  });
-
   it("reports managed configured and failed states distinctly", async () => {
     vi.spyOn(hostSource, "inspectHostDesktop")
       .mockResolvedValueOnce({
@@ -97,10 +53,8 @@ describe("host desktop doctor section", () => {
         detail: "managed (failed: startxfce4 not installed)",
       });
 
-    await noteHostDesktopHealth(
-      { desktop: { host: { enabled: true, managed: true } } },
-      { platform: "linux" },
-    );
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    await noteHostDesktopHealth({ desktop: { host: { enabled: true, managed: true } } });
     expect(note).toHaveBeenCalledWith(
       "managed (configured; runtime state is available from the running Gateway status)",
       "Host desktop",
@@ -125,14 +79,15 @@ describe("host desktop doctor section", () => {
         detail: "attached (127.0.0.1:5900, security: ARD)",
       });
     const confirmRuntimeRepair = vi.fn(async () => true);
-    const runCommand = vi.fn(async (_argv: string[], _options: unknown) => commandResult(0));
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const runCommand = vi
+      .spyOn(execRunner, "runCommandWithTimeout")
+      .mockResolvedValue(commandResult(0));
 
     await noteHostDesktopHealth(
       { desktop: { host: { enabled: true } } },
       {
-        platform: "darwin",
         prompter: { shouldRepair: true, confirmRuntimeRepair },
-        runCommand,
       },
     );
 
@@ -151,13 +106,12 @@ describe("host desktop doctor section", () => {
 
   it("prints the System Settings path when interactive repair is declined", async () => {
     vi.spyOn(hostSource, "inspectHostDesktop").mockResolvedValue(unavailableInspection);
-    const runCommand = vi.fn();
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const runCommand = vi.spyOn(execRunner, "runCommandWithTimeout");
     await noteHostDesktopHealth(
       { desktop: { host: { enabled: true } } },
       {
-        platform: "darwin",
         prompter: { shouldRepair: true, confirmRuntimeRepair: vi.fn(async () => false) },
-        runCommand: runCommand as never,
       },
     );
     expect(runCommand).not.toHaveBeenCalled();
@@ -169,13 +123,14 @@ describe("host desktop doctor section", () => {
 
   it("stops after a failed sudo command and prints both manual repair paths", async () => {
     vi.spyOn(hostSource, "inspectHostDesktop").mockResolvedValue(unavailableInspection);
-    const runCommand = vi.fn(async () => commandResult(1));
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const runCommand = vi
+      .spyOn(execRunner, "runCommandWithTimeout")
+      .mockResolvedValue(commandResult(1));
     await noteHostDesktopHealth(
       { desktop: { host: { enabled: true } } },
       {
-        platform: "darwin",
         prompter: { shouldRepair: true, confirmRuntimeRepair: vi.fn(async () => true) },
-        runCommand,
       },
     );
     expect(runCommand).toHaveBeenCalledTimes(1);

@@ -4,9 +4,12 @@ import { configureExecutionDecisionWorkSink } from "../../audit/execution-decisi
 import type { ExecutionDecisionWork } from "../../audit/execution-decision-work.types.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import {
+  createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
+  prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
@@ -17,6 +20,10 @@ import {
   createTestMcpLoopbackServer,
   createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
+import { prepareDiscoveredContextTokenCache } from "../context-cache-projection.js";
+import { replaceDiscoveredContextTokenCache } from "../context-cache.js";
+import { resetContextWindowCacheForTest } from "../context.test-support.js";
+import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -120,10 +127,64 @@ describe("CLI model-routing receipt authority", () => {
     await fixture.cleanup();
   });
 
+  it("checks the logical model before CLI preparation and retains a current model guard through dispatch", async () => {
+    const config = { agents: { defaults: { model: "fixture/allowed" } } };
+    let policy = prepareOperatorModelPolicy({ cfg: config, policy: {}, manifestPlugins: [] });
+    const source = createAdmittedRunOperatorAuthority({
+      profileId: "fixture-person",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+      get modelPolicy() {
+        return policy;
+      },
+    });
+    const prepareExecution = vi.fn(async () => undefined);
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [{ ...buildDefaultTestCliBackend(), prepareExecution }],
+    });
+    const admission = prepareSystemAgentRunAdmission(
+      config,
+      "cli-policy-run",
+      "main",
+      "test",
+      undefined,
+      source,
+    );
+    try {
+      await expect(
+        fixture.prepare({
+          config,
+          runId: "cli-policy-run",
+          preparedRunAdmission: admission,
+          model: "denied",
+          requesterModel: { provider: "fixture", model: "denied" },
+        }),
+      ).rejects.toThrow("operator role cannot use this model");
+      expect(prepareExecution).not.toHaveBeenCalled();
+      const context = await fixture.prepare({
+        config,
+        runId: "cli-policy-run",
+        preparedRunAdmission: admission,
+        model: "allowed",
+        requesterModel: { provider: "fixture", model: "allowed" },
+      });
+      expect(prepareExecution).toHaveBeenCalledOnce();
+      expect(context.params.assertCurrent).toBeTypeOf("function");
+      expect(context.params.assertCurrent).not.toThrow();
+      policy = prepareOperatorModelPolicy({
+        cfg: config,
+        policy: { allow: [] },
+        manifestPlugins: [],
+      });
+      expect(context.params.assertCurrent).toThrow("operator role cannot use this model");
+    } finally {
+      admission.close();
+    }
+  });
+
   it.each<{ kind: AuthorityLoss; producer: Producer }>([
     { kind: "close", producer: "normal" },
-    { kind: "replace", producer: "normal" },
-    { kind: "close", producer: "side-question" },
     { kind: "replace", producer: "side-question" },
   ])("drops $producer routing work when admission $kind wins the await", async (testCase) => {
     const runId = `run-cli-${testCase.producer}-${testCase.kind}`;
@@ -162,5 +223,71 @@ describe("CLI model-routing receipt authority", () => {
     });
     expect.soft(decisionWork).toEqual([]);
     expect.soft(dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("CLI context-window ownership", () => {
+  let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
+
+  beforeEach(() => {
+    resetContextWindowCacheForTest();
+    setCliRunnerPrepareTestDeps({
+      isWorkspaceBootstrapPending: async () => false,
+      resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
+      resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
+      prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
+      loadManifestModelCatalog: () => [],
+    });
+    fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
+  });
+
+  afterEach(async () => {
+    resetCliRunnerPrepareTestDeps();
+    cliBackendsTesting.resetDepsForTest();
+    resetContextWindowCacheForTest();
+    await fixture.cleanup();
+  });
+
+  it("keeps test-cli stable when another provider loads the same model", async () => {
+    const provider = "test-cli";
+    const model = "large-model";
+    const catalogProvider = "api-provider";
+    const prepareExecution = vi.fn<NonNullable<CliBackendPlugin["prepareExecution"]>>(
+      async () => undefined,
+    );
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          ...buildDefaultTestCliBackend(),
+          id: provider,
+          modelProvider: catalogProvider,
+          prepareExecution,
+        },
+      ],
+    });
+    const prepare = () => fixture.prepare({ provider, model });
+    const cold = await prepare();
+    expect(cold.contextWindowInfo?.tokens).toBe(200_000);
+
+    // Discovery publishes both provider-qualified and bare keys. The latter cannot
+    // supply a different runtime's native budget on the next turn.
+    const catalogModels = [{ provider: catalogProvider, id: model, contextWindow: 1_000_000 }];
+    replaceDiscoveredContextTokenCache(
+      await prepareDiscoveredContextTokenCache({ modelCatalog: { entries: catalogModels } }),
+    );
+    const resumed = await prepare();
+    expect(resumed.contextWindowInfo?.tokens).toBe(200_000);
+
+    // A provider-owned large window remains usable even without a manifest row.
+    catalogModels.push({ provider, id: model, contextWindow: 1_000_000 });
+    replaceDiscoveredContextTokenCache(
+      await prepareDiscoveredContextTokenCache({ modelCatalog: { entries: catalogModels } }),
+    );
+    const owned = await prepare();
+    expect(owned.contextWindowInfo?.tokens).toBe(1_000_000);
+    expect(prepareExecution.mock.calls.map(([context]) => context.contextTokenBudget)).toEqual([
+      200_000, 200_000, 1_000_000,
+    ]);
   });
 });

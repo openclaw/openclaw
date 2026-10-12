@@ -12,7 +12,7 @@ import { listHostDirectories } from "../../infra/host-directory-listing.js";
 import { NODE_FS_LIST_DIR_COMMAND } from "../../infra/node-commands.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, hasGatewayAdminScope } from "../operator-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
@@ -86,8 +86,7 @@ export const fsHandlers: GatewayRequestHandlers = {
         respond(true, payload, undefined);
         return;
       }
-      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-      if (scopes.includes(ADMIN_SCOPE)) {
+      if (hasGatewayAdminScope(client)) {
         respond(true, await listHostDirectories(params.path), undefined);
         return;
       }

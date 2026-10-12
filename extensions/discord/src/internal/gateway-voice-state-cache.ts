@@ -1,17 +1,9 @@
 import {
   GatewayDispatchEvents,
-  type APIBaseVoiceState,
   type APIVoiceState,
   type GatewayDispatchPayload,
-  type GatewayGuildCreateDispatchData,
-  type GatewayGuildDeleteDispatchData,
-  type GatewayVoiceStateUpdateDispatchData,
 } from "discord-api-types/v10";
-
-export type DiscordGatewayVoiceStateTransition = {
-  current: APIVoiceState;
-  previous?: APIVoiceState;
-};
+import type { DiscordGatewayVoiceStateTransition } from "./plugin-contract.js";
 
 export class DiscordGatewayVoiceStateCache {
   private readonly statesByGuild = new Map<string, Map<string, APIVoiceState>>();
@@ -56,7 +48,7 @@ export class DiscordGatewayVoiceStateCache {
       return;
     }
     if (payload.t === GatewayDispatchEvents.GuildCreate) {
-      const guild = payload.d as GatewayGuildCreateDispatchData;
+      const guild = payload.d;
       if (guild.unavailable) {
         this.statesByGuild.delete(guild.id);
         return;
@@ -65,7 +57,7 @@ export class DiscordGatewayVoiceStateCache {
       const membersByUserId = new Map(
         (guild.members ?? []).map((member) => [member.user.id, member] as const),
       );
-      for (const state of guild.voice_states as APIBaseVoiceState[]) {
+      for (const state of guild.voice_states) {
         if (state.channel_id) {
           const member = state.member ?? membersByUserId.get(state.user_id);
           states.set(state.user_id, {
@@ -79,7 +71,7 @@ export class DiscordGatewayVoiceStateCache {
       return;
     }
     if (payload.t === GatewayDispatchEvents.VoiceStateUpdate) {
-      const state = payload.d as GatewayVoiceStateUpdateDispatchData;
+      const state = payload.d;
       const guildId = state.guild_id?.trim();
       if (!guildId) {
         return;
@@ -106,7 +98,7 @@ export class DiscordGatewayVoiceStateCache {
       return;
     }
     if (payload.t === GatewayDispatchEvents.GuildDelete) {
-      const guild = payload.d as GatewayGuildDeleteDispatchData;
+      const guild = payload.d;
       this.statesByGuild.delete(guild.id);
     }
   }

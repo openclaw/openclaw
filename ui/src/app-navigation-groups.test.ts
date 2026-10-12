@@ -1,22 +1,20 @@
-// Control UI tests cover sidebar entry customization behavior.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SIDEBAR_ENTRIES,
-  SIDEBAR_NAV_ROUTES,
   isSessionsHubRoute,
   isSettingsNavigationRoute,
   normalizeSidebarEntries,
   parseSidebarEntry,
   serializeSidebarEntry,
-  settingsNavigationOwnerRoute,
-  sidebarMoreRoutes,
   visibleSettingsNavigationGroups,
   isSettingsNavigationRouteVisible,
 } from "./app-navigation.ts";
 import type { NativeDeviceSettingsCapability } from "./app/native-device-settings.ts";
 import { readGatewayOperatorAccess } from "./app/operator-access.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
+import { settingsNavigationOwnerRoute } from "./lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
+import { createChromeExtensionSetupResult } from "./test-helpers/chrome-extension-setup.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
@@ -36,18 +34,7 @@ describe("sidebar entries", () => {
       openSystemSettings: () => undefined,
       openPanel: () => undefined,
       checkForUpdates: () => undefined,
-      chromeExtensionStatus: async () => ({
-        nativeHostRegistered: false,
-        installRequested: false,
-        installedProfiles: 0,
-        discoveredProfiles: 0,
-      }),
-      installChromeExtension: async () => ({
-        nativeHostRegistered: false,
-        installRequested: false,
-        installedProfiles: 0,
-        discoveredProfiles: 0,
-      }),
+      setupChromeExtension: async (action) => createChromeExtensionSetupResult({ action }),
       refresh: () => undefined,
       dispose: () => undefined,
     };
@@ -79,7 +66,7 @@ describe("sidebar entries", () => {
     );
     expect(
       getStaticCommandPaletteCatalogItems(canAdmin, capability).some(
-        (item) => item.routeId === "updates",
+        (item) => item.action === "nav:updates",
       ),
     ).toBe(true);
     expect(browserGroups.some((group) => group.labelKey === "nav.settingsGroupDevice")).toBe(false);
@@ -156,28 +143,20 @@ describe("sidebar entries", () => {
       expect(isSettingsNavigationRouteVisible(route, canAdmin, capability)).toBe(true);
       expect(browserGroups.flatMap((group) => group.routes)).not.toContain(route);
       expect(
-        getStaticCommandPaletteCatalogItems(canAdmin).some((item) => item.routeId === route),
+        getStaticCommandPaletteCatalogItems(canAdmin).some(
+          (item) => item.action === `nav:${route}`,
+        ),
       ).toBe(false);
       expect(
         getStaticCommandPaletteCatalogItems(canAdmin, capability).some(
-          (item) => item.routeId === route,
+          (item) => item.action === `nav:${route}`,
         ),
       ).toBe(true);
     }
   });
-  it("keeps operational destinations visible by default", () => {
-    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual([
-      "route:agents-home",
-      "route:dashboards",
-      "route:systems",
-      "route:cron",
-      "route:plugins",
-    ]);
+  it("starts with no personal rail shortcuts", () => {
+    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual([]);
     expect(isSettingsNavigationRoute("agents-home")).toBe(false);
-  });
-
-  it("drops retired routes from persisted entries", () => {
-    expect(normalizeSidebarEntries(["route:overview", "route:usage"])).toEqual(["route:usage"]);
   });
 
   it("treats worktrees as a sessions hub tab without its own pin", () => {
@@ -192,7 +171,6 @@ describe("sidebar entries", () => {
       "plugin:workboard/workboard",
       "plugin:workboard/board-ops",
     ]);
-    expect(sidebarMoreRoutes([])).not.toContain("workboard");
   });
 
   it("recognizes every settings navigation route", () => {
@@ -247,28 +225,6 @@ describe("sidebar entries", () => {
     );
   });
 
-  it("drops stale device pins", () => {
-    expect(normalizeSidebarEntries(["route:nodes", "route:usage"])).toEqual(["route:usage"]);
-  });
-
-  it("keeps the apps promo page available in More", () => {
-    expect(sidebarMoreRoutes(DEFAULT_SIDEBAR_ENTRIES)).toContain("apps");
-    expect(isSettingsNavigationRoute("apps")).toBe(false);
-  });
-
-  it("keeps Portals available in More", () => {
-    expect(sidebarMoreRoutes(DEFAULT_SIDEBAR_ENTRIES)).toContain("portals");
-    expect(isSettingsNavigationRoute("portals")).toBe(false);
-  });
-
-  it("keeps the plugin manager in customizable workspace routes", () => {
-    expect(normalizeSidebarEntries(["route:plugins", "route:usage", "route:plugins"])).toEqual([
-      "route:plugins",
-      "route:usage",
-    ]);
-    expect(sidebarMoreRoutes(["route:usage", "session:agent:main:test"])).toContain("plugins");
-  });
-
   it("round-trips route, Workboard, and session entries", () => {
     expect(parseSidebarEntry("route:usage")).toEqual({ type: "route", route: "usage" });
     expect(parseSidebarEntry("session:agent:main:test")).toEqual({
@@ -300,6 +256,7 @@ describe("sidebar entries", () => {
       normalizeSidebarEntries([
         "route:usage",
         "session:agent:main:test",
+        "route:cron",
         "route:tasks",
         "route:usage",
         "route:worktrees",
@@ -307,26 +264,13 @@ describe("sidebar entries", () => {
         "usage",
         7,
       ]),
-    ).toEqual(["route:usage", "session:agent:main:test", "route:tasks"]);
+    ).toEqual(["route:usage", "session:agent:main:test", "route:cron"]);
     expect(normalizeSidebarEntries([])).toEqual([]);
-  });
-
-  it("recognizes OpenClaw settings and drops stale sidebar pins", () => {
-    expect(isSettingsNavigationRoute("custodian")).toBe(true);
-    expect(normalizeSidebarEntries(["route:custodian", "route:usage"])).toEqual(["route:usage"]);
   });
 
   it("falls back to null for non-list values so callers use defaults", () => {
     expect(normalizeSidebarEntries(undefined)).toBeNull();
     expect(normalizeSidebarEntries({ usage: true })).toBeNull();
     expect(normalizeSidebarEntries("route:usage")).toBeNull();
-  });
-
-  it("puts every hidden nav route into the More section", () => {
-    const entries = ["route:tasks", "session:agent:main:test", "route:usage"] as const;
-    const more = sidebarMoreRoutes(entries);
-    expect(more).not.toContain("tasks");
-    expect(more).not.toContain("usage");
-    expect(new Set(["tasks", "usage", ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
   });
 });

@@ -8,7 +8,6 @@ import {
 
 export type BrokerOutputOption = "pipe" | "ignore" | "inherit" | { file: string };
 
-/** The serializable execa options used by the command transport. */
 export type BrokerExecaOptions = Pick<
   Options,
   | "buffer"
@@ -25,6 +24,7 @@ export type BrokerExecaOptions = Pick<
   | "windowsHide"
   | "windowsVerbatimArguments"
 > & {
+  executionDeadlineMs?: number;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   input?: string | Uint8Array;

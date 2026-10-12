@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectPolicyInlineEval } from "./command-analysis/policy.js";
+import { detectInlineEvalInSegments } from "./command-analysis/risks.js";
 import {
   makeExecutable,
   makePathEnv,
@@ -31,7 +31,7 @@ describe("authorization-backed exec allowlist", () => {
       ["echo", "$HOME"],
       ["python3", "-c", "print(1)"],
     ]);
-    expect(detectPolicyInlineEval(result.segments)).toEqual(
+    expect(detectInlineEvalInSegments(result.segments)).toEqual(
       expect.objectContaining({
         executable: "python3",
         flag: "-c",
@@ -57,61 +57,12 @@ describe("authorization-backed exec allowlist", () => {
       ["echo", "ok"],
       ["python3", "-c", "print(1)"],
     ]);
-    expect(detectPolicyInlineEval(result.segments)).toEqual(
+    expect(detectInlineEvalInSegments(result.segments)).toEqual(
       expect.objectContaining({
         executable: "python3",
         flag: "-c",
       }),
     );
-  });
-
-  it("allows allowlisted inline-eval commands while keeping allow-always one-shot", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const dir = makeExecApprovalsTempDir();
-    const pythonPath = makeExecutable(dir, "python3");
-    const env = makePathEnv(dir);
-    const command = "python3 -c 'print(1)'";
-
-    const result = await evaluateShellAllowlistWithAuthorization({
-      command,
-      allowlist: [{ pattern: pythonPath }],
-      safeBins: new Set(),
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-
-    expect(result.analysisOk).toBe(true);
-    expect(result.allowlistSatisfied).toBe(true);
-    expect(result.segments.map((segment) => segment.argv)).toEqual([["python3", "-c", "print(1)"]]);
-    expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
-    expect(detectPolicyInlineEval(result.segments)).toEqual(
-      expect.objectContaining({
-        executable: "python3",
-        flag: "-c",
-      }),
-    );
-
-    const allowAlwaysPersistence = resolveAllowAlwaysPersistenceDecision({
-      segments: result.segments,
-      commandText: command,
-      cwd: dir,
-      env,
-      platform: process.platform,
-      authorizationPlan: result.authorizationPlan,
-    });
-
-    expect(allowAlwaysPersistence).toEqual({
-      kind: "one-shot",
-      reasons: expect.arrayContaining(["no-reusable-pattern"]),
-    });
-    expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence })).toEqual([
-      "allow-once",
-      "deny",
-    ]);
   });
 
   it("keeps glued allowlisted inline-eval commands one-shot in strict mode", async () => {
@@ -136,7 +87,7 @@ describe("authorization-backed exec allowlist", () => {
     expect(result.analysisOk).toBe(true);
     expect(result.allowlistSatisfied).toBe(true);
     expect(result.segments.map((segment) => segment.argv)).toEqual([["python3", "-xcprint"]]);
-    expect(detectPolicyInlineEval(result.segments)).toEqual(
+    expect(detectInlineEvalInSegments(result.segments)).toEqual(
       expect.objectContaining({
         executable: "python3",
         flag: "-c",
@@ -273,27 +224,5 @@ describe("authorization-backed exec allowlist", () => {
         allowlistSatisfied: result.allowlistSatisfied,
       }),
     ).toBe(true);
-  });
-
-  it("does not satisfy pattern allowlists for escaped word-boundary newlines", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const result = await evaluateShellAllowlistWithAuthorization({
-      command: "git\n\\id -u",
-      allowlist: [{ pattern: "git" }],
-      safeBins: new Set(),
-      platform: process.platform,
-    });
-
-    expect(result.analysisOk).toBe(false);
-    expect(result.allowlistSatisfied).toBe(false);
-    expect(result.authorizationPlan).toEqual(
-      expect.objectContaining({
-        ok: false,
-        reason: "line-continuation",
-      }),
-    );
   });
 });

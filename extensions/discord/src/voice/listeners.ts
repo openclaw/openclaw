@@ -1,4 +1,3 @@
-// Discord plugin module wires Gateway lifecycle events into the voice manager.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -6,24 +5,11 @@ import {
   type Client,
   GatewayDispatchEvents,
   type GatewayGuildCreateDispatchData,
-  ReadyListener,
-  ResumedListener,
   VoiceStateUpdateListener,
 } from "../internal/discord.js";
-import type { GatewayPlugin } from "../internal/gateway.js";
+import type { DiscordVoiceListenerManager } from "./listener-contract.js";
 
 const logger = createSubsystemLogger("discord/voice");
-
-// Keep this leaf contract structural so manager.ts can re-export listeners without a cycle.
-type DiscordVoiceListenerManager = {
-  autoJoin: () => Promise<unknown>;
-  reconcileAutoJoinGuild: (guildId: string) => Promise<unknown>;
-  refreshGuildRoster: (guildId: string) => void;
-  handleVoiceStateUpdate: (
-    state: APIVoiceState,
-    previousState?: APIVoiceState | null,
-  ) => Promise<void>;
-};
 
 function startAutoJoin(operation: () => Promise<unknown>, context = "") {
   void operation().catch((err: unknown) =>
@@ -31,24 +17,19 @@ function startAutoJoin(operation: () => Promise<unknown>, context = "") {
   );
 }
 
-export class DiscordVoiceReadyListener extends ReadyListener {
-  constructor(private manager: DiscordVoiceListenerManager) {
-    super();
-  }
+export class DiscordVoiceReadyListener {
+  readonly type: GatewayDispatchEvents.Ready | GatewayDispatchEvents.Resumed =
+    GatewayDispatchEvents.Ready;
+
+  constructor(private manager: DiscordVoiceListenerManager) {}
 
   async handle(_data: unknown, _client: Client): Promise<void> {
     startAutoJoin(() => this.manager.autoJoin());
   }
 }
 
-export class DiscordVoiceResumedListener extends ResumedListener {
-  constructor(private manager: DiscordVoiceListenerManager) {
-    super();
-  }
-
-  async handle(_data: unknown, _client: Client): Promise<void> {
-    startAutoJoin(() => this.manager.autoJoin());
-  }
+export class DiscordVoiceResumedListener extends DiscordVoiceReadyListener {
+  override readonly type = GatewayDispatchEvents.Resumed;
 }
 
 export class DiscordVoiceGuildCreateListener {
@@ -73,7 +54,7 @@ export class DiscordVoiceStateUpdateListener extends VoiceStateUpdateListener {
   }
 
   async handle(data: APIVoiceState, client: Client): Promise<void> {
-    const transition = client.getPlugin<GatewayPlugin>("gateway")?.takeVoiceStateTransition(data);
+    const transition = client.getPlugin("gateway")?.takeVoiceStateTransition(data);
     await this.manager.handleVoiceStateUpdate(
       data,
       transition ? (transition.previous ?? null) : undefined,

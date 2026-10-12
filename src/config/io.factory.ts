@@ -63,8 +63,10 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
         reason: params.reason,
         prepareCandidate: context.prepareRecoveryBackupCandidate,
       }),
-    recoverConfigFromJsonRootSuffix: (snapshot: ConfigFileSnapshot) =>
-      recoverConfigFromJsonRootSuffixWithContext(context, snapshot),
+    recoverConfigFromJsonRootSuffix: (
+      snapshot: ConfigFileSnapshot,
+      assertRecoveryCandidate?: (config: unknown) => void,
+    ) => recoverConfigFromJsonRootSuffixWithContext(context, snapshot, assertRecoveryCandidate),
     writeConfigFile: async (
       config: Parameters<typeof writeConfigFileFromContext>[1],
       writeOptions: Parameters<typeof writeConfigFileFromContext>[2] = {},

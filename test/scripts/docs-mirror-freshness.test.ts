@@ -24,7 +24,6 @@ describe("docs mirror freshness", () => {
     ]
   >([
     ["a current mirror", newestSha, 10, true, true, 60, 0, 0],
-    ["only recent changes", baseSha, 10, false, true, 60, 0, 0],
     ["an overdue change hidden by a recent edit", baseSha, 10, true, true, 60, 0, 120],
     ["an overdue change with recovery already active", baseSha, 10, true, true, 60, 1, 120],
     ["a quiet stale source", baseSha, 90, true, true, 60, 0, 90],

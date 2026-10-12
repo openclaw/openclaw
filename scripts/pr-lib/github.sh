@@ -28,6 +28,11 @@ unset pr_gh_snapshot_root pr_gh_source_scripts pr_gh_snapshot_path
 pr_gh_run() (
   local route="$1" filter="" filtered=0
   shift
+  if [ -n "${PR_REPOSITORY_URL:-}" ] &&
+    [ "${GH_REPO:-}" = "${PR_REPOSITORY_SELECTOR:-}" ] &&
+    [ "${GH_HOST:-}" = "${PR_REPOSITORY_HOST:-}" ]; then
+    export GH_REPO="$PR_REPOSITORY_URL"
+  fi
   local args=()
   case "${1:-}:${2:-}" in
     pr:view|repo:view)

@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { INVALID_PROJECT_ANNOTATION_KEY } from "./internal.js";
+import { INVALID_PROJECT_ANNOTATION_KEY } from "./curated-annotations.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./openclaw-runtime-kysely.js";
 import type { MemoryEntryProvenance, MemoryOriginClass, MemorySessionKind } from "./types.js";
 
@@ -120,7 +120,6 @@ export function readCuratedMemoryTriggerCandidates(
     limit,
     activeProjectKeys,
     requireProject: false,
-    requireTriggers: true,
   });
 }
 
@@ -137,7 +136,6 @@ export function readCuratedProjectMemoryCandidates(
     limit,
     activeProjectKeys,
     requireProject: true,
-    requireTriggers: false,
   });
 }
 
@@ -146,7 +144,6 @@ function readCuratedMemoryCandidates(params: {
   limit: number;
   activeProjectKeys?: readonly string[];
   requireProject: boolean;
-  requireTriggers: boolean;
 }) {
   const { db, limit } = params;
   const active = params.activeProjectKeys
@@ -164,7 +161,6 @@ function readCuratedMemoryCandidates(params: {
       limit: batchSize,
       cursor,
       requireProject: params.requireProject,
-      requireTriggers: params.requireTriggers,
       projectKeyPrefilter,
     });
     if (rows.length === 0) {
@@ -205,7 +201,6 @@ function readCuratedCandidateBatch(params: {
   limit: number;
   cursor?: { importance: number | null; path: string; id: string };
   requireProject: boolean;
-  requireTriggers: boolean;
   projectKeyPrefilter?: readonly string[];
 }) {
   let query = getNodeSqliteKysely<MemoryRecallMetadataDatabase>(params.db)
@@ -233,7 +228,7 @@ function readCuratedCandidateBatch(params: {
   if (params.requireProject) {
     query = query.where("metadata.project_key", "is not", null);
   }
-  if (params.requireTriggers) {
+  if (!params.requireProject) {
     query = query.where("metadata.triggers", "is not", null);
   }
   const projectKeyPrefilter = params.projectKeyPrefilter;

@@ -9,7 +9,7 @@ import {
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
 } from "./protocol.js";
-import type { CodexAppServerThreadBinding } from "./session-binding.js";
+import type { CodexBindingAuthority, CodexAppServerThreadBinding } from "./session-binding.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 export function hasCodexNativeToolCatalog(
@@ -99,6 +99,7 @@ export async function loadCodexNativeToolCatalog(params: {
   appServer: CodexAppServerRuntimeOptions;
   agentDir: string;
   assertCurrent: () => void;
+  authority?: CodexBindingAuthority;
 }): Promise<CodexDynamicToolSpec[]> {
   const { binding, client, appServer, agentDir, assertCurrent } = params;
   assertCurrent();
@@ -124,6 +125,9 @@ export async function loadCodexNativeToolCatalog(params: {
     binding.rolloutPath,
     binding.threadId,
   );
-  assertCurrent();
-  return parseCodexNativeToolCatalog(metadata, binding.threadId, binding.dynamicToolsFingerprint);
+  const consume = () => {
+    assertCurrent();
+    return parseCodexNativeToolCatalog(metadata, binding.threadId, binding.dynamicToolsFingerprint);
+  };
+  return params.authority ? await params.authority.withCurrent(consume) : consume();
 }

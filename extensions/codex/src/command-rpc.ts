@@ -6,7 +6,11 @@ import {
 } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveSessionModelRef } from "openclaw/plugin-sdk/model-session-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  captureSessionEntryCurrentCheck,
+  composeSessionEntryCommitGuards,
+} from "openclaw/plugin-sdk/session-binding-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeCodexStartupClientBestEffort } from "./app-server/attempt-client-cleanup.js";
 import { prepareCodexAppServerAuthBinding } from "./app-server/auth-binding.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./app-server/auth-bridge.js";
@@ -52,6 +56,13 @@ import type { CodexCatalogPreviewCache } from "./session-catalog-native-projecti
 
 export type SafeValue<T> = { ok: true; value: T } | { ok: false; error: string };
 
+export type SafeCodexControlRequestFn = (
+  pluginConfig: unknown,
+  method: CodexControlMethod,
+  requestParams: JsonValue | undefined,
+  options?: CodexControlRequestOptions,
+) => Promise<SafeValue<JsonValue | undefined>>;
+
 type AuthProfileOrderConfig = Parameters<
   typeof resolveCodexAppServerAuthProfileIdForAgent
 >[0]["config"];
@@ -68,6 +79,8 @@ export type CodexControlRequestOptions = {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
   assertCurrent?: () => void;
+  /** Owner authority applies before dispatch; accepted responses still settle. */
+  assertOwnerCurrent?: () => void;
   catalogPreview?: true;
   catalogPreviewCache?: CodexCatalogPreviewCache;
   catalogRows?: number;
@@ -107,27 +120,45 @@ export async function prepareCodexControlSessionAuth(
   });
   const agentDir = options.agentDir ?? resolveAgentDir(config, sessionAgentId);
   const workspaceDir = resolveAgentWorkspaceDir(config, sessionAgentId);
-  const entry = getSessionEntry({
+  const storePath =
+    options.storePath?.trim() ||
+    resolveStorePath(config.session?.store, { agentId: sessionAgentId });
+  const current = await captureSessionEntryCurrentCheck({
     agentId: sessionAgentId,
-    storePath:
-      options.storePath?.trim() ||
-      resolveStorePath(config.session?.store, { agentId: sessionAgentId }),
+    storePath,
     sessionKey: options.sessionKey,
-    hydrateSkillPromptRefs: false,
-    readConsistency: "latest",
+    fields: [
+      "model",
+      "modelProvider",
+      "modelOverride",
+      "providerOverride",
+      "authProfileOverride",
+      "authProfileOverrideSource",
+    ],
   });
+  const { entry } = current;
+  const assertCurrent = composeSessionEntryCommitGuards([
+    options.assertCurrent,
+    current.assertCurrent,
+  ]);
+  assertCurrent();
   if (entry?.sessionId !== options.sessionId) {
     throw createCodexSessionGenerationSupersededError(options.sessionId);
   }
   if (options.authProfileId === null || startOptions.homeScope === "user") {
     return {
       authProfileId: options.authProfileId ?? undefined,
-      clientOptions: { authProfileId: options.authProfileId },
+      clientOptions: {
+        authProfileId: options.authProfileId,
+        assertCurrent,
+        storePath,
+        agentId: sessionAgentId,
+      },
     };
   }
   const model = resolveSessionModelRef(config, entry, sessionAgentId);
   const authProfileId = entry?.authProfileOverride ?? options.authProfileId;
-  const store = resolveCodexAppServerAuthProfileStore({ agentDir, config, authProfileId });
+  const store = await resolveCodexAppServerAuthProfileStore({ agentDir, config, authProfileId });
   const { plan, attempts } = prepareAgentRuntimeAuth({
     provider: model.provider,
     modelId: model.model,
@@ -185,6 +216,7 @@ export async function prepareCodexControlSessionAuth(
         config,
       })
     : undefined;
+  assertCurrent();
   return {
     authProfileId: handoff.authProfileId,
     clientOptions: {
@@ -195,6 +227,9 @@ export async function prepareCodexControlSessionAuth(
       authProfileStore: binding?.authProfileStore ?? store,
       authBindingFingerprint: binding?.fingerprint,
       agentDir,
+      assertCurrent,
+      storePath,
+      agentId: sessionAgentId,
     },
   };
 }
@@ -233,8 +268,9 @@ export async function codexControlRequest(
   pluginConfig: unknown,
   method: CodexControlMethod,
   requestParams?: unknown,
-  options: CodexControlRequestOptions = {},
+  inputOptions: CodexControlRequestOptions = {},
 ): Promise<unknown> {
+  const options = { ...inputOptions };
   try {
     options.controlObservation?.phase("prepare");
   } catch {
@@ -263,8 +299,10 @@ export async function codexControlRequest(
     assertCurrent: options.assertCurrent,
     startOptions,
     config: options.config,
+    agentId: options.agentId,
     sessionKey: options.sessionKey,
     sessionId: options.sessionId,
+    storePath: options.storePath,
     agentDir: options.agentDir,
     isolated: options.isolated,
     ...(options.catalogPreview
@@ -291,12 +329,17 @@ export async function codexControlRequest(
           response = await resumeCodexAppServerThread({
             client,
             request: { ...requestParams, threadId: requestParams.threadId },
-            requestResume: () => request({ method, requestParams }),
+            requestResume: () =>
+              request({ method, requestParams, assertCurrent: options.assertOwnerCurrent }),
             abandonClient: () => closeCodexStartupClientBestEffort(client),
           });
         } else {
           try {
-            response = await request({ method, requestParams });
+            response = await request({
+              method,
+              requestParams,
+              assertCurrent: options.assertOwnerCurrent,
+            });
           } catch (error) {
             if (
               nativeAuthFork &&
@@ -324,7 +367,19 @@ export async function codexControlRequest(
       },
     );
   }
-  return await requestCodexAppServerJson({ method, requestParams, ...controlRequestOptions });
+  return await requestCodexAppServerJson({
+    method,
+    requestParams,
+    ...controlRequestOptions,
+    ...(options.assertOwnerCurrent
+      ? {
+          assertCurrent: () => {
+            options.assertOwnerCurrent?.();
+            options.assertCurrent?.();
+          },
+        }
+      : {}),
+  });
 }
 
 export function safeCodexControlRequest<M extends CodexControlRequestMethod>(
@@ -351,50 +406,22 @@ export async function safeCodexControlRequest(
   );
 }
 
-async function safeCodexModelList(
-  pluginConfig: unknown,
-  limit: number,
-  config?: AuthProfileOrderConfig,
-  agentDir?: string,
-) {
-  return await safeValue(
-    async () =>
-      await listCodexAppServerModels(requestOptions(pluginConfig, limit, config, agentDir)),
-  );
-}
-
 export async function readCodexStatusProbes(
   pluginConfig: unknown,
   config?: AuthProfileOrderConfig,
   agentDir?: string,
 ) {
+  const options = { config, agentDir };
+  const probe = <M extends CodexControlRequestMethod>(
+    method: M,
+    params: CodexAppServerRequestParams<M>,
+  ) => safeCodexControlRequest(pluginConfig, method, params, options);
   const [models, account, limits, mcps, skills] = await Promise.all([
-    safeCodexModelList(pluginConfig, 20, config, agentDir),
-    safeCodexControlRequest(
-      pluginConfig,
-      CODEX_CONTROL_METHODS.account,
-      { refreshToken: false },
-      { config, agentDir },
-    ),
-    safeCodexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.rateLimits, undefined, {
-      config,
-      agentDir,
-    }),
-    safeCodexControlRequest(
-      pluginConfig,
-      CODEX_CONTROL_METHODS.listMcpServers,
-      { limit: 100 },
-      { config, agentDir },
-    ),
-    safeCodexControlRequest(
-      pluginConfig,
-      CODEX_CONTROL_METHODS.listSkills,
-      {},
-      {
-        config,
-        agentDir,
-      },
-    ),
+    safeValue(() => listCodexAppServerModels(requestOptions(pluginConfig, 20, config, agentDir))),
+    probe(CODEX_CONTROL_METHODS.account, { refreshToken: false }),
+    probe(CODEX_CONTROL_METHODS.rateLimits, undefined),
+    probe(CODEX_CONTROL_METHODS.listMcpServers, { limit: 100 }),
+    probe(CODEX_CONTROL_METHODS.listSkills, {}),
   ]);
 
   return { models, account, limits, mcps, skills };

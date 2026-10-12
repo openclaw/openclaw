@@ -1,5 +1,7 @@
 {
   "id": "xai",
+  "name": "xAI (Grok)",
+  "description": "xAI provider for Grok models, Grok web and X search, code execution, speech, and media generation.",
   "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {
@@ -20,6 +22,7 @@
         "aliases": {
           "grok-4.3-latest": "grok-4.3",
           "grok-4.5-latest": "grok-4.5",
+          "grok-4.7-latest": "grok-4.7",
           "grok-build-latest": "grok-4.5"
         }
       }
@@ -48,6 +51,15 @@
         "baseUrl": "https://api.x.ai/v1",
         "api": "openai-responses",
         "models": [
+          {
+            "id": "grok-4.7",
+            "name": "Grok 4.7",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 2, "output": 6, "cacheRead": 0.5, "cacheWrite": 0 },
+            "contextWindow": 500000,
+            "maxTokens": 64000
+          },
           {
             "id": "grok-4.6",
             "name": "Grok 4.6",
@@ -105,6 +117,11 @@
         ]
       }
     },
+    "aliases": {
+      "x-ai": {
+        "provider": "xai"
+      }
+    },
     "discovery": {
       "xai": "refreshable"
     },
@@ -113,7 +130,7 @@
         "provider": "xai",
         "model": "auto",
         "reason": "The xAI auto selector has retired; use a concrete model.",
-        "retirement": { "replacedBy": "grok-4.6" },
+        "retirement": { "replacedBy": "grok-4.7" },
         "when": { "baseUrlHosts": ["cli-chat-proxy.grok.com", "api.x.ai"] }
       },
       {

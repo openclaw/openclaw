@@ -1,8 +1,8 @@
 import { isUtf8 } from "node:buffer";
-import path from "node:path";
 import { requireGitBuffer } from "../../agents/worktrees/git.js";
 import { manifestNodes } from "./workspace-manifest-comparison.js";
 import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 
 function decodeGitPaths(listed: Buffer): string[] {
   if (!isUtf8(listed)) {
@@ -56,11 +56,7 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
   // The inventory contract requires explicit ancestors, including directories
   // omitted by Git and empty directories already accepted from the guest.
   for (const entryPath of paths) {
-    for (
-      let parent = path.posix.dirname(entryPath);
-      parent !== ".";
-      parent = path.posix.dirname(parent)
-    ) {
+    for (const parent of workspacePathAncestors(entryPath)) {
       paths.add(parent);
     }
   }

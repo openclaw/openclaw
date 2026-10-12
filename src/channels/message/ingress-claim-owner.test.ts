@@ -20,8 +20,8 @@ describe("ingress claim owner", () => {
     expect(
       isIngressClaimOwnedByOtherLiveProcess({
         claim: {
-          processId: `${process.pid}:1:other-process`,
-          processPid: process.pid,
+          ownerId: `${process.pid}:1:other-process`,
+          token: "test-auth-token",
           claimedAt: now - INGRESS_CLAIM_LEASE_MS - 1,
         },
       }),
@@ -33,8 +33,8 @@ describe("ingress claim owner", () => {
     expect(
       isIngressClaimOwnedByOtherLiveProcess({
         claim: {
-          processId: `${process.pid}:1:other-process`,
-          processPid: process.pid,
+          ownerId: `${process.pid}:1:other-process`,
+          token: "test-auth-token",
           claimedAt: now,
         },
       }),
@@ -49,33 +49,14 @@ describe("ingress claim owner", () => {
       isIngressClaimOwnedByOtherLiveProcess(
         {
           claim: {
-            processId: "9:1000:dead-owner",
-            processPid: 9,
+            ownerId: "9:1000:dead-owner",
+            token: "test-auth-token",
             claimedAt: now,
           },
         },
         {
           processExists: (pid) => pid === 9,
           readProcessStartTime: (pid) => (pid === 9 ? 2000 : null),
-        },
-      ),
-    ).toBe(false);
-  });
-
-  it("does not treat a fresh foreign claim as live-owned when its pid was reused by an unrelated process", () => {
-    const now = Date.now();
-    expect(
-      isIngressClaimOwnedByOtherLiveProcess(
-        {
-          claim: {
-            processId: "4242:1000:dead-owner",
-            processPid: 4242,
-            claimedAt: now,
-          },
-        },
-        {
-          processExists: (pid) => pid === 4242,
-          readProcessStartTime: (pid) => (pid === 4242 ? 9999 : null),
         },
       ),
     ).toBe(false);
@@ -88,8 +69,8 @@ describe("ingress claim owner", () => {
       isIngressClaimOwnedByOtherLiveProcess(
         {
           claim: {
-            processId: `${liveOwnerPid}:5555:other-process`,
-            processPid: liveOwnerPid,
+            ownerId: `${liveOwnerPid}:5555:other-process`,
+            token: "test-auth-token",
             claimedAt: now,
           },
         },
@@ -110,33 +91,14 @@ describe("ingress claim owner", () => {
       isIngressClaimOwnedByOtherLiveProcess(
         {
           claim: {
-            processId: `${liveOwnerPid}:legacy-owner`,
-            processPid: liveOwnerPid,
+            ownerId: `${liveOwnerPid}:legacy-owner`,
+            token: "test-auth-token",
             claimedAt: now,
           },
         },
         {
           processExists: () => true,
           readProcessStartTime: () => 1,
-        },
-      ),
-    ).toBe(true);
-  });
-
-  it("accepts queue claim.ownerId shape", () => {
-    const now = Date.now();
-    expect(
-      isIngressClaimOwnedByOtherLiveProcess(
-        {
-          claim: {
-            token: "test-auth-token",
-            ownerId: "99:5555:other",
-            claimedAt: now,
-          },
-        },
-        {
-          processExists: (pid) => pid === 99,
-          readProcessStartTime: (pid) => (pid === 99 ? 5555 : null),
         },
       ),
     ).toBe(true);

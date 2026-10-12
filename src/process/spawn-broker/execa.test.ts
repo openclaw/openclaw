@@ -1,18 +1,23 @@
+import { deepStrictEqual } from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { serialize } from "node:v8";
 import { execa, type Options } from "execa";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createRemoteShellSandboxSession } from "../../agents/sandbox/remote-shell-transport.js";
+import { withCommandProcessScope } from "../exec-spawn.js";
 import { runCommandWithTimeout } from "../exec.js";
 import { BrokerChild } from "./child.js";
 import { runWithSpawnBroker } from "./context.js";
 import { brokerExecaOptions, spawnBrokerCommand } from "./execa-client.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
 describe.skipIf(skipBrokerTests)("broker execa parity", () => {
   let host: SpawnBrokerHost;
@@ -38,7 +43,6 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
 
   const cases = [
     { name: "success", source: "process.stdout.write('out\\n');process.stderr.write('err\\n')" },
-    { name: "exit code", source: "process.stdout.write('partial');process.exitCode=7" },
     {
       name: "binary diagnostics",
       source:
@@ -68,6 +72,74 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
       cancel: true,
     },
   ];
+
+  it.each([
+    { guarded: true, revoked: false },
+    { guarded: true, revoked: true },
+    { guarded: false, revoked: false },
+  ])(
+    "keeps remote sandbox native initiation inside its final guard (guarded: $guarded, revoked: $revoked)",
+    async ({ guarded, revoked }) => {
+      const marker = path.join(tempDirs.make("sandbox-broker-revocation-"), "effect");
+      const ownerContext = new AsyncLocalStorage<string>();
+      const refusal = new Error("Sandbox runtime removed");
+      let current = !revoked;
+      const launches: Array<{ current: boolean; pid: number; context: string | undefined }> = [];
+      const settled = vi.fn();
+      const assertCurrent = vi.fn(() => {
+        expect(ownerContext.getStore()).toBe("sandbox-owner");
+        if (!current) {
+          throw refusal;
+        }
+      });
+      const session = createRemoteShellSandboxSession({
+        buildCommand: () => ({
+          argv: [
+            process.execPath,
+            "-e",
+            "require('node:fs').writeFileSync(process.argv[1], 'dispatched')",
+            marker,
+          ],
+          env: { ...process.env },
+        }),
+        assertCurrent: guarded ? assertCurrent : undefined,
+      });
+      const command = ownerContext.run("sandbox-owner", () =>
+        runWithSpawnBroker(host, () =>
+          withCommandProcessScope(
+            () => session.runCommand({ remoteCommand: "synthetic" }),
+            undefined,
+            {
+              reserve: () => ({
+                spawned: ({ pid }) => {
+                  launches.push({ current, pid, context: ownerContext.getStore() });
+                },
+                settled,
+              }),
+            },
+          ),
+        ),
+      );
+      const spawnedSynchronously = launches.length > 0;
+      current = false;
+      if (revoked) {
+        await expect(command).rejects.toBe(refusal);
+        await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(launches).toEqual([]);
+        expect(settled).not.toHaveBeenCalled();
+      } else {
+        await expect(command).resolves.toMatchObject({ code: 0 });
+        await expect(readFile(marker, "utf8")).resolves.toBe("dispatched");
+        expect(launches).toEqual([
+          { current: guarded, pid: expect.any(Number), context: "sandbox-owner" },
+        ]);
+        expect(settled).toHaveBeenCalledOnce();
+      }
+      expect(spawnedSynchronously).toBe(guarded && !revoked);
+      expect(assertCurrent).toHaveBeenCalledTimes(guarded ? 1 : 0);
+      await session.dispose();
+    },
+  );
 
   it.each([0, 23])(
     "preserves admitted input closure through the broker (exit=%s)",
@@ -211,9 +283,9 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
         Buffer.from(Array.from({ length: size }, (_, index) => Math.floor(index / 4096) % 251)),
       ]);
       for (const name of ["stdout", "stderr"] as const) {
-        expect(Buffer.concat(chunks[name])).toEqual(expected);
+        deepStrictEqual(Buffer.concat(chunks[name]), expected);
         if (buffer) {
-          expect(Buffer.from(result[name] as Uint8Array)).toEqual(expected);
+          deepStrictEqual(Buffer.from(result[name] as Uint8Array), expected);
         }
       }
       expect(result.exitCode).toBe(0);

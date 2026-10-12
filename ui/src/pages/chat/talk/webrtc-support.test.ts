@@ -79,20 +79,7 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
     await expect(readAnswer(exchange, () => true, null, "openai")).resolves.toBe(answer);
   });
 
-  it("honors a response limit declared by a custom provider", async () => {
-    const answer = "x".repeat(OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES + 1);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(answer)),
-    );
-    const exchange = new RealtimeTalkWebRtcOfferExchange();
-
-    await expect(
-      readAnswer(exchange, () => true, OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES, "custom-provider"),
-    ).rejects.toThrow("Realtime WebRTC SDP answer: text response exceeds 262144 bytes");
-  });
-
-  it("rejects and cancels a streamed SDP answer over the 256 KiB boundary", async () => {
+  it("cancels a streamed SDP answer exceeding a custom provider's 256 KiB limit", async () => {
     const cancel = vi.fn(() => Promise.resolve());
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -113,9 +100,9 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
     );
     const exchange = new RealtimeTalkWebRtcOfferExchange();
 
-    await expect(readAnswer(exchange)).rejects.toThrow(
-      "Realtime WebRTC SDP answer: text response exceeds 262144 bytes",
-    );
+    await expect(
+      readAnswer(exchange, () => true, OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES, "custom-provider"),
+    ).rejects.toThrow("Realtime WebRTC SDP answer: text response exceeds 262144 bytes");
     expect(cancel).toHaveBeenCalledOnce();
     expect(body.locked).toBe(false);
   });

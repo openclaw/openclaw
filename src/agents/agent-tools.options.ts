@@ -6,8 +6,8 @@ import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
+import type { MemoryFlushToolRunContext } from "./agent-tools.memory-flush.types.js";
 import type { SkillInstructionDeliveryCache } from "./agent-tools.read.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import type {
@@ -19,8 +19,8 @@ import type { ResolvedConversationCapabilityProfile } from "./conversation-capab
 import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import type { DelegationCapability } from "./delegation-capability.js";
 import type { ModelAuthMode } from "./model-auth.js";
+import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
 import type { OpenClawSharedToolsOptions } from "./openclaw-tools.types.js";
-import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import type { SandboxContext } from "./sandbox.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
@@ -55,12 +55,14 @@ export type OpenClawCodingToolsOptions = {
   trace?: DiagnosticTraceContext;
   /** What initiated this run (for trigger-specific tool restrictions). */
   trigger?: string;
+  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
+  continuesConversation?: boolean;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
   /** Relative workspace path that memory-triggered writes may append to. */
   memoryFlushWritePath?: string;
-  agentDir?: string;
-  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  /** Provider-owned persistence surface for a tools-arm memory flush. */
+  memoryFlushTools?: MemoryFlushToolRunContext;
   workspaceDir?: string;
   /** Additional containment for a trusted scheduled workspace; never weakens configured policy. */
   requireWorkspaceOnly?: true;
@@ -68,21 +70,12 @@ export type OpenClawCodingToolsOptions = {
   abortSignal?: AbortSignal;
   /** Disable hook-owned diagnostics when an outer runtime owns tool diagnostics. */
   emitBeforeToolCallDiagnostics?: boolean;
-  /**
-   * Provider of the currently selected model (used for provider-specific tool quirks).
-   * Example: "anthropic", "openai", "google", "openai".
-   */
-  modelProvider?: string;
-  /** Model id for the current provider (used for model-specific tool gating). */
-  modelId?: string;
   /** Attempt-local authority to start or redirect delegated work. */
   delegationCapability?: DelegationCapability;
   /** Model API for the current provider (used for provider-native tool arbitration). */
   modelApi?: string;
   /** Resolved endpoint for provider-native tool eligibility. */
   modelBaseUrl?: string;
-  /** Model context window in tokens (used to scale read-tool output budget). */
-  modelContextWindowTokens?: number;
   /** Resolved runtime model compatibility hints. */
   modelCompat?: ModelCompatConfig;
   /** If false, keep OpenClaw web_search even when a provider-native search tool is active. */
@@ -98,14 +91,14 @@ export type OpenClawCodingToolsOptions = {
   memberRoleIds?: string[];
   /** True when runtimeToolAllowlist is real parent authority that child sessions inherit. */
   inheritRuntimeToolAllowlist?: boolean;
+  /** Plugin-owned optional tools granted to this run (e.g. subagent toolsAlsoAllow). */
+  runtimePluginToolGrant?: import("../plugins/runtime/tool-grant.js").RuntimePluginToolGrant;
   /** Mutable spawn capability snapshot refreshed after late-bound runtime tools are authorized. */
   inheritedToolAllowlistRef?: string[];
   /** Mutable cron creator cap ref for callers that append final runtime tools later. */
   cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
   /** Mutable proof that the cron cap reached the final executable surface. */
   cronCreatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
-  /** If true, the model has native vision capability */
-  modelHasVision?: boolean;
   /** Attempt-local full skill reads that remain visible in the model context. */
   skillInstructionDeliveryCache?: SkillInstructionDeliveryCache;
   /** Keep the message tool available even when the selected profile omits it. */
@@ -126,8 +119,6 @@ export type OpenClawCodingToolsOptions = {
   toolConstructionPlan?: OpenClawCodingToolConstructionPlan;
   /** Ring-zero OpenClaw tool; set only by the OpenClaw agent runner. */
   systemAgentTool?: import("./tools/system-agent-tool.js").SystemAgentToolOptions;
-  /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
-  authProfileStore?: AuthProfileStore;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
   /** Reads the sticky untrusted-content flag for the current user turn. */
@@ -148,6 +139,7 @@ export type OpenClawCodingToolsOptions = {
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 } & OpenClawSharedToolsOptions &
+  Omit<ModelAwareToolContext, "requesterAgentIdOverride"> &
   AgentRunClientContext &
   AgentRunMessageContext &
   AgentRunChannelContext;

@@ -1,10 +1,11 @@
 // Connection-bound delivery queue operations shared by standalone and compound owners.
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { chunkItems } from "../utils/chunk-items.js";
 import {
   bindDeliveryQueueEntry,
   deliveryQueueEntriesQuery,
-  inflateDeliveryQueueRow,
+  inflateDeliveryQueueRows,
   loadDeliveryQueueEntryInDatabase,
   pruneDeliveryQueueTombstoneAges,
   pruneDeliveryQueueTombstones,
@@ -19,6 +20,7 @@ import {
   inferDeliveryQueueFailureRetention,
   parseDeliveryQueueCompletionRetention,
   projectDeliveryQueueTerminalEntry,
+  resolveDeliveryQueueAttemptCount,
   type DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -86,88 +88,131 @@ export function expireStagingAndLoadDeliveryQueueEntriesInDatabase(
     },
   );
   return {
-    entries: snapshot.entryRows
-      .map(inflateDeliveryQueueRow)
-      .filter((entry): entry is DeliveryQueueEntryState => entry != null),
-    stagingEntries: snapshot.stagingRows
-      .map(inflateDeliveryQueueRow)
-      .filter((entry): entry is DeliveryQueueEntryState => entry != null),
+    entries: inflateDeliveryQueueRows(snapshot.entryRows),
+    stagingEntries: inflateDeliveryQueueRows(snapshot.stagingRows),
   };
 }
+
+type DeliveryQueueOwner = { status: DeliveryQueueStoredStatus; settlementPending?: true };
 
 /** Keeps namespace reads and receipt pruning on the caller's exact transaction handle. */
 export function getDeliveryQueueEntryOwnersInDatabase(
   database: OpenClawStateDatabase,
   queueNames: readonly string[],
   id: string,
-): Map<string, { status: DeliveryQueueStoredStatus; settlementPending?: true }> {
-  if (queueNames.length === 0) {
+): Map<string, DeliveryQueueOwner> {
+  return getDeliveryQueueEntriesOwnersInDatabase(database, queueNames, [id]).get(id) ?? new Map();
+}
+
+export function getDeliveryQueueEntriesOwnersInDatabase(
+  database: OpenClawStateDatabase,
+  queueNames: readonly string[],
+  ids: readonly string[],
+): Map<string, Map<string, DeliveryQueueOwner>> {
+  if (queueNames.length === 0 || ids.length === 0) {
     return new Map();
   }
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  return runSqliteImmediateTransactionSync(
+    database.db,
+    () => selectDeliveryQueueEntryOwners(database, queueNames, ids),
+    { databaseLabel: "openclaw-state", operationLabel: "read delivery queue status" },
+  );
+}
+
+/** Read receipt and live custody within the same pruning transaction. */
+export function inspectDeliveryQueueReceiptInDatabase(
+  database: OpenClawStateDatabase,
+  input: { queueName: string; id: string; includePending: boolean },
+) {
   return runSqliteImmediateTransactionSync(
     database.db,
     () => {
-      const readExact = () =>
-        executeSqliteQuerySync(
-          database.db,
-          queueDb
-            .selectFrom("delivery_queue_entries")
-            .select(["queue_name", "status", "recovery_state"])
-            .select((eb) =>
-              eb
-                .case("recovery_state")
-                .when("completed_bounded")
-                .then(eb.ref("entry_json"))
-                .else(null)
-                .end()
-                .as("entry_json"),
-            )
-            .where("queue_name", "in", queueNames)
-            .where("id", "=", id),
-        ).rows;
-      let rows = readExact();
-      let pruned = false;
-      for (const row of rows) {
-        if (row.entry_json === null) {
-          continue;
-        }
-        const entry = safeParseJsonRecord(row.entry_json);
-        const retention = parseDeliveryQueueCompletionRetention(entry?.completionRetention, id);
-        if (typeof retention === "object") {
-          pruneDeliveryQueueTombstones(database.db, Date.now(), {
-            queueName: row.queue_name,
-            idPrefix: retention.idPrefix,
-          });
-          pruned = true;
-        }
-      }
-      if (pruned) {
-        rows = readExact();
-      }
-      return new Map(
-        rows.flatMap((row) =>
-          row.status
-            ? [
-                [
-                  row.queue_name,
-                  {
-                    status: row.status,
-                    ...(row.status === "failed" && row.recovery_state === "settlement_pending"
-                      ? { settlementPending: true as const }
-                      : {}),
-                  },
-                ],
-              ]
-            : [],
-        ),
-      );
+      const status = selectDeliveryQueueEntryOwners(database, [input.queueName], [input.id])
+        .get(input.id)
+        ?.get(input.queueName)?.status;
+      return {
+        status,
+        pendingEntry:
+          input.includePending && status === "pending"
+            ? loadDeliveryQueueEntryInDatabase(database, input.queueName, input.id, "pending")
+            : null,
+      };
     },
-    {
-      databaseLabel: "openclaw-state",
-      operationLabel: "read delivery queue status",
-    },
+    { databaseLabel: "openclaw-state", operationLabel: "read delivery queue receipt" },
   );
+}
+
+function selectDeliveryQueueEntryOwners(
+  database: OpenClawStateDatabase,
+  queueNames: readonly string[],
+  ids: readonly string[],
+): Map<string, Map<string, DeliveryQueueOwner>> {
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const uniqueIds = [...new Set(ids)];
+  const readExact = () => {
+    const query = queueDb
+      .selectFrom("delivery_queue_entries")
+      .select(["id", "queue_name", "status", "recovery_state"])
+      .select((eb) =>
+        eb
+          .case("recovery_state")
+          .when("completed_bounded")
+          .then(eb.ref("entry_json"))
+          .else(null)
+          .end()
+          .as("entry_json"),
+      )
+      .where("queue_name", "in", queueNames);
+    const readChunk = (chunk: string[]) => {
+      const id = chunk.length === 1 ? chunk[0] : undefined;
+      return executeSqliteQuerySync(
+        database.db,
+        id === undefined ? query.where("id", "in", chunk) : query.where("id", "=", id),
+      ).rows;
+    };
+    // Bound parameter counts while retaining one transaction across the complete batch.
+    return chunkItems(uniqueIds, 500).flatMap(readChunk);
+  };
+  let rows = readExact();
+  let pruned = false;
+  const prunedPrefixes = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (row.entry_json === null) {
+      continue;
+    }
+    const entry = safeParseJsonRecord(row.entry_json);
+    const retention = parseDeliveryQueueCompletionRetention(entry?.completionRetention, row.id);
+    if (typeof retention === "object") {
+      const prefixes = prunedPrefixes.get(row.queue_name) ?? new Set<string>();
+      if (prefixes.has(retention.idPrefix)) {
+        continue;
+      }
+      prefixes.add(retention.idPrefix);
+      prunedPrefixes.set(row.queue_name, prefixes);
+      const changed = pruneDeliveryQueueTombstones(database.db, Date.now(), {
+        queueName: row.queue_name,
+        idPrefix: retention.idPrefix,
+      });
+      pruned = changed || pruned;
+    }
+  }
+  if (pruned) {
+    rows = readExact();
+  }
+  const owners = new Map<string, Map<string, DeliveryQueueOwner>>();
+  for (const row of rows) {
+    if (row.status) {
+      const namespaces = owners.get(row.id) ?? new Map<string, DeliveryQueueOwner>();
+      namespaces.set(row.queue_name, {
+        status: row.status,
+        ...(row.status === "failed" && row.recovery_state === "settlement_pending"
+          ? { settlementPending: true as const }
+          : {}),
+      });
+      owners.set(row.id, namespaces);
+    }
+  }
+  return owners;
 }
 
 export function loadDeliveryQueueEntriesInDatabase(
@@ -181,9 +226,7 @@ export function loadDeliveryQueueEntriesInDatabase(
       .orderBy("enqueued_at", "asc")
       .orderBy("id", "asc"),
   ).rows;
-  return rows
-    .map(inflateDeliveryQueueRow)
-    .filter((entry): entry is DeliveryQueueEntryState => entry != null);
+  return inflateDeliveryQueueRows(rows);
 }
 
 export function deleteDeliveryQueueEntryInDatabase(
@@ -281,6 +324,9 @@ export function reserveDeliveryQueueEntryAttemptInDatabase(
     expectedPlatformSendAttemptId?: string;
   },
 ): ReserveDeliveryQueueAttemptResult {
+  if (!Number.isInteger(params.maxAttempts) || params.maxAttempts <= 0) {
+    throw new Error(`Invalid delivery attempt budget: ${params.maxAttempts}`);
+  }
   const current = loadDeliveryQueueEntryInDatabase(
     database,
     params.queueName,
@@ -296,13 +342,7 @@ export function reserveDeliveryQueueEntryAttemptInDatabase(
   ) {
     throw new Error(`Delivery platform claim was lost: ${params.id}`);
   }
-  const persistedAttemptCount =
-    typeof current.attemptCount === "number" &&
-    Number.isInteger(current.attemptCount) &&
-    current.attemptCount >= 0
-      ? current.attemptCount
-      : 0;
-  const attemptCount = Math.max(persistedAttemptCount, current.retryCount);
+  const attemptCount = resolveDeliveryQueueAttemptCount(current);
   if (attemptCount >= params.maxAttempts) {
     return { status: "exhausted", attemptCount };
   }

@@ -10,7 +10,201 @@ sidebarTitle: "Gateway and nodes"
 
 Reach the Gateway and paired nodes from plugin code, and the events a long-lived Gateway service receives. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference.
 
+## Service scheduling
+
+Register a service with `apiVersion: 2` to require the host-owned
+`PluginServiceSchedulerV1` capability in its start and stop context:
+
+```typescript
+api.registerService({
+  id: "catalog-refresh",
+  apiVersion: 2,
+  start({ scheduler }) {
+    scheduler.schedule({
+      id: "refresh",
+      delayMs: 0,
+      everyMs: 60_000,
+      run: () => refreshCatalog({ signal: scheduler.signal }),
+    });
+  },
+});
+```
+
+Import `OpenClawPluginServiceV2`, `OpenClawPluginServiceContextV2`, and
+`PluginServiceSchedulerV1` from `openclaw/plugin-sdk/plugin-entry` when naming
+these contracts. Existing `OpenClawPluginService` and
+`OpenClawPluginServiceContext` types remain source-compatible; their scheduler
+field is optional. The Gateway supplies a scheduler to both service versions.
+
+`schedule` accepts either an absolute `atMs` or a relative `delayMs`. Job IDs
+belong to one scope: scheduling the same ID replaces its pending dispatch,
+while other services and child scopes can use the same ID independently.
+`mode: "earliest"` retains the earlier pending deadline. `everyMs` schedules
+the next run after the callback settles and coalesces missed periods; callbacks
+must return their asynchronous work so retirement can join it. Errors are
+reported by the host scheduler. The returned handle's `cancel()` prevents
+future dispatch, and `stop()` also waits for that job's running callback.
+
+Use `scheduler.scope()` for a shorter connection or watcher lifetime. Its
+`beginClose()` closes admission, aborts its signal, and cancels pending work;
+`await stop()` also joins running work and all descendants. Closing a child
+does not stop its parent or siblings. Closing the service closes all its child
+scopes. Retained `schedule` and `scope` functions throw after closure. Do not
+await a scope's `stop()` from one of its own running callbacks.
+
+The host first closes scheduling admission and signals cancellation, then invokes
+the service's stop hook. Retirement waits for both that hook and scheduled work.
+Plugins retain ownership of reconnection policy, sockets, watchers, durable flush
+ordering, and delivery custody. Stop transports and flush pending delivery in the
+owner's required order, then join its child scope before closing resources used
+by that work. Pass the lifetime signal to operations that support cancellation,
+and finish admitted writes before returning. Scheduling creates no durable jobs
+and changes no stored config or state; an update requires no state migration.
+
+Channel Gateway adapters opt in with `apiVersion: 2`. Their `startAccount` and
+`stopAccount` callbacks receive `ChannelGatewayContextV2`, including the required
+account scheduler. Import that context and `ChannelGatewayAdapterV2` from
+`openclaw/plugin-sdk/channel-contract`. Existing version 1 adapters keep an
+optional scheduler field and continue to work unchanged. The host supplies the
+same capability to both versions and joins scheduled work before retiring an
+account. Bundled plugin timer migrations can adopt it independently.
+
+`ChannelPlugin<Account, Probe, Audit>` and `createChatChannelPlugin` default to
+the version 1 Gateway adapter, preserving existing declarations and manual calls.
+Use `ChannelPlugin<Account, Probe, Audit, 2>` or the fourth `createChatChannelPlugin`
+type argument for a version 2 adapter. Inline `api.registerChannel` registrations
+infer the callback context from the adapter's `apiVersion`.
+
+Published factories whose older parameter contracts did not accept a scheduler
+use `resolvePluginServiceScheduler` from `openclaw/plugin-sdk/runtime` in their
+version 1 adapter, then delegate to their version 2 implementation. The resolver
+accepts an explicit handle or borrows the currently bound service, account, or
+executable CLI lifetime. It rejects missing or closed owners and never creates a
+root scheduler. New factories require the handle explicitly.
+
+CLI callbacks retain the scheduling owner captured when their command is
+registered. Timed callbacks run in the same plugin instance without inheriting
+the initiating request or operator authority. A command that serves a runtime
+must remain pending until that runtime closes; returning from the action lets
+the executable retire and join its scheduler before releasing the plugin.
+
+One-shot diagnostics exporters borrow the existing CLI SDK host scheduler. When
+export is enabled without that host, startup reports a clear error; the agent
+command reports the diagnostic failure and continues. Exporter shutdown retires
+only its service scope, leaving the CLI scheduler available to other work.
+
 ## Gateway and node namespaces
+
+### Session resource methods
+
+A plugin can declare `sessionAccess` when registering an additive Gateway method:
+
+```typescript
+api.registerGatewayMethod("my-plugin.session.open", handleOpen, {
+  scope: "operator.write",
+  sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "my_tool" },
+});
+```
+
+This requires a current authenticated profile, an existing canonical top-level
+`sessionKey`, and, when supplied, its matching `agentId`. Broad writers retain
+the session's sharing rules. `allowOwnSessionScope` additionally admits
+`operator.sessions.write` only for the caller's own session. `requiredTool`
+checks the canonical effective session tool policy and an admitted agent run's
+tool limits. Agent callers are bound to their own conversation. Currently,
+resource tool-policy admission does not support locked model selection.
+
+The handler receives `sessionAccessAuthority`. Call `assertCurrent()` before
+and after awaited preparation and immediately before effects. The router closes
+this invocation handle when the handler finishes; it cannot be reused to adopt
+new resources afterward.
+
+Use `retain()` during the handler to obtain an original-person access borrow
+with `signal`, `assertCurrent()` and `release()`, for example for an interactive
+viewer. Use `retainSession()` for a resource shared by independently authorized
+collaborators. That second borrow checks only the exact session incarnation and
+store generation; it does not authorize operations. Each operation still needs
+its own person/run admission. Normal row progress preserves both lifetimes;
+reset, deletion or physical-store replacement invalidates the session borrow.
+Release every borrow on failed startup, replacement and service cleanup.
+
+`sandboxRequired` describes the admitted session/role constraint. A consumer
+must provide a compliant backend or report that its backend is unsupported.
+This metadata does not turn a Gateway-hosted process into a sandbox.
+
+For tool presentation, `readGatewayToolOperatorScopes()` from
+`openclaw/plugin-sdk/agent-harness-runtime` returns a copy of the current admitted
+operator's scopes after checking that authority. It returns `undefined` for
+system/local calls without an operator capture. It does not grant permissions;
+the selected Gateway method still authorizes the request.
+
+### Person access lifetimes
+
+`api.registerGatewayAccessPolicy({ authorize })` adds a plugin-owned access
+requirement to authenticated person admission. The callback receives the current
+configuration and the canonical profile's ID, email aliases, optional verified
+`githubAccountIds`, and assigned role. Account IDs come from the existing identity
+owner; display logins and public email do not establish that binding.
+The Gateway resolves `requiredByRole` from the person's effective role and this
+plugin's ID; role-bound policies use that fact instead of inferring a binding
+from the default role's name.
+Return `undefined` when the policy does not govern that person. Otherwise return
+`{ assertCurrent, signal }`; reject admission when the required access is absent.
+
+A named Gateway role can set `accessPolicyPlugin` to your plugin ID. That role
+requires a current authority from your registered policy, including when the
+plugin cannot load or its manifest is unavailable. Returning `undefined` does
+not satisfy an explicit role binding. Roles without the binding retain their
+existing policy behavior, and the Gateway owner remains independent.
+
+The assertion must check the original access source immediately before an action.
+Abort its signal when that source expires or is revoked, including plugin service
+shutdown. An ended source must stay ended if a later grant is created. A renewal
+may extend an uninterrupted source. Keep the source in its existing lifecycle
+owner and initialize it before accepting person access.
+
+Return a native `AbortSignal`. Registration preserves native cancellation and
+cleanup while keeping the assertion and callable abort-reason values bound to
+the plugin instance. Plugin retirement also ends captured access.
+
+The Gateway binds the returned authority to the original person and carries it
+through WebSocket and HTTP requests, and through commands admitted for a linked
+channel sender. Linked administrators must satisfy the same role-bound person
+policy, including after awaited command preparation. Revoking an admitted grant
+ends that command's authority; a replacement grant applies only to new admission.
+Explicitly configured command owners retain their independent authority.
+Ordinary transport disconnect is distinct
+from revocation. A policy must preserve independent staff access; it must not
+infer the requesting person's authority from a session's creator, display name,
+or sandbox state. Shared-secret system authority remains outside person policies.
+
+### Durable person access grants
+
+A policy that supports deferred shared publication returns a stable UUID as
+`grantId` on its access authority and implements
+`resume({ config, profile, requiredByRole, grantId })`. The Gateway records the plugin ID and this
+original grant reference with the accepted requester and scope ceiling; it does
+not persist the authority callback, signal, credentials, or email aliases.
+
+The Gateway also retains opaque lifetime IDs for the person's original email
+bindings. Moving an original alias to another profile ends that publication
+authority, even if the alias is later restored. Display edits and changes to
+aliases added after admission preserve the original binding. The plugin's grant
+UUID remains independently checked; these identity facts cannot replace it.
+
+`resume` must check that exact original grant, even when the person's current role
+would otherwise be exempt. Return its current authority while it remains active,
+and `undefined` only when the grant is definitively ended, absent, or replaced.
+Throw while the service is starting or its state is unavailable, so recovery
+retains the pending request instead of treating an unreadable grant as revoked.
+A renewal can retain the UUID only if it commits before the old grant expires;
+reinvitation after expiry or revocation must use a new UUID.
+
+Policies without durable grant support still govern live admission. Their
+unclassified authority cannot be converted into a restartable shared publication
+request. Shared publication currently supports one original governing grant;
+multiple dependencies cannot be inferred from that single reference. A newly
+applicable policy also requires fresh publication admission.
 
 <AccordionGroup>
   <Accordion title="api.runtime.gateway">
@@ -32,6 +226,89 @@ Reach the Gateway and paired nodes from plugin code, and the events a long-lived
     plugins are rejected. Failed methods throw a `GatewayClientRequestError`, preserving structured
     `details`, retry metadata, and the Gateway error code for recovery flows. Use `isAvailable()`
     before choosing this path from tools that can also run in standalone agent processes.
+
+    `await api.runtime.gateway.openPluginPanel({ panelId, sessionKey, agentId })`
+    opens this plugin's registered native session panel in the requesting
+    Control UI. Unlike arbitrary `request`, this narrow capability is also
+    available to user-installed plugins. The host binds the plugin ID, keeps
+    the caller's existing `operator.write` authority, and targets only the
+    browser that requested the current action or agent turn. It rejects after
+    plugin retirement, caller revocation, or requester disconnection; a session
+    key never selects someone else's browser. `{ ok: true }` confirms command
+    delivery, not completion of a plugin's asynchronous document load. Native
+    UI must be enabled and the plugin must register the named panel.
+
+    `await api.runtime.gateway.readSessionFacts({ sessionKeys })` reads at most
+    40 sessions and returns typed `{ sessions, warnings? }` data. Each session
+    includes its key, identity, agent, bounded redacted title and message preview,
+    run state (`active`, `idle`, or `failed`), optional observer digest
+    (health, headline, assessment, revision), pull-request numbers and states,
+    archive state, and last activity time. The message preview is capped at
+    400 characters. `pullRequestsUnavailable` distinguishes unknown PR state
+    from a confirmed empty list. This lifecycle-bound read reuses the Gateway's
+    session projection and context-bound PR snapshot owner, preserves current
+    caller authority and session visibility, and omits incognito sessions.
+    It returns prepared facts without waiting for Git or transcript enrichment;
+    previews can be absent while enrichment is pending. Missing PR snapshots
+    refresh in the background. Use `api.runtime.gateway.subscribeSessionChanges`
+    to reread the affected `sessionKey` when facts change, and call the returned
+    unsubscribe function when finished. Category-only changes carry
+    `factsInvalidated: "category"`; projections that do not use session categories
+    can ignore them. Unchanged facts need no age-based retry.
+    Retained handles reject after their owner closes; no new SDK barrel export
+    is needed.
+
+    `api.runtime.gateway.withSessionFacts(select, async (snapshot) => result)`
+    selects immutable facts through the same session-list filtering owner,
+    without pagination. Selection supports agent, archive, automation, activity,
+    and person filters, including the people facet. Unchanged session facts retain
+    object identity across reads; `revision` changes with the selected content or
+    its activity or retry deadline. Eligible human readers receive a stable opaque
+    `scope` for their query and current viewer, profile, access, configuration,
+    and redaction facts. Other callers receive `undefined`. The scope is not authority:
+    the host rechecks the caller after the callback settles, including awaited
+    plugin work. Consume reused results only inside this callback.
+
+    Selected rows include `isMain`. Failed acquisition batches retain authorized
+    roster fields with an `unavailable` reason; plugins can show their previous
+    facts for the same session identity and `redactionRevision`. When that revision
+    changes, discard retained text prepared under the old policy. Missing or no-longer-visible sessions are
+    omitted; `missingSessionKeys` identifies selected roster entries whose current
+    facts were omitted, so consumers can retire their fallback facts. Selected PR
+    facts retry from 60 seconds up to 15 minutes, retain a
+    last-confirmed list with `pullRequestsStale: true`, and reset on lifecycle
+    replacement or a successful read. When redaction rules change, the host omits
+    retained PR titles until fresh source text is available, while preserving
+    confirmed states and retry deadlines.
+    `activityExpiresAt` and `retryAt` describe the next relevant deadlines; no polling timer is created. Remove these
+    selection-only fields when adapting facts to another public response contract.
+
+    `await api.runtime.gateway.resolveGitHubAccount({ login, signal? })` resolves a
+    public GitHub login to `{ accountId, login }` using the Gateway's configured
+    GitHub API credential, with no anonymous retry. Bundled and trusted official
+    plugins use the existing `users.list` / `operator.read` permission; the caller,
+    plugin, and Gateway must stay active. Lookup failures return `{ error }` with
+    the existing GitHub `statusCode` (404 not found, 429 rate limited, 502 upstream
+    or network failure), a safe `message`, optional absolute `retryAtMs`, and
+    `credentialConfigured`. Cancellation and authority failures reject. The
+    optional capability is absent on older hosts; require an update rather than
+    implementing a private lookup. The transport owns timeout and identity validation.
+
+    `await api.runtime.gateway.withUserProfileIdentity({ profileId, emails, githubAccountIds }, run)`
+    prepares the canonical profile's original binding lifetimes for up to 500
+    selected email aliases under the existing `users.list` / `operator.read`
+    permission. Optional `githubAccountIds` binds up to 500 positive safe numeric
+    account IDs to that same canonical profile. The callback receives a synchronous `assertCurrent()` function.
+    Compose it with the action's own authorization in the store's final commit
+    guard and immediately before dispatching an external mutation. It reads
+    current facts published by the profile owner without querying SQLite on the
+    calling thread. Moving an alias away and back, merging the selected profile,
+    an unsettled profile mutation, or closing the caller invalidates the check.
+    Selected account IDs must remain verified members of that profile.
+    Unselected email bindings can change independently. The preparation is
+    released when the callback settles, and retained assertions then reject.
+    This capability checks the selected identity; it does not grant permission
+    to perform the action or roll back a mutation already accepted externally.
 
   </Accordion>
   <Accordion title="api.runtime.nodes">
@@ -190,6 +467,8 @@ Reach the Gateway and paired nodes from plugin code, and the events a long-lived
     unavailable state on expected preparation failure and let `isAvailable`
     withhold their commands; throwing aborts node startup. Use `watchAvailability`
     for later availability changes and `onDisconnect` for execution cleanup.
+    The cleanup callback returned by `watchAvailability` may return a promise.
+    Node shutdown awaits that callback and reports cleanup failures.
 
     <Warning>
     The optional `scopes` field requests Gateway operator scopes for the invocation. OpenClaw honors it only for bundled plugins and trusted official plugin installations; requests from other plugins do not elevate the call. When `openDuplex` runs inside an authenticated Gateway request, its effective scopes never exceed that authenticated caller's actual scopes, even if a trusted plugin requests stronger scopes. Without an authenticated incoming client, existing trusted-plugin scope behavior applies. Use requested scopes only when a trusted plugin must invoke a node command with a stricter Gateway scope, such as `operator.admin`.
@@ -217,6 +496,14 @@ before dispatch and each frame. Closing the service cancels open channels.
 Gateway-hosted services also receive `ctx.getCron?.()` for the scheduler operations
 already available to Gateway hooks: `list`, `add`, `update`, `remove`, and
 `removeStaleJobFamily`. Non-Gateway service hosts omit this getter.
+
+Current service handles also expose `enqueueRun(id, mode)` for service-owned
+work. It uses the normal cron admission queue with the service's live authority,
+independently of a completed agent tool caller. Use `"if-enabled"` to request an
+immediate run without overriding a disabled job. Retained handles still reject
+when the service stops or the scheduler is replaced, including while waiting for
+admission. This optional method is absent on older hosts; it has no caller-scoped
+fallback.
 
 Current Gateway service handles also provide `await cron.isEnabled()` to observe
 whether automatic scheduling is enabled, including the `OPENCLAW_SKIP_CRON`

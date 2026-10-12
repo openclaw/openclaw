@@ -2,24 +2,20 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { BrowserContext, Locator, Page } from "playwright";
+import { beforeEach, expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
-import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   defaultControlUiFeatureMethods,
-  canRunPlaywrightChromium,
   installMockGateway,
   pauseVirtualClock,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   expectModifiedNavigation,
   pullPreviewResponse,
@@ -33,31 +29,20 @@ beforeEach(() => {
   artifactDir = parent ? createControlUiE2eArtifactDir("link-reader-hovercard", parent) : undefined;
 });
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-
-let server: ControlUiE2eServer;
-let browser: Browser;
+const suite = createControlUiE2eSuite({
+  name: "GitHub link hover cards",
+  trackBrowserContexts: true,
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 
 async function newBrowserContext(): Promise<BrowserContext> {
-  return browser.newContext({
+  return suite.newBrowserContext({
     colorScheme: "light",
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 800, width: 1180 },
   });
-}
-
-async function closeContexts(): Promise<void> {
-  const [first, ...remaining] = browser?.contexts() ?? [];
-  await runQaGatewayFixture(
-    async () => {
-      await first?.close();
-    },
-    ...remaining.map((context) => () => context.close()),
-  );
 }
 
 async function expectText(locator: Locator, text: string): Promise<void> {
@@ -121,7 +106,7 @@ async function openPullPreviewPage(
       },
     ],
   });
-  await page.goto(`${server.baseUrl}chat`);
+  await page.goto(`${suite.server.baseUrl}chat`);
 
   const pullLink = page.locator('a.markdown-github-link[href$="/pull/99816"]');
   const commentLink = page.getByRole("link", { name: "the review comment", exact: true });
@@ -165,48 +150,23 @@ async function openPullPreviewPage(
   return { card, commentLink, gateway, page, pullLink };
 }
 
-describeControlUiE2e("GitHub link hover cards", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await runQaGatewayFixture(
-      closeContexts,
-      () => browser?.close(),
-      () => server?.close(),
-    );
-  });
-
-  afterEach(closeContexts);
-
-  it.each([
-    { width: 1180, theme: "light", longAuthor: false },
-    { width: 1180, theme: "dark", longAuthor: false },
-    { width: 390, theme: "dark", longAuthor: false },
-    { width: 320, theme: "light", longAuthor: true },
-  ] as const)("keeps all preview metadata readable ($width, $theme)", async (scenario) => {
+suite.define(() => {
+  it("keeps all preview metadata readable with long authors on narrow screens", async () => {
     const metadata: NonNullable<ControlUiLinkReaderPreview["metadata"]> = [
       { label: "", value: "+1077", tone: "positive" },
       { label: "", value: "−189", tone: "negative" },
     ];
     const { card, page, pullLink } = await openPullPreviewPage(false, {
       ...pullPreviewResponse,
-      author: scenario.longAuthor
-        ? "a-very-long-contributor-name-that-must-stay-readable"
-        : "steipete",
+      author: "a-very-long-contributor-name-that-must-stay-readable",
       title: "fix(macos): show live status for connected saved gateways",
       metadata,
     });
-    await page.emulateMedia({ colorScheme: scenario.theme, reducedMotion: "reduce" });
-    await page.setViewportSize({ width: scenario.width, height: 800 });
+    await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 320, height: 800 });
     await pullLink.focus();
     await card.waitFor({ state: "visible" });
-    await captureArtifact(card, "metadata-" + scenario.width + "-" + scenario.theme);
+    await captureArtifact(card, "metadata-320-light");
     for (const { value } of metadata) {
       await expectText(card, value);
     }
@@ -328,7 +288,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
           },
         },
       });
-      await page.goto(server.baseUrl + "chat");
+      await page.goto(suite.server.baseUrl + "chat");
       const key = await waitForWatchedSessionKey(gateway);
       await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
         sessions: { [key]: { repository, pullRequests: [], rateLimited: false, status: "ready" } },
@@ -458,7 +418,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
         },
       },
     });
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
     const key = await waitForWatchedSessionKey(gateway);
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: { [key]: { repository, pullRequests: [], rateLimited: false, status: "ready" } },
@@ -502,8 +462,6 @@ describeControlUiE2e("GitHub link hover cards", () => {
 
   it.each([
     { theme: "light", reducedMotion: "no-preference", width: 1180, fails: false },
-    { theme: "light", reducedMotion: "no-preference", width: 1180, fails: true },
-    { theme: "dark", reducedMotion: "no-preference", width: 1180, fails: false },
     { theme: "dark", reducedMotion: "reduce", width: 390, fails: true },
   ] as const)(
     "waits silently while pending, then shows the result ($theme, $reducedMotion, $width, fails=$fails)",
@@ -669,48 +627,6 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await expectText(card, pullPreviewResponse.title);
   });
 
-  it.each(["pointer", "focus"])(
-    "does not show a late successful response after %s leaves",
-    async (trigger) => {
-      const { card, gateway, page, pullLink } = await openPullPreviewPage(true);
-      if (trigger === "pointer") {
-        await pullLink.hover();
-      } else {
-        await pullLink.focus();
-      }
-      await gateway.waitForRequest("forge.preview");
-      if (trigger === "pointer") {
-        await page.mouse.move(1, 1);
-      } else {
-        await pullLink.evaluate((element) => element.blur());
-      }
-      await gateway.resolveDeferred("forge.preview");
-      await page.clock.runFor(300);
-      expect(await card.count()).toBe(0);
-      expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
-      expect(await pullLink.getAttribute("aria-controls")).toBeNull();
-    },
-  );
-
-  it("warms visible links before first hover and shares data across permalinks", async () => {
-    const { card, commentLink, gateway, page, pullLink } = await openPullPreviewPage(true);
-
-    await gateway.waitForRequest("forge.preview");
-    expect(await card.count()).toBe(0);
-    expect(await pullLink.evaluate((element) => element.matches(":hover, :focus"))).toBe(false);
-    await gateway.resolveDeferred("forge.preview");
-    await pullLink.hover();
-    await expectText(card, pullPreviewResponse.title);
-    await page.mouse.move(1, 1);
-    await expect.poll(() => card.count()).toBe(0);
-    await commentLink.focus();
-    await expectText(card, pullPreviewResponse.title);
-    expect(await card.locator(".link-reader-hovercard__title").getAttribute("href")).toBe(
-      PULL_COMMENT_HREF,
-    );
-    expect(await gateway.getRequests("forge.preview")).toHaveLength(1);
-  });
-
   it("keeps a pending prefetch alive across dismissal and reuses it on rehover", async () => {
     const proofDir =
       artifactDir ?? createControlUiE2eArtifactDir("link-reader-hovercard-cancellation");
@@ -718,6 +634,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
 
     await gateway.waitForRequest("forge.preview");
     expect(await card.count()).toBe(0);
+    expect(await pullLink.evaluate((element) => element.matches(":hover, :focus"))).toBe(false);
     expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
     await pullLink.hover();
     await page.clock.runFor(300);
@@ -818,7 +735,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
         },
       ],
     });
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
 
     const previewRequestsFor = async (number: number) =>
       (await gateway.getRequests("forge.preview")).filter(

@@ -31,6 +31,7 @@ export async function createNpmPublicationReadbackFixture(
   root: string,
   mode = "direct",
   fault = "none",
+  distTagVersion = version,
 ) {
   const runId = mode === "prior-deferred" ? 201 : 200;
   const runAttempt = 2;
@@ -357,7 +358,7 @@ export async function createNpmPublicationReadbackFixture(
         name === "@openclaw/existing" || fault === "archive-identity" ? existingBytes : bytes;
       return Response.json({
         name,
-        "dist-tags": { beta: version },
+        "dist-tags": { beta: distTagVersion },
         versions: {
           [version]: {
             name,

@@ -99,7 +99,7 @@ should cover at least one supported and one unsupported account through the
 `ChannelPlugin["conversationBindings"]` contract exported by
 `openclaw/plugin-sdk/channel-core`.
 
-Binding ids are local to a channel and account. `SessionBindingService.touch(bindingId, at?, scope?)`
+Binding ids are local to a channel and account. `SessionBindingService.touchAsync(bindingId, at?, scope?)`
 and `unbind({ bindingId, reason, scope })` accept an optional `{ channel, accountId }`
 scope to select that owner. For an individual mutation, pass the existing binding's
 `conversation` as the scope. For example, to detach a resolved binding:
@@ -113,7 +113,7 @@ await getSessionBindingService().unbind({
 ```
 
 Import `getSessionBindingService` from `openclaw/plugin-sdk/session-binding-runtime`.
-For activity updates, use `service.touch(binding.bindingId, at, binding.conversation)`.
+For activity updates, await `service.touchAsync(binding.bindingId, at, binding.conversation)`.
 Omit scope only for intentional global cleanup or an existing legacy cross-channel
 operation. Scope does not change binding ids or require a new adapter method.
 
@@ -129,6 +129,14 @@ pass prepared `inactivityExpiresAt` and `maxAgeExpiresAt` values to
 `resolveThreadBindingExpiry(...)` on the same subpath. It selects the earlier
 deadline and its reason, preferring idle expiration on ties; omitted deadlines
 are disabled. The plugin still owns timestamp validation and duration defaults.
+
+On the same subpath, `projectThreadBindingRecord(...)` projects prepared
+conversation identity and expiry, with an explicit metadata merge callback.
+`createAccountScopedBindingAdapter(...)` shares list, resolve, touch, and unbind
+dispatch for account-prefixed binding IDs. The plugin's manager still owns
+storage, mutation admission and settlement, child creation, and shutdown.
+Platforms with different identity grammars, such as Matrix parent-room keys,
+can use the projection without the account-prefixed adapter.
 
 Preserve opaque plugin ownership metadata when projecting binding records.
 Plugin-owned targets do not require an OpenClaw agent id; use

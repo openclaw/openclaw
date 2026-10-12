@@ -1,7 +1,7 @@
 /** Captures and revalidates the directory identity used by exec authorization. */
 import fs from "node:fs";
 import path from "node:path";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { hasMutableSymlinkPathComponentSync } from "./system-run-mutable-file-policy.js";
 
 export const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =

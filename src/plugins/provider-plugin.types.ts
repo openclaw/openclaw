@@ -45,6 +45,7 @@ import type {
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
   ProviderSanitizeReplayHistoryContext,
+  ProviderSanitizeReplayHistoryContextV2,
   ProviderValidateReplayTurnsContext,
   ProviderNormalizeToolSchemasContext,
   ProviderToolSchemaDiagnostic,
@@ -237,6 +238,7 @@ export type ProviderPlugin = {
    */
   buildReplayPolicy?: (ctx: ProviderReplayPolicyContext) => ProviderReplayPolicy | null | undefined;
   /**
+   * @deprecated Use sanitizeReplayHistoryAsync; removed in the next Plugin SDK major.
    * Provider-owned replay-history sanitization.
    *
    * Runs after OpenClaw performs generic transcript cleanup. Use this for
@@ -245,6 +247,10 @@ export type ProviderPlugin = {
    */
   sanitizeReplayHistory?: (
     ctx: ProviderSanitizeReplayHistoryContext,
+  ) => Promise<AgentMessage[] | null | undefined> | AgentMessage[] | null | undefined;
+  /** Replay hook with worker-backed persistence; preferred over the legacy hook when both exist. */
+  sanitizeReplayHistoryAsync?: (
+    ctx: ProviderSanitizeReplayHistoryContextV2,
   ) => Promise<AgentMessage[] | null | undefined> | AgentMessage[] | null | undefined;
   /**
    * Provider-owned final replay-turn validation.
@@ -323,7 +329,13 @@ export type ProviderPlugin = {
    * provider-specific compat payload patches that do not justify a separate
    * transport implementation.
    */
-  wrapStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
+  wrapStreamFn?: (ctx: ProviderWrapStreamFnContext) =>
+    | (StreamFn & {
+        /** A decorator that leaves shared request and output compatibility policy active. */
+        preservesGenericCompatibility?: boolean;
+      })
+    | null
+    | undefined;
   /**
    * Provider-owned wrapper for direct `completeSimple` callers.
    *
@@ -486,6 +498,8 @@ export type ProviderPlugin = {
   ) => ProviderThinkingProfile | null | undefined;
   /** Whether Fast can affect this selected request; undefined retains existing unknown behavior. */
   resolveFastModeSupport?: (ctx: ProviderFastModePolicyContext) => boolean | undefined;
+  /** Known model/route service tiers; undefined retains account discovery and route defaults. */
+  resolveServiceTiers?: (ctx: ProviderFastModePolicyContext) => readonly string[] | undefined;
   /**
    * Provider-owned system-prompt contribution.
    *

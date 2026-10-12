@@ -21,53 +21,38 @@ describe("agent event delivery bridge", () => {
     resetAgentEventsForTest();
   });
 
-  test.each([1, 4, 16, 64])(
-    "isolates every delivery bridge while %s CLI runs stream interleaved events",
-    async (runs) => {
-      let predicateReads = 0;
-      const bridges = Array.from({ length: runs }, (_, runIndex) => {
-        const runId = `run-${runIndex}`;
-        registerAgentRunContext(runId, { sessionKey: `session-${runIndex}` });
-        return Array.from({ length: 8 }, (_bridge, bridgeIndex) => {
-          const delivered: string[] = [];
-          const bridge = createAgentEventBridge<string>({
-            get runId() {
-              predicateReads++;
-              return runId;
-            },
-            read: (event) => (typeof event.data.text === "string" ? event.data.text : undefined),
-            deliver: async (text) => {
-              delivered.push(text);
-            },
-          });
-          return { ...bridge, delivered, runIndex, bridgeIndex };
+  test("isolates every delivery bridge while 64 CLI runs stream interleaved events", async () => {
+    const bridges = Array.from({ length: 64 }, (_, runIndex) => {
+      const runId = `run-${runIndex}`;
+      registerAgentRunContext(runId, { sessionKey: `session-${runIndex}` });
+      return Array.from({ length: 8 }, (_bridge, bridgeIndex) => {
+        const delivered: string[] = [];
+        const bridge = createAgentEventBridge<string>({
+          runId,
+          read: (event) => (typeof event.data.text === "string" ? event.data.text : undefined),
+          deliver: async (text) => {
+            delivered.push(text);
+          },
         });
-      }).flat();
-      try {
-        predicateReads = 0;
-        emitAgentEvent({ runId: "run-0", stream: "assistant", data: { text: "a1" } });
-        // Source-pinned work measurement only: hoisting the filter can change this
-        // count without changing dispatch complexity. Output assertions own the test.
-        console.info("bridge predicate-read diagnostic (not latency)", {
-          runs,
-          bridgesPerRun: 8,
-          predicateReads,
-        });
-        emitAgentEvent({ runId: "run-1", stream: "assistant", data: { text: "b1" } });
-        emitAgentEvent({ runId: "run-0", stream: "assistant", data: { text: "a2" } });
-        await Promise.all(bridges.map((bridge) => bridge.drain()));
-        for (const { delivered, runIndex, bridgeIndex } of bridges) {
-          expect(delivered, `run-${runIndex}/bridge-${bridgeIndex}`).toEqual(
-            runIndex === 0 ? ["a1", "a2"] : runIndex === 1 ? ["b1"] : [],
-          );
-        }
-      } finally {
-        for (const bridge of bridges) {
-          bridge.unsubscribe();
-        }
+        return { ...bridge, delivered, runIndex, bridgeIndex };
+      });
+    }).flat();
+    try {
+      emitAgentEvent({ runId: "run-0", stream: "assistant", data: { text: "a1" } });
+      emitAgentEvent({ runId: "run-1", stream: "assistant", data: { text: "b1" } });
+      emitAgentEvent({ runId: "run-0", stream: "assistant", data: { text: "a2" } });
+      await Promise.all(bridges.map((bridge) => bridge.drain()));
+      for (const { delivered, runIndex, bridgeIndex } of bridges) {
+        expect(delivered, `run-${runIndex}/bridge-${bridgeIndex}`).toEqual(
+          runIndex === 0 ? ["a1", "a2"] : runIndex === 1 ? ["b1"] : [],
+        );
       }
-    },
-  );
+    } finally {
+      for (const bridge of bridges) {
+        bridge.unsubscribe();
+      }
+    }
+  });
 
   test("keeps stream delivery order when a later global listener emits another event", async () => {
     registerAgentRunContext("run-nested", { sessionKey: "session-nested" });

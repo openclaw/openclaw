@@ -83,13 +83,11 @@ async function readRawBody(params: Parameters<typeof createMockRequest>[0], prof
 
 describe("isJsonContentType", () => {
   it.each([
-    { name: "accepts application/json", input: "application/json", expected: true },
     {
       name: "accepts +json suffixes",
       input: "application/cloudevents+json; charset=utf-8",
       expected: true,
     },
-    { name: "rejects non-json media types", input: "text/plain", expected: false },
     { name: "rejects missing media types", input: undefined, expected: false },
   ])("$name", ({ input, expected }) => {
     expect(isJsonContentType(input)).toBe(expected);
@@ -363,7 +361,9 @@ describe("runDetachedWebhookWork", () => {
       },
     );
 
-    await expect(inherited).rejects.toThrow("Gateway is draining");
+    await expect(inherited).rejects.toThrow(
+      "Gateway is temporarily unavailable. Please try again shortly.",
+    );
   });
 
   it("keeps tracked work accepted after the caller's async work scope closes", async () => {

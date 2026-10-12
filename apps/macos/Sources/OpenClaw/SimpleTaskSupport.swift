@@ -9,7 +9,7 @@ enum SimpleTaskSupport {
         }
     }
 
-    static func stop(task: inout Task<Void, Never>?) {
+    nonisolated static func stop(task: inout Task<Void, Never>?) {
         task?.cancel()
         task = nil
     }

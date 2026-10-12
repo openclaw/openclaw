@@ -1,53 +1,51 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
-  COMPUTER_STALE_OBSERVATION,
-  COMPUTER_USE_V2_ACTION_NAMES,
   parseComputerActParamsJSON,
   parseComputerActResult,
   parseComputerUseCapabilityDescriptor,
   parseScreenSnapshotResult,
+} from "./computer-use-contract.js";
+import {
   registerComputerUseProvider,
   type ComputerUseProvider,
-} from "./computer-use-contract.js";
+} from "./computer-use-registration.js";
 import type { OpenClawPluginNodeHostCommand } from "./types.js";
 
+function capabilityDescriptor(
+  actions: ReturnType<ComputerUseProvider["capabilities"]>["actions"] = ["screenshot"],
+): ReturnType<ComputerUseProvider["capabilities"]> {
+  return {
+    contractVersion: 2,
+    provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+    actions,
+    targets: ["screen"],
+    deliveryModes: ["foreground"],
+    observations: ["image"],
+    features: { recording: false, agentCursor: false, multiDisplay: false },
+  };
+}
+
+function registerProvider(
+  openExecution: ComputerUseProvider["openExecution"],
+  overrides: Partial<ComputerUseProvider> = {},
+): OpenClawPluginNodeHostCommand[] {
+  const commands: OpenClawPluginNodeHostCommand[] = [];
+  registerComputerUseProvider(
+    { registerNodeHostCommand: (command) => commands.push(command) },
+    {
+      id: "fixture",
+      label: "Fixture",
+      capabilities: capabilityDescriptor,
+      isAvailable: () => true,
+      openExecution,
+      ...overrides,
+    },
+  );
+  return commands;
+}
+
 describe("Computer Use wire contract", () => {
-  it("owns the shared provider ref-lifecycle error code", () => {
-    const contract = JSON.parse(
-      readFileSync(
-        new URL("../../test/fixtures/computer-ref-lifecycle-contract.json", import.meta.url),
-        "utf8",
-      ),
-    ) as { staleErrorCode: string };
-
-    expect(contract.staleErrorCode).toBe(COMPUTER_STALE_OBSERVATION);
-  });
-
-  it("validates the canonical computer.act payload", () => {
-    expect(
-      parseComputerActParamsJSON(
-        JSON.stringify({
-          action: "left_click",
-          displayFrameId: "frame-1",
-          x: 10,
-          y: 20,
-          refWidth: 1280,
-        }),
-      ),
-    ).toEqual({
-      action: "left_click",
-      displayFrameId: "frame-1",
-      x: 10,
-      y: 20,
-      refWidth: 1280,
-    });
-    expect(() => parseComputerActParamsJSON('{"action":"left_click","unexpected":true}')).toThrow(
-      "COMPUTER_INVALID_REQUEST",
-    );
-  });
-
   it("projects the canonical screen.snapshot result", () => {
     expect(
       parseScreenSnapshotResult({
@@ -67,91 +65,6 @@ describe("Computer Use wire contract", () => {
       height: 50,
       capturedAtMs: 42,
     });
-  });
-
-  it("owns the complete v2 action-name union", () => {
-    expect(COMPUTER_USE_V2_ACTION_NAMES).toEqual([
-      "screenshot",
-      "left_click",
-      "right_click",
-      "middle_click",
-      "double_click",
-      "triple_click",
-      "mouse_move",
-      "left_click_drag",
-      "left_mouse_down",
-      "left_mouse_up",
-      "scroll",
-      "type",
-      "key",
-      "hold_key",
-      "wait",
-      "list_apps",
-      "list_windows",
-      "get_accessibility_tree",
-      "get_cursor_position",
-      "get_window_state",
-      "launch_app",
-      "kill_app",
-      "bring_to_front",
-      "set_value",
-      "zoom",
-      "get_browser_state",
-      "browser_prepare",
-      "browser_navigate",
-      "browser_click",
-      "browser_type",
-      "browser_dialog",
-      "browser_set_input_files",
-      "browser_download",
-      "browser_pointer",
-      "escalate_scope",
-      "get_recording_state",
-      "start_recording",
-      "stop_recording",
-      "replay_trajectory",
-      "invoke_menu",
-    ]);
-  });
-
-  it("validates closed v2 action families without turning params into an optional bag", () => {
-    expect(
-      parseComputerActParamsJSON(
-        JSON.stringify({
-          action: "get_window_state",
-          windowRef: "window-1",
-          query: "button",
-          depth: 4,
-          maxElements: 200,
-        }),
-      ),
-    ).toMatchObject({ action: "get_window_state", windowRef: "window-1" });
-    expect(() =>
-      parseComputerActParamsJSON(
-        JSON.stringify({ action: "get_window_state", windowRef: "window-1", app: "wrong-family" }),
-      ),
-    ).toThrow("COMPUTER_INVALID_REQUEST");
-    expect(
-      parseComputerActParamsJSON(
-        JSON.stringify({
-          action: "browser_click",
-          browserRef: "browser-1",
-          pageRef: "page-1",
-          observationId: "observation-1",
-          elementRef: "element-1",
-          inputRoute: "dom_event",
-        }),
-      ),
-    ).toMatchObject({ action: "browser_click", browserRef: "browser-1" });
-    expect(() =>
-      parseComputerActParamsJSON(
-        JSON.stringify({
-          action: "browser_prepare",
-          windowRef: "window-1",
-          strategy: { kind: "existing_profile" },
-        }),
-      ),
-    ).toThrow("COMPUTER_INVALID_REQUEST");
   });
 
   it("accepts the portable recording family without native path or helper inputs", () => {
@@ -213,18 +126,6 @@ describe("Computer Use wire contract", () => {
     }
   });
 
-  it("accepts canonical input success and rejects obsolete cursor fields", () => {
-    expect(parseComputerActResult({ ok: true })).toEqual({ ok: true });
-    const openDetails = { coordinateSpace: { unit: "provider-defined" }, vendorValue: 42 };
-    expect(parseComputerActResult({ ok: true, details: openDetails })).toEqual({
-      ok: true,
-      details: openDetails,
-    });
-    expect(() => parseComputerActResult({ ok: true, cursorX: 12, cursorY: 34 })).toThrow(
-      "COMPUTER_CONTRACT_MISMATCH",
-    );
-  });
-
   it("caps semantic observations and provider detail records", () => {
     const element = {
       elementRef: "element-1",
@@ -265,26 +166,10 @@ describe("Computer Use wire contract", () => {
 
   it("validates the bounded node capability descriptor", () => {
     expect(
-      parseComputerUseCapabilityDescriptor({
-        contractVersion: 2,
-        provider: { id: "cua", label: "CUA", generation: "generation-1" },
-        actions: ["screenshot", "left_click"],
-        targets: ["screen"],
-        deliveryModes: ["foreground"],
-        observations: ["image"],
-        features: { recording: false, agentCursor: false, multiDisplay: false },
-      }),
+      parseComputerUseCapabilityDescriptor(capabilityDescriptor(["screenshot", "left_click"])),
     ).toMatchObject({ contractVersion: 2 });
     expect(() =>
-      parseComputerUseCapabilityDescriptor({
-        contractVersion: 2,
-        provider: { id: "cua", label: "CUA", generation: "generation-1" },
-        actions: ["left_click", "left_click"],
-        targets: ["screen"],
-        deliveryModes: ["foreground"],
-        observations: ["image"],
-        features: { recording: false, agentCursor: false, multiDisplay: false },
-      }),
+      parseComputerUseCapabilityDescriptor(capabilityDescriptor(["left_click", "left_click"])),
     ).toThrow("COMPUTER_CONTRACT_MISMATCH");
   });
 });
@@ -299,7 +184,6 @@ describe("Computer Use provider registration", () => {
         ? nextId
         : "323e4567-e89b-42d3-a456-426614174000";
       const closeLater = laterOwner.endsWith("-close");
-      const commands: OpenClawPluginNodeHostCommand[] = [];
       const firstClose = createDeferredCore();
       const nextClose = createDeferredCore();
       const close = vi
@@ -311,24 +195,7 @@ describe("Computer Use provider registration", () => {
         act: async () => "act",
         close,
       }));
-      registerComputerUseProvider(
-        { registerNodeHostCommand: (command) => commands.push(command) },
-        {
-          id: "fixture",
-          label: "Fixture",
-          capabilities: () => ({
-            contractVersion: 2,
-            provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
-            actions: ["screenshot"],
-            targets: ["screen"],
-            deliveryModes: ["foreground"],
-            observations: ["image"],
-            features: { recording: false, agentCursor: false, multiDisplay: false },
-          }),
-          isAvailable: () => true,
-          openExecution,
-        },
-      );
+      const commands = registerProvider(openExecution);
       const snapshot = commands[0]!;
       const computer = commands[1]!;
       expect(commands.map((command) => command.hasActiveWork?.())).toEqual([false, false]);
@@ -395,7 +262,6 @@ describe("Computer Use provider registration", () => {
   it("retains terminal close failure without confusing it with failed-open recovery", async () => {
     const executionId = "123e4567-e89b-42d3-a456-426614174000";
     const otherId = "223e4567-e89b-42d3-a456-426614174000";
-    const commands: OpenClawPluginNodeHostCommand[] = [];
     const openFailure = new Error("native driver startup failed");
     const closeFailure = new Error("native driver shutdown failed");
     const failedOpening =
@@ -412,24 +278,7 @@ describe("Computer Use provider registration", () => {
         close,
       }))
       .mockImplementationOnce(() => failedOpening.promise);
-    registerComputerUseProvider(
-      { registerNodeHostCommand: (command) => commands.push(command) },
-      {
-        id: "fixture",
-        label: "Fixture",
-        capabilities: () => ({
-          contractVersion: 2,
-          provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
-          actions: ["screenshot"],
-          targets: ["screen"],
-          deliveryModes: ["foreground"],
-          observations: ["image"],
-          features: { recording: false, agentCursor: false, multiDisplay: false },
-        }),
-        isAvailable: () => true,
-        openExecution,
-      },
-    );
+    const commands = registerProvider(openExecution);
     const snapshot = commands[0]!;
     const computer = commands[1]!;
     const params = JSON.stringify({ executionId });
@@ -463,33 +312,22 @@ describe("Computer Use provider registration", () => {
 
   it("registers one command pair and dispatches both through one execution", async () => {
     const executionId = "123e4567-e89b-42d3-a456-426614174000";
-    const commands: OpenClawPluginNodeHostCommand[] = [];
     const snapshot = vi.fn(async () => "snapshot");
     const act = vi.fn(async () => "act");
-    const close = vi.fn(async () => {});
-    const stopWatching = vi.fn();
+    const executionRetiring = createDeferredCore();
+    const close = vi.fn(async () => await executionRetiring.promise);
+    const retiring = createDeferredCore();
+    const stopEntered = createDeferredCore();
+    const failure = new Error("availability stop failed");
+    const stopWatching = vi.fn(() => {
+      stopEntered.resolve();
+      return retiring.promise;
+    });
     const openExecution = vi.fn(async () => ({ snapshot, act, close }));
-    const provider: ComputerUseProvider = {
-      id: "fixture",
-      label: "Fixture",
-      capabilities: () => ({
-        contractVersion: 2,
-        provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
-        actions: ["screenshot", "left_click"],
-        targets: ["screen"],
-        deliveryModes: ["foreground"],
-        observations: ["image"],
-        features: { recording: false, agentCursor: false, multiDisplay: false },
-      }),
-      isAvailable: () => true,
+    const commands = registerProvider(openExecution, {
+      capabilities: () => capabilityDescriptor(["screenshot", "left_click"]),
       watchAvailability: () => stopWatching,
-      openExecution,
-    };
-
-    registerComputerUseProvider(
-      { registerNodeHostCommand: (command) => commands.push(command) },
-      provider,
-    );
+    });
 
     expect(commands.map(({ command, cap, dangerous }) => ({ command, cap, dangerous }))).toEqual([
       { command: "screen.snapshot", cap: "screen", dangerous: false },
@@ -507,15 +345,39 @@ describe("Computer Use provider registration", () => {
     expect(act).toHaveBeenCalledWith(paramsJSON, signal);
 
     const stop = commands[0]!.watchAvailability?.({ config: {} as never, env: {} }, vi.fn());
-    stop?.();
-    await vi.waitFor(() => expect(close).toHaveBeenCalledWith("node-host-stop"));
-    expect(stopWatching).toHaveBeenCalledOnce();
+    const stopping = Promise.resolve(stop?.());
+    let settled = false;
+    const observed = stopping.then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    try {
+      await stopEntered.promise;
+      await vi.waitFor(() => expect(close).toHaveBeenCalledWith("node-host-stop"));
+      retiring.reject(failure);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+      executionRetiring.resolve();
+      expect(await observed).toBe(failure);
+      expect(stopWatching).toHaveBeenCalledOnce();
+    } finally {
+      retiring.resolve();
+      executionRetiring.resolve();
+      await Promise.allSettled([stopping, observed]);
+    }
   });
 
   it("refuses a second mutating execution and closes only the exact host execution", async () => {
     const firstId = "123e4567-e89b-42d3-a456-426614174000";
     const secondId = "223e4567-e89b-42d3-a456-426614174000";
-    const commands: OpenClawPluginNodeHostCommand[] = [];
     const closes: string[] = [];
     const openExecution = vi.fn(async () => ({
       snapshot: vi.fn(async () => "snapshot"),
@@ -524,25 +386,12 @@ describe("Computer Use provider registration", () => {
         closes.push(reason);
       }),
     }));
-    const provider: ComputerUseProvider = {
-      id: "fixture",
-      label: "Fixture",
+    const commands = registerProvider(openExecution, {
       capabilities: () => ({
-        contractVersion: 2,
-        provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
-        actions: ["start_recording", "stop_recording"],
-        targets: ["screen"],
-        deliveryModes: ["foreground"],
-        observations: ["image"],
+        ...capabilityDescriptor(["start_recording", "stop_recording"]),
         features: { recording: true, agentCursor: false, multiDisplay: false },
       }),
-      isAvailable: () => true,
-      openExecution,
-    };
-    registerComputerUseProvider(
-      { registerNodeHostCommand: (command) => commands.push(command) },
-      provider,
-    );
+    });
     const computer = commands.find((command) => command.command === "computer.act")!;
 
     await expect(

@@ -42,6 +42,7 @@ export function reconcileChatRunStartup(
 }
 
 const STARTUP_LABEL_KEYS = {
+  waiting_for_state: "chat.startupStatus.waitingForState",
   preparing_workspace: "chat.startupStatus.preparingWorkspace",
   naming_worktree: "chat.startupStatus.namingWorktree",
   creating_worktree: "chat.startupStatus.creatingWorktree",
@@ -51,6 +52,10 @@ const STARTUP_LABEL_KEYS = {
   memory_flushing: "chat.startupStatus.memoryFlushing",
   starting_model: "chat.startupStatus.startingModel",
 } as const satisfies Record<ChatRunStartupPhase, Parameters<typeof t>[0]>;
+
+export function isChatRunStartupPhase(value: unknown): value is ChatRunStartupPhase {
+  return typeof value === "string" && Object.hasOwn(STARTUP_LABEL_KEYS, value);
+}
 
 export function chatStartupStatusLabel(
   run: ChatRunStartupStatus | null | undefined,

@@ -1,3 +1,4 @@
+import ConcurrencyExtras
 import Foundation
 import OpenClawChatUI
 import OpenClawProtocol
@@ -5,10 +6,33 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
+@Suite(.testWaitLimit)
 @MainActor
 struct QuickChatCatalogPublicationTests {
-    @Test(arguments: ["config.changed", "chat.metadata.changed"])
-    func `Gateway publications refresh the presentation without discarding a draft`(_ event: String) async throws {
+    @Test(arguments: [
+        ("config.changed", false, true),
+        ("chat.metadata.changed", false, false),
+        ("chat.metadata.changed", true, true),
+    ])
+    func `Gateway publications refresh the presentation without discarding a draft`(
+        _ event: String,
+        modelSelectionChanged: Bool,
+        retiresChoices: Bool) async throws
+    {
+        let policy: OpenClawChatModelSelectionPolicy? = if modelSelectionChanged {
+            try JSONDecoder().decode(
+                OpenClawChatModelSelectionPolicy.self,
+                from: Data(#"{"restricted":true,"defaultModel":null}"#.utf8))
+        } else {
+            nil
+        }
+        func publication(_ seq: Int) -> Data {
+            let payload = modelSelectionChanged ? #"{"modelSelectionChanged":true}"# : "{}"
+            return Data(
+                """
+                {"type":"event","event":"\(event)","payload":\(payload),"seq":\(seq)}
+                """.utf8)
+        }
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
                 guard sendIndex > 0 else { return }
@@ -22,8 +46,8 @@ struct QuickChatCatalogPublicationTests {
             sessionBox: WebSocketSessionBox(session: session))
         _ = try await gateway.acquireServerLease()
         let socket = try #require(session.latestTask())
-        var publishedName = "Original choice"
-        var fails = false
+        let publishedName = LockIsolated("Original choice")
+        let fails = LockIsolated(false)
         var subscriptions = 0
         let model = QuickChatModel(
             sessionKeyProvider: { "agent:main:main" },
@@ -36,13 +60,18 @@ struct QuickChatCatalogPublicationTests {
             permissionStatusProvider: { _ in [:] },
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in
-                if fails { throw URLError(.cannotConnectToHost) }
+                if fails.value { throw URLError(.cannotConnectToHost) }
                 return QuickChatModelControlSnapshot(
-                    models: [.init(modelID: "choice", name: publishedName, provider: "fixture", contextWindow: nil)],
+                    models: [.init(
+                        modelID: "choice",
+                        name: publishedName.value,
+                        provider: "fixture",
+                        contextWindow: nil)],
                     currentModelSelectionID: "fixture/choice",
                     currentThinkingLevel: nil,
                     thinkingOptions: [],
-                    defaultProvider: "fixture")
+                    defaultProvider: "fixture",
+                    modelSelectionPolicy: policy)
             },
             modelCatalogEventsProvider: {
                 let events = await gateway.subscribe()
@@ -53,29 +82,41 @@ struct QuickChatCatalogPublicationTests {
         do {
             let presentation = model.beginPresentation()
             await model.refreshForPresentation(id: presentation)
-            try await self.waitUntil { subscriptions == 1 && !model.isLoadingModelControls }
+            try await TestWait.state("initial catalog subscription") {
+                subscriptions == 1 && !model.isLoadingModelControls
+            }
             model.text = "Unsent draft"
+            model.selectModel("fixture/choice")
+            #expect(model.selectedModelSelectionID == "fixture/choice")
             print("Quick Chat catalog \(event): initial=\(model.modelChoices.map(\.name)), draft=\(model.text)")
 
-            publishedName = "Published choice"
-            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.eventData(event: event, seq: 1)))
-            try await self.waitUntil { model.modelChoices.first?.name == "Published choice" }
+            publishedName.setValue("Published choice")
+            socket.emitReceiveSuccess(.data(publication(1)))
+            try await TestWait.observed("published model choice") {
+                model.modelChoices.first?.name == "Published choice"
+            }
             #expect(model.text == "Unsent draft")
             print(
                 "Quick Chat catalog \(event): seq=1, published=\(model.modelChoices.map(\.name)), draft=\(model.text)")
 
-            fails = true
-            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.eventData(event: event, seq: 2)))
-            try await self.waitUntil { model.modelControlStatusMessage != nil }
-            #expect(model.modelChoices.map(\.name) == ["Published choice"])
+            fails.setValue(true)
+            socket.emitReceiveSuccess(.data(publication(2)))
+            try await TestWait.observed("catalog refresh failure") { model.modelControlStatusMessage != nil }
+            #expect(model.modelChoices.map(\.name) == (retiresChoices ? [] : ["Published choice"]))
+            #expect(model.canSelectDefaultModel == !retiresChoices)
+            #expect(model.currentSessionModelSelectionID == "fixture/choice")
+            #expect(model.selectedModelSelectionID == (retiresChoices ? nil : "fixture/choice"))
+            #expect(model.displayedModelSelectionID == (retiresChoices ? nil : "fixture/choice"))
             #expect(model.text == "Unsent draft")
             print(
                 "Quick Chat catalog \(event): seq=2, failedRefresh=\(model.modelControlStatusMessage != nil), retained=\(model.modelChoices.map(\.name)), draft=\(model.text)")
 
-            fails = false
-            publishedName = "Recovered choice"
-            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.eventData(event: event, seq: 3)))
-            try await self.waitUntil { model.modelChoices.first?.name == "Recovered choice" }
+            fails.setValue(false)
+            publishedName.setValue("Recovered choice")
+            socket.emitReceiveSuccess(.data(publication(3)))
+            try await TestWait.observed("recovered model choice") {
+                model.modelChoices.first?.name == "Recovered choice"
+            }
             #expect(model.modelControlStatusMessage == nil)
             print(
                 "Quick Chat catalog \(event): seq=3, recovered=\(model.modelChoices.map(\.name)), draft=\(model.text)")
@@ -83,10 +124,14 @@ struct QuickChatCatalogPublicationTests {
             model.endPresentation()
             let reopened = model.beginPresentation()
             await model.refreshForPresentation(id: reopened)
-            try await self.waitUntil { subscriptions == 2 && !model.isLoadingModelControls }
-            publishedName = "New presentation choice"
+            try await TestWait.state("reopened catalog subscription") {
+                subscriptions == 2 && !model.isLoadingModelControls
+            }
+            publishedName.setValue("New presentation choice")
             socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.eventData(event: "tick", seq: 5)))
-            try await self.waitUntil { model.modelChoices.first?.name == "New presentation choice" }
+            try await TestWait.observed("new presentation model choice") {
+                model.modelChoices.first?.name == "New presentation choice"
+            }
             #expect(model.activePresentationID == reopened)
             print(
                 "Quick Chat catalog \(event): reopened, seq=5 tick, choices=\(model.modelChoices.map(\.name)), currentPresentation=\(model.activePresentationID == reopened)")
@@ -107,6 +152,7 @@ struct QuickChatCatalogPublicationTests {
                 thinkingOptions: [], defaultProvider: "fixture")
         }
         var pendingRead: CheckedContinuation<QuickChatModelControlSnapshot, Never>?
+        let readHeld = AsyncTestGate()
         var reads = 0
         let model = QuickChatModel(
             sessionKeyProvider: { "agent:main:main" },
@@ -121,7 +167,10 @@ struct QuickChatCatalogPublicationTests {
             modelControlsProvider: { _ in
                 reads += 1
                 if reads == 1 {
-                    return await withCheckedContinuation { pendingRead = $0 }
+                    return await withCheckedContinuation {
+                        pendingRead = $0
+                        readHeld.open()
+                    }
                 }
                 return snapshot("New choice")
             },
@@ -132,7 +181,8 @@ struct QuickChatCatalogPublicationTests {
             pendingRead?.resume(returning: snapshot("Old choice"))
             model.endPresentation()
         }
-        try await self.waitUntil { pendingRead != nil }
+        await readHeld.wait()
+        try Task.checkCancellation()
         model.endPresentation()
         let reopened = model.beginPresentation()
         await model.refreshForPresentation(id: reopened)
@@ -149,13 +199,5 @@ struct QuickChatCatalogPublicationTests {
         #expect(model.text == "New presentation draft")
         print(
             "Quick Chat late read: choices=\(model.modelChoices.map(\.name)), draft=\(model.text), currentPresentation=\(model.activePresentationID == reopened)")
-    }
-
-    private func waitUntil(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
-        while !condition(), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        try #require(condition())
     }
 }

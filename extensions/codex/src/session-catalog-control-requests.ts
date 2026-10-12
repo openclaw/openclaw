@@ -4,50 +4,20 @@ import { assertCodexThreadForkParams } from "./app-server/protocol.js";
 import type {
   CodexAppServerRequestParams,
   CodexAppServerRequestResult,
-  CodexThread,
-  CodexThreadForkParams,
-  CodexThreadForkResponse,
-  CodexThreadListParams,
-  CodexThreadListResponse,
-  CodexThreadItemsListParams,
-  CodexThreadItemsListResponse,
-  CodexThreadTurnsListParams,
-  CodexThreadTurnsListResponse,
 } from "./app-server/protocol.js";
 import type { CodexControlRequestObservation } from "./app-server/request-observation.js";
-import { withTimeout } from "./app-server/timeout.js";
-import { CodexCatalogLoadingError } from "./session-catalog-availability.js";
+import { withCodexCatalogLoadingTimeout } from "./session-catalog-availability.js";
 import { requireEligibleCodexThread } from "./session-catalog-eligibility.js";
 import type { CodexCatalogIndex } from "./session-catalog-index.js";
 import {
   currentCodexCatalogListRequest,
   withCodexCatalogListRequest,
-  type CodexCatalogListRequest,
 } from "./session-catalog-list-request.js";
 import { readControlCursor, readPageParams } from "./session-catalog-parsing.js";
-import type { CodexCatalogSourceBackoff } from "./session-catalog-source-backoff.js";
+import type { CodexSessionCatalogRequestSnapshot } from "./session-catalog-request-types.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 
-export type CodexSessionCatalogRequestSnapshot = {
-  beginList: (request?: CodexCatalogListRequest) => ReturnType<CodexCatalogSourceBackoff["begin"]>;
-  index: () => Promise<CodexCatalogIndex>;
-  requestTimeoutMs: number;
-  listThreads(
-    params: CodexThreadListParams,
-    timeoutMs: number,
-    observation?: CodexControlRequestObservation,
-  ): Promise<CodexThreadListResponse>;
-  listThreadTurns(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
-  listThreadItems(params: CodexThreadItemsListParams): Promise<CodexThreadItemsListResponse>;
-  forkThread(
-    params: CodexThreadForkParams,
-    assertCurrent?: () => void,
-  ): Promise<CodexThreadForkResponse>;
-  readThread(threadId: string, includeTurns: boolean, timeoutMs?: number): Promise<CodexThread>;
-  archiveThread(threadId: string, assertCurrent?: () => void): Promise<void>;
-};
-
-export type CodexCatalogRequestMethod =
+type CodexCatalogRequestMethod =
   | typeof CODEX_CONTROL_METHODS.archiveThread
   | typeof CODEX_CONTROL_METHODS.forkThread
   | typeof CODEX_CONTROL_METHODS.listThreads
@@ -153,28 +123,25 @@ export function createCodexSessionCatalogControlFromRequests(params: {
       const query = readPageParams(pageParams);
       return await withCodexCatalogListRequest(async (request) => {
         const requests = params.createRequestSnapshot();
-        const deadline = request.deadline(requests.requestTimeoutMs);
-        const index = await withTimeout(
+        // Release foreground admission while index-owned hydration continues.
+        const timeoutMs = Math.min(requests.requestTimeoutMs, 5_000);
+        const deadline = request.constrainDeadline(performance.now() + timeoutMs);
+        const index = await withCodexCatalogLoadingTimeout(
           requests.index(),
-          request.remaining(requests.requestTimeoutMs),
-          "Codex session catalog is still loading",
-          () => new CodexCatalogLoadingError(),
+          request.remaining(timeoutMs),
         );
         return await index.list(query, deadline);
       });
     },
     async listDescendantPage(listParams) {
       const requests = params.createRequestSnapshot();
-      const response = await requests.listThreads(listParams, requests.requestTimeoutMs);
-      return response;
+      return await requests.listThreads(listParams, requests.requestTimeoutMs);
     },
     async readThread(threadId, includeTurns = false) {
-      const thread = await params.createRequestSnapshot().readThread(threadId, includeTurns);
-      return thread;
+      return await params.createRequestSnapshot().readThread(threadId, includeTurns);
     },
     async listTurnPage(listParams) {
-      const response = await params.createRequestSnapshot().listThreadTurns(listParams);
-      return response;
+      return await params.createRequestSnapshot().listThreadTurns(listParams);
     },
     listItemPage: (listParams) => params.createRequestSnapshot().listThreadItems(listParams),
     async forkThread(forkParams, assertCurrent) {

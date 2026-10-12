@@ -1,12 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import {
+  renderDreamingView,
   fullDreamingViewAccess,
   installDreamingViewTestTranslations,
 } from "./view.test-helpers.ts";
-import { createDreamingViewState, renderDreaming } from "./view.ts";
+import { createDreamingViewState, renderDreaming } from "./view.tsx";
+
+afterEach(() => cleanupSolid());
 
 type DreamingProps = Parameters<typeof renderDreaming>[0];
 
@@ -24,6 +27,9 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
   const viewState = createDreamingViewState();
   viewState.activeSubTab = "diary";
   viewState.activeDiarySubTab = tab;
+  // Count every returned item while rendering only the small selected cluster.
+  viewState.diaryPage = 1;
+  const clusterSizes = [2_499, 1];
   return {
     access: fullDreamingViewAccess,
     viewState,
@@ -33,7 +39,6 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
     promotedCount: 0,
     shortTermEntries: [],
     promotedEntries: [],
-    dreamingOf: null,
     nextCycle: null,
     timezone: null,
     statusError: null,
@@ -52,35 +57,33 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
         ? {
             sourceType: "chatgpt",
             totalItems: 2_501,
-            totalClusters: 1,
+            totalClusters: 2,
             truncated: true,
-            clusters: [
-              {
-                key: "topic/example",
-                label: "Example",
-                itemCount: 2_500,
-                highRiskCount: 0,
-                withheldCount: 0,
-                preferenceSignalCount: 0,
-                items: Array.from({ length: 2_500 }, (_, index) => ({
-                  pagePath: `sources/import-${index}.md`,
-                  title: `Imported chat ${index}`,
-                  riskLevel: "low" as const,
-                  riskReasons: [],
-                  labels: [],
-                  topicKey: "topic/example",
-                  topicLabel: "Example",
-                  digestStatus: "available" as const,
-                  activeBranchMessages: 1,
-                  userMessageCount: 1,
-                  assistantMessageCount: 1,
-                  summary: "Imported summary",
-                  candidateSignals: [],
-                  correctionSignals: [],
-                  preferenceSignals: [],
-                })),
-              },
-            ],
+            clusters: clusterSizes.map((itemCount, clusterIndex) => ({
+              key: `topic/example-${clusterIndex}`,
+              label: `Example ${clusterIndex}`,
+              itemCount,
+              highRiskCount: 0,
+              withheldCount: 0,
+              preferenceSignalCount: 0,
+              items: Array.from({ length: itemCount }, (_, index) => ({
+                pagePath: `sources/import-${clusterIndex}-${index}.md`,
+                title: `Imported chat ${clusterIndex}-${index}`,
+                riskLevel: "low" as const,
+                riskReasons: [],
+                labels: [],
+                topicKey: `topic/example-${clusterIndex}`,
+                topicLabel: `Example ${clusterIndex}`,
+                digestStatus: "available" as const,
+                activeBranchMessages: 1,
+                userMessageCount: 1,
+                assistantMessageCount: 1,
+                summary: "Imported summary",
+                candidateSignals: [],
+                correctionSignals: [],
+                preferenceSignals: [],
+              })),
+            })),
           }
         : null,
     wikiOverviewLoading: false,
@@ -90,32 +93,30 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
         ? {
             totalItems: 2_501,
             totalPages: 2_501,
-            pageCounts: { synthesis: 2_501, entity: 0, concept: 0, source: 0, report: 0 },
+            pageCounts: { synthesis: 2_500, entity: 1, concept: 0, source: 0, report: 0 },
             totalClaims: 0,
             totalQuestions: 0,
             totalContradictions: 0,
             truncated: true,
-            clusters: [
-              {
-                key: "synthesis",
-                label: "Syntheses",
-                itemCount: 2_500,
+            clusters: clusterSizes.map((itemCount, clusterIndex) => ({
+              key: clusterIndex === 0 ? "synthesis" : "entity",
+              label: clusterIndex === 0 ? "Syntheses" : "Entities",
+              itemCount,
+              claimCount: 0,
+              questionCount: 0,
+              contradictionCount: 0,
+              items: Array.from({ length: itemCount }, (_, index) => ({
+                pagePath: `${clusterIndex === 0 ? "syntheses" : "entities"}/page-${index}.md`,
+                title: `Memory page ${index}`,
+                kind: clusterIndex === 0 ? ("synthesis" as const) : ("entity" as const),
                 claimCount: 0,
                 questionCount: 0,
                 contradictionCount: 0,
-                items: Array.from({ length: 2_500 }, (_, index) => ({
-                  pagePath: `syntheses/page-${index}.md`,
-                  title: `Memory page ${index}`,
-                  kind: "synthesis" as const,
-                  claimCount: 0,
-                  questionCount: 0,
-                  contradictionCount: 0,
-                  claims: [],
-                  questions: [],
-                  contradictions: [],
-                })),
-              },
-            ],
+                claims: [],
+                questions: [],
+                contradictions: [],
+              })),
+            })),
           }
         : null,
     onRefreshDiary: () => {},
@@ -136,7 +137,7 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
 describe("bounded Memory Wiki dashboard results", () => {
   it.each(["insights", "wiki"] as const)("discloses returned and total %s item counts", (tab) => {
     const container = document.createElement("div");
-    render(renderDreaming(buildBoundedDashboardProps(tab)), container);
+    renderDreamingView(buildBoundedDashboardProps(tab), container);
 
     expect(container.querySelector(".dreams-diary__bounded-result")?.textContent?.trim()).toBe(
       "Showing the newest 2,500 of 2,501 items.",

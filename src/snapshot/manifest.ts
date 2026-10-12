@@ -1,10 +1,10 @@
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { sha256File } from "../infra/directory-durability.js";
 import { copyFileHandle, sameFileMutationFingerprint } from "../infra/file-descriptor.js";
-import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { root } from "../infra/fs-safe.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
 import {

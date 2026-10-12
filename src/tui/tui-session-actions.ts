@@ -1,5 +1,5 @@
-// Implements TUI session actions such as switching, forking, and resuming.
 import type { TUI } from "@earendil-works/pi-tui";
+import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
@@ -7,14 +7,12 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import type { AgentHistoryActivity } from "../infra/agent-activity-events.js";
 import {
-  agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import type { ChatLog } from "./components/chat-log.js";
-import { refreshTuiAgentList } from "./tui-agent-list-refresh.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import {
   formatPrimitiveString,
@@ -23,8 +21,16 @@ import {
   isCommandMarkedMessage,
 } from "./tui-formatters.js";
 import { extractTuiImageSources } from "./tui-images.js";
-import { readTuiSessionUserMessage } from "./tui-session-events.js";
 import {
+  captureTuiSessionIncarnation,
+  captureTuiSessionSelection,
+  matchesTuiSessionMetadata,
+  matchesTuiSessionSelection,
+  readTuiSessionUserMessage,
+} from "./tui-session-events.js";
+import { readTuiSessionHistory } from "./tui-session-history.js";
+import {
+  copyDefinedSessionInfo,
   sessionInfoUiEquals,
   type SessionInfoDefaults,
   type SessionInfoEntry,
@@ -56,6 +62,7 @@ type SessionActionContext = {
   invalidateRunOwnership?: () => void;
   clearLocalRunIds?: () => void;
   rememberSessionKey?: (sessionKey: string) => void | Promise<void>;
+  onSessionSelection?: () => void;
 };
 
 export function createSessionActions(context: SessionActionContext) {
@@ -77,20 +84,17 @@ export function createSessionActions(context: SessionActionContext) {
     invalidateRunOwnership,
     clearLocalRunIds,
     rememberSessionKey,
+    onSessionSelection,
   } = context;
   let historyLoadGeneration = 0;
   let lastSessionDefaults: SessionInfoDefaults | null = null;
 
-  const captureSessionSelection = () => ({
-    sessionKey: state.currentSessionKey,
-    agentId: state.currentAgentId,
-  });
-
   const applySessionSelection = (nextSelection: { key: string; agentId: string }) => {
-    const previousSelection = captureSessionSelection();
     if (
-      nextSelection.agentId === previousSelection.agentId &&
-      agentSessionKeysMatchByRequestKey(nextSelection.key, previousSelection.sessionKey)
+      matchesTuiSessionSelection(state, {
+        sessionKey: nextSelection.key,
+        agentId: nextSelection.agentId,
+      })
     ) {
       return false;
     }
@@ -118,21 +122,6 @@ export function createSessionActions(context: SessionActionContext) {
     updateHeader();
     updateFooter();
     return true;
-  };
-
-  const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }): boolean =>
-    state.currentAgentId === selection.agentId &&
-    agentSessionKeysMatchByRequestKey(state.currentSessionKey, selection.sessionKey);
-
-  const isCurrentSessionMutation = (result: { key?: string }): boolean => {
-    if (!result.key) {
-      return true;
-    }
-    const parsed = parseAgentSessionKey(result.key);
-    return isCurrentSessionSelection({
-      sessionKey: result.key,
-      agentId: parsed ? normalizeAgentId(parsed.agentId) : state.currentAgentId,
-    });
   };
 
   const applyAgentsResult = (result: TuiAgentsList) => {
@@ -177,22 +166,38 @@ export function createSessionActions(context: SessionActionContext) {
     updateFooter();
   };
 
-  const refreshAgents = (ownsRefresh: () => boolean = () => true) =>
-    refreshTuiAgentList({
-      load: () => client.listAgents(),
-      apply: (result) => ownsRefresh() && applyAgentsResult(result),
-      reportError: (error) => ownsRefresh() && chatLog.addSystem(`agents list failed: ${error}`),
-    });
+  const refreshAgents = async (
+    ownsRefresh: () => boolean = () => true,
+  ): Promise<Result<void, string>> => {
+    try {
+      const result = await client.listAgents();
+      if (ownsRefresh()) {
+        applyAgentsResult(result);
+      }
+      return ok(undefined);
+    } catch (error) {
+      const message = formatTuiErrorMessage(error);
+      if (ownsRefresh()) {
+        chatLog.addSystem(`agents list failed: ${message}`);
+      }
+      return resultError(message);
+    }
+  };
 
-  const updateAgentFromSessionKey = (key: string) => {
+  const adoptSessionKey = (key: string | undefined) => {
+    if (!key || key === state.currentSessionKey) {
+      return false;
+    }
     const parsed = parseAgentSessionKey(key);
-    if (!parsed) {
-      return;
+    if (parsed) {
+      const agentId = normalizeAgentId(parsed.agentId);
+      if (agentId !== state.currentAgentId) {
+        state.currentAgentId = agentId;
+      }
     }
-    const next = normalizeAgentId(parsed.agentId);
-    if (next !== state.currentAgentId) {
-      state.currentAgentId = next;
-    }
+    state.currentSessionKey = key;
+    updateHeader();
+    return true;
   };
 
   const resolveModelSelection = (entry?: SessionInfoEntry) => {
@@ -240,38 +245,22 @@ export function createSessionActions(context: SessionActionContext) {
     }
 
     const next = { ...state.sessionInfo };
-    if (entry?.thinkingLevel !== undefined) {
-      next.thinkingLevel = entry.thinkingLevel;
-    }
+    copyDefinedSessionInfo(next, entry, [
+      "thinkingLevel",
+      "agentRuntime",
+      "fastMode",
+      "verboseLevel",
+      "traceLevel",
+      "reasoningLevel",
+      "responseUsage",
+      "effectiveResponseUsage",
+      "inputTokens",
+      "outputTokens",
+      "displayName",
+      "updatedAt",
+    ]);
     if (entry?.thinkingLevels !== undefined || defaults?.thinkingLevels !== undefined) {
       next.thinkingLevels = entry?.thinkingLevels ?? defaults?.thinkingLevels;
-    }
-    if (entry?.agentRuntime !== undefined) {
-      next.agentRuntime = entry.agentRuntime;
-    }
-    if (entry?.fastMode !== undefined) {
-      next.fastMode = entry.fastMode;
-    }
-    if (entry?.verboseLevel !== undefined) {
-      next.verboseLevel = entry.verboseLevel;
-    }
-    if (entry?.traceLevel !== undefined) {
-      next.traceLevel = entry.traceLevel;
-    }
-    if (entry?.reasoningLevel !== undefined) {
-      next.reasoningLevel = entry.reasoningLevel;
-    }
-    if (entry?.responseUsage !== undefined) {
-      next.responseUsage = entry.responseUsage;
-    }
-    if (entry?.effectiveResponseUsage !== undefined) {
-      next.effectiveResponseUsage = entry.effectiveResponseUsage;
-    }
-    if (entry?.inputTokens !== undefined) {
-      next.inputTokens = entry.inputTokens;
-    }
-    if (entry?.outputTokens !== undefined) {
-      next.outputTokens = entry.outputTokens;
     }
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
@@ -302,20 +291,8 @@ export function createSessionActions(context: SessionActionContext) {
       next.contextTokens =
         entry?.contextTokens ?? defaults?.contextTokens ?? state.sessionInfo.contextTokens;
     }
-    if (entry?.displayName !== undefined) {
-      next.displayName = entry.displayName;
-    }
-    if (entry?.updatedAt !== undefined) {
-      next.updatedAt = entry.updatedAt;
-    }
 
-    const selection = resolveModelSelection(entry);
-    if (selection.modelProvider !== undefined) {
-      next.modelProvider = selection.modelProvider;
-    }
-    if (selection.model !== undefined) {
-      next.model = selection.model;
-    }
+    copyDefinedSessionInfo(next, resolveModelSelection(entry), ["modelProvider", "model"]);
 
     const previous = state.sessionInfo;
     const uiChanged = !sessionInfoUiEquals(previous, next);
@@ -331,13 +308,13 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const runRefreshSessionInfo = async () => {
-    const selection = captureSessionSelection();
+    const selection = captureTuiSessionSelection(state);
     const historyGeneration = historyLoadGeneration;
     const sessionGeneration = state.sessionGeneration ?? 0;
     const isCurrentRefresh = () =>
       historyGeneration === historyLoadGeneration &&
       sessionGeneration === (state.sessionGeneration ?? 0) &&
-      isCurrentSessionSelection(selection);
+      matchesTuiSessionSelection(state, selection);
     try {
       const result = await client.describeSession({
         sessionKey: selection.sessionKey,
@@ -348,16 +325,11 @@ export function createSessionActions(context: SessionActionContext) {
       if (!isCurrentRefresh()) {
         return;
       }
-      const entry =
-        result.session &&
-        agentSessionKeysMatchByRequestKey(result.session.key, selection.sessionKey)
-          ? result.session
-          : undefined;
-      if (entry?.key && entry.key !== state.currentSessionKey) {
-        updateAgentFromSessionKey(entry.key);
-        state.currentSessionKey = entry.key;
-        updateHeader();
+      const entry = result.session;
+      if (entry && (!entry.key || !matchesTuiSessionMetadata(state, entry))) {
+        return;
       }
+      adoptSessionKey(entry?.key);
       state.currentSessionId = typeof entry?.sessionId === "string" ? entry.sessionId : null;
       applySessionInfo({
         entry,
@@ -373,22 +345,16 @@ export function createSessionActions(context: SessionActionContext) {
 
   // Many TUI paths ask for the same session snapshot at once; bursts need only
   // one active lookup and one follow-up with the latest selection.
-  const refreshSessionInfoRunner = createTuiRefreshCoalescer(async () => {
-    await runRefreshSessionInfo();
-  });
+  const refreshSessionInfoRunner = createTuiRefreshCoalescer(runRefreshSessionInfo);
   const refreshSessionInfo = () => refreshSessionInfoRunner.run();
 
   const applySessionInfoFromPatch = (
     result?: SessionsPatchResult | TuiSessionMutationResult | null,
   ) => {
-    if (!result?.entry || !isCurrentSessionMutation(result)) {
+    if (!result?.entry || !matchesTuiSessionMetadata(state, result)) {
       return;
     }
-    if (result.key && result.key !== state.currentSessionKey) {
-      updateAgentFromSessionKey(result.key);
-      state.currentSessionKey = result.key;
-      updateHeader();
-    }
+    adoptSessionKey(result.key);
     const resolved = result.resolved;
     const entry = resolved
       ? {
@@ -405,11 +371,11 @@ export function createSessionActions(context: SessionActionContext) {
 
   const applySessionMutationResult = (
     result?: TuiSessionMutationResult | null,
-    requestSelection = captureSessionSelection(),
+    requestSelection = captureTuiSessionSelection(state),
   ): boolean => {
     // A reset can legitimately return a replacement key. Reject results using
     // the request's original selection, not the key the response must adopt.
-    if (!result?.entry || !isCurrentSessionSelection(requestSelection)) {
+    if (!result?.entry || !matchesTuiSessionSelection(state, requestSelection)) {
       return false;
     }
     // Invalidate same-key history/session-info readers before adopting the replacement epoch.
@@ -419,11 +385,7 @@ export function createSessionActions(context: SessionActionContext) {
       type: "sessionReset",
       scope: readTuiSessionProjectionScope(state),
     });
-    if (result.key && result.key !== state.currentSessionKey) {
-      updateAgentFromSessionKey(result.key);
-      state.currentSessionKey = result.key;
-      updateHeader();
-    }
+    adoptSessionKey(result.key);
     const sessionId = result.entry.sessionId;
     state.currentSessionId = typeof sessionId === "string" ? sessionId : null;
     applySessionInfoFromPatch(result);
@@ -441,21 +403,24 @@ export function createSessionActions(context: SessionActionContext) {
     // latest request may render, or a slow reload can replace a newer selection.
     const generation = ++historyLoadGeneration;
     const sessionGeneration = state.sessionGeneration ?? 0;
-    const selection = captureSessionSelection();
+    const selection = captureTuiSessionSelection(state);
     const isCurrentLoad = () =>
       generation === historyLoadGeneration &&
       (state.sessionGeneration ?? 0) === sessionGeneration &&
-      isCurrentSessionSelection(selection);
+      matchesTuiSessionSelection(state, selection);
     try {
-      const history = await client.loadHistory({
+      const read = await readTuiSessionHistory({
+        client,
         sessionKey: selection.sessionKey,
-        ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
+        agentId: selection.agentId,
+        homeSessionKey: resolveSessionSelection(undefined, selection.agentId).key,
         limit: opts.historyLimit ?? 200,
+        isCurrent: isCurrentLoad,
       });
-      if (!isCurrentLoad()) {
+      if (!read || !isCurrentLoad()) {
         return { loaded: false };
       }
-      const record = history as {
+      const record = read.history as {
         messages?: unknown[];
         activity?: AgentHistoryActivity[];
         sessionId?: string;
@@ -472,12 +437,10 @@ export function createSessionActions(context: SessionActionContext) {
         runtimePluginsPrewarm?: { status?: string; error?: string };
       };
       const sessionInfo = record.sessionInfo;
-      if (sessionInfo?.key && sessionInfo.key !== state.currentSessionKey) {
-        updateAgentFromSessionKey(sessionInfo.key);
-        state.currentSessionKey = sessionInfo.key;
+      const historyKey = sessionInfo?.key ?? read.legacyHistoryKey;
+      if (adoptSessionKey(historyKey)) {
         selection.sessionKey = state.currentSessionKey;
         selection.agentId = state.currentAgentId;
-        updateHeader();
       }
       const historySessionInfo =
         sessionInfo && sessionInfo.thinkingLevel === undefined && record.thinkingLevel !== undefined
@@ -552,12 +515,7 @@ export function createSessionActions(context: SessionActionContext) {
                 ...(liveUserMessage.images ? { images: liveUserMessage.images } : {}),
               });
             } else {
-              const images = extractTuiImageSources(message);
-              if (images.length > 0) {
-                chatLog.addUser(text, { images });
-              } else {
-                chatLog.addUser(text);
-              }
+              chatLog.addUser(text, { images: extractTuiImageSources(message) });
             }
           }
           continue;
@@ -567,12 +525,7 @@ export function createSessionActions(context: SessionActionContext) {
             includeThinking: state.showThinking,
           });
           if (text) {
-            const images = extractTuiImageSources(message);
-            if (images.length > 0) {
-              chatLog.finalizeAssistant(text, undefined, images);
-            } else {
-              chatLog.finalizeAssistant(text);
-            }
+            chatLog.finalizeAssistant(text, undefined, extractTuiImageSources(message));
           }
           continue;
         }
@@ -639,12 +592,20 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const setSession = async (rawKey: string, agentId?: string) => {
-    if (applySessionSelection(resolveSessionSelection(rawKey, agentId)) || !state.historyLoaded) {
+    const changed = applySessionSelection(resolveSessionSelection(rawKey, agentId));
+    onSessionSelection?.();
+    if (changed || !state.historyLoaded) {
       await loadHistory();
     }
   };
 
   const abortActive = async (params?: { preferActive?: boolean }) => {
+    const admission = submit.resolveTuiSessionActionAdmission(state);
+    if (admission.status === "blocked") {
+      chatLog.addSystem(submit.tuiSessionActionBlockedMessage(admission, opts.local === true));
+      tui.requestRender();
+      return;
+    }
     if (
       opts.local === true &&
       state.activityStatus === "finishing context" &&
@@ -655,15 +616,9 @@ export function createSessionActions(context: SessionActionContext) {
       tui.requestRender();
       return;
     }
-    const selection = captureSessionSelection();
-    const sessionId = state.currentSessionId;
-    const sessionGeneration = state.sessionGeneration ?? 0;
+    const { selection, isCurrent: isCurrentAbort } = captureTuiSessionIncarnation(state);
     const pendingRunId = submit.getPendingSubmitAcceptedRunId(state);
     const activeRunId = state.activeChatRunId;
-    const isCurrentAbort = () =>
-      isCurrentSessionSelection(selection) &&
-      (state.sessionGeneration ?? 0) === sessionGeneration &&
-      (sessionId === null || state.currentSessionId === sessionId);
     const dropPendingRun = (runId: string) => {
       reduceTuiSessionProjection(state, {
         type: "sendFailed",
@@ -700,7 +655,7 @@ export function createSessionActions(context: SessionActionContext) {
       if (pendingRunId) {
         // Re-read after abortChat: an event may already have dropped the queued row.
         const pendingDraft = submit.getPendingSubmitDraft(state);
-        submit.clearPendingSubmit(state, pendingRunId ?? undefined);
+        submit.clearPendingSubmit(state, pendingRunId);
         if (pendingDraft?.runId === pendingRunId) {
           dropPendingRun(pendingRunId);
         }
@@ -717,7 +672,6 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   return {
-    applyAgentsResult,
     refreshAgents,
     refreshSessionInfo,
     applySessionInfoFromPatch,

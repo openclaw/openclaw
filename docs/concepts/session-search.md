@@ -18,7 +18,7 @@ and can include later post-reset turns. An explicit `messageId` for a retained
 active-path row outside the current view opens that original closed interval and does
 not mix later post-reset turns.
 
-Anchored reads use `limit` to bound the surrounding messages and cannot be combined with `offset`.
+Anchored reads use `limit` to bound the surrounding messages. Omit `offset` when using an anchor.
 For SQLite transcript history, a missing or off-path message returns empty history rather than
 the newest tail; a `sessionId` that does not belong to the selected session key is rejected.
 These rules also apply in local embedded mode, without a running Gateway.
@@ -46,6 +46,15 @@ The command palette and Threads page send their session filters to the Gateway, 
 searches the full authorized indexed history in that scope. The browser does not download
 a session roster to choose which transcripts to search, and a roster page size does not
 exclude older matching sessions.
+
+Title searches treat punctuation and repeated whitespace as word separators, so
+`per session communi` finds a conversation titled **Per-session communication
+controls**. The command palette uses the same matching rule when grouping results
+under Sessions or Messages. Identifier searches retain their literal matching.
+
+Control UI message searches match the final word as a prefix while requiring the
+preceding words in full. For example, `session communi` finds **session
+communication**. The agent-facing `sessions_search` tool keeps exact-word matching.
 
 The command palette also finds agent-created conversations assigned to a custom
 sidebar group, by title or transcript, after you switch to another conversation.

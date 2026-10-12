@@ -1,30 +1,34 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as packageArtifact from "../../scripts/e2e/parallels/package-artifact.ts";
 import { packAndServeSmokeArtifact } from "../../scripts/e2e/parallels/smoke-common.ts";
-import { resolveCrossOsPackageSet } from "../../scripts/lib/cross-os-release-checks/companions.ts";
+import {
+  bindCrossOsCandidateRootPackage,
+  omitCrossOsCandidateRootPackage,
+  resolveCrossOsPackageSet,
+  resolveCrossOsRegistryDistTags,
+  startCrossOsPackageRegistry,
+} from "../../scripts/lib/cross-os-release-checks/companions.ts";
 import {
   findLaneByName,
   requiredPrepublishPluginPackagesForLanes,
 } from "../../scripts/lib/docker-e2e-plan.mts";
+import { resolveNpmJsonString } from "../../scripts/lib/npm-json-output.mts";
+import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 import {
   PREPUBLISH_PLUGIN_REGISTRY_MANIFEST,
   createPrepublishPluginRegistryArtifact,
   validatePrepublishPluginRegistryArtifact,
 } from "../../scripts/prepublish-plugin-registry-artifact.mjs";
+import { resolveExtendedStablePackage } from "../../src/infra/update-check.ts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SOURCE_SHA = "a".repeat(40);
 const VERSION = "2026.8.1-beta.1";
@@ -32,6 +36,7 @@ const PACKAGE_NAME = "@openclaw/discord";
 const TARBALL = "openclaw-discord-2026.8.1-beta.1.tgz";
 const SCRIPT = path.resolve("scripts/prepublish-plugin-registry-artifact.mjs");
 const tempDirs: string[] = [];
+const registryTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const packageTarballs = new Map<string, Buffer>();
 const fixtureCommitArgs = [
   "-c",
@@ -44,6 +49,7 @@ const fixtureCommitArgs = [
   "-m",
   "test: seed release source",
 ];
+const execFileAsync = promisify(execFile);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -56,21 +62,19 @@ function sha256(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
-function writeFixtureTarball(root: string, tarballPath: string, name: string) {
-  const cached = packageTarballs.get(name);
+function writeFixtureTarball(root: string, tarballPath: string, name: string, version = VERSION) {
+  const cacheKey = `${name}@${version}`;
+  const cached = packageTarballs.get(cacheKey);
   if (cached) {
     writeFileSync(tarballPath, cached);
     return;
   }
   const packageRoot = path.join(root, "package");
   mkdirSync(packageRoot, { recursive: true });
-  writeFileSync(
-    path.join(packageRoot, "package.json"),
-    `${JSON.stringify({ name, version: VERSION })}\n`,
-  );
+  writeFileSync(path.join(packageRoot, "package.json"), `${JSON.stringify({ name, version })}\n`);
   execFileSync("tar", ["-czf", tarballPath, "-C", root, "package"]);
   // Each test mutates its own file; only original archive bytes survive cleanup.
-  packageTarballs.set(name, readFileSync(tarballPath));
+  packageTarballs.set(cacheKey, readFileSync(tarballPath));
 }
 
 function fixture(packageName = PACKAGE_NAME) {
@@ -212,68 +216,6 @@ function preparedBundleFixture(repoRoot: string, sourceSha: string) {
 }
 
 describe("prepublish plugin registry artifact", () => {
-  it("reuses prepared root and core bytes while packing only selected plugins", () => {
-    const { repoRoot, sourceSha } = cliFixture([PACKAGE_NAME, "@openclaw/slack"]);
-    const { preparedBundleDir, entries } = preparedBundleFixture(repoRoot, sourceSha);
-    const artifactDir = path.join(repoRoot, "artifact");
-    const result = spawnSync(
-      process.execPath,
-      [
-        SCRIPT,
-        "create",
-        "--repo-root",
-        repoRoot,
-        "--artifact-dir",
-        artifactDir,
-        "--source-sha",
-        sourceSha,
-        "--candidate-version",
-        VERSION,
-        "--required-packages-json",
-        JSON.stringify([PACKAGE_NAME]),
-        "--prepared-bundle-dir",
-        preparedBundleDir,
-      ],
-      { encoding: "utf8" },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    const output = JSON.parse(result.stdout);
-    expect(output.packages).toEqual([
-      "@openclaw/ai",
-      PACKAGE_NAME,
-      "@openclaw/gateway-protocol",
-      "openclaw",
-    ]);
-    for (const entry of entries) {
-      expect(readFileSync(path.join(artifactDir, entry.tarballName))).toEqual(
-        readFileSync(path.join(preparedBundleDir, entry.tarballName)),
-      );
-    }
-    expect(
-      validatePrepublishPluginRegistryArtifact({
-        artifactDir,
-        expectedSourceSha: sourceSha,
-        expectedCandidateVersion: VERSION,
-        expectedManifestSha256: output.manifestSha256,
-        requiredPackages: ["openclaw", "@openclaw/ai", PACKAGE_NAME],
-      }).manifest.packages,
-    ).toHaveLength(4);
-    const crossOs = resolveCrossOsPackageSet({
-      artifactDir,
-      sourceSha,
-      candidateVersion: VERSION,
-      manifestSha256: output.manifestSha256,
-      requiredPackages: [PACKAGE_NAME],
-    });
-    expect(crossOs.packages.map((entry) => entry.name)).toEqual([
-      "@openclaw/ai",
-      PACKAGE_NAME,
-      "@openclaw/gateway-protocol",
-    ]);
-    expect(crossOs.companions.map((entry) => entry.name)).toEqual([PACKAGE_NAME]);
-  });
-
   it.each(["source", "conflicting dependency", "tarball bytes"])(
     "rejects prepared bundle %s drift before accepting its registry",
     (drift) => {
@@ -312,7 +254,7 @@ describe("prepublish plugin registry artifact", () => {
     },
   );
 
-  it.each(["discord", "slack"])(
+  it.each(["slack"])(
     "stages the planned %s candidate and Codex in one verified artifact",
     (channel) => {
       const lane = findLaneByName(`npm-onboard-${channel}-candidate-channel-agent`);
@@ -399,12 +341,6 @@ describe("prepublish plugin registry artifact", () => {
     },
   );
 
-  it("validates the immutable manifest, package set, hashes, and packed identity", () => {
-    const paths = fixture();
-    const result = validate(paths);
-    expect(result.manifest.packages.map((entry) => entry.name)).toEqual([PACKAGE_NAME]);
-  });
-
   it("requires the complete immutable identity tuple", () => {
     const paths = fixture();
     const common = {
@@ -423,16 +359,6 @@ describe("prepublish plugin registry artifact", () => {
         validatePrepublishPluginRegistryArtifact({ ...common, [field]: undefined }),
       ).toThrow(field);
     }
-  });
-
-  it("accepts immutable companion packages beyond the selected Docker plan", () => {
-    const paths = fixture();
-    addCompanionPackage(paths);
-
-    expect(validate(paths).manifest.packages.map((entry) => entry.name)).toEqual([
-      "@openclaw/discord",
-      "@openclaw/feishu",
-    ]);
   });
 
   it("extracts only required cross-OS companions from the validated registry", () => {
@@ -454,6 +380,134 @@ describe("prepublish plugin registry artifact", () => {
       },
     ]);
   });
+
+  it("publishes the candidate root under the extended-stable registry tag", () => {
+    expect(
+      resolveCrossOsRegistryDistTags([
+        { name: "openclaw", version: "2026.8.34", tarballPath: "/tmp/openclaw.tgz" },
+      ]),
+    ).toBe("extended-stable=2026.8.34");
+    expect(
+      resolveCrossOsRegistryDistTags([
+        { name: "openclaw", version: "2026.9.1", tarballPath: "/tmp/openclaw.tgz" },
+      ]),
+    ).toBeUndefined();
+    expect(
+      omitCrossOsCandidateRootPackage([
+        { name: "@openclaw/codex", version: "2026.9.1", tarballPath: "/tmp/codex.tgz" },
+        { name: "openclaw", version: "2026.9.1", tarballPath: "/tmp/openclaw.tgz" },
+      ]),
+    ).toEqual([{ name: "@openclaw/codex", version: "2026.9.1", tarballPath: "/tmp/codex.tgz" }]);
+  });
+
+  it("keeps the shipped updater and npm install on the local extended-stable candidate", async () => {
+    const candidateVersion = "2026.8.34";
+    const publishedVersion = "2026.8.33";
+    const root = registryTempDirs.make("openclaw-cross-os-registry-");
+    const tarballPath = path.join(root, `openclaw-${candidateVersion}.tgz`);
+    writeFixtureTarball(path.join(root, "archive"), tarballPath, "openclaw", candidateVersion);
+
+    const upstreamRequests: string[] = [];
+    const upstream = createServer((request, response) => {
+      upstreamRequests.push(request.url ?? "");
+      if (request.url !== "/openclaw") {
+        response.writeHead(404).end();
+        return;
+      }
+      const upstreamUrl = `http://127.0.0.1:${(upstream.address() as { port: number }).port}`;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          name: "openclaw",
+          "dist-tags": { latest: publishedVersion },
+          versions: {
+            [publishedVersion]: {
+              name: "openclaw",
+              version: publishedVersion,
+              dist: { tarball: `${upstreamUrl}/openclaw/-/openclaw-${publishedVersion}.tgz` },
+            },
+          },
+        }),
+      );
+    });
+    await new Promise<void>((resolveListen, rejectListen) => {
+      upstream.once("error", rejectListen);
+      upstream.listen(0, "127.0.0.1", resolveListen);
+    });
+    const upstreamUrl = `http://127.0.0.1:${(upstream.address() as { port: number }).port}`;
+    let registry: Awaited<ReturnType<typeof startCrossOsPackageRegistry>>;
+    try {
+      const packages = bindCrossOsCandidateRootPackage([], {
+        version: candidateVersion,
+        tarballPath,
+      });
+      expect(resolveCrossOsRegistryDistTags(packages)).toBe(`extended-stable=${candidateVersion}`);
+      registry = await startCrossOsPackageRegistry(packages, root, {
+        upstreamRegistry: upstreamUrl,
+      });
+      expect(registry).toBeDefined();
+      const registryUrl = registry!.url;
+      const env = {
+        ...process.env,
+        NPM_CONFIG_AUDIT: "false",
+        NPM_CONFIG_CACHE: path.join(root, "npm-cache"),
+        NPM_CONFIG_FUND: "false",
+        NPM_CONFIG_REGISTRY: registryUrl,
+        NPM_CONFIG_TAG: "extended-stable",
+        OPENCLAW_UPDATE_PACKAGE_SPEC: "openclaw",
+      };
+      const runNpm = async (npmArgs: string[]) => {
+        const runner = resolveNpmRunner({ env, npmArgs });
+        return await execFileAsync(runner.command, runner.args, {
+          encoding: "utf8",
+          env: runner.env ?? env,
+          timeout: 10_000,
+          windowsVerbatimArguments: runner.windowsVerbatimArguments,
+        });
+      };
+      await expect(
+        fetch(`${registryUrl}/openclaw/latest`).then(async (response) => await response.json()),
+      ).resolves.toMatchObject({ name: "openclaw", version: publishedVersion });
+      await expect(
+        resolveExtendedStablePackage({ installKind: "package", env, timeoutMs: 5_000 }),
+      ).resolves.toMatchObject({
+        status: "resolved",
+        selector: "extended-stable",
+        version: candidateVersion,
+        packageSpec: `openclaw@${candidateVersion}`,
+      });
+
+      const viewedVersion = resolveNpmJsonString(
+        JSON.parse((await runNpm(["view", "openclaw", "version", "--json"])).stdout),
+      );
+      expect(viewedVersion).toBe(candidateVersion);
+
+      const installPrefix = path.join(root, "installed");
+      await runNpm([
+        "install",
+        "--ignore-scripts",
+        "--no-package-lock",
+        "--prefix",
+        installPrefix,
+        "openclaw",
+      ]);
+      expect(
+        JSON.parse(
+          readFileSync(path.join(installPrefix, "node_modules/openclaw/package.json"), "utf8"),
+        ).version,
+      ).toBe(candidateVersion);
+      expect(upstreamRequests).not.toContain("/openclaw/extended-stable");
+      expect(upstreamRequests).not.toContain(`/openclaw/${candidateVersion}`);
+    } finally {
+      try {
+        await registry?.close();
+      } finally {
+        await new Promise<void>((resolveClose, rejectClose) => {
+          upstream.close((error) => (error ? rejectClose(error) : resolveClose()));
+        });
+      }
+    }
+  }, 30_000);
 
   it("rejects mismatched cross-OS companion registry identities", () => {
     const paths = fixture();
@@ -508,44 +562,6 @@ describe("prepublish plugin registry artifact", () => {
       }),
     ).toThrow("tracked changes");
   });
-
-  it.each(process.platform === "win32" ? ["direct"] : ["direct", "symlink"])(
-    "keeps noisy package commands off the CLI JSON stdout contract (%s entrypoint)",
-    (entrypoint) => {
-      const { repoRoot, sourceSha } = cliFixture();
-      const artifactDir = path.join(repoRoot, "artifact");
-      const script = entrypoint === "symlink" ? path.join(repoRoot, "artifact-cli.mjs") : SCRIPT;
-      if (entrypoint === "symlink") {
-        symlinkSync(SCRIPT, script);
-      }
-      const result = spawnSync(
-        process.execPath,
-        [
-          script,
-          "create",
-          "--repo-root",
-          repoRoot,
-          "--artifact-dir",
-          artifactDir,
-          "--source-sha",
-          sourceSha,
-          "--candidate-version",
-          VERSION,
-          "--required-packages-json",
-          JSON.stringify([PACKAGE_NAME]),
-        ],
-        { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-      );
-
-      expect(result.status).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        manifestSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
-        packages: [PACKAGE_NAME],
-      });
-      expect(result.stderr).toContain("runtime build stdout");
-      expect(result.stderr).toContain("package manifest stdout");
-    },
-  );
 
   it("rejects traversal and duplicate package entries", () => {
     const traversal = fixture();

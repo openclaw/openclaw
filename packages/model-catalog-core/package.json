@@ -10,7 +10,7 @@
   "types": "./dist/index.d.mts",
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*",
-    "zod": "4.6.4"
+    "zod": "4.6.5"
   },
   "exports": {
     ".": {

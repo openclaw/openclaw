@@ -1,6 +1,8 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { testApi as loggerTestApi } from "../logging/logger.test-support.js";
@@ -12,18 +14,19 @@ import {
 import type { ProviderPlugin } from "../plugins/types.js";
 import { registerResolvedAgentDir, unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import {
+  createApiKeyCredential,
   createAuthProfileStoreFixture,
   oauthCred,
 } from "./auth-profiles/credential-fixtures.test-support.js";
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
-import { prepareProviderCatalogRun } from "./models-config.providers.catalog-context.js";
+import {
+  loadSelectedProviderAccountCatalog,
+  prepareProviderCatalogRun,
+} from "./models-config.providers.catalog-context.js";
 import type { ProviderAuthResolver } from "./models-config.providers.secret-helpers.js";
 
 vi.mock("./auth-profiles/oauth.js", () => ({ resolveApiKeyForProfile: vi.fn() }));
-vi.mock("./provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: (provider: string) => provider,
-}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -33,6 +36,148 @@ afterEach(async () => {
   resetLogger();
   vi.clearAllMocks();
 });
+
+it("revalidates selected-account authority before consuming an awaited discovery result", async () => {
+  const agentDir = tempDirs.make("selected-catalog-authority-");
+  const entered = createDeferred();
+  const release = createDeferred();
+  const revoked = new Error("Session changed during selected-account discovery");
+  const beforeRequest = vi.fn();
+  let current = true;
+  const readCredential = vi.fn(() => "synthetic-key");
+  const authStore = createAuthProfileStoreFixture({
+    "fixture:selected": createApiKeyCredential("fixture", "synthetic-key"),
+  });
+  Object.defineProperty(authStore.profiles["fixture:selected"], "key", { get: readCredential });
+  const readOutcomes = vi.fn(() => [
+    { provider: "fixture", profileId: "fixture:selected", status: "ready" as const },
+  ]);
+  const request = loadSelectedProviderAccountCatalog({
+    provider: {
+      id: "fixture",
+      label: "Fixture",
+      auth: [],
+      catalog: {
+        run: async (context) => {
+          entered.resolve();
+          await release.promise;
+          context.resolveProviderAuth();
+          context.resolveProviderApiKey();
+          return {
+            provider: { baseUrl: "https://fixture.example.test/v1", models: [] },
+            get outcomes() {
+              return readOutcomes();
+            },
+          };
+        },
+      },
+    },
+    providerId: "fixture",
+    profileId: "fixture:selected",
+    authStore,
+    config: {},
+    agentDir,
+    workspaceDir: agentDir,
+    isCurrent: () => true,
+    beforeRequest,
+    // Foreign commits become visible through the awaited source read.
+    assertCurrent: () => {},
+    withCurrent: async <T>(consume: () => T): Promise<Awaited<T>> => {
+      await Promise.resolve();
+      if (!current) {
+        throw revoked;
+      }
+      return await consume();
+    },
+  });
+  void request.catch(() => {});
+  try {
+    await awaitGateBeforeSettlement(entered.promise, request, "Discovery did not start");
+    expect(beforeRequest).not.toHaveBeenCalled();
+    const preparedReads = readCredential.mock.calls.length;
+    expect(preparedReads).toBeGreaterThan(0);
+    current = false;
+    release.resolve();
+    await expect(request).rejects.toBe(revoked);
+    expect(readOutcomes).not.toHaveBeenCalled();
+    expect(readCredential).toHaveBeenCalledTimes(preparedReads);
+  } finally {
+    release.resolve();
+    await request.catch(() => {});
+  }
+});
+
+it.each([undefined])(
+  "passes refreshed OAuth grant metadata to the catalog (authFlow: %s)",
+  async (authFlow) => {
+    const agentDir = tempDirs.make("catalog-oauth-grant-");
+    const profileId = "openai:sharing";
+    const credential = {
+      ...oauthCred({
+        provider: "openai",
+        access: "expired-sharing-access",
+        refresh: "sharing-refresh",
+        expires: 1,
+      }),
+      authFlow: "chatgpt-token-sharing",
+    };
+    const store = createAuthProfileStoreFixture({ [profileId]: credential });
+    const refreshed = {
+      ...credential,
+      access: "refreshed-access",
+      expires: Date.now() + 600_000,
+      authFlow,
+    };
+    vi.mocked(resolveApiKeyForProfile).mockResolvedValue({
+      apiKey: refreshed.access,
+      provider: credential.provider,
+      profileId,
+      profileType: "oauth",
+      credential: refreshed,
+    });
+    const observedAuth: Array<ReturnType<ProviderAuthResolver>> = [];
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [{ id: "oauth", label: "OAuth", kind: "oauth", run: async () => ({ profiles: [] }) }],
+      catalog: {
+        run: async (ctx) => {
+          observedAuth.push(ctx.resolveProviderAuth(undefined, { oauthMarker: "oauth-marker" }));
+          return null;
+        },
+      },
+    };
+    const prepared = await prepareProviderCatalogRun({
+      provider,
+      config: {},
+      agentDir,
+      authStore: store,
+      env: {},
+      isActive: () => true,
+      resolveProviderAuth: (_providerId, options) => ({
+        apiKey: options?.oauthMarker,
+        discoveryApiKey: credential.access,
+        authFlow: credential.authFlow,
+        profileId,
+        mode: "oauth",
+        source: "profile",
+      }),
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+    });
+    await runProviderCatalog(prepared);
+
+    expect(observedAuth).toEqual([
+      {
+        apiKey: "oauth-marker",
+        discoveryApiKey: refreshed.access,
+        authFlow,
+        profileId,
+        mode: "oauth",
+        source: "profile",
+      },
+    ]);
+  },
+);
 
 it.each([true, false])(
   "reports failed OAuth preparation with the resulting catalog (API-key fallback: %s)",

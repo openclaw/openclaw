@@ -1,14 +1,8 @@
 /** Gateway request surface and bound replies used by the node-host runtime. */
-import type { GatewayClientRequestOptions } from "../gateway/client.js";
+import type { GatewayClient } from "../gateway/client.js";
 import type { NodeInvokeRequestPayload } from "./invoke-types.js";
 
-export type NodeHostClient = {
-  request<T = Record<string, unknown>>(
-    method: string,
-    params?: unknown,
-    opts?: GatewayClientRequestOptions,
-  ): Promise<T>;
-};
+export type NodeHostClient = Pick<GatewayClient, "request">;
 
 export function createNodeInvokeResponder(client: NodeHostClient, frame: NodeInvokeRequestPayload) {
   const send = async (result: {

@@ -7,6 +7,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveHookMappings } from "../hooks-mapping.js";
 import { createHooksConfig } from "../hooks-test-helpers.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
@@ -76,6 +77,7 @@ function createFanOutHandler(params?: {
   } as unknown as ReturnType<typeof createSubsystemLogger>;
   const hooksConfig = params?.hooksConfig ?? createGmailHooksConfig();
   const handler = createHooksRequestHandler({
+    scheduler: createTestGatewayScheduler("fake-timers"),
     getHooksConfig: params?.getHooksConfig ?? (() => hooksConfig),
     bindHost: "127.0.0.1",
     port: 18789,

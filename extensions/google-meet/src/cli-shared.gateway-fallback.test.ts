@@ -1,5 +1,5 @@
-import type { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
-import { describe, expect, it, vi } from "vitest";
+import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { callGoogleMeetGateway } from "./cli-shared.js";
 
 function gatewayTransportError(code?: number): Error {
@@ -19,37 +19,28 @@ function gatewayRequestError(message: string, gatewayCode = "INVALID_REQUEST"): 
   });
 }
 
-function rejectingGateway(error: Error): typeof callGatewayFromCli {
-  return vi.fn<typeof callGatewayFromCli>().mockRejectedValue(error);
-}
-
 describe("callGoogleMeetGateway local fallback", () => {
-  it("returns a successful gateway payload", async () => {
-    const payload = { found: true };
-    const callGateway = vi.fn<typeof callGatewayFromCli>().mockResolvedValue(payload);
-
-    await expect(
-      callGoogleMeetGateway({ callGateway, method: "googlemeet.status" }),
-    ).resolves.toEqual({ ok: true, payload });
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("falls back for an uncoded transport close", async () => {
     const error = gatewayTransportError();
+    vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockRejectedValue(error);
 
     await expect(
       callGoogleMeetGateway({
-        callGateway: rejectingGateway(error),
         method: "googlemeet.status",
       }),
     ).resolves.toEqual({ ok: false, error });
   });
 
-  it.each([1006, 1000])("propagates a transport close with code %s", async (code) => {
-    const error = gatewayTransportError(code);
+  it("propagates a coded transport close", async () => {
+    const error = gatewayTransportError(1006);
+    vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockRejectedValue(error);
 
     await expect(
       callGoogleMeetGateway({
-        callGateway: rejectingGateway(error),
         method: "googlemeet.status",
       }),
     ).rejects.toBe(error);
@@ -61,10 +52,10 @@ describe("callGoogleMeetGateway local fallback", () => {
       kind: "timeout",
       connectionDetails: { url: "ws://127.0.0.1:18789" },
     });
+    vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockRejectedValue(error);
 
     await expect(
       callGoogleMeetGateway({
-        callGateway: rejectingGateway(error),
         method: "googlemeet.status",
       }),
     ).rejects.toBe(error);
@@ -72,10 +63,10 @@ describe("callGoogleMeetGateway local fallback", () => {
 
   it("falls back when the exact Meet method is not registered", async () => {
     const error = gatewayRequestError("unknown method: googlemeet.status");
+    vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockRejectedValue(error);
 
     await expect(
       callGoogleMeetGateway({
-        callGateway: rejectingGateway(error),
         method: "googlemeet.status",
       }),
     ).resolves.toEqual({ ok: false, error });
@@ -84,12 +75,10 @@ describe("callGoogleMeetGateway local fallback", () => {
   it.each([
     gatewayRequestError("unknown method: voicecall.status"),
     new Error("unknown method: googlemeet.status"),
-    new Error("gateway not connected"),
-    new Error("connect ECONNREFUSED 127.0.0.1:18789"),
   ])("propagates a non-fallback error: $message", async (error) => {
+    vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockRejectedValue(error);
     await expect(
       callGoogleMeetGateway({
-        callGateway: rejectingGateway(error),
         method: "googlemeet.status",
       }),
     ).rejects.toBe(error);

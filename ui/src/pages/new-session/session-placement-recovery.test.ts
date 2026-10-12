@@ -1,14 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  sessionPlacementRecoveryExactStorageKey,
-  sessionPlacementRecoveryScopeStoragePrefix,
-} from "../../lib/sessions/session-placement-recovery-storage-key.ts";
+import { sessionPlacementRecoveryExactStorageKey } from "../../lib/sessions/session-placement-recovery-storage-key.ts";
 import {
   clearSessionPlacementRecovery,
   listSessionPlacementRecoveries,
   migrateSessionPlacementRecoveryScope,
   parseSessionPlacementCreateParams,
   pauseSessionPlacementRecovery,
+  promoteSessionPlacementRecovery,
   readSessionPlacementRecovery,
   writeSessionPlacementRecovery,
   writeSessionPlacementRecoveryIfAvailable,
@@ -28,6 +26,10 @@ const recovery = {
 const exactKey = (sessionKey: string) =>
   sessionPlacementRecoveryExactStorageKey(recovery.gatewayUrl, recovery.recoveryScope, sessionKey);
 
+const readRecovery = (
+  record: Pick<typeof recovery, "gatewayUrl" | "recoveryScope" | "sessionKey"> = recovery,
+) => readSessionPlacementRecovery(record.gatewayUrl, record.recoveryScope, record.sessionKey);
+
 describe("session placement recovery", () => {
   beforeEach(() => sessionStorage.clear());
   afterEach(() => {
@@ -39,16 +41,13 @@ describe("session placement recovery", () => {
     const gatewayUrl = "ws://gateway.example";
     const recoveryScope = "principal-a";
     const sessionKey = "admin";
-    const scopePrefix = sessionPlacementRecoveryScopeStoragePrefix(gatewayUrl, recoveryScope);
-    expect(scopePrefix).toBe(
-      `openclaw.new-session.session-placement-recovery.v1:${gatewayUrl.length}:${gatewayUrl}:${recoveryScope.length}:${recoveryScope}:`,
-    );
+    const scopePrefix = `openclaw.new-session.session-placement-recovery.v1:${gatewayUrl.length}:${gatewayUrl}:${recoveryScope.length}:${recoveryScope}:`;
     expect(sessionPlacementRecoveryExactStorageKey(gatewayUrl, recoveryScope, sessionKey)).toBe(
       `${scopePrefix}${sessionKey.length}:${sessionKey}`,
     );
     const colonGateway = `${gatewayUrl}:principal-a`;
-    expect(sessionPlacementRecoveryScopeStoragePrefix(colonGateway, "admin")).not.toBe(
-      sessionPlacementRecoveryScopeStoragePrefix(gatewayUrl, "principal-a:admin"),
+    expect(sessionPlacementRecoveryExactStorageKey(colonGateway, "admin", sessionKey)).not.toBe(
+      sessionPlacementRecoveryExactStorageKey(gatewayUrl, "principal-a:admin", sessionKey),
     );
 
     expect(sessionPlacementRecoveryExactStorageKey(gatewayUrl, recoveryScope, "\ud800")).not.toBe(
@@ -70,28 +69,91 @@ describe("session placement recovery", () => {
       recovery,
       second,
     ]);
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toEqual(recovery);
+    expect(readRecovery()).toEqual(recovery);
 
     clearSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope, recovery.sessionKey);
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toBeNull();
-    expect(
-      readSessionPlacementRecovery(second.gatewayUrl, second.recoveryScope, second.sessionKey),
-    ).toEqual(second);
+    expect(readRecovery()).toBeNull();
+    expect(readRecovery(second)).toEqual(second);
 
     clearSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope);
     expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([]);
+  });
+
+  it("keeps required input outside the released scope through promotion, migration, and retirement", () => {
+    const required = {
+      ...recovery,
+      target: { kind: "profile" as const, profileId: "aws", required: true as const },
+      attachments: [{ type: "file", mimeType: "text/plain", content: "aGVsbG8=" }],
+    };
+    const optional = {
+      ...recovery,
+      sessionKey: "agent:cloud:optional",
+      messageId: "optional-turn",
+    };
+    expect(writeSessionPlacementRecovery(required)).toBe(true);
+    expect(writeSessionPlacementRecovery(optional)).toBe(true);
+    const releasedPrefix = `openclaw.new-session.session-placement-recovery.v1:${recovery.gatewayUrl.length}:${recovery.gatewayUrl}:${recovery.recoveryScope.length}:${recovery.recoveryScope}:`;
+    const storedKeys = Array.from({ length: sessionStorage.length }, (_, index) =>
+      sessionStorage.key(index)!,
+    );
+    expect(storedKeys.filter((key) => key.startsWith(releasedPrefix))).toEqual([
+      exactKey(optional.sessionKey),
+    ]);
+    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([
+      required,
+      optional,
+    ]);
+
+    const promoted = { ...required, sessionKey: "agent:cloud:canonical" };
+    expect(promoteSessionPlacementRecovery(required.sessionKey, promoted)).toBe(true);
+    expect(readRecovery()).toBeNull();
+    expect(readRecovery(promoted)).toEqual(promoted);
+    const paused = pauseSessionPlacementRecovery(promoted, "placement unavailable", true).recovery;
+    const destinationScope = "principal-migrated";
+    migrateSessionPlacementRecoveryScope(
+      recovery.gatewayUrl,
+      recovery.recoveryScope,
+      destinationScope,
+    );
+    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([]);
+    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, destinationScope)).toEqual([
+      { ...paused, recoveryScope: destinationScope },
+      { ...optional, recoveryScope: destinationScope },
+    ]);
+    clearSessionPlacementRecovery(
+      recovery.gatewayUrl,
+      destinationScope,
+      promoted.sessionKey,
+      "older-turn",
+    );
+    expect(readRecovery({ ...promoted, recoveryScope: destinationScope })).toEqual({
+      ...paused,
+      recoveryScope: destinationScope,
+    });
+    clearSessionPlacementRecovery(recovery.gatewayUrl, destinationScope);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("relocates a required draft written before namespace isolation without replacing newer input", () => {
+    const required = {
+      ...recovery,
+      target: { kind: "profile" as const, profileId: "aws", required: true as const },
+    };
+    sessionStorage.setItem(exactKey(required.sessionKey), JSON.stringify(required));
+    expect(readRecovery()).toEqual(required);
+    expect(sessionStorage.getItem(exactKey(required.sessionKey))).toBeNull();
+    const older = { ...required, messageId: "older-turn", message: "older input" };
+    const olderRaw = JSON.stringify(older);
+    sessionStorage.setItem(exactKey(required.sessionKey), olderRaw);
+    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([
+      required,
+    ]);
+    expect(sessionStorage.getItem(exactKey(required.sessionKey))).toBe(olderRaw);
+    expect(writeSessionPlacementRecoveryIfAvailable({ ...older, message: "do not replace" })).toBe(
+      false,
+    );
+    clearSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope);
+    expect(sessionStorage.length).toBe(0);
   });
 
   it("preserves automatic device selection across placement recovery", () => {
@@ -100,13 +162,7 @@ describe("session placement recovery", () => {
       target: { kind: "auto-device" as const },
     };
     expect(writeSessionPlacementRecovery(automatic)).toBe(true);
-    expect(
-      readSessionPlacementRecovery(
-        automatic.gatewayUrl,
-        automatic.recoveryScope,
-        automatic.sessionKey,
-      ),
-    ).toEqual(automatic);
+    expect(readRecovery(automatic)).toEqual(automatic);
   });
 
   it("does not retire a replacement submission at the same session key", () => {
@@ -118,26 +174,14 @@ describe("session placement recovery", () => {
       recovery.sessionKey,
       recovery.messageId,
     );
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toEqual(replacement);
+    expect(readRecovery()).toEqual(replacement);
     clearSessionPlacementRecovery(
       recovery.gatewayUrl,
       recovery.recoveryScope,
       recovery.sessionKey,
       replacement.messageId,
     );
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toBeNull();
+    expect(readRecovery()).toBeNull();
   });
 
   it.each(["not-sent", "rejected", "unconfirmed"] as const)(
@@ -150,21 +194,9 @@ describe("session placement recovery", () => {
         error: "Target unavailable",
       };
       expect(writeSessionPlacementRecovery(paused)).toBe(true);
-      expect(
-        readSessionPlacementRecovery(
-          recovery.gatewayUrl,
-          recovery.recoveryScope,
-          recovery.sessionKey,
-        ),
-      ).toEqual(paused);
+      expect(readRecovery()).toEqual(paused);
       expect(writeSessionPlacementRecovery({ ...paused, error: "x".repeat(4097) })).toBe(false);
-      expect(
-        readSessionPlacementRecovery(
-          recovery.gatewayUrl,
-          recovery.recoveryScope,
-          recovery.sessionKey,
-        ),
-      ).toEqual(paused);
+      expect(readRecovery()).toEqual(paused);
     },
   );
 
@@ -198,13 +230,7 @@ describe("session placement recovery", () => {
           error: expect.stringContaining("Keep this page open"),
         },
       });
-      expect(
-        readSessionPlacementRecovery(
-          recovery.gatewayUrl,
-          recovery.recoveryScope,
-          recovery.sessionKey,
-        ),
-      ).toEqual(alreadyPaused ? retained : null);
+      expect(readRecovery()).toEqual(alreadyPaused ? retained : null);
     },
   );
 
@@ -216,13 +242,7 @@ describe("session placement recovery", () => {
 
       expect(paused.recovery.error).toBe("x".repeat(4095));
       expect(paused.persisted).toBe(persistent);
-      expect(
-        readSessionPlacementRecovery(
-          recovery.gatewayUrl,
-          recovery.recoveryScope,
-          recovery.sessionKey,
-        ),
-      ).toEqual(persistent ? paused.recovery : null);
+      expect(readRecovery()).toEqual(persistent ? paused.recovery : null);
     },
   );
 
@@ -243,13 +263,7 @@ describe("session placement recovery", () => {
 
     expect(paused.recovery.error).toBe(`${prefix}${"x".repeat(4095 - prefix.length)}`);
     expect(paused.persisted).toBe(false);
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toBeNull();
+    expect(readRecovery()).toBeNull();
   });
 
   it("migrates only exact framed rows under a new scope", () => {
@@ -403,13 +417,7 @@ describe("session placement recovery", () => {
       attachments: [{ type: "file", mimeType: "text/plain", content: "aGVsbG8=" }],
     };
     expect(writeSessionPlacementRecovery(attachmentRecovery)).toBe(true);
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toEqual(attachmentRecovery);
+    expect(readRecovery()).toEqual(attachmentRecovery);
   });
 
   it.each([
@@ -425,6 +433,8 @@ describe("session placement recovery", () => {
         agentId: "cloud",
         message: "" as const,
         category: "Client work",
+        model: "openai/gpt-5.6-sol",
+        agentRuntime: "codex",
         thinkingLevel: "high",
         toolOverrides: {
           mcpServers: { github: false },
@@ -436,25 +446,13 @@ describe("session placement recovery", () => {
       },
     };
     expect(writeSessionPlacementRecovery(creating)).toBe(true);
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toEqual(creating);
+    expect(readRecovery()).toEqual(creating);
 
     sessionStorage.setItem(
       exactKey(recovery.sessionKey),
       JSON.stringify({ ...creating, createParams: { key: "agent:cloud:other" } }),
     );
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toBeNull();
+    expect(readRecovery()).toBeNull();
   });
 
   it.each([
@@ -494,6 +492,10 @@ describe("session placement recovery", () => {
     { name: "an unsupported visibility", value: { visibility: "shared" } },
     { name: "an unsupported Fast Mode", value: { fastMode: "fast" } },
     { name: "a null Fast Mode", value: { fastMode: null } },
+    { name: "an empty runtime", value: { agentRuntime: "" } },
+    { name: "a whitespace runtime", value: { agentRuntime: "  " } },
+    { name: "a non-string runtime", value: { agentRuntime: 42 } },
+    { name: "a null runtime", value: { agentRuntime: null } },
     { name: "malformed tool overrides", value: { toolOverrides: { webSearch: "yes" } } },
     { name: "an unknown field", value: { unknown: true } },
   ])("rejects $name in creating parameters", ({ value }) => {
@@ -510,18 +512,6 @@ describe("session placement recovery", () => {
         "cloud",
       ),
     ).toBeNull();
-  });
-
-  it("does not let stale cleanup erase another session", () => {
-    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
-    clearSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope, "agent:cloud:older");
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toEqual(recovery);
   });
 
   it("arbitrates matching sessions without blocking another session", () => {

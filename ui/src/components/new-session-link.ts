@@ -7,6 +7,7 @@ import {
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { icons } from "./icons.ts";
+import { renderShortcutHint } from "./kbd.ts";
 import "./tooltip.ts";
 
 export function renderNewSessionLink(params: {
@@ -24,7 +25,14 @@ export function renderNewSessionLink(params: {
   const hint = params.showShortcut
     ? `${params.label} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newSession)})`
     : params.label;
-  return html`<openclaw-tooltip .content=${params.disabledReason ?? hint}>
+  return html`<openclaw-tooltip
+    .content=${params.disabledReason ?? hint}
+    .contentTemplate=${
+      params.disabledReason == null && params.showShortcut
+        ? renderShortcutHint(params.label, KEYBOARD_SHORTCUT_COMBOS.newSession)
+        : undefined
+    }
+  >
     <a
       class=${params.className}
       role="link"

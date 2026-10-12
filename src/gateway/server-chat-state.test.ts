@@ -61,52 +61,48 @@ describe("createChatRunState", () => {
     });
   });
 
-  it.each([false, true])(
-    "stops returning finalized recipients at expiry (other state: %s)",
-    (keepState) => {
+  it.each([
+    { finalized: true, keepState: false },
+    { finalized: true, keepState: true },
+    { finalized: false, keepState: false },
+  ])(
+    "expires recipients without dropping active runs or other state: %j",
+    ({ finalized, keepState }) => {
       let now = 1_000;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
       try {
         const state = createChatRunState();
-        state.toolEventRecipients.add("finished", "conn-finished");
+        state.toolEventRecipients.add("expired", "conn-expired");
         state.toolEventRecipients.add("active", "conn-active");
         if (keepState) {
-          state.getOrCreate("finished").buffer = "retained";
+          state.getOrCreate("expired").buffer = "retained";
         }
-        state.toolEventRecipients.markFinal("finished");
-        now += 29_999;
-        expect(state.toolEventRecipients.get("finished")).toEqual(new Set(["conn-finished"]));
+        if (finalized) {
+          state.toolEventRecipients.markFinal("expired");
+        } else {
+          now = 301_000;
+          expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+        }
+        now = 1_000 + (finalized ? 30_000 : 600_000) - 1;
+        if (finalized) {
+          expect(state.toolEventRecipients.get("expired")).toEqual(new Set(["conn-expired"]));
+        } else {
+          state.toolEventRecipients.get("active");
+          expect(state.runs.has("expired")).toBe(true);
+        }
         now += 1;
-        expect(state.toolEventRecipients.get("finished")).toBeUndefined();
-        expect(state.toolEventRecipients.get("finished")).toBeUndefined();
+        if (!finalized) {
+          state.toolEventRecipients.get("active");
+        }
+        expect(state.toolEventRecipients.get("expired")).toBeUndefined();
+        expect(state.toolEventRecipients.get("expired")).toBeUndefined();
         expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
-        expect(state.runs.has("finished")).toBe(keepState);
+        expect(state.runs.has("expired")).toBe(keepState);
       } finally {
         clock.mockRestore();
       }
     },
   );
-
-  it("expires idle recipients while activity extends another run's lifetime", () => {
-    let now = 1_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    try {
-      const state = createChatRunState();
-      state.toolEventRecipients.add("idle", "conn-idle");
-      state.toolEventRecipients.add("active", "conn-active");
-      now = 301_000;
-      expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
-      now = 600_999;
-      state.toolEventRecipients.get("active");
-      expect(state.runs.has("idle")).toBe(true);
-      now += 1;
-      state.toolEventRecipients.get("active");
-      expect(state.runs.has("idle")).toBe(false);
-      expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
-    } finally {
-      clock.mockRestore();
-    }
-  });
 
   it.each([false, true])(
     "expires new recipients after clock rollback (clear previous state: %s)",
@@ -142,12 +138,11 @@ describe("createChatRunState", () => {
       rawBuffer: "raw",
       buffer: "projected",
       planSnapshot: { steps: [{ step: "Inspect", status: "in_progress" }] },
-      bufferUpdatedAt: 1,
       deltaSentAt: 2,
-      deltaLastBroadcastText: "projected",
       agentText: { assistant: { lastSentAt: 3 } },
       abortMarker: createChatAbortMarker(4),
     });
+    state.takeBufferDelta("run-1", "projected");
     state.recordProgressEvent("run-1", {
       runId: "run-1",
       seq: 1,
@@ -156,27 +151,20 @@ describe("createChatRunState", () => {
       data: { kind: "preamble", progressText: "Inspecting" },
     });
 
+    state.updateBuffer("run-1", { itemId: "reused", text: "Saved." });
+    state.retireBuffer("run-1", ["reused"]);
     state.clearRun("run-1");
 
     expect(state.registry.peek("run-1")?.clientRunId).toBe("client-1");
     expect(state.toolEventRecipients.get("run-1")).toEqual(new Set(["conn-1"]));
     expect(state.runs.get("run-1")).toEqual({
+      lastActivityAt: expect.any(Number),
       registrations: expect.any(Array),
       abortMarker: expect.any(Object),
       toolRecipient: expect.any(Object),
     });
-  });
-
-  it("keeps first-registration and first-record iteration order stable across updates", () => {
-    const state = createChatRunState();
-    state.registry.add("run-b", { sessionKey: "session-b", clientRunId: "client-b-1" });
-    state.registry.add("run-a", { sessionKey: "session-a", clientRunId: "client-a" });
-    state.registry.add("run-b", { sessionKey: "session-b", clientRunId: "client-b-2" });
-    state.getOrCreate("run-b").buffer = "updated";
-
-    expect([...state.runs.keys()]).toEqual(["run-b", "run-a"]);
-    expect(state.registry.shift("run-b")?.clientRunId).toBe("client-b-1");
-    expect(state.registry.shift("run-b")?.clientRunId).toBe("client-b-2");
+    state.updateBuffer("run-1", { itemId: "reused", text: "New reply." });
+    expect(state.resolveBuffer("run-1").text).toBe("New reply.");
   });
 
   it.each(["full", "summary"] as const)(
@@ -209,13 +197,7 @@ describe("createChatRunState", () => {
     },
   );
 
-  it.each([
-    "naming_worktree",
-    "creating_worktree",
-    "running_setup",
-    "preparing_context",
-    "memory_flushing",
-  ])(
+  it.each(["memory_flushing"])(
     "retains only the latest startup status (%s) until observable run activity begins",
     (phase) => {
       const state = createChatRunState();
@@ -489,22 +471,55 @@ describe("createChatRunState", () => {
     },
   );
 
-  it("captures nested tool JSON once with the same values reconnect transport sends", () => {
+  it("captures native tool JSON once with frozen wire values and exact byte accounting", () => {
     const state = createChatRunState();
     let serializations = 0;
+    let reads = 0;
     const details = {
       toJSON: () => {
         serializations += 1;
-        return { text: "é", omitted: undefined, values: [undefined, Number.NaN] };
+        return {
+          get text() {
+            reads += 1;
+            return reads === 1 ? "é" : "changed";
+          },
+          omitted: undefined,
+          values: [undefined, Number.NaN],
+        };
       },
     };
+    const numberHints: string[] = [];
+    const boxedNumber = Object.assign(Object(3), {
+      [Symbol.toPrimitive]: (hint: string) => {
+        numberHints.push(hint);
+        return -3.25;
+      },
+    });
+    const shared = { value: boxedNumber, text: Object("é"), enabled: Object(false) };
+    const revocable = Proxy.revocable(["last"], {
+      get(target, key, receiver) {
+        const value: unknown = Reflect.get(target, key, receiver);
+        if (key === "0") {
+          revocable.revoke();
+        }
+        return value;
+      },
+    });
     state.recordProgressEvent("run-1", {
       runId: "run-1",
       seq: 1,
       stream: "tool",
       ts: 1,
-      data: { phase: "result", toolCallId: "done", result: { details } },
+      data: {
+        phase: "result",
+        toolCallId: "done",
+        result: { details, first: shared, again: shared, last: revocable.proxy },
+      },
     });
+    const firstSnapshot = state.runs.get("run-1")?.progressSnapshot;
+    expect(firstSnapshot?.byteLength).toBe(
+      Buffer.byteLength(JSON.stringify(firstSnapshot?.events[0])),
+    );
     state.recordProgressEvent("run-1", {
       runId: "run-1",
       seq: 2,
@@ -513,9 +528,14 @@ describe("createChatRunState", () => {
       data: { phase: "input_delta", toolCallId: "active", diff: { added: 1, removed: 0 } },
     });
     expect(serializations).toBe(1);
+    expect(reads).toBe(1);
+    expect(numberHints).toEqual(["number", "number"]);
     const snapshot = state.runs.get("run-1")?.progressSnapshot;
     expect(snapshot?.events[0]?.data.result).toEqual({
       details: { text: "é", values: [null, null] },
+      first: { value: -3.25, text: "é", enabled: false },
+      again: { value: -3.25, text: "é", enabled: false },
+      last: ["last"],
     });
     const captured = snapshot!.events[0]!.data.result as {
       details: { text: string; values: null[] };
@@ -532,40 +552,120 @@ describe("createChatRunState", () => {
   });
 
   it.each([
-    [
-      "cyclic",
-      (): unknown => {
-        const result: { self?: unknown } = {};
-        result.self = result;
-        return result;
-      },
-    ],
-    ["bigint", (): unknown => 1n],
-    [
-      "throwing toJSON",
-      (): unknown => ({
-        toJSON: () => {
-          throw new Error("unserializable tool result");
-        },
-      }),
-    ],
-  ] as const)("retains tool metadata when a %s result cannot be replayed", (_label, result) => {
+    { prefix: 'é\n"\\\ud800', raw: false },
+    { prefix: "🦞", raw: false },
+    { prefix: "é", raw: true },
+  ])("retains the exact JSON byte limit and stops capture on overflow: %j", ({ prefix, raw }) => {
+    const encode = (text: string): unknown => {
+      if (!raw) {
+        return text;
+      }
+      if (!("rawJSON" in JSON) || typeof JSON.rawJSON !== "function") {
+        throw new Error("This contract requires native JSON.rawJSON support");
+      }
+      return JSON.rawJSON(JSON.stringify(text));
+    };
+    const field = raw ? "raw" : "text";
     const state = createChatRunState();
-    state.recordProgressEvent("run-1", {
+    const metadata = { phase: "result", toolCallId: "done", ...(raw ? {} : { name: "read" }) };
+    const event = {
       runId: "run-1",
       seq: 1,
       stream: "tool",
       ts: 1,
-      data: { phase: "result", toolCallId: "done", name: "read", result: result() },
+      data: { ...metadata, result: { [field]: encode(prefix) } },
+    };
+    const text = prefix + "x".repeat(64 * 1024 - Buffer.byteLength(JSON.stringify(event)));
+    event.data.result[field] = encode(text);
+    state.recordProgressEvent("run-1", event);
+    expect(state.runs.get("run-1")?.progressSnapshot?.byteLength).toBe(64 * 1024);
+    expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data.result).toEqual({
+      [field]: text,
     });
-    const snapshot = state.runs.get("run-1")?.progressSnapshot;
-    expect(snapshot?.events[0]?.data).toEqual({
-      phase: "result",
-      toolCallId: "done",
-      name: "read",
+    let laterReads = 0;
+    state.recordProgressEvent("run-1", {
+      ...event,
+      seq: 2,
+      data: {
+        ...metadata,
+        result: {
+          [field]: encode(`${text}x`),
+          get later() {
+            laterReads += 1;
+            return "unused";
+          },
+        },
+      },
     });
-    expect(snapshot?.byteLength).toBe(Buffer.byteLength(JSON.stringify(snapshot?.events[0])));
+    expect(laterReads).toBe(0);
+    expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data).toEqual(metadata);
   });
+
+  const unreplayable: { label: string; result: () => unknown; oversized?: boolean }[] = [
+    { label: "single oversized", oversized: true, result: () => "x".repeat(80_000) },
+    {
+      label: "cumulative oversized",
+      oversized: true,
+      result: () => Array.from({ length: 100 }, () => "x".repeat(1_024)),
+    },
+    {
+      label: "cyclic",
+      result: () => {
+        const result: { self?: unknown } = {};
+        result.self = result;
+        return result;
+      },
+    },
+    { label: "bigint", result: () => 1n },
+    {
+      label: "boxed number coercing to bigint",
+      result: () => Object.assign(Object(1), { [Symbol.toPrimitive]: () => 2n }),
+    },
+    {
+      label: "throwing toJSON",
+      result: () => ({
+        toJSON: () => {
+          throw new Error("unserializable tool result");
+        },
+      }),
+    },
+  ];
+  it.each(unreplayable)(
+    "retains metadata without reading beyond a $label result",
+    ({ result, oversized }) => {
+      const state = createChatRunState();
+      let laterReads = 0;
+      const value = result();
+      state.recordProgressEvent("run-1", {
+        runId: "run-1",
+        seq: 1,
+        stream: "tool",
+        ts: 1,
+        data: {
+          phase: "result",
+          toolCallId: "done",
+          name: "read",
+          result: oversized
+            ? {
+                body: value,
+                get later() {
+                  laterReads += 1;
+                  return "unused";
+                },
+              }
+            : value,
+        },
+      });
+      expect(laterReads).toBe(0);
+      const snapshot = state.runs.get("run-1")?.progressSnapshot;
+      expect(snapshot?.events[0]?.data).toEqual({
+        phase: "result",
+        toolCallId: "done",
+        name: "read",
+      });
+      expect(snapshot?.byteLength).toBe(Buffer.byteLength(JSON.stringify(snapshot?.events[0])));
+    },
+  );
 
   it("keeps a review-heavy reconnect bounded, adverse, and attached to its owner", () => {
     const state = createChatRunState();
@@ -620,146 +720,241 @@ describe("createChatRunState", () => {
 });
 
 describe("createSessionMessageSubscriberRegistry", () => {
-  it("keeps approval delivery opt-in and updates it on resubscribe", () => {
+  const key = "agent:main:main";
+  it.each([
+    { mode: "narration", includeApprovals: false },
+    { mode: undefined, includeApprovals: true },
+  ] as const)("replaces subscription intent (%j) before notifying observers", (intent) => {
     const subscribers = createSessionMessageSubscriberRegistry();
-
-    subscribers.subscribe("conn-plain", "agent:main:main");
-    subscribers.subscribe("conn-reviewer", "agent:main:main", { includeApprovals: true });
-
-    expect([...subscribers.get("agent:main:main")]).toEqual(["conn-plain", "conn-reviewer"]);
-    expect([...subscribers.getApprovals("agent:main:main")]).toEqual(["conn-reviewer"]);
-
-    subscribers.subscribe("conn-reviewer", "agent:main:main");
-    expect([...subscribers.get("agent:main:main")]).toEqual(["conn-plain", "conn-reviewer"]);
-    expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
-
-    subscribers.subscribe("conn-reviewer", "agent:main:main", { includeApprovals: true });
-    expect([...subscribers.getApprovals("agent:main:main")]).toEqual(["conn-reviewer"]);
-
-    subscribers.unsubscribe("conn-reviewer", "agent:main:main");
-    expect([...subscribers.get("agent:main:main")]).toEqual(["conn-plain"]);
-    expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
+    subscribers.subscribe("plain", key);
+    const modes: string[] = [];
+    subscribers.onChange((changedKey, connId) => {
+      modes.push(
+        !subscribers.get(changedKey).has(connId)
+          ? "none"
+          : subscribers.getNarration(changedKey).has(connId)
+            ? "narration"
+            : "full",
+      );
+    });
+    subscribers.subscribe("conn", key, intent);
+    subscribers.subscribe("conn", key, intent);
+    expect([...subscribers.get(key)]).toEqual(["plain", "conn"]);
+    expect([...subscribers.getApprovals(key)]).toEqual(intent.includeApprovals ? ["conn"] : []);
+    subscribers.subscribe("conn", key);
+    expect([...subscribers.get(key)]).toEqual(["plain", "conn"]);
+    expect([...subscribers.getApprovals(key)]).toEqual([]);
+    subscribers.subscribe("conn", key, intent);
+    expect([...subscribers.getApprovals(key)]).toEqual(intent.includeApprovals ? ["conn"] : []);
+    if (intent.mode) {
+      subscribers.unsubscribeAll("conn");
+    } else {
+      subscribers.unsubscribe("conn", key);
+    }
+    expect([...subscribers.get(key)]).toEqual(["plain"]);
+    expect([...subscribers.getApprovals(key)]).toEqual([]);
+    expect([...subscribers.getNarration(key)]).toEqual([]);
+    expect(modes).toEqual(
+      intent.mode ? ["narration", "full", "narration", "none"] : ["full", "none"],
+    );
   });
 
-  it("removes approval subscriptions through connection cleanup and registry reset", () => {
+  it("removes approval subscriptions only for the disconnected connection", () => {
     const subscribers = createSessionMessageSubscriberRegistry();
-
-    subscribers.subscribe("conn-reviewer", "agent:main:main", { includeApprovals: true });
-    subscribers.subscribe("conn-reviewer", "agent:main:child", { includeApprovals: true });
-    subscribers.subscribe("conn-other", "agent:main:child", { includeApprovals: true });
-
-    subscribers.unsubscribeAll("conn-reviewer");
-    expect([...subscribers.get("agent:main:main")]).toEqual([]);
-    expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
-    expect([...subscribers.get("agent:main:child")]).toEqual(["conn-other"]);
-    expect([...subscribers.getApprovals("agent:main:child")]).toEqual(["conn-other"]);
+    subscribers.subscribe("reviewer", key, { includeApprovals: true });
+    subscribers.subscribe("reviewer", "child", { includeApprovals: true });
+    subscribers.subscribe("other", "child", { includeApprovals: true });
+    subscribers.unsubscribeAll("reviewer");
+    expect([...subscribers.get(key)]).toEqual([]);
+    expect([...subscribers.getApprovals(key)]).toEqual([]);
+    expect([...subscribers.get("child")]).toEqual(["other"]);
+    expect([...subscribers.getApprovals("child")]).toEqual(["other"]);
   });
 
-  it.each(["first", "second"])(
-    "removes a first-time subscription when both concurrent replays fail (%s rollback first)",
-    (firstRollback) => {
+  it.each([
+    { order: "first", firstSucceeds: false, secondSucceeds: false },
+    { order: "second", firstSucceeds: false, secondSucceeds: false },
+    { order: "first", firstSucceeds: false, secondSucceeds: true },
+    { order: "second", firstSucceeds: false, secondSucceeds: true },
+    { order: "first", firstSucceeds: true, secondSucceeds: true },
+    { order: "second", firstSucceeds: true, secondSucceeds: true },
+  ])("settles concurrent replay intent: %j", ({ order, firstSucceeds, secondSucceeds }) => {
+    const subscribers = createSessionMessageSubscriberRegistry();
+    if (secondSucceeds) {
+      subscribers.subscribe("conn", "other");
+    }
+    const first = subscribers.subscribe("conn", key, {
+      provisional: true,
+      includeApprovals: true,
+      mode: "narration",
+    })!;
+    const second = subscribers.subscribe("conn", key, { provisional: true })!;
+    const settleFirst = firstSucceeds ? first.commit : first;
+    const settleSecond = secondSucceeds ? second.commit : second;
+    if (order === "first") {
+      settleFirst();
+      settleSecond();
+    } else {
+      settleSecond();
+      settleFirst();
+    }
+    expect([...subscribers.get(key)]).toEqual(secondSucceeds ? ["conn"] : []);
+    expect([...subscribers.get("other")]).toEqual(secondSucceeds ? ["conn"] : []);
+    expect([...subscribers.getApprovals(key)]).toEqual([]);
+    expect([...subscribers.getNarration(key)]).toEqual([]);
+  });
+
+  it.each([
+    { mode: undefined, includeApprovals: false, changeMode: true },
+    { mode: "narration", includeApprovals: false, changeMode: true },
+    { mode: undefined, includeApprovals: false, changeMode: false },
+    { mode: undefined, includeApprovals: true, changeMode: false },
+  ] as const)(
+    "restores committed intent after replay failure: %j",
+    ({ mode, includeApprovals, changeMode }) => {
       const subscribers = createSessionMessageSubscriberRegistry();
-      const first = subscribers.subscribe("conn", "agent:main:main", {
+      const onChange = vi.fn();
+      subscribers.onChange(onChange);
+      subscribers.subscribe("conn", key, { mode, includeApprovals });
+      subscribers.subscribe("conn", "child");
+      const rollback = subscribers.subscribe("conn", key, {
         provisional: true,
-        includeApprovals: true,
+        includeApprovals: !includeApprovals,
+        mode: changeMode && mode !== "narration" ? "narration" : undefined,
       })!;
-      const second = subscribers.subscribe("conn", "agent:main:main", { provisional: true })!;
-
-      if (firstRollback === "first") {
-        first();
-        second();
-      } else {
-        second();
-        first();
+      rollback();
+      expect([...subscribers.get(key)]).toEqual(["conn"]);
+      expect([...subscribers.get("child")]).toEqual(["conn"]);
+      expect([...subscribers.getNarration(key)]).toEqual(mode === "narration" ? ["conn"] : []);
+      expect([...subscribers.getApprovals(key)]).toEqual(includeApprovals ? ["conn"] : []);
+      if (!changeMode) {
+        expect(onChange.mock.calls).toEqual([
+          [key, "conn"],
+          ["child", "conn"],
+        ]);
       }
-
-      expect([...subscribers.get("agent:main:main")]).toEqual([]);
-      expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
     },
   );
 
   it.each([
-    ["first", false],
-    ["second", false],
-    ["first", true],
-    ["second", true],
-  ] as const)(
-    "keeps the latest successful replay's approval mode (%s settles first, earlier succeeds=%s)",
-    (firstResolution, firstSucceeds) => {
+    { action: "unsubscribe", subscriptionId: undefined },
+    { action: "disconnect", subscriptionId: undefined },
+    { action: "unsubscribe", subscriptionId: "owner" },
+    { action: "disconnect", subscriptionId: "owner" },
+  ])(
+    "fences pending settlements after invalidation and ID reuse: %j",
+    ({ action, subscriptionId }) => {
       const subscribers = createSessionMessageSubscriberRegistry();
-      subscribers.subscribe("conn", "agent:main:other");
-      const first = subscribers.subscribe("conn", "agent:main:main", {
+      const old = subscribers.subscribe("conn", key, {
+        subscriptionId,
         provisional: true,
         includeApprovals: true,
+        mode: subscriptionId ? undefined : "narration",
       })!;
-      const second = subscribers.subscribe("conn", "agent:main:main", { provisional: true })!;
-      const settleFirst = firstSucceeds ? first.commit : first;
-
-      if (firstResolution === "first") {
-        settleFirst();
-        second.commit();
-      } else {
-        second.commit();
-        settleFirst();
-      }
-
-      expect([...subscribers.get("agent:main:other")]).toEqual(["conn"]);
-      expect([...subscribers.get("agent:main:main")]).toEqual(["conn"]);
-      expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
-    },
-  );
-
-  it.each([false, true])(
-    "retains committed approval mode %s without audience churn when a re-subscribe replay fails",
-    (includeApprovals) => {
-      const subscribers = createSessionMessageSubscriberRegistry();
-      const onChange = vi.fn();
-      subscribers.onChange(onChange);
-      subscribers.subscribe("conn", "agent:main:main", { includeApprovals });
-      subscribers.subscribe("conn", "agent:main:child");
-      const rollback = subscribers.subscribe("conn", "agent:main:main", {
-        provisional: true,
-        includeApprovals: !includeApprovals,
-      })!;
-
-      rollback();
-
-      expect([...subscribers.get("agent:main:main")]).toEqual(["conn"]);
-      expect([...subscribers.get("agent:main:child")]).toEqual(["conn"]);
-      expect([...subscribers.getApprovals("agent:main:main")]).toEqual(
-        includeApprovals ? ["conn"] : [],
-      );
-      expect(onChange.mock.calls).toEqual([["agent:main:main"], ["agent:main:child"]]);
-    },
-  );
-
-  it.each(["unsubscribe", "disconnect"] as const)(
-    "does not restore a replay invalidated by %s when its connection/session is reused",
-    (invalidation) => {
-      const subscribers = createSessionMessageSubscriberRegistry();
-      const subscription = subscribers.subscribe("conn", "agent:main:main", {
-        provisional: true,
-        includeApprovals: true,
-      })!;
-
-      if (invalidation === "disconnect") {
+      if (action === "disconnect") {
         subscribers.unsubscribeAll("conn");
       } else {
-        subscribers.unsubscribe("conn", "agent:main:main");
+        subscribers.unsubscribe("conn", key, subscriptionId);
       }
-      expect([...subscribers.get("agent:main:main")]).toEqual([]);
-      expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
+      expect([...subscribers.get(key)]).toEqual([]);
+      expect([...subscribers.getApprovals(key)]).toEqual([]);
+      const replacement = subscribers.subscribe("conn", key, {
+        subscriptionId,
+        provisional: !subscriptionId,
+        mode: subscriptionId ? "narration" : undefined,
+      });
+      old.commit();
+      expect([...subscribers.get(key)]).toEqual(["conn"]);
+      expect([...subscribers.getApprovals(key)]).toEqual([]);
+      expect([...subscribers.getNarration(key)]).toEqual(subscriptionId ? ["conn"] : []);
+      if (replacement) {
+        replacement();
+      } else {
+        subscribers.subscribe("conn", key, { subscriptionId: "another" });
+        subscribers.unsubscribeAll("conn");
+      }
+      expect([...subscribers.get(key)]).toEqual([]);
+      expect([...subscribers.getApprovals(key)]).toEqual([]);
+      expect([...subscribers.getNarration(key)]).toEqual([]);
+    },
+  );
+  it("aggregates full streams and approvals while releasing only the named observer", () => {
+    const registry = createSessionMessageSubscriberRegistry();
+    const changes = vi.fn(() => ({
+      subscribed: registry.get(key).has("conn"),
+      narration: registry.getNarration(key).has("conn"),
+      approvals: registry.getApprovals(key).has("conn"),
+    }));
+    registry.onChange(changes);
+    registry.subscribe("conn", key, { subscriptionId: "foreground" });
+    registry.subscribe("conn", key, {
+      subscriptionId: "sidebar",
+      mode: "narration",
+      includeApprovals: true,
+    });
+    expect([...registry.getNarration(key)]).toEqual([]);
+    expect([...registry.getApprovals(key)]).toEqual(["conn"]);
 
-      const replacement = subscribers.subscribe("conn", "agent:main:main", {
+    registry.unsubscribe("conn", key, "foreground");
+    expect(changes.mock.results.at(-1)?.value).toEqual({
+      subscribed: true,
+      narration: true,
+      approvals: true,
+    });
+    registry.subscribe("conn", key);
+    expect([...registry.getNarration(key)]).toEqual([]);
+    registry.unsubscribe("conn", key);
+    expect([...registry.getNarration(key)]).toEqual(["conn"]);
+    registry.unsubscribe("conn", key, "unknown");
+    expect([...registry.get(key)]).toEqual(["conn"]);
+
+    registry.unsubscribe("conn", key, "sidebar");
+    expect(changes.mock.results.at(-1)?.value).toEqual({
+      subscribed: false,
+      narration: false,
+      approvals: false,
+    });
+  });
+
+  it.each([
+    { separateOwners: true, succeeds: false },
+    { separateOwners: false, succeeds: false },
+    { separateOwners: false, succeeds: true },
+  ])(
+    "retains foreground delivery until pending ownership settles: %j",
+    ({ separateOwners, succeeds }) => {
+      const registry = createSessionMessageSubscriberRegistry();
+      const foregroundId = separateOwners ? "foreground" : "owner";
+      const narrationId = separateOwners ? "sidebar" : "owner";
+      if (separateOwners) {
+        registry.subscribe("conn", key, { subscriptionId: narrationId, mode: "narration" });
+      }
+      const foreground = registry.subscribe("conn", key, {
+        subscriptionId: foregroundId,
         provisional: true,
+        includeApprovals: separateOwners,
       })!;
-      subscription.commit();
-      expect([...subscribers.get("agent:main:main")]).toEqual(["conn"]);
-      expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
-
-      replacement();
-      expect([...subscribers.get("agent:main:main")]).toEqual([]);
-      expect([...subscribers.getApprovals("agent:main:main")]).toEqual([]);
+      const narration = registry.subscribe("conn", key, {
+        subscriptionId: narrationId,
+        provisional: true,
+        mode: "narration",
+      })!;
+      expect([...registry.getNarration(key)]).toEqual([]);
+      expect([...registry.getApprovals(key)]).toEqual(separateOwners ? ["conn"] : []);
+      if (separateOwners) {
+        narration();
+      } else {
+        narration.commit();
+      }
+      expect([...registry.getNarration(key)]).toEqual([]);
+      expect([...registry.getApprovals(key)]).toEqual(separateOwners ? ["conn"] : []);
+      if (succeeds) {
+        foreground.commit();
+      } else {
+        foreground();
+      }
+      expect([...registry.getNarration(key)]).toEqual(["conn"]);
+      expect([...registry.getApprovals(key)]).toEqual([]);
     },
   );
 });

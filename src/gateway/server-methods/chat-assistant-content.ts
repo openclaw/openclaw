@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
   readPairingQrReplyChannelData,
   stripReplyMediaFailureFallback,
   type ReplyPayload,
@@ -11,7 +12,6 @@ import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
-import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   buildManagedMediaFailureBlock,
@@ -32,14 +32,10 @@ export function combineNonStreamingReplyParts(parts: readonly string[]): string 
     if (!part.trim()) {
       continue;
     }
-    if (!combined) {
-      combined = part;
-      continue;
-    }
     // Outbound media normalization trims a chunk's trailing newline, so an
     // indented following chunk still needs its original single-line boundary.
     const separator =
-      /[\r\n]$/.test(combined) || /^[\r\n]/.test(part)
+      !combined || /[\r\n]$/.test(combined) || /^[\r\n]/.test(part)
         ? ""
         : /^[\t ]+\S/.test(part)
           ? "\n"
@@ -50,20 +46,9 @@ export function combineNonStreamingReplyParts(parts: readonly string[]): string 
 }
 
 export function isMediaBearingPayload(payload: ReplyPayload): boolean {
-  if (payload.isReasoning === true) {
-    return false;
-  }
-  if (payload.mediaUrl?.trim()) {
-    return true;
-  }
-  return Boolean(payload.mediaUrls?.some((url) => url.trim()));
-}
-
-function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
-  return payloads.some(
-    (payload) =>
-      payload.sensitiveMedia === true &&
-      (isMediaBearingPayload(payload) || Boolean(readPairingQrReplyChannelData(payload))),
+  return (
+    payload.isReasoning !== true &&
+    Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim()))
   );
 }
 
@@ -95,15 +80,9 @@ export function sanitizeAssistantDisplayText(
   if (!value) {
     return undefined;
   }
-  const withoutEnvelope = stripEnvelopeFromMessage(value);
-  const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
-  const stripped = stripInlineDirectiveTagsForDelivery(normalized);
+  const stripped = stripInlineDirectiveTagsForDelivery(value);
   const visible = trimTextPreservingCode(stripped.text);
-  return visible
-    ? options?.preserveBoundaries && !stripped.changed
-      ? normalized
-      : visible
-    : undefined;
+  return visible ? (options?.preserveBoundaries && !stripped.changed ? value : visible) : undefined;
 }
 
 export function prepareAssistantDisplayText(
@@ -113,12 +92,10 @@ export function prepareAssistantDisplayText(
   if (!value) {
     return undefined;
   }
-  const withoutEnvelope = stripEnvelopeFromMessage(value);
-  const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
-  return normalized.trim()
+  return value.trim()
     ? options?.preserveBoundaries
-      ? normalized
-      : trimTextPreservingCode(normalized)
+      ? value
+      : trimTextPreservingCode(value)
     : undefined;
 }
 
@@ -207,23 +184,32 @@ export async function buildAssistantReplyContentFromInputs(
     1;
   const content: Array<AssistantDisplayContentBlock | [string, ...string[]]> = [];
   const persistedContent: AssistantDisplayContentBlock[] = [];
-  const persistSensitiveDisplay = !hasSensitiveMediaPayload(payloads);
+  const persistSensitiveDisplay = !payloads.some(
+    (payload) =>
+      payload.sensitiveMedia === true &&
+      (isMediaBearingPayload(payload) || Boolean(readPairingQrReplyChannelData(payload))),
+  );
   let strippedTextPayloadCount = 0;
   for (const entry of plan) {
     const payload = entry.payload;
     const metadataSource = payloads[entry.sourceIndex] ?? payload;
-    const mediaFailures = getReplyPayloadMetadata(metadataSource)?.assistantMediaFailures ?? [];
+    const mediaFailures = getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? [];
     const isPrepared = params.inputs[entry.sourceIndex]?.kind === "prepared";
+    const statusNotice = isReplyPayloadStatusNotice(payload);
     const displayText = isPrepared ? prepareAssistantDisplayText : sanitizeAssistantDisplayText;
     const text = displayText(stripReplyMediaFailureFallback(payload.text, mediaFailures), {
       preserveBoundaries: preserveTextBoundaries,
     });
     if (text && (isPrepared || !isSuppressedControlReplyText(text))) {
-      const previousBlock = content.at(-1);
-      if (Array.isArray(previousBlock)) {
-        previousBlock.push(text);
+      if (statusNotice) {
+        content.push({ type: "text", text, openclawStatusNotice: true });
       } else {
-        content.push([text]);
+        const previousBlock = content.at(-1);
+        if (Array.isArray(previousBlock)) {
+          previousBlock.push(text);
+        } else {
+          content.push([text]);
+        }
       }
     } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
       strippedTextPayloadCount += 1;
@@ -232,7 +218,11 @@ export async function buildAssistantReplyContentFromInputs(
     // stay attached to their source payload instead of matching display slots.
     const transcriptText = params.transcriptMediaMessage?.payloadTexts[entry.sourceIndex] ?? text;
     if (transcriptText && (isPrepared || !isSuppressedControlReplyText(transcriptText))) {
-      persistedContent.push({ type: "text", text: transcriptText });
+      persistedContent.push({
+        type: "text",
+        text: transcriptText,
+        ...(statusNotice ? { openclawStatusNotice: true } : {}),
+      });
     }
     if (params.includeSensitiveDisplay === true) {
       try {
@@ -310,30 +300,26 @@ function isManagedOutgoingMediaUrl(value: unknown): boolean {
   }
 }
 
+function hasManagedOutgoingMediaBlock(
+  block: AssistantDisplayContentBlock,
+  includeAttachmentBlockUrls = false,
+): boolean {
+  const attachment = block?.type === "attachment" ? asOptionalRecord(block.attachment) : undefined;
+  return (
+    ((block?.type === "image" ||
+      block?.type === "audio" ||
+      block?.type === "video" ||
+      (includeAttachmentBlockUrls && Boolean(attachment))) &&
+      (isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl))) ||
+    isManagedOutgoingMediaUrl(attachment?.url)
+  );
+}
+
 export function stripManagedOutgoingAssistantContentBlocks(
   content: readonly AssistantDisplayContentBlock[] | undefined,
 ): AssistantDisplayContentBlock[] | undefined {
-  if (!content || content.length === 0) {
-    return undefined;
-  }
-  const filtered = content.filter((block) => {
-    const attachment =
-      block?.type === "attachment" ? asOptionalRecord(block.attachment) : undefined;
-    if (
-      block?.type !== "image" &&
-      block?.type !== "audio" &&
-      block?.type !== "video" &&
-      !attachment
-    ) {
-      return true;
-    }
-    return !(
-      isManagedOutgoingMediaUrl(block.url) ||
-      isManagedOutgoingMediaUrl(block.openUrl) ||
-      isManagedOutgoingMediaUrl(attachment?.url)
-    );
-  });
-  return filtered.length > 0 ? filtered : undefined;
+  const filtered = content?.filter((block) => !hasManagedOutgoingMediaBlock(block, true));
+  return filtered?.length ? filtered : undefined;
 }
 
 export function hasAssistantDisplayMediaContent(
@@ -367,13 +353,5 @@ export function hasVisibleAssistantFinalMessage(
 export function hasManagedOutgoingAssistantContent(
   content: readonly AssistantDisplayContentBlock[] | undefined,
 ): boolean {
-  return Boolean(
-    content?.some(
-      (block) =>
-        ((block?.type === "image" || block?.type === "audio" || block?.type === "video") &&
-          (isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl))) ||
-        (block?.type === "attachment" &&
-          isManagedOutgoingMediaUrl(asOptionalRecord(block.attachment)?.url)),
-    ),
-  );
+  return Boolean(content?.some((block) => hasManagedOutgoingMediaBlock(block)));
 }

@@ -1,5 +1,6 @@
 // Tests settled dispatcher outcome accounting for dispatch-from-config runs.
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
@@ -13,9 +14,7 @@ import {
 
 describe("settled dispatcher final outcomes", () => {
   it.each([
-    { visibleReplySent: false, deferred: false },
     { visibleReplySent: true, deferred: false },
-    { visibleReplySent: false, deferred: true },
     { visibleReplySent: true, deferred: true },
   ])(
     "keeps identityless delivery pending in the exact receipt ($visibleReplySent, $deferred)",
@@ -50,7 +49,7 @@ describe("settled dispatcher final outcomes", () => {
   );
 
   it.each(["channel_transform", "no_visible_result"])(
-    "keeps %s distinct when a payload has an undelivered alternative",
+    "keeps %s distinct and sends an immediate alternative before later finals",
     async (reason) => {
       const delivered: string[] = [];
       const payload = { text: "primary" };
@@ -67,19 +66,53 @@ describe("settled dispatcher final outcomes", () => {
 
       const ledger = createReplyTurnLedger(dispatcher);
       const send = ledger.sendQueued("final", payload);
+      const second = ledger.sendQueued("final", { text: "second final" });
       expect(send.queued).toBe(true);
       expect(outcome.isTracked()).toBe(true);
       dispatcher.markComplete();
       const receipt = await dispatcher.waitForIdle();
 
       const suppressed = reason === "channel_transform";
-      expect(delivered).toEqual(suppressed ? ["primary"] : ["primary", "alternative"]);
+      expect(delivered).toEqual(
+        suppressed ? ["primary", "second final"] : ["primary", "alternative", "second final"],
+      );
       await expect(outcome.promise).resolves.toBe(suppressed ? "channel-transform" : "delivered");
       await expect(send.outcome).resolves.toBe(suppressed ? "channel-transform" : "delivered");
-      expect(receipt?.anyVisibleDelivered).toBe(!suppressed);
+      await expect(second.outcome).resolves.toBe("delivered");
+      expect(receipt?.counts.final.delivered).toBe(suppressed ? 1 : 2);
+      expect(receipt?.anyVisibleDelivered).toBe(true);
       expect(receipt?.counts.final.deliveredNotVisible).toBe(suppressed ? 1 : 0);
     },
   );
+
+  it("drains later finals before flushing a deferred delivery and its alternative", async () => {
+    const finalized = createDeferred<{ visibleReplySent: boolean }>();
+    const attempted: string[] = [];
+    const payload = { text: "primary" };
+    attachReplyDispatchUndeliveredFallback(payload, { text: "alternative" });
+    const dispatcher = createReplyDispatcher({
+      deliver: async (reply) => {
+        attempted.push(reply.text ?? "");
+        return reply.text === "primary"
+          ? { visibleReplySent: false, finalization: finalized.promise }
+          : { visibleReplySent: true };
+      },
+      onIdle: () => {
+        expect(attempted).toContain("second final");
+        finalized.resolve({ visibleReplySent: false });
+      },
+    });
+    const ledger = createReplyTurnLedger(dispatcher);
+    const first = ledger.sendQueued("final", payload);
+    const second = ledger.sendQueued("final", { text: "second final" });
+    dispatcher.markComplete();
+    const receipt = await dispatcher.waitForIdle();
+
+    expect(attempted).toEqual(["primary", "second final", "alternative"]);
+    await expect(first.outcome).resolves.toBe("delivered");
+    await expect(second.outcome).resolves.toBe("delivered");
+    expect(receipt?.counts.final.delivered).toBe(2);
+  });
 
   it("keeps a reused payload's next receipt when its previous delivery settles", async () => {
     let delivered = false;

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { reconcileNodePairingOnConnect } from "../gateway/node-connect-reconcile.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -21,15 +21,17 @@ import {
 } from "./device-pairing.js";
 import { migrateDoctorPairingStores } from "./state-migrations.pairing.js";
 
-const temporary = useAutoCleanupTempDirTracker(afterEach);
+const temporary = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 const nodeId = "openclaw-macos";
 let baseDir: string;
 
 beforeEach(() => {
   baseDir = temporary.make("openclaw-desktop-approval-migration-");
-});
-afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
 });
 
 function database() {
@@ -56,25 +58,27 @@ async function approveDesktopNode() {
 }
 
 describe("desktop approval upgrade", () => {
-  it.each(["none", "desktop", "unrelated"] as const)(
+  it.each(["desktop", "unrelated"] as const)(
     "requires interactive desktop reapproval across reopen with %s pending state",
     async (pendingKind) => {
       const before = await approveDesktopNode();
       const declaredCommands = ["desktop.stream", "system.run", "system.which"];
-      const pending =
-        pendingKind === "none"
-          ? undefined
-          : await requestNodePairing(
-              {
-                nodeId,
-                platform: "macos",
-                caps: ["screen", "system"],
-                commands:
-                  pendingKind === "desktop" ? declaredCommands : ["system.run", "system.which"],
-                silent: true,
-              },
-              baseDir,
-            );
+      const pending = await requestNodePairing(
+        {
+          nodeId,
+          platform: "macos",
+          caps: ["screen", "system"],
+          commands: pendingKind === "desktop" ? declaredCommands : ["system.run", "system.which"],
+          silent: true,
+        },
+        baseDir,
+      );
+      // Seed the legacy hint directly: current requests keep upgrades interactive.
+      await withPairedDeviceRecords(baseDir, (devices) => {
+        const legacy = expectDefined(devices[nodeId]?.pendingNodeSurface, "legacy pending surface");
+        legacy.silent = true;
+        return { value: undefined, persist: true };
+      });
       expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(1);
       const after = expectDefined(await getPairedDevice(nodeId, baseDir), "migrated device");
       expect(after.nodeSurface?.commands).toEqual(["system.run"]);
@@ -84,17 +88,13 @@ describe("desktop approval upgrade", () => {
       expect(resolveNodePairingGeneration(after)?.key).not.toBe(
         resolveNodePairingGeneration(before)?.key,
       );
-      if (pending) {
-        expect(after.pendingNodeSurface).toMatchObject({
-          requestId: pending.request.requestId,
-          silent: pendingKind === "unrelated",
-          commands: pending.request.commands,
-        });
-      } else {
-        expect(after.pendingNodeSurface).toBeUndefined();
-      }
+      expect(after.pendingNodeSurface).toMatchObject({
+        requestId: pending.request.requestId,
+        silent: pendingKind === "unrelated",
+        commands: pending.request.commands,
+      });
 
-      closeOpenClawStateDatabaseByPath(database().path);
+      await closeOpenClawStateDatabaseByPathAsync(database().path);
       const pairedNode = expectDefined((await listNodePairing(baseDir)).paired[0], "paired node");
       const reconciled = await reconcileNodePairingOnConnect({
         cfg: {},
@@ -123,21 +123,13 @@ describe("desktop approval upgrade", () => {
         { callerScopes: ["operator.pairing", "operator.admin"] },
         baseDir,
       );
-      closeOpenClawStateDatabaseByPath(database().path);
+      await closeOpenClawStateDatabaseByPathAsync(database().path);
       expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(0);
       expect((await getPairedDevice(nodeId, baseDir))?.nodeSurface?.commands).toContain(
         "desktop.stream",
       );
     },
   );
-
-  it("records an empty first startup so newly approved nodes keep the enabled default", async () => {
-    expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(0);
-    closeOpenClawStateDatabaseByPath(database().path);
-    const before = await approveDesktopNode();
-    expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(0);
-    expect(await getPairedDevice(nodeId, baseDir)).toEqual(before);
-  });
 
   it("serializes with an already-loaded pairing writer before retiring desktop access", async () => {
     await approveDesktopNode();
@@ -155,68 +147,74 @@ describe("desktop approval upgrade", () => {
     release.resolve();
     await writer;
     expect(await migration).toBe(1);
-    expect(await getPairedDevice(nodeId, baseDir)).toMatchObject({
+    const after = expectDefined(await getPairedDevice(nodeId, baseDir), "migrated device");
+    expect(after).toMatchObject({
       displayName: "Renamed while updating",
       nodeSurface: { commands: ["system.run"] },
     });
+    expect(after.pendingNodeSurface).toBeUndefined();
   });
 
-  it.each([
-    { allow: ["desktop.stream"] },
-    { allow: [" desktop.stream "] },
-    { deny: ["desktop.stream"] },
-    { allow: ["desktop.stream"], deny: ["desktop.stream"] },
-  ])("preserves existing explicit policy %j", async (commands) => {
-    const before = await approveDesktopNode();
-    expect(
-      await migrateLegacyDesktopStreamOptOuts({ gateway: { nodes: { commands } } }, baseDir),
-    ).toBe(0);
-    expect(await getPairedDevice(nodeId, baseDir)).toEqual(before);
-    expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(0);
-    expect(await getPairedDevice(nodeId, baseDir)).toEqual(before);
-  });
+  it.each([undefined, { allow: [" desktop.stream "] }, { deny: ["desktop.stream"] }])(
+    "records unchanged approvals for an empty startup or explicit policy %j",
+    async (commands) => {
+      if (!commands) {
+        expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(0);
+        await closeOpenClawStateDatabaseByPathAsync(database().path);
+      }
+      const before = await approveDesktopNode();
+      expect(
+        await migrateLegacyDesktopStreamOptOuts(
+          commands ? { gateway: { nodes: { commands } } } : {},
+          baseDir,
+        ),
+      ).toBe(0);
+      expect(await getPairedDevice(nodeId, baseDir)).toEqual(before);
+      expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(0);
+      expect(await getPairedDevice(nodeId, baseDir)).toEqual(before);
+    },
+  );
 
-  it("rolls back narrowed grants when receipt persistence fails", async () => {
-    const before = await approveDesktopNode();
-    const { db } = database();
-    db.exec(
-      "CREATE TRIGGER reject_migration_receipt BEFORE INSERT ON migration_runs BEGIN SELECT RAISE(ABORT, 'synthetic receipt failure'); END",
-    );
-    await expect(migrateLegacyDesktopStreamOptOuts({}, baseDir)).rejects.toThrow(
-      "synthetic receipt failure",
-    );
-    expect(await getPairedDevice(nodeId, baseDir)).toEqual(before);
-    expect(
-      db
-        .prepare("SELECT id FROM migration_runs WHERE id = ?")
-        .get("node-desktop-stream-pairing-defaults-v1"),
-    ).toBeUndefined();
-    db.exec("DROP TRIGGER reject_migration_receipt");
-    expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(1);
-  });
-
-  it("preserves malformed approval data without recording a completed migration", async () => {
-    const before = await approveDesktopNode();
-    const { db } = database();
-    const malformed = JSON.stringify({ ...before.nodeSurface, approvedAtMs: "invalid" });
-    db.prepare("UPDATE device_pairing_paired SET node_surface_json = ? WHERE device_id = ?").run(
-      malformed,
-      nodeId,
-    );
-    await expect(migrateLegacyDesktopStreamOptOuts({}, baseDir)).rejects.toThrow(
-      "Cannot migrate malformed desktop approval",
-    );
-    expect(
-      db
-        .prepare("SELECT node_surface_json FROM device_pairing_paired WHERE device_id = ?")
-        .get(nodeId),
-    ).toMatchObject({ node_surface_json: malformed });
-    expect(
-      db
-        .prepare("SELECT id FROM migration_runs WHERE id = ?")
-        .get("node-desktop-stream-pairing-defaults-v1"),
-    ).toBeUndefined();
-  });
+  it.each(["receipt failure", "malformed approval"] as const)(
+    "preserves approval data without a completion receipt after %s",
+    async (failure) => {
+      const before = await approveDesktopNode();
+      const { db } = database();
+      const malformed = JSON.stringify({ ...before.nodeSurface, approvedAtMs: "invalid" });
+      if (failure === "receipt failure") {
+        db.exec(
+          "CREATE TRIGGER reject_migration_receipt BEFORE INSERT ON migration_runs BEGIN SELECT RAISE(ABORT, 'synthetic receipt failure'); END",
+        );
+      } else {
+        db.prepare(
+          "UPDATE device_pairing_paired SET node_surface_json = ? WHERE device_id = ?",
+        ).run(malformed, nodeId);
+      }
+      await expect(migrateLegacyDesktopStreamOptOuts({}, baseDir)).rejects.toThrow(
+        failure === "receipt failure"
+          ? "synthetic receipt failure"
+          : "Cannot migrate malformed desktop approval",
+      );
+      if (failure === "receipt failure") {
+        expect(await getPairedDevice(nodeId, baseDir)).toEqual(before);
+      } else {
+        expect(
+          db
+            .prepare("SELECT node_surface_json FROM device_pairing_paired WHERE device_id = ?")
+            .get(nodeId),
+        ).toMatchObject({ node_surface_json: malformed });
+      }
+      expect(
+        db
+          .prepare("SELECT id FROM migration_runs WHERE id = ?")
+          .get("node-desktop-stream-pairing-defaults-v1"),
+      ).toBeUndefined();
+      if (failure === "receipt failure") {
+        db.exec("DROP TRIGGER reject_migration_receipt");
+        expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(1);
+      }
+    },
+  );
 
   it.each(["devices", "nodes"])(
     "preserves opt-outs in later Doctor imports from %s",

@@ -23,6 +23,13 @@ const SESSION_LABEL_MAX_LENGTH = 512;
 
 /** Non-empty string primitive for protocol fields that reject blank values. */
 export const NonEmptyString = Type.String({ minLength: 1 });
+/** SHA-256 hex content version accepted by workspace and skill file operations. */
+export const Sha256String = Type.String({
+  minLength: 64,
+  maxLength: 64,
+  pattern: "^[a-fA-F0-9]{64}$",
+});
+
 export const UserProfileIdSchema = Type.String({
   minLength: 1,
   maxLength: USER_PROFILE_ID_MAX_LENGTH,

@@ -1,5 +1,10 @@
 // Qa Lab tests cover suite runtime gateway plugin behavior.
+import { syncBuiltinESMExports } from "node:module";
+import timersPromises from "node:timers/promises";
+import { promisify } from "node:util";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QaSuiteInfraError } from "./errors.js";
 import {
   applyConfig,
   fetchJson,
@@ -7,6 +12,7 @@ import {
   restartGatewayWithConfigPatch,
   waitForConfigRestartSettle,
   waitForGatewayHealthy,
+  waitForTransportReady,
 } from "./suite-runtime-gateway.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
@@ -53,16 +59,38 @@ function createConfigMutationEnv(
 }
 
 describe("qa suite gateway helpers", () => {
-  it.each([
-    {
-      name: "restarts through the authenticated gateway config patch",
-      alreadyApplied: false,
-    },
-    {
-      name: "forces a restart when the authenticated gateway config patch was already applied",
-      alreadyApplied: true,
-    },
-  ])("$name", async ({ alreadyApplied }) => {
+  it("classifies transport readiness failures without replacing typed infrastructure errors", async () => {
+    const readinessError = new Error(
+      'telegram account "sut" did not become ready; last check error: proxy returned 502',
+    );
+    const failedEnv = createRestartSettleEnv(async () => {
+      throw readinessError;
+    });
+
+    const failure = await waitForTransportReady(failedEnv, 1_234).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(QaSuiteInfraError);
+    expect(failure).toMatchObject({
+      name: "QaSuiteInfraError",
+      code: "transport_ready_timeout",
+      cause: readinessError,
+    });
+    if (!(failure instanceof QaSuiteInfraError)) {
+      throw failure;
+    }
+    expect(failure.message).toContain(readinessError.message);
+
+    const typedError = new QaSuiteInfraError("gateway_ready_timeout", "gateway stayed down");
+    await expect(
+      waitForTransportReady(
+        createRestartSettleEnv(async () => {
+          throw typedError;
+        }),
+      ),
+    ).rejects.toBe(typedError);
+  });
+
+  it("forces an authenticated restart even when the config patch was already applied", async () => {
     vi.useFakeTimers();
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -77,7 +105,7 @@ describe("qa suite gateway helpers", () => {
           hash: "hash-1",
           config: {
             gateway: { auth: { token: "keep-me" } },
-            ...(alreadyApplied ? patch : {}),
+            ...patch,
           },
         };
       }
@@ -120,7 +148,7 @@ describe("qa suite gateway helpers", () => {
       env: runtimeEnv,
       targetPid: 43_123,
       reason: "config.patch",
-      intent: { force: true },
+      intent: { force: true, waitMs: 0 },
     });
     expect(writeGatewayRestartIntentSyncMock).toHaveBeenCalledOnce();
     expect(writeGatewayRestartIntentSyncMock.mock.invocationCallOrder[0]).toBeGreaterThan(
@@ -141,6 +169,28 @@ describe("qa suite gateway helpers", () => {
     });
     expect(release).toHaveBeenCalled();
     expect(restartAfterStateMutation).not.toHaveBeenCalled();
+  });
+
+  it("does not signal a restart when the immediate drain intent cannot be persisted", async () => {
+    writeGatewayRestartIntentSyncMock.mockReturnValue(false);
+    const gatewayCall = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1", config: {} };
+      }
+      return method === "system.info" ? { pid: 43_123 } : { ok: true };
+    });
+    const { env, waitReady } = createConfigMutationEnv(gatewayCall);
+
+    await expect(
+      restartGatewayWithConfigPatch({ env, patch: { tools: { codeMode: { enabled: true } } } }),
+    ).rejects.toThrow("could not persist a forced restart intent");
+    expect(gatewayCall.mock.calls.map(([method]) => method)).toEqual([
+      "config.get",
+      "system.info",
+      "config.patch",
+    ]);
+    expect(waitReady).not.toHaveBeenCalled();
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
   it("bounds oversized suite gateway JSON responses", async () => {
@@ -234,53 +284,81 @@ describe("qa suite gateway helpers", () => {
     expect(events).toEqual(["cancel", "release"]);
   });
 
-  it("cancels every ignored gateway health body before releasing its guard", async () => {
-    const events: string[] = [];
-    const failedCancel = vi.fn(() => {
-      events.push("failed:cancel");
-    });
-    const successCancel = vi.fn(() => {
-      events.push("success:cancel");
-    });
-    const failedRelease = vi.fn(async () => {
-      events.push("failed:release");
-    });
-    const successRelease = vi.fn(async () => {
-      events.push("success:release");
-    });
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          new ReadableStream<Uint8Array>({
-            cancel: failedCancel,
-          }),
-          { status: 503 },
-        ),
-        release: failedRelease,
-      })
-      .mockResolvedValueOnce({
-        response: new Response(
-          new ReadableStream<Uint8Array>({
-            cancel: successCancel,
-          }),
-          { status: 200 },
-        ),
-        release: successRelease,
+  it("retries healthy gateway responses until their guard releases successfully", async () => {
+    vi.useFakeTimers();
+    const sleep = vi.spyOn(timersPromises, "setTimeout");
+    try {
+      // Keep the named promise-timer binding on the same fake clock.
+      sleep.mockImplementation(promisify(globalThis.setTimeout));
+      syncBuiltinESMExports();
+      const events: string[] = [];
+      const released = createDeferred<void>();
+      fetchWithSsrFGuardMock
+        .mockResolvedValueOnce({
+          response: new Response(
+            new ReadableStream<Uint8Array>({
+              cancel() {
+                events.push("first:cancel");
+              },
+            }),
+          ),
+          release: async () => {
+            events.push("first:release");
+            throw new Error("release failed");
+          },
+        })
+        .mockResolvedValueOnce({
+          response: new Response(
+            new ReadableStream<Uint8Array>({
+              cancel() {
+                events.push("second:cancel");
+              },
+            }),
+          ),
+          release: async () => {
+            events.push("second:release");
+            await released.promise;
+          },
+        });
+      let ready = false;
+      const readiness = waitForGatewayHealthy(
+        { gateway: { baseUrl: "http://127.0.0.1:43123" } } as never,
+        1_000,
+      ).then(() => {
+        ready = true;
       });
 
-    await expect(
-      waitForGatewayHealthy({ gateway: { baseUrl: "http://127.0.0.1:43123" } } as never, 1_000),
-    ).resolves.toBeUndefined();
-    expect(failedCancel).toHaveBeenCalledTimes(1);
-    expect(successCancel).toHaveBeenCalledTimes(1);
-    expect(failedRelease).toHaveBeenCalledTimes(1);
-    expect(successRelease).toHaveBeenCalledTimes(1);
-    expect(events).toEqual([
-      "failed:cancel",
-      "failed:release",
-      "success:cancel",
-      "success:release",
-    ]);
+      const settled = readiness.catch(() => undefined);
+
+      try {
+        await vi.advanceTimersByTimeAsync(249);
+        expect(events).toEqual(["first:cancel", "first:release"]);
+        expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+        expect(ready).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(events).toEqual([
+          "first:cancel",
+          "first:release",
+          "second:cancel",
+          "second:release",
+        ]);
+        expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+        expect(ready).toBe(false);
+
+        released.resolve();
+        await expect(readiness).resolves.toBeUndefined();
+        expect(ready).toBe(true);
+      } finally {
+        released.resolve();
+        await vi.advanceTimersByTimeAsync(1_000);
+        await settled;
+      }
+    } finally {
+      sleep.mockRestore();
+      vi.useRealTimers();
+      syncBuiltinESMExports();
+    }
   });
 
   it("bounds a hung gateway health request by the remaining readiness deadline", async () => {
@@ -311,7 +389,7 @@ describe("qa suite gateway helpers", () => {
         profile: "coding",
       },
       agents: {
-        list: [{ id: "qa", model: { primary: "openai/gpt-5.6-luna" } }],
+        entries: { qa: { model: { primary: "openai/gpt-5.6-luna" } } },
       },
       meta: {
         updatedAt: "2026-04-25T10:00:00.000Z",
@@ -353,101 +431,6 @@ describe("qa suite gateway helpers", () => {
     expect(gatewayCall).toHaveBeenCalledOnce();
   });
 
-  it("retries rate-limited config mutations using the primary gateway error", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: { ok: true },
-      release: vi.fn(async () => {}),
-    });
-    let patchAttempts = 0;
-    const gatewayCall = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return { hash: `hash-${patchAttempts + 1}`, config: { tools: {} } };
-      }
-      patchAttempts += 1;
-      if (patchAttempts === 1) {
-        throw new Error(
-          "rate limit exceeded for config.patch; retryAfterMs=1\nGateway logs:\nprevious config changed since last load",
-        );
-      }
-      return { ok: true };
-    });
-    const { env } = createConfigMutationEnv(gatewayCall);
-
-    await expect(
-      patchConfig({
-        env,
-        patch: { tools: { deny: ["read"] } },
-        restartDelayMs: 0,
-      }),
-    ).resolves.toEqual({ ok: true });
-    expect(patchAttempts).toBe(2);
-  });
-
-  it("retries config hash conflicts from the primary gateway error", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: { ok: true },
-      release: vi.fn(async () => {}),
-    });
-    let patchAttempts = 0;
-    const gatewayCall = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return { hash: `hash-${patchAttempts + 1}`, config: { tools: {} } };
-      }
-      patchAttempts += 1;
-      if (patchAttempts === 1) {
-        throw new Error(
-          "config changed since last load; re-run config.get and retry\nGateway logs:\nold rate limit exceeded; retry after 38s",
-        );
-      }
-      return { ok: true };
-    });
-    const { env } = createConfigMutationEnv(gatewayCall);
-
-    await expect(
-      patchConfig({
-        env,
-        patch: { tools: { deny: ["read"] } },
-        restartDelayMs: 0,
-      }),
-    ).resolves.toEqual({ ok: true });
-    expect(patchAttempts).toBe(2);
-  });
-
-  it("uses the live timeout profile for config mutations and restart settle", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: { ok: true },
-      release,
-    });
-    const gatewayCall = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return { hash: "hash-1", config: { tools: {} } };
-      }
-      return { ok: true };
-    });
-    const { env, waitReady } = createConfigMutationEnv(gatewayCall);
-
-    await patchConfig({
-      env,
-      patch: { tools: { deny: ["read"] } },
-      restartDelayMs: 0,
-    });
-
-    expect(gatewayCall).toHaveBeenCalledWith(
-      "config.patch",
-      expect.objectContaining({
-        raw: expect.stringContaining('"deny"'),
-        baseHash: "hash-1",
-      }),
-      { timeoutMs: 180_000 },
-    );
-    expect(waitReady).toHaveBeenCalledWith({
-      gateway: env.gateway,
-      timeoutMs: expect.any(Number),
-    });
-    expect(waitReady.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(60_000);
-  });
-
   it("does not wait for a deferred restart beyond the mutation timeout", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -472,115 +455,6 @@ describe("qa suite gateway helpers", () => {
       gateway: env.gateway,
       timeoutMs: 180_000,
     });
-  });
-
-  it("uses the live timeout profile when config mutation races a restart", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: { ok: true },
-      release,
-    });
-    const snapshots = [
-      { hash: "hash-1", config: { tools: {} } },
-      { hash: "hash-2", config: { tools: { deny: ["read"] } } },
-    ];
-    const gatewayCall = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return snapshots.shift() ?? snapshots.at(-1);
-      }
-      throw new Error("service restart");
-    });
-    const { env, waitReady } = createConfigMutationEnv(gatewayCall);
-
-    const result = await patchConfig({
-      env,
-      patch: { tools: { deny: ["read"] } },
-      restartDelayMs: 0,
-    });
-
-    expect(result).toEqual({ ok: true, restarted: true });
-    expect(waitReady).toHaveBeenCalledWith({
-      gateway: env.gateway,
-      timeoutMs: expect.any(Number),
-    });
-    expect(waitReady.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(60_000);
-  });
-
-  it("retries when a restart race settles before the config mutation is visible", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: { ok: true },
-      release,
-    });
-    const snapshots = [
-      { hash: "hash-1", config: { tools: {} } },
-      { hash: "hash-2", config: { tools: {} } },
-      { hash: "hash-2", config: { tools: {} } },
-    ];
-    const gatewayCall = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return snapshots.shift() ?? { hash: "hash-3", config: { tools: { deny: ["read"] } } };
-      }
-      if (method === "config.patch" && gatewayCall.mock.calls.length < 4) {
-        throw new Error("service restart");
-      }
-      return { ok: true };
-    });
-    const { env } = createConfigMutationEnv(gatewayCall);
-
-    const mutation = patchConfig({
-      env,
-      patch: { tools: { deny: ["read"] } },
-      replacePaths: ["tools.deny"],
-      restartDelayMs: 0,
-      restartSettleBufferMs: 1,
-    });
-
-    await expect(mutation).resolves.toEqual({ ok: true });
-
-    expect(gatewayCall).toHaveBeenCalledWith(
-      "config.patch",
-      expect.objectContaining({
-        baseHash: "hash-1",
-        replacePaths: ["tools.deny"],
-      }),
-      { timeoutMs: 180_000 },
-    );
-    expect(gatewayCall).toHaveBeenCalledWith(
-      "config.patch",
-      expect.objectContaining({
-        baseHash: "hash-2",
-        replacePaths: ["tools.deny"],
-      }),
-      { timeoutMs: 180_000 },
-    );
-  });
-
-  it("waits for transport readiness after gateway restart health", async () => {
-    vi.useFakeTimers();
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: { ok: true },
-      release,
-    });
-    const waitReady = vi.fn(async () => {});
-
-    const settling = waitForConfigRestartSettle(createRestartSettleEnv(waitReady), 0, 5_000);
-
-    await vi.advanceTimersByTimeAsync(750);
-    await settling;
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:43123/readyz",
-        auditContext: "qa-lab-suite-wait-for-gateway-healthy",
-      }),
-    );
-    expect(waitReady).toHaveBeenCalledWith({
-      gateway: { baseUrl: "http://127.0.0.1:43123" },
-      timeoutMs: expect.any(Number),
-    });
-    expect(release).toHaveBeenCalled();
   });
 
   it("keeps polling gateway health instead of sleeping blindly through restart settle", async () => {

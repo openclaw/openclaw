@@ -2,11 +2,17 @@
  * Test runtime factory for subagent announce delivery. It wires gateway,
  * session-store, queue, and hook behavior to caller-provided mocks.
  */
+import { isDeepStrictEqual } from "node:util";
+import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway } from "../../../gateway/call.js";
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { immutableSubagentRun, subagentRuns } from "../registry/subagent-registry-memory.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 type DeliveryRuntimeMockOptions = {
   callGateway: (request: unknown) => Promise<unknown>;
@@ -56,8 +62,13 @@ function resolveQueueSettings(params: {
 }
 
 /** Create a mocked announce delivery runtime for focused subagent tests. */
-export function createSubagentAnnounceDeliveryRuntimeMock(options: DeliveryRuntimeMockOptions) {
+export async function createSubagentAnnounceDeliveryRuntimeMock(
+  options: DeliveryRuntimeMockOptions,
+) {
   return {
+    ...(await vi.importActual<typeof import("./subagent-announce-delivery.runtime.js")>(
+      "./subagent-announce-delivery.runtime.js",
+    )),
     callGateway: (async <T = Record<string, unknown>>(request: Parameters<typeof callGateway>[0]) =>
       (await options.callGateway(request)) as T) as typeof callGateway,
     dispatchGatewayMethodInProcess: (async <T = Record<string, unknown>>(
@@ -87,11 +98,108 @@ export function createSubagentAnnounceDeliveryRuntimeMock(options: DeliveryRunti
         ? `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=live`
         : undefined,
     getGlobalHookRunner: () => ({ hasHooks: () => options.hasHooks?.() ?? false }),
-    createBoundDeliveryRouter: () => ({
-      resolveDestination: () => ({ mode: "none" }),
-    }),
+    resolveBoundDeliveryDestination: async () => null,
     resolveConversationIdFromTargets: () => "",
     resolveExternalBestEffortDeliveryTarget,
     resolveQueueSettings,
   };
+}
+
+export type AgentCallRequest = {
+  method?: string;
+  params?: Record<string, unknown> & {
+    message?: string;
+    internalEvents?: Array<{ type?: string; taskLabel?: string; result?: string }>;
+  };
+};
+
+export function visibleAgentResponse(runId = "run-main") {
+  return {
+    runId,
+    status: "ok",
+    result: {
+      payloads: [{ text: "announced" }],
+      didSendViaMessagingTool: true,
+      messagingToolSentTexts: ["announced"],
+      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSourceReplyPayloads: [{ text: "announced", sourceReplyFinal: true }],
+    },
+  };
+}
+
+export function expectInputProvenance(
+  params: Record<string, unknown> | undefined,
+  sourceSessionKey: string,
+) {
+  // Announce handoffs are inter-session messages; provenance lets the receiver
+  // distinguish child-output delivery from ordinary user input.
+  const inputProvenance = params?.inputProvenance;
+  if (!inputProvenance || typeof inputProvenance !== "object") {
+    throw new Error("Expected input provenance");
+  }
+  const provenance = inputProvenance as Record<string, unknown>;
+  expect(provenance.kind).toBe("inter_session");
+  expect(provenance.sourceSessionKey).toBe(sourceSessionKey);
+  expect(provenance.sourceTool).toBe("subagent_announce");
+}
+
+export function expectAgentCallFields(
+  call: AgentCallRequest,
+  expected: {
+    channel?: string;
+    deliver?: boolean;
+    sessionKey: string;
+    to?: string;
+  },
+) {
+  expect(call.method).toBe("agent");
+  expect(call.params?.sessionKey).toBe(expected.sessionKey);
+  expect(call.params?.deliver).toBe(expected.deliver);
+  if ("channel" in expected) {
+    expect(call.params?.channel).toBe(expected.channel);
+  }
+  if ("to" in expected) {
+    expect(call.params?.to).toBe(expected.to);
+  }
+}
+
+export type MockSubagentRun = {
+  runId: string;
+  childSessionKey: string;
+  requesterSessionKey: string;
+  requesterDisplayKey: string;
+  task: string;
+  cleanup: "keep" | "delete";
+  createdAt: number;
+  execution: {
+    endedAt?: number;
+    outcome?: {
+      status: "ok" | "timeout" | "error" | "unknown";
+      error?: string;
+    };
+  };
+  cleanupCompletedAt?: number;
+  label?: string;
+  completion?: {
+    required: boolean;
+    resultText?: string | null;
+    terminalReply?: AgentRunTerminalReplySnapshot;
+  };
+};
+
+export function publishAnnounceRunFixture(fixture: MockSubagentRun): SubagentRunRecord {
+  const canonical = createSubagentRunRecord({
+    ...fixture,
+    execution:
+      typeof fixture.execution.endedAt === "number"
+        ? { status: "terminal", ...fixture.execution }
+        : { status: "running" },
+  });
+  const current = subagentRuns.get(canonical.runId);
+  if (current && isDeepStrictEqual(current, canonical)) {
+    return current;
+  }
+  const published = immutableSubagentRun(structuredClone(canonical));
+  subagentRuns.set(published.runId, published);
+  return published;
 }

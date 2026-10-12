@@ -11,7 +11,10 @@ import {
 } from "./sidebar-attention-dismissals.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 
-type SidebarAttentionItemKind = Exclude<SidebarAttentionKind, "scopeUpgrade" | "updateAvailable">;
+type SidebarAttentionItemKind = Exclude<
+  SidebarAttentionKind,
+  "scopeUpgrade" | "updateAvailable" | "outbox"
+>;
 
 type SidebarInboxEntryBase<
   Category extends Exclude<IssueTab, "all">,
@@ -73,26 +76,6 @@ export function buildScopeUpgradeInboxEntry(params: {
     severity:
       params.state.phase === "error" || params.state.phase === "rejected" ? "error" : "warning",
     state: params.state,
-  };
-}
-
-export function buildUpdateInboxEntry(params: {
-  canDismiss: boolean;
-  dismissal: SidebarAttentionDismissal | null;
-  forced: boolean;
-  requiresAction: boolean;
-  severity: "error" | "warning";
-  visible: boolean;
-}): Extract<SidebarInboxEntry, { type: "update" }> | null {
-  if (!params.visible) {
-    return null;
-  }
-  return {
-    type: "update",
-    category: "system",
-    dismissal: params.canDismiss && !params.forced ? params.dismissal : null,
-    requiresAction: params.requiresAction,
-    severity: params.severity,
   };
 }
 

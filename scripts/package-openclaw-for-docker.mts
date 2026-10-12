@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveTimerTimeoutMs } from "../packages/normalization-core/src/number-coercion.ts";
 import {
   booleanFlag,
   parseFlagArgs,
@@ -22,7 +23,10 @@ import {
   LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
   PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
 } from "./lib/package-lifecycle-marker.mjs";
-import { cleanPackedOpenClawTarballs } from "./lib/packed-openclaw-tarballs.mts";
+import {
+  cleanPackedOpenClawTarballs,
+  validatePackedTarballOutputName,
+} from "./lib/packed-openclaw-tarballs.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
@@ -32,13 +36,12 @@ import { resolvePnpmRunner } from "./pnpm-runner.mts";
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_PACKAGE_BUILD_TIMEOUT_MS = 45 * 60 * 1000;
 const DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS = 5 * 60 * 1000;
-const DEFAULT_PACKAGE_PACK_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_PACKAGE_PACK_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_PACKAGE_TARBALL_CHECK_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_KILL_AFTER_MS = 5_000;
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const POST_FORCE_KILL_WAIT_MS = 1_000;
 const DEFAULT_CAPTURED_STDOUT_MAX_BYTES = 1024 * 1024;
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const AI_RUNTIME_PACKAGE = "@openclaw/ai";
 const AI_RUNTIME_BACKUP_DIR = ".openclaw-ai-package-backup";
 
@@ -68,19 +71,12 @@ type RunImpl = (
   cwd: string,
   options: RunOptions,
 ) => Promise<string>;
-type DocsMapLifecycle = {
-  preparePackageDocsMap: (cwd: string) => Promise<unknown>;
-  restorePackageDocsMap: (cwd: string) => Promise<unknown>;
-};
-type PackageManifestLifecycle = {
-  preparePackageManifest: (cwd: string) => Promise<unknown>;
-  restorePackageManifest: (cwd: string) => Promise<unknown>;
-};
 type PackageOptions = RunOptions & {
   bundlePlugins?: string[];
   allowUnreleasedChangelog?: unknown;
   extractAiRuntime?: (tarballPath: string, destination: string) => Promise<unknown>;
   normalizeTarballModes?: (tarballPath: string) => Promise<unknown>;
+  onCleanupFailure?: (error: unknown) => void;
   outputName?: string;
   packJsonPath?: string;
   pnpmPack?: boolean;
@@ -88,28 +84,21 @@ type PackageOptions = RunOptions & {
   prepareChangelog?: (cwd: string) => Promise<unknown>;
   prepareDocsMap?: (cwd: string) => Promise<unknown>;
   prepareManifest?: (cwd: string) => Promise<unknown>;
+  prepareWorkerBundle?: (cwd: string) => Promise<unknown>;
   restoreChangelog?: (cwd: string) => Promise<unknown>;
   restoreDocsMap?: (cwd: string) => Promise<unknown>;
   restoreManifest?: (cwd: string) => Promise<unknown>;
+  restoreWorkerBundle?: (cwd: string) => Promise<unknown>;
   runCaptureImpl?: RunImpl;
   runImpl?: CommandRunner;
 };
 type MutableJsonRecord = Record<string, unknown>;
 
-function isDocsMapLifecycle(value: unknown): value is DocsMapLifecycle {
-  return (
-    isRecord(value) &&
-    typeof value.preparePackageDocsMap === "function" &&
-    typeof value.restorePackageDocsMap === "function"
-  );
-}
-
-function isPackageManifestLifecycle(value: unknown): value is PackageManifestLifecycle {
-  return (
-    isRecord(value) &&
-    typeof value.preparePackageManifest === "function" &&
-    typeof value.restorePackageManifest === "function"
-  );
+function hasPackageLifecycleMethods<Method extends string>(
+  value: unknown,
+  methods: Method[],
+): value is Record<Method, (cwd: string) => Promise<unknown>> {
+  return isRecord(value) && methods.every((method) => typeof value[method] === "function");
 }
 
 function hasErrorCode(error: unknown, code: string) {
@@ -173,30 +162,8 @@ function resolveTimeoutMs(envName: string, defaultValue: number) {
   return parsed;
 }
 
-function numericTimerValueMs(valueMs: unknown) {
-  const value = Number(valueMs);
-  return Number.isFinite(value) ? Math.floor(value) : undefined;
-}
-
-function resolvePackageBuildTimeoutMs(
-  valueMs: unknown,
-  fallbackMs: unknown = MAX_TIMER_TIMEOUT_MS,
-) {
-  const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
-  return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
-}
-
 function resolveOptionalTimerTimeoutMs(valueMs: unknown) {
-  if (valueMs === undefined) {
-    return undefined;
-  }
-  return resolvePackageBuildTimeoutMs(valueMs, 1);
-}
-
-function validateOutputName(value: string) {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.t(?:ar\.)?gz$/u.test(value)) {
-    throw new Error(`--output-name must be a tarball filename, not a path: ${value}`);
-  }
+  return valueMs === undefined ? undefined : resolveTimerTimeoutMs(Number(valueMs), 1);
 }
 
 function resolvePackedOpenClawFileName(value: string) {
@@ -252,7 +219,7 @@ export function parseArgs(argv: string[]) {
     },
   );
   if (options.outputName) {
-    validateOutputName(options.outputName);
+    validatePackedTarballOutputName(options.outputName);
   }
   if (options.packJson && options.pnpmPack) {
     throw new Error("--pack-json cannot be combined with --pnpm-pack");
@@ -270,8 +237,8 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
   }
   return new Promise<string>((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(options.timeoutMs);
-    const resolvedKillAfterMs = resolvePackageBuildTimeoutMs(
-      options.killAfterMs,
+    const resolvedKillAfterMs = resolveTimerTimeoutMs(
+      Number(options.killAfterMs),
       DEFAULT_TIMEOUT_KILL_AFTER_MS,
     );
     const useProcessGroup = process.platform !== "win32";
@@ -670,6 +637,7 @@ export async function prepareBundledAiRuntimePackage(
     originalAiRuntimeMoved = false;
     packedAiTarballs = [];
     if (cleanupError) {
+      packageOptions.onCleanupFailure?.(cleanupError);
       throw toErrorObject(cleanupError, "Package cleanup failed.");
     }
   };
@@ -703,6 +671,7 @@ export async function prepareBundledAiRuntimePackage(
     try {
       await restoreManifest(aiRuntimeSourceDir);
     } catch (restoreError) {
+      packageOptions.onCleanupFailure?.(restoreError);
       throw packError ? packagePreparationRestoreError(packError, restoreError) : restoreError;
     }
     if (packError) {
@@ -809,10 +778,12 @@ async function restorePackageSourceArtifacts(
   sourceDir: string,
   restoreDocsMap: (cwd: string) => Promise<unknown>,
   restoreManifest: (cwd: string) => Promise<unknown>,
+  restoreWorkerBundle: (cwd: string) => Promise<unknown>,
   restoreChangelog: (cwd: string) => Promise<unknown>,
 ) {
   await restoreChangelog(sourceDir);
   await restoreManifest(sourceDir);
+  await restoreWorkerBundle(sourceDir);
   await Promise.all(
     [PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH].map(
       (relativePath) => fs.rm(path.join(sourceDir, relativePath), { force: true }),
@@ -822,10 +793,10 @@ async function restorePackageSourceArtifacts(
   await restoreDocsMap(sourceDir);
 }
 
-async function loadSourcePackageLifecycle(
+async function loadSourcePackageLifecycle<Method extends string>(
   sourceDir: string,
   moduleName: string,
-  validate: (value: unknown) => boolean,
+  methods: Method[],
 ) {
   const modulePath = path.join(sourceDir, "scripts", moduleName);
   try {
@@ -837,7 +808,7 @@ async function loadSourcePackageLifecycle(
     throw error;
   }
   const lifecycle: unknown = await import(pathToFileURL(modulePath).href);
-  if (!validate(lifecycle)) {
+  if (!hasPackageLifecycleMethods(lifecycle, methods)) {
     throw new Error(`source package lifecycle is invalid: ${modulePath}`);
   }
   return lifecycle;
@@ -866,11 +837,10 @@ export async function packOpenClawPackageForDocker(
   const sourceDocsMapLifecycle =
     packageOptions.prepareDocsMap && packageOptions.restoreDocsMap
       ? null
-      : ((await loadSourcePackageLifecycle(
-          sourcePath,
-          "package-docs-map.mjs",
-          isDocsMapLifecycle,
-        )) as DocsMapLifecycle | null);
+      : await loadSourcePackageLifecycle(sourcePath, "package-docs-map.mjs", [
+          "preparePackageDocsMap",
+          "restorePackageDocsMap",
+        ]);
   const prepareDocsMap =
     packageOptions.prepareDocsMap ??
     sourceDocsMapLifecycle?.preparePackageDocsMap ??
@@ -882,11 +852,10 @@ export async function packOpenClawPackageForDocker(
   const sourceManifestLifecycle =
     packageOptions.prepareManifest && packageOptions.restoreManifest
       ? null
-      : ((await loadSourcePackageLifecycle(
-          sourcePath,
-          "package-manifest.mjs",
-          isPackageManifestLifecycle,
-        )) as PackageManifestLifecycle | null);
+      : await loadSourcePackageLifecycle(sourcePath, "package-manifest.mjs", [
+          "preparePackageManifest",
+          "restorePackageManifest",
+        ]);
   const prepareManifest =
     packageOptions.prepareManifest ??
     sourceManifestLifecycle?.preparePackageManifest ??
@@ -894,6 +863,24 @@ export async function packOpenClawPackageForDocker(
   const restoreManifest =
     packageOptions.restoreManifest ??
     sourceManifestLifecycle?.restorePackageManifest ??
+    (async () => false);
+  const sourceWorkerBundlePrepareLifecycle = packageOptions.prepareWorkerBundle
+    ? null
+    : await loadSourcePackageLifecycle(sourcePath, "package-worker-bundle.mts", [
+        "preparePackagedWorkerBundle",
+      ]);
+  const sourceWorkerBundleRestoreLifecycle = packageOptions.restoreWorkerBundle
+    ? null
+    : await loadSourcePackageLifecycle(sourcePath, "package-worker-bundle-lifecycle.mjs", [
+        "restorePackagedWorkerBundle",
+      ]);
+  const prepareWorkerBundle =
+    packageOptions.prepareWorkerBundle ??
+    sourceWorkerBundlePrepareLifecycle?.preparePackagedWorkerBundle ??
+    (async () => false);
+  const restoreWorkerBundle =
+    packageOptions.restoreWorkerBundle ??
+    sourceWorkerBundleRestoreLifecycle?.restorePackagedWorkerBundle ??
     (async () => false);
   const prepareBundledAiRuntime =
     packageOptions.prepareBundledAiRuntime ?? prepareBundledAiRuntimePackage;
@@ -913,6 +900,7 @@ export async function packOpenClawPackageForDocker(
     }
   };
   try {
+    await prepareWorkerBundle(sourcePath);
     console.error("==> Writing OpenClaw package inventory");
     await writePackageInventoryForDocker(sourcePath, packageOptions.runImpl ?? run);
 
@@ -924,6 +912,7 @@ export async function packOpenClawPackageForDocker(
         sourcePath,
         restoreDocsMap,
         restoreManifest,
+        restoreWorkerBundle,
         restoreChangelog,
       );
     } catch (restoreError) {
@@ -939,6 +928,8 @@ export async function packOpenClawPackageForDocker(
   try {
     let cleanupBundledAiRuntime = async () => {};
     let cleanupBundledPlugins = async () => {};
+    const cleanupFailures = new Set<unknown>();
+    const onCleanupFailure = (error: unknown) => void cleanupFailures.add(error);
     try {
       await cleanPackedOpenClawTarballs(outputPath);
       if (packageOptions.bundlePlugins?.length) {
@@ -946,6 +937,7 @@ export async function packOpenClawPackageForDocker(
         cleanupBundledPlugins = await preparePackageBundledPlugins(
           sourcePath,
           packageOptions.bundlePlugins,
+          onCleanupFailure,
         );
       }
       cleanupBundledAiRuntime = await prepareBundledAiRuntime(
@@ -955,6 +947,7 @@ export async function packOpenClawPackageForDocker(
         {
           prepareManifest,
           restoreManifest,
+          onCleanupFailure,
         },
       );
       // AI staging materializes the bundled tree; pack must not inherit the
@@ -975,21 +968,35 @@ export async function packOpenClawPackageForDocker(
           DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
         ),
       });
+    } catch (error) {
+      packageError = error;
+      throw error;
     } finally {
-      try {
-        await cleanupBundledAiRuntime();
-      } finally {
+      // Restore shared manifests in reverse preparation order. A helper can
+      // fail restoring during preparation, before its cleanup handle returns.
+      for (const cleanup of [cleanupBundledAiRuntime, cleanupBundledPlugins]) {
         try {
-          await cleanupBundledPlugins();
-        } finally {
-          await restorePackageSourceArtifacts(
-            sourcePath,
-            restoreDocsMap,
-            restoreManifest,
-            restoreChangelog,
-          );
+          await cleanup();
+        } catch (error) {
+          onCleanupFailure(error);
         }
       }
+      await restorePackageSourceArtifacts(
+        sourcePath,
+        async (cwd) => {
+          if (cleanupFailures.size) {
+            throw new AggregateError(
+              new Set([...(packageError === undefined ? [] : [packageError]), ...cleanupFailures]),
+              "Package source cleanup failed; packaging receipt retained.",
+              { cause: packageError },
+            );
+          }
+          await restoreDocsMap(cwd);
+        },
+        restoreManifest,
+        restoreWorkerBundle,
+        restoreChangelog,
+      );
     }
     // Scan the emptied pnpm destination instead of trusting its absolute-path output.
     let tarball = await newestOpenClawTarball(
@@ -1008,11 +1015,24 @@ export async function packOpenClawPackageForDocker(
     if (packageOptions.packJsonPath) {
       // npm's original receipt predates normalization. Inspect the finished bytes;
       // dry-run preserves the archive while npm owns hashes, modes, and inventory.
+      // npm streams a file spec through its cache while extracting it, so give this
+      // inspection a private cache that leaves with the receipt instead of copying
+      // the artifact into, and waiting on, the caller's shared npm cache.
       packReceiptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-pack-receipt-"));
       const packReceiptPath = path.join(packReceiptDir, "pack.json");
       await runCaptureImpl(
         "npm",
-        ["pack", tarball, "--dry-run", "--json", "--ignore-scripts", "--offline", "--silent"],
+        [
+          "pack",
+          tarball,
+          "--dry-run",
+          "--json",
+          "--ignore-scripts",
+          "--offline",
+          "--silent",
+          "--cache",
+          path.join(packReceiptDir, "npm-cache"),
+        ],
         sourcePath,
         {
           stdoutFilePath: packReceiptPath,

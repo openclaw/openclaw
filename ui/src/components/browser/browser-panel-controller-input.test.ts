@@ -1,8 +1,10 @@
 import { runInNewContext } from "node:vm";
-import { nothing, render } from "lit";
+import { createSignal, createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
@@ -18,7 +20,7 @@ import {
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
 import { BrowserPanelController } from "./browser-panel-controller.ts";
-import { renderBrowserPanelChrome } from "./browser-panel-render.ts";
+import { BrowserPanelChrome } from "./browser-panel-render.tsx";
 
 setupBrowserPanelTestCleanup();
 
@@ -611,20 +613,25 @@ describe("BrowserPanelController capture and input ownership", () => {
     expect(controller.evaluateUnavailable).toBe(false);
     expect(controller.inspected).toBeNull();
     const renderedPanel = document.createElement("div");
-    const renderPanel = () =>
-      render(
-        renderBrowserPanelChrome(
-          controller,
-          "right",
-          400,
-          400,
-          () => {},
-          () => {},
-          nothing,
-        ),
-        renderedPanel,
-      );
-    renderPanel();
+    const [revision, setRevision] = createSignal(0);
+    mountSolid(
+      () =>
+        createComponent(BrowserPanelChrome, {
+          get controller() {
+            revision();
+            return controller;
+          },
+          dock: "right",
+          height: 400,
+          width: 400,
+          onDockChange() {},
+          onClose() {},
+          embedded: false,
+          tabsInHeader: false,
+        }),
+      { container: renderedPanel },
+    );
+    flush();
     expect(renderedPanel.querySelector('[role="alert"]')?.textContent).toBe(
       "Browser request failed: Browser connection temporarily unavailable",
     );
@@ -636,7 +643,8 @@ describe("BrowserPanelController capture and input ownership", () => {
     expect(controller.inspected).toEqual(recoveredNode);
     expect(controller.errorText).toBeNull();
     expect(controller.inspectPointer).toEqual({ x: 0.7, y: 0.8 });
-    renderPanel();
+    setRevision((value) => value + 1);
+    flush();
     expect(renderedPanel.querySelector('[role="alert"]')).toBeNull();
     expect(
       renderedPanel.querySelector<HTMLButtonElement>('button[aria-label="Inspect element"]')

@@ -13,7 +13,7 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import { getChatSessionProjection, readChatSessionProjectionScope } from "./history-merge.ts";
+import { getChatSessionProjection } from "./history-merge.ts";
 
 function terminalReplyDisplaySignature(message: unknown): string | null {
   if (shouldHideAssistantChatMessage(message)) {
@@ -57,8 +57,7 @@ export function readTerminalReplyRecoveryState(
   acceptedFinal: boolean;
   terminalReplySignatures: ReadonlySet<string>;
 } {
-  const scope = readChatSessionProjectionScope(state);
-  const projection = getChatSessionProjection(state, scope);
+  const projection = getChatSessionProjection(state);
   const run = projection.runs[runId];
   const candidates: unknown[] = run?.message === undefined ? [] : [run.message];
   for (const message of projection.messages) {

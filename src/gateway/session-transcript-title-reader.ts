@@ -7,7 +7,6 @@ import {
   readSessionTranscriptWatermark,
   type SessionTranscriptMessageEvent,
   type SessionTranscriptReadScope,
-  type SessionTranscriptReadTarget,
 } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteTranscriptReadScope,
@@ -16,9 +15,14 @@ import {
 import { prepareSessionTranscriptReadTargetCore } from "../config/sessions/session-accessor.transcript-read-target.js";
 import { resolveSessionTranscriptReadTarget } from "../config/sessions/session-accessor.transcript-target.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { captureIncognitoSessionHistoryBinding } from "../config/sessions/session-incognito-binding.js";
+import {
+  readIncognitoSessionHistory,
+  type IncognitoSessionHistoryBinding,
+} from "../config/sessions/session-incognito-history-read.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
@@ -27,11 +31,7 @@ import {
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
 import { toTranscriptReadScope } from "./session-transcript-read-target.js";
-
-export type SessionTitleFields = {
-  firstUserMessage: string | null;
-  lastMessagePreview: string | null;
-};
+import type { SessionTitleFields } from "./session-utils.types.js";
 
 type SessionTitleReadOptions = { includeInterSession?: boolean; readOnly?: boolean };
 
@@ -57,17 +57,9 @@ type SqliteTitleFieldCacheEntry = ReturnType<typeof readSessionTranscriptWaterma
 };
 
 // Found titles survive appends only while the rewrite generation and visible reset window stay fixed.
-const sqliteTitleFieldCache = new Map<string, SqliteTitleFieldCacheEntry>();
-
-function sqliteTitleFieldCacheKey(target: SessionTranscriptReadTarget): string {
-  return `${target.agentId ?? ""}\0${target.sessionId}\0${target.storePath ?? ""}`;
-}
-
-function setSqliteTitleFieldCache(key: string, entry: SqliteTitleFieldCacheEntry): void {
-  sqliteTitleFieldCache.delete(key);
-  sqliteTitleFieldCache.set(key, entry);
-  pruneMapToMaxSize(sqliteTitleFieldCache, SQLITE_TITLE_FIELD_CACHE_MAX_ENTRIES);
-}
+const sqliteTitleFieldCache = new LruCache<SqliteTitleFieldCacheEntry>(
+  SQLITE_TITLE_FIELD_CACHE_MAX_ENTRIES,
+);
 
 function readSqliteTitleProbeRange(
   scope: SessionTranscriptReadScope,
@@ -161,19 +153,20 @@ function copySessionTitleText(text: string | null): string | null {
   return text === null ? null : Buffer.from(text, "utf16le").toString("utf16le");
 }
 
-function hydrateSqliteTitleFields(
-  target: SessionTranscriptReadTarget,
+export function readSessionTitleFieldsFromTranscript(
+  input: SessionTranscriptReadScope,
   opts?: SessionTitleReadOptions,
 ): SessionTitleFields {
+  const target = resolveSessionTranscriptReadTarget(input);
   try {
-    const scope = toTranscriptReadScope(target);
-    const cacheKey = sqliteTitleFieldCacheKey(target);
+    const scope = { ...toTranscriptReadScope(target), ...(input.env ? { env: input.env } : {}) };
+    const cacheKey = `${target.agentId ?? ""}\0${target.sessionId}\0${target.storePath ?? ""}`;
     const watermark = readSessionTranscriptWatermark(scope);
     if (watermark.maxSeq === null) {
       return { ...EMPTY_SESSION_TITLE_FIELDS };
     }
     const variant = opts?.includeInterSession === true ? "includeInterSession" : "default";
-    const entry = sqliteTitleFieldCache.get(cacheKey);
+    const entry = sqliteTitleFieldCache.peek(cacheKey);
     const cached = entry?.generation === watermark.generation ? entry : undefined;
     const current = cached?.maxSeq === watermark.maxSeq;
     const cachedTitle = cached?.firstUserMessages[variant];
@@ -185,7 +178,7 @@ function hydrateSqliteTitleFields(
         cachedTitle.scannedMessages >=
           Math.min(cached.totalMessages, SQLITE_TITLE_PROBE_MAX_MESSAGES))
     ) {
-      setSqliteTitleFieldCache(cacheKey, cached);
+      sqliteTitleFieldCache.set(cacheKey, cached);
       return {
         firstUserMessage: cachedTitle.text,
         lastMessagePreview: cached.lastMessagePreview,
@@ -239,7 +232,7 @@ function hydrateSqliteTitleFields(
     };
     firstUserMessages[variant] = { text: fields.firstUserMessage, scannedMessages };
     // Retain only the watermark and bounded strings, never the probe's transcript payloads.
-    setSqliteTitleFieldCache(cacheKey, {
+    sqliteTitleFieldCache.set(cacheKey, {
       generation: tail.generation,
       maxSeq: tail.maxSeq,
       boundarySeq: tail.boundarySeq,
@@ -265,19 +258,20 @@ function hydrateSqliteTitleFields(
   }
 }
 
-/** Reads title and preview text from one transcript. */
-export function readSessionTitleFieldsFromTranscript(
-  scope: SessionTranscriptReadScope,
-  opts?: SessionTitleReadOptions,
-): SessionTitleFields {
-  return hydrateSqliteTitleFields(resolveSessionTranscriptReadTarget(scope), opts);
-}
-
 /** Reuse the bounded title cache in the existing history worker without transporting session metadata. */
 export async function readSessionTitleFieldsFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
   opts?: { includeInterSession?: boolean },
+  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionTitleFields> {
+  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
+  if (incognito) {
+    const result = await readIncognitoSessionHistory(incognito, scope, (target) => ({
+      type: "session.history.title",
+      input: { ...target, includeInterSession: opts?.includeInterSession },
+    }));
+    return result.fields;
+  }
   const target = prepareSessionTranscriptReadTargetCore(scope);
   const readScope: SessionTranscriptReadScope = {
     agentId: target.agentId,

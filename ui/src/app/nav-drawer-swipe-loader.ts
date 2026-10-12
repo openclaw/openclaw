@@ -1,17 +1,11 @@
-import type { NavDrawerSwipeOwner } from "./nav-drawer-swipe.runtime.ts";
-
-type NavDrawerSwipeHost = HTMLElement & {
-  readonly onboardingMode: boolean;
-  readonly updateComplete: Promise<boolean>;
-  readonly navDrawerOpen: boolean;
-};
+import type { NavDrawerHost, NavDrawerSwipeOwner } from "./nav-drawer-swipe.runtime.ts";
 
 export class NavDrawerSwipeLoader {
   private owner?: NavDrawerSwipeOwner;
   private pending = false;
 
   constructor(
-    private readonly host: NavDrawerSwipeHost,
+    private readonly host: NavDrawerHost,
     private readonly requestOpen: () => void,
   ) {}
 
@@ -40,12 +34,7 @@ export class NavDrawerSwipeLoader {
     this.owner?.disconnect();
   }
 
-  opened(): boolean {
-    this.owner?.opened();
-    return Boolean(this.owner);
-  }
-
-  closed(): void {
-    this.owner?.closed();
+  reset(): void {
+    this.owner?.reset();
   }
 }

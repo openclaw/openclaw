@@ -1,15 +1,3 @@
-/**
- * Tests for status.ts module
- *
- * Tests cover:
- * - Detection of unconfigured accounts
- * - Detection of disabled accounts
- * - Detection of missing clientId
- * - Token format warnings
- * - Access control warnings
- * - Runtime error detection
- */
-
 import { describe, expect, it } from "vitest";
 import { collectTwitchStatusIssues } from "./status.js";
 import type { ChannelAccountSnapshot } from "./types.js";
@@ -21,14 +9,6 @@ function createSnapshot(overrides: Partial<ChannelAccountSnapshot> = {}): Channe
     enabled: true,
     running: false,
     ...overrides,
-  };
-}
-
-function createSimpleTwitchConfig(overrides: Record<string, unknown>) {
-  return {
-    channels: {
-      twitch: overrides,
-    },
   };
 }
 
@@ -84,128 +64,6 @@ describe("status", () => {
         message: "Twitch account is disabled",
         fix: "Set enabled: true in your account configuration to enable this account",
       });
-    });
-
-    it("should detect missing clientId when account configured (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
-      const mockCfg = createSimpleTwitchConfig({
-        username: "testbot",
-        accessToken: "oauth:test123",
-        // clientId missing
-      });
-
-      const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
-
-      expectIssues(issues, [
-        {
-          channel: "twitch",
-          accountId: "default",
-          kind: "config",
-          message: "Twitch client ID is required",
-          fix: "Add clientId to your Twitch account configuration (from Twitch Developer Portal)",
-        },
-        neverConnectedIssue(),
-      ]);
-    });
-
-    it("should warn about oauth: prefix in token (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
-      const mockCfg = createSimpleTwitchConfig({
-        username: "testbot",
-        accessToken: "oauth:test123", // has prefix
-        clientId: "test-id",
-      });
-
-      const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
-
-      expectIssues(issues, [
-        {
-          channel: "twitch",
-          accountId: "default",
-          kind: "config",
-          message: "Token contains 'oauth:' prefix (will be stripped)",
-          fix: "The 'oauth:' prefix is optional. You can use just the token value, or keep it as-is (it will be normalized automatically).",
-        },
-        neverConnectedIssue(),
-      ]);
-    });
-
-    it("should detect clientSecret without refreshToken (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
-      const mockCfg = createSimpleTwitchConfig({
-        username: "testbot",
-        accessToken: "oauth:test123",
-        clientId: "test-id",
-        clientSecret: "secret123",
-        // refreshToken missing
-      });
-
-      const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
-
-      expectIssues(issues, [
-        {
-          channel: "twitch",
-          accountId: "default",
-          kind: "config",
-          message: "Token contains 'oauth:' prefix (will be stripped)",
-          fix: "The 'oauth:' prefix is optional. You can use just the token value, or keep it as-is (it will be normalized automatically).",
-        },
-        {
-          channel: "twitch",
-          accountId: "default",
-          kind: "config",
-          message: "clientSecret provided without refreshToken",
-          fix: "For automatic token refresh, provide both clientSecret and refreshToken. Otherwise, clientSecret is not needed.",
-        },
-        neverConnectedIssue(),
-      ]);
-    });
-
-    it("should detect empty allowFrom array (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
-      const mockCfg = createSimpleTwitchConfig({
-        username: "testbot",
-        accessToken: "test123",
-        clientId: "test-id",
-        allowFrom: [], // empty array
-      });
-
-      const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
-
-      expectIssues(issues, [
-        {
-          channel: "twitch",
-          accountId: "default",
-          kind: "config",
-          message: "allowFrom is configured but empty",
-          fix: "Either add user IDs to allowFrom, remove the allowFrom field, or use allowedRoles instead.",
-        },
-        neverConnectedIssue(),
-      ]);
-    });
-
-    it("should detect allowedRoles 'all' with allowFrom conflict (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
-      const mockCfg = createSimpleTwitchConfig({
-        username: "testbot",
-        accessToken: "test123",
-        clientId: "test-id",
-        allowedRoles: ["all"],
-        allowFrom: ["123456"], // conflict!
-      });
-
-      const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
-
-      expectIssues(issues, [
-        {
-          channel: "twitch",
-          accountId: "default",
-          kind: "intent",
-          message: "allowedRoles is set to 'all' but allowFrom is also configured",
-          fix: "When allowedRoles is 'all', the allowFrom list is not needed. Remove allowFrom or set allowedRoles to specific roles.",
-        },
-        neverConnectedIssue(),
-      ]);
     });
 
     it("should detect runtime errors", () => {

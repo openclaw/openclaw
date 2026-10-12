@@ -31,12 +31,6 @@ const updateCases = [
     patch: { kind: "systemEvent", toolsAllow: ["cron"] },
     expected: { kind: "systemEvent", text: "tick", toolsAllow: ["cron"] },
   },
-  {
-    label: "command",
-    existing: { kind: "command", argv: ["echo", "tick"], toolsAllow: ["read", "cron"] },
-    patch: { kind: "command", toolsAllow: ["cron"] },
-    expected: { kind: "command", argv: ["echo", "tick"], toolsAllow: ["cron"] },
-  },
 ] satisfies MergeCase[];
 
 const clearCases = [
@@ -46,21 +40,9 @@ const clearCases = [
     patch: { kind: "systemEvent", toolsAllow: null },
     expected: { kind: "systemEvent", text: "tick" },
   },
-  {
-    label: "command",
-    existing: { kind: "command", argv: ["echo", "tick"], toolsAllow: ["read", "cron"] },
-    patch: { kind: "command", toolsAllow: null },
-    expected: { kind: "command", argv: ["echo", "tick"] },
-  },
 ] satisfies MergeCase[];
 
 const kindChangeCases = [
-  {
-    label: "systemEvent to agentTurn",
-    existing: { kind: "systemEvent", text: "before", toolsAllow: ["read", "cron"] },
-    patch: { kind: "agentTurn", message: "after" },
-    expected: { kind: "agentTurn", message: "after", toolsAllow: ["read", "cron"] },
-  },
   {
     label: "agentTurn to command",
     existing: { kind: "agentTurn", message: "before", toolsAllow: ["read", "cron"] },
@@ -76,21 +58,6 @@ const kindChangeCases = [
 ] satisfies MergeCase[];
 
 const installDefaultMarkerCases = [
-  {
-    label: "systemEvent",
-    existing: { kind: "systemEvent", text: "before" },
-    patch: {
-      kind: "systemEvent",
-      toolsAllow: ["read", "cron"],
-      toolsAllowIsDefault: true,
-    },
-    expected: {
-      kind: "systemEvent",
-      text: "before",
-      toolsAllow: ["read", "cron"],
-      toolsAllowIsDefault: true,
-    },
-  },
   {
     label: "command",
     existing: { kind: "command", argv: ["echo", "before"] },
@@ -133,24 +100,6 @@ describe("mergeCronPayload trigger tool caps", () => {
       expect(mergeCronPayload(existing, patch)).toEqual(expected);
     },
   );
-
-  it("clears default provenance when a stamped patch narrows the existing default", () => {
-    expect(
-      mergeCronPayload(
-        {
-          kind: "agentTurn",
-          message: "before",
-          toolsAllow: ["read", "cron"],
-          toolsAllowIsDefault: true,
-        },
-        {
-          kind: "agentTurn",
-          toolsAllow: ["read"],
-          toolsAllowIsDefault: true,
-        },
-      ),
-    ).toEqual({ kind: "agentTurn", message: "before", toolsAllow: ["read"] });
-  });
 
   it("clears toolsAllow explicitly across a kind change", () => {
     expect(

@@ -1,11 +1,9 @@
-// Bootstrap extra files hook injects configured extra files into startup context.
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { isAgentBootstrapEvent, type HookHandler } from "../../hooks.js";
 import { loadDeclaredExtraBootstrapFiles } from "./declared-files.js";
 
 const log = createSubsystemLogger("bootstrap-extra-files");
 
-/** Agent-bootstrap hook that appends configured extra files to the session bootstrap set. */
 const bootstrapExtraFilesHook: HookHandler = async (event) => {
   if (!isAgentBootstrapEvent(event)) {
     return;

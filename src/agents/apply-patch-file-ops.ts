@@ -61,71 +61,65 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
   const assertCurrent = captureAgentToolSourceExecutionGuard(options.signal);
   if (options.sandbox) {
     const { root, bridge } = options.sandbox;
-    return withPatchMemoryWriteProvenance({
-      observer: options.memoryWriteProvenance,
-      operations: {
-        readFile: async (filePath) => {
-          const buf = await bridge.readFile({ filePath, cwd: root });
-          return decodeUtf8File(buf, filePath);
-        },
-        writeFile: (filePath, content) => {
-          assertCurrent();
-          return bridge.writeFile({ filePath, cwd: root, data: content, signal: options.signal });
-        },
-        createFileExclusive: (filePath, content) => {
-          if (!bridge.createFileExclusive) {
-            throw new Error(
-              "Sandbox filesystem bridge does not support atomic file creation; refusing to overwrite an existing path.",
-            );
-          }
-          assertCurrent();
-          return bridge.createFileExclusive({
-            filePath,
-            cwd: root,
-            data: content,
-            signal: options.signal,
-          });
-        },
-        remove: (filePath) => {
-          assertCurrent();
-          return bridge.remove({ filePath, cwd: root, force: false, signal: options.signal });
-        },
-        mkdirp: (dir) => {
-          assertCurrent();
-          return bridge.mkdirp({ filePath: dir, cwd: root, signal: options.signal });
-        },
+    return withPatchMemoryWriteProvenance(options.memoryWriteProvenance, {
+      readFile: async (filePath) => {
+        const buf = await bridge.readFile({ filePath, cwd: root });
+        return decodeUtf8File(buf, filePath);
+      },
+      writeFile: (filePath, content) => {
+        assertCurrent();
+        return bridge.writeFile({ filePath, cwd: root, data: content, signal: options.signal });
+      },
+      createFileExclusive: (filePath, content) => {
+        if (!bridge.createFileExclusive) {
+          throw new Error(
+            "Sandbox filesystem bridge does not support atomic file creation; refusing to overwrite an existing path.",
+          );
+        }
+        assertCurrent();
+        return bridge.createFileExclusive({
+          filePath,
+          cwd: root,
+          data: content,
+          signal: options.signal,
+        });
+      },
+      remove: (filePath) => {
+        assertCurrent();
+        return bridge.remove({ filePath, cwd: root, force: false, signal: options.signal });
+      },
+      mkdirp: (dir) => {
+        assertCurrent();
+        return bridge.mkdirp({ filePath: dir, cwd: root, signal: options.signal });
       },
     });
   }
 
   if (options.workspaceOnly === false) {
-    return withPatchMemoryWriteProvenance({
-      observer: options.memoryWriteProvenance,
-      operations: {
-        readFile: async (filePath) => decodeUtf8File(await fs.readFile(filePath), filePath),
-        writeFile: async (filePath, content) => {
-          await writeHostFile(filePath, content, options.signal);
-        },
-        createFileExclusive: async (filePath, content) => {
-          try {
-            assertCurrent();
-            await fs.writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
-            return "created";
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-              return "exists";
-            }
-            throw error;
+    return withPatchMemoryWriteProvenance(options.memoryWriteProvenance, {
+      readFile: async (filePath) => decodeUtf8File(await fs.readFile(filePath), filePath),
+      writeFile: async (filePath, content) => {
+        await writeHostFile(filePath, content, options.signal);
+      },
+      createFileExclusive: async (filePath, content) => {
+        try {
+          assertCurrent();
+          await fs.writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
+          return "created";
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+            return "exists";
           }
-        },
-        remove: (filePath) => {
-          assertCurrent();
-          return fs.rm(filePath);
-        },
-        mkdirp: async (dir) => {
-          assertCurrent();
-          await fs.mkdir(dir, { recursive: true });
-        },
+          throw error;
+        }
+      },
+      remove: (filePath) => {
+        assertCurrent();
+        return fs.rm(filePath);
+      },
+      mkdirp: async (dir) => {
+        assertCurrent();
+        await fs.mkdir(dir, { recursive: true });
       },
     });
   }
@@ -136,55 +130,52 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
   // absolute paths keep a literal "~" component from becoming home expansion.
   const toRootPath = (filePath: string) =>
     path.resolve(root.rootReal, toRelativeSandboxPath(root.rootDir, filePath));
-  return withPatchMemoryWriteProvenance({
-    observer: options.memoryWriteProvenance,
-    operations: {
-      readFile: async (filePath) => {
-        const opened = await openRootFile({
-          absolutePath: filePath,
-          rootPath: containmentRoot,
-          boundaryLabel: "workspace root",
-          symlinks: "follow-parents-within-root",
+  return withPatchMemoryWriteProvenance(options.memoryWriteProvenance, {
+    readFile: async (filePath) => {
+      const opened = await openRootFile({
+        absolutePath: filePath,
+        rootPath: containmentRoot,
+        boundaryLabel: "workspace root",
+        symlinks: "follow-parents-within-root",
+      });
+      assertBoundaryRead(opened, filePath);
+      try {
+        return decodeUtf8File(syncFs.readFileSync(opened.fd), filePath);
+      } finally {
+        syncFs.closeSync(opened.fd);
+      }
+    },
+    writeFile: async (filePath, content) => {
+      assertCurrent();
+      await root
+        .write(toRootPath(filePath), content, {
+          encoding: "utf8",
+          mutationSymlinks: "follow-parents-within-root",
+        })
+        .catch(rethrowHostMutationError);
+    },
+    createFileExclusive: async (filePath, content) => {
+      try {
+        assertCurrent();
+        await root.create(toRootPath(filePath), content, {
+          encoding: "utf8",
+          mutationSymlinks: "reject",
         });
-        assertBoundaryRead(opened, filePath);
-        try {
-          return decodeUtf8File(syncFs.readFileSync(opened.fd), filePath);
-        } finally {
-          syncFs.closeSync(opened.fd);
+        return "created";
+      } catch (error) {
+        if (error instanceof FsSafeError && error.code === "already-exists") {
+          return "exists";
         }
-      },
-      writeFile: async (filePath, content) => {
-        assertCurrent();
-        await root
-          .write(toRootPath(filePath), content, {
-            encoding: "utf8",
-            mutationSymlinks: "follow-parents-within-root",
-          })
-          .catch(rethrowHostMutationError);
-      },
-      createFileExclusive: async (filePath, content) => {
-        try {
-          assertCurrent();
-          await root.create(toRootPath(filePath), content, {
-            encoding: "utf8",
-            mutationSymlinks: "reject",
-          });
-          return "created";
-        } catch (error) {
-          if (error instanceof FsSafeError && error.code === "already-exists") {
-            return "exists";
-          }
-          return rethrowHostMutationError(error);
-        }
-      },
-      remove: async (filePath) => {
-        assertCurrent();
-        // remove requires a relative path; "./" preserves literal tilde names.
-        // Omitted mutationSymlinks lets it unlink the final symlink itself.
-        await root
-          .remove(`./${toRelativeSandboxPath(root.rootDir, filePath)}`)
-          .catch(rethrowHostMutationError);
-      },
+        return rethrowHostMutationError(error);
+      }
+    },
+    remove: async (filePath) => {
+      assertCurrent();
+      // remove requires a relative path; "./" preserves literal tilde names.
+      // Omitted mutationSymlinks lets it unlink the final symlink itself.
+      await root
+        .remove(`./${toRelativeSandboxPath(root.rootDir, filePath)}`)
+        .catch(rethrowHostMutationError);
     },
   });
 }
@@ -207,20 +198,19 @@ function rethrowHostMutationError(error: unknown): never {
 
 class PatchCreateExistsSignal extends Error {}
 
-function withPatchMemoryWriteProvenance(params: {
-  operations: PatchFileOps;
-  observer: MemoryWriteProvenanceObserver | undefined;
-}): PatchFileOps {
-  const observer = params.observer;
-  const operations = withMemoryWriteProvenance(params.operations, observer);
+function withPatchMemoryWriteProvenance(
+  observer: MemoryWriteProvenanceObserver | undefined,
+  operations: PatchFileOps,
+): PatchFileOps {
+  const observedOperations = withMemoryWriteProvenance(operations, observer);
   if (!observer) {
-    return operations;
+    return observedOperations;
   }
   return {
-    ...operations,
+    ...observedOperations,
     createFileExclusive: async (filePath, content) => {
       if (!(await observer.classifies(filePath))) {
-        return params.operations.createFileExclusive(filePath, content);
+        return operations.createFileExclusive(filePath, content);
       }
       try {
         await observer.write({
@@ -228,7 +218,7 @@ function withPatchMemoryWriteProvenance(params: {
           contentBefore: "",
           contentAfter: content,
           commit: async () => {
-            if ((await params.operations.createFileExclusive(filePath, content)) === "exists") {
+            if ((await operations.createFileExclusive(filePath, content)) === "exists") {
               throw new PatchCreateExistsSignal();
             }
           },

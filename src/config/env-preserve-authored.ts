@@ -1,80 +1,57 @@
 import { isDeepStrictEqual } from "node:util";
 import { isPlainObject } from "../infra/plain-object.js";
-import { containsEnvVarReference } from "./env-substitution.js";
+import {
+  containsEnvVarReference,
+  scanEnvTemplateTokens,
+  type EnvTemplateToken,
+} from "./env-substitution.js";
 
-const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
-
-type AuthoredEnvRef = { kind: "escaped" | "unescaped"; name: string };
-
-function collectAuthoredEnvRefs(value: string): AuthoredEnvRef[] {
-  const refs: AuthoredEnvRef[] = [];
-  for (let index = 0; index < value.length; index += 1) {
-    if (value[index] !== "$") {
-      continue;
-    }
-    const isEscaped = value[index + 1] === "$" && value[index + 2] === "{";
-    const nameStart = index + (isEscaped ? 3 : 2);
-    if (!isEscaped && value[index + 1] !== "{") {
-      continue;
-    }
-    const nameEnd = value.indexOf("}", nameStart);
-    if (nameEnd === -1 || !ENV_VAR_NAME_PATTERN.test(value.slice(nameStart, nameEnd))) {
-      continue;
-    }
-    refs.push({
-      kind: isEscaped ? "escaped" : "unescaped",
-      name: value.slice(nameStart, nameEnd),
-    });
-    index = nameEnd;
+function containsAuthoredEnvTemplate(value: unknown, matches: (value: string) => boolean): boolean {
+  if (typeof value === "string") {
+    return matches(value);
   }
-  return refs;
-}
-
-function hasEscapedEnvVarRef(value: string): boolean {
-  return collectAuthoredEnvRefs(value).some((ref) => ref.kind === "escaped");
+  const children = Array.isArray(value) ? value : isPlainObject(value) ? Object.values(value) : [];
+  return children.some((item) => containsAuthoredEnvTemplate(item, matches));
 }
 
 export function containsAuthoredUnescapedEnvTemplate(value: unknown): boolean {
-  if (typeof value === "string") {
-    return containsEnvVarReference(value);
-  }
-  if (Array.isArray(value)) {
-    return value.some((item) => containsAuthoredUnescapedEnvTemplate(item));
-  }
-  if (isPlainObject(value)) {
-    return Object.values(value).some((item) => containsAuthoredUnescapedEnvTemplate(item));
-  }
-  return false;
+  return containsAuthoredEnvTemplate(value, containsEnvVarReference);
 }
 
 export function containsAuthoredEscapedEnvTemplate(value: unknown): boolean {
-  if (typeof value === "string") {
-    return hasEscapedEnvVarRef(value);
-  }
-  if (Array.isArray(value)) {
-    return value.some((item) => containsAuthoredEscapedEnvTemplate(item));
-  }
-  if (isPlainObject(value)) {
-    return Object.values(value).some((item) => containsAuthoredEscapedEnvTemplate(item));
-  }
-  return false;
+  return containsAuthoredEnvTemplate(value, (text) =>
+    scanEnvTemplateTokens(text).some((ref) => ref.kind === "escaped"),
+  );
 }
 
+function addEnvRefCounts(
+  countsByName: Map<string, Map<string, number>>,
+  value: string,
+  kind: EnvTemplateToken["kind"],
+  path: string[],
+): void {
+  for (const ref of scanEnvTemplateTokens(value)) {
+    if (ref.kind === kind) {
+      const pathCounts = countsByName.get(ref.name) ?? new Map<string, number>();
+      const pathKey = JSON.stringify(path);
+      pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1);
+      countsByName.set(ref.name, pathCounts);
+    }
+  }
+}
+
+/**
+ * Keyed by bare variable name: `${VAR}` and `${VAR:-x}` are one identity, so changing
+ * an authored `$${VAR}` literal into either active reference is rejected.
+ */
 function countAuthoredEnvRefsByPath(
   value: unknown,
-  kind: AuthoredEnvRef["kind"],
+  kind: EnvTemplateToken["kind"],
 ): Map<string, Map<string, number>> {
   const countsByName = new Map<string, Map<string, number>>();
   const visit = (item: unknown, path: string[]) => {
     if (typeof item === "string") {
-      for (const ref of collectAuthoredEnvRefs(item)) {
-        if (ref.kind === kind) {
-          const pathCounts = countsByName.get(ref.name) ?? new Map<string, number>();
-          const pathKey = JSON.stringify(path);
-          pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1);
-          countsByName.set(ref.name, pathCounts);
-        }
-      }
+      addEnvRefCounts(countsByName, item, kind, path);
       return;
     }
     if (Array.isArray(item)) {
@@ -105,14 +82,7 @@ function countResolvedActiveEnvRefsByPath(
       if (!isDeepStrictEqual(incomingItem, resolvedItem)) {
         return;
       }
-      for (const ref of collectAuthoredEnvRefs(parsedItem)) {
-        if (ref.kind === "unescaped") {
-          const pathCounts = countsByName.get(ref.name) ?? new Map<string, number>();
-          const pathKey = JSON.stringify(path);
-          pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1);
-          countsByName.set(ref.name, pathCounts);
-        }
-      }
+      addEnvRefCounts(countsByName, parsedItem, "substitution", path);
       return;
     }
     if (Array.isArray(incomingItem) && Array.isArray(parsedItem) && Array.isArray(resolvedItem)) {
@@ -137,9 +107,10 @@ export function containsUnaccountedActiveEscapedEnvRef(
   matchedIncoming: unknown,
   matchedParsed: unknown,
   matchedResolved: unknown,
+  explicitSetPaths?: readonly (readonly string[])[],
 ): boolean {
   const escapedCounts = countAuthoredEnvRefsByPath(escapedParsed, "escaped");
-  const incomingActiveCounts = countAuthoredEnvRefsByPath(incoming, "unescaped");
+  const incomingActiveCounts = countAuthoredEnvRefsByPath(incoming, "substitution");
   const incomingEscapedCounts = countAuthoredEnvRefsByPath(incoming, "escaped");
   const matchedActiveCounts = countResolvedActiveEnvRefsByPath(
     matchedIncoming,
@@ -147,20 +118,32 @@ export function containsUnaccountedActiveEscapedEnvRef(
     matchedResolved,
   );
   const matchedEscapedCounts = countAuthoredEnvRefsByPath(matchedParsed, "escaped");
-  return [...escapedCounts].some(
-    ([name, escapedPathCounts]) =>
+  return [...escapedCounts].some(([name, escapedPathCounts]) => {
+    const isExplicitActivation = (path: string) => {
+      if (!escapedPathCounts.has(path) || !explicitSetPaths?.length) {
+        return false;
+      }
+      const segments: string[] = JSON.parse(path);
+      return explicitSetPaths.some((supplied) =>
+        supplied.every((segment, index) => segments[index] === segment),
+      );
+    };
+    return (
       [...(incomingActiveCounts.get(name) ?? new Map())].some(
-        ([path, count]) => count > (matchedActiveCounts.get(name)?.get(path) ?? 0),
+        ([path, count]) =>
+          !isExplicitActivation(path) && count > (matchedActiveCounts.get(name)?.get(path) ?? 0),
       ) ||
       [...escapedPathCounts.keys()].some((path) => {
         const incomingActiveCount = incomingActiveCounts.get(name)?.get(path) ?? 0;
         return (
+          !isExplicitActivation(path) &&
           incomingActiveCount > 0 &&
           (incomingEscapedCounts.get(name)?.get(path) ?? 0) <
             (matchedEscapedCounts.get(name)?.get(path) ?? 0)
         );
-      }),
-  );
+      })
+    );
+  });
 }
 
 export function preservesAuthoredEscapedEnvRefs(incoming: unknown, parsed: unknown): boolean {

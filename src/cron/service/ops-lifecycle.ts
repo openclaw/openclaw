@@ -1,5 +1,12 @@
 import { isAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
-import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
+import { SqliteWorkerAdmissionTimeoutError } from "../../infra/sqlite-worker-contract.js";
+import {
+  beginGatewayRootWorkAdmissionWhenOpen,
+  GatewayDrainingError,
+} from "../../process/gateway-work-admission.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import type { CronRunRecoveryProposal } from "../store/run-recovery-read.types.js";
+import type { CronRunRecoveryResult, InterruptedStartupRun } from "../store/run-recovery.types.js";
 import {
   configureForeignReceiptMonitor,
   enrollForeignReceipt,
@@ -11,28 +18,22 @@ import {
 } from "./foreign-receipt-monitor.js";
 import { nextWakeAtMs } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
-import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
+import { stopCronRunQueue, drainCronRunQueue, waitForCronRunQueue } from "./run-queue.js";
 import { emitInterruptedCronRun } from "./run-recovery-events.js";
-import {
-  proposeCronRunRecovery,
-  recomputeUnownedCronSchedules,
-  recoverCronRunProposal,
-  type CronRunRecoveryProposal,
-  type CronRunRecoveryResult,
-} from "./run-recovery.js";
-import { applyCronRuntimeRowsToState } from "./runtime-store.js";
-import type { InterruptedStartupRun } from "./startup-run-repair.js";
+import { recoverCronRunProposals } from "./run-recovery.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
+import { MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
 import { armTimer, runMissedJobs, stopTimer } from "./timer.js";
 
-function applyRecoveryResult(params: {
+async function applyRecoveryResult(params: {
   state: CronServiceState;
   proposal: CronRunRecoveryProposal;
   result: CronRunRecoveryResult;
   interruptedRuns: InterruptedStartupRun[];
   skipJobIds?: Set<string>;
-}): boolean {
+}): Promise<boolean> {
   const { state, proposal, result } = params;
   if (result.kind === "live") {
     enrollForeignReceipt(state, result.receipt);
@@ -49,7 +50,7 @@ function applyRecoveryResult(params: {
     return true;
   }
   removeForeignReceipt(state, proposal.jobId);
-  runPostPersistCronNotifications(state, result.notifications);
+  await runPostPersistCronNotifications(state, result.notifications);
   if (result.interrupted) {
     params.interruptedRuns.push(result.interrupted);
   }
@@ -66,27 +67,30 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
     if (state.stopped) {
       return;
     }
-    for (const receipt of listForeignReceipts(state)) {
+    const proposals = listForeignReceipts(state).map((receipt): CronRunRecoveryProposal => {
       const job = state.store?.jobs.find((entry) => entry.id === receipt.jobId);
-      const proposal: CronRunRecoveryProposal = {
+      return {
         jobId: receipt.jobId,
-        ...(job?.state.queuedAtMs !== undefined ? { queuedAtMs: job.state.queuedAtMs } : {}),
-        ...(job?.state.runningAtMs !== undefined ? { runningAtMs: job.state.runningAtMs } : {}),
+        queuedAtMs: job?.state.queuedAtMs,
+        runningAtMs: job?.state.runningAtMs,
         runningReceiptId: job?.state.runningReceiptId,
         receipt,
       };
-      schedulingChanged =
-        applyRecoveryResult({
-          state,
-          proposal,
-          result: recoverCronRunProposal(state, proposal),
-          interruptedRuns,
-        }) || schedulingChanged;
-    }
-    if (schedulingChanged) {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      for (const interrupted of interruptedRuns) {
-        emitInterruptedCronRun(state, interrupted);
+    });
+    try {
+      await recoverCronRunProposals(state, proposals, {
+        async onRecovery(proposal, result) {
+          schedulingChanged =
+            (await applyRecoveryResult({ state, proposal, result, interruptedRuns })) ||
+            schedulingChanged;
+        },
+      });
+    } finally {
+      if (schedulingChanged) {
+        await ensureLoaded(state, { forceReload: true });
+        for (const interrupted of interruptedRuns) {
+          await emitInterruptedCronRun(state, interrupted);
+        }
       }
     }
   });
@@ -108,33 +112,49 @@ export async function waitForRunSettlement(
         if (signal.aborted || state.stopped || state.lifecycleGeneration !== generation) {
           return { settled: false };
         }
-        await ensureLoaded(state, { skipRecompute: true });
+        await ensureLoaded(state);
         if (signal.aborted || state.stopped || state.lifecycleGeneration !== generation) {
           return { settled: false };
         }
         const job = state.store?.jobs.find((entry) => entry.id === jobId);
-        const proposal = await proposeCronRunRecovery(
-          state,
+        const proposal: CronRunRecoveryProposal = {
           jobId,
-          job?.state.queuedAtMs,
-          job?.state.runningAtMs,
-        );
-        if (signal.aborted || state.stopped || state.lifecycleGeneration !== generation) {
-          return { settled: false };
-        }
-        const recovery = recoverCronRunProposal(state, proposal);
+          queuedAtMs: job?.state.queuedAtMs,
+          runningAtMs: job?.state.runningAtMs,
+        };
+        let recovery: CronRunRecoveryResult | undefined;
+        let changed = false;
         const interruptedRuns: InterruptedStartupRun[] = [];
-        const changed = applyRecoveryResult({ state, proposal, result: recovery, interruptedRuns });
-        if (changed) {
-          await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-          for (const interrupted of interruptedRuns) {
-            emitInterruptedCronRun(state, interrupted);
-          }
-          if (state.schedulerStarted) {
-            armTimer(state);
+        try {
+          await recoverCronRunProposals(state, [proposal], {
+            signal,
+            async onRecovery(observed, recovered) {
+              recovery = recovered;
+              changed = await applyRecoveryResult({
+                state,
+                proposal: observed,
+                result: recovered,
+                interruptedRuns,
+              });
+            },
+          });
+        } finally {
+          if (changed) {
+            await ensureLoaded(state, { forceReload: true });
+            for (const interrupted of interruptedRuns) {
+              await emitInterruptedCronRun(state, interrupted);
+            }
+            if (state.schedulerStarted) {
+              armTimer(state);
+            }
           }
         }
-        if (signal.aborted || state.stopped || state.lifecycleGeneration !== generation) {
+        if (
+          !recovery ||
+          signal.aborted ||
+          state.stopped ||
+          state.lifecycleGeneration !== generation
+        ) {
           return { settled: false };
         }
         if (recovery.kind === "repaired" || !recovery.receipt) {
@@ -161,6 +181,75 @@ export async function waitForRunSettlement(
 
 /** Starts the cron service, atomically repairs abandoned runs, and arms scheduling. */
 export async function start(state: CronServiceState): Promise<void> {
+  const generation = state.lifecycleGeneration;
+  try {
+    await startOnce(state);
+  } catch (error) {
+    if (!(error instanceof SqliteWorkerAdmissionTimeoutError)) {
+      throw error;
+    }
+    if (state.stopped || state.lifecycleGeneration !== generation) {
+      return;
+    }
+    state.deps.log.warn({ err: String(error) }, "cron: startup admission delayed; retrying later");
+    stopTimer(state);
+    // Recovery must retain startup semantics for interrupted one-shots until it completes.
+    const retry = {};
+    state.startupCatchup = retry;
+    const scheduler = state.schedulerScope;
+    scheduler.schedule({
+      id: `cron:${state.deps.storePath}:startup`,
+      delayMs: MIN_REFIRE_GAP_MS,
+      run: async () => {
+        if (
+          state.stopped ||
+          state.lifecycleGeneration !== generation ||
+          state.startupCatchup !== retry
+        ) {
+          return;
+        }
+        await runInDetachedAsyncContext(async () => {
+          let admission;
+          try {
+            admission = await beginGatewayRootWorkAdmissionWhenOpen(
+              "cron:startup-retry",
+              scheduler.signal,
+            );
+          } catch (admissionError) {
+            if (
+              admissionError instanceof GatewayDrainingError ||
+              (scheduler.signal.aborted && isAbortError(admissionError))
+            ) {
+              return;
+            }
+            throw admissionError;
+          }
+          try {
+            if (
+              state.stopped ||
+              state.lifecycleGeneration !== generation ||
+              state.startupCatchup !== retry
+            ) {
+              return;
+            }
+            state.startupCatchup = undefined;
+            const resume = () => start(state);
+            await admission.run(() =>
+              state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(resume) : resume(),
+            );
+          } finally {
+            admission.release();
+          }
+        });
+      },
+    });
+  }
+}
+
+async function startOnce(state: CronServiceState): Promise<void> {
+  if (state.schedulerScope.signal.aborted) {
+    state.schedulerScope = state.deps.scheduler.scope();
+  }
   state.stopped = false;
   const generation = state.lifecycleGeneration;
   stopForeignReceiptMonitor(state);
@@ -173,88 +262,82 @@ export async function start(state: CronServiceState): Promise<void> {
   const skipJobIds = new Set<string>();
   await locked(state, async () => {
     const interruptedRuns: InterruptedStartupRun[] = [];
-    await ensureLoaded(state, { skipRecompute: true });
-    if (state.stopped) {
+    await ensureLoaded(state);
+    if (state.stopped || state.lifecycleGeneration !== generation) {
       return;
-    }
-    if (state.deps.legacyDefaultAgentId) {
-      const rewritten = await materializeLegacyDefaultCronJobOwners({
-        storePath: state.deps.storePath,
-        legacyDefaultAgentId: state.deps.legacyDefaultAgentId,
-      });
-      if (rewritten > 0) {
-        state.deps.log.info(
-          { storePath: state.deps.storePath, rewritten },
-          "cron: assigned legacy jobs to the retained owner",
-        );
-        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      }
     }
     const proposals: CronRunRecoveryProposal[] = [];
     for (const job of state.store?.jobs ?? []) {
-      job.state ??= {};
-      if (typeof job.state.queuedAtMs === "number") {
-        proposals.push(
-          await proposeCronRunRecovery(state, job.id, job.state.queuedAtMs, undefined),
-        );
-        if (state.stopped || state.lifecycleGeneration !== generation) {
-          return;
-        }
-      }
-      if (typeof job.state.runningAtMs === "number") {
-        proposals.push(
-          await proposeCronRunRecovery(state, job.id, undefined, job.state.runningAtMs),
-        );
-        if (state.stopped || state.lifecycleGeneration !== generation) {
-          return;
-        }
-      }
-    }
-    for (const proposal of proposals) {
-      applyRecoveryResult({
-        state,
-        proposal,
-        result: recoverCronRunProposal(state, proposal, "startup"),
-        interruptedRuns,
-        skipJobIds,
+      proposals.push({
+        jobId: job.id,
+        queuedAtMs: job.state.queuedAtMs,
+        runningAtMs: job.state.runningAtMs,
       });
     }
-    if (proposals.length > 0) {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-    }
-    // Publish committed interruptions before a replacement can start catch-up.
-    for (const interrupted of interruptedRuns) {
-      emitInterruptedCronRun(state, interrupted);
+    try {
+      await recoverCronRunProposals(state, proposals, {
+        mode: "startup",
+        async onRecovery(proposal, result) {
+          await applyRecoveryResult({ state, proposal, result, interruptedRuns, skipJobIds });
+        },
+      });
+    } finally {
+      if (proposals.length > 0) {
+        await ensureLoaded(state, { forceReload: true });
+      }
+      // Publish committed interruptions before a replacement can start catch-up.
+      for (const interrupted of interruptedRuns) {
+        await emitInterruptedCronRun(state, interrupted);
+      }
     }
     if (state.stopped || state.lifecycleGeneration !== generation) {
       return;
     }
     if (listForeignReceipts(state).length > 0) {
-      const maintenance = recomputeUnownedCronSchedules(state);
-      runPostPersistCronNotifications(state, maintenance.notifications);
-      if (maintenance.changed) {
-        applyCronRuntimeRowsToState(state, maintenance.jobs);
-      }
+      await recomputeUnownedCronSchedules(state);
     }
   });
 
   if (state.stopped || state.lifecycleGeneration !== generation) {
     return;
   }
-  await runMissedJobs(state, {
-    skipJobIds: skipJobIds.size > 0 ? skipJobIds : undefined,
-    deferAgentWork: true,
-  });
+  try {
+    await drainCronRunQueue(state);
+    await runMissedJobs(state, {
+      skipJobIds: skipJobIds.size > 0 ? skipJobIds : undefined,
+      deferAgentWork: true,
+    });
+  } catch (err) {
+    if (err instanceof SqliteWorkerAdmissionTimeoutError) {
+      throw err;
+    }
+    // Catch-up releases its timer fence even when a terminal write fails.
+    // Keep future jobs live without hiding that failure from the caller.
+    if (!state.stopped && state.lifecycleGeneration === generation) {
+      state.schedulerStarted = true;
+      try {
+        armTimer(state);
+        resumeForeignReceiptMonitor(state);
+      } catch (armError) {
+        state.deps.log.warn(
+          { err: String(armError) },
+          "cron: failed to arm scheduling after startup catch-up failed",
+        );
+      }
+    }
+    throw err;
+  }
 
   await locked(state, async () => {
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-    if (state.stopped) {
+    await ensureLoaded(state, { forceReload: true });
+    if (state.stopped || state.lifecycleGeneration !== generation) {
       return;
     }
     if (listForeignReceipts(state).length === 0) {
-      const maintenance = recomputeUnownedCronSchedules(state, { recomputeExpired: true });
-      runPostPersistCronNotifications(state, maintenance.notifications);
-      applyCronRuntimeRowsToState(state, maintenance.jobs);
+      await recomputeUnownedCronSchedules(state, { recomputeExpired: true });
+    }
+    if (state.stopped || state.lifecycleGeneration !== generation) {
+      return;
     }
     armTimer(state);
     resumeForeignReceiptMonitor(state);
@@ -273,7 +356,18 @@ export async function start(state: CronServiceState): Promise<void> {
 export function stop(state: CronServiceState) {
   state.lifecycleGeneration += 1;
   state.stopped = true;
-  cancelCronRunAdmissionWaiters(state);
+  // stop() closes admission synchronously; only external drain callers join it.
+  state.schedulerDrain = Promise.all([state.schedulerDrain, state.schedulerScope.stop()]).then(
+    () => undefined,
+  );
+  const cancel = stopCronRunQueue(state).catch((error: unknown) =>
+    state.deps.log.warn({ err: String(error) }, "cron: stopped queue left for recovery"),
+  );
+  state.schedulerDrain = Promise.all([
+    state.schedulerDrain,
+    cancel,
+    waitForCronRunQueue(state),
+  ]).then(() => undefined);
   state.schedulerStarted = false;
   stopForeignReceiptMonitor(state);
   stopTimer(state);
@@ -298,6 +392,7 @@ export function resumeScheduling(state: CronServiceState) {
   try {
     armTimer(state);
     resumeForeignReceiptMonitor(state);
+    void drainCronRunQueue(state);
   } catch (err) {
     state.schedulingPaused = true;
     stopTimer(state);

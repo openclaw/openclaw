@@ -1,8 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { fetchCopilotUsage } from "./usage.js";
 
 function registerProvider() {
   const registerProviderMock = vi.fn<OpenClawPluginApi["registerProvider"]>();
@@ -17,16 +19,6 @@ describe("GitHub Copilot usage credential routing", () => {
       label: "plain token with configured tenant",
       configuredDomain: "config.ghe.com",
       expectedDomain: "config.ghe.com",
-    },
-    {
-      label: "public OAuth metadata",
-      credentialDomain: "github.com",
-      expectedDomain: "github.com",
-    },
-    {
-      label: "OAuth tenant without provider config",
-      credentialDomain: "account.ghe.com",
-      expectedDomain: "account.ghe.com",
     },
     {
       label: "OAuth tenant before provider config",
@@ -125,5 +117,141 @@ describe("GitHub Copilot usage credential routing", () => {
       }),
     ).rejects.toThrow("Invalid GitHub Copilot legacy OAuth credential metadata");
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("fetchCopilotUsage", () => {
+  it("cancels failed response bodies", async () => {
+    let canceled = false;
+    const body = new ReadableStream({
+      cancel() {
+        canceled = true;
+        throw new Error("stream already closed");
+      },
+    });
+    const mockFetch = createProviderUsageFetch(async () => new Response(body, { status: 500 }));
+
+    const result = await fetchCopilotUsage("token", 5000, mockFetch);
+
+    expect(result.error).toBe("HTTP 500");
+    expect(result.windows).toHaveLength(0);
+    expect(canceled).toBe(true);
+  });
+
+  it("parses premium/chat usage from remaining percentages", async () => {
+    const mockFetch = createProviderUsageFetch(async (_url, init) => {
+      const headers = (init?.headers as Record<string, string> | undefined) ?? {};
+      expect(headers.Authorization).toBe("token token");
+      expect(headers["X-Github-Api-Version"]).toBe("2025-04-01");
+
+      return makeResponse(200, {
+        quota_snapshots: {
+          premium_interactions: { percent_remaining: 20 },
+          chat: { percent_remaining: 75 },
+        },
+        copilot_plan: "pro",
+      });
+    });
+
+    const result = await fetchCopilotUsage("token", 5000, mockFetch);
+
+    expect(result.plan).toBe("pro");
+    expect(result.windows).toEqual([
+      { label: "Premium", usedPercent: 80 },
+      { label: "Chat", usedPercent: 25 },
+    ]);
+  });
+
+  it("defaults missing snapshot values and clamps invalid remaining percentages", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        quota_snapshots: {
+          premium_interactions: { percent_remaining: null },
+          chat: { percent_remaining: 140 },
+        },
+      }),
+    );
+
+    const result = await fetchCopilotUsage("token", 5000, mockFetch);
+
+    expect(result.windows).toEqual([
+      { label: "Premium", usedPercent: 100 },
+      { label: "Chat", usedPercent: 0 },
+    ]);
+    expect(result.plan).toBeUndefined();
+  });
+
+  it("returns an empty window list when quota snapshots are missing", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        copilot_plan: "free",
+      }),
+    );
+
+    const result = await fetchCopilotUsage("token", 5000, mockFetch);
+
+    expect(result).toEqual({
+      provider: "github-copilot",
+      displayName: "Copilot",
+      windows: [],
+      plan: "free",
+    });
+  });
+
+  it.each([
+    ["null", null],
+    ["an array", []],
+  ])("returns an empty window list for a non-object %s payload", async (_label, payload) => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
+
+    const result = await fetchCopilotUsage("token", 5000, mockFetch);
+
+    expect(result).toEqual({
+      provider: "github-copilot",
+      displayName: "Copilot",
+      windows: [],
+      plan: undefined,
+    });
+  });
+
+  it("bounds the usage read and cancels the stream when the body exceeds the JSON byte cap", async () => {
+    // Larger than the shared 16 MiB readProviderJsonResponse cap so the bounded reader cancels the
+    // stream mid-flight; if the cap were removed the unbounded res.json() would buffer the whole body.
+    const ONE_MIB = 1024 * 1024;
+    const TOTAL_CHUNKS = 32; // 32 MiB advertised body, double the cap.
+    const chunk = new Uint8Array(ONE_MIB);
+
+    let bytesPulled = 0;
+    let canceled = false;
+    const makeOversizedJsonResponse = (): Response => {
+      let pulled = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (pulled >= TOTAL_CHUNKS) {
+            controller.close();
+            return;
+          }
+          pulled += 1;
+          bytesPulled += chunk.length;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          canceled = true;
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const mockFetch = createProviderUsageFetch(async () => makeOversizedJsonResponse());
+
+    await expect(fetchCopilotUsage("token", 5000, mockFetch)).rejects.toThrow(
+      /github-copilot-usage: JSON response exceeds/,
+    );
+    // The bounded reader cancels the body and never pulls the full advertised 32 MiB stream.
+    expect(canceled).toBe(true);
+    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
   });
 });

@@ -4,23 +4,16 @@ import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
-import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { withProjectCheckoutLifecycle } from "./project-checkout.js";
-import { registerResolvedProject } from "./project-registration.js";
 import {
-  ensureProjectRegistrySchema,
-  removeProjectCheckoutReferenceInDatabase,
-  type ProjectRegistryIdentity,
-  type ProjectRegistryRecord,
-} from "./project-registry.kernel.js";
+  prepareProjectRegistration,
+  registerPreparedProjectRegistry,
+} from "./project-registration.js";
+import type { ProjectRegistryIdentity, ProjectRegistryRecord } from "./project-registry.types.js";
 
-export type { ProjectRegistryRecord } from "./project-registry.kernel.js";
 export {
   ProjectCheckoutError,
   resolveProjectCheckout,
@@ -51,7 +44,14 @@ export async function registerProjectRegistry(
   input: { path: string; name?: string },
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
 ): Promise<ProjectRegistryRecord> {
-  return await registerResolvedProject({ ...input, source: "registered" }, options);
+  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
+  const context = captureOpenClawStateWorkerContext({ path: options.path, env });
+  const prepared = await prepareProjectRegistration({ ...input, source: "registered" });
+  return await withProjectCheckoutLifecycle(
+    prepared.project.repoRoot,
+    { path: context.admission.databasePath, env },
+    (lease) => registerPreparedProjectRegistry(prepared, lease, context),
+  );
 }
 
 export function listWorkspaceProjects(cfg: OpenClawConfig): ProjectRegistryRecord[] {
@@ -221,37 +221,6 @@ export async function selectStoredProjectRegistry(
   };
 }
 
-export function removeProjectCheckoutReference(
-  project: ProjectRegistryRecord,
-  lease: OpenClawStateLeaseContext,
-  options: OpenClawStateDatabaseOptions = {},
-): "missing" | "changed" | "remaining" | "final" {
-  ensureProjectRegistrySchema(options);
-  return runOpenClawStateWriteTransaction(
-    ({ db: sqlite }) => {
-      lease.assertOwnedInTransaction(sqlite);
-      return removeProjectCheckoutReferenceInDatabase(sqlite, project);
-    },
-    options,
-    { operationLabel: "projects.registry.checkout-reference.remove" },
-  );
-}
-
-export async function resolveProjectCloneRefreshOwner(
-  project: ProjectRegistryIdentity,
-  lease: OpenClawStateLeaseContext,
-  context: OpenClawStateWorkerContext,
-): Promise<ProjectRegistryRecord | undefined> {
-  const { runWithOpenClawStateLeaseWorker } =
-    await import("../state/openclaw-state-worker-store.js");
-  return await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
-    scope.execute({
-      type: "projects.resolveRefreshOwner",
-      input: { project, lease: identity },
-    }),
-  );
-}
-
 export async function resolveRecordedProjectRoot(
   projectPath: string,
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
@@ -285,7 +254,7 @@ export async function removeProjectRegistry(
     { path: context.admission.databasePath, env },
     async (lease) => {
       const { runWithOpenClawStateLeaseWorker } =
-        await import("../state/openclaw-state-worker-store.js");
+        await import("../state/openclaw-state-lease-worker-operation.js");
       return await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
         scope.execute({
           type: "projects.remove",

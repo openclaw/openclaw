@@ -1,12 +1,24 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { githubRepositoryUrl } from "../agents/github-host.js";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
 import { splitNullBuffer } from "../agents/worktrees/git-path-inventory.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
 import { runCommandBuffered } from "../process/exec.js";
-import { githubPublicationUnsafeConfigArgs } from "./github-publication-base.js";
+import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import {
+  githubPublicationUnsafeConfigArgs,
+  parseGitHubPublicationBaseRef,
+} from "./github-publication-base.js";
+import {
+  hasUnapprovedGitHubPublicationWorkflowChanges,
+  isGitHubPublicationWorkflowPath,
+} from "./github-publication-workflows.js";
 
 type GitCommandOptions = {
   cwd?: string;
@@ -14,28 +26,48 @@ type GitCommandOptions = {
   input?: string | Buffer;
   maxOutputBytes?: number;
   beforeRun?: () => void;
+  operation?: GitProcessOperation;
 };
 type GitCommandResult = { code: number | null; stdout: Buffer };
 
+export function githubPublicationApiArgs(
+  endpoint: string,
+  method = "GET",
+  host = "github.com",
+): string[] {
+  return [
+    "gh",
+    "api",
+    "--hostname",
+    host,
+    "--method",
+    method,
+    endpoint,
+    ...(method === "GET" ? [] : ["--input", "-"]),
+  ];
+}
+
 export async function runPublicationCommand(argv: string[], options: GitCommandOptions = {}) {
-  return await withGitNetworkRetry(
-    argv[0] === "git" ? retryableGitNetworkOperation(argv.slice(1)) : undefined,
-    { timeoutMs: 60_000, beforeRun: options.beforeRun },
-    (timeoutMs) =>
-      runCommandBuffered(argv, {
-        ...(options.cwd ? { cwd: options.cwd } : {}),
-        env: {
-          ...(options.env ?? process.env),
-          GIT_NO_REPLACE_OBJECTS: "1",
-          // Pin every command against repository hooks; explicit hook-disabling -c flags stay stronger.
-          GIT_CONFIG_COUNT: "1",
-          GIT_CONFIG_KEY_0: "core.hooksPath",
-          GIT_CONFIG_VALUE_0: os.devNull,
-        },
-        ...(options.input !== undefined ? { input: options.input } : {}),
-        timeoutMs,
-        maxOutputBytes: options.maxOutputBytes ?? 256 * 1024,
-      }),
+  return await withGitProcessOperation(options.operation ?? "publication", () =>
+    withGitNetworkRetry(
+      argv[0] === "git" ? retryableGitNetworkOperation(argv.slice(1)) : undefined,
+      { timeoutMs: 60_000, beforeRun: options.beforeRun },
+      (timeoutMs) =>
+        runCommandBuffered(argv, {
+          ...(options.cwd ? { cwd: options.cwd } : {}),
+          env: {
+            ...(options.env ?? process.env),
+            GIT_NO_REPLACE_OBJECTS: "1",
+            // Pin every command against repository hooks; explicit hook-disabling -c flags stay stronger.
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "core.hooksPath",
+            GIT_CONFIG_VALUE_0: os.devNull,
+          },
+          ...(options.input !== undefined ? { input: options.input } : {}),
+          timeoutMs,
+          maxOutputBytes: options.maxOutputBytes ?? 256 * 1024,
+        }),
+    ),
   );
 }
 
@@ -52,30 +84,93 @@ export async function requirePublicationCommand(
 
 // Guard ordinary steps on both sides of the await. Effects whose observations
 // must survive revocation use the raw transport and record before rechecking.
-export function createGitHubPublicationCommandRunner(assertCurrent?: () => void) {
+export function createGitHubPublicationCommandRunner(
+  assertCurrent?: () => void,
+  gitOperation: GitProcessOperation = "publication",
+) {
   const step = async <T>(operation: () => Promise<T>): Promise<T> => {
     assertCurrent?.();
     const result = await operation();
     assertCurrent?.();
     return result;
   };
-  const run = async (argv: string[], options: GitCommandOptions = {}) => {
-    const result = await runPublicationCommand(argv, { ...options, beforeRun: assertCurrent });
-    assertCurrent?.();
-    return result;
-  };
-  return {
-    step,
-    run,
-    require: async (argv: string[], options: GitCommandOptions = {}) => {
-      const result = await requirePublicationCommand(argv, {
+  const guarded =
+    <T>(command: (argv: string[], options: GitCommandOptions) => Promise<T>) =>
+    async (argv: string[], options: GitCommandOptions = {}): Promise<T> => {
+      const result = await command(argv, {
         ...options,
+        operation: gitOperation,
         beforeRun: assertCurrent,
       });
       assertCurrent?.();
       return result;
-    },
+    };
+  return {
+    step,
+    run: guarded(runPublicationCommand),
+    require: guarded(requirePublicationCommand),
   };
+}
+
+export async function readGitHubPublicationBaseSha(
+  run: ReturnType<typeof createGitHubPublicationCommandRunner>["run"],
+  repository: string,
+  branch: string,
+  host: string,
+  env: NodeJS.ProcessEnv,
+) {
+  const result = await run(
+    [
+      "gh",
+      "api",
+      "--hostname",
+      host,
+      `repos/${repository}/git/ref/heads/${branch}`,
+      "--jq",
+      "{ref: .ref, sha: .object.sha}",
+    ],
+    { env },
+  );
+  if (result.code !== 0) {
+    throw new Error("GitHub publication workspace base branch could not be verified.");
+  }
+  return parseGitHubPublicationBaseRef(result.stdout.toString("utf8"), branch);
+}
+
+export async function requireGitHubPublicationCommit(
+  run: ReturnType<typeof createGitHubPublicationCommandRunner>["run"],
+  repository: string,
+  sha: string,
+  host: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  failure: string,
+) {
+  const result = await run(
+    [
+      ...GITHUB_CREDENTIAL_ARGS,
+      "-c",
+      `core.hooksPath=${os.devNull}`,
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "maintenance.auto=false",
+      "-c",
+      "gc.auto=0",
+      "fetch",
+      "--no-auto-maintenance",
+      "--no-tags",
+      "--no-write-fetch-head",
+      "--recurse-submodules=no",
+      "--",
+      githubRepositoryUrl(repository, host),
+      sha,
+    ],
+    { cwd, env },
+  );
+  if (result.code !== 0) {
+    throw new Error(failure);
+  }
 }
 
 // A recursive tree listing scales with repository size (openclaw itself is
@@ -83,6 +178,66 @@ export function createGitHubPublicationCommandRunner(assertCurrent?: () => void)
 // bound the attribute scan dies as an output-limit "verification" failure on
 // any real repository.
 const TREE_LISTING_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
+
+export async function hasGitHubPublicationWorkflowChanges(params: {
+  cwd: string;
+  comparisonCommit: string;
+  ancestryCommit: string;
+  targetCommit: string;
+  workspaceTree: string;
+  run: typeof runPublicationCommand;
+}): Promise<boolean> {
+  const trees = new Map<string, Promise<Map<string, string>>>();
+  const workflows = (tree: string) =>
+    getOrCreatePromise(trees, tree, async () => {
+      const listing = await params.run(
+        ["git", "ls-tree", "-r", "-z", "--full-tree", tree, "--", ".github/workflows"],
+        { cwd: params.cwd, maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES },
+      );
+      if (listing.code !== 0) {
+        throw new Error("GitHub publication workspace workflows could not be verified.");
+      }
+      const entries = new Map<string, string>();
+      for (const record of listing.stdout.toString("latin1").split("\0").filter(Boolean)) {
+        const tab = record.indexOf("\t");
+        const [mode, , sha] = record.slice(0, tab).split(" ");
+        if (tab < 0 || !mode || !sha) {
+          throw new Error("GitHub publication workspace workflows could not be verified.");
+        }
+        const file = record.slice(tab + 1);
+        if (isGitHubPublicationWorkflowPath(file)) {
+          entries.set(file, mode + ":" + sha);
+        }
+      }
+      return entries;
+    });
+  const [before, accepted] = await Promise.all([
+    workflows(params.comparisonCommit),
+    workflows(params.workspaceTree),
+  ]);
+  return await hasUnapprovedGitHubPublicationWorkflowChanges({
+    before,
+    accepted,
+    readUpstream: async () => {
+      const result = await params.run(
+        ["git", "merge-base", "--all", params.ancestryCommit, params.targetCommit],
+        { cwd: params.cwd },
+      );
+      if (result.code !== 0) {
+        throw new Error("GitHub publication workflow ancestry could not be verified.");
+      }
+      const bases = result.stdout.toString("utf8").trim().split(/\s+/u);
+      if (bases.length !== 1 || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(bases[0]!)) {
+        return undefined;
+      }
+      const [ancestor, target] = await Promise.all([
+        workflows(bases[0]!),
+        workflows(params.targetCommit),
+      ]);
+      return { ancestor, target };
+    },
+  });
+}
 
 export async function assertSafeGitPublicationWorkspace(
   cwd: string,
@@ -148,9 +303,7 @@ async function readOptionalAttributeFile(file: string): Promise<Buffer | undefin
   try {
     return await fs.readFile(file);
   } catch (error) {
-    const code =
-      typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-    if (code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;
@@ -236,24 +389,27 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   cwd: string;
   assertCurrent?: () => void;
 }): Promise<{ sourceHeadCommit: string; sourceIndexTree: string; workspaceTree: string }> {
+  const context = captureOpenClawStateWorkerContext();
   const { withSettledLocalWorkspacePath } =
     await import("./worker-environments/local-workspace-projection.js");
   return await withSettledLocalWorkspacePath(params, async (custody) => {
-    const admittedPaths = await custody?.canonicalPaths();
+    const admittedPaths = await custody?.canonicalPaths?.();
     const bound = {
       ...params,
       assertCurrent: () => {
+        context.admission.assertCurrent();
         params.assertCurrent?.();
         custody?.assertCurrent();
       },
     };
-    const [{ findLiveRegistryWorktreeByPath }, { withManagedWorktreeGit }, { getRuntimeConfig }] =
+    const [{ readLiveRegistryWorktreeByPath }, { withManagedWorktreeGit }, { getRuntimeConfig }] =
       await Promise.all([
-        import("../agents/worktrees/registry.js"),
+        import("../agents/worktrees/registry-read.js"),
         import("../agents/worktrees/checkout-policy.js"),
         import("../config/config.js"),
       ]);
-    const record = findLiveRegistryWorktreeByPath(process.env, params.cwd);
+    const record = await readLiveRegistryWorktreeByPath(context, params.cwd);
+    bound.assertCurrent();
     return record
       ? await withManagedWorktreeGit(
           {
@@ -358,10 +514,47 @@ const GITHUB_CREDENTIAL_ARGS = [
   "credential.helper=!gh auth git-credential",
 ] as const;
 
+export async function readGitHubPublicationCoauthorTrailers(params: {
+  cwd: string;
+  headCommit: string;
+  command: typeof requirePublicationCommand;
+}): Promise<string[]> {
+  const output = await params.command(
+    [
+      "git",
+      "-c",
+      "trailer.separators=:",
+      "-c",
+      "trailer.co-authored-by.key=Co-authored-by",
+      "show",
+      "-s",
+      "--format=%(trailers:key=Co-authored-by,only,unfold)",
+      params.headCommit,
+    ],
+    { cwd: params.cwd },
+  );
+  return output.split(/\r?\n/u);
+}
+
 export function appendGitHubPublicationMessage(base: string, lines: readonly string[]): string {
-  const present = new Set(base.split(/\r?\n/u).map((line) => line.trim()));
-  const missing = lines.filter((line) => !present.has(line));
-  return missing.length > 0 ? `${base.trimEnd()}\n\n${missing.join("\n")}` : base.trimEnd();
+  const footer = [...new Set(lines)].join("\n");
+  return footer ? `${base.trimEnd()}\n\n${footer}` : base.trimEnd();
+}
+
+/** Prepared commits use our terminal credit footer, never matching prose elsewhere in the message. */
+export function hasGitHubPublicationMessageFooter(
+  message: string,
+  coauthorTrailers: readonly string[],
+  publicationMarker: string,
+): boolean {
+  const lines = message.replace(/[\r\n]+$/u, "").split(/\r?\n/u);
+  const separator = lines.lastIndexOf("");
+  if (separator < 1 || lines.at(-1) !== publicationMarker) {
+    return false;
+  }
+  const actual = lines.slice(separator + 1, -1);
+  const expected = new Set(coauthorTrailers);
+  return actual.length === expected.size && [...expected].every((line) => actual.includes(line));
 }
 
 export async function assertGitHubPublicationBranchRef(
@@ -381,6 +574,7 @@ export function githubPublicationPushArgs(
   remote: string,
   headCommit: string,
   branch: string,
+  expectedRemoteHead: string,
 ): string[] {
   return [
     ...GITHUB_CREDENTIAL_ARGS,
@@ -388,6 +582,9 @@ export function githubPublicationPushArgs(
     `core.hooksPath=${os.devNull}`,
     "push",
     "--porcelain",
+    // The executor proves ancestry first. Pin that proof to this exact remote
+    // value (or absence); the lease never substitutes for the fast-forward check.
+    `--force-with-lease=refs/heads/${branch}:${expectedRemoteHead}`,
     "--no-follow-tags",
     "--recurse-submodules=no",
     "--",

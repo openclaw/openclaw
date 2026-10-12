@@ -31,6 +31,9 @@ xAI Responses.
     details.
   </Step>
   <Step title="Configure">
+    Open **Settings → Search** in the Control UI to choose a provider, configure
+    its credentials, and test a search. Or use the CLI:
+
     ```bash
     openclaw configure --section web
     ```
@@ -59,6 +62,41 @@ xAI Responses.
 
   </Step>
 </Steps>
+
+## Search settings
+
+**Settings → Search** separates whether search is enabled from whether a provider
+is configured and working. Choose an agent and model to see the effective search
+route: native search, a managed provider, disabled, or unavailable. For an external
+harness, the page identifies that harness and explains that its search capability
+is determined when a turn starts.
+
+- **Automatic** uses supported native search for the model connection, or the
+  managed provider selected by credential auto-detection.
+- Selecting a managed provider makes that provider available through OpenClaw's
+  `web_search`, including for open-weight models. Provider credentials and options
+  reuse the plugin settings, including compatible custom endpoints and SearXNG
+  instance URLs.
+- **Configured** means credential or setup information is present. It does not
+  prove that the provider accepts the credential or is reachable.
+- **Test search** runs a query through the named managed provider and shows
+  results or an error with latency. It uses the provider's normal account limits
+  and billing. A provider test checks that service; it does not prove an external
+  harness used it. Native search runs inside its model or harness; **Test in chat**
+  opens an unsent chat with the displayed agent and model selected. Ask it to
+  search to verify that route.
+
+Provider setup and search testing require Gateway administrator access. Changes
+use the existing configuration owner; there is no separate search credential store.
+
+When no managed provider is configured, OpenClaw omits `web_search` from the
+agent tool list, including Tool Search and Code Mode catalogs. On turns without
+native search, the agent receives a short setup hint instead. Explicitly disabled
+or policy-denied search does not produce a missing-configuration hint. Configured
+providers with invalid or unavailable credentials keep their normal diagnostics;
+configuration presence is not a health check. Native search and explicitly selected
+key-free providers are unchanged. New tool contexts pick up completed setup; existing
+configured tools continue to read current credentials at execution time.
 
 ## Choosing a provider
 
@@ -200,7 +238,7 @@ true: provider prose (`title`, `snippet`, `siteName`, `content`, citation
 titles, error `message`) is stripped of any pre-existing envelope lines and
 re-wrapped exactly once at the core boundary, so no provider metadata can spoof
 the marker. `query` is always the requested query, citation and result URLs
-must parse as http(s), `published` must be ISO-date shaped, URLs are emitted canonicalized, and a
+must parse as http(s), `published` must be ISO-date shaped, URLs are normalized before output, and a
 payload carrying an `error` key is always reported as `kind: "error"` with the
 raw provider code preserved inside the wrapped message. Raw passthrough
 payloads keep whatever markers the provider set.
@@ -315,7 +353,7 @@ namespace.
 - When `allowedDomains` is set, it restricts both hosted `web_search` and
   managed `web_fetch` on turns where native hosted search is active. Turns
   using a managed search provider are unchanged. Automatic managed search
-  fallback also fails closed if hosted search is unavailable.
+  fallback is also blocked if hosted search is unavailable.
 - Tool-disabled LLM-only runs disable both native and managed search
 - `tools.web.search.enabled: false` disables both managed and native search
 

@@ -7,36 +7,26 @@ import {
   buildRealtimeVoiceSessionInstructions,
   canonicalizeRealtimeVoiceProviderId,
   projectInternalRealtimeVoicePublicConfig,
-  resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync,
   resolveRealtimeVoiceBargeIn,
   resolveRealtimeVoiceInterruptResponseOnInputAudio,
   resolveRealtimeVoiceMinBargeInAudioEndMs,
   resolveRealtimeVoiceSessionPolicy,
-  type RealtimeVoiceProviderConfig,
   type RealtimeVoiceTranscriptEntry,
+  type ResolvedRealtimeVoiceProvider,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { discordRealtimeVoiceSecretOwnerId } from "../secret-config-contract.js";
-import { buildProviderConfigs, buildProviderConfigOverrides } from "./config.js";
 
-function readProviderConfigString(
-  config: RealtimeVoiceProviderConfig,
-  key: string,
-): string | undefined {
-  const value = config[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-/** Resolve the same provider, voice catalog, and policies for initial and replacement connections. */
-export function resolveDiscordRealtimeSpeakerConfig(params: {
+/** Prepare shared provider credentials once before any speaker starts capturing audio. */
+export async function prepareDiscordRealtimeProvider(params: {
   accountId: string;
   agentId: string;
   cfg: OpenClawConfig;
   realtimeConfig: NonNullable<DiscordAccountConfig["voice"]>["realtime"];
   isAgentProxy: boolean;
-  bootstrapContextInstructions?: string;
   voiceOverride?: string;
-  conversationHistory?: readonly RealtimeVoiceTranscriptEntry[];
-}) {
+}): Promise<ResolvedRealtimeVoiceProvider> {
   const { realtimeConfig, isAgentProxy } = params;
   const configuredProviderId = realtimeConfig?.provider?.trim();
   if (configuredProviderId) {
@@ -57,11 +47,16 @@ export function resolveDiscordRealtimeSpeakerConfig(params: {
       );
     }
   }
-  const resolved = resolveConfiguredRealtimeVoiceProvider({
+  const configuredVoice = realtimeConfig?.speakerVoice || realtimeConfig?.speakerVoiceId;
+  const resolved = await resolveConfiguredRealtimeVoiceProviderAsync({
     configuredProviderId: realtimeConfig?.provider,
-    providerConfigs: buildProviderConfigs(realtimeConfig),
+    providerConfigs: { ...realtimeConfig?.providers },
     providerConfigOverrides: {
-      ...buildProviderConfigOverrides(realtimeConfig),
+      ...(realtimeConfig?.model ? { model: realtimeConfig.model } : {}),
+      ...(configuredVoice ? { voice: configuredVoice } : {}),
+      ...(typeof realtimeConfig?.minBargeInAudioEndMs === "number"
+        ? { minBargeInAudioEndMs: realtimeConfig.minBargeInAudioEndMs }
+        : {}),
       ...(params.voiceOverride
         ? { voice: params.voiceOverride, speakerVoice: params.voiceOverride }
         : {}),
@@ -84,13 +79,28 @@ export function resolveDiscordRealtimeSpeakerConfig(params: {
       ),
     noRegisteredProviderMessage: "No configured realtime voice provider registered",
   });
+  return resolved;
+}
+
+/** Build per-speaker policy from the room-owned provider preparation. */
+export function resolveDiscordRealtimeSpeakerConfig(params: {
+  accountId: string;
+  agentId: string;
+  cfg: OpenClawConfig;
+  realtimeConfig: NonNullable<DiscordAccountConfig["voice"]>["realtime"];
+  isAgentProxy: boolean;
+  preparedProvider: ResolvedRealtimeVoiceProvider;
+  bootstrapContextInstructions?: string;
+  conversationHistory?: readonly RealtimeVoiceTranscriptEntry[];
+}) {
+  const { realtimeConfig, isAgentProxy, preparedProvider: resolved } = params;
   assertSecretOwnerAvailable(
     "capability",
     discordRealtimeVoiceSecretOwnerId(params.accountId, resolved.provider.id),
   );
   const capabilities = resolved.capabilities;
   const model =
-    readProviderConfigString(resolved.providerConfig, "model") ?? resolved.provider.defaultModel;
+    normalizeOptionalString(resolved.providerConfig.model) ?? resolved.provider.defaultModel;
   const voices = [
     ...(capabilities?.voices ??
       (model ? capabilities?.voicesByModel?.[model] : undefined) ??
@@ -103,8 +113,8 @@ export function resolveDiscordRealtimeSpeakerConfig(params: {
     config: {
       model,
       voice:
-        readProviderConfigString(resolved.providerConfig, "speakerVoice") ??
-        readProviderConfigString(resolved.providerConfig, "voice"),
+        normalizeOptionalString(resolved.providerConfig.speakerVoice) ??
+        normalizeOptionalString(resolved.providerConfig.voice),
     },
   });
   const selection = {
@@ -173,6 +183,6 @@ export function resolveDiscordRealtimeSpeakerConfig(params: {
     bargeIn,
     minBargeInAudioEndMs,
     resolvedModel: model,
-    resolvedVoice: readProviderConfigString(resolved.providerConfig, "voice"),
+    resolvedVoice: normalizeOptionalString(resolved.providerConfig.voice),
   };
 }

@@ -5,15 +5,18 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
+import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { HostedGatewayStop } from "../../daemon/hosted-stop.js";
 import type { GatewayServer } from "../../gateway/server-public.js";
-import { withTimeout } from "../../infra/fs-safe.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createManagedServiceBoundaryCleanup } from "../../infra/update-managed-service-handoff-process.test-support.js";
+import { updateExecutorEntrypoints } from "../cli-entrypoint.test-support.js";
 import type { UpdateRespawnFixtures } from "./run-loop.test-support.js";
 
 const removeFixturePath = fs.rm;
-const sourceUrl = (file: string) => JSON.stringify(new URL(`../../${file}`, import.meta.url).href);
+const sourceUrl = (key: keyof typeof updateExecutorEntrypoints) =>
+  JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints[key]).href);
 
 export async function startPackageLifecycleStopFixture(params: {
   fixtures: UpdateRespawnFixtures;
@@ -111,7 +114,6 @@ export async function startPackageLifecycleStopFixture(params: {
       });
     },
     async expectHostedPending() {
-      expect(fixtures.captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();
       await expect(host.request("stop", () => {})).resolves.toMatchObject({ ok: false });
       expect(fixtures.hostedStopPrepare).toHaveBeenCalledOnce();
       expect(fixtures.captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();
@@ -221,13 +223,10 @@ export async function observeFixtureHelper(
       if (!closed) {
         throw new Error("fixture helper did not launch");
       }
-      await withTimeout(closed, 15000);
+      await closed;
     },
     async close() {
-      const outcomes = await Promise.allSettled([
-        cleanup(),
-        ...(closed ? [withTimeout(closed, 15000)] : []),
-      ]);
+      const outcomes = await Promise.allSettled([cleanup(), ...(closed ? [closed] : [])]);
       const failures = outcomes.flatMap((outcome) =>
         outcome.status === "rejected" ? [outcome.reason] : [],
       );
@@ -247,21 +246,27 @@ export async function observeFixtureHelper(
   };
 }
 
-export async function writePackageLifecycleFixture(root: string, control: string) {
+export async function writePackageLifecycleFixture(
+  root: string,
+  control: string,
+  receiptEndpoint: string,
+) {
   const bootstrap = `
         import fs from "node:fs/promises";
         import path from "node:path";
-        const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
-        register({ tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))} });
-        const { registerSealedRuntime } = await import(${sourceUrl("infra/sealed-runtime-registry.ts")});
+        if (${sourceUrl("sealedRegistry")}.endsWith(".ts")) {
+          const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
+          register({ tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))} });
+        }
+        const { registerSealedRuntime } = await import(${sourceUrl("sealedRegistry")});
         registerSealedRuntime({ json5: undefined, resolveSecureTempRoot: () => ${JSON.stringify(control)} });
       `;
   await fs.writeFile(
     path.join(root, "dist", "cli", "daemon-cli.js"),
     `${bootstrap}
-        const ledger = await import(${sourceUrl("infra/update-run-ledger.ts")});
+        const ledger = await import(${sourceUrl("ledger")});
         export const { adoptUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunStep, recordUpdateRunVerification } = ledger;
-        const handoff = await import(${sourceUrl("infra/update-managed-service-handoff.ts")});
+        const handoff = await import(${sourceUrl("handoff")});
         export const { assertForegroundUpdateOrigin } = handoff;
         `,
   );
@@ -273,12 +278,12 @@ export async function writePackageLifecycleFixture(root: string, control: string
         if (process.argv[2] === "triage") {
           process.stdout.write(JSON.stringify({ diagnostic: "isolated lifecycle fixture" }));
         } else {
-          const handoff = await import(${sourceUrl("infra/update-managed-service-handoff.ts")});
-          const { readControlPlaneUpdateSentinelMeta } = await import(${sourceUrl("infra/update-control-plane-sentinel.ts")});
-          const { runGlobalPackageUpdateSteps } = await import(${sourceUrl("infra/package-update-steps.ts")});
-          const { createNpmTarget, createRootRunner } = await import(${sourceUrl("infra/package-update-steps.test-support.ts")});
-          const { writePackageDistInventory } = await import(${JSON.stringify(new URL("../../../scripts/lib/package-dist-inventory.ts", import.meta.url).href)});
-          const { runCommandWithTimeout } = await import(${sourceUrl("process/exec.ts")});
+          const handoff = await import(${sourceUrl("handoff")});
+          const { readControlPlaneUpdateSentinelMeta } = await import(${sourceUrl("sentinel")});
+          const { runGlobalPackageUpdateSteps } = await import(${sourceUrl("packageSteps")});
+          const { createNpmTarget, createRootRunner } = await import(${sourceUrl("packageFixture")});
+          const { writePackageDistInventory } = await import(${sourceUrl("inventory")});
+          const { runCommandWithTimeout } = await import(${sourceUrl("exec")});
           const meta = await readControlPlaneUpdateSentinelMeta();
           const run = { runId: meta.runId, env: process.env };
           let outcome;
@@ -303,9 +308,11 @@ export async function writePackageLifecycleFixture(root: string, control: string
                   await fs.writeFile(path.join(candidate, "scripts", "preinstall-package-manager-warning.mjs"), ${JSON.stringify(`
                     import fs from "node:fs/promises";
                     import path from "node:path";
+                    ${fixtureReceiptClientSource(receiptEndpoint)}
                     const control = ${JSON.stringify(control)};
                     await fs.appendFile(path.join(control, "script-calls"), "preinstall\\n");
                     await fs.writeFile(path.join(control, "script-entered"), String(process.pid));
+                    sendReceipt(control, "script-entered");
                     while (!(await fs.access(path.join(control, "release-script")).then(() => true, () => false)))
                       await new Promise(resolve => setTimeout(resolve, 10));
                     await fs.writeFile(path.join(control, "script-settled"), "writer finished");

@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import {
   SESSION_COLOR_IDS,
@@ -24,7 +24,7 @@ export function sessionArchiveShortcut(state: {
     : undefined;
 }
 
-export function renderSessionEditorOptions(params: { inline: boolean; disabled: boolean }) {
+function renderSessionEditorOptions(params: { inline: boolean; disabled: boolean }) {
   return html`
     ${EDITOR_IDS.map(
       (editor) => html`
@@ -137,4 +137,83 @@ export function renderSessionColorOptions(params: {
       },
     )}
   </div>`;
+}
+
+export function renderSessionCopyOptions(params: {
+  inline: boolean;
+  navigationAllowed: boolean;
+  renderItem: (
+    kind: "copy-session-link" | "copy-session-preview-link" | "copy-markdown" | "copy-session-id",
+    label: string,
+    icon: TemplateResult,
+    options: { inline: boolean },
+  ) => TemplateResult;
+}) {
+  const { inline } = params;
+  return html`
+    ${
+      params.navigationAllowed
+        ? params.renderItem(
+            "copy-session-preview-link",
+            t("sessionsView.copySessionPreviewLink"),
+            icons.link,
+            { inline },
+          )
+        : nothing
+    }
+    ${params.renderItem("copy-markdown", t("sessionsView.copyMarkdown"), icons.fileText, {
+      inline,
+    })}
+    ${params.renderItem("copy-session-id", t("sessionsView.copySessionId"), icons.copy, { inline })}
+  `;
+}
+
+export function renderSessionOpenOptions(params: {
+  inline: boolean;
+  navigationAllowed: boolean;
+  splitAllowed: boolean;
+  renderOpenInExtra?: (inline: boolean) => TemplateResult;
+  worktreePath: string | null;
+  editorDisabled: boolean;
+  renderItem: (
+    kind: "open-new-tab" | "open-new-window" | "split-right" | "split-below",
+    label: string,
+    icon: TemplateResult,
+    options: { inline: boolean },
+  ) => TemplateResult;
+}) {
+  const { inline } = params;
+  return html`
+    ${
+      params.navigationAllowed
+        ? (
+            [
+              ["open-new-tab", "sessionsView.openNewTab", icons.externalLink],
+              ["open-new-window", "sessionsView.openNewWindow", icons.monitor],
+            ] as const
+          ).map(([kind, label, icon]) => params.renderItem(kind, t(label), icon, { inline }))
+        : nothing
+    }
+    ${
+      params.splitAllowed
+        ? (
+            [
+              ["split-right", "chat.splitView.splitRight", icons.columns2],
+              ["split-below", "sessionsView.splitBelow", icons.panelBottomOpen],
+            ] as const
+          ).map(([kind, label, icon]) => params.renderItem(kind, t(label), icon, { inline }))
+        : nothing
+    }
+    ${params.renderOpenInExtra?.(inline) ?? nothing}
+    ${
+      params.worktreePath
+        ? html`
+            <div slot=${inline ? nothing : "submenu"} class="session-menu__info">
+              ${t("sessionsView.workspaceEditors")}
+            </div>
+            ${renderSessionEditorOptions({ inline, disabled: params.editorDisabled })}
+          `
+        : nothing
+    }
+  `;
 }

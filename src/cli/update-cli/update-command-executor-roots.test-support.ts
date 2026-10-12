@@ -8,6 +8,7 @@ import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 export function registerExecutorRootOwnershipTests(
   fixture: () => { root: string; replaceOwner: (installationRoot?: string) => void },
@@ -74,20 +75,93 @@ export function registerExecutorRootOwnershipTests(
     });
   });
 
+  it("refuses to release a replaced preflight owner and preserves the new lease", async () => {
+    const { root, replaceOwner } = fixture();
+    let refusal: unknown;
+    await expect(
+      withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(root, { preflight: true });
+        replaceOwner();
+        try {
+          releaseUpdateCommandPreflightForHandoff(fence);
+        } catch (error) {
+          refusal = error;
+        }
+      }),
+    ).rejects.toThrow();
+    expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
+    expect(refusal).toMatchObject({ message: expect.stringContaining("no longer current") });
+    expect(createManagedHandoffLeaseStore().read(root)).toMatchObject({
+      kind: "current",
+      lease: { owner: "replacement" },
+    });
+  });
+
   it("invalidates the package fence if its service owner is replaced", async () => {
     const { root, replaceOwner } = fixture();
     const serviceRoot = path.join(root, "service-A");
     fs.mkdirSync(serviceRoot);
+    let refusal: unknown;
     await expect(
       withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(root, { serviceRoot });
         replaceOwner(serviceRoot);
-        expect(fence.assertCurrent).toThrow("no longer current");
+        try {
+          fence.assertCurrent();
+        } catch (error) {
+          refusal = error;
+        }
       }),
     ).rejects.toThrow();
+    expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
+    expect(refusal).toMatchObject({ message: expect.stringContaining("no longer current") });
     expect(createManagedHandoffLeaseStore().read(serviceRoot)).toMatchObject({
       kind: "current",
       lease: { owner: "replacement" },
     });
+  });
+
+  it("recovery acquires a fresh owner without reactivating the original fence", async () => {
+    const { root } = fixture();
+    const store = createManagedHandoffLeaseStore();
+    const runId = randomUUID();
+    const original = await withUpdateCommandExecutor(runId, async (executor) => {
+      const fence = await executor.enter(root);
+      const current = store.read(root);
+      assert(current.kind === "current", "Original executor was not acquired");
+      return {
+        fence,
+        lease: current.lease,
+        authority: captureUpdateCommandExecutorAuthority(fence),
+      };
+    });
+    expect(Object.isFrozen(original.authority)).toBe(true);
+    expect(original.authority.owner).toBe(original.lease.owner);
+    expect(() => captureUpdateCommandExecutorAuthority(original.fence)).toThrow(
+      "no longer current",
+    );
+    await withUpdateCommandExecutor(
+      runId,
+      async (executor) => {
+        const fence = await executor.enter(root);
+        const current = store.read(root);
+        assert(current.kind === "current", "Recovery executor was not acquired");
+        expect(current.lease.owner).not.toBe(original.lease.owner);
+        expect(current.lease.helper.pid).toBe(process.pid);
+        const recoveredAuthority = captureUpdateCommandExecutorAuthority(fence);
+        expect(recoveredAuthority).toEqual({
+          ...original.authority,
+          owner: current.lease.owner,
+        });
+        expect(recoveredAuthority.owner).not.toBe(original.authority.owner);
+        expect(Object.isFrozen(recoveredAuthority)).toBe(true);
+        expect(store.current(original.lease)).toBe(false);
+        expect(store.release(original.lease)).toBe(false);
+        expect(original.fence.assertCurrent).toThrow("no longer current");
+        fence.assertCurrent();
+      },
+      { existingAuthority: original.authority },
+    );
+    expect(store.read(root)).toEqual({ kind: "absent" });
   });
 }

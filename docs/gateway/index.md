@@ -45,7 +45,7 @@ openclaw status
 openclaw logs --follow
 ```
 
-Healthy baseline: `Runtime: running`, `Connectivity probe: ok`, and a `Capability` line that matches what you expect. Use `openclaw gateway status --require-rpc` for read-scope RPC proof, not just reachability.
+Healthy baseline: `Runtime: running`, a successful connectivity check, and a `Capability` line that matches what you expect. Use `openclaw gateway status --require-rpc` for read-scope RPC proof, not just reachability.
 
   </Step>
 
@@ -55,7 +55,7 @@ Healthy baseline: `Runtime: running`, `Connectivity probe: ok`, and a `Capabilit
 openclaw channels status --probe
 ```
 
-With a reachable gateway this runs live per-account channel probes and optional audits. If the gateway is unreachable, the CLI falls back to config-only channel summaries.
+With a reachable gateway this runs live per-account channel checks and optional audits. If the gateway is unreachable, the CLI falls back to config-only channel summaries.
 
   </Step>
 </Steps>
@@ -75,6 +75,27 @@ Gateway config reload watches the active config file path (resolved from profile
 - Default bind mode: `loopback`. Inside a detected container environment the effective default is `auto` (resolves to `0.0.0.0` for port-forwarding), unless Tailscale serve/funnel is active, which always forces `loopback`.
 - Auth is required by default. Shared-secret setups use `gateway.auth.token` / `gateway.auth.password` (or `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`), and non-loopback reverse-proxy setups can use `gateway.auth.mode: "trusted-proxy"`.
 
+### Module compile cache
+
+The packaged CLI and the compiled `dist/index.js` entry automatically enable
+Node's on-disk module compile cache. This includes compiled source deployments
+that retain their Git checkout. Cache entries live outside the release directory,
+under the operating system's temporary directory by default. Set
+`NODE_COMPILE_CACHE` to a writable persistent cache root to retain them across
+host reboots. OpenClaw namespaces that root by package version and build identity;
+each new build starts with its own cache. `NODE_DISABLE_COMPILE_CACHE=1` disables
+it. An unavailable cache produces one diagnostic and startup continues.
+With Node's permission model enabled, an already-active cache remains caller-owned
+so cache scoping never requires launching a process that permissions may forbid.
+
+The first boot populates the cache; later boots reuse it. Deployment systems can
+warm a candidate before cutover by booting and cleanly stopping it with isolated
+state, a loopback port, the runtime user, and the same cache root. Warm it at its
+final release path: moving the release after warming can prevent Node from
+reusing its entries. Recent build caches coexist, including the serving release
+and a prepared candidate. Cleanup bounds the combined cache to 512 MiB and
+expires bytecode older than seven days.
+
 ## OpenAI-compatible endpoints
 
 OpenClaw's highest-leverage compatibility surface:
@@ -87,7 +108,7 @@ OpenClaw's highest-leverage compatibility surface:
 
 Why this set matters:
 
-- Most Open WebUI, LobeChat, and LibreChat integrations probe `/v1/models` first.
+- Most Open WebUI, LobeChat, and LibreChat integrations check `/v1/models` first.
 - Many RAG and memory pipelines expect `/v1/embeddings`.
 - Agent-native clients increasingly prefer `/v1/responses`.
 
@@ -131,7 +152,7 @@ openclaw logs --follow
 openclaw doctor
 ```
 
-`gateway status --deep` is for extra service discovery (LaunchDaemons/systemd system units/schtasks), not a deeper RPC health probe.
+`gateway status --deep` is for extra service discovery (LaunchDaemons/systemd system units/schtasks), not a deeper RPC health check.
 
 ## Multiple gateways (same host)
 
@@ -218,6 +239,8 @@ LaunchAgent labels are `ai.openclaw.gateway` (default) or `ai.openclaw.<profile>
 OpenClaw installs and manages a per-user LaunchAgent. It does not install or manage system LaunchDaemons. If a custom LaunchDaemon already uses the same gateway label, OpenClaw refuses to write, start, restart, or repair a user LaunchAgent because two `KeepAlive` managers can repeatedly restart the same gateway.
 
 The ownership check reads `launchctl print system/<label>` and also checks installed plists under `/Library/LaunchDaemons`. It fails closed when system ownership cannot be verified, and `--force` does not bypass it. `openclaw gateway status` reports a loaded same-label system job; add `--deep` to scan installed system service files.
+
+The runtime and standalone updater parse captured plist bytes with the native parser. If endpoint protection denies pathname parsing during a detached restart, its ownership scan tries a bounded read and parses the captured bytes instead. Actual permission-denied reads are skipped, while malformed data and other read failures still block activation. Loaded same-label jobs remain blocked; an unloaded same-label plist hidden by read denial cannot be detected. The detached restart fallback uses macOS's `/usr/bin/perl`; if that reader is unavailable, the scan still refuses unverifiable activation. This does not change endpoint-protection policy or suppress its alerts.
 
 Choose one lifecycle owner before retrying:
 
@@ -347,7 +370,7 @@ sudo systemctl enable --now openclaw-gateway[-<profile>].service
   </Tab>
 </Tabs>
 
-Invalid configuration errors exit with code `78`. Linux systemd units use `RestartPreventExitStatus=78` to stop relaunching until the config is fixed. launchd and Windows Task Scheduler do not have an equivalent per-exit-code stop rule, so the Gateway also persists rapid unclean boot history and suppresses channel/provider account auto-start after repeated startup failures. In that safe mode the control plane still starts for inspection and repair, config hot reloads and `secrets.reload` refuse automatic channel restarts, and an explicit operator `channels.start` request can override the suppression. Step-by-step recovery lives in [Restart recovery](/gateway/restart-recovery#safety-valves-and-observability).
+Invalid configuration errors exit with code `78`. Linux systemd units use `RestartPreventExitStatus=78` to stop relaunching until the config is fixed. launchd and Windows Task Scheduler do not have an equivalent per-exit-code stop rule, so the Gateway also persists rapid unclean boot history and suppresses channel/provider account auto-start after repeated startup failures. In that safe mode the control plane still starts for inspection and repair, main-session restart recovery pauses until the full breaker window drains and then resumes automatically in the same process, config hot reloads and `secrets.reload` refuse automatic channel restarts, and an explicit operator `channels.start` request can override the suppression. Step-by-step recovery lives in [Restart recovery](/gateway/restart-recovery#safety-valves-and-observability).
 
 ## Dev profile quick path
 

@@ -45,7 +45,6 @@ suite.define(() => {
             sessions: [],
             ts: baseTime,
           },
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.cards.list": {
             boards: [
               {

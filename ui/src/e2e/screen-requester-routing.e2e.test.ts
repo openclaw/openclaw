@@ -182,11 +182,8 @@ suite.define(() => {
     });
     await desktop.getByRole("button", { name: "Take control", exact: true }).click();
     await expect.poll(rfb.events).toContain("authenticated:2");
-    await desktop
-      .getByText("You control this desktop. Agent input is paused until you switch to view only.", {
-        exact: true,
-      })
-      .waitFor();
+    await desktop.getByRole("button", { name: "Switch to view only", exact: true }).waitFor();
+    expect(await desktop.locator(".desktop-note").count()).toBe(0);
     const controlledCanvas = await desktop.locator("canvas").elementHandle();
     const requestsBeforeShow = await Promise.all(
       ["environments.status", "desktop.observe", "desktop.release"].map((method) =>
@@ -222,12 +219,8 @@ suite.define(() => {
       ).toEqual(requestsBeforeShow);
       expect(await controlledCanvas?.evaluate((element) => element.isConnected)).toBe(true);
       expect(await rfb.connectionCount()).toBe(2);
-      await desktop
-        .getByText(
-          "You control this desktop. Agent input is paused until you switch to view only.",
-          { exact: true },
-        )
-        .waitFor();
+      await desktop.getByRole("button", { name: "Switch to view only", exact: true }).waitFor();
+      expect(await desktop.locator(".desktop-note").count()).toBe(0);
     }
     await captureUiProof(
       suite,
@@ -241,7 +234,9 @@ suite.define(() => {
       expiresAtMs: 60_000,
       control: false,
     });
-    await desktop.getByRole("button", { name: "Switch to view only", exact: true }).click();
+    // The Gateway revokes the human controller when the agent explicitly takes over.
+    await rfb.disconnect("control-taken:Agent", 4000);
+    await desktop.getByText("Agent took control", { exact: true }).waitFor();
     await expect.poll(rfb.events).toContain("authenticated:3");
     expect((await requester.gateway.getRequests("desktop.observe")).at(-1)).toMatchObject({
       params: { control: false },

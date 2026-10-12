@@ -5,6 +5,7 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "./agent-events.js";
 import {
+  captureAgentRunDelegatedSourceAssertion,
   claimAgentRunApprovalAuthority,
   claimAgentRunContext,
   claimAgentRunDelegatedAuthority,
@@ -98,6 +99,76 @@ test.each(["close", "replacement", "restart"])(
     }
     expect(validateAgentRunDelegatedAuthority(next)).toBe(false);
     outer.abort();
+  },
+);
+
+test.each(["release", "abort"])(
+  "nested approval scopes retain their original worker through %s and reentrant cleanup",
+  (closure) => {
+    const root = claimAgentRunDelegatedAuthority({
+      instanceId: "nested-instance",
+      runId: "nested-run",
+    });
+    const workerLifetime = new AbortController();
+    const worker = claimAgentRunApprovalAuthority(root, [workerLifetime.signal]);
+    const request = claimAgentRunApprovalAuthority({ ...worker }, [new AbortController().signal]);
+    const child = claimAgentRunApprovalAuthority(request, [new AbortController().signal]);
+    const sibling = claimAgentRunApprovalAuthority(root, [new AbortController().signal]);
+    const copiedChild = structuredClone(child);
+    const source = captureAgentRunDelegatedSourceAssertion(copiedChild, () => {
+      throw new Error("child authority closed");
+    });
+    expect(source).toBeDefined();
+    expect(() => source?.assertCurrent()).not.toThrow();
+    expect(validateAgentRunDelegatedAuthority(copiedChild, worker)).toBe(true);
+    expect(validateAgentRunDelegatedAuthority(worker, request)).toBe(false);
+    expect(validateAgentRunDelegatedAuthority(sibling, worker)).toBe(false);
+    const closed: Array<{
+      claimId: string;
+      reason: string | undefined;
+      childCurrent: boolean;
+      rootCurrent: boolean;
+      siblingCurrent: boolean;
+      releasedAgain: boolean;
+    }> = [];
+    const stop = registerAgentRunDelegatedAuthorityClosedHandler((authority, reason) => {
+      closed.push({
+        claimId: authority.claimId,
+        reason,
+        childCurrent: validateAgentRunDelegatedAuthority(copiedChild),
+        rootCurrent: validateAgentRunDelegatedAuthority(root),
+        siblingCurrent: validateAgentRunDelegatedAuthority(sibling),
+        releasedAgain: releaseAgentRunDelegatedAuthority(child),
+      });
+    });
+    try {
+      if (closure === "release") {
+        releaseAgentRunDelegatedAuthority(worker);
+      } else {
+        workerLifetime.abort();
+      }
+      expect(closed).toEqual(
+        [child.claimId, request.claimId, worker.claimId].map((claimId) => ({
+          claimId,
+          reason: "approval-scope-closed",
+          childCurrent: false,
+          rootCurrent: true,
+          siblingCurrent: true,
+          releasedAgain: false,
+        })),
+      );
+      expect(validateAgentRunDelegatedAuthority(copiedChild)).toBe(false);
+      expect(() => source?.assertCurrent()).toThrow("child authority closed");
+      expect(
+        captureAgentRunDelegatedSourceAssertion(copiedChild, () => {
+          throw new Error("child authority closed");
+        }),
+      ).toBeUndefined();
+      expect(() => claimAgentRunApprovalAuthority(worker, [])).toThrow("no longer active");
+    } finally {
+      stop();
+      releaseAgentRunDelegatedAuthority(root);
+    }
   },
 );
 
@@ -210,13 +281,9 @@ test.each(["replacement", "restart"])(
   },
 );
 
-test.each(
-  [false, true].flatMap((revoked) =>
-    ["omitted", "replaced"].map((binding) => ({ revoked, binding })),
-  ),
-)(
-  "refuses a $binding source binding for the same instance (revoked=$revoked)",
-  ({ revoked, binding }) => {
+test.each(["omitted", "replaced"])(
+  "refuses a %s source binding for the same instance after revocation",
+  (binding) => {
     const instance = { instanceId: "bound-instance", runId: "bound-run" };
     let current = true;
     const assertSourceCurrent = () => {
@@ -228,7 +295,7 @@ test.each(
     const replacement = vi.fn();
     try {
       expect(claimAgentRunDelegatedAuthority(instance, assertSourceCurrent)).toBe(authority);
-      current = !revoked;
+      current = false;
       expect(() =>
         claimAgentRunDelegatedAuthority(instance, binding === "replaced" ? replacement : undefined),
       ).toThrow("already bound");

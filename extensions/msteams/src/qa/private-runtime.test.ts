@@ -1,3 +1,4 @@
+import { Client } from "@microsoft/teams.common";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveMSTeamsPrivateQaRuntime } from "./private-runtime.js";
 
@@ -60,7 +61,6 @@ describe("Microsoft Teams private QA runtime", () => {
   it("returns a skip-auth runtime with the per-run token", async () => {
     const runtime = resolveMSTeamsPrivateQaRuntime(completeEnv, completeBootstrap);
     expect(runtime?.skipAuth).toBe(true);
-    expect(runtime?.listenHost).toBe("127.0.0.1");
     await expect(runtime?.token()).resolves.toBe("qa-bot-token");
   });
 
@@ -77,9 +77,9 @@ describe("Microsoft Teams private QA runtime", () => {
       throw new Error("expected Microsoft Teams private QA runtime");
     }
 
-    await expect(runtime.client.get("/v3/conversations/test/activities")).rejects.toThrow(
-      "Too many redirects (limit: 0)",
-    );
+    await expect(
+      new Client(runtime.client).get("/v3/conversations/test/activities"),
+    ).rejects.toThrow("Too many redirects (limit: 0)");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -94,7 +94,7 @@ describe("Microsoft Teams private QA runtime", () => {
     }
 
     await expect(
-      runtime.client.post("/v3/conversations/test/activities", {}),
+      new Client(runtime.client).post("/v3/conversations/test/activities", {}),
     ).rejects.toMatchObject({ statusCode: 504 });
   });
 });

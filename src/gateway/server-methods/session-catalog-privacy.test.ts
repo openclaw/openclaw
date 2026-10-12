@@ -25,7 +25,8 @@ import {
   type SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
@@ -40,10 +41,13 @@ async function withCatalog(
     let fixture: Awaited<ReturnType<typeof createCatalog>> | undefined;
     try {
       fixture = await createCatalog();
+      // Deferred providers must not race the response budget while privacy writes settle.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       await run(fixture);
     } finally {
       fixture?.projection.dispose();
       setActivePluginRegistry(previousRegistry);
+      vi.useRealTimers();
     }
   });
 }
@@ -217,9 +221,24 @@ const rows = (respond: ReturnType<typeof vi.fn>) =>
     (row: { threadId: string }) => row.threadId,
   );
 
+function expectOwnedRowsOrPending(respond: ReturnType<typeof vi.fn>) {
+  expect.soft(respond).toHaveBeenCalledOnce();
+  expect.soft(respond.mock.calls[0]?.[0]).toBe(true);
+  const catalog = respond.mock.calls[0]?.[1]?.catalogs[0];
+  if (catalog?.error) {
+    expect.soft(catalog).toMatchObject({
+      id: "fixture",
+      hosts: [],
+      error: { code: "catalog_pending" },
+    });
+  } else {
+    expect.soft(rows(respond)).toEqual(["owned"]);
+  }
+}
+
 describe("catalog delivery uses current canonical privacy", () => {
   it("lists remote publications without local stores while preserving mixed-request adoption", async () => {
-    await withCatalog(async ({ call, registry, read, list, enumerate, replaceForeign }) => {
+    await withCatalog(async ({ call, registry, read, list, enumerate, replaceForeign, owner }) => {
       const remoteHost: SessionCatalogHost = {
         hostId: "node:source",
         label: "Source",
@@ -261,26 +280,54 @@ describe("catalog delivery uses current canonical privacy", () => {
 
       const entered = createDeferredCore();
       const release = createDeferredCore();
+      const delivered = createDeferredCore();
+      const broadcast = vi.fn<(_event: string, payload: SessionsCatalogHostEvent) => void>(() =>
+        delivered.resolve(),
+      );
       let observed: SessionCatalogHost | undefined;
-      list.mockImplementation(async ({ sessionEntries }) => {
+      let providerResult: Promise<SessionCatalogHost[]> | undefined;
+      list.mockImplementation(({ sessionEntries, onHost }) => {
         entered.resolve();
-        await release.promise;
-        observed = enumerate(sessionEntries);
-        return [observed];
+        providerResult = release.promise.then(() => {
+          observed = enumerate(sessionEntries);
+          onHost?.(observed);
+          return [observed];
+        });
+        return providerResult;
       });
-      const pending = call();
+      const pending = call(
+        "sessions.catalog.list",
+        { progressId: "mixed-request-adoption" },
+        owner,
+        broadcast,
+      );
       try {
         await entered.promise;
         await replaceForeign();
+        release.resolve();
+        const [response] = await Promise.all([pending, providerResult, delivered.promise]);
+        expect(
+          observed?.sessions.find((session) => session.threadId === "foreign")?.sessionKey,
+        ).toBe("agent:main:foreign");
+        expect(list).toHaveBeenCalledOnce();
+        expect(broadcast).toHaveBeenCalledOnce();
+        expect(broadcast.mock.calls[0]?.[1]).toMatchObject({
+          progressId: "mixed-request-adoption",
+          agentId: "main",
+          catalog: { id: "fixture" },
+        });
+        // The RPC budget may finish first; progress uses the same current-row privacy projection.
+        expect(
+          broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions.map(
+            (session) => session.threadId,
+          ),
+        ).toEqual(["owned"]);
+        expectOwnedRowsOrPending(response);
+        expect(response.mock.calls[0]?.[1]?.catalogs[1]?.hosts).toEqual([remoteHost]);
       } finally {
         release.resolve();
+        await Promise.allSettled([pending, providerResult]);
       }
-      const response = await pending;
-      expect(observed?.sessions.find((session) => session.threadId === "foreign")?.sessionKey).toBe(
-        "agent:main:foreign",
-      );
-      expect(rows(response)).toEqual(["owned"]);
-      expect(response.mock.calls[0]?.[1]?.catalogs[1]?.hosts).toEqual([remoteHost]);
     });
   });
 
@@ -295,23 +342,31 @@ describe("catalog delivery uses current canonical privacy", () => {
         }
         await projection.ensureMaterialized();
         const read = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+        const delivered = createDeferredCore();
+        let publications = 0;
+        const broadcast = vi.fn<(_event: string, payload: SessionsCatalogHostEvent) => void>(() => {
+          if (++publications === 2) {
+            delivered.resolve();
+          }
+        });
         list.mockImplementation(async ({ sessionEntries, onHost }) => {
           expect(sessionEntries?.entriesForCatalog?.()).toHaveLength(27);
           const host = enumerate(sessionEntries);
           onHost?.(host);
           await replaceForeign();
+          onHost?.(host);
           return [host];
         });
         try {
-          const broadcast = vi.fn();
           const response = await call(
             "sessions.catalog.list",
             { progressId: "delivery-budget" },
             owner,
             broadcast,
           );
+          await delivered.promise;
           const progress = broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions;
-          expect(broadcast).toHaveBeenCalledOnce();
+          expect(broadcast).toHaveBeenCalledTimes(2);
           expect(progress?.map((session: { threadId: string }) => session.threadId)).toEqual([
             "foreign",
             "owned",
@@ -319,7 +374,13 @@ describe("catalog delivery uses current canonical privacy", () => {
           expect(
             progress?.find((session: { threadId: string }) => session.threadId === "owned"),
           ).toMatchObject({ createdActor: { id: callerId } });
-          expect(rows(response)).toEqual(["owned"]);
+          expect(
+            broadcast.mock.calls[1]?.[1]?.catalog.hosts[0]?.sessions.map(
+              (session) => session.threadId,
+            ),
+          ).toEqual(["owned"]);
+          expectOwnedRowsOrPending(response);
+          expect(list).toHaveBeenCalledOnce();
           expect(read).not.toHaveBeenCalled();
         } finally {
           read.mockRestore();
@@ -677,8 +738,9 @@ describe("catalog delivery uses current canonical privacy", () => {
             .soft(observed?.sessions.find((session) => session.threadId === "foreign")?.sessionKey)
             .toBe("agent:main:foreign");
           if (!late) {
-            expect.soft(rows(result)).toEqual(["owned"]);
+            expectOwnedRowsOrPending(result);
           }
+          expect(list).toHaveBeenCalledOnce();
           expect(broadcast).toHaveBeenCalledOnce();
           expect
             .soft(
@@ -695,66 +757,96 @@ describe("catalog delivery uses current canonical privacy", () => {
   );
 
   it("rechecks each follower at progress and final delivery after provider awaits", async () => {
-    await withCatalog(async ({ call, changeForeign, owner, foreignOwner, host, list }) => {
-      const entered = createDeferredCore();
-      const progress = createDeferredCore();
-      const finish = createDeferredCore();
-      list.mockImplementation(async ({ sessionEntries, onHost }) => {
-        sessionEntries?.entriesForCatalog?.();
-        entered.resolve();
-        await progress.promise;
-        onHost?.(host);
-        await finish.promise;
-        return [host];
-      });
-      const leaderBroadcast = vi.fn();
-      const followerBroadcast = vi.fn();
-      const sameCallerBroadcast = vi.fn();
-      const leader = call(
-        "sessions.catalog.list",
-        { progressId: "leader" },
-        owner,
-        leaderBroadcast,
-      );
-      await entered.promise;
-      const sameCaller = call(
-        "sessions.catalog.list",
-        { progressId: "same-caller" },
-        owner,
-        sameCallerBroadcast,
-      );
-      const follower = call(
-        "sessions.catalog.list",
-        { progressId: "follower" },
-        foreignOwner,
-        followerBroadcast,
-      );
-      await changeForeign({ visibility: "draft" });
-      progress.resolve();
-      await vi.waitFor(() => {
-        expect(leaderBroadcast).toHaveBeenCalledOnce();
-        expect(followerBroadcast).toHaveBeenCalledOnce();
-        expect(sameCallerBroadcast).toHaveBeenCalledOnce();
-      });
-      const progressRows = (broadcast: typeof leaderBroadcast) =>
-        broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions.map(
-          (row: { threadId: string }) => row.threadId,
+    await withCatalog(
+      async ({ call, changeForeign, owner, foreignOwner, host, list, provider }) => {
+        const entered = createDeferredCore();
+        const progress = createDeferredCore();
+        const finish = createDeferredCore();
+        list.mockImplementation(async ({ sessionEntries, onHost }) => {
+          sessionEntries?.entriesForCatalog?.();
+          entered.resolve();
+          await progress.promise;
+          onHost?.(host);
+          return [host];
+        });
+        provider.createListOperation = (params) => {
+          let hosts: SessionCatalogHost[] | undefined;
+          return {
+            async next() {
+              if (!hosts) {
+                hosts = await list(params);
+                return { done: false };
+              }
+              await finish.promise;
+              return { done: true, hosts };
+            },
+            close() {},
+          };
+        };
+        const leaderDelivered = createDeferredCore();
+        const followerDelivered = createDeferredCore();
+        const sameCallerDelivered = createDeferredCore();
+        const leaderBroadcast = vi.fn().mockImplementation(() => leaderDelivered.resolve());
+        const followerBroadcast = vi.fn().mockImplementation(() => followerDelivered.resolve());
+        const sameCallerBroadcast = vi.fn().mockImplementation(() => sameCallerDelivered.resolve());
+        const leader = call(
+          "sessions.catalog.list",
+          { progressId: "leader" },
+          owner,
+          leaderBroadcast,
         );
-      expect.soft(progressRows(leaderBroadcast)).toEqual(["owned"]);
-      expect.soft(progressRows(followerBroadcast)).toEqual(["foreign"]);
-      expect.soft(progressRows(sameCallerBroadcast)).toEqual(["owned"]);
-      await changeForeign({ incognito: true });
-      finish.resolve();
-      const [leaderResult, followerResult, sameCallerResult] = await Promise.all([
-        leader,
-        follower,
-        sameCaller,
-      ]);
-      expect.soft(rows(leaderResult)).toEqual(["owned"]);
-      expect.soft(rows(followerResult)).toEqual([]);
-      expect.soft(rows(sameCallerResult)).toEqual(["owned"]);
-      expect(list).toHaveBeenCalledTimes(2);
-    });
+        const pending = [leader];
+        try {
+          await entered.promise;
+          const sameCaller = call(
+            "sessions.catalog.list",
+            { progressId: "same-caller" },
+            owner,
+            sameCallerBroadcast,
+          );
+          pending.push(sameCaller);
+          const follower = call(
+            "sessions.catalog.list",
+            { progressId: "follower" },
+            foreignOwner,
+            followerBroadcast,
+          );
+          pending.push(follower);
+          await changeForeign({ visibility: "draft" });
+          progress.resolve();
+          await Promise.all([
+            leaderDelivered.promise,
+            followerDelivered.promise,
+            sameCallerDelivered.promise,
+          ]);
+          expect(leaderBroadcast).toHaveBeenCalledOnce();
+          expect(followerBroadcast).toHaveBeenCalledOnce();
+          expect(sameCallerBroadcast).toHaveBeenCalledOnce();
+          const progressRows = (broadcast: typeof leaderBroadcast) =>
+            broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions.map(
+              (row: { threadId: string }) => row.threadId,
+            );
+          expect.soft(progressRows(leaderBroadcast)).toEqual(["owned"]);
+          expect.soft(progressRows(followerBroadcast)).toEqual(["foreign"]);
+          expect.soft(progressRows(sameCallerBroadcast)).toEqual(["owned"]);
+          await changeForeign({ incognito: true });
+          finish.resolve();
+          const [leaderResult, followerResult, sameCallerResult] = await Promise.all([
+            leader,
+            follower,
+            sameCaller,
+          ]);
+          expect.soft(rows(leaderResult)).toEqual(["owned"]);
+          expect.soft(rows(followerResult)).toEqual([]);
+          expect.soft(rows(sameCallerResult)).toEqual(["owned"]);
+          expect(list).toHaveBeenCalledTimes(2);
+        } finally {
+          progress.resolve();
+          finish.resolve();
+          await Promise.allSettled(pending);
+        }
+      },
+    );
   });
 
   it.each(

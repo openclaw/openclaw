@@ -65,6 +65,7 @@ describe("plugin lifecycle protocol validators", () => {
     const runtime = { operationId: "reload", generation: 2, pluginIds: ["alpha", "beta"] };
     const batch = { ok: true, pluginIds: ["alpha", "beta"], restartRequired: false, runtime };
     expect(Value.Check(PluginsReloadResultSchema, batch)).toBe(true);
+    expect(Value.Check(PluginsReloadResultSchema, { ...batch, restartRequired: true })).toBe(true);
     expect(
       Value.Check(PluginsReloadResultSchema, {
         ...batch,
@@ -81,7 +82,7 @@ describe("plugin lifecycle protocol validators", () => {
     const { runtime: _runtime, ...withoutReceipt } = batch;
     for (const result of [
       withoutReceipt,
-      { ...batch, restartRequired: true },
+      { ...batch, restartRequired: "true" },
       { ...batch, pluginIds: [] },
       { ...batch, warnings: "cleanup failed" },
     ]) {
@@ -98,6 +99,7 @@ describe("plugin lifecycle protocol validators", () => {
     { source: "official", pluginId: "demo", version: "latest", pin: true },
   ])("accepts the CLI's $source install intent without caller trust metadata", (request) => {
     expect(validatePluginsInstallParams(request)).toBe(true);
+    expect(validatePluginsInstallParams({ ...request, enable: false })).toBe(true);
     for (const trust of [
       { trustedSourceLinkedOfficialInstall: true },
       { bundledOrigin: true },
@@ -222,7 +224,7 @@ describe("plugin lifecycle protocol validators", () => {
     expect(validatePluginsInspectParams({ pluginId: "workboard", unexpected: true })).toBe(false);
   });
 
-  it("requires inspection review tokens and complete declared contract surfaces", () => {
+  it("validates artifact reviews and tokenless catalog inspection surfaces", () => {
     const result = {
       ok: true,
       plugin: { id: "workboard", name: "Workboard", installed: true, enabled: false },
@@ -268,12 +270,30 @@ describe("plugin lifecycle protocol validators", () => {
         components: { ...result.components, unexpected: [] },
       }),
     ).toBe(false);
-    const { reviewToken: _reviewToken, ...withoutReviewToken } = result;
-    expect(Value.Check(PluginsInspectResultSchema, withoutReviewToken)).toBe(false);
     const { contracts: _contracts, ...withoutContracts } = result.declared;
     expect(Value.Check(PluginsInspectResultSchema, { ...result, declared: withoutContracts })).toBe(
       false,
     );
+
+    const { reviewToken: _reviewToken, ...withoutReviewToken } = result;
+    for (const declaredSurfaceStatus of ["partial", "unavailable"]) {
+      const catalogInspection = {
+        ...withoutReviewToken,
+        plugin: { ...result.plugin, origin: "clawhub", installed: false },
+        source: { kind: "clawhub", packageName: "workboard" },
+        declaredSurfaceStatus,
+      };
+      expect(Value.Check(PluginsInspectResultSchema, catalogInspection)).toBe(true);
+      expect(
+        Value.Check(PluginsInspectResultSchema, { ...catalogInspection, reviewToken: "" }),
+      ).toBe(false);
+      expect(
+        Value.Check(PluginsInspectResultSchema, {
+          ...catalogInspection,
+          declared: withoutContracts,
+        }),
+      ).toBe(false);
+    }
   });
 
   it("validates bounded plugin search requests", () => {
@@ -401,6 +421,7 @@ describe("plugin lifecycle protocol validators", () => {
       generation: 2,
       pluginIds: ["notes"],
       sourceDigests: { notes: "sha256-fixture" },
+      selectedEntries: { notes: "/plugins/notes/dist/index.js" },
     };
     expect(Value.Check(PluginRuntimeApplicationSchema, receipt)).toBe(true);
     expect(Value.Check(PluginsChangedEventSchema, { generation: 2 })).toBe(true);

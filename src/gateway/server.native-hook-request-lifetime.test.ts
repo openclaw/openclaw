@@ -268,7 +268,7 @@ describe("native hook relay WebSocket request lifetime", () => {
           ]),
           signal,
         );
-        expect(getOperatorApprovalDetailed({ id })).toMatchObject({
+        expect(await getOperatorApprovalDetailed({ id })).toMatchObject({
           outcome: "found",
           record: { status: "pending" },
         });
@@ -282,20 +282,22 @@ describe("native hook relay WebSocket request lifetime", () => {
         firstAbort.abort();
         await expect(first).rejects.toThrow(/abort/i);
         if (owned) {
-          await vi.waitFor(() =>
-            expect(getOperatorApprovalDetailed({ id })).toMatchObject({
+          await vi.waitFor(async () =>
+            expect(await getOperatorApprovalDetailed({ id })).toMatchObject({
               outcome: "found",
               record: { status: "cancelled", terminalReason: "run-aborted" },
             }),
           );
           await vi.waitFor(() => expect(resolved).toContain(id));
-          expect(getOperatorApprovalDetailed({ id: records.get("call-b")![0]!.id })).toMatchObject({
+          expect(
+            await getOperatorApprovalDetailed({ id: records.get("call-b")![0]!.id }),
+          ).toMatchObject({
             outcome: "found",
             record: { status: "pending" },
           });
           expect(() => host!.hostCapabilities.assertActive()).not.toThrow();
         } else {
-          expect(getOperatorApprovalDetailed({ id })).toMatchObject({
+          expect(await getOperatorApprovalDetailed({ id })).toMatchObject({
             outcome: "found",
             record: { status: "pending" },
           });
@@ -324,7 +326,9 @@ describe("native hook relay WebSocket request lifetime", () => {
             })
           ).ok,
         ).toBe(true);
-        expect(JSON.parse((await retry).stdout).hookSpecificOutput.decision.behavior).toBe("allow");
+        const retryResponse = await retry;
+        expect(retryResponse.stdout, JSON.stringify({ retryId, retryResponse })).not.toBe("");
+        expect(JSON.parse(retryResponse.stdout).hookSpecificOutput.decision.behavior).toBe("allow");
         if (other) {
           const otherId = records.get("call-b")![0]!.id;
           expect(
@@ -351,7 +355,7 @@ describe("native hook relay WebSocket request lifetime", () => {
         if (reviewer?.readyState === 1) {
           for (const values of records.values()) {
             for (const { id } of values) {
-              const stored = getOperatorApprovalDetailed({ id });
+              const stored = await getOperatorApprovalDetailed({ id });
               if (stored.outcome === "found" && stored.record.status === "pending") {
                 await rpcReq(reviewer, "plugin.approval.resolve", { id, decision: "deny" }).catch(
                   () => {},

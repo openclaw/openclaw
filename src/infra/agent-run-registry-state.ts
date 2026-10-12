@@ -19,6 +19,41 @@ export function getAgentRunRegistryState(): AgentRunRegistryState {
   }));
 }
 
+/** Lists registered runs bound to one current session identity. */
+export function listAgentRunsForSession(params: {
+  sessionKey: string;
+  sessionId?: string;
+}): Array<{ runId: string; lifecycleGeneration: string }> {
+  const state = getAgentRunRegistryState();
+  const runs: Array<{ runId: string; lifecycleGeneration: string }> = [];
+  for (const [runId, context] of state.contexts) {
+    const matches =
+      context.sessionKey === params.sessionKey &&
+      (!context.sessionId || context.sessionId === params.sessionId);
+    if (matches && context.lifecycleGeneration === state.lifecycleGeneration) {
+      runs.push({ runId, lifecycleGeneration: context.lifecycleGeneration });
+    }
+  }
+  return runs.toSorted((a, b) => a.runId.localeCompare(b.runId));
+}
+
+export function getAgentRunContextOwnerStatus(
+  runId: string,
+  claimId: string,
+  lifecycleGeneration: string,
+): "active" | "clear-requested" | undefined {
+  const state = getAgentRunRegistryState();
+  const owners = state.owners.get(runId);
+  if (
+    lifecycleGeneration !== state.lifecycleGeneration ||
+    owners?.lifecycleGeneration !== lifecycleGeneration ||
+    !owners.claimIds.has(claimId)
+  ) {
+    return undefined;
+  }
+  return owners.clearRequested ? "clear-requested" : "active";
+}
+
 export function bumpAgentRunIndexVersion(
   context?: AgentRunContext,
   previous?: AgentRunContext,
@@ -29,6 +64,8 @@ export function bumpAgentRunIndexVersion(
     ? [previous, context]
     : [context]) {
     const { sessionKey, agentId } = target ?? {};
-    sessionChanges.emit(sessionKey ? { sessionKey, agentId } : { all: true, scope: "agent-runs" });
+    sessionChanges.emit(
+      sessionKey ? { sessionKey, agentId, scope: "runtime" } : { all: true, scope: "agent-runs" },
+    );
   }
 }

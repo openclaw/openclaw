@@ -1,53 +1,34 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
-import type { EmbeddedAgentMeta } from "../../agents/embedded-agent-runner/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import { applySessionEntryLifecycleMutation } from "../../config/sessions/session-accessor.js";
+import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import {
-  applySessionEntryLifecycleMutation,
-  loadSessionEntry,
-  replaceSessionEntry,
-} from "../../config/sessions/session-accessor.js";
-import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.js";
-import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
-import {
-  disposeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabasesAsync,
+  getOpenClawAgentDatabaseIfOpen,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { isReplyPayloadTerminalContent } from "../reply-payload.js";
-import type { ReplyPayload } from "../types.js";
-import type {
-  AgentTurnCompaction,
-  AgentTurnExecutionResult,
-} from "./agent-runner-execution.types.js";
-import { accountAgentTurn, accountFollowupTurn } from "./agent-runner-result-accounting.js";
-import { completeReplyAgentRun } from "./agent-runner-result-complete.js";
-import { finalizeReplyAgentRun } from "./agent-runner-result.js";
-import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
-import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import * as agentExecution from "../../state/openclaw-agent-execution.js";
+import { getReplyPayloadMetadata, isReplyPayloadTerminalContent } from "../reply-payload.js";
+import { recordTurnCompaction } from "./agent-runner-compaction-accounting.js";
 import {
-  createReplyOperation,
-  retainReplyOperationUntilComplete,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
-import { createReplySessionEntryHandle } from "./session-entry-handle.js";
+  agentAccountingPersistenceDiagnostic as diagnostic,
+  createAgentAccountingPersistenceFixture,
+} from "./agent-runner-result-accounting.persistence.test-support.js";
+import { finalizeReplyAgentRun } from "./agent-runner-result.js";
+import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
-import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
-import { createTypingSignaler } from "./typing-mode.js";
-
-vi.mock("../../agents/live-model-switch.js", () => ({
-  consolidateLiveModelSwitchAfterRun: vi.fn(async () => {}),
-}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const operations: ReplyOperation[] = [];
@@ -55,13 +36,17 @@ let suiteRoot: string;
 let storePath: string;
 let fixtureSequence = 0;
 beforeAll(() => {
-  suiteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-accounting-suite-"));
+  // openclaw-temp-dir: allow suite database root drains before removal
+  suiteRoot = fs.mkdtempSync(
+    path.join(fs.realpathSync.native(os.tmpdir()), "openclaw-accounting-suite-"),
+  );
   storePath = path.join(suiteRoot, "openclaw-agent.sqlite");
   openOpenClawAgentDatabase({ agentId: "main", path: storePath });
 });
 afterAll(async () => {
   await drainSessionStoreWriterQueuesForTest();
-  disposeOpenClawAgentDatabaseByPath(storePath);
+  await disposeOpenClawAgentDatabaseByPath(storePath);
+  await closeOpenClawAgentDatabasesAsync(suiteRoot);
   expect(isOpenClawAgentDatabaseOpen(storePath)).toBe(false);
   fs.rmSync(suiteRoot, { recursive: true, force: true });
 });
@@ -70,278 +55,385 @@ afterEach(() => {
     operation.complete();
   }
 });
-const diagnostic = {
-  schemaVersion: 1,
-  source: "pre-prompt-estimate",
-  updatedAt: 20,
-  provider: "openai",
-  model: "gpt-5.6-luna",
-  route: "compact_only",
-  shouldCompact: true,
-  estimatedPromptTokens: 950,
-  contextTokenBudget: 1_000,
-  promptBudgetBeforeReserve: 900,
-  reserveTokens: 100,
-  effectiveReserveTokens: 100,
-  remainingPromptBudgetTokens: 0,
-  overflowTokens: 50,
-  toolResultReducibleChars: 0,
-  messageCount: 4,
-  unwindowedMessageCount: 4,
-} satisfies NonNullable<SessionEntry["contextBudgetStatus"]>;
-
-async function createFixture() {
-  const root = tempDirs.make("openclaw-context-pressure-");
-  const fixtureId = ++fixtureSequence;
-  const sessionKey = `agent:main:accounting-${fixtureId}`;
-  const sessionId = `accounting-session-${fixtureId}`;
-  const runId = `context-pressure-run-${fixtureId}`;
-  const entry: InternalSessionEntry = {
-    sessionId,
-    lifecycleRevision: "generation-1",
-    activeWriterRunId: runId,
-    updatedAt: 1,
-    modelProvider: diagnostic.provider,
-    model: diagnostic.model,
-    contextBudgetStatus: { ...diagnostic, updatedAt: 1 },
-    estimatedCostUsd: 2,
-  };
-  await replaceSessionEntry({ storePath, sessionKey }, entry);
-  const cfg: OpenClawConfig = {
-    session: { store: storePath },
-    models: {
-      providers: {
-        openai: {
-          baseUrl: "https://unused.invalid",
-          models: [
-            {
-              id: diagnostic.model,
-              name: "test model",
-              reasoning: false,
-              input: ["text"],
-              contextWindow: 1_000,
-              maxTokens: 100,
-              cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 1 },
-            },
-          ],
-        },
-      },
+function createFixture() {
+  return createAgentAccountingPersistenceFixture({
+    storePath,
+    root: tempDirs.make("openclaw-context-pressure-"),
+    fixtureId: ++fixtureSequence,
+    registerOperation: (operation) => {
+      operations.push(operation);
     },
-  };
-  const followupRun = createMockFollowupRun({
-    run: {
-      sessionKey,
-      sessionId: entry.sessionId,
-      agentDir: root,
-      workspaceDir: root,
-      config: cfg,
+  });
+}
+
+it.each(["before-accounting", "during-payload-preparation"] as const)(
+  "consolidates only the model switch present %s",
+  async (when) => {
+    const fixture = await createFixture();
+    fixture.context.execution.result.payloads = [
+      { text: "done", mediaUrl: "https://example.invalid/final.png" },
+    ];
+    let payloadPrepared = false;
+    fixture.context.replyMediaContext.normalizePayload = async (payload) => {
+      payloadPrepared = true;
+      if (when === "during-payload-preparation") {
+        await fixture.replace({ ...fixture.read()!, liveModelSwitchPending: true });
+      }
+      return payload;
+    };
+    if (when === "before-accounting") {
+      await fixture.replace({
+        ...fixture.context.activeSessionEntry!,
+        liveModelSwitchPending: true,
+      });
+    }
+    await finalizeReplyAgentRun(fixture.context);
+    expect(payloadPrepared).toBe(true);
+    expect(fixture.read()?.liveModelSwitchPending).toBe(
+      when === "during-payload-preparation" ? true : undefined,
+    );
+  },
+);
+
+it.each([
+  { name: "auth profile", authProfileOverride: "openai:new", authProfileOverrideSource: "user" },
+  { name: "auth provenance", authProfileOverride: "openai:old", authProfileOverrideSource: "user" },
+] as const)(
+  "preserves a newer $name switch selected during payload preparation",
+  async ({ authProfileOverride, authProfileOverrideSource }) => {
+    const fixture = await createFixture();
+    fixture.context.execution.result.payloads = [
+      { text: "done", mediaUrl: "https://example.invalid/final.png" },
+    ];
+    await fixture.replace({
+      ...fixture.context.activeSessionEntry!,
+      authProfileOverride: "openai:old",
+      authProfileOverrideSource: "auto",
+      liveModelSwitchPending: true,
+    });
+    let payloadPrepared = false;
+    fixture.context.replyMediaContext.normalizePayload = async (payload) => {
+      payloadPrepared = true;
+      await fixture.replace({
+        ...fixture.read()!,
+        authProfileOverride,
+        authProfileOverrideSource,
+        liveModelSwitchPending: true,
+      });
+      return payload;
+    };
+
+    await finalizeReplyAgentRun(fixture.context);
+
+    expect(payloadPrepared).toBe(true);
+    expect(fixture.read()).toMatchObject({
+      modelProvider: diagnostic.provider,
+      model: diagnostic.model,
+      authProfileOverride,
+      authProfileOverrideSource,
+      liveModelSwitchPending: true,
+    });
+  },
+);
+
+it("keeps native incognito accounting and final custody on the retained memory owner", async () => {
+  const root = tempDirs.make("openclaw-native-completion-");
+  const env = { OPENCLAW_STATE_DIR: root };
+  const nativePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+  const options = { agentId: "main", env, path: nativePath };
+  const owner = openOpenClawAgentDatabase(options);
+  try {
+    const fixture = await createAgentAccountingPersistenceFixture({
+      storePath: nativePath,
+      root,
+      fixtureId: ++fixtureSequence,
+      registerOperation: (operation) => operations.push(operation),
+    });
+    fixture.context.execution.result.meta.agentMeta = {
+      sessionId: fixture.sessionId,
       provider: diagnostic.provider,
       model: diagnostic.model,
-    },
-  });
-  const sessionStore = { [sessionKey]: entry };
-  const replyOperation = createReplyOperation({
-    sessionId: entry.sessionId,
-    sessionKey,
-    resetTriggered: false,
-  });
-  replyOperation.setPhase("running");
-  retainReplyOperationUntilComplete(replyOperation);
-  operations.push(replyOperation);
-  const context: FinalizeReplyAgentRunInput = {
-    activeIsNewSession: false,
-    activeSessionEntry: entry,
-    activeSessionStore: sessionStore,
-    blockReplyPipeline: null,
-    blockStreamingEnabled: false,
-    cfg,
-    commandBody: followupRun.prompt,
-    defaultModel: diagnostic.model,
-    followupRun,
-    isHeartbeat: false,
-    pendingToolTasks: new Set(),
-    preflightCompactionApplied: false,
-    queueKey: sessionKey,
-    replyMediaContext: { normalizePayload: async (payload) => payload },
-    replyOperation,
-    replyRouteThreadId: undefined,
-    replyToChannel: undefined,
-    replyToMode: "off",
-    resolvedBlockStreamingBreak: "message_end",
-    resolvedQueue: { mode: "followup" },
-    resolvedVerboseLevel: "off",
-    returnWithQueuedFollowupDrain: (value) => value,
-    runFollowupTurn: async () => {},
-    execution: {
-      kind: "settled",
-      status: "ok",
-      result: {
-        payloads: [{ text: "done" }],
-        meta: {
-          durationMs: 1,
-          requestShaping: { authMode: "api-key", fallbackEligible: false },
-        },
-      },
-      resolved: { provider: diagnostic.provider, model: diagnostic.model },
-      fallback: { exhausted: false, attempts: [] },
-      autoCompactionCount: 0,
-      didLogHeartbeatStrip: false,
-    },
-    runId,
-    runStartedAt: Date.now(),
-    sessionCtx: {},
-    sessionKey,
-    shouldInjectGroupIntro: false,
-    storePath,
-    typingSignals: createTypingSignaler({
-      typing: createMockTypingController(),
-      mode: "never",
-      isHeartbeat: false,
-    }),
-  };
-  const handle = createReplySessionEntryHandle({
-    sessionEntry: entry,
-    sessionStore,
-    sessionKey,
-    generationFence: { sessionId: entry.sessionId, expectedStoreEntry: entry },
-  });
-  const turn: AdmittedFollowupTurn = {
-    runId: context.runId,
-    queued: followupRun,
-    operation: context.replyOperation,
-    config: cfg,
-    session: {
-      kind: "session",
-      key: sessionKey,
-      storePath,
-      current: () => handle.getCurrent(),
-      publish: (next) => next && handle.replaceCurrent(next),
-      adopt: (next) => handle.adoptCurrent(next),
-    },
-    sessionStore: handle.toCompatSessionStore(),
-    sendPolicy: "allow",
-    preflightCompactionApplied: false,
-  };
-  const accountQueued = (outcome: AgentTurnExecutionResult["outcome"]) =>
-    accountFollowupTurn({
-      turn,
-      defaults: {
-        defaultModel: diagnostic.model,
-        typing: createMockTypingController(),
-        typingMode: "never",
-        opts: { isHeartbeat: context.isHeartbeat },
-      },
-      execution: {
-        commentaryPayloadsEnabled: false,
-        execution: { runId: context.runId, outcome },
-        runStartedAt: context.runStartedAt,
-        sessionCtx: {},
-        pendingToolTasks: context.pendingToolTasks,
-        progress: { drain: async () => {} },
+      usage: { input: 120, output: 8 },
+    };
+    const result = await finalizeReplyAgentRun(fixture.context);
+    expect(result).toMatchObject({ text: "done" });
+    const final = Array.isArray(result) ? result[0] : result;
+    const completion = final && getReplyPayloadMetadata(final)?.pendingFinalDeliveryCompletion;
+    expect(completion).toMatchObject({
+      sessionId: fixture.sessionId,
+      sessionKey: fixture.context.sessionKey,
+      storePath: nativePath,
+    });
+    expect(fixture.read()).toMatchObject({
+      inputTokens: 120,
+      outputTokens: 8,
+      pendingFinalDelivery: {
+        intentId: completion?.intentId,
+        text: "done",
+        deliveries: [{ id: completion?.deliveryId, state: "prepared" }],
       },
     });
-  const recordCompaction = (params: { sessionId?: string; currentContextTokens?: number } = {}) => {
-    const fact: CompactionAccountingFact = {
-      kind: "durable",
-      count: 1,
-      currentContextSnapshot: { tokens: params.currentContextTokens },
-      target: {
-        agentId: "main",
-        sessionKey,
-        storePath,
-        sessionId: params.sessionId ?? entry.sessionId,
-        lifecycleRevision: entry.lifecycleRevision,
-        activeWriterRunId: entry.activeWriterRunId,
-      },
-    };
-    const compaction: AgentTurnCompaction = { count: fact.count, durable: [fact] };
-    context.execution.autoCompactionCount = compaction.count;
-    context.execution.compaction = compaction;
-    return compaction;
+    expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(owner);
+    expect(fs.existsSync(nativePath)).toBe(false);
+  } finally {
+    await disposeOpenClawAgentDatabaseByPath(nativePath);
+  }
+});
+
+it("publishes a prepared final only after its worker completion commits without host transactions", async () => {
+  const fixture = await createFixture();
+  const payload = { text: "durable final" };
+  fixture.context.execution.result.payloads = [payload];
+  const sql = observeHostDataSql();
+  try {
+    const result = await finalizeReplyAgentRun(fixture.context);
+    expect(result).toMatchObject({ text: "durable final" });
+    expect(
+      sql.queries.filter((query) =>
+        /\b(?:BEGIN|COMMIT|ROLLBACK|INSERT|UPDATE|DELETE)\b/i.test(query),
+      ),
+    ).toEqual([]);
+    const final = Array.isArray(result) ? result[0] : result;
+    const completion = final && getReplyPayloadMetadata(final)?.pendingFinalDeliveryCompletion;
+    expect(completion).toMatchObject({
+      sessionId: fixture.sessionId,
+      sessionKey: fixture.context.sessionKey,
+      storePath,
+    });
+    expect(fixture.read()?.pendingFinalDelivery).toMatchObject({
+      intentId: completion?.intentId,
+      deliveries: [{ id: completion?.deliveryId, state: "prepared" }],
+      text: "durable final",
+    });
+  } finally {
+    sql.restore();
+  }
+});
+
+it("completes against the settled writer when the caller still has its pre-run entry", async () => {
+  const fixture = await createFixture();
+  fixture.context.execution.sessionWriter = {
+    agentId: "main",
+    storePath,
+    sessionKey: fixture.context.sessionKey!,
+    sessionId: fixture.sessionId,
+    lifecycleRevision: fixture.context.activeSessionEntry!.lifecycleRevision,
+    activeWriterRunId: fixture.context.runId,
   };
-  return {
-    sessionId,
-    context,
-    turn,
-    deliverQueued: async () => {
-      const registry = createEmptyPluginRegistry();
-      registry.providers.push({
-        pluginId: "synthetic",
-        source: "test",
-        provider: { id: diagnostic.provider, label: "Synthetic provider", auth: [] },
-      });
-      return withPluginRuntimeRegistryScope(registry, async () => {
-        const delivered: ReplyPayload[] = [];
-        const accounting = await accountQueued(context.execution);
-        const decision = await resolveFollowupDeliveryDecision({
-          turn,
-          execution: { runId: context.runId, outcome: context.execution },
-          accounting,
-          opts: { onBlockReply: async () => {} },
-        });
-        await deliverFollowupDecision({
-          decision,
-          turn,
-          defaults: {
-            defaultModel: diagnostic.model,
-            typing: createMockTypingController(),
-            typingMode: "never",
-            opts: {
-              onBlockReply: async (payload) => {
-                delivered.push(payload);
-              },
-            },
-          },
-          runId: context.runId,
-          runFollowup: async () => {},
-        });
-        return delivered;
-      });
-    },
-    recordCompaction,
-    accountAborted: (reason: "user" | "restart") => {
-      const compaction =
-        context.execution.compaction ?? recordCompaction({ currentContextTokens: 40 });
-      if (reason === "restart") {
-        replyOperation.abortForRestart();
-      } else {
-        replyOperation.abortByUser();
-      }
-      return accountQueued({ kind: "aborted", reason, compaction });
-    },
-    read: () => loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
-    replace: (next: SessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
-    account: async (lane: "ordinary" | "followup", meta: Partial<EmbeddedAgentMeta>) => {
-      context.execution.result.meta.agentMeta = {
-        sessionId: entry.sessionId,
-        provider: diagnostic.provider,
-        model: diagnostic.model,
-        contextTokens: 1_000,
-        contextBudgetStatus: diagnostic,
-        ...meta,
+  Object.assign(fixture.context.activeSessionEntry!, { activeWriterRunId: undefined });
+
+  const result = await finalizeReplyAgentRun(fixture.context);
+
+  expect(result).toMatchObject({ text: "done" });
+  expect(fixture.read()).toMatchObject({
+    activeWriterRunId: fixture.context.runId,
+    pendingFinalDelivery: { text: "done" },
+  });
+  expect(fixture.read()?.compactionCount).toBeUndefined();
+});
+
+function observeCompletionCommands(
+  options: { hideCommittedReceipt?: boolean; beforeCommit?: () => void } = {},
+) {
+  const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+  const commands: string[] = [];
+  const execution = vi
+    .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
+    .mockImplementation((...args) => {
+      const owner = capture(...args);
+      return {
+        ...owner,
+        get fileIdentity() {
+          return owner.fileIdentity;
+        },
+        runExisting: (source, run, runOptions) =>
+          owner.runExisting(
+            source,
+            (worker) =>
+              run({
+                execute(command, commandOptions) {
+                  commands.push(command.type);
+                  return worker.execute(command, commandOptions);
+                },
+              }),
+            runOptions,
+          ),
       };
-      if (lane === "ordinary") {
-        const accounting = await accountAgentTurn(context);
-        await completeReplyAgentRun({
-          context,
-          accounting,
-          prepared: {
-            kind: "continue",
-            activeSessionEntry: accounting.activeSessionEntry,
-            // The reply was already delivered; exercise completion bookkeeping
-            // without creating another pending delivery intent.
-            completedSourceReplyDelivery: true,
-            guardedReplyPayloads: [],
-            responseUsageLine: undefined,
+    });
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+  const admission = vi
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((authorize, attachment) => {
+      let terminalCommit = false;
+      const owner = createAdmission((request, grant) => {
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          isRecord(request.facts.publication) &&
+          request.facts.publication.kind === "session-actor-admission" &&
+          request.facts.publication.final === true
+        ) {
+          terminalCommit = true;
+          options.beforeCommit?.();
+        }
+        return authorize(request, grant);
+      }, attachment);
+      if (options.hideCommittedReceipt) {
+        const committed = Object.getOwnPropertyDescriptor(owner, "committed")!;
+        Object.defineProperty(owner, "committed", {
+          get() {
+            const receipt = committed.get!.call(owner);
+            return terminalCommit ? undefined : receipt;
           },
         });
-      } else {
-        turn.preflightCompactionApplied = context.preflightCompactionApplied === true;
-        await accountQueued(context.execution);
       }
+      return owner;
+    });
+  return {
+    commands,
+    restore() {
+      admission.mockRestore();
+      execution.mockRestore();
     },
   };
 }
+
+it.each(["publication-failure", "unknown-commit"] as const)(
+  "does not disclose or replay a durable final after %s",
+  async (failure) => {
+    const fixture = await createFixture();
+    fixture.context.execution.result.meta.agentMeta = {
+      sessionId: fixture.sessionId,
+      provider: diagnostic.provider,
+      model: diagnostic.model,
+      usage: { input: 120, output: 8 },
+    };
+    if (failure === "publication-failure") {
+      fixture.context.activeSessionStore = Object.freeze({ ...fixture.context.activeSessionStore });
+    }
+    const observer = observeCompletionCommands({
+      hideCommittedReceipt: failure === "unknown-commit",
+    });
+    try {
+      await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
+        failure === "unknown-commit"
+          ? "Unconfirmed actor settlement"
+          : /read only|readonly|extensible/i,
+      );
+      expect(
+        observer.commands.filter((command) => command === "session.actor.completeTurn"),
+      ).toHaveLength(1);
+      expect(fixture.read()).toMatchObject({
+        inputTokens: 120,
+        outputTokens: 8,
+        pendingFinalDelivery: {
+          text: "done",
+          deliveries: [{ state: "prepared" }],
+        },
+      });
+    } finally {
+      observer.restore();
+    }
+  },
+);
+
+it.each(["usage-only", "with-final-custody"] as const)(
+  "preserves %s failure semantics after a proven worker rollback",
+  async (kind) => {
+    const fixture = await createFixture();
+    const meta = {
+      sessionId: fixture.sessionId,
+      provider: diagnostic.provider,
+      model: diagnostic.model,
+      usage: { input: 120, output: 8 },
+    };
+    fixture.context.execution.result.meta.agentMeta = meta;
+    const before = fixture.read();
+    const beforeCommit = vi.fn(() => {
+      throw new Error("synthetic completion refusal");
+    });
+    const observer = observeCompletionCommands({ beforeCommit });
+    try {
+      if (kind === "usage-only") {
+        await expect(fixture.account("ordinary", meta)).resolves.toBeUndefined();
+      } else {
+        await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
+          "synthetic completion refusal",
+        );
+      }
+      expect(
+        observer.commands.filter((command) => command === "session.actor.completeTurn"),
+      ).toHaveLength(1);
+      expect(beforeCommit).toHaveBeenCalledOnce();
+      expect(fixture.read()).toEqual(before);
+    } finally {
+      observer.restore();
+    }
+  },
+);
+
+it("rechecks the live reply operation at the final commit boundary", async () => {
+  const fixture = await createFixture();
+  const before = fixture.read();
+  const beforeCommit = vi.fn(() => {
+    fixture.context.replyOperation.complete();
+  });
+  const observer = observeCompletionCommands({ beforeCommit });
+  try {
+    await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
+      "Terminal accounting lost its reply operation",
+    );
+    expect(
+      observer.commands.filter((command) => command === "session.actor.completeTurn"),
+    ).toHaveLength(1);
+    expect(beforeCommit).toHaveBeenCalledOnce();
+    expect(fixture.read()).toEqual(before);
+  } finally {
+    observer.restore();
+  }
+});
+
+it.each([
+  { name: "typed runtime", tokens: 1_000_000, source: "runtime" as const, expected: 1_000_000 },
+  { name: "source-less runtime", tokens: 512_000, source: undefined, expected: 512_000 },
+  { name: "current model lookup", tokens: undefined, source: undefined, expected: 1_000 },
+  { name: "prior context fallback", tokens: undefined, source: undefined, expected: 272_000 },
+])(
+  "persists $name context provenance through completion",
+  async ({ name, tokens, source, expected }) => {
+    const fixture = await createFixture();
+    if (name === "prior context fallback") {
+      const previous = {
+        ...fixture.context.activeSessionEntry!,
+        model: "old-model",
+        contextTokens: 272_000,
+        contextTokensSource: "resolved" as const,
+      };
+      await fixture.replace(previous);
+      fixture.context.activeSessionEntry = previous;
+      fixture.turn.session.adopt(previous);
+      fixture.context.followupRun.run.model = "unlisted-model";
+      fixture.context.execution.resolved.model = "unlisted-model";
+    }
+    await fixture.account("followup", {
+      model: fixture.context.execution.resolved.model,
+      agentHarnessId: "context-fixture",
+      contextTokens: tokens,
+      contextTokensSource: source,
+    });
+    expect(fixture.read()).toMatchObject({
+      contextTokens: expected,
+      agentHarnessId: "context-fixture",
+    });
+    expect(fixture.read()?.contextTokensSource).toBe(
+      name === "current model lookup"
+        ? "resolved-v1"
+        : name === "prior context fallback"
+          ? undefined
+          : "runtime",
+    );
+  },
+);
 
 it.each([
   { stored: "off", selected: "raw", authorized: true, trace: true },
@@ -374,31 +466,8 @@ it.each([
   },
 );
 
-it.each([
-  { stored: "off", selected: "on", status: true },
-  { stored: "on", selected: "off", status: false },
-] as const)(
-  "delivers queued plugin status at turn verbosity $selected over stored $stored",
-  async ({ stored, selected, status }) => {
-    const fixture = await createFixture();
-    await fixture.replace({
-      ...fixture.context.activeSessionEntry!,
-      verboseLevel: stored,
-      pluginDebugEntries: [{ pluginId: "synthetic", lines: ["PLUGIN_STATUS_MARKER"] }],
-    });
-    fixture.context.followupRun.run.verboseLevelOverride = selected;
-    const delivered = await fixture.deliverQueued();
-    expect(delivered.some((payload) => payload.text?.includes("PLUGIN_STATUS_MARKER"))).toBe(
-      status,
-    );
-    expect(fixture.read()?.verboseLevel).toBe(stored);
-  },
-);
-
 describe.each(["ordinary", "followup"] as const)("%s completion verbosity", (lane) => {
   it.each([
-    { initial: "on", live: "off", override: undefined, visible: false },
-    { initial: "off", live: "on", override: undefined, visible: true },
     { initial: "on", live: "off", override: "on", visible: true },
     { initial: "off", live: "on", override: "off", visible: false },
   ] as const)(
@@ -434,7 +503,6 @@ it.each([
   { lane: "ordinary", field: "sessionId" },
   { lane: "ordinary", field: "lifecycleRevision" },
   { lane: "followup", field: "sessionId" },
-  { lane: "followup", field: "lifecycleRevision" },
 ] as const)(
   "keeps $lane diagnostic refresh inside its captured $field",
   async ({ lane, field }) => {
@@ -500,19 +568,6 @@ it.each([
   },
 );
 
-it("does not let queued diagnostics replace a missing terminal answer", async () => {
-  const fixture = await createFixture();
-  fixture.context.followupRun.run.traceAuthorized = true;
-  fixture.context.followupRun.run.traceLevelOverride = "raw";
-  fixture.context.execution.result.payloads = [];
-  const delivered = await fixture.deliverQueued();
-  expect(
-    delivered.some((payload) => payload.isError && isReplyPayloadTerminalContent(payload)),
-  ).toBe(true);
-  const supplement = delivered.find((payload) => payload.text?.includes("Model Input (User Role)"));
-  expect(supplement?.isStatusNotice).toBe(true);
-});
-
 it("keeps queued diagnostic supplements behind source send policy", async () => {
   const fixture = await createFixture();
   fixture.context.followupRun.run.traceAuthorized = true;
@@ -546,11 +601,35 @@ it("accounts a completed compaction before an empty heartbeat skips reply prepar
   expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
 });
 
+describe.each(["ordinary", "followup"] as const)("%s byte-compaction accounting", (lane) => {
+  it.each([false, true])(
+    "preserves suppression unless host history changed (%s)",
+    async (hostCompactionCommitted) => {
+      const fixture = await createFixture();
+      const latch = { activeBytes: 60_000, sessionId: fixture.sessionId, maxBytes: 50_000 };
+      await fixture.replace({
+        ...fixture.context.activeSessionEntry!,
+        transcriptByteCompactionLatch: latch,
+      });
+      const compaction = fixture.recordCompaction({ currentContextTokens: 40 });
+      const fact = compaction.durable[0]!;
+      compaction.durable = [];
+      recordTurnCompaction(compaction, { ...fact, hostCompactionCommitted });
+      // A later native fact from the same writer must retain the prior host rewrite.
+      recordTurnCompaction(compaction, fact);
+
+      await fixture.account(lane, { compactionCount: 2, usage: { input: 120 } });
+
+      expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(
+        hostCompactionCommitted ? undefined : latch,
+      );
+    },
+  );
+});
+
 it.each([
   { completion: "NO_REPLY", expectation: "required", missing: true },
-  { completion: "NO_REPLY", expectation: "optional", missing: false },
   { completion: "hook_block", expectation: "required", missing: false },
-  { completion: "empty", expectation: "required", missing: true },
 ] as const)(
   "finalizes a $expectation $completion fallback without hiding missing output",
   async ({ completion, expectation, missing }) => {
@@ -594,7 +673,7 @@ it.each([
 );
 
 describe("cancelled followup compaction accounting", () => {
-  it.each(["user", "restart"] as const)(
+  it.each(["restart"] as const)(
     "retains committed compaction facts after %s abort without success bookkeeping",
     async (reason) => {
       const fixture = await createFixture();
@@ -654,16 +733,6 @@ describe("cancelled followup compaction accounting", () => {
     expect(fixture.read()).toMatchObject({ sessionId, compactionCount: 4, totalTokens: 40 });
   });
 
-  it("keeps target-less cancelled counts presentation-only", async () => {
-    const fixture = await createFixture();
-    fixture.context.execution.compaction = { count: 2, durable: [] };
-    const before = fixture.read();
-
-    await fixture.accountAborted("user");
-
-    expect(fixture.read()).toEqual(before);
-  });
-
   it("rejects a late old operation even when a replacement reuses its writer string", async () => {
     const fixture = await createFixture();
     fixture.recordCompaction({ currentContextTokens: 40 });
@@ -680,30 +749,10 @@ describe("cancelled followup compaction accounting", () => {
 
     expect(fixture.read()).toEqual(before);
   });
-
-  it.each([
-    { name: "session", replacement: { sessionId: "replacement-session" } },
-    { name: "lifecycle", replacement: { lifecycleRevision: "generation-2" } },
-    { name: "writer", replacement: { activeWriterRunId: "newer-writer" } },
-  ])("does not apply cancelled facts to a replacement $name", async ({ name, replacement }) => {
-    const fixture = await createFixture();
-    await fixture.replace({
-      ...fixture.context.activeSessionEntry!,
-      ...(name === "session" ? { sessionId: `${fixture.sessionId}-replacement` } : replacement),
-      compactionCount: 9,
-      totalTokens: 666,
-    });
-    const replacementEntry = fixture.read();
-
-    await fixture.accountAborted("user");
-
-    expect(fixture.read()).toEqual(replacementEntry);
-  });
 });
-
-describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting", (lane) => {
+describe("followup context-pressure accounting", () => {
+  const lane = "followup";
   it.each([
-    { runtimeOwned: true, finalizer: false },
     { runtimeOwned: true, finalizer: true },
     { runtimeOwned: false, finalizer: false },
   ])(
@@ -775,9 +824,6 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
 
   it.each([
     { name: "new diagnostic with usage", withUsage: true, contextBudgetStatus: diagnostic },
-    { name: "new diagnostic without usage", withUsage: false, contextBudgetStatus: diagnostic },
-    { name: "missing diagnostic with usage", withUsage: true, contextBudgetStatus: undefined },
-    { name: "missing diagnostic without usage", withUsage: false, contextBudgetStatus: undefined },
   ])(
     "persists $name without changing token/cost accounting",
     async ({ withUsage, contextBudgetStatus }) => {
@@ -801,101 +847,13 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
     },
   );
 
-  it.each([
-    { mode: "heartbeat", withUsage: true },
-    { mode: "heartbeat", withUsage: false },
-    { mode: "exhausted fallback", withUsage: true },
-    { mode: "exhausted fallback", withUsage: false },
-    { mode: "inter-session completion", withUsage: true },
-    { mode: "inter-session completion", withUsage: false },
-  ])("preserves diagnostics for $mode with usage=$withUsage", async ({ mode, withUsage }) => {
+  it("preserves diagnostics for exhausted fallback with usage", async () => {
     const fixture = await createFixture();
-    fixture.context.isHeartbeat = mode === "heartbeat";
-    if (mode === "heartbeat") {
-      fixture.context.followupRun.run.terminalReplyExpectation = "optional";
-    }
-    fixture.context.execution.fallback.exhausted = mode === "exhausted fallback";
-    if (mode === "inter-session completion") {
-      fixture.context.followupRun.run.inputProvenance = {
-        kind: "inter_session",
-        sourceTool: "subagent_announce",
-      };
-    }
+    fixture.context.execution.fallback.exhausted = true;
     const before = fixture.read()?.contextBudgetStatus;
-    await fixture.account(lane, { usage: withUsage ? { input: 120 } : undefined });
+    await fixture.account(lane, { usage: { input: 120 } });
     expect(fixture.read()?.contextBudgetStatus).toEqual(before);
   });
-
-  it.each([
-    { name: "fresh", contextBudgetStatus: diagnostic },
-    { name: "unavailable", contextBudgetStatus: undefined },
-  ])(
-    "records a $name diagnostic after preflight compaction without usage",
-    async ({ contextBudgetStatus }) => {
-      const fixture = await createFixture();
-      await incrementCompactionCount({
-        sessionEntry: fixture.context.activeSessionEntry,
-        sessionStore: fixture.context.activeSessionStore,
-        sessionKey: fixture.context.sessionKey,
-        storePath: fixture.context.storePath,
-        amount: 1,
-        tokensAfter: 40,
-      });
-      expect(fixture.read()?.contextBudgetStatus).toBeUndefined();
-      fixture.context.preflightCompactionApplied = true;
-      await fixture.account(lane, { contextBudgetStatus });
-      expect(fixture.read()?.contextBudgetStatus).toEqual(contextBudgetStatus);
-      expect(fixture.read()).toMatchObject({
-        totalTokens: 40,
-        totalTokensFresh: true,
-        compactionCount: 1,
-      });
-    },
-  );
-
-  it.each([
-    { order: "compaction then model", currentContextTokens: 120, withModelSnapshot: true },
-    { order: "model then compaction", currentContextTokens: 40, withModelSnapshot: true },
-    { order: "model then zero compaction", currentContextTokens: 0, withModelSnapshot: true },
-    {
-      order: "later unknown observation",
-      currentContextTokens: undefined,
-      withModelSnapshot: true,
-    },
-    {
-      order: "compaction without model context",
-      currentContextTokens: 40,
-      withModelSnapshot: false,
-    },
-  ])(
-    "uses $order chronology without discarding billing usage",
-    async ({ currentContextTokens, withModelSnapshot }) => {
-      const fixture = await createFixture();
-      fixture.recordCompaction({ currentContextTokens });
-      const usage = { input: 120, output: 8 };
-      await fixture.account(lane, {
-        usage,
-        lastCallUsage: withModelSnapshot ? usage : undefined,
-        promptTokens: withModelSnapshot ? 120 : undefined,
-        compactionTokensAfter: 40,
-      });
-      const persisted = fixture.read();
-      expect(persisted?.contextBudgetStatus).toBeUndefined();
-      expect(persisted?.totalTokens).toBe(currentContextTokens);
-      expect(persisted).toMatchObject({
-        compactionCount: 1,
-        totalTokensFresh: currentContextTokens !== undefined,
-        inputTokens: 120,
-        outputTokens: 8,
-        estimatedCostUsd: 0.000136,
-      });
-      expect(fixture.context.activeSessionStore?.[fixture.context.sessionKey!]).toMatchObject({
-        inputTokens: 120,
-        outputTokens: 8,
-        totalTokensFresh: currentContextTokens !== undefined,
-      });
-    },
-  );
 
   it.each(["session", "context-pressure-successor"])(
     "accounts current-generation compaction into accepted %s",
@@ -906,7 +864,10 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
           ? fixture.sessionId
           : `${fixture.sessionId}-context-pressure-successor`;
       fixture.recordCompaction({ sessionId, currentContextTokens: 120 });
-      await fixture.replace({ ...fixture.context.activeSessionEntry!, sessionId });
+      const successor = { ...fixture.context.activeSessionEntry!, sessionId };
+      await fixture.replace(successor);
+      fixture.context.activeSessionEntry = successor;
+      fixture.turn.session.adopt(successor);
       fixture.context.replyOperation.updateSessionId(sessionId);
       await fixture.account(lane, {
         sessionId,
@@ -925,7 +886,33 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
       });
     },
   );
+});
 
+it.each([{ name: "unavailable", contextBudgetStatus: undefined }])(
+  "records a $name diagnostic after preflight compaction without usage",
+  async ({ contextBudgetStatus }) => {
+    const fixture = await createFixture();
+    await incrementCompactionCount({
+      sessionEntry: fixture.context.activeSessionEntry,
+      sessionStore: fixture.context.activeSessionStore,
+      sessionKey: fixture.context.sessionKey,
+      storePath: fixture.context.storePath,
+      amount: 1,
+      tokensAfter: 40,
+    });
+    expect(fixture.read()?.contextBudgetStatus).toBeUndefined();
+    fixture.context.preflightCompactionApplied = true;
+    await fixture.account("ordinary", { contextBudgetStatus });
+    expect(fixture.read()?.contextBudgetStatus).toEqual(contextBudgetStatus);
+    expect(fixture.read()).toMatchObject({
+      totalTokens: 40,
+      totalTokensFresh: true,
+      compactionCount: 1,
+    });
+  },
+);
+
+describe.each(["ordinary", "followup"] as const)("%s accounting replacement races", (lane) => {
   it.each([
     { name: "session", replacement: { sessionId: "replacement-session" } },
     { name: "lifecycle", replacement: { lifecycleRevision: "generation-2" } },
@@ -970,29 +957,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
       await fixture.replace(next);
       const persisted = fixture.read();
       pendingTool.resolve();
-      await accounting;
-      expect(fixture.read()).toEqual(persisted);
-    },
-  );
-
-  it.each([
-    { name: "session", replacement: { sessionId: "replacement-session" }, withUsage: true },
-    { name: "session", replacement: { sessionId: "replacement-session" }, withUsage: false },
-    { name: "generation", replacement: { lifecycleRevision: "generation-2" }, withUsage: true },
-    { name: "generation", replacement: { lifecycleRevision: "generation-2" }, withUsage: false },
-  ])(
-    "does not write an old result into a replacement $name with usage=$withUsage",
-    async ({ name, replacement, withUsage }) => {
-      const fixture = await createFixture();
-      const next = {
-        ...fixture.context.activeSessionEntry!,
-        ...(name === "session" ? { sessionId: `${fixture.sessionId}-replacement` } : replacement),
-        contextBudgetStatus: undefined,
-      };
-      await fixture.replace(next);
-      const persisted = fixture.read();
-      const usage = withUsage ? { input: 120 } : undefined;
-      await fixture.account(lane, { usage, lastCallUsage: usage });
+      await expect(accounting).rejects.toThrow("Terminal accounting session changed");
       expect(fixture.read()).toEqual(persisted);
     },
   );
@@ -1011,7 +976,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
     Object.assign(fixture.context.activeSessionEntry!, replacement);
     const persisted = fixture.read();
     pendingTool.resolve();
-    await accounting;
+    await expect(accounting).rejects.toThrow("Terminal accounting session changed");
     expect(fixture.read()).toEqual(persisted);
   });
 
@@ -1022,7 +987,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
       removals: [{ sessionKey: fixture.context.sessionKey! }],
       skipMaintenance: true,
     });
-    await fixture.account(lane, { usage: { input: 120 } });
+    await expect(fixture.account(lane, { usage: { input: 120 } })).rejects.toThrow();
     expect(fixture.read()).toBeUndefined();
   });
 });

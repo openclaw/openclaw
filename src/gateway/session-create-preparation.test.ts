@@ -1,10 +1,465 @@
 import fs from "node:fs/promises";
-import { describe, expect, it } from "vitest";
-import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import {
+  clearActiveEmbeddedRun,
+  isEmbeddedAgentRunActive,
+  setActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import {
+  beginSessionWorkAdmission,
+  runExclusiveSessionLifecycleMutation,
+} from "../sessions/session-lifecycle-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import * as repositoryWorkspaces from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { prepareSessionRepositoryWorkspace } from "./server-methods/session-create-project.js";
 import { createGatewaySession } from "./session-create-service.js";
+import { resolveSessionMutationAuthorization } from "./session-sharing.js";
+import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
+import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 
 describe("Gateway creation preparation", () => {
+  it.each(["caller", "database"] as const)(
+    "keeps repository creation compensation bound to its original source after %s retirement",
+    async (retired) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const store = repositoryWorkspaces.getSessionRepositoryWorkspaceStore();
+        const selectStore = vi
+          .spyOn(repositoryWorkspaces, "getSessionRepositoryWorkspaceStore")
+          .mockReturnValue(store);
+        const create = store.create.bind(store);
+        let current = true;
+        const createTarget = vi.spyOn(store, "create").mockImplementationOnce(async (input) => {
+          const created = await create(input);
+          const artifact = store.artifactPath(created.workspaceId);
+          await fs.mkdir(artifact, { recursive: true });
+          await fs.writeFile(path.join(artifact, "retained-owner"), "accepted target");
+          if (retired === "database") {
+            await closeOpenClawStateDatabaseByPathAsync(store.path);
+          } else {
+            current = false;
+          }
+          return created;
+        });
+        try {
+          const owner = { agentId: "main", sessionKey: "agent:main:creation-compensation" };
+          const result = await prepareSessionRepositoryWorkspace(
+            { url: "https://github.com/openclaw/fixture.git" },
+            {
+              runSetupScript: false,
+              assertCurrent: () => {
+                if (!current) {
+                  throw new Error("creation caller revoked");
+                }
+              },
+            },
+          )({
+            agentId: owner.agentId,
+            key: owner.sessionKey,
+            storePath: state.path("sessions.sqlite"),
+          });
+          if (!result.ok || !result.value.rollback || !result.value.repositoryWorkspaceId) {
+            throw new Error("Repository creation did not prepare compensation");
+          }
+          const workspaceId = result.value.repositoryWorkspaceId;
+          const persisted = await store.get(workspaceId);
+          expect(persisted).toMatchObject({ workspaceId, ...owner });
+          if (retired === "database") {
+            await expect(result.value.rollback()).rejects.toBeInstanceOf(
+              StateDatabaseReadAdmissionInvalidatedError,
+            );
+            expect(await store.get(workspaceId)).toEqual(persisted);
+            expect(
+              await fs.readFile(
+                path.join(store.artifactPath(workspaceId), "retained-owner"),
+                "utf8",
+              ),
+            ).toBe("accepted target");
+          } else {
+            await result.value.rollback();
+            expect(await store.get(workspaceId)).toBeUndefined();
+            await expect(fs.stat(store.artifactPath(workspaceId))).rejects.toMatchObject({
+              code: "ENOENT",
+            });
+          }
+          if (!result.value.withCommit) {
+            throw new Error("Repository creation did not retain its persistence source");
+          }
+          const commit = vi.fn(async (assertSourceCurrent: () => void) => assertSourceCurrent());
+          const publication = result.value.withCommit(commit);
+          if (retired === "database") {
+            await expect(publication).rejects.toBeInstanceOf(
+              StateDatabaseReadAdmissionInvalidatedError,
+            );
+          } else {
+            await expect(publication).rejects.toThrow("creation caller revoked");
+          }
+          expect(commit).not.toHaveBeenCalled();
+        } finally {
+          createTarget.mockRestore();
+          selectStore.mockRestore();
+        }
+      });
+    },
+  );
+
+  it.each([
+    ["canonical", undefined],
+    ["alias", undefined],
+    ["sessionId", undefined],
+    ["embedded", undefined],
+    ["canonical", "sessionRoot"],
+    ["canonical", "spawnedCwd"],
+    ["canonical", "execNode"],
+  ] as const)(
+    "rejects active %s work before workspace allocation or direct binding (%s)",
+    async (identity, binding) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const key = "agent:main:main";
+        const originalRoot = state.path("original");
+        const destination = state.path("worktree");
+        const common = {
+          cfg: {},
+          key: "main",
+          commandSource: "test",
+          operatorRoleActor: { kind: "system" as const },
+        };
+        const first = await createGatewaySession({ ...common, sessionRoot: originalRoot });
+        expect(first.ok).toBe(true);
+        if (!first.ok) {
+          throw new Error(first.error.message);
+        }
+        const scope = { ...resolveGatewaySessionStoreTarget({ cfg: {}, key }), sessionKey: key };
+        const transcriptScope = { ...scope, sessionId: first.entry.sessionId };
+        for (const message of [
+          { role: "user", content: "Keep this conversation when moving the workspace." },
+          { role: "assistant", content: "The conversation stays with this session." },
+        ]) {
+          expect(await appendTranscriptMessage(transcriptScope, { message })).toMatchObject({
+            appended: true,
+          });
+        }
+        const transcript = await loadTranscriptEvents(transcriptScope);
+        const onInterrupt = vi.fn();
+        const handle = {
+          abort: onInterrupt,
+          cancel: onInterrupt,
+          isStreaming: () => true,
+          isCompacting: () => false,
+          queueMessage: async () => {},
+        };
+        const admission =
+          identity === "embedded"
+            ? undefined
+            : await beginSessionWorkAdmission({
+                scope: scope.storePath,
+                identities: [
+                  identity === "sessionId"
+                    ? first.entry.sessionId
+                    : identity === "alias"
+                      ? "main"
+                      : key,
+                ],
+                assertAllowed: () => {},
+                onInterrupt,
+              });
+        if (identity === "embedded") {
+          setActiveEmbeddedRun(first.entry.sessionId, handle, key);
+        }
+        const prepareLifecycle = vi.fn(async () => ({
+          ok: true as const,
+          value: { sessionRoot: destination, spawnedCwd: destination },
+        }));
+        try {
+          expect(
+            await createGatewaySession({
+              ...common,
+              ...(binding
+                ? { [binding]: binding === "execNode" ? "selected-node" : destination }
+                : { prepareLifecycle }),
+            }),
+          ).toMatchObject({
+            ok: false,
+            error: { code: "UNAVAILABLE", message: expect.stringContaining("still active") },
+          });
+          expect(prepareLifecycle).not.toHaveBeenCalled();
+          expect(loadSessionEntry(scope)).toMatchObject({
+            sessionId: first.entry.sessionId,
+            sessionRoot: originalRoot,
+          });
+          expect(onInterrupt).not.toHaveBeenCalled();
+          expect(admission?.isActive() ?? isEmbeddedAgentRunActive(first.entry.sessionId)).toBe(
+            true,
+          );
+          expect(
+            await createGatewaySession({ ...common, sessionRoot: originalRoot }),
+          ).toMatchObject({
+            ok: true,
+            entry: { sessionId: first.entry.sessionId, sessionRoot: originalRoot },
+          });
+        } finally {
+          admission?.release();
+          if (identity === "embedded") {
+            clearActiveEmbeddedRun(first.entry.sessionId, handle, key);
+          }
+        }
+        expect(await createGatewaySession({ ...common, prepareLifecycle })).toMatchObject({
+          ok: true,
+          entry: {
+            sessionId: first.entry.sessionId,
+            sessionRoot: destination,
+            spawnedCwd: destination,
+          },
+        });
+        expect(await loadTranscriptEvents(transcriptScope)).toEqual(transcript);
+      });
+    },
+  );
+
+  it("rejects a target identity change while waiting for lifecycle custody", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const key = "agent:main:workspace-drift";
+      const common = {
+        cfg: {},
+        key,
+        commandSource: "test",
+        operatorRoleActor: { kind: "system" as const },
+      };
+      const first = await createGatewaySession(common);
+      expect(first.ok).toBe(true);
+      if (!first.ok) {
+        throw new Error(first.error.message);
+      }
+      const target = resolveGatewaySessionStoreTarget({ cfg: {}, key });
+      const scope = { agentId: target.agentId, sessionKey: key, storePath: target.storePath };
+      const entered = createDeferredCore();
+      const rotate = createDeferredCore();
+      const mutation = runExclusiveSessionLifecycleMutation("create", {
+        scope: target.storePath,
+        identities: [key, first.entry.sessionId],
+        run: async () => {
+          entered.resolve();
+          await rotate.promise;
+          replaceSessionEntrySync(scope, { ...first.entry, sessionId: "replacement-session" });
+        },
+      });
+      await entered.promise;
+      const prepareLifecycle = vi.fn(async () => ({
+        ok: true as const,
+        value: { sessionRoot: state.path("worktree") },
+      }));
+      const lifecycleAdmission = createDeferredCore();
+      const adoption = createGatewaySession({
+        ...common,
+        prepareLifecycle,
+        onPhase: (phase) => {
+          if (phase === "lifecycleAdmission") {
+            lifecycleAdmission.resolve();
+          }
+        },
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          lifecycleAdmission.promise,
+          adoption,
+          "Session adoption settled before lifecycle admission",
+        );
+        rotate.resolve();
+        await mutation;
+        expect(await adoption).toMatchObject({
+          ok: false,
+          error: { code: "UNAVAILABLE", message: expect.stringContaining("changed before") },
+        });
+        expect(prepareLifecycle).not.toHaveBeenCalled();
+        expect(loadSessionEntry(scope)?.sessionId).toBe("replacement-session");
+      } finally {
+        rotate.resolve();
+        await Promise.allSettled([mutation, adoption]);
+      }
+    });
+  });
+
+  it.each(["commit", "rollback"] as const)(
+    "holds queued admission through workspace %s while unrelated work progresses",
+    async (outcome) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const key = "agent:main:workspace-target";
+        const originalRoot = state.path("original");
+        const destination = state.path("worktree");
+        const common = {
+          cfg: {},
+          key,
+          commandSource: "test",
+          operatorRoleActor: { kind: "system" as const },
+        };
+        const first = await createGatewaySession({ ...common, sessionRoot: originalRoot });
+        expect(first.ok).toBe(true);
+        if (!first.ok) {
+          throw new Error(first.error.message);
+        }
+        expect(
+          (await createGatewaySession({ ...common, key: "agent:main:sibling", label: "Taken" })).ok,
+        ).toBe(true);
+        const target = resolveGatewaySessionStoreTarget({ cfg: {}, key });
+        const scope = { agentId: target.agentId, sessionKey: key, storePath: target.storePath };
+        const entered = createDeferredCore();
+        const proceed = createDeferredCore();
+        const rollingBack = createDeferredCore();
+        const finishRollback = createDeferredCore();
+        const creation = createGatewaySession({
+          ...common,
+          ...(outcome === "rollback" ? { label: "Taken" } : {}),
+          prepareLifecycle: async () => {
+            entered.resolve();
+            await proceed.promise;
+            return {
+              ok: true,
+              value: {
+                sessionRoot: destination,
+                rollback: async () => {
+                  rollingBack.resolve();
+                  await finishRollback.promise;
+                },
+              },
+            };
+          },
+        });
+        await Promise.race([
+          entered.promise,
+          creation.then((result) => {
+            throw new Error(`Creation completed before preparation: ${JSON.stringify(result)}`);
+          }),
+        ]);
+        const observedRoots: Array<string | undefined> = [];
+        const queued = beginSessionWorkAdmission({
+          scope: target.storePath,
+          identities: [first.entry.sessionId],
+          assertAllowed: () => {
+            observedRoots.push(loadSessionEntry(scope)?.sessionRoot);
+          },
+        });
+        try {
+          const unrelated = await beginSessionWorkAdmission({
+            scope: target.storePath,
+            identities: ["agent:main:sibling"],
+            assertAllowed: () => {},
+          });
+          unrelated.release();
+          expect(observedRoots).toEqual([]);
+          proceed.resolve();
+          if (outcome === "rollback") {
+            await Promise.race([
+              rollingBack.promise,
+              creation.then((result) => {
+                throw new Error(`Creation completed before rollback: ${JSON.stringify(result)}`);
+              }),
+            ]);
+            expect(observedRoots).toEqual([]);
+          }
+          finishRollback.resolve();
+          expect(await creation).toMatchObject({ ok: outcome === "commit" });
+          const admitted = await queued;
+          admitted.release();
+          expect(new Set(observedRoots)).toEqual(
+            new Set([outcome === "commit" ? destination : originalRoot]),
+          );
+          expect(loadSessionEntry(scope)?.sessionId).toBe(first.entry.sessionId);
+        } finally {
+          proceed.resolve();
+          finishRollback.resolve();
+          await Promise.allSettled([creation, queued.then((admitted) => admitted.release())]);
+        }
+      });
+    },
+  );
+
+  it.each(["sessions.send", "sessions.create", "generated-create"])(
+    "transfers only the creation owner's exact committed row into the original %s lease",
+    async (method) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const client = roleClient("view", "creation-caller");
+        client.connect.scopes = ["operator.sessions.write"];
+        const profileId = client.authenticatedUserProfile!.profileId;
+        const cfg = rolePolicyConfig();
+        const key = "agent:main:created-handoff";
+        const generated = method === "generated-create";
+        const captured = resolveSessionMutationAuthorization({
+          client,
+          context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+          method: generated ? "sessions.create" : method,
+          requestParams: generated ? {} : { key },
+          sessionScope: "operator.sessions.write",
+        });
+        expect(captured.error).toBeNull();
+        const authorization = captured.authorization!;
+        const notify = vi.fn<
+          NonNullable<Parameters<typeof createGatewaySession>[0]["onCreatedSessionCommitted"]>
+        >((created) => {
+          expect(
+            loadSessionEntry({ agentId: created.agentId, sessionKey: created.key }),
+          ).toMatchObject({
+            sessionId: created.entry.sessionId,
+            lifecycleRevision: created.entry.lifecycleRevision,
+          });
+          authorization.recordCreatedSession?.({
+            agentId: created.agentId,
+            sessionKey: created.key,
+            storePath: created.storePath,
+            sessionId: created.entry.sessionId,
+            lifecycleRevision: created.entry.lifecycleRevision,
+          });
+        });
+        const afterCreate = vi.fn<
+          NonNullable<Parameters<typeof createGatewaySession>[0]["afterCreate"]>
+        >(async (created) => {
+          expect(notify).toHaveBeenCalledOnce();
+          expect(() => authorization.assertCurrent()).not.toThrow();
+          const scope = {
+            agentId: created.agentId,
+            sessionKey: created.key,
+            storePath: created.storePath,
+          };
+          replaceSessionEntrySync(scope, { ...created.entry, lifecycleRevision: "replacement" });
+          // A second notification cannot adopt a successor after the first COMMIT.
+          authorization.recordCreatedSession?.({
+            agentId: created.agentId,
+            sessionKey: created.key,
+            storePath: created.storePath,
+            sessionId: created.entry.sessionId,
+            lifecycleRevision: "replacement",
+          });
+          expect(() => authorization.assertCurrent()).toThrow("session changed");
+        });
+        const created = await createGatewaySession({
+          cfg,
+          ...(generated ? {} : { key }),
+          commandSource: "test",
+          requestingOperatorScopes: client.connect.scopes,
+          requestingOperatorProfileId: profileId,
+          operatorRoleActor: { kind: "operator", profileId },
+          creation: { via: "operator", actor: { type: "human", source: "profile", id: profileId } },
+          commitGuard: authorization.assertCurrent,
+          onCreatedSessionCommitted: notify,
+          afterCreate,
+        });
+        expect(created.ok).toBe(true);
+        expect(notify).toHaveBeenCalledOnce();
+        expect(afterCreate).toHaveBeenCalledOnce();
+      });
+    },
+  );
+
   it.each(["sessionRoot", "spawnedCwd"] as const)(
     "keeps an explicit %s when forking",
     async (destination) => {

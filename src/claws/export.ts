@@ -1,19 +1,19 @@
 import { createHash } from "node:crypto";
-import { closeSync } from "node:fs";
 import { mkdir, realpath, rm } from "node:fs/promises";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { stringify as stringifyYaml } from "yaml";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { openLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
+import { prepareLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
-import { AVATAR_MAX_BYTES, isAvatarDataUrl, isAvatarHttpUrl } from "../shared/avatar-policy.js";
+import { isAvatarDataUrl, isAvatarHttpUrl } from "../shared/avatar-policy.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
+import { digestClawBytes } from "./digest.js";
 import { readClawStatus } from "./lifecycle-state.js";
 import type { PackageRemovalDeps } from "./package-remove.js";
 import { readClawManifestFile } from "./reader.js";
@@ -35,7 +35,6 @@ import {
 export const CLAW_EXPORT_RESULT_SCHEMA_VERSION = "openclaw.clawExportResult.v1" as const;
 const MAX_EXPORT_FILE_BYTES = 1024 * 1024;
 
-type AgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 type ClawBootstrapFileName = (typeof CLAW_BOOTSTRAP_FILE_NAMES)[number];
 
 function decodeUtf8(content: Buffer): string | undefined {
@@ -68,32 +67,47 @@ export class ClawExportError extends Error {
   }
 }
 
-function portableAgent(agent: AgentConfig, avatar: string | undefined): ClawManifest["agent"] {
-  const identity = {
-    ...(agent.identity?.name ? { name: agent.identity.name } : {}),
-    ...(agent.identity?.theme ? { theme: agent.identity.theme } : {}),
-    ...(agent.identity?.emoji ? { emoji: agent.identity.emoji } : {}),
-    ...(avatar ? { avatar } : {}),
-  };
+function definedFields<T extends object>(fields: T): Partial<T> {
+  const result: Partial<T> = {};
+  for (const key in fields) {
+    if (fields[key] !== undefined) {
+      result[key] = fields[key];
+    }
+  }
+  return result;
+}
+
+export function portableAgent(
+  agent: AgentConfig,
+  avatar: string | undefined,
+): ClawManifest["agent"] {
+  const identity = definedFields({
+    name: agent.identity?.name || undefined,
+    theme: agent.identity?.theme || undefined,
+    emoji: agent.identity?.emoji || undefined,
+    avatar: avatar || undefined,
+  });
   return {
     id: agent.id,
-    ...(agent.name ? { name: agent.name } : {}),
-    ...(agent.description ? { description: agent.description } : {}),
-    ...(Object.keys(identity).length > 0 ? { identity } : {}),
+    ...definedFields({
+      name: agent.name || undefined,
+      description: agent.description || undefined,
+      identity: Object.keys(identity).length > 0 ? identity : undefined,
+    }),
   };
 }
 
-function portableOpenClawProfile(
+export function portableOpenClawProfile(
   agent: AgentConfig,
   extensions: ClawOpenClawExtension[],
 ): ClawOpenClawProfile | undefined {
-  const configuredTools = {
-    ...(agent.tools?.profile ? { profile: agent.tools.profile } : {}),
-    ...(agent.tools?.allow?.length ? { allow: agent.tools.allow } : {}),
-    ...(agent.tools?.alsoAllow?.length ? { alsoAllow: agent.tools.alsoAllow } : {}),
-    ...(agent.tools?.deny?.length ? { deny: agent.tools.deny } : {}),
-    ...(agent.tools?.fs?.workspaceOnly === true ? { fs: { workspaceOnly: true as const } } : {}),
-  };
+  const configuredTools = definedFields({
+    profile: agent.tools?.profile || undefined,
+    allow: agent.tools?.allow?.length ? agent.tools.allow : undefined,
+    alsoAllow: agent.tools?.alsoAllow?.length ? agent.tools.alsoAllow : undefined,
+    deny: agent.tools?.deny?.length ? agent.tools.deny : undefined,
+    fs: agent.tools?.fs?.workspaceOnly === true ? { workspaceOnly: true as const } : undefined,
+  });
   let tools: NonNullable<ClawOpenClawProfile["agent"]["tools"]> = configuredTools;
   if (configuredTools.profile || configuredTools.allow?.length) {
     try {
@@ -105,97 +119,57 @@ function portableOpenClawProfile(
       );
     }
   }
-  const settings = {
-    ...(agent.model !== undefined
-      ? { model: typeof agent.model === "string" ? { primary: agent.model } : agent.model }
-      : {}),
-    ...(agent.subagents
+  const settings = definedFields({
+    model: typeof agent.model === "string" ? { primary: agent.model } : agent.model,
+    subagents: agent.subagents
+      ? definedFields({
+          allowAgents: agent.subagents.allowAgents,
+          delegationMode: agent.subagents.delegationMode,
+        })
+      : undefined,
+    groupChat: agent.groupChat?.mentionPatterns?.length
+      ? { mentionPatterns: agent.groupChat.mentionPatterns }
+      : undefined,
+    sandbox: agent.sandbox
+      ? definedFields({
+          mode: agent.sandbox.mode || undefined,
+          scope: agent.sandbox.scope || undefined,
+          workspaceAccess: agent.sandbox.workspaceAccess || undefined,
+        })
+      : undefined,
+    tools: Object.keys(tools).length > 0 ? tools : undefined,
+    memory: agent.memory?.search
       ? {
-          subagents: {
-            ...(agent.subagents.allowAgents !== undefined
-              ? { allowAgents: agent.subagents.allowAgents }
-              : {}),
-            ...(agent.subagents.delegationMode !== undefined
-              ? { delegationMode: agent.subagents.delegationMode }
-              : {}),
-          },
+          search: definedFields({
+            enabled: agent.memory.search.enabled,
+            rememberAcrossConversations: agent.memory.search.rememberAcrossConversations,
+            sources: agent.memory.search.sources?.length ? agent.memory.search.sources : undefined,
+          }),
         }
-      : {}),
-    ...(agent.groupChat?.mentionPatterns?.length
-      ? { groupChat: { mentionPatterns: agent.groupChat.mentionPatterns } }
-      : {}),
-    ...(agent.sandbox
-      ? {
-          sandbox: {
-            ...(agent.sandbox.mode ? { mode: agent.sandbox.mode } : {}),
-            ...(agent.sandbox.scope ? { scope: agent.sandbox.scope } : {}),
-            ...(agent.sandbox.workspaceAccess
-              ? { workspaceAccess: agent.sandbox.workspaceAccess }
-              : {}),
-          },
-        }
-      : {}),
-    ...(Object.keys(tools).length > 0 ? { tools } : {}),
-    ...(agent.memory?.search
-      ? {
-          memory: {
-            search: {
-              ...(agent.memory.search.enabled !== undefined
-                ? { enabled: agent.memory.search.enabled }
-                : {}),
-              ...(agent.memory.search.rememberAcrossConversations !== undefined
-                ? {
-                    rememberAcrossConversations: agent.memory.search.rememberAcrossConversations,
-                  }
-                : {}),
-              ...(agent.memory.search.sources?.length
-                ? { sources: agent.memory.search.sources }
-                : {}),
-            },
-          },
-        }
-      : {}),
-    ...(agent.heartbeat
-      ? {
-          heartbeat: {
-            ...(agent.heartbeat.every ? { every: agent.heartbeat.every } : {}),
-            ...(agent.heartbeat.activeHours
-              ? {
-                  activeHours: {
-                    ...(agent.heartbeat.activeHours.start
-                      ? { start: agent.heartbeat.activeHours.start }
-                      : {}),
-                    ...(agent.heartbeat.activeHours.end
-                      ? { end: agent.heartbeat.activeHours.end }
-                      : {}),
-                    ...(agent.heartbeat.activeHours.timezone
-                      ? { timezone: agent.heartbeat.activeHours.timezone }
-                      : {}),
-                  },
-                }
-              : {}),
-            ...(agent.heartbeat.lightContext !== undefined
-              ? { lightContext: agent.heartbeat.lightContext }
-              : {}),
-            ...(agent.heartbeat.isolatedSession !== undefined
-              ? { isolatedSession: agent.heartbeat.isolatedSession }
-              : {}),
-            ...(agent.heartbeat.timeoutSeconds !== undefined
-              ? { timeoutSeconds: agent.heartbeat.timeoutSeconds }
-              : {}),
-          },
-        }
-      : {}),
-    ...(agent.humanDelay
-      ? {
-          humanDelay: {
-            ...(agent.humanDelay.mode ? { mode: agent.humanDelay.mode } : {}),
-            ...(agent.humanDelay.minMs !== undefined ? { minMs: agent.humanDelay.minMs } : {}),
-            ...(agent.humanDelay.maxMs !== undefined ? { maxMs: agent.humanDelay.maxMs } : {}),
-          },
-        }
-      : {}),
-  };
+      : undefined,
+    heartbeat: agent.heartbeat
+      ? definedFields({
+          every: agent.heartbeat.every || undefined,
+          activeHours: agent.heartbeat.activeHours
+            ? definedFields({
+                start: agent.heartbeat.activeHours.start || undefined,
+                end: agent.heartbeat.activeHours.end || undefined,
+                timezone: agent.heartbeat.activeHours.timezone || undefined,
+              })
+            : undefined,
+          lightContext: agent.heartbeat.lightContext,
+          isolatedSession: agent.heartbeat.isolatedSession,
+          timeoutSeconds: agent.heartbeat.timeoutSeconds,
+        })
+      : undefined,
+    humanDelay: agent.humanDelay
+      ? definedFields({
+          mode: agent.humanDelay.mode || undefined,
+          minMs: agent.humanDelay.minMs,
+          maxMs: agent.humanDelay.maxMs,
+        })
+      : undefined,
+  });
   if (extensions.length === 0 && Object.keys(settings).length === 0) {
     return undefined;
   }
@@ -220,11 +194,11 @@ function comparePortableText(left: string, right: string): number {
 function isClawBootstrapFileName(value: string): value is ClawBootstrapFileName {
   return (CLAW_BOOTSTRAP_FILE_NAMES as readonly string[]).includes(value);
 }
-function readPortableAvatar(params: {
+async function readPortableAvatar(params: {
   config: OpenClawConfig;
   agent: AgentConfig;
   workspace: string;
-}): { source?: string; sidecar?: { path: string; content: Buffer } } {
+}): Promise<{ source?: string; sidecar?: { path: string; content: Buffer } }> {
   const source = params.agent.identity?.avatar?.trim();
   if (!source) {
     return {};
@@ -235,23 +209,17 @@ function readPortableAvatar(params: {
   if (isAvatarDataUrl(source)) {
     return isPortableClawAvatar(source) ? { source } : {};
   }
-  const opened = openLocalAgentAvatarFile({
+  const prepared = await prepareLocalAgentAvatarFile({
     cfg: params.config,
     agentId: params.agent.id,
     source,
+    readBody: true,
   });
-  if (!opened.ok) {
+  if (!prepared.ok || !prepared.file.body) {
     return {};
   }
-  try {
-    const content = readFileDescriptorBoundedSync(opened.file.fd, AVATAR_MAX_BYTES);
-    const path = normalizedRelativePath(relative(params.workspace, opened.file.path));
-    return { source: path, sidecar: { path, content } };
-  } catch {
-    return {};
-  } finally {
-    closeSync(opened.file.fd);
-  }
+  const path = normalizedRelativePath(relative(params.workspace, prepared.file.path));
+  return { source: path, sidecar: { path, content: prepared.file.body } };
 }
 
 function derivativePackageVersion(manifest: ClawManifest, contents: ExportContent[]): string {
@@ -273,7 +241,6 @@ async function readAuthorBootstrap(path: string): Promise<Buffer> {
     const read = await sourceRoot.read(basename(resolvedPath), {
       hardlinks: "reject",
       maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-      nonBlockingRead: true,
       symlinks: "reject",
     });
     const text = new TextDecoder("utf-8", { fatal: true }).decode(read.buffer);
@@ -451,7 +418,7 @@ export async function exportClawAgent(
   let clawMarkdownBody =
     soul && decodedSoul !== undefined && decodedSoul.trim().length > 0 ? soul.content : undefined;
   const contents = allContents.filter((file) => file !== soul || !clawMarkdownBody);
-  const avatar = readPortableAvatar({
+  const avatar = await readPortableAvatar({
     config: options.config,
     agent,
     workspace: record.install.workspace,
@@ -472,9 +439,7 @@ export async function exportClawAgent(
         `Cannot export the package bootstrap because BOOTSTRAP.md changed after inspection: ${(error as Error).message}`,
       );
     }
-    const contentDigest = `sha256:${createHash("sha256")
-      .update(pendingPackageBootstrap)
-      .digest("hex")}`;
+    const contentDigest = digestClawBytes(pendingPackageBootstrap);
     if (contentDigest !== record.install.bootstrap.contentDigest) {
       throw new ClawExportError(
         "bootstrap_drifted",

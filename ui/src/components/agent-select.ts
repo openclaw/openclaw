@@ -26,15 +26,11 @@ export type AgentSelectOption = {
 type WebAwesomeSelectEvent = Event & { detail: { item: Element } };
 export function renderAgentSelectAvatar(
   option: AgentSelectOption,
-  identity: AgentIdentityResult | null = null,
-  imageUrl?: string | null,
+  identity: AgentIdentityResult | null,
+  imageUrl: string | null,
   onImageError?: () => void,
 ) {
-  const resolvedImageUrl =
-    imageUrl === undefined && option.agent
-      ? resolveAgentAvatarUrl(option.agent, identity)
-      : (imageUrl ?? null);
-  if (option.icon && !resolvedImageUrl) {
+  if (option.icon && !imageUrl) {
     return html`<span class="agent-select__avatar agent-select__avatar--icon" aria-hidden="true"
       >${option.icon}</span
     >`;
@@ -42,7 +38,7 @@ export function renderAgentSelectAvatar(
   return renderAgentIdentityAvatar(
     {
       id: option.agent?.id ?? option.value,
-      avatar: resolvedImageUrl,
+      avatar: imageUrl,
       textAvatar: option.agent ? resolveAgentTextAvatar(option.agent, identity) : null,
     },
     "agent-select__avatar",
@@ -132,11 +128,9 @@ export class AgentSelect extends OpenClawLightDomElement {
 
   private renderContent() {
     const selectedOption = this.options.find((option) => option.value === this.value);
-    const missingValueOption: AgentSelectOption | null =
-      !selectedOption && this.value
-        ? { value: this.value, label: this.value, agent: { id: this.value } }
-        : null;
-    const triggerOption = selectedOption ?? missingValueOption;
+    const triggerOption =
+      selectedOption ??
+      (this.value ? { value: this.value, label: this.value, agent: { id: this.value } } : null);
     const unavailable = this.disabled || (this.options.length === 0 && !this.onCreateAgent);
     const triggerLabel = triggerOption?.label ?? (this.placeholder || t("agents.noAgents"));
     const selectedBadge = selectedOption?.badge;

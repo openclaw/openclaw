@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -20,8 +21,9 @@ import { buildGatewaySessionRow } from "./session-utils-row.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 const NOW = Date.UTC(2026, 8, 15);
-const NAMED_PAYLOAD_MARKER = "named transcript payload ";
-const NAMED_PAYLOAD = NAMED_PAYLOAD_MARKER.repeat(3_000);
+// Keep the persisted marker distinct from copies of this test in source maps.
+const NAMED_PAYLOAD_MARKER = `named transcript payload ${randomUUID()}`;
+const NAMED_PAYLOAD = NAMED_PAYLOAD_MARKER + "named transcript payload ".repeat(3_000);
 type RowDefinition = {
   entry?: Partial<SessionEntry>;
   key?: string;
@@ -45,7 +47,7 @@ async function withTitleRows(
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { model: { primary: "openai/gpt-5" }, thinkingDefault: "off" },
       },
     };
@@ -86,7 +88,7 @@ async function withTitleRows(
     const before = persistedState();
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const queries = trackSqliteStatementExecutions(database.db, ["events"], (sql) =>
-      /^select\b[\s\S]*\bevent_json\b/i.test(sql) ? "events" : null,
+      /^select\b[\s\S]*\bevent_(?:json|zstd)\b/i.test(sql) ? "events" : null,
     );
     try {
       await run({
@@ -159,12 +161,18 @@ test("does not hydrate named transcript payloads for scalar title-only rows", as
         "Readable origin title",
       ]);
       expect(queries.textBytes.events).toBe(0);
+      expect(queries.blobBytes.events).toBe(0);
       expect(parse.mock.calls.some(([json]) => json.includes(NAMED_PAYLOAD_MARKER))).toBe(false);
 
       // A preview request still reads the same persisted payload and preserves every title.
       const previews = await render(true);
-      expect(queries.textBytes.events).toBeGreaterThan(NAMED_PAYLOAD.length * titles.length);
-      expect(previews.every((row) => row.lastMessagePreview?.startsWith("Preview"))).toBe(true);
+      expect(queries.textBytes.events + queries.blobBytes.events).toBeGreaterThan(0);
+      expect(parse.mock.calls.some(([json]) => json.includes(NAMED_PAYLOAD))).toBe(true);
+      for (const [index, row] of previews.entries()) {
+        expect(
+          row.lastMessagePreview?.startsWith(`Preview ${index}. ${NAMED_PAYLOAD_MARKER}`),
+        ).toBe(true);
+      }
       expect(JSON.stringify(withoutPreviews(previews))).toBe(JSON.stringify(titles));
       parse.mockRestore();
     },
@@ -192,6 +200,7 @@ test("keeps unresolved scalar titles aligned between named and missing-session r
       ]);
       expect(queries.textBytes.events).toBeGreaterThan(0);
       expect(queries.textBytes.events).toBeLessThan(4_096);
+      expect(queries.blobBytes.events).toBe(0);
       expect(parse.mock.calls.some(([json]) => json.includes(NAMED_PAYLOAD_MARKER))).toBe(false);
       const previews = await render(true);
       expect(previews.map((row) => row.lastMessagePreview?.slice(0, 10))).toEqual([

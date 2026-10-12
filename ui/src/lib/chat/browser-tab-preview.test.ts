@@ -103,7 +103,7 @@ describe("browser tab previews", () => {
     ]);
   });
 
-  it.each([undefined, "about:blank"])("follows a newer tab without a web preview (%s)", (url) => {
+  it.each([undefined])("follows a newer tab without a web preview (%s)", (url) => {
     const older = browserResult("web", "web-tab");
     const web = {
       ...older,

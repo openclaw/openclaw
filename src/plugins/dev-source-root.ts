@@ -1,4 +1,3 @@
-// Resolves development source roots for local plugin installs.
 import fs from "node:fs";
 import path from "node:path";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";

@@ -104,16 +104,3 @@ export async function pruneNativeHookRelayBridgeRecords(params: {
       : scope.execute({ type: "nativeHookRelay.prune", input: { candidates, nowMs } });
   });
 }
-
-export async function clearNativeHookRelayBridgeRecordsForTests(
-  options: NativeHookRelayBridgeStoreOptions = {},
-): Promise<void> {
-  const [{ runOpenClawStateWriteTransaction }, { clearNativeHookRelayBridgeRecordsInDatabase }] =
-    await Promise.all([
-      import("../../state/openclaw-state-db.js"),
-      import("./native-hook-relay-store.kernel.js"),
-    ]);
-  runOpenClawStateWriteTransaction(clearNativeHookRelayBridgeRecordsInDatabase, {
-    path: options.stateDbPath,
-  });
-}

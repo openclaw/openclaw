@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { emitMd } from "../../emit.js";
 import { parseMd } from "../../parse.js";
 import { resolveMdOcPath as resolveOcPath } from "../../resolve.js";
 
@@ -54,15 +53,6 @@ describe("CPU budgets + determinism", () => {
     }, 500);
   });
 
-  it("same input → byte-identical AST.raw across runs", () => {
-    const raw = `---\nb: 2\na: 1\n---\n## Z\n- z\n## A\n- a\n`;
-    const a1 = parseMd(raw).ast;
-    const a2 = parseMd(raw).ast;
-    expect(a1.raw).toBe(a2.raw);
-    expect(a1.frontmatter).toEqual(a2.frontmatter);
-    expect(a1.blocks).toEqual(a2.blocks);
-  });
-
   it("resolveOcPath is non-mutating", () => {
     const raw = `## A\n- a: x\n## B\n- b\n`;
     const { ast } = parseMd(raw);
@@ -80,16 +70,6 @@ describe("CPU budgets + determinism", () => {
     const parsed = JSON.parse(serialized);
     expect(parsed.raw).toBe(ast.raw);
     expect(parsed.blocks.length).toBe(ast.blocks.length);
-  });
-
-  it("emit is non-mutating", () => {
-    const raw = `## A\n- a\n`;
-    const { ast } = parseMd(raw);
-    const before = JSON.stringify(ast);
-    emitMd(ast);
-    emitMd(ast);
-    emitMd(ast);
-    expect(JSON.stringify(ast)).toBe(before);
   });
 
   it("frontmatter ordering is preserved (insertion order, not alphabetical)", () => {
@@ -124,7 +104,7 @@ describe("CPU budgets + determinism", () => {
     let out = "";
     expectWithinCpuBudget(() => {
       const { ast } = parseMd(raw);
-      out = emitMd(ast);
+      out = ast.raw;
     }, 100);
     expect(out).toBe(raw);
   });

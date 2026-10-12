@@ -1,4 +1,3 @@
-// Signal plugin module implements approval reactions behavior.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
@@ -158,26 +157,19 @@ function readPersistedTarget(target: unknown): SignalApprovalReactionTarget | nu
   if (value.route.deliveryMode === "target" && !targetRouteTo) {
     return null;
   }
-  const route: SignalApprovalReactionRoute =
-    value.route.deliveryMode === "target"
+  const route: SignalApprovalReactionRoute = {
+    ...(value.route.deliveryMode === "target"
       ? {
-          deliveryMode: "target",
+          deliveryMode: "target" as const,
           to: targetRouteTo!,
           ...(typeof value.route.accountId === "string"
             ? { accountId: value.route.accountId }
             : {}),
-          ...(typeof value.route.agentId === "string" ? { agentId: value.route.agentId } : {}),
-          ...(typeof value.route.sessionKey === "string"
-            ? { sessionKey: value.route.sessionKey }
-            : {}),
         }
-      : {
-          deliveryMode: "session",
-          ...(typeof value.route.agentId === "string" ? { agentId: value.route.agentId } : {}),
-          ...(typeof value.route.sessionKey === "string"
-            ? { sessionKey: value.route.sessionKey }
-            : {}),
-        };
+      : { deliveryMode: "session" as const }),
+    ...(typeof value.route.agentId === "string" ? { agentId: value.route.agentId } : {}),
+    ...(typeof value.route.sessionKey === "string" ? { sessionKey: value.route.sessionKey } : {}),
+  };
   return {
     ...record,
     targetAuthorKeys: value.targetAuthorKeys,
@@ -201,7 +193,6 @@ export async function registerSignalApprovalReactionTarget(params: {
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   targetAuthorKeys: readonly string[];
   route: SignalApprovalReactionRoute;
-  routeAllowed: boolean;
   ttlMs?: number;
 }): Promise<SignalApprovalReactionTarget | null> {
   const key = buildReactionTargetKey(params);
@@ -217,8 +208,9 @@ export async function registerSignalApprovalReactionTarget(params: {
     allowedDecisions: params.allowedDecisions,
   }).map((binding) => binding.decision);
   if (
-    !params.routeAllowed ||
-    (params.approvalKind !== "exec" && params.approvalKind !== "plugin") ||
+    (params.approvalKind !== "exec" &&
+      params.approvalKind !== "plugin" &&
+      params.approvalKind !== "system-agent") ||
     !key ||
     !approvalId ||
     allowedDecisions.length === 0
@@ -228,30 +220,23 @@ export async function registerSignalApprovalReactionTarget(params: {
   if (targetAuthorKeys.length === 0) {
     return null;
   }
-  const route =
+  const agentId = normalizeOptionalString(params.route.agentId);
+  const sessionKey = normalizeOptionalString(params.route.sessionKey);
+  const accountId =
     params.route.deliveryMode === "target"
-      ? ({
-          deliveryMode: "target",
+      ? normalizeOptionalString(params.route.accountId)
+      : undefined;
+  const route: SignalApprovalReactionRoute = {
+    ...(params.route.deliveryMode === "target"
+      ? {
+          deliveryMode: "target" as const,
           to: params.route.to,
-          ...(normalizeOptionalString(params.route.accountId)
-            ? { accountId: normalizeOptionalString(params.route.accountId) }
-            : {}),
-          ...(normalizeOptionalString(params.route.agentId)
-            ? { agentId: normalizeOptionalString(params.route.agentId) }
-            : {}),
-          ...(normalizeOptionalString(params.route.sessionKey)
-            ? { sessionKey: normalizeOptionalString(params.route.sessionKey) }
-            : {}),
-        } satisfies SignalApprovalReactionRoute)
-      : ({
-          deliveryMode: "session",
-          ...(normalizeOptionalString(params.route.agentId)
-            ? { agentId: normalizeOptionalString(params.route.agentId) }
-            : {}),
-          ...(normalizeOptionalString(params.route.sessionKey)
-            ? { sessionKey: normalizeOptionalString(params.route.sessionKey) }
-            : {}),
-        } satisfies SignalApprovalReactionRoute);
+          ...(accountId ? { accountId } : {}),
+        }
+      : { deliveryMode: "session" as const }),
+    ...(agentId ? { agentId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+  };
   const target: SignalApprovalReactionTarget = {
     approvalId,
     approvalKind: params.approvalKind,
@@ -343,7 +328,6 @@ export async function registerSignalApprovalReactionTargetForDeliveredPayload(pa
   results: readonly SignalApprovalDeliveryResult[];
   targetAuthor?: string | null;
   targetAuthorUuid?: string | null;
-  ttlMs?: number;
 }): Promise<boolean> {
   if (normalizeLowercaseStringOrEmpty(params.target.channel) !== "signal") {
     return false;
@@ -398,8 +382,6 @@ export async function registerSignalApprovalReactionTargetForDeliveredPayload(pa
         allowedDecisions: metadata.allowedDecisions,
         targetAuthorKeys,
         route,
-        routeAllowed: true,
-        ttlMs: params.ttlMs,
       }),
     );
   }
@@ -480,7 +462,6 @@ export async function maybeResolveSignalApprovalReaction(params: {
   actorId?: string | null;
   targetAuthor?: string | null;
   targetAuthorUuid?: string | null;
-  gatewayUrl?: string;
   logVerboseMessage?: (message: string) => void;
 }): Promise<boolean> {
   const target = await resolveSignalApprovalReactionTargetWithPersistence({
@@ -519,7 +500,6 @@ export async function maybeResolveSignalApprovalReaction(params: {
       channel: "signal",
       accountId: params.accountId,
       senderId: actorId,
-      gatewayUrl: params.gatewayUrl,
     },
     approvers: getSignalApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }),
     authorizeActorAction: (input) => signalApprovalAuth.authorizeActorAction(input),

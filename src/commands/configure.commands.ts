@@ -1,4 +1,3 @@
-// Entry points for the full configure wizard and section-limited runs.
 import { formatCliCommand } from "../cli/command-format.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -20,28 +19,6 @@ const CONFIGURE_NON_TTY_HINT = [
   `  ${formatCliCommand("openclaw config validate")}           validate configuration`,
 ].join("\n");
 
-/**
- * Refuses to launch the interactive wizard without a TTY.
- *
- * `interactive` lets callers/tests override the detected terminal state
- * (mirrors the `params.interactive ?? process.stdin.isTTY` pattern used by
- * `src/commands/gateway-readiness.ts`), so the fail-closed path is exercisable
- * without mutating the global `process` streams. Both stdin and stdout must be
- * TTYs: the wizard reads from stdin and renders prompts to stdout, so either
- * being piped means it cannot run correctly.
- *
- * Returns true when the wizard may proceed.
- */
-function assertInteractiveConfigureTerminal(runtime: RuntimeEnv, interactive?: boolean): boolean {
-  const interactiveTerminal = interactive ?? isTerminalInteractive();
-  if (interactiveTerminal) {
-    return true;
-  }
-  runtime.error(CONFIGURE_NON_TTY_HINT);
-  runtime.exit(1);
-  return false;
-}
-
 /** Parse `--section` input and run the requested configure wizard sections. */
 export async function configureCommandFromSectionsArg(
   rawSections: unknown,
@@ -57,18 +34,13 @@ export async function configureCommandFromSectionsArg(
     return;
   }
 
-  // Fail closed once at the shared entry: both `openclaw configure` and the
-  // no-subcommand `openclaw config` route here, so a single guard keeps them
-  // consistent instead of partially entering the wizard on a non-TTY pipe.
-  // `options.interactive` lets tests drive the fail-closed path directly
-  // instead of mutating global `process` streams.
-  if (!assertInteractiveConfigureTerminal(runtime, options?.interactive)) {
+  // Both configure and bare config share this guard before entering the wizard.
+  if (!(options?.interactive ?? isTerminalInteractive())) {
+    runtime.error(CONFIGURE_NON_TTY_HINT);
+    runtime.exit(1);
     return;
   }
 
   // Omission opens the full chooser; an empty array means no selected changes to the runner.
-  await runConfigureWizard(
-    { command: "configure", ...(sections.length > 0 ? { sections } : {}) },
-    runtime,
-  );
+  await runConfigureWizard(sections.length > 0 ? { sections } : {}, runtime);
 }

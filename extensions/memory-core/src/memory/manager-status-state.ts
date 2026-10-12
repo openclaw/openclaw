@@ -20,20 +20,22 @@ type StatusAggregateRow = {
 
 /** Read only for explicit diagnostics: retained cache payloads can be large even when disabled. */
 export function collectMemoryStorageStatus(
-  db: DatabaseSync,
+  db: DatabaseSync | undefined,
   databasePath: string,
 ): NonNullable<MemoryProviderStatus["storage"]> {
-  const query = getNodeSqliteKysely<{ memory_embedding_cache: { embedding: string } }>(db)
-    .selectFrom("memory_embedding_cache")
-    .select((eb) => [
-      eb.fn.countAll<number>().as("entries"),
-      eb.fn
-        .coalesce(eb.fn.sum<number>(eb.fn<number>("octet_length", ["embedding"])), eb.val(0))
-        .as("bytes"),
-    ]);
-  const cache = executeSqliteQuerySync(db, query).rows[0]!;
-  const pageSize = Number(db.prepare("PRAGMA page_size").get()?.page_size);
-  const freePages = Number(db.prepare("PRAGMA freelist_count").get()?.freelist_count);
+  const query = db
+    ? getNodeSqliteKysely<{ memory_embedding_cache: { embedding: Uint8Array } }>(db)
+        .selectFrom("memory_embedding_cache")
+        .select((eb) => [
+          eb.fn.countAll<number>().as("entries"),
+          eb.fn
+            .coalesce(eb.fn.sum<number>(eb.fn<number>("octet_length", ["embedding"])), eb.val(0))
+            .as("bytes"),
+        ])
+    : undefined;
+  const cache = db && query ? executeSqliteQuerySync(db, query).rows[0]! : { bytes: 0, entries: 0 };
+  const pageSize = db ? Number(db.prepare("PRAGMA page_size").get()?.page_size) : 0;
+  const freePages = db ? Number(db.prepare("PRAGMA freelist_count").get()?.freelist_count) : 0;
   return {
     databaseBytes: fs.statSync(databasePath, { throwIfNoEntry: false })?.size ?? 0,
     walBytes: fs.statSync(`${databasePath}-wal`, { throwIfNoEntry: false })?.size ?? 0,
@@ -75,7 +77,7 @@ export function resolveStatusProviderInfo(params: {
 }
 
 export function collectMemoryStatusAggregate(params: {
-  db: Pick<DatabaseSync, "prepare">;
+  db: Pick<DatabaseSync, "prepare"> | undefined;
   sources: Iterable<MemorySource>;
   sourceFilterSql?: string;
   sourceFilterParams?: MemorySource[];
@@ -99,10 +101,10 @@ export function collectMemoryStatusAggregate(params: {
     `SELECT 'chunks' AS kind, source, COUNT(*) as c, ${chunkBytes} AS bytes FROM memory_index_chunks WHERE 1=1${sourceFilterSql} GROUP BY source`;
   const filterParams = params.sourceFilterParams ?? [];
   const rows = params.db
-    .prepare(query)
+    ?.prepare(query)
     // SAFETY: Both UNION branches return the declared kind/source, count, and nullable byte total.
-    .all(...filterParams, ...filterParams) as StatusAggregateRow[];
-  for (const row of rows) {
+    .all(...filterParams, ...filterParams) as StatusAggregateRow[] | undefined;
+  for (const row of rows ?? []) {
     const entry = bySource.get(row.source) ?? { ...emptyCounts };
     entry[row.kind] = row.c;
     totals[row.kind] += row.c;

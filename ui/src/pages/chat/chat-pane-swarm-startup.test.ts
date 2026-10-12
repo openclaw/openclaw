@@ -6,7 +6,6 @@ import { createApplicationConfigCapability } from "../../app/config.ts";
 import { createApplicationPlacementStartup } from "../../app/session-placement-startup.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
-import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
@@ -146,7 +145,6 @@ describe("global pane Swarm startup ownership", () => {
             config: createApplicationConfigCapability({ resourceBasePath: "" }),
             runtimeConfig,
             placementStartup,
-            plugins: new ControlUiPluginRuntime(() => pane.context),
           });
           onTestFinished(() => {
             runtimeConfig.dispose();

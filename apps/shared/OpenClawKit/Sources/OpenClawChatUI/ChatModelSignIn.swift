@@ -141,12 +141,14 @@ final class ChatModelSignInModel {
         guard let id = self.sessionID, !self.busy, !self.cancelling, !self.closed else { return }
         var params = ["sessionId": AnyCodable(id)]
         if let step = self.step, wizardStepExecutor(step) != "gateway" {
-            let value: AnyCodable? = switch wizardStepType(step) {
-            case "text": AnyCodable(self.text)
-            case "confirm": AnyCodable(self.confirmation)
-            case "select": parseWizardOptions(step.options).indices.contains(self.selection)
-                ? parseWizardOptions(step.options)[self.selection].value : nil
-            default: nil
+            let value: AnyCodable?
+            switch wizardStepType(step) {
+            case "text": value = AnyCodable(self.text)
+            case "confirm": value = AnyCodable(self.confirmation)
+            case "select":
+                let options = parseWizardOptions(step.options)
+                value = options.indices.contains(self.selection) ? options[self.selection].value : nil
+            default: value = nil
             }
             var answer = ["stepId": AnyCodable(step.id)]
             if let value { answer["value"] = value }

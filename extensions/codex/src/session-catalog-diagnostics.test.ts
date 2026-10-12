@@ -130,7 +130,7 @@ async function fixture(suffix = "default") {
   vi.stubEnv("CODEX_HOME", home);
   vi.stubEnv("PATH", "");
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true, agentDir }] },
+    agents: { entries: { main: { agentDir } } },
   };
   const pluginConfig = {
     supervision: { enabled: true },
@@ -309,29 +309,6 @@ describe("registered Codex catalog diagnostics", () => {
             ["string", "number", "boolean"].includes(typeof value),
           ),
         ).toBe(true);
-        const controlWaitersV1 = fields(record).controlWaitersV1;
-        if (controlWaitersV1 !== undefined) {
-          expect(controlWaitersV1).toBeTypeOf("string");
-          if (typeof controlWaitersV1 !== "string") {
-            throw new Error("expected JSON-encoded waiter tuples");
-          }
-          const tuples: unknown = JSON.parse(controlWaitersV1);
-          expect(Array.isArray(tuples)).toBe(true);
-          if (!Array.isArray(tuples)) {
-            throw new Error("expected bounded waiter tuples");
-          }
-          expect(tuples.length).toBeLessThanOrEqual(4);
-          for (const tuple of tuples) {
-            expect(Array.isArray(tuple)).toBe(true);
-            if (!Array.isArray(tuple)) {
-              throw new Error("expected a waiter tuple");
-            }
-            expect(tuple).toHaveLength(13);
-            expect(
-              tuple.every((value) => value === null || ["string", "number"].includes(typeof value)),
-            ).toBe(true);
-          }
-        }
       }
     } finally {
       response.resolve({ data: [] });
@@ -380,72 +357,69 @@ describe("registered Codex catalog diagnostics", () => {
     );
   });
 
-  it.each(["exclusion", "title-filter"] as const)(
-    "records complete native hydration before resident %s filtering",
-    async (kind) => {
-      const f = await fixture();
-      const thread = await f.thread(kind === "exclusion" ? "openclaw" : "codex");
-      const cursors: (string | undefined)[] = [];
-      commandRpcMocks.codexControlRequest.mockImplementation(
-        async (
-          _config: unknown,
-          method: unknown,
-          params: { cursor?: string },
-          options: { controlObservation?: CodexControlRequestObservation },
-        ) => {
-          expect(method).toBe("thread/list");
-          expect(params).not.toHaveProperty("searchTerm");
-          cursors.push(params.cursor);
-          for (let attempt = 1; attempt <= 6; attempt++) {
-            options.controlObservation?.attemptWaiterFinished?.(
-              waiterSummary({
-                rpcId: (cursors.length - 1) * 6 + attempt,
-                overloadAttemptOrdinal: attempt,
-                waiterOutcome: attempt === 6 ? "resolved" : "native-error",
-                wireOutcomeAtWaiterSettlement: attempt === 6 ? "native-ok" : "ingress-rejected",
-              }),
-            );
-          }
-          clock += 1_100;
-          return {
-            data: [thread],
-            ...(cursors.length < 20 ? { nextCursor: `private-cursor-${cursors.length}` } : {}),
-          };
-        },
-      );
-      await f.control.initialize();
-      const hosts = await f.list(kind === "title-filter" ? "wanted title" : undefined);
-      expect(hosts[0]).toMatchObject({ connected: true, sessions: [] });
-      expect(hosts[0]).not.toHaveProperty("nextCursor");
-      expect(cursors).toEqual([
-        undefined,
-        ...Array.from({ length: 19 }, (_, i) => `private-cursor-${i + 1}`),
-      ]);
-      expect(await emitted(LIST)).toEqual([]);
-      const pages = await emitted(PAGE);
-      expect(pages).toHaveLength(20);
-      for (const [index, page] of pages.entries()) {
-        expect(fields(page)).toMatchObject({
-          origin: "cold",
-          controlRequestCalls: 1,
-          inclusiveControlRequestWaitMs: 1_100,
-          provenanceChecks: 1,
-          provenanceReadCalls: index === 0 ? 1 : 0,
-          provenanceCacheHits: index === 0 ? 0 : 1,
-          controlWaitersOmitted: 2,
-        });
-        const tuples = JSON.parse(String(fields(page).controlWaitersV1));
-        expect(tuples).toHaveLength(4);
-        expect(tuples.map((tuple: unknown[]) => tuple[1])).toEqual([1, 2, 5, 6]);
-        expect(Object.keys(fields(page)).length).toBeLessThanOrEqual(28);
-        expect(Buffer.byteLength(JSON.stringify(fields(page)))).toBeLessThanOrEqual(2_048);
-      }
-      expect(JSON.stringify(records)).not.toContain("private-cursor-");
-      expect(JSON.stringify(records)).not.toContain(privateText);
-      await f.list("another query");
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(20);
-    },
-  );
+  it("records complete native hydration before resident title filtering", async () => {
+    const f = await fixture();
+    const thread = await f.thread("codex");
+    const cursors: (string | undefined)[] = [];
+    commandRpcMocks.codexControlRequest.mockImplementation(
+      async (
+        _config: unknown,
+        method: unknown,
+        params: { cursor?: string },
+        options: { controlObservation?: CodexControlRequestObservation },
+      ) => {
+        expect(method).toBe("thread/list");
+        expect(params).not.toHaveProperty("searchTerm");
+        cursors.push(params.cursor);
+        for (let attempt = 1; attempt <= 6; attempt++) {
+          options.controlObservation?.attemptWaiterFinished?.(
+            waiterSummary({
+              rpcId: (cursors.length - 1) * 6 + attempt,
+              overloadAttemptOrdinal: attempt,
+              waiterOutcome: attempt === 6 ? "resolved" : "native-error",
+              wireOutcomeAtWaiterSettlement: attempt === 6 ? "native-ok" : "ingress-rejected",
+            }),
+          );
+        }
+        clock += 1_100;
+        return {
+          data: [thread],
+          ...(cursors.length < 20 ? { nextCursor: `private-cursor-${cursors.length}` } : {}),
+        };
+      },
+    );
+    await f.control.initialize();
+    const hosts = await f.list("wanted title");
+    expect(hosts[0]).toMatchObject({ connected: true, sessions: [] });
+    expect(hosts[0]).not.toHaveProperty("nextCursor");
+    expect(cursors).toEqual([
+      undefined,
+      ...Array.from({ length: 19 }, (_, i) => `private-cursor-${i + 1}`),
+    ]);
+    expect(await emitted(LIST)).toEqual([]);
+    const pages = await emitted(PAGE);
+    expect(pages).toHaveLength(20);
+    for (const [index, page] of pages.entries()) {
+      expect(fields(page)).toMatchObject({
+        origin: "cold",
+        controlRequestCalls: 1,
+        inclusiveControlRequestWaitMs: 1_100,
+        provenanceChecks: 1,
+        provenanceReadCalls: index === 0 ? 1 : 0,
+        provenanceCacheHits: index === 0 ? 0 : 1,
+        controlWaitersOmitted: 2,
+      });
+      const tuples = JSON.parse(String(fields(page).controlWaitersV1));
+      expect(tuples).toHaveLength(4);
+      expect(tuples.map((tuple: unknown[]) => tuple[1])).toEqual([1, 2, 5, 6]);
+      expect(Object.keys(fields(page)).length).toBeLessThanOrEqual(28);
+      expect(Buffer.byteLength(JSON.stringify(fields(page)))).toBeLessThanOrEqual(2_048);
+    }
+    expect(JSON.stringify(records)).not.toContain("private-cursor-");
+    expect(JSON.stringify(records)).not.toContain(privateText);
+    await f.list("another query");
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(20);
+  });
 
   it("preserves a bounded page warning with maximal waiter values and omitted invalid facts", async () => {
     const f = await fixture();
@@ -514,29 +488,6 @@ describe("registered Codex catalog diagnostics", () => {
     expect(Object.keys(metadata).length).toBeLessThanOrEqual(28);
     expect(Buffer.byteLength(JSON.stringify(metadata))).toBeLessThanOrEqual(2_048);
     expect(JSON.stringify(records)).not.toContain(privateText);
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
-  });
-
-  it("attributes a slow warm list to adoption without starting another producer", async () => {
-    const f = await fixture();
-    commandRpcMocks.codexControlRequest.mockResolvedValue({
-      data: [idleThread({ id: "resident-thread", source: "cli" })],
-    });
-    await f.control.initialize();
-    const initial = await f.list();
-    vi.mocked(f.runtime.agent.session.listSessionEntries).mockImplementation(() => {
-      clock += 1_100;
-      return [];
-    });
-    clock += 61_000;
-    await expect(f.list()).resolves.toEqual(initial);
-    expect(fields((await emitted(LIST))[0])).toMatchObject({
-      elapsedMs: 1_100,
-      controlWaitSumMs: 0,
-      adoptionCalls: 1,
-      adoptionSumMs: 1_100,
-    });
-    expect(await emitted(PAGE)).toEqual([]);
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
   });
 

@@ -193,27 +193,23 @@ export function resolveConfigWidePluginMetadataSnapshot(
   if (gatewaySnapshot) {
     return gatewaySnapshot;
   }
-  return withSynchronousArtifactPreservingStateSnapshot(() =>
-    resolveConfigWidePluginMetadataSnapshotInScope(params),
-  );
-}
-
-function resolveConfigWidePluginMetadataSnapshotInScope(
-  params: ResolveConfigWidePluginMetadataParams,
-): PluginMetadataSnapshot {
-  const env = params.env ?? process.env;
-  if (params.installRecords === undefined) {
-    preparePluginMetadataMachineState({ env, stateDir: params.stateDir });
-  }
-  const { key, workspaceDirs } = resolveConfigWideMetadataSelection(params);
-  const cache = getPluginCache();
-  const cached = cache.metadata.snapshots.get(key);
-  if (cached) {
-    return cached;
-  }
-  const snapshot = resolveConfigWidePluginMetadataSnapshotImpl(params, workspaceDirs);
-  cache.metadata.snapshots.set(key, snapshot);
-  return snapshot;
+  return withSynchronousArtifactPreservingStateSnapshot(() => {
+    if (params.installRecords === undefined) {
+      preparePluginMetadataMachineState({
+        env: params.env ?? process.env,
+        stateDir: params.stateDir,
+      });
+    }
+    const { key, workspaceDirs } = resolveConfigWideMetadataSelection(params);
+    const cache = getPluginCache();
+    const cached = cache.metadata.snapshots.get(key);
+    if (cached) {
+      return cached;
+    }
+    const snapshot = resolveConfigWidePluginMetadataSnapshotImpl(params, workspaceDirs);
+    cache.metadata.snapshots.set(key, snapshot);
+    return snapshot;
+  });
 }
 
 function resolveConfigWidePluginMetadataSnapshotImpl(

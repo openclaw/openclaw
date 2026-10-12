@@ -1,16 +1,17 @@
 ---
-summary: "Recursive delegation depth, the announce chain, cascade stop, and how sub-agent auth resolves"
+summary: "Recursive delegation depth, the announce chain, cascade stop, and how sub-agent auth and memory audience resolve"
 title: "Nested sub-agents and authentication"
 read_when:
   - You are building an orchestrator that spawns its own children
   - You need the depth caps and per-agent child limits
   - You need to know which auth profile a sub-agent uses
+  - You need to know how a child inherits memory audience
 ---
 
 ## Nested sub-agents
 
-By default, sub-agents can recursively delegate through depth `5`. Global
-concurrency, per-session child limits, inherited tool policy, sandbox
+By default, sub-agents can recursively delegate through depth `5`. Per-session
+execution and child admission limits, inherited tool policy, sandbox
 inheritance, and target-agent allowlists still apply. Set a lower depth to
 create leaf workers sooner.
 
@@ -21,7 +22,7 @@ create leaf workers sooner.
       subagents: {
         maxSpawnDepth: 2, // stop nesting after depth 2 (default: 5, range 1-5)
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5, range 1-20)
-        maxConcurrent: 8, // global concurrency lane cap (default: 8)
+        maxConcurrent: 8, // concurrent child runs per spawning session (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn (0 = no timeout)
         announceTimeoutMs: 120000, // gateway announce timeout, excluding accepted queue waits
       },
@@ -59,8 +60,9 @@ visible for a short recent window, and stale store-only child links are
 ignored after their freshness window. This prevents old `spawnedBy` /
 `parentSessionKey` metadata from resurrecting ghost children after
 restart. If a child completion event arrives after you already sent the
-final answer, the correct follow-up is the exact silent token
-`NO_REPLY` / `no_reply`.
+final answer, review it and continue any unfinished work. Avoid repeating an
+already delivered update. Internal orchestration still requires a meaningful
+result; a silent token cannot settle the child task.
 </Note>
 
 ### Tool policy by depth
@@ -74,7 +76,9 @@ final answer, the correct follow-up is the exact silent token
 
 Each agent session (at any depth) can have at most `maxChildrenPerAgent`
 (default `5`) active children at a time. This prevents runaway fan-out
-from a single orchestrator.
+from a single orchestrator. Separately, `maxConcurrent` limits executing child
+runs for that immediate spawning session. Each nested orchestrator gets its own
+execution budget; its children do not share the root session's slots.
 
 ### Reset a conversation
 
@@ -97,3 +101,38 @@ Sub-agent auth is resolved by **agent id**, not by session type:
 The merge is additive, so shared profiles are always available as
 fallbacks. There is no setting that isolates an agent's auth from the shared
 profiles.
+
+### Memory audience inheritance
+
+OpenClaw `sessions_spawn` (including ACP runtimes) and realtime voice consults
+record the immediate parent key (`spawnedBy`), exact parent session id
+(`spawnedBySessionId`), parent lifecycle revision
+(`parentSessionLifecycleRevision`), and the spawning invocation's trusted owner
+status (`spawnedBySenderIsOwner`). These are host-owned facts, not tool arguments
+or `sessions.patch` fields. The owner flag is never inferred from a child's
+synthetic launch authority; voice consults take it only from the caller's
+ingress authentication. Missing or false owner status does not grant owner
+access.
+
+For memory access, OpenClaw validates every parent hop against the current parent
+incarnation and lifecycle, including same-id resets. It then supplies the
+host-minted root audience to memory providers and plugin tools. Providers must
+consume that prepared audience and must not walk session lineage or infer memory
+authority from session lookups.
+
+A child reset preserves its recorded parent grant, so a newly resolved audience
+can still inherit from the same root. A reset or removal of any recorded parent
+invalidates an already captured audience, so the next protected provider or tool
+operation fails its audience currency check. Later turns of that child receive
+no memory audience. With a native memory provider, the Gateway log warns that the
+child's lineage is stale and that it must be respawned or recreated from a current
+session; resetting the child keeps the stale lineage. Legacy children without the
+complete lineage stamps receive no inherited memory audience: their turns run
+without private or conversation memory, and the Gateway log warns that the
+session predates memory lineage receipts and must be respawned from its parent.
+Children whose parents lack a lifecycle revision must be respawned after the
+parent's next reset, which establishes a current lifecycle revision.
+
+This contract covers OpenClaw-created child sessions. Native runtime child threads
+also need their runtime's tool bridge to provide a live authorized invocation;
+lineage metadata alone does not add that bridge.

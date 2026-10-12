@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { AgentHarnessHostCapabilities } from "./harness/host-capability-types.js";
@@ -151,15 +152,19 @@ vi.mock("./model-discovery-context.js", () => ({
   resolveModelPluginMetadataSnapshot: () => undefined,
 }));
 
-vi.mock("./embedded-agent-runner/model.js", () => ({
+vi.mock("./embedded-agent-runner/model.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./embedded-agent-runner/model.js")>()),
   resolveModelAsync: (...args: unknown[]) => resolveModelAsyncMock(...args),
-  resolveModelWithRegistry: (...args: unknown[]) => resolveModelWithRegistryMock(...args),
 }));
 
+// mock-isolation: Side-question runs use controlled auth results without host credential discovery.
 vi.mock("./model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
   ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
+  ensureAuthProfileStoreAsync: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
   ensureAuthProfileStoreWithoutExternalProfiles: (...args: unknown[]) =>
+    ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: (...args: unknown[]) =>
     ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
   getApiKeyForModelCore: (...args: unknown[]) => getApiKeyForModelMock(...args),
   hasUsableCustomProviderApiKey: (...args: unknown[]) => hasUsableCustomProviderApiKeyMock(...args),
@@ -261,8 +266,8 @@ vi.mock("./embedded-agent-runner/runs.js", () => ({
 
 vi.mock("./agent-scope.js", () => ({
   listAgentEntries: (...args: unknown[]) => listAgentEntriesMock(...args),
-  resolveAgentConfig: (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
-    cfg.agents?.list?.find((entry) => entry.id === agentId),
+  listAgentEntriesWithSource: () => [],
+  resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) => cfg.agents?.entries?.[agentId],
   resolveSessionAgentIds: (...args: unknown[]) => resolveSessionAgentIdsMock(...args),
   resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
   resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),

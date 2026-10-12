@@ -48,6 +48,29 @@ import {
 - `dispatchChannelInboundReply(...)`: records and dispatches an already
   assembled inbound reply with a delivery adapter.
 
+For replies, channel plugins decode the platform reference and hydrate accessible
+parent messages. Pass the reference as `reply.replyToId` even when the parent
+cannot be fetched, and pass available text and sender facts as
+`supplemental.quote`. Core applies the configured context visibility policy and
+renders the reply relationship for the model. Quoted bot text is context for the
+current message; it does not independently admit a bot-authored turn. Self-authored
+quote text is preserved by default. Self-authored quote media is skipped by
+default; callers can explicitly set `suppressSelfQuoteBody: true` or
+`suppressSelfQuoteMedia: false` when resolving supplemental media.
+
+Native command adapters must authorize the sender before preparing a configured
+binding. `resolveCommandAuthorization(...)` from
+`openclaw/plugin-sdk/command-auth-native` returns an optional `assertOwnerCurrent`
+callback carrying the host's admitted owner check. It cannot grant ownership;
+the callback is absent when no owner check was bound. Capture the authorization
+result before awaited preparation, combine its callback with current channel and
+command-policy checks, and pass the resulting callback as `assertActive` to
+`ensureConfiguredBindingRouteReady`. ACP preparation checks it before later
+backend effects, including queued controls, handle reopening, and session
+replacement. Accepted control and close results still settle after revocation;
+revocation blocks the next effect. The optional callback preserves existing
+callers that do not carry channel-request authority.
+
 For intentional skips, `logInboundDrop({ log, channel, reason, target?, onceKey?, hint? })`
 formats a diagnostic through the supplied logger. Use a default-level logger and
 an actionable `hint` for mention-gated groups. Set `onceKey` to an account/conversation
@@ -273,6 +296,14 @@ different provider-routed target session. The override affects inbound metadata,
 transcript-context merge, and record-stage diagnostics; it does not change dispatch
 routing or hook correlation. An explicit override must be non-empty and contain no
 surrounding whitespace.
+
+The shared `recordInboundSession` recorder joins its metadata writer before
+returning, so dispatch cannot race creation of the session store. If the agent
+database is still awaiting startup inspection, recording rejects before dispatch
+so the channel transport can retry the inbound message. Other metadata write
+failures still reach `onRecordError` without failing the turn. The promise passed
+to `trackSessionMetaTask` includes asynchronous error reporting; reporting and
+automatic session maintenance remain outside foreground completion.
 
 Reject `deliver` or `finalization` when native delivery fails. If no provider
 send was attempted, throw `PlatformMessageNotDispatchedError` from

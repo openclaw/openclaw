@@ -19,11 +19,8 @@ import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/e
 import { ADMIN_SCOPE, APPROVALS_SCOPE, READ_SCOPE } from "./method-scopes.js";
 import { withOperatorApprovalsGatewayClient } from "./operator-approvals-client.js";
 import { startGatewayServer } from "./server.js";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-} from "./test-helpers.e2e.js";
+import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 import {
   configureManualGatewayBackgroundEnv,
   MANUAL_GATEWAY_ENV_KEYS,
@@ -93,17 +90,19 @@ describe("operator approval gateway client e2e", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     configureManualGatewayBackgroundEnv(tempHome);
 
-    const port = await getGatewayE2ePortBlock();
+    const claim = await acquireGatewayE2ePortBlock();
     const token = "approval-client-e2e-token";
-    const url = `ws://127.0.0.1:${port}`;
-    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
+    const url = `ws://127.0.0.1:${claim.port}`;
+    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
 
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
+    const server = await startClaimedGateway(claim, () =>
+      startGatewayServer(claim.port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      }),
+    );
     cleanup.push(() => server.close());
 
     const admin = await connectGatewayClient({
@@ -126,7 +125,7 @@ describe("operator approval gateway client e2e", () => {
 
     const localConfig = {
       gateway: {
-        port,
+        port: claim.port,
         auth: { mode: "token", token },
       },
     } satisfies OpenClawConfig;
@@ -209,17 +208,19 @@ describe("operator approval gateway client e2e", () => {
     });
     expect(requesterIdentity.deviceId).not.toBe(reviewerIdentity.deviceId);
 
-    const port = await getGatewayE2ePortBlock();
+    const claim = await acquireGatewayE2ePortBlock();
     const token = "approval-surfaces-e2e-token";
-    const url = `ws://127.0.0.1:${port}`;
-    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
+    const url = `ws://127.0.0.1:${claim.port}`;
+    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
 
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
+    const server = await startClaimedGateway(claim, () =>
+      startGatewayServer(claim.port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      }),
+    );
     cleanup.push(() => server.close());
 
     const requester = await connectGatewayClient({

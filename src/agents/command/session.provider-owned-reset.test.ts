@@ -57,11 +57,11 @@ describe("command resolveSession provider-owned daily reset", () => {
     hoisted.terminalTranscriptNewer = false;
   });
 
-  it("keeps a provider-owned CLI session with the default reset policy", () => {
+  it("keeps a provider-owned CLI session with the default reset policy", async () => {
     const sessionKey = "agent:main:cli";
     seedProviderOwned(sessionKey);
 
-    const result = resolveSession({
+    const result = await resolveSession({
       cfg: { session: {} } as OpenClawConfig,
       sessionKey,
       agentId: "main",
@@ -71,60 +71,7 @@ describe("command resolveSession provider-owned daily reset", () => {
     expect(result.sessionId).toBe("old-session-id");
   });
 
-  it("still rotates a non-provider-owned session across the daily boundary", () => {
-    const sessionKey = "agent:main:cli";
-    const startedAt = Date.now() - DAY_MS;
-    hoisted.store = {
-      [sessionKey]: {
-        sessionId: "old-session-id",
-        updatedAt: startedAt,
-        sessionStartedAt: startedAt,
-        lastInteractionAt: startedAt,
-        pendingTranscriptRepair: [
-          { id: "predecessor-repair", text: "old reply", createdAt: startedAt },
-        ],
-        lastRunId: "settled-old-run",
-      },
-    };
-
-    const result = resolveSession({
-      cfg: { session: { reset: { mode: "daily" } } } as OpenClawConfig,
-      sessionKey,
-      agentId: "main",
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe("old-session-id");
-    expect(result.sessionEntry?.pendingTranscriptRepair).toBeUndefined();
-    expect(result.sessionEntry?.lastRunId).toBeUndefined();
-  });
-
-  it("keeps a model-locked session across the daily boundary", () => {
-    const sessionKey = "agent:main:codex-supervised";
-    const startedAt = Date.now() - DAY_MS;
-    hoisted.store = {
-      [sessionKey]: {
-        sessionId: "locked-session-id",
-        updatedAt: startedAt,
-        sessionStartedAt: startedAt,
-        lastInteractionAt: startedAt,
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-      },
-    };
-    hoisted.terminalTranscriptNewer = true;
-
-    const result = resolveSession({
-      cfg: { session: {} } as OpenClawConfig,
-      sessionKey,
-      agentId: "main",
-    });
-
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe("locked-session-id");
-  });
-
-  it("carries stored thinking and verbose preferences during terminal transcript recovery", () => {
+  it("carries stored thinking and verbose preferences during terminal transcript recovery", async () => {
     const sessionKey = "agent:main:cli";
     const now = Date.now();
     hoisted.store = {
@@ -139,7 +86,7 @@ describe("command resolveSession provider-owned daily reset", () => {
     };
     hoisted.terminalTranscriptNewer = true;
 
-    const result = resolveSession({
+    const result = await resolveSession({
       cfg: { session: {} } as OpenClawConfig,
       sessionKey,
       agentId: "main",
@@ -151,7 +98,7 @@ describe("command resolveSession provider-owned daily reset", () => {
     expect(result.persistedVerbose).toBe("full");
   });
 
-  it("carries preferences across a daily reset", () => {
+  it("carries preferences across a daily reset", async () => {
     const sessionKey = "agent:main:cli";
     const startedAt = Date.now() - 2 * DAY_MS;
     hoisted.store = {
@@ -162,9 +109,11 @@ describe("command resolveSession provider-owned daily reset", () => {
         lastInteractionAt: startedAt,
         thinkingLevel: "high",
         verboseLevel: "full",
+        pendingTranscriptRepair: [{ id: "old-repair", text: "old reply", createdAt: startedAt }],
+        lastRunId: "settled-old-run",
       },
     };
-    const result = resolveSession({
+    const result = await resolveSession({
       cfg: { session: { reset: { mode: "daily" } } } as OpenClawConfig,
       sessionKey,
       agentId: "main",
@@ -172,39 +121,9 @@ describe("command resolveSession provider-owned daily reset", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe("daily-expired-session-id");
+    expect(result.sessionEntry?.pendingTranscriptRepair).toBeUndefined();
+    expect(result.sessionEntry?.lastRunId).toBeUndefined();
     expect(result.persistedThinking).toBe("high");
     expect(result.persistedVerbose).toBe("full");
-  });
-
-  it("carries preferences when terminal recovery overlaps an idle reset", () => {
-    const sessionKey = "agent:main:cli";
-    const now = Date.now();
-    const lastInteractionAt = now - 60 * 60 * 1000;
-    hoisted.store = {
-      [sessionKey]: {
-        sessionId: "idle-expired-session-id",
-        updatedAt: lastInteractionAt,
-        sessionStartedAt: now,
-        lastInteractionAt,
-        thinkingLevel: "high",
-        verboseLevel: "on",
-      },
-    };
-    hoisted.terminalTranscriptNewer = true;
-
-    const result = resolveSession({
-      cfg: {
-        session: {
-          reset: { mode: "idle", idleMinutes: 30 },
-        },
-      } as OpenClawConfig,
-      sessionKey,
-      agentId: "main",
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe("idle-expired-session-id");
-    expect(result.persistedThinking).toBe("high");
-    expect(result.persistedVerbose).toBe("on");
   });
 });

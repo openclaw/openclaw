@@ -1,4 +1,3 @@
-// Logbook plugin entrypoint: automatic work journal built from screen snapshots.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -19,9 +18,7 @@ import { LogbookService } from "./src/service.js";
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 const logbookConfigSchema = {
-  parse(value: unknown) {
-    return resolveLogbookConfig(value);
-  },
+  parse: resolveLogbookConfig,
 };
 
 function readDayParam(params: unknown): string {
@@ -90,18 +87,14 @@ export default definePluginEntry({
       return service;
     };
 
-    const sendError = (respond: GatewayRequestHandlerOptions["respond"], err: unknown) => {
-      const message = formatErrorMessage(err);
-      respond(false, { error: message }, errorShape(ErrorCodes.UNAVAILABLE, message));
-    };
-
     const handle =
       (run: (params: unknown) => unknown) =>
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           respond(true, await run(params));
         } catch (err) {
-          sendError(respond, err);
+          const message = formatErrorMessage(err);
+          respond(false, { error: message }, errorShape(ErrorCodes.UNAVAILABLE, message));
         }
       };
 
@@ -140,6 +133,7 @@ export default definePluginEntry({
 
     api.registerService({
       id: "logbook",
+      apiVersion: 2,
       start: async (ctx) => {
         if (retired) {
           throw new Error("Logbook plugin runtime has been retired");
@@ -157,6 +151,7 @@ export default definePluginEntry({
           runtime: api.runtime,
           fullConfig: ctx.config,
           logger: ctx.logger,
+          scheduler: ctx.scheduler,
           dataDir: path.join(ctx.stateDir, "logbook"),
           workerModuleUrl: new URL(
             `./src/store.worker${path.extname(api.runtimeSource)}`,

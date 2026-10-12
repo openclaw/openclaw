@@ -16,13 +16,17 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/co
 import { createConfiguredGatewayLocalProbe } from "../../../../src/gateway/local-http-probe.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
+import { startClaimedGateway } from "../../../../src/gateway/test-helpers.listener.js";
 import { resolveGatewayConnectionTlsFingerprint } from "../../../../src/gateway/tls-fingerprint.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { loadGatewayTlsServerRuntime } from "../../../../src/infra/tls/gateway.js";
 import { flushLogger, resetLogger } from "../../../../src/logging/logger.js";
-import { getDeterministicFreePortBlock, getFreePort } from "../../../../src/test-utils/ports.js";
-import { waitForFile } from "../../../helpers/process-wait.js";
-import { createDeferred } from "../../../helpers/promise.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../../../src/state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../../../src/state/openclaw-state-db.paths.js";
+import { acquireTestPortBlock } from "../../../../src/test-utils/port-claims.js";
+import { getFreePort } from "../../../../src/test-utils/ports.js";
+import { createDeferred, withinTest } from "../../../helpers/promise.js";
+import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SCENARIO_ID = "gateway-tls-pinning";
@@ -52,6 +56,7 @@ const ENV_KEYS = [
 type ProducerOptions = {
   artifactBase: string;
   repoRoot: string;
+  signal?: AbortSignal;
 };
 
 export type GatewayTlsPinningProof = {
@@ -106,6 +111,7 @@ function captureEnvironment() {
 async function writeDiscoveryProbePlugin(
   pluginDir: string,
   advertisementPath: string,
+  advertisementReadyEvent: string,
 ): Promise<void> {
   await fs.mkdir(pluginDir, { recursive: true });
   await Promise.all([
@@ -141,6 +147,7 @@ module.exports = {
       id: ${JSON.stringify(DISCOVERY_PLUGIN_ID)},
       advertise(context) {
         fs.writeFileSync(${JSON.stringify(advertisementPath)}, JSON.stringify(context), "utf8");
+        process.emit(${JSON.stringify(advertisementReadyEvent)});
       },
     });
   },
@@ -317,21 +324,27 @@ async function proveCleartextMismatch(port: number, tlsFingerprint: string): Pro
   }
 }
 
-export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProof> {
+export async function runGatewayTlsPinningProof(
+  signal?: AbortSignal,
+): Promise<GatewayTlsPinningProof> {
   const restoreEnvironment = captureEnvironment();
   const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tls-pinning-"));
   const stateDir = path.join(runtimeRoot, "state");
+  const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
   const configPath = path.join(stateDir, "openclaw.json");
   const certPath = path.join(runtimeRoot, "tls", "gateway-cert.pem");
   const keyPath = path.join(runtimeRoot, "tls", "gateway-key.pem");
   const pluginDir = path.join(runtimeRoot, "discovery-plugin");
   const advertisementPath = path.join(runtimeRoot, "gateway-discovery-advertisement.json");
+  const advertisementReadyEvent = `${DISCOVERY_PLUGIN_ID}:${runtimeRoot}`;
+  const advertisementReady = createDeferred();
   const gatewayLogPath = path.join(runtimeRoot, "gateway.log");
   // Windows symlink creation requires host privileges unrelated to Gateway TLS.
   const symlinkRenewal = process.platform !== "win32";
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
 
-  try {
+  async function runProof(): Promise<GatewayTlsPinningProof> {
+    process.once(advertisementReadyEvent, advertisementReady.resolve);
     process.env.HOME = runtimeRoot;
     process.env.OPENCLAW_CONFIG_PATH = configPath;
     process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -348,7 +361,7 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
     delete process.env.NODE_ENV;
     delete process.env.OPENCLAW_DISABLE_BONJOUR;
     delete process.env.VITEST;
-    await writeDiscoveryProbePlugin(pluginDir, advertisementPath);
+    await writeDiscoveryProbePlugin(pluginDir, advertisementPath, advertisementReadyEvent);
 
     const preparedTls = await loadGatewayTlsServerRuntime({
       enabled: true,
@@ -399,14 +412,16 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
     clearConfigCache();
     clearRuntimeConfigSnapshot();
 
-    const port = await getDeterministicFreePortBlock({ offsets: [0, 1] });
-    server = await startGatewayServer(port, {
-      auth: { mode: "none" },
-      bind: "loopback",
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
-    const url = `wss://127.0.0.1:${port}`;
+    const claim = await acquireTestPortBlock({ offsets: [0, 1] });
+    server = await startClaimedGateway(claim, () =>
+      startGatewayServer(claim.port, {
+        auth: { mode: "none" },
+        bind: "loopback",
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      }),
+    );
+    const url = `wss://127.0.0.1:${claim.port}`;
     const probeConfig = {
       gateway: { tls: { enabled: true, certPath, keyPath } },
     };
@@ -415,7 +430,7 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
     const probeHealth = () =>
       localProbe.requestHttp({
         host: "127.0.0.1",
-        port,
+        port: claim.port,
         pathname: "/healthz",
         timeoutMs: 1000,
       });
@@ -424,7 +439,7 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
       if ((await probeHealth())?.statusCode !== 200) {
         probeFailures.push(`${stage}: HTTP probe rejected the healthy accepted listener`);
       }
-      const target = await localProbe.resolveWebSocketTarget(port);
+      const target = await localProbe.resolveWebSocketTarget(claim.port);
       if (target?.tlsFingerprint !== expectedFingerprint) {
         probeFailures.push(`${stage}: WebSocket probe selected an unaccepted certificate pin`);
       } else {
@@ -437,13 +452,13 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
       async () => ((await probeHealth())?.statusCode === 200 ? true : undefined),
       "the initial accepted local TLS health listener",
     );
-    const initialTarget = await missedRenewalProbe.resolveWebSocketTarget(port);
+    const initialTarget = await missedRenewalProbe.resolveWebSocketTarget(claim.port);
     if (initialTarget?.tlsFingerprint !== preparedTls.fingerprintSha256) {
       throw new Error("A WebSocket-first probe did not verify the initial listener pin");
     }
-    await waitForFile(advertisementPath, CONNECTION_TIMEOUT_MS);
+    await (signal ? withinTest(advertisementReady.promise, signal) : advertisementReady.promise);
     const advertisedFingerprint = await readAdvertisedFingerprint(advertisementPath);
-    const peerFingerprint = await waitForPeerFingerprint(port);
+    const peerFingerprint = await waitForPeerFingerprint(claim.port);
     if (peerFingerprint !== advertisedFingerprint) {
       throw new Error("Gateway advertised TLS fingerprint did not match the live peer certificate");
     }
@@ -473,7 +488,7 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
         const log = await fs.readFile(gatewayLogPath, "utf8");
         return log.includes("TLS renewal failed; keeping accepted material") ? true : undefined;
       }, "rejection of the incomplete cert/key replacement");
-      for (const listener of [port, existing.portalPort]) {
+      for (const listener of [claim.port, existing.portalPort]) {
         if ((await waitForPeerFingerprint(listener)) !== advertisedFingerprint) {
           throw new Error("An incomplete renewal changed an accepted TLS listener");
         }
@@ -489,11 +504,11 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
       if (
         (await coldProbe.requestHttp({
           host: "127.0.0.1",
-          port,
+          port: claim.port,
           pathname: "/healthz",
           timeoutMs: 1000,
         })) !== null ||
-        (await coldProbe.resolveWebSocketTarget(port)) !== null
+        (await coldProbe.resolveWebSocketTarget(claim.port)) !== null
       ) {
         throw new Error(
           "A cold probe trusted a serving certificate absent from its configured file",
@@ -501,7 +516,7 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
       }
       await fs.writeFile(keyPath, nextKey);
       const renewedFingerprint = await waitForRenewalFact(async () => {
-        const fingerprint = await waitForPeerFingerprint(port);
+        const fingerprint = await waitForPeerFingerprint(claim.port);
         return fingerprint === replacement.fingerprintSha256 ? fingerprint : undefined;
       }, "the renewed listener certificate");
       await waitForRenewalFact(
@@ -564,24 +579,24 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
         const laterLog = (await fs.readFile(gatewayLogPath)).subarray(pausedLogSize).toString();
         return laterLog.includes("TLS renewal deferred") ? true : undefined;
       }, "the paused owner's certificate observation");
-      if ((await waitForPeerFingerprint(port)) !== renewedFingerprint) {
+      if ((await waitForPeerFingerprint(claim.port)) !== renewedFingerprint) {
         throw new Error("TLS certificate changed while automatic reload was off");
       }
       await verifyRetainedProbe("reload off", renewedFingerprint);
       if (
         (await missedRenewalProbe.requestHttp({
           host: "127.0.0.1",
-          port,
+          port: claim.port,
           pathname: "/healthz",
           timeoutMs: 1000,
         })) !== null ||
-        (await missedRenewalProbe.resolveWebSocketTarget(port)) !== null
+        (await missedRenewalProbe.resolveWebSocketTarget(claim.port)) !== null
       ) {
         throw new Error("A probe trusted an intermediate serving certificate it never verified");
       }
       await setReloadMode("hybrid");
       const resumedFingerprint = await waitForRenewalFact(async () => {
-        const fingerprint = await waitForPeerFingerprint(port);
+        const fingerprint = await waitForPeerFingerprint(claim.port);
         return fingerprint === nextPair.fingerprintSha256 ? fingerprint : undefined;
       }, "renewal on re-enable without another certificate write");
       for (const listener of [existing.portalPort, later.portalPort, later.sandboxPort]) {
@@ -613,7 +628,7 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
         await fs.rename(`${certPath}.next`, certPath);
         await fs.rename(`${keyPath}.next`, keyPath);
         finalFingerprint = await waitForRenewalFact(async () => {
-          const fingerprint = await waitForPeerFingerprint(port);
+          const fingerprint = await waitForPeerFingerprint(claim.port);
           return fingerprint === retargeted.fingerprintSha256 ? fingerprint : undefined;
         }, "the certificate after atomic symlink retargeting");
         for (const listener of [existing.portalPort, later.portalPort, later.sandboxPort]) {
@@ -630,7 +645,9 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
         );
       }
       const health = await client.request("health", {});
-      if ((await localProbe.resolveWebSocketTarget(port))?.tlsFingerprint !== finalFingerprint) {
+      if (
+        (await localProbe.resolveWebSocketTarget(claim.port))?.tlsFingerprint !== finalFingerprint
+      ) {
         throw new Error("Retained local probe returned its startup certificate pin after renewal");
       }
       if ((await probeHealth())?.statusCode !== 200) {
@@ -663,7 +680,7 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
     await withExactPin(url, configuredPin, async (client) => {
       await client.request("health", {});
     });
-    const cleartextMismatch = await proveCleartextMismatch(port, advertisedFingerprint);
+    const cleartextMismatch = await proveCleartextMismatch(claim.port, advertisedFingerprint);
     if (probeFailures.length > 0) {
       throw new Error(probeFailures.join("; "));
     }
@@ -680,15 +697,23 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
       coldProbeRejectedUnknownPin: true,
       missedRenewalRejectedUnknownPin: true,
     };
-  } finally {
-    await server?.close({ reason: "Gateway TLS pinning proof complete" }).catch(() => undefined);
-    clearConfigCache();
-    clearRuntimeConfigSnapshot();
-    restoreEnvironment();
-    await flushLogger();
-    resetLogger();
-    await fs.rm(runtimeRoot, { force: true, recursive: true });
   }
+  return await runQaGatewayFixture(
+    runProof,
+    async () => {
+      await server?.close({ reason: "Gateway TLS pinning proof complete" });
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      await flushLogger();
+      resetLogger();
+      await fs.rm(runtimeRoot, { force: true, recursive: true });
+    },
+    () => {
+      process.off(advertisementReadyEvent, advertisementReady.resolve);
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      restoreEnvironment();
+    },
+  );
 }
 
 export async function runGatewayTlsPinningProducer(
@@ -714,7 +739,7 @@ export async function runGatewayTlsPinningProducer(
   });
   const startedAt = Date.now();
   try {
-    const proof = await runGatewayTlsPinningProof();
+    const proof = await runGatewayTlsPinningProof(options.signal);
     await fs.mkdir(options.artifactBase, { recursive: true });
     const summaryPath = path.join(options.artifactBase, "gateway-tls-pinning-summary.json");
     await fs.writeFile(summaryPath, `${JSON.stringify(proof, null, 2)}\n`, "utf8");

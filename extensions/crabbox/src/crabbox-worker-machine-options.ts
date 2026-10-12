@@ -1,5 +1,10 @@
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
-import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asPositiveSafeInteger,
+  isRecord,
+  normalizeOptionalString as nonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   type CrabboxMachineShape,
@@ -7,7 +12,6 @@ import {
   CRABBOX_ENROLLABLE_TARGETS,
   CRABBOX_OS_LABELS,
   listCrabboxMachineOptions,
-  nonEmptyString,
   parseCrabboxProfile,
 } from "./crabbox-worker-profile.js";
 import { CRABBOX_MACHINE_CATALOG_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
@@ -107,9 +111,7 @@ export function createCrabboxMachineOptionsResolver(
     if (!shapes) {
       shapes = loadMachineShapes(binary).catch((error: unknown) => {
         machineShapesByBinary.delete(binary);
-        dependencies.warn(
-          `Crabbox machine shapes unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        dependencies.warn(`Crabbox machine shapes unavailable: ${coerceErrorMessage(error)}`);
         return new Map();
       });
       machineShapesByBinary.set(binary, shapes);

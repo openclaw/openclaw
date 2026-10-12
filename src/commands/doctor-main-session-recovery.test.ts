@@ -1,9 +1,8 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   inspectMainSessionRecoveryEntry,
   noteMainSessionRecoveryIntegrity,
@@ -12,21 +11,13 @@ import {
 const agentId = "main";
 const sessionKey = "agent:main:wedged-main";
 const reason = "restart recovery exhausted after 3 attempts";
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function countLabel(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-doctor-main-recovery-");
 
 describe("doctor main-session recovery integrity", () => {
   let storePath = "";
 
   beforeEach(() => {
-    storePath = path.join(tempDirs.make("openclaw-doctor-main-recovery-"), "sessions.json");
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
+    storePath = path.join(sessionDirs.make(), "sessions.json");
   });
 
   async function writeTombstone(abortedLastRun: boolean): Promise<void> {
@@ -62,7 +53,6 @@ describe("doctor main-session recovery integrity", () => {
       warnings,
       changes,
       confirmRepair,
-      countLabel,
     });
 
     expect(warnings.join("\n")).toContain("automatic restart recovery tombstoned");
@@ -85,7 +75,6 @@ describe("doctor main-session recovery integrity", () => {
       warnings,
       changes,
       confirmRepair,
-      countLabel,
     });
 
     expect(confirmRepair).toHaveBeenCalledWith({

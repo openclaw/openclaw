@@ -60,25 +60,16 @@ export function fingerprintAuthProfileOwnerShape(params: {
   }
   switch (credential.type) {
     case "api_key":
-      return hashAuthBinding([
-        "profile-owner-v1",
-        params.profileId,
-        credential.type,
-        credential.provider,
-        credential.keyRef ?? null,
-        normalizeIdentity(credential.email, true) ?? null,
-        normalizeIdentity(credential.displayName) ?? null,
-        credential.metadata ?? null,
-      ]);
     case "token":
       return hashAuthBinding([
         "profile-owner-v1",
         params.profileId,
         credential.type,
         credential.provider,
-        credential.tokenRef ?? null,
+        (credential.type === "api_key" ? credential.keyRef : credential.tokenRef) ?? null,
         normalizeIdentity(credential.email, true) ?? null,
         normalizeIdentity(credential.displayName) ?? null,
+        ...(credential.type === "api_key" ? [credential.metadata ?? null] : []),
       ]);
     case "oauth": {
       const jwtIdentity = decodeJwtIdentity(credential.idToken);
@@ -207,33 +198,21 @@ export function fingerprintAuthProfileCredential(params: {
 }): string | undefined {
   const credential = params.credential;
   switch (credential.type) {
-    case "api_key": {
-      if (!credential.key) {
-        return undefined;
-      }
-      return hashAuthBinding([
-        "api_key",
-        params.profileId,
-        credential.provider,
-        credential.key,
-        credential.keyRef ?? null,
-        credential.email ?? null,
-        credential.displayName ?? null,
-        credential.metadata ?? null,
-      ]);
-    }
+    case "api_key":
     case "token": {
-      if (!credential.token) {
+      const value = credential.type === "api_key" ? credential.key : credential.token;
+      if (!value) {
         return undefined;
       }
       return hashAuthBinding([
-        "token",
+        credential.type,
         params.profileId,
         credential.provider,
-        credential.token,
-        credential.tokenRef ?? null,
+        value,
+        (credential.type === "api_key" ? credential.keyRef : credential.tokenRef) ?? null,
         credential.email ?? null,
         credential.displayName ?? null,
+        ...(credential.type === "api_key" ? [credential.metadata ?? null] : []),
       ]);
     }
     case "oauth": {

@@ -1,18 +1,17 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import type { SystemRunApprovalFileOperand, SystemRunApprovalPlan } from "./exec-approvals.js";
 import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
 function normalizeSystemRunApprovalFileOperand(
-  value: unknown,
+  candidate: unknown,
 ): SystemRunApprovalFileOperand | null | undefined {
-  if (value === undefined) {
+  if (candidate === undefined) {
     return undefined;
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(candidate)) {
     return null;
   }
-  // SAFETY: Non-null, non-array object; each unknown field is validated below.
-  const candidate = value as Record<string, unknown>;
   const argvIndex =
     typeof candidate.argvIndex === "number" &&
     Number.isInteger(candidate.argvIndex) &&
@@ -31,12 +30,10 @@ function normalizeSystemRunApprovalFileOperand(
   };
 }
 
-export function normalizeSystemRunApprovalPlan(value: unknown): SystemRunApprovalPlan | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+export function normalizeSystemRunApprovalPlan(candidate: unknown): SystemRunApprovalPlan | null {
+  if (!isRecord(candidate)) {
     return null;
   }
-  // SAFETY: Non-null, non-array object; each unknown field is validated below.
-  const candidate = value as Record<string, unknown>;
   const argv = normalizeStringArray(candidate.argv);
   if (argv.length === 0) {
     return null;

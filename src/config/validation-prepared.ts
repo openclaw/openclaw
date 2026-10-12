@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import { validatePluginSchemaValue } from "../plugins/schema-validator.js";
 
-type SchemaValidationParams = Parameters<typeof validatePluginSchemaValue>[0];
+type SchemaValidationParams = Parameters<typeof validatePluginSchemaValue>[0] & {
+  cacheKey: string;
+};
 type SchemaValidationResult = ReturnType<typeof validatePluginSchemaValue>;
 
 export type PreparedPluginSchemaValidations = Map<

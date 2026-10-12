@@ -154,7 +154,7 @@ export async function readMatrixMessages(
     const dir = opts.after ? "f" : "b";
     const threadId = normalizeOptionalString(opts.threadId);
     const isThreadRelationsStartCursor = threadId
-      ? isMatrixThreadRelationsStartCursor(rawBefore, threadId)
+      ? rawBefore === encodeMatrixThreadRelationsStartCursor(threadId)
       : false;
     const token = isThreadRelationsStartCursor ? undefined : (rawBefore ?? rawAfter);
     const includeThreadRoot = threadId !== undefined && !token && !isThreadRelationsStartCursor;
@@ -287,32 +287,8 @@ function encodeMatrixThreadRelationsStartCursor(threadId: string): string {
   return `${MATRIX_THREAD_RELATIONS_START_CURSOR_PREFIX}${payload}`;
 }
 
-function isMatrixThreadRelationsStartCursor(raw: string | undefined, threadId: string): boolean {
-  if (!raw?.startsWith(MATRIX_THREAD_RELATIONS_START_CURSOR_PREFIX)) {
-    return false;
-  }
-  const encoded = raw.slice(MATRIX_THREAD_RELATIONS_START_CURSOR_PREFIX.length);
-  try {
-    const bytes = Buffer.from(encoded, "base64url");
-    if (bytes.toString("base64url") !== encoded) {
-      return false;
-    }
-    const decoded = JSON.parse(bytes.toString("utf8")) as {
-      v?: unknown;
-      threadId?: unknown;
-    };
-    return (
-      decoded.v === 1 &&
-      decoded.threadId === threadId &&
-      encodeMatrixThreadRelationsStartCursor(decoded.threadId) === raw
-    );
-  } catch {
-    return false;
-  }
-}
-
 async function fetchDisplayableThreadRootSummary(
-  client: MatrixActionClientOpts["client"] & NonNullable<MatrixActionClientOpts["client"]>,
+  client: NonNullable<MatrixActionClientOpts["client"]>,
   resolvedRoom: string,
   threadId: string,
 ): Promise<MatrixMessageSummary | undefined> {
@@ -344,7 +320,7 @@ function isMatrixThreadEvent(event: MatrixRawEvent): boolean {
 }
 
 async function isMatrixPollRootThreaded(params: {
-  client: MatrixActionClientOpts["client"] & NonNullable<MatrixActionClientOpts["client"]>;
+  client: NonNullable<MatrixActionClientOpts["client"]>;
   event: MatrixRawEvent;
   pollRootId: string;
   resolvedRoom: string;

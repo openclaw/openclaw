@@ -77,11 +77,7 @@ export function normalizeModifiers(value: string | undefined, platform: NodeJS.P
   return value?.trim() ? normalizeModifierList(value.split("+"), platform) : [];
 }
 
-function normalizeKey(value: string, platform: NodeJS.Platform): string {
-  const raw = value.trim();
-  if (!raw) {
-    throw unsupportedKey("key chord contains an empty key");
-  }
+function normalizeKey(raw: string, platform: NodeJS.Platform): string {
   const lowered = raw.toLowerCase();
   const named = modifierAlias(lowered, platform) ?? KEY_ALIASES.get(lowered);
   if (named) {

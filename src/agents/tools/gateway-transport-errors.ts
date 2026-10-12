@@ -4,17 +4,13 @@ import { formatErrorMessage } from "../../infra/errors.js";
 
 export function isStaleGatewayAgentRuntimeIdentityRejection(error: unknown): boolean {
   const message = formatErrorMessage(error);
-  if (
+  return (
     message.includes(
       "gateway rejected required agent runtime identity auth field; refusing to retry without it",
-    )
-  ) {
-    return true;
-  }
-  return (
-    message.includes("invalid connect params") &&
-    message.includes("/auth") &&
-    message.includes("unexpected property 'agentRuntimeIdentityToken'")
+    ) ||
+    (message.includes("invalid connect params") &&
+      message.includes("/auth") &&
+      message.includes("unexpected property 'agentRuntimeIdentityToken'"))
   );
 }
 

@@ -1,5 +1,7 @@
 // Process coverage for health failures and unreachable Gateway commands.
+import { createHash } from "node:crypto";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -16,12 +18,13 @@ import {
 import type { GatewayEventLoopHealth } from "../gateway/server/event-loop-health.js";
 import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getFreePort } from "../test-utils/ports.js";
 import {
   prepareGatewayCliFixture,
+  prepareSharedStateReadArtifacts,
   prepareUnreachableGatewayCliFixture,
   runIsolatedGatewayCli,
   snapshotDirectoryContents,
@@ -49,10 +52,18 @@ function expectUnreachableGatewayTransportFailure(
     });
     return;
   }
-  expect(result.stderr).toContain("Gateway not reachable");
-  expect(result.stderr).toContain(UNREACHABLE_GATEWAY_URL);
+  expect(result.stderr).toBe(
+    "Couldn't connect to OpenClaw.\n" +
+      "Check the Control UI or run `openclaw gateway status` in your terminal.\n",
+  );
   expect(result.stderr).not.toContain("gateway timeout");
 }
+
+// Custody is an ordering/integrity contract, not a two-second handshake SLO.
+// The real child also loads device auth through a SQLite worker before connect.
+// Keep a bounded integration budget; call.test.ts enforces short deadlines with a fake clock.
+const STATE_CUSTODY_RPC_BUDGET_MS = 10_000;
+const CHANNEL_PROBE_TIMEOUT_MS = 2_000;
 
 describe("gateway-backed CLI process exit", () => {
   it.each([
@@ -74,13 +85,18 @@ describe("gateway-backed CLI process exit", () => {
         "call",
         "channels.status",
         "--params",
-        JSON.stringify({ probe: true, timeoutMs: 2000 }),
+        JSON.stringify({ probe: true, timeoutMs: CHANNEL_PROBE_TIMEOUT_MS }),
       ],
     },
-  ])("reads $label while another process owns state lifecycle", async ({ method, args }) => {
+  ])("reads $label while another process owns state maintenance", async ({ method, args }) => {
+    const startedAt = performance.now();
+    const phases: Array<{ phase: string; elapsedMs: number }> = [];
+    const recordPhase = (phase: string) => {
+      phases.push({ phase, elapsedMs: Math.round(performance.now() - startedAt) });
+    };
     const root = tempDirs.make("openclaw-status-state-custody-");
     const gateway = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    let coordinator: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
+    let stateOwner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
     try {
       await once(gateway, "listening");
       const address = gateway.address();
@@ -104,7 +120,10 @@ describe("gateway-backed CLI process exit", () => {
         env,
       });
       closeOpenClawStateDatabaseForTest();
+      prepareSharedStateReadArtifacts(stateDir);
       const before = await snapshotDirectoryContents(stateDir);
+      const expectedAfter = { ...before };
+      const canonicalStateDir = await fs.realpath(stateDir);
       const eventLoop = {
         degraded: false,
         degradedSinceMs: null,
@@ -132,14 +151,15 @@ describe("gateway-backed CLI process exit", () => {
           ? channelStatus
           : { pid: 123, runtimeVersion: "synthetic-runtime" };
       const calls: string[] = [];
-      const transportEvents: string[] = [];
+
       gateway.on("connection", (ws) => {
-        transportEvents.push("connection");
-        ws.on("close", () => transportEvents.push("close"));
+        recordPhase("connection");
+        ws.on("close", () => recordPhase("close"));
         sendMinimalGatewayConnectChallenge(ws);
+        recordPhase("challenge-sent");
         ws.on("message", (data) => {
           const frame = parseMinimalGatewayRequestFrame(data);
-          transportEvents.push(`message:${frame.method}`);
+          recordPhase(`message:${frame.method}`);
           if (frame.type !== "req" || !frame.id) {
             return;
           }
@@ -149,11 +169,28 @@ describe("gateway-backed CLI process exit", () => {
               id: identity.deviceId,
               nonce: "test-nonce",
             });
+            recordPhase("auth-checked");
             // Auth loading has finished; hold native custody before the hello can trigger storage.
-            coordinator ??= acquireStateDatabaseCoordinator({
+            stateOwner ??= acquireGatewayStateOwner({
               databasePath: resolveOpenClawStateSqlitePath(env),
-              keepAlive: false,
             });
+            const ownerPath = path.relative(canonicalStateDir, stateOwner.path);
+            if (
+              ownerPath &&
+              ownerPath !== ".." &&
+              !ownerPath.startsWith(`..${path.sep}`) &&
+              !path.isAbsolute(ownerPath)
+            ) {
+              // Preserve the pre-CLI snapshot; add only the parent's actual custody artifacts.
+              expectedAfter[ownerPath] = `file:${createHash("sha256")
+                .update(readFileSync(stateOwner.path))
+                .digest("hex")}`;
+              for (let directory = path.dirname(ownerPath); directory !== ".";) {
+                expectedAfter[directory] ??= "directory";
+                directory = path.dirname(directory);
+              }
+            }
+            recordPhase("custody-acquired");
             sendMinimalGatewayResponse(
               ws,
               frame.id,
@@ -166,46 +203,67 @@ describe("gateway-backed CLI process exit", () => {
                 },
               }),
             );
+            recordPhase("hello-sent");
             return;
           }
+          expect(stateOwner).toBeDefined();
+          stateOwner!.assertCurrent();
           expect(frame.method).toBe(method);
           if (method === "channels.status") {
             const timeoutMs = frame.params?.timeoutMs;
             expect(frame.params).toEqual({ probe: true, timeoutMs });
             expect(Number.isInteger(timeoutMs)).toBe(true);
             expect(timeoutMs).toBeGreaterThan(0);
-            expect(timeoutMs).toBeLessThanOrEqual(2000);
+            expect(timeoutMs).toBeLessThanOrEqual(STATE_CUSTODY_RPC_BUDGET_MS);
             if (args[0] === "gateway") {
-              expect(timeoutMs).toBe(2000);
+              expect(timeoutMs).toBe(CHANNEL_PROBE_TIMEOUT_MS);
             }
           }
           calls.push(method);
           sendMinimalGatewayResponse(ws, frame.id, payload);
         });
       });
+      recordPhase("child-start");
       const result = await runIsolatedGatewayCli({
-        args: [...args, "--json", "--timeout", "2000"],
+        args: [...args, "--json", "--timeout", String(STATE_CUSTODY_RPC_BUDGET_MS)],
         root,
         stateDir,
         configPath,
       });
+      recordPhase("child-exited");
       const after = await snapshotDirectoryContents(stateDir);
       const evidence = JSON.stringify({
         result,
         calls,
-        transportEvents,
-        coordinatorHeld: coordinator?.closed === false,
+        phases,
+        stateOwnerPath: stateOwner?.path,
         stateBefore: before,
+        stateExpected: expectedAfter,
         stateAfter: after,
       });
       expect(JSON.parse(result.stdout), evidence).toEqual(payload);
       expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
-      expect(calls).toEqual([method]);
-      expect(coordinator?.closed).toBe(false);
-      expect(after).toEqual(before);
+      expect(calls, evidence).toEqual([method]);
+      expect(
+        phases.map(({ phase }) => phase).filter((phase) => phase !== "close"),
+        evidence,
+      ).toEqual([
+        "child-start",
+        "connection",
+        "challenge-sent",
+        "message:connect",
+        "auth-checked",
+        "custody-acquired",
+        "hello-sent",
+        `message:${method}`,
+        "child-exited",
+      ]);
+      expect(stateOwner, evidence).toBeDefined();
+      stateOwner!.assertCurrent();
+      expect(after).toEqual(expectedAfter);
     } finally {
       try {
-        coordinator?.release();
+        stateOwner?.release();
       } finally {
         await closeMinimalGatewayServer(gateway);
       }

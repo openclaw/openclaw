@@ -1,8 +1,22 @@
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect } from "vitest";
+import { assert, expect } from "vitest";
+import { formatCliCommand } from "../../src/cli/command-format.js";
 import type { runSqliteSessionsTranscriptsFlipProof } from "./sqlite-sessions-transcripts-flip-proof.ts";
 
 type SqliteFlipProofReport = Awaited<ReturnType<typeof runSqliteSessionsTranscriptsFlipProof>>;
+
+export function assertSqliteFlipStartupRefusal(
+  refusal: SqliteFlipProofReport["startupRefusal"],
+): void {
+  expect(refusal?.message).toContain(`Run "${formatCliCommand("openclaw doctor --fix")}"`);
+  expect(refusal?.preservedSourceFiles.map((filePath) => filePath.replaceAll("\\", "/"))).toEqual(
+    expect.arrayContaining([
+      "agents/main/sessions/sessions.json",
+      "agents/main/sessions/archive-fixture/cold-archive.jsonl",
+      "agents/main/sessions/sqlite-legacy-main.jsonl",
+    ]),
+  );
+}
 
 export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
   expect(report.failures).toEqual([]);
@@ -13,18 +27,8 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
   const refusalCheckpoint = report.checkpoints.find(
     (checkpoint) => checkpoint.label === "after-startup-refusal",
   );
-  expect(report.startupRefusal?.message).toContain('Run "openclaw doctor --fix"');
-  expect(
-    report.startupRefusal?.preservedSourceFiles.map((filePath) => filePath.replaceAll("\\", "/")),
-  ).toEqual(
-    expect.arrayContaining([
-      "agents/main/sessions/sessions.json",
-      "agents/main/sessions/archive-fixture/cold-archive.jsonl",
-      "sessions/sessions.json",
-    ]),
-  );
+  assertSqliteFlipStartupRefusal(report.startupRefusal);
   expect(refusalCheckpoint?.activeJsonl).toEqual(seededCheckpoint?.activeJsonl);
-  expect(refusalCheckpoint?.legacyStateJsonl).toEqual(seededCheckpoint?.legacyStateJsonl);
   expect(refusalCheckpoint?.sqlite.sessionEntries).toBe(seededCheckpoint?.sqlite.sessionEntries);
   expect(refusalCheckpoint?.sqlite.transcriptEvents).toBe(
     seededCheckpoint?.sqlite.transcriptEvents,
@@ -38,21 +42,7 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
       )
       .every((checkpoint) => checkpoint.activeJsonl.length === 0),
   ).toBe(true);
-  expect(
-    report.checkpoints.some(
-      (checkpoint) =>
-        checkpoint.label === "seeded-legacy-store" && checkpoint.legacyStateJsonl.length > 0,
-    ),
-  ).toBe(true);
-  expect(
-    report.checkpoints
-      .filter(
-        (checkpoint) =>
-          checkpoint.label !== "seeded-legacy-store" &&
-          checkpoint.label !== "after-startup-refusal",
-      )
-      .every((checkpoint) => checkpoint.legacyStateJsonl.length === 0),
-  ).toBe(true);
+  expect(seededCheckpoint?.activeJsonl.length).toBeGreaterThan(0);
   expect(
     report.checkpoints.some(
       (checkpoint) =>
@@ -130,9 +120,22 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
   const messageIds = afterAppend.selected.messages.map((message) => message.id);
   expect(messageIds.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
   expect(new Set(messageIds).size).toBe(messageIds.length);
-  expect(
-    afterAppend.selected.history.messages.slice(0, before.selected.history.messages.length),
-  ).toEqual(before.selected.history.messages);
+  const historyPrefix = afterAppend.selected.history.messages.slice(
+    0,
+    before.selected.history.messages.length,
+  );
+  const displaySource = asRecord(
+    asRecord(asRecord(historyPrefix[0])?.["__openclaw"])?.transcriptPosition,
+  )?.source;
+  assert(typeof displaySource === "string" && displaySource.length > 0);
+  const expectedHistory = structuredClone(before.selected.history.messages);
+  // Capturing the new user's prompt advances the display generation, not past message content.
+  for (const message of expectedHistory) {
+    const position = asRecord(asRecord(asRecord(message)?.["__openclaw"])?.transcriptPosition);
+    assert(position && typeof position.source === "string");
+    position.source = displaySource;
+  }
+  expect(historyPrefix).toEqual(expectedHistory);
   const appendedHistory = afterAppend.selected.history.messages.slice(
     before.selected.history.messages.length,
   );

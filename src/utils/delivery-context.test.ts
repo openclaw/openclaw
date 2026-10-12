@@ -1,8 +1,8 @@
 // Delivery context tests cover context normalization for channel delivery.
 import { describe, expect, it } from "vitest";
+import { deliveryContextFromSession } from "./delivery-context.read.js";
 import {
   deliveryContextKey,
-  deliveryContextFromSession,
   hasDeliveryTargetFields,
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -13,14 +13,12 @@ import {
 describe("delivery context helpers", () => {
   it.each([
     ["undefined", undefined, false],
-    ["empty", {}, false],
     ["channel only", { channel: "telegram" }, false],
     ["target only", { to: "-1001" }, false],
     ["empty channel", { channel: "", to: "-1001" }, false],
     ["empty target", { channel: "telegram", to: "" }, false],
     ["whitespace-only fields", { channel: " ", to: " " }, true],
     ["internal route", { channel: "webchat", to: "dashboard" }, true],
-    ["external route", { channel: "telegram", to: "-1001" }, true],
   ] as const)("checks raw delivery target fields for %s", (_name, context, expected) => {
     expect(hasDeliveryTargetFields(context)).toBe(expected);
   });

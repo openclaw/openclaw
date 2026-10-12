@@ -4,6 +4,14 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import { scheduleFollowupDrain } from "./queue.js";
+import { clearFollowupDrainCallback } from "./queue/drain.js";
+import { clearFollowupQueue } from "./queue/state.js";
+
+export function clearFollowupQueueForTest(key: string): void {
+  clearFollowupQueue(key);
+  clearFollowupDrainCallback(key);
+}
 
 /** Builds a minimal queued follow-up run fixture. */
 export function createQueueTestRun(params: {
@@ -79,4 +87,13 @@ export function createDrainRecorder(expectedCalls = 1) {
     }
   };
   return { calls, done, runFollowup };
+}
+
+export async function drainRecordedQueue(
+  key: string,
+  runFollowup: ReturnType<typeof createDrainRecorder>["runFollowup"],
+  done: ReturnType<typeof createDrainRecorder>["done"],
+) {
+  scheduleFollowupDrain(key, runFollowup);
+  await done.promise;
 }

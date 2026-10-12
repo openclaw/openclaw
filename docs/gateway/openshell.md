@@ -324,7 +324,6 @@ OpenShell providers or another dedicated secret-delivery mechanism.
     },
     entries: {
       researcher: {
-        default: true,
         sandbox: {
           mode: "all",
           backend: "openshell",

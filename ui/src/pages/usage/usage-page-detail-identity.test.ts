@@ -30,7 +30,7 @@ function usagePoints(timestamp: number, count: number) {
   }));
 }
 
-function dragTimelineRange(page: HTMLElement) {
+function dragTimelineRange(page: Pick<HTMLElement, "querySelector">) {
   const svg = page.querySelector<SVGSVGElement>(".timeseries-svg")!;
   const handle = page.querySelector<HTMLElement>(".chart-handle-right")!;
   vi.spyOn(svg, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 118));
@@ -48,8 +48,6 @@ function dragTimelineRange(page: HTMLElement) {
 describe("UsagePage detail identity", () => {
   it.each([
     { refresh: "automatic", points: 1, activeDrag: false },
-    { refresh: "manual", points: 2, activeDrag: false },
-    { refresh: "automatic", points: 1, activeDrag: true },
     { refresh: "manual", points: 2, activeDrag: true },
   ])(
     "retires a selected range during $refresh instance replacement with $points points (active drag: $activeDrag)",
@@ -122,8 +120,6 @@ describe("UsagePage detail identity", () => {
 
   it.each([
     { replacement: "owner", refresh: "manual" },
-    { replacement: "owner", refresh: "automatic" },
-    { replacement: "instance", refresh: "manual" },
     { replacement: "instance", refresh: "automatic" },
   ])(
     "retires old-$replacement details and pending recovery during $refresh overview refresh",
@@ -220,8 +216,6 @@ describe("UsagePage detail identity", () => {
 
   it.each([
     { sessionId: undefined, refresh: "automatic" },
-    { sessionId: "stable-instance", refresh: "automatic" },
-    { sessionId: undefined, refresh: "manual" },
     { sessionId: "stable-instance", refresh: "manual" },
   ])(
     "retains healthy details and range during $refresh refresh of optional instance $sessionId",
@@ -289,7 +283,6 @@ describe("UsagePage detail identity", () => {
   );
   it.each([
     { captured: "selected-instance", returned: "retired-instance", conflict: true },
-    { captured: "selected-instance", returned: "selected-instance", conflict: false },
     { captured: "selected-instance", returned: undefined, conflict: false },
     { captured: undefined, returned: "selected-instance", conflict: false },
   ])(

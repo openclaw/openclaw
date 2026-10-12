@@ -1,4 +1,4 @@
-/** Text and JSON rendering for the gateway status command. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { writeRuntimeJson } from "../../runtime.js";
@@ -13,29 +13,28 @@ import {
 } from "./helpers.js";
 import type { GatewayStatusProbedTarget } from "./probe-run.js";
 
-/** Warning emitted when gateway status finds degraded or surprising probe state. */
 type GatewayStatusWarning = {
   code: string;
   message: string;
-  details?: string[];
   targetIds?: string[];
 };
 
 const noReachableGatewayDiagnostic =
-  "No gateway answered any probe and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.";
+  "No gateway answered any check and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.";
 
 function gatewaySelfIdentityKey(entry: GatewayStatusProbedTarget): string | null {
   if (!entry.self) {
     return null;
   }
-  const host = typeof entry.self.host === "string" ? entry.self.host.trim().toLowerCase() : "";
-  const ip = typeof entry.self.ip === "string" ? entry.self.ip.trim().toLowerCase() : "";
-  const discriminator =
-    typeof entry.self.instanceId === "string" && entry.self.instanceId.trim()
-      ? `instance:${entry.self.instanceId.trim().toLowerCase()}`
-      : typeof entry.self.deviceId === "string" && entry.self.deviceId.trim()
-        ? `device:${entry.self.deviceId.trim().toLowerCase()}`
-        : "";
+  const host = normalizeLowercaseStringOrEmpty(entry.self.host);
+  const ip = normalizeLowercaseStringOrEmpty(entry.self.ip);
+  const instanceId = normalizeLowercaseStringOrEmpty(entry.self.instanceId);
+  const deviceId = normalizeLowercaseStringOrEmpty(entry.self.deviceId);
+  const discriminator = instanceId
+    ? `instance:${instanceId}`
+    : deviceId
+      ? `device:${deviceId}`
+      : "";
   if ((!host && !ip) || !discriminator) {
     return null;
   }
@@ -46,14 +45,13 @@ function hasMultipleReachableGatewayIdentities(reachable: GatewayStatusProbedTar
   if (reachable.length <= 1) {
     return false;
   }
-  const identityKeys = reachable.map((entry) => gatewaySelfIdentityKey(entry));
+  const identityKeys = reachable.map(gatewaySelfIdentityKey);
   if (identityKeys.some((key) => key === null)) {
     return true;
   }
   return new Set(identityKeys).size > 1;
 }
 
-/** Chooses the reachable target that best represents the user's requested gateway. */
 export function pickPrimaryProbedTarget(probed: GatewayStatusProbedTarget[]) {
   const reachable = probed.filter((entry) => isProbeReachable(entry.probe));
   return (
@@ -65,7 +63,6 @@ export function pickPrimaryProbedTarget(probed: GatewayStatusProbedTarget[]) {
   );
 }
 
-/** Builds operator-facing warnings from probe, discovery, and SSH tunnel results. */
 export function buildGatewayStatusWarnings(params: {
   probed: GatewayStatusProbedTarget[];
   sshTarget: string | null;
@@ -87,7 +84,7 @@ export function buildGatewayStatusWarnings(params: {
       code: "ssh_tunnel_failed",
       message: params.sshTunnelError
         ? `SSH tunnel failed: ${params.sshTunnelError}`
-        : "SSH tunnel failed to start; falling back to direct probes.",
+        : "SSH tunnel failed to start; falling back to direct checks.",
     });
   }
   if (params.localTlsLoadError) {
@@ -130,7 +127,7 @@ export function buildGatewayStatusWarnings(params: {
     warnings.push({
       code: "probe_scope_limited",
       message:
-        "Read-probe diagnostics are limited by gateway scopes (missing operator.read). Connection succeeded, but read-only status calls are incomplete. Hint: pair device identity or use credentials with operator.read.",
+        "Read-check diagnostics are limited by gateway scopes (missing operator.read). Connection succeeded, but read-only status calls are incomplete. Hint: pair device identity or use credentials with operator.read.",
       targetIds: [result.target.id],
     });
   }
@@ -145,7 +142,6 @@ export function buildGatewayStatusWarnings(params: {
   return warnings;
 }
 
-/** Writes the machine-readable gateway status payload and exits nonzero when unreachable. */
 export function writeGatewayStatusJson(params: {
   runtime: RuntimeEnv;
   startedAt: number;
@@ -173,7 +169,7 @@ export function writeGatewayStatusJson(params: {
     discovery: {
       timeoutMs: params.discoveryTimeoutMs,
       count: params.discovery.length,
-      beacons: params.discovery.map((beacon) => serializeGatewayDiscoveryBeacon(beacon)),
+      beacons: params.discovery.map(serializeGatewayDiscoveryBeacon),
     },
     targets: params.probed.map((entry) => ({
       id: entry.target.id,
@@ -203,7 +199,6 @@ export function writeGatewayStatusJson(params: {
   }
 }
 
-/** Writes the human-readable gateway status report and exits nonzero when unreachable. */
 export function writeGatewayStatusText(params: {
   runtime: RuntimeEnv;
   rich: boolean;
@@ -226,7 +221,7 @@ export function writeGatewayStatusText(params: {
     `${colorize(params.rich, theme.info, "Capability")}: ${capability.replaceAll("_", "-")}`,
   );
   params.runtime.log(
-    colorize(params.rich, theme.muted, `Probe budget: ${params.overallTimeoutMs}ms`),
+    colorize(params.rich, theme.muted, `Check budget: ${params.overallTimeoutMs}ms`),
   );
 
   if (params.warnings.length > 0) {
@@ -234,9 +229,6 @@ export function writeGatewayStatusText(params: {
     params.runtime.log(colorize(params.rich, theme.warn, "Warning:"));
     for (const warning of params.warnings) {
       params.runtime.log(`- ${warning.message}`);
-      for (const detail of warning.details ?? []) {
-        params.runtime.log(`  ${detail}`);
-      }
     }
   }
 
@@ -244,9 +236,7 @@ export function writeGatewayStatusText(params: {
   params.runtime.log(colorize(params.rich, theme.heading, "Discovery (this machine)"));
   const discoveryDomains = params.wideAreaDomain ? `local. + ${params.wideAreaDomain}` : "local.";
   params.runtime.log(
-    params.discovery.length > 0
-      ? `Found ${params.discovery.length} gateway(s) via Bonjour (${discoveryDomains})`
-      : `Found 0 gateways via Bonjour (${discoveryDomains})`,
+    `Found ${params.discovery.length} ${params.discovery.length > 0 ? "gateway(s)" : "gateways"} via Bonjour (${discoveryDomains})`,
   );
   if (params.discovery.length === 0) {
     params.runtime.log(

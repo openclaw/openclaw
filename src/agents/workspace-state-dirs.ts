@@ -93,25 +93,17 @@ export async function listWorkspaceStateDirs(params: {
       dirs.add(workspaceRoot);
       continue;
     }
-    if (sandbox.scope === "agent") {
+    const sessionKeys =
+      sandbox.scope === "agent"
+        ? [`agent:${agentId}:main`]
+        : expectDefined(runtimeGroups[index], "sandbox runtime group")
+            .filter((runtime) => runtime.sandboxed)
+            .map((runtime) => runtime.sessionKey);
+    for (const sessionKey of sessionKeys) {
       const layout = resolveSandboxWorkspaceLayoutPaths({
         cfg: { ...sandbox, workspaceRoot },
         agentId,
-        rawSessionKey: `agent:${agentId}:main`,
-        workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId, params.env),
-      });
-      dirs.add(layout.sandboxWorkspaceDir);
-      continue;
-    }
-
-    for (const runtime of expectDefined(runtimeGroups[index], "sandbox runtime group")) {
-      if (!runtime.sandboxed) {
-        continue;
-      }
-      const layout = resolveSandboxWorkspaceLayoutPaths({
-        cfg: { ...sandbox, workspaceRoot },
-        agentId,
-        rawSessionKey: runtime.sessionKey,
+        rawSessionKey: sessionKey,
         workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId, params.env),
       });
       dirs.add(layout.sandboxWorkspaceDir);

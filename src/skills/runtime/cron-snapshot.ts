@@ -1,4 +1,3 @@
-// Cron snapshot helpers collect runtime skill state for scheduled agents.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../types.js";
@@ -6,10 +5,6 @@ import type { SkillSnapshot } from "../types.js";
 const skillsSnapshotRuntimeLoader = createLazyImportLoader(
   () => import("./cron-snapshot.runtime.js"),
 );
-
-async function loadSkillsSnapshotRuntime() {
-  return await skillsSnapshotRuntimeLoader.load();
-}
 
 export async function resolveCronSkillsSnapshot(params: {
   workspaceDir: string;
@@ -24,7 +19,7 @@ export async function resolveCronSkillsSnapshot(params: {
     return params.existingSnapshot ?? { prompt: "", skills: [] };
   }
 
-  const runtime = await loadSkillsSnapshotRuntime();
+  const runtime = await skillsSnapshotRuntimeLoader.load();
   const skillFilter = runtime.resolveEffectiveAgentSkillFilter(params.config, params.agentId);
   const nodeSkills = runtime.resolveNodeExecEligibility({
     cfg: params.config,

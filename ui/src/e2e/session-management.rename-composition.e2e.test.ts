@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { SessionCapability } from "../lib/sessions/session-capability.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
@@ -20,13 +21,13 @@ const finalTitle = "確定した名前";
 
 suite.define(() => {
   it.each([
-    { kind: "modern", key: "Enter", isComposing: true, keyCode: 0 },
-    { kind: "modern", key: "Escape", isComposing: true, keyCode: 0 },
-    { kind: "legacy", key: "Enter", isComposing: false, keyCode: 229 },
-    { kind: "legacy", key: "Escape", isComposing: false, keyCode: 229 },
+    { kind: "modern", key: "Enter", isComposing: true, keyCode: 0, invalidateMetadata: false },
+    { kind: "modern", key: "Escape", isComposing: true, keyCode: 0, invalidateMetadata: true },
+    { kind: "legacy", key: "Enter", isComposing: false, keyCode: 229, invalidateMetadata: true },
+    { kind: "legacy", key: "Escape", isComposing: false, keyCode: 229, invalidateMetadata: false },
   ] as const)(
     "keeps the rename draft during $kind composition $key until ordinary Enter",
-    async ({ kind, key, isComposing, keyCode }) => {
+    async ({ kind, key, isComposing, keyCode, invalidateMetadata }) => {
       const proofDir = captureUiProofEnabled
         ? createControlUiE2eArtifactDir("chat-header-rename-ime")
         : undefined;
@@ -100,6 +101,20 @@ suite.define(() => {
           expect(await input.inputValue()).toBe(draft);
           expect(patches).toEqual([]);
 
+          // Keep the browser object: provenance follows its identity across cache invalidation.
+          await using sampledSession = await page.evaluateHandle(async (sessionKey) => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime: { context: { sessions: SessionCapability } };
+            };
+            return (
+              await app.runtime.context.sessions.describe({ key: sessionKey, agentId: "main" })
+            ).session;
+          }, original.key);
+          expect(await sampledSession.evaluate((session) => session?.label)).toBe(original.label);
+          const rosterMatch = { includeGlobal: true };
+          await gateway.deferNext("sessions.list", rosterMatch);
+          const listCountBeforeRename = (await gateway.getRequests("sessions.list", rosterMatch))
+            .length;
           await input.fill(finalTitle);
           await input.press("Enter");
           const committed = await waitForPatch(gateway, (params) => params.label === finalTitle);
@@ -110,7 +125,24 @@ suite.define(() => {
           });
           expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
           await input.waitFor({ state: "detached" });
+          await gateway.waitForRequest("sessions.list", {
+            after: listCountBeforeRename,
+            match: rosterMatch,
+          });
+          // A real metadata event may retire the cache while this older sample is in flight.
+          // Its sampling clock must still keep the old title from winning by delivery order.
+          if (invalidateMetadata) {
+            await gateway.emitGatewayEvent("chat.metadata.changed", {});
+          }
+          await page.evaluate((session) => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime: { context: { sessions: SessionCapability } };
+            };
+            app.runtime.context.sessions.captureReconcile()(session ?? undefined);
+          }, sampledSession);
+          await gateway.resolveDeferred("sessions.list");
           await expect.poll(() => title.textContent()).toContain(finalTitle);
+          await expect.poll(() => sidebarRow.textContent()).toContain(finalTitle);
         },
       );
     },

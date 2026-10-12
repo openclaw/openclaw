@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it, vi } from "vitest";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import {
@@ -9,6 +10,7 @@ import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import * as gatewayScope from "./runtime/gateway-request-scope.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -19,14 +21,76 @@ import {
 } from "./runtime/generation-scope.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
-function createOwnedInstance() {
+function createOwnedInstance(id = "paired-scope") {
   const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({ id: "paired-scope" });
+  const record = createPluginRecord({ id });
   registry.plugins.push(record);
   return new PluginInstance(record.id, { record, registry });
 }
 
 describe("independent plugin execution scope views", () => {
+  it("reuses one identity descriptor per instance across repeated invocations", async () => {
+    const instances = [createOwnedInstance(), createOwnedInstance("other-scope")];
+    const scopes = vi.spyOn(gatewayScope, "withPluginRuntimePluginScope");
+    try {
+      for (const instance of instances) {
+        for (let index = 0; index < 100; index++) {
+          instance.run(() => {
+            expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe(instance.pluginId);
+          });
+        }
+      }
+      const identities = scopes.mock.calls.map(([scope]) => scope);
+      expect(identities).toHaveLength(200);
+      expect(new Set(identities).size).toBe(2);
+    } finally {
+      scopes.mockRestore();
+      await Promise.all(instances.map((instance) => instance.dispose()));
+    }
+  });
+
+  it.each(["ordinary", "consumer"] as const)(
+    "admits a %s callback in one independent frame and retains its closure fence",
+    async (kind) => {
+      const instance = createOwnedInstance();
+      const consumer = kind === "consumer" ? instance.retainConsumer() : undefined;
+      let retained: (() => void) | undefined;
+      let outer: ReturnType<typeof getPluginRuntimeGatewayRequestScope>;
+      let calls = 0;
+      const hook = (consumer ?? instance).wrap((callback: () => void) => {
+        outer = getPluginRuntimeGatewayRequestScope();
+        retained = callback;
+        callback();
+        expect(getPluginRuntimeGatewayRequestScope()).toBe(outer);
+      });
+      const frames = vi.spyOn(AsyncLocalStorage.prototype, "run");
+      try {
+        hook(() => {
+          calls++;
+          const scope = getPluginRuntimeGatewayRequestScope();
+          expect(scope?.pluginId).toBe(instance.pluginId);
+          expect(scope).not.toBe(outer);
+        });
+        // One plugin invocation plus one independently admitted caller callback.
+        expect(frames).toHaveBeenCalledTimes(2);
+        frames.mockRestore();
+        expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+        if (consumer) {
+          consumer.release();
+          expect(instance.run(() => "still open")).toBe("still open");
+        } else {
+          await instance.dispose();
+        }
+        expect(() => retained!()).toThrow(consumer ? "consumer is closed" : "reloaded or disabled");
+        expect(calls).toBe(1);
+      } finally {
+        frames.mockRestore();
+        consumer?.release();
+        await instance.dispose();
+      }
+    },
+  );
+
   it("preserves Gateway and generation context through invocation exit and rejection", async () => {
     const instance = createOwnedInstance();
     const unowned = new PluginInstance("unowned-scope");
@@ -93,6 +157,7 @@ describe("independent plugin execution scope views", () => {
 
   it("isolates mutable sibling Gateway views when the admitted instance token is unchanged", async () => {
     const instance = createOwnedInstance();
+    const other = createOwnedInstance("other-scope");
     try {
       await instance.run(async () => {
         const call = pluginInstanceInvocation.getStore();
@@ -109,6 +174,16 @@ describe("independent plugin execution scope views", () => {
               expect(getPluginRuntimeGatewayRequestScope()).toBe(child);
               expect(child.pluginSource).toBe(source);
               expect(parent.pluginSource).toBe(originalSource);
+              await other.run(async () => {
+                await Promise.resolve();
+                expect(pluginInstanceInvocation.getStore()?.instance).toBe(other);
+                expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe(other.pluginId);
+                expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).not.toBe(
+                  child.pluginRegistry,
+                );
+              });
+              expect(pluginInstanceInvocation.getStore()).toBe(call);
+              expect(getPluginRuntimeGatewayRequestScope()).toBe(child);
               return child;
             }),
           ),
@@ -118,7 +193,7 @@ describe("independent plugin execution scope views", () => {
         expect(getPluginRuntimeGatewayRequestScope()).toBe(parent);
       });
     } finally {
-      await instance.dispose();
+      await Promise.all([instance.dispose(), other.dispose()]);
     }
   });
 

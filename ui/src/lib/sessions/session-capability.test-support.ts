@@ -1,3 +1,4 @@
+import { onTestFinished } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
@@ -5,10 +6,22 @@ import { createSessionCapability } from "./index.ts";
 import type { SessionGateway } from "./session-capability.ts";
 
 export function createTestSessionCapability(gateway: SessionGateway, selectedId = "main") {
-  return createSessionCapability(gateway, {
+  const sessions = createSessionCapability(gateway, {
     state: { selectedId },
     subscribe: () => () => undefined,
   });
+  const dispose = sessions.dispose;
+  let disposed = false;
+  sessions.dispose = () => {
+    dispose();
+    disposed = true;
+  };
+  onTestFinished(() => {
+    if (!disposed) {
+      dispose();
+    }
+  });
+  return sessions;
 }
 
 export function sessionsResult(
@@ -133,6 +146,7 @@ export function createSubscriptionHydrationHarness(
     hello: null as GatewayHelloOk | null,
   };
   const gatewayListeners = new Set<(next: typeof snapshot) => void>();
+  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
   const publish = () => gatewayListeners.forEach((listener) => listener(snapshot));
   const gateway = {
     connection: { gatewayUrl: "ws://gateway.example.test" },
@@ -143,7 +157,10 @@ export function createSubscriptionHydrationHarness(
       gatewayListeners.add(listener);
       return () => gatewayListeners.delete(listener);
     },
-    subscribeEvents: () => () => undefined,
+    subscribeEvents(listener: (event: GatewayEventFrame) => void) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
     setSessionKey(sessionKey: string) {
       snapshot = { ...snapshot, sessionKey };
       publish();
@@ -173,6 +190,11 @@ export function createSubscriptionHydrationHarness(
     gateway,
     selection,
     sessions,
+    emitEvent: (event: GatewayEventFrame) => {
+      for (const listener of eventListeners) {
+        listener(event);
+      }
+    },
     connect: () => {
       snapshot = { ...snapshot, client, phase: "connected", assistantAgentId: "main" };
       publish();

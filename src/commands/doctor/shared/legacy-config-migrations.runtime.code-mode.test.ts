@@ -12,8 +12,7 @@ describe("Code Mode JavaScript config migration", () => {
       const raw = {
         tools: {
           codeMode: {
-            enabled: "auto",
-            languages: ["javascript", "typescript"],
+            languages: null,
             maxOutputBytes: 4096,
           },
         },
@@ -37,7 +36,7 @@ describe("Code Mode JavaScript config migration", () => {
       const migrated = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
       expect(migrated.partiallyValid).toBeUndefined();
-      expect(migrated.config?.tools?.codeMode).toEqual({ enabled: "auto", maxOutputBytes: 4096 });
+      expect(migrated.config?.tools?.codeMode).toEqual({ maxOutputBytes: 4096 });
       expect(migrated.config?.agents?.entries?.main?.tools?.codeMode).toEqual({
         enabled: false,
         timeoutMs: 2500,
@@ -52,17 +51,66 @@ describe("Code Mode JavaScript config migration", () => {
       ).toEqual([]);
     },
   );
+});
 
-  it.each([[], null, "typescript"])(
-    "removes an empty or malformed language setting %j without enabling Code Mode",
-    (languages) => {
-      const raw = { tools: { codeMode: { languages } } };
+describe("Code Mode executor config migration", () => {
+  it.each(["entries", "list"])(
+    "preserves an explicit QuickJS runtime and newer executor selections in the %s roster",
+    (roster) => {
+      const agent = {
+        tools: {
+          codeMode: {
+            enabled: false,
+            runtime: "quickjs-wasi",
+            executor: "node",
+            timeoutMs: 2500,
+          },
+        },
+      };
+      const raw = {
+        tools: {
+          codeMode: { enabled: "auto", runtime: "quickjs-wasi", maxOutputBytes: 4096 },
+        },
+        plugins: roster === "entries" ? { enabled: false } : { allow: ["openai"] },
+        agents:
+          roster === "entries"
+            ? { entries: { main: agent } }
+            : { list: [{ id: "main", ...agent }] },
+      };
+      const original = structuredClone(raw);
+
+      expect(findLegacyConfigIssues(raw)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "tools.codeMode.runtime" }),
+          expect.objectContaining({
+            path: "agents",
+            message: expect.stringContaining("tools.codeMode.executor"),
+          }),
+        ]),
+      );
+
       const migrated = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
       expect(migrated.partiallyValid).toBeUndefined();
-      expect(migrated.config?.tools?.codeMode).toEqual({});
+      expect(migrated.config?.tools?.codeMode).toEqual({
+        enabled: "auto",
+        executor: "quickjs",
+        maxOutputBytes: 4096,
+      });
+      expect(migrated.config?.agents?.entries?.main?.tools?.codeMode).toEqual({
+        enabled: false,
+        executor: "node",
+        timeoutMs: 2500,
+      });
+      expect(raw).toEqual(original);
       expect(migrated.sourceConfig).toBeDefined();
+      expect(migrated.sourceConfig?.plugins).toEqual(raw.plugins);
       expect(findLegacyConfigIssues(migrated.sourceConfig)).toEqual([]);
+      expect(
+        migrateLegacyConfig(migrated.sourceConfig, {
+          sourceConfigBeforeMigrations: migrated.sourceConfig,
+        }).changes,
+      ).toEqual([]);
     },
   );
 });

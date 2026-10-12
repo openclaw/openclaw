@@ -4,7 +4,7 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawChatUI
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct WebChatSwiftUISmokeTests {
     private struct TestTransport: OpenClawChatTransport {

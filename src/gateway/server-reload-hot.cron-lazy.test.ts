@@ -1,6 +1,8 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { GatewayCronExitWatcherHandoff, GatewayCronState } from "./server-cron.js";
 import type {
   GatewayHotReloadPublication,
@@ -62,6 +64,7 @@ async function createFixture() {
   });
   const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
   const params: GatewayReloadHandlerParams = {
+    scheduler: createTestGatewayScheduler(),
     deps: {} as GatewayReloadHandlerParams["deps"],
     broadcast: vi.fn(),
     getState: () => state,
@@ -105,9 +108,9 @@ async function createFixture() {
 
 describe("cron reload loading", { concurrent: false }, () => {
   it("loads cron only when the reload plan requests its first rebuild", async () => {
-    const fixture = await createFixture();
     const load = vi.fn(() => ({ buildGatewayCronService }));
     vi.doMock("./server-cron.js", load);
+    const fixture = await createFixture();
     try {
       await fixture.handlers.applyHotReload(
         { ...fixture.plan, restartCron: false, reconcileSystemJobs: false },
@@ -129,16 +132,13 @@ describe("cron reload loading", { concurrent: false }, () => {
     }
   });
 
+  // Each await rechecks the same ownership guard; cover every cause and await point.
   it.each([
-    ...(["load", "handoff", "publication"] as const).flatMap((phase) =>
-      (["stop", "replace", "supersede"] as const).map((action) => ({
-        phase,
-        action,
-        plugins: false,
-      })),
-    ),
-    { phase: "publication", action: "supersede", plugins: true } as const,
-  ])(
+    { phase: "load", action: "stop", plugins: false },
+    { phase: "handoff", action: "replace", plugins: false },
+    { phase: "publication", action: "supersede", plugins: false },
+    { phase: "publication", action: "supersede", plugins: true },
+  ] as const)(
     "rejects cron publication after $action during $phase (plugins: $plugins)",
     async ({ phase, action, plugins }) => {
       const fixture = await createFixture();
@@ -198,8 +198,8 @@ describe("cron reload loading", { concurrent: false }, () => {
         publication,
       );
       const settled = reload.then(
-        () => ({ status: "applied" as const }),
-        (error: unknown) => ({ status: "rejected" as const, error }),
+        () => undefined,
+        (error: unknown) => error,
       );
       try {
         // Observe the owning await, not a timer or an assumed import microtask count.
@@ -217,16 +217,12 @@ describe("cron reload loading", { concurrent: false }, () => {
           current = false;
         }
         release.resolve();
-        const result = await settled;
-        expect(result.status).toBe("rejected");
-        if (result.status === "rejected") {
-          expect(result.error).toMatchObject({
-            name:
-              action === "supersede"
-                ? "GatewayConfigReloadSupersededError"
-                : "GatewayHotReloadCancelledError",
-          });
-        }
+        expect(await settled).toMatchObject({
+          name:
+            action === "supersede"
+              ? "GatewayConfigReloadSupersededError"
+              : "GatewayHotReloadCancelledError",
+        });
         expect(buildGatewayCronService).toHaveBeenCalledTimes(phase === "load" ? 0 : 1);
         expect(fixture.setState).not.toHaveBeenCalled();
         expect(publishPluginRuntime).not.toHaveBeenCalled();

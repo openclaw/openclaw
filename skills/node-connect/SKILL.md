@@ -16,7 +16,7 @@ Record the target environment/profile, OpenClaw binary, config/state root, Gatew
 - If the global executable is stale, invoke the target through its owner.
 - Verify status, config, logs, and process identity describe the same Gateway.
 
-Do not mutate pairing or auth until the target is unambiguous.
+Identify the target Gateway before changing pairing or auth.
 
 ## 2. Classify the client
 

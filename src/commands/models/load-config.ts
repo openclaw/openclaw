@@ -9,19 +9,12 @@ import {
 } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
-/** Source and resolved config pair returned by model command config loading. */
-type LoadedModelsConfig = {
-  sourceConfig: OpenClawConfig;
-  resolvedConfig: OpenClawConfig;
-  diagnostics: string[];
-};
-
 /** Loads config, resolves model command secrets, and preserves the source snapshot. */
 export async function loadModelsConfigWithSource(params: {
   commandName: string;
   runtime?: RuntimeEnv;
   skipPluginValidation?: boolean;
-}): Promise<LoadedModelsConfig> {
+}) {
   const runtimeConfig = getRuntimeConfig(
     params.skipPluginValidation ? { skipPluginValidation: true } : undefined,
   );
@@ -43,11 +36,8 @@ export async function loadModelsConfigWithSource(params: {
   };
 }
 
-/** Loads the resolved model command config when callers do not need source metadata. */
-export async function loadModelsConfig(params: {
-  commandName: string;
-  runtime?: RuntimeEnv;
-  skipPluginValidation?: boolean;
-}): Promise<OpenClawConfig> {
+export async function loadModelsConfig(
+  params: Parameters<typeof loadModelsConfigWithSource>[0],
+): Promise<OpenClawConfig> {
   return (await loadModelsConfigWithSource(params)).resolvedConfig;
 }

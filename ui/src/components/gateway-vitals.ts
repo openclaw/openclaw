@@ -4,25 +4,14 @@ import "./tooltip.ts";
 import { t } from "../i18n/index.ts";
 import { registerDebugEnglish } from "../i18n/locales/en-debug.ts";
 import { formatDurationCompact } from "../lib/format-duration.ts";
-import "./sparkline-tile.ts";
-import type { SparklineSample } from "./sparkline-tile.ts";
+import "./sparkline-tile.tsx";
+import type { SparklineSample } from "./sparkline-tile.tsx";
 
 registerDebugEnglish();
 
 export type GatewayStatusSnapshot = {
-  eventLoop?: {
-    utilization?: number;
-    cpuCoreRatio?: number;
-    cpuBreakdown?: NonNullable<SystemInfoResult["eventLoop"]>["cpuBreakdown"];
-    delayP99Ms?: number;
-    delayMaxMs?: number;
-    reasons?: string[];
-  };
-  processMemory?: {
-    rssBytes: number;
-    heapUsedBytes: number;
-    heapTotalBytes: number;
-  };
+  eventLoop?: Partial<NonNullable<SystemInfoResult["eventLoop"]>>;
+  processMemory?: SystemInfoResult["processMemory"];
 };
 
 export type GatewayStatusSample<T extends GatewayStatusSnapshot = GatewayStatusSnapshot> = {

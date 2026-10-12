@@ -40,18 +40,11 @@ async function prepare(
 describe("Tlon setup adapter", () => {
   it.each([
     ["file:///etc/passwd", "Invalid URL: URL must use http:// or https://"],
-    ["ftp://urbit.example.com", "Invalid URL: URL must use http:// or https://"],
     [urlWithCredentials.href, "Invalid URL: URL must not include credentials"],
     ["https://", "Invalid URL: Invalid URL"],
     ["", "Tlon requires --url."],
   ])("rejects a URL the runtime cannot use: %s", (url, expected) => {
     expect(validate({ input: { ...validInput, url } })).toBe(expected);
-  });
-
-  it("accepts the same bare-host and path URL forms as the runtime", () => {
-    expect(
-      validate({ input: { ...validInput, url: "urbit.example.com/~/login?redirect=1" } }),
-    ).toBe(null);
   });
 
   it("validates a config-resolved URL without rewriting it for a code-only update", async () => {

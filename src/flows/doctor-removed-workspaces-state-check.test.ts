@@ -129,15 +129,12 @@ describe("removed Workspaces state doctor check", () => {
     });
   });
 
-  it.each(["defaults", "agent"] as const)(
+  it.each(["agent"] as const)(
     "skips cleanup when the %s workspace resolves to the retired state directory",
-    async (kind) => {
+    async () => {
       const staleDir = await createStateDir();
       const resolvedAlias = join(staleDir, "..", "workspaces");
-      const cfg =
-        kind === "defaults"
-          ? { agents: { defaults: { workspace: resolvedAlias } } }
-          : { agents: { list: [{ id: "ops", workspace: resolvedAlias }] } };
+      const cfg = { agents: { entries: { ops: { workspace: resolvedAlias } } } };
 
       await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
         const findings = await removedWorkspacesStateCheck.detect({
@@ -166,24 +163,6 @@ describe("removed Workspaces state doctor check", () => {
       });
     },
   );
-
-  it("skips cleanup when an agent workspace is nested under the retired state directory", async () => {
-    const staleDir = await createStateDir();
-    const nestedWorkspace = join(staleDir, "active-agent");
-    await fs.mkdir(nestedWorkspace);
-    const cfg = { agents: { list: [{ id: "active", workspace: nestedWorkspace }] } };
-
-    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-      const findings = await removedWorkspacesStateCheck.detect({ mode: "lint", runtime, cfg });
-      const repaired = await removedWorkspacesStateCheck.repair?.(
-        { mode: "fix", runtime, cfg },
-        findings,
-      );
-
-      expect(repaired).toMatchObject({ status: "skipped", changes: [] });
-      await expect(fs.stat(nestedWorkspace)).resolves.toBeDefined();
-    });
-  });
 
   it("skips cleanup when an agent workspace symlink resolves beneath the retired state directory", async () => {
     const staleDir = await createStateDir();

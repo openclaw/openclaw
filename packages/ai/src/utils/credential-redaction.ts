@@ -51,6 +51,9 @@ const LOOSE_CREDENTIAL_PAIR_RE =
 const MEDIA_DATA_URL_RE =
   /data:(?:audio|image|video)\/[a-z0-9.+-]+(?:;[^,;\s]+)*;base64,[ \t]*(?:\r?\n[ \t]*)?[a-z0-9+/_=-]+(?:[ \t]*\r?\n[ \t]*[a-z0-9+/_=-]+)*/giu;
 const MAX_DIAGNOSTIC_JSON_LENGTH = 16 * 1024;
+const UNCHANGED_DIAGNOSTIC_TEXT_MAX_ENTRIES = 2_048;
+const UNCHANGED_DIAGNOSTIC_TEXT_MAX_LENGTH = 2_048;
+const unchangedDiagnosticText = new Set<string>();
 const BRACKET_PROSE_PATTERN = String.raw`(\[+)([A-Za-z][A-Za-z0-9 _.-]*|\s*\d+\s+(?!(?:true|false|null)(?![\w-]))[A-Za-z][A-Za-z0-9 _.=-]*)(\]+)`;
 const BRACKET_PROSE_RE = new RegExp(`^${BRACKET_PROSE_PATTERN}$`, "u");
 const BRACKET_PROSE_PART_RE = new RegExp(String.raw`(?<!\[)${BRACKET_PROSE_PATTERN}`, "gu");
@@ -109,7 +112,9 @@ function normalizeDiagnosticFieldName(value: string): string {
   return value.toLowerCase().replaceAll(DIAGNOSTIC_FIELD_SEPARATOR_RE, "");
 }
 
-function isCredentialFieldName(normalized: string): boolean {
+/** Classifies credential-bearing fields, including case-insensitive HTTP header names. */
+export function isCredentialFieldName(name: string): boolean {
+  const normalized = normalizeDiagnosticFieldName(name);
   if (!normalized || NON_CREDENTIAL_FIELD_NAMES.has(normalized)) {
     return false;
   }
@@ -319,6 +324,21 @@ export function projectDiagnosticValue(
 
 /** Redacts bounded structured JSON while preserving harmless diagnostic text byte-for-byte. */
 export function redactDiagnosticText(value: string): string {
+  if (unchangedDiagnosticText.has(value)) {
+    return value;
+  }
+  const projected = projectDiagnosticText(value);
+  // Only this fixed policy is cached; downstream configured/exact-secret redaction stays live.
+  if (projected === value && value.length <= UNCHANGED_DIAGNOSTIC_TEXT_MAX_LENGTH) {
+    if (unchangedDiagnosticText.size >= UNCHANGED_DIAGNOSTIC_TEXT_MAX_ENTRIES) {
+      unchangedDiagnosticText.clear();
+    }
+    unchangedDiagnosticText.add(value);
+  }
+  return projected;
+}
+
+function projectDiagnosticText(value: string): string {
   const text = redactCredentialText(value).replace(MEDIA_DATA_URL_RE, "<redacted>");
   if (!looksLikeDiagnosticJson(text)) {
     return text;

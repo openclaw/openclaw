@@ -24,13 +24,12 @@ import { verifyUpdatedGateway } from "./update-command-verification.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   createUpdateConfigSnapshot: vi.fn(async () => undefined),
-  runRestartScript: vi.fn(async () => true),
   runUpdatedInstallGatewayCommand: vi.fn<
     typeof import("./update-command-service-command.js").runUpdatedInstallGatewayCommand
   >(async (_params, action) => (action === "restart" ? "accepted" : "unverified")),
@@ -63,11 +62,6 @@ vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
   waitForGatewayHealthyRestart: mocks.waitForGatewayHealthyRestart,
   waitForGatewayHttpReadiness: mocks.waitForGatewayHttpReadiness,
   inspectGatewayRestart: mocks.inspectGatewayRestart,
-}));
-
-vi.mock("./restart-helper.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./restart-helper.js")>()),
-  runRestartScript: mocks.runRestartScript,
 }));
 
 vi.mock("./update-command-config-snapshot.js", () => ({
@@ -402,46 +396,6 @@ describe("maybeRestartService", () => {
     expect(loadUpdateRecovery(record.runId, options)).toEqual(record);
   });
 
-  it.each(["seal refused", "target install failed", "missing entrypoint"])(
-    "never falls back to restart after gated install failure: %s",
-    async (reason) => {
-      const serviceLoadBoundary = { assertCurrent: vi.fn(), seal: vi.fn() };
-      if (reason === "missing entrypoint") {
-        const actual = await vi.importActual<typeof import("./update-command-service-command.js")>(
-          "./update-command-service-command.js",
-        );
-        mocks.runUpdatedInstallGatewayCommand.mockImplementationOnce(
-          actual.runUpdatedInstallGatewayCommand,
-        );
-      } else {
-        mocks.runUpdatedInstallGatewayCommand.mockRejectedValueOnce(new Error(reason));
-      }
-      const onVerified = vi.fn();
-      await expect(
-        maybeRestartService({
-          shouldRestart: true,
-          result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
-          opts: { json: true, run },
-          refreshServiceEnv: true,
-          serviceEnv: { HOME: "/home/operator" },
-          serviceInstallEnv: {},
-          serviceLoadBoundary,
-          gatewayPort: 18789,
-          restartScriptPath: "/tmp/openclaw-sealed-restart.sh",
-          timeoutMs: 1_000,
-          onVerified,
-        }),
-      ).rejects.toMatchObject({ name: "UpdateServiceLoadBoundaryError" });
-      expect(mocks.runUpdatedInstallGatewayCommand).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ serviceLoadBoundary }),
-        "install",
-      );
-      expect(mocks.runRestartScript).not.toHaveBeenCalled();
-      expect(mocks.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
-      expect(onVerified).not.toHaveBeenCalled();
-    },
-  );
-
   it("records changed-key warnings before health verification and retains them in the outcome and report", async () => {
     const home = tempDirs.make("service-warning-history-");
     const options = { env: { HOME: home, OPENCLAW_STATE_DIR: home } };
@@ -496,11 +450,67 @@ describe("maybeRestartService", () => {
       warning,
     );
   });
-  it.for(
-    ["installed", "registration rejected", "activation uncertain", "definition unchanged"].flatMap(
-      (outcome) => ["default", "work"].map((profile) => ({ outcome, profile })),
-    ),
-  )(
+  it("records measured reconciliation child timing in the outcome and run history", async () => {
+    const home = tempDirs.make("service-timing-history-");
+    const options = { env: { HOME: home, OPENCLAW_STATE_DIR: home } };
+    const admitted = createUpdateRun({ trigger: "cli" }, options);
+    const liveRun = { ...run, runId: admitted.runId, env: options.env };
+    const ledger = await vi.importActual<typeof import("../../infra/update-run-ledger.js")>(
+      "../../infra/update-run-ledger.js",
+    );
+    const install = {
+      name: "managed-service-install",
+      command: "openclaw gateway install --force --port 18789 --json",
+      cwd: "/fixture/root",
+      durationMs: 24_000,
+      exitCode: 0,
+    };
+    mocks.runUpdatedInstallGatewayCommand.mockImplementationOnce(async (params) => {
+      params.onTimedStep?.(install);
+      return "unverified";
+    });
+    const result: UpdateRunResult = {
+      status: "ok",
+      mode: "npm",
+      root: "/fixture/root",
+      after: { version: gateway.version, buildId: gateway.buildId },
+      steps: [],
+      durationMs: 0,
+    };
+    await vi
+      .mocked(recordUpdateRunStep)
+      .withImplementation(ledger.recordUpdateRunStep, async () => {
+        await expect(
+          maybeRestartService({
+            shouldRestart: true,
+            result,
+            opts: { json: true, run: liveRun },
+            refreshServiceEnv: true,
+            serviceEnv: { HOME: "/home/operator" },
+            serviceInstallEnv: {},
+            gatewayPort: 18789,
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toBe("ok");
+      });
+    expect(result.steps).toContainEqual(install);
+    const row = getUpdateRun(admitted.runId, options)?.steps.find(
+      (step) => step.step === "managed-service-install",
+    );
+    expect(row).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+      startedAtMs: expect.any(Number),
+      endedAtMs: expect.any(Number),
+    });
+    expect((row?.endedAtMs ?? 0) - (row?.startedAtMs ?? 0)).toBe(24_000);
+  });
+  it.for([
+    { outcome: "installed", profile: "default" },
+    { outcome: "registration rejected", profile: "default" },
+    { outcome: "activation uncertain", profile: "work" },
+    { outcome: "definition unchanged", profile: "work" },
+  ])(
     "keeps a Windows two-prefix reconciliation available ($outcome, $profile)",
     async ({ outcome, profile }, { onTestFinished }) => {
       vi.stubEnv("OPENCLAW_PROFILE", "caller");
@@ -531,6 +541,7 @@ describe("maybeRestartService", () => {
               path.join(commandRoot, "dist/index.js"),
               "gateway",
             ],
+            sourcePath: path.join(home, "gateway.cmd"),
           }),
         }),
       );
@@ -677,42 +688,8 @@ describe("maybeRestartService", () => {
     },
   );
 
-  it.each(["new-build", undefined])(
-    "enforces the available Git identity after restart: %s",
-    async (buildId) => {
-      const result = {
-        status: "ok",
-        mode: "git",
-        root: "/tmp/openclaw-configured-ui-update",
-        after: { version: "2026.9.1", buildId },
-        steps: [],
-        durationMs: 0,
-      } satisfies UpdateRunResult;
-
-      await expect(
-        maybeRestartService({
-          shouldRestart: true,
-          result,
-          opts: { json: true, run },
-          refreshServiceEnv: false,
-          serviceEnv: { HOME: "/home/operator" },
-          serviceInstallEnv: {},
-          gatewayPort: 18789,
-          restartScriptPath: "/tmp/openclaw-configured-ui-restart.sh",
-          timeoutMs: 1_000,
-        }),
-      ).resolves.toBe("ok");
-
-      expect(mocks.runRestartScript).toHaveBeenCalledWith(
-        "/tmp/openclaw-configured-ui-restart.sh",
-        1_000,
-      );
-      expect(mocks.waitForGatewayHealthyRestart.mock.lastCall?.[0].expectedBuildId).toBe(buildId);
-    },
-  );
-
-  it("does not infer activation from a detached script when the expected Git build is never observed", async () => {
-    mocks.runRestartScript.mockResolvedValueOnce(false);
+  it("does not infer activation from an unverified restart when the expected Git build is never observed", async () => {
+    mocks.runUpdatedInstallGatewayCommand.mockResolvedValueOnce("unverified");
     mocks.waitForGatewayHealthyRestart.mockResolvedValue({
       runtime: { status: "stopped" },
       portUsage: {
@@ -743,48 +720,51 @@ describe("maybeRestartService", () => {
         serviceEnv: { HOME: "/home/operator" },
         serviceInstallEnv: {},
         gatewayPort: 18789,
-        restartScriptPath: "/tmp/openclaw-configured-ui-restart.sh",
         timeoutMs: 1_000,
       }),
     ).resolves.toBe("failed");
   });
 
-  it.each(
-    [false, true].flatMap((refreshServiceEnv) => [
-      { refreshServiceEnv, readyz: 503, verified: false },
-      { refreshServiceEnv, readyz: 200, verified: true },
-    ]),
-  )(
+  it.each([
+    { refreshServiceEnv: false, readyz: 503, verified: false, buildId: "new-build" },
+    { refreshServiceEnv: false, readyz: 200, verified: true, buildId: "new-build" },
+    { refreshServiceEnv: false, readyz: 200, verified: true, buildId: undefined },
+    { refreshServiceEnv: true, readyz: 503, verified: false, buildId: "new-build" },
+    { refreshServiceEnv: true, readyz: 200, verified: true, buildId: "new-build" },
+  ])(
     "requires HTTP readiness (readyz=$readyz, refresh=$refreshServiceEnv)",
-    async ({ refreshServiceEnv, readyz, verified }) => {
+    async ({ refreshServiceEnv, readyz, verified, buildId }) => {
       mocks.waitForGatewayHttpReadiness.mockResolvedValue({ healthz: 200, readyz });
       const onVerified = vi.fn();
       const onVerificationFailure = vi.fn();
       const startedAtMs = Date.now();
+      const result: UpdateRunResult = {
+        status: "ok",
+        mode: "git",
+        root: "/tmp/openclaw-configured-ui-update",
+        after: { version: "2026.9.1", buildId },
+        steps: [],
+        durationMs: 0,
+      };
       const actual = await maybeRestartService({
         shouldRestart: true,
-        result: {
-          status: "ok",
-          mode: "git",
-          after: { version: "2026.9.1", buildId: "new-build" },
-          steps: [],
-          durationMs: 0,
-        },
+        result,
         opts: { json: true, run },
         refreshServiceEnv,
         serviceEnv: { HOME: "/home/operator" },
+        serviceInstallEnv: {},
         gatewayPort: 18789,
-        restartScriptPath: "/tmp/openclaw-verification.sh",
         timeoutMs: 1_000,
         onVerified,
         onVerificationFailure,
       });
       expect(actual).toBe(verified ? "ok" : "restart-health-failed");
       expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
-      expect(mocks.runRestartScript).toHaveBeenCalledTimes(refreshServiceEnv ? 0 : 1);
-      expect(mocks.runUpdatedInstallGatewayCommand).toHaveBeenCalledTimes(
-        refreshServiceEnv ? 1 : 0,
+      expect(mocks.runUpdatedInstallGatewayCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ result, timeoutMs: 1_000 }),
+        refreshServiceEnv ? "install" : "restart",
       );
+      expect(mocks.waitForGatewayHealthyRestart.mock.lastCall?.[0].expectedBuildId).toBe(buildId);
       expect(onVerified).toHaveBeenCalledTimes(verified ? 1 : 0);
       expect(onVerificationFailure).toHaveBeenCalledTimes(verified ? 0 : 1);
       if (verified) {
@@ -813,13 +793,111 @@ describe("maybeRestartService", () => {
         refreshServiceEnv: false,
         serviceEnv: { HOME: "/home/operator" },
         gatewayPort: 18789,
-        restartScriptPath: "/tmp/openclaw-verification.sh",
         timeoutMs: 1_000,
         onVerificationFailure,
       }),
     ).resolves.toBe("restart-health-failed");
     expect(onVerificationFailure).toHaveBeenCalledWith("channel-errors");
   });
+
+  it.for([
+    "native refusal",
+    "install refusal",
+    "install root refusal",
+    "install health observation",
+    "health observation",
+    "unmasked",
+  ] as const)(
+    "keeps service-definition refusal separate from candidate health: %s",
+    async (scenario, { onTestFinished }) => {
+      const env = { HOME: tempDirs.make("update-service-hold-") };
+      const runtime = {
+        status: "stopped",
+        systemd: {
+          unit: "openclaw-gateway.service",
+          ...(scenario === "unmasked"
+            ? {}
+            : {
+                startRefusal: {
+                  reason: "masked" as const,
+                  message: "Run `systemctl --user unmask openclaw-gateway.service`, then retry.",
+                },
+              }),
+        },
+      };
+      const service = createMockGatewayService({ readRuntime: async () => runtime });
+      const serviceSpy = vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+      onTestFinished(() => serviceSpy.mockRestore());
+      if (!scenario.endsWith("health observation")) {
+        mocks.runUpdatedInstallGatewayCommand.mockRejectedValueOnce(
+          new Error("systemctl restart failed: Unit openclaw-gateway.service is masked."),
+        );
+      } else {
+        mocks.waitForGatewayHealthyRestart.mockResolvedValueOnce({
+          runtime,
+          portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+          healthy: false,
+          staleGatewayPids: [],
+          waitOutcome: "service-definition-refused",
+        });
+      }
+      const result: UpdateRunResult = {
+        status: "ok",
+        mode: "git",
+        after: { version: gateway.version, buildId: gateway.buildId },
+        steps: [],
+        durationMs: 0,
+      };
+      const onVerified = vi.fn();
+      const onVerificationFailure = vi.fn();
+      await expect(
+        maybeRestartService({
+          shouldRestart: true,
+          result,
+          opts: { json: true },
+          refreshServiceEnv: scenario.startsWith("install"),
+          ...(scenario === "install root refusal"
+            ? {
+                serviceUpdateVerdict: {
+                  kind: "owned" as const,
+                  root: env.HOME,
+                  fingerprint: "original",
+                  refreshDefinition: true,
+                  requiresInstallRootRefresh: true,
+                },
+              }
+            : {}),
+          serviceEnv: env,
+          gatewayPort: 18789,
+          timeoutMs: 1000,
+          onVerified,
+          onVerificationFailure,
+        }),
+      ).resolves.toBe(scenario === "unmasked" ? "failed" : "reconciliation-pending");
+      expect(onVerified).not.toHaveBeenCalled();
+      expect(onVerificationFailure).not.toHaveBeenCalled();
+      expect(result.status).toBe("ok");
+      if (scenario !== "unmasked") {
+        expect(result.steps).toContainEqual(
+          expect.objectContaining({
+            exitCode: 0,
+            advisory: expect.objectContaining({
+              message: expect.stringMatching(/SERVICE-DEFINITION.*unmask.*openclaw gateway start/),
+            }),
+          }),
+        );
+        expect(result.steps.some((step) => step.exitCode === 1)).toBe(false);
+        expect(
+          result.steps.flatMap((step) => step.advisory?.message ?? []).join("\n"),
+        ).not.toContain("gateway install --force");
+      }
+      if (scenario.startsWith("install")) {
+        expect(
+          mocks.runUpdatedInstallGatewayCommand.mock.calls.map(([, action]) => action),
+        ).toEqual(["install"]);
+      }
+    },
+  );
 
   it("reports service ownership skips to JSON callers", async () => {
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);

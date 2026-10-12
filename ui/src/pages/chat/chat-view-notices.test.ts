@@ -3,11 +3,52 @@
 import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
-import { renderChatComposerNotices } from "./chat-view-notices.ts";
+import { renderChatComposerNotices, renderChatTopbarNotices } from "./chat-view-notices.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
 });
+
+it.each([
+  [
+    "transferring",
+    25 * 1_024 * 1_024,
+    "Updating worker runtime · 25 MB of 100 MB (25%)",
+    "Transferring the new worker runtime to this device: 25 MB of 100 MB (25%). The next turn starts when it finishes.",
+  ],
+  [
+    "installing",
+    100 * 1_024 * 1_024,
+    "Installing worker runtime",
+    "Installing the new worker runtime on this device.",
+  ],
+] as const)(
+  "renders worker runtime progress for %s at %s bytes",
+  (phase, transferredBytes, title, body) => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderChatTopbarNotices({
+        workerRuntimeInstall: {
+          phase,
+          transferredBytes,
+          totalBytes: 100 * 1_024 * 1_024,
+          startedAtMs: 1,
+          updatedAtMs: 2,
+        },
+      }),
+      container,
+    );
+
+    const notice = container.querySelector(".chat-worker-runtime-install-notice");
+    expect(notice?.getAttribute("role")).toBe("status");
+    expect(notice?.querySelector("strong")?.textContent).toBe(title);
+    expect(notice?.getAttribute("title")).toBe(body);
+    expect(notice?.textContent).toContain(body);
+
+    render(renderChatTopbarNotices({}), container);
+    expect(container.querySelector(".chat-worker-runtime-install-notice")).toBeNull();
+  },
+);
 
 it.each([true, false])("refreshes a failed conversation only while connected=%s", (connected) => {
   const onRefresh = vi.fn();
@@ -102,3 +143,41 @@ it("offers an explicit discard action with the full warning when unsaved starts 
   expect(discardAndReload).toHaveBeenCalledOnce();
   expect(retry).not.toHaveBeenCalled();
 });
+
+it.each([true, false])(
+  "checks state contention status without retrying while connected=%s",
+  (connected) => {
+    const onRefresh = vi.fn();
+    const onRetrySessionPlacementStartup = vi.fn();
+    const diagnostic =
+      "Temporarily busy. Check status before trying again.\nState contention: session store; attempts exhausted.\n<img src=x onerror=alert(1)>";
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderChatComposerNotices({
+        connected,
+        messages: [],
+        runError: { kind: "state_contention", summary: diagnostic },
+        onRefresh,
+        onRetrySessionPlacementStartup,
+      }),
+      container,
+    );
+    const notice = container.querySelector(".chat-error");
+    expect(notice?.classList.contains("chat-composer-neighbor-card--warn")).toBe(true);
+    expect(notice?.classList.contains("chat-composer-neighbor-card--danger")).toBe(false);
+    expect(notice?.getAttribute("role")).toBe("status");
+    const details = notice?.querySelector("details");
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector("strong")?.textContent).toBe(
+      "OpenClaw is busy. Check status before trying again.",
+    );
+    expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
+    expect(notice?.querySelector("img")).toBeNull();
+    const check = notice?.querySelector<HTMLButtonElement>(".chat-error__refresh");
+    expect(check?.textContent?.trim()).toBe("Check status");
+    expect(check?.disabled).toBe(!connected);
+    check?.click();
+    expect(onRefresh).toHaveBeenCalledTimes(connected ? 1 : 0);
+    expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
+  },
+);

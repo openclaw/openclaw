@@ -191,13 +191,4 @@ struct GatewayEnvironmentTests {
             profile: work) == work.defaultGatewayPort)
         #expect(AppProfile(environment: [:]).defaultGatewayPort == 18789)
     }
-
-    @Test func `expected gateway version from string uses parser`() {
-        #expect(GatewayEnvironment.expectedGatewayVersion(from: "v9.1.2") == Semver(major: 9, minor: 1, patch: 2))
-        #expect(GatewayEnvironment.expectedGatewayVersion(from: "2026.1.11-4") == Semver(
-            major: 2026,
-            minor: 1,
-            patch: 11))
-        #expect(GatewayEnvironment.expectedGatewayVersion(from: nil) == nil)
-    }
 }

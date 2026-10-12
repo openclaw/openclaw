@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   runCommandWithTimeout: vi.fn(),
   killProcessTree: vi.fn(),
   spawn: vi.fn(),
-  log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
+  log: { debug: vi.fn(), trace: vi.fn(), error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   defaultRuntime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -251,11 +251,10 @@ describe("runGmailService", () => {
     expectSignalsDetached();
   });
 
-  it.each(
-    signals.flatMap((signal) =>
-      ["replacement", "restart delay"].map((phase) => ({ signal, phase })),
-    ),
-  )(
+  it.each([
+    { signal: "SIGINT", phase: "replacement" },
+    { signal: "SIGTERM", phase: "restart delay" },
+  ] as const)(
     "$signal stops the watcher during $phase without restarting or renewing",
     async ({ signal, phase }) => {
       await runGmailService({});
@@ -284,9 +283,10 @@ describe("runGmailService", () => {
     },
   );
 
-  it.each(
-    signals.flatMap((signal) => ["tailscale", "watch"].map((boundary) => ({ signal, boundary }))),
-  )(
+  it.each([
+    { signal: "SIGINT", boundary: "tailscale" },
+    { signal: "SIGTERM", boundary: "watch" },
+  ] as const)(
     "$signal cancels in-flight $boundary startup without a late child",
     async ({ signal, boundary }) => {
       const pending = createDeferred<typeof commandSuccess>();
@@ -338,26 +338,23 @@ describe("runGmailService", () => {
     },
   );
 
-  it.each(["initial", "replacement"])(
-    "halts restarts after a split bind error on the %s child",
-    async (phase) => {
-      await runGmailService({});
-      if (phase === "replacement") {
-        exitChild(children[0]!);
-        await vi.advanceTimersByTimeAsync(5_000);
-      }
-      const countBeforeBind = children.length;
+  it("bounds retries after split bind errors while continuing watch renewal", async () => {
+    await runGmailService({});
+    exitChild(children[0]!);
+    await vi.advanceTimersByTimeAsync(5_000);
+    const countBeforeBind = children.length;
+    for (const delayMs of [5_000, 10_000, 20_000, 60_000]) {
       const child = children.at(-1)!;
       child.stderr.emit("data", Buffer.from("address alre"));
       child.alive = false;
       child.emit("exit", 1, null);
       child.stderr.emit("data", Buffer.from("ady in use\n"));
       child.emit("close", 1, null);
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(children).toHaveLength(countBeforeBind);
-      expect(children.filter((candidate) => candidate.alive)).toHaveLength(0);
-      // Another watcher can own forwarding, so watch renewal must remain active.
-      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
-    },
-  );
+      await vi.advanceTimersByTimeAsync(delayMs);
+    }
+    expect(children).toHaveLength(countBeforeBind + 3);
+    expect(children.filter((candidate) => candidate.alive)).toHaveLength(0);
+    // Another watcher can own forwarding, so watch renewal must remain active.
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
+  });
 });

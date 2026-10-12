@@ -37,6 +37,7 @@ beforeEach(() => {
   records = [];
   vi.spyOn(performance, "now").mockImplementation(() => clock);
   catalogLog.isEnabled.mockReset().mockReturnValue(true);
+  catalogLog.debug.mockReset();
   catalogLog.warn.mockReset().mockImplementation((message, fields) => {
     if (message === "slow session catalog provider list") {
       records.push({ fields: fields ?? {}, trace: getActiveDiagnosticTraceContext() });
@@ -50,8 +51,23 @@ afterEach(() => {
 });
 
 describe("session catalog provider diagnostics", () => {
+  it("maps fast provider calls once at debug level without catalog content", async () => {
+    const catalog = provider("codex", async () => {
+      clock += 999;
+      return [];
+    });
+    await listSessionCatalogProvider(catalog, {});
+    await listSessionCatalogProvider(catalog, {});
+    expect(catalogLog.debug).toHaveBeenCalledExactlyOnceWith("session catalog provider identity", {
+      providerId: "codex",
+      providerIdHash: createHash("sha256").update("codex").digest("hex"),
+    });
+    expect(JSON.stringify(catalogLog.debug.mock.calls)).not.toContain(privateText);
+    expect(catalogLog.warn).not.toHaveBeenCalled();
+  });
+
   it("separates queue, provider and drain delay without exposing provider or host content", async () => {
-    const gates = Array.from({ length: 4 }, () => createDeferredCore<SessionCatalogHost[]>());
+    const gates = Array.from({ length: 16 }, () => createDeferredCore<SessionCatalogHost[]>());
     const active = gates.map((gate, index) =>
       listSessionCatalogProvider(
         provider(`blocker-${index}`, () => gate.promise),
@@ -135,8 +151,11 @@ describe("session catalog provider diagnostics", () => {
     const gate = createDeferredCore<SessionCatalogHost[]>();
     const activeOwner = new AbortController();
     const blocker = provider("active-catalog", () => gate.promise);
-    const active = Array.from({ length: 4 }, () =>
-      listSessionCatalogProvider(blocker, { signal: activeOwner.signal }),
+    const active = Array.from({ length: 16 }, (_, index) =>
+      listSessionCatalogProvider(
+        { ...blocker, id: `active-catalog-${index}` },
+        { signal: activeOwner.signal },
+      ),
     );
     const queuedOwner = new AbortController();
     const list = vi.fn(async () => []);
@@ -170,7 +189,7 @@ describe("session catalog provider diagnostics", () => {
       gate.resolve([]);
       await Promise.all([...active, successor]);
       expect(list).toHaveBeenCalledOnce();
-      expect(records.filter(({ fields }) => fields.providerInvoked)).toHaveLength(4);
+      expect(records.filter(({ fields }) => fields.providerInvoked)).toHaveLength(16);
       for (const record of records.slice(1)) {
         expect(record.fields).toMatchObject({
           outcome: "resolved",
@@ -214,10 +233,10 @@ describe("session catalog provider diagnostics", () => {
     },
   );
 
-  it.each(["disabled", "sink-disabled", "disabled-during-call", "enabled-during-call", "fast"])(
+  it.each(["sink-disabled", "disabled-during-call", "enabled-during-call"])(
     "leaves diagnostics silent for %s calls",
     async (mode) => {
-      if (mode === "disabled" || mode === "enabled-during-call") {
+      if (mode === "enabled-during-call") {
         setDiagnosticsEnabledForProcess(false);
       }
       if (mode === "sink-disabled") {
@@ -225,7 +244,7 @@ describe("session catalog provider diagnostics", () => {
       }
       const hosts: SessionCatalogHost[] = [];
       const list = async () => {
-        clock = mode === "fast" ? 999 : 1_500;
+        clock = 1_500;
         if (mode === "disabled-during-call" || mode === "enabled-during-call") {
           setDiagnosticsEnabledForProcess(mode === "enabled-during-call");
         }

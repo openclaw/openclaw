@@ -8,21 +8,15 @@ import {
   resolveRedactOptions,
 } from "../logging/redact.js";
 
-// Escape control characters, Unicode format/line/paragraph separators, unpaired surrogates,
-// and non-ASCII space separators that can spoof or break approval prompts in common UIs.
-// With the Unicode regex flag, valid astral characters are full code points and do not match
-// Cs; only malformed surrogate code units are escaped. Ordinary ASCII space stays unchanged.
+// Escape spoofing characters while preserving ASCII spaces and valid astral code points;
+// Unicode mode makes Cs match only unpaired surrogate units.
 const EXEC_APPROVAL_INVISIBLE_CHAR_REGEX =
   /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]/gu;
 const EXEC_APPROVAL_INVISIBLE_CHAR_SINGLE =
   /^[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]$/u;
 
-// Hard cap on input the sanitizer will process at all. Above this size we return a constant
-// marker without running any regex work, so an attacker cannot force unbounded CPU/memory.
+// Bound regex work before redaction; truncate output afterward to avoid exposing partial secrets.
 const EXEC_APPROVAL_MAX_INPUT = 256 * 1024;
-// Soft cap on displayed output. Truncation happens AFTER redaction so a secret near the
-// cutoff is not partially exposed when the cut lands mid-token below a pattern's minimum
-// length (e.g. `ghp_` needs 20+ trailing chars before the `\b` match).
 const EXEC_APPROVAL_MAX_OUTPUT = 16 * 1024;
 const EXEC_APPROVAL_TRUNCATION_MARKER = "…[truncated]";
 const EXEC_APPROVAL_OVERSIZED_MARKER =
@@ -67,9 +61,7 @@ function truncateForDisplay(text: string): SanitizedExecApprovalDisplayText {
   };
 }
 
-// Iterate by full Unicode code point so astral-plane invisibles (e.g. U+E0061 TAG LATIN
-// SMALL LETTER A, category Cf) are matched as single characters instead of being seen as a
-// surrogate pair whose halves are category Cs and would escape the invisible-char regex.
+// Iterate by code point so astral invisibles match Cf, then map back to UTF-16 offsets.
 function buildStrippedView(original: string): { stripped: string; strippedToOrig: number[] } {
   const strippedChars: string[] = [];
   const strippedToOrig: number[] = [];
@@ -91,8 +83,6 @@ function sanitizeExecApprovalDisplayTextInternal(
   options?: { preserveLineBreaks?: boolean; oversizedMarker?: string },
 ): SanitizedExecApprovalDisplayText {
   if (commandText.length > EXEC_APPROVAL_MAX_INPUT) {
-    // Refuse to display inputs above the hard cap; anything larger must be approved through
-    // another channel. Running redaction on a multi-megabyte payload would be a DoS vector.
     return {
       text: options?.oversizedMarker ?? EXEC_APPROVAL_OVERSIZED_MARKER,
       truncated: false,
@@ -106,48 +96,28 @@ function sanitizeExecApprovalDisplayTextInternal(
   }
   const { stripped, strippedToOrig } = buildStrippedView(commandText);
   const strippedRedacted = redactSensitiveText(stripped, { mode: "tools" });
-  // Fast path: stripping invisibles did not expose any additional secret-like content, so the
-  // raw-view redaction is sufficient. Preserve structure and show invisible-character spoof
-  // attempts as `\u{...}` escapes.
+  // Stripping invisibles exposed no extra secrets; retain the raw layout with visible escapes.
   if (strippedRedacted === stripped) {
     return truncateForDisplay(escapeInvisibles(rawRedacted, options));
   }
-  // Detect bypass by position-bitmap coverage. Run the redaction matchers on both views and
-  // map stripped-view match positions back to original coordinates. If every position the
-  // stripped view would mask is also masked by the raw view, the raw view already covered
-  // everything — for example, an ordinary multi-line PEM private key where raw produces
-  // `BEGIN/…redacted…/END` while stripped collapses to `***`. A real bypass exists only when
-  // the stripped view masks at least one original position raw missed (e.g. the tail of an
-  // `sk-` token whose prefix-boundary was broken by a spliced zero-width or NBSP character).
+  // Compare coverage at original offsets: different rendering (such as a multiline PEM)
+  // is not a bypass unless stripping invisibles exposes positions the raw view missed.
   const redaction = resolveRedactOptions({ mode: "tools" });
   const rawMask = computeSensitiveRedactionBitmap(commandText, redaction);
   const strippedMask = computeSensitiveRedactionBitmap(stripped, redaction);
   let bypassDetected = false;
+  const unionMask = rawMask.slice();
   for (let i = 0; i < strippedMask.length; i++) {
-    if (
-      strippedMask[i] &&
-      !rawMask[expectDefined(strippedToOrig[i], "stripped to orig entry at i")]
-    ) {
-      bypassDetected = true;
-      break;
+    if (strippedMask[i]) {
+      const originalIndex = expectDefined(strippedToOrig[i], "stripped to orig entry at i");
+      bypassDetected ||= !rawMask[originalIndex];
+      unionMask[originalIndex] = true;
     }
   }
   if (!bypassDetected) {
     return truncateForDisplay(escapeInvisibles(rawRedacted, options));
   }
-  // Bypass path. Project the stripped-view mask back onto original positions, union with the
-  // raw-view mask, and emit a rendering where each contiguous masked run becomes a single
-  // `***` marker. Invisible characters that fall outside masked runs still render as visible
-  // `\u{...}` escapes so multi-line structure and spliced invisibles stay readable. The
-  // render loop advances by full code point so astral-plane invisibles are escaped as one
-  // `\u{...}` token rather than two separate surrogate escapes (or, worse, passed through
-  // unescaped because neither surrogate half matches the Cf regex).
-  const unionMask = rawMask.slice();
-  for (let i = 0; i < strippedMask.length; i++) {
-    if (strippedMask[i]) {
-      unionMask[expectDefined(strippedToOrig[i], "stripped to orig entry at i")] = true;
-    }
-  }
+  // Collapse the combined mask's runs and escape unmasked invisibles by code point.
   let out = "";
   let i = 0;
   while (i < commandText.length) {

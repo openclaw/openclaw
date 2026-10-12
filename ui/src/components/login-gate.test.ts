@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { registerControlUiReloadGuard } from "../app/document-reload-guard.ts";
 import { showToast } from "../lib/toast.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "./login-gate.ts";
 
 type LoginGateElement = HTMLElement & {
@@ -28,7 +29,7 @@ async function mountFailure(lastError: string, lastErrorCode: string | null, sec
     onToggleGatewaySecret: vi.fn(),
     onConnect: vi.fn(),
   };
-  document.body.append(element);
+  mountSolid(() => element);
   await element.updateComplete;
   return element;
 }
@@ -47,6 +48,45 @@ describe("login gate failure recovery", () => {
       bootstrapToken: "synthetic-bootstrap-token",
     }),
   ).replace(/=+$/g, "");
+
+  it("drags only the empty native background and preserves login recovery controls", async () => {
+    const postMessage = vi.fn();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawWindowDrag: { postMessage } } });
+    const element = await mountFailure("unauthorized", ConnectErrorDetailCodes.AUTH_TOKEN_MISSING);
+    const onOpenGatewaySettings = vi.fn();
+    element.props = { ...element.props, onOpenGatewaySettings };
+    await element.updateComplete;
+    const press = (target: Element) => {
+      const event = new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        button: 0,
+      });
+      target.dispatchEvent(event);
+      return event;
+    };
+
+    expect(press(element.querySelector(".login-gate")!).defaultPrevented).toBe(true);
+    expect(postMessage).toHaveBeenCalledExactlyOnceWith({ type: "window-drag" });
+
+    for (const selector of [
+      ".login-gate__card",
+      ".login-gate__failure-title",
+      ".login-gate__failure-summary",
+      "#login-gate-url",
+      ".login-gate__connect",
+      ".login-gate__recovery button",
+    ]) {
+      expect(press(element.querySelector(selector)!).defaultPrevented).toBe(false);
+    }
+    expect(postMessage).toHaveBeenCalledOnce();
+
+    element.querySelector<HTMLButtonElement>(".login-gate__recovery button")!.click();
+    expect(onOpenGatewaySettings).toHaveBeenCalledOnce();
+    element.querySelector<HTMLButtonElement>(".login-gate__connect")!.click();
+    expect(element.props.onConnect).toHaveBeenCalledOnce();
+  });
 
   it("explains a pasted setup code before connecting and clears the hint when replaced", async () => {
     const element = await mountFailure("", null, setupCode);
@@ -111,14 +151,11 @@ describe("login gate failure recovery", () => {
     );
   });
 
-  it.each([
-    { name: "empty", secret: "" },
-    { name: "populated", secret: "test-secret" },
-  ])("explains missing identity headers with $name credentials", async ({ secret }) => {
+  it("explains missing identity headers even with credentials entered", async () => {
     const element = await mountFailure(
       "unauthorized",
       ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
-      secret,
+      "test-secret",
     );
     const failure = element.querySelector(".login-gate__failure");
     const steps = failure?.querySelector(".login-gate__failure-steps")?.textContent;
@@ -139,31 +176,54 @@ describe("login gate failure recovery", () => {
     expect(steps).not.toMatch(/generate.*?token|replace.*?(?:token|password)|Gateway is running/iu);
   });
 
-  it.each([
-    "Authenticated profile verification is unavailable; retry the request.",
-    "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential.",
-  ])(
-    "explains profile verification failures without credential or network recovery: %s",
-    async (error) => {
-      const element = await mountFailure(
-        error,
-        ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE,
-      );
-      const failure = element.querySelector(".login-gate__failure");
+  it("explains profile verification failures without credential or network recovery", async () => {
+    const error =
+      "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential.";
+    const element = await mountFailure(
+      error,
+      ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE,
+    );
+    const failure = element.querySelector(".login-gate__failure");
 
-      expect(failure?.getAttribute("data-kind")).toBe("profile-unavailable");
-      expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
-        "Profile verification unavailable",
-      );
-      expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(error);
-      expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain("Retry");
-      expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain(
-        "Gateway administrator",
-      );
-      expect(failure?.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
-      expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe(error);
-    },
-  );
+    expect(failure?.getAttribute("data-kind")).toBe("profile-unavailable");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+      "Couldn't verify your account",
+    );
+    expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(
+      "OpenClaw couldn't check your account right now. Please try again shortly.",
+    );
+    expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain("Retry");
+    expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain(
+      "person who manages OpenClaw",
+    );
+    expect(failure?.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
+    expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe(error);
+  });
+
+  it("explains operator access denial without credential or network recovery", async () => {
+    const element = await mountFailure(
+      "Gateway access is not active for this account; ask a Gateway administrator to grant or restore access.",
+      ConnectErrorDetailCodes.OPERATOR_ACCESS_DENIED,
+    );
+    const failure = element.querySelector(".login-gate__failure");
+
+    expect(failure?.getAttribute("data-kind")).toBe("access-denied");
+    expect(failure?.getAttribute("data-tone")).toBe("warn");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+      "No access to this Gateway",
+    );
+    expect(failure?.textContent).not.toMatch(/openclaw gateway run|Gateway unreachable/u);
+    const steps = failure?.querySelector(".login-gate__failure-steps");
+    expect(steps?.textContent).toContain(
+      "Ask a Gateway administrator to assign your profile a role",
+    );
+    expect(steps?.textContent).toContain("This page reconnects on its own once access is granted.");
+    expect(steps?.textContent).not.toMatch(/Gateway is running|Gateway URL|token|password/iu);
+    expect(steps?.querySelector("code")?.textContent).toBe("openclaw users list --json");
+    expect(failure?.querySelector(".login-gate__failure-docs")?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/gateway/operator-scopes#named-operator-roles",
+    );
+  });
 
   it("renders every auth recovery command exactly once", async () => {
     const element = await mountFailure(
@@ -176,6 +236,28 @@ describe("login gate failure recovery", () => {
         entry.textContent?.trim(),
       ),
     ).toEqual(["openclaw gateway auth-token --show", "openclaw doctor --generate-gateway-token"]);
+  });
+
+  it("recovers an invalid one-time pairing link without blaming the Gateway secret", async () => {
+    const element = await mountFailure(
+      "unauthorized: bootstrap token invalid",
+      ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
+    );
+    const failure = element.querySelector(".login-gate__failure");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent?.trim()).toBe(
+      "Pairing link is no longer valid",
+    );
+    expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toMatch(
+      /expired|already been used/,
+    );
+    expect(failure?.querySelector(".login-gate__command--hero code")?.textContent?.trim()).toBe(
+      "openclaw dashboard",
+    );
+    const steps = failure?.querySelector(".login-gate__failure-steps");
+    expect(steps?.textContent).toContain("browserUrl");
+    expect(steps?.querySelector("code")?.textContent?.trim()).toBe("openclaw dashboard --json");
+    expect(failure?.textContent).not.toMatch(/Gateway secret rejected|Replace the Gateway secret/);
+    expect(element.props.onConnect).not.toHaveBeenCalled();
   });
 
   it("edits and reveals one Gateway secret without choosing a credential type", async () => {
@@ -312,22 +394,15 @@ describe("login gate failure recovery", () => {
     }
   });
 
-  it.each([
-    [
-      "auth-required",
+  it("does not offer page refresh for auth failures", async () => {
+    const element = await mountFailure(
       "unauthorized: gateway token required",
       ConnectErrorDetailCodes.AUTH_REQUIRED,
-    ],
-    ["network", "WebSocket connection failed", null],
-    [
-      "insecure-context",
-      "device identity required",
-      ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
-    ],
-  ])("does not offer page refresh for %s failures", async (kind, error, code) => {
-    const element = await mountFailure(error, code);
+    );
 
-    expect(element.querySelector(".login-gate__failure")?.getAttribute("data-kind")).toBe(kind);
+    expect(element.querySelector(".login-gate__failure")?.getAttribute("data-kind")).toBe(
+      "auth-required",
+    );
     expect(element.querySelector(".login-gate__failure-refresh")).toBeNull();
   });
 
@@ -422,6 +497,7 @@ describe("login gate failure recovery", () => {
 
   it("preserves command order when one recovery sentence contains multiple commands", async () => {
     const element = await mountFailure("WebSocket connection failed", null);
+    expect(element.querySelector(".login-gate__failure-refresh")).toBeNull();
 
     expect(
       Array.from(element.querySelectorAll(".login-gate__failure-steps code"), (entry) =>
@@ -435,6 +511,7 @@ describe("login gate failure recovery", () => {
       "device identity required",
       ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
     );
+    expect(element.querySelector(".login-gate__failure-refresh")).toBeNull();
 
     const steps = Array.from(
       element.querySelectorAll<HTMLElement>(".login-gate__failure-steps li"),
@@ -494,6 +571,15 @@ describe("login gate failure recovery", () => {
     });
     expect(writeText.mock.calls).toEqual([["openclaw status"], ["openclaw gateway run"]]);
     expect(buttons[2]?.getAttribute("aria-label")).toBe("Copy command");
+    element.props = { ...element.props, showGatewaySecret: true };
+    await element.updateComplete;
+    const retained = element.querySelectorAll<HTMLButtonElement>(
+      ".login-gate__failure-steps .login-gate__command .chat-copy-btn",
+    );
+    expect(retained[0]).toBe(buttons[0]);
+    expect(retained[0]?.getAttribute("aria-label")).toBe("Copied!");
+    expect(retained[1]).toBe(buttons[1]);
+    expect(retained[1]?.getAttribute("aria-label")).toBe("Copied!");
   });
 
   it("keeps the latest command-copy feedback until its own reset", async () => {

@@ -1,5 +1,4 @@
 // File lock helpers serialize plugin writes that share a filesystem-backed state file.
-import "../infra/fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import {
   acquireFileLock as acquireFsSafeFileLock,
@@ -91,10 +90,6 @@ function createCurrentProcessLockPayload(): Record<string, unknown> {
   return payload;
 }
 
-function asLockPayload(payload: unknown): Record<string, unknown> | null {
-  return asNullableRecord(payload);
-}
-
 function sameStatValue(left: number | bigint, right: number | bigint): boolean {
   return typeof left === typeof right ? left === right : BigInt(left) === BigInt(right);
 }
@@ -182,14 +177,14 @@ export async function acquireFileLock(
       },
       shouldReclaim: (params) => {
         if (staleRecovery === "fail-closed") {
-          staleOwner = inspectStaleLockOwner({ payload: asLockPayload(params.payload) });
+          staleOwner = inspectStaleLockOwner({ payload: asNullableRecord(params.payload) });
           return staleOwner !== null;
         }
         if (staleRecovery === "remove-if-definitely-stale") {
-          return isLockOwnerDefinitelyStale({ payload: asLockPayload(params.payload) });
+          return isLockOwnerDefinitelyStale({ payload: asNullableRecord(params.payload) });
         }
         return shouldRemoveDeadOwnerOrExpiredLock({
-          payload: asLockPayload(params.payload),
+          payload: asNullableRecord(params.payload),
           staleMs: params.staleMs,
           nowMs: params.nowMs,
         });
@@ -202,10 +197,10 @@ export async function acquireFileLock(
             }) => {
               options.assertResourceUnborrowed?.(snapshot.normalizedTargetPath);
               if (staleRecovery === "remove-if-definitely-stale") {
-                return isLockOwnerDefinitelyStale({ payload: asLockPayload(snapshot.payload) });
+                return isLockOwnerDefinitelyStale({ payload: asNullableRecord(snapshot.payload) });
               }
               return shouldRemoveDeadOwnerOrExpiredLock({
-                payload: asLockPayload(snapshot.payload),
+                payload: asNullableRecord(snapshot.payload),
                 staleMs: options.stale,
               });
             },
@@ -251,7 +246,7 @@ export async function reclaimDefinitelyStaleFileLock(
   // rechecks that identity and raw payload immediately before path removal.
   const ownerIsDefinitelyStale = async (payload: unknown) =>
     (await isSameRegularFile(lockPath, observed)) &&
-    isLockOwnerDefinitelyStale({ payload: asLockPayload(payload) });
+    isLockOwnerDefinitelyStale({ payload: asNullableRecord(payload) });
   const targetPath = lockPath.endsWith(".lock") ? lockPath.slice(0, -".lock".length) : lockPath;
   try {
     const reclaimed = await acquireFsSafeFileLock(targetPath, {

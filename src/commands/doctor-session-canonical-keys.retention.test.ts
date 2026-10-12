@@ -2,10 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
-import {
-  getConversationProgressSnapshot,
-  recordConversationProgressReceipt,
-} from "../config/sessions/conversation-delivery-store.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadExactSessionEntryReadOnly,
@@ -13,14 +9,17 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
-import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
+import {
+  insertLegacySession,
+  repairCanonicalSessionKeys,
+} from "./doctor-session-canonical-keys.test-support.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
@@ -32,7 +31,7 @@ describe("doctor canonical session-key retention repair", () => {
       const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
       const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
       const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+        agents: { entries: { main: {}, ops: {} } },
         session: { mainKey: "shared", store: storeTemplate },
       } as OpenClawConfig;
 
@@ -59,18 +58,19 @@ describe("doctor canonical session-key retention repair", () => {
           "INSERT INTO session_windows (session_id, session_key, reason, session_scope, created_at, updated_at) VALUES ('destination-only-previous', 'agent:main:shared', 'recovery', 'conversation', 4, 4)",
         )
         .run();
-      destinationDatabase.db
-        .prepare(
-          "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES ('destination-only-previous', 0, ?, 4)",
-        )
-        .run(
-          JSON.stringify({
-            id: "destination-only-message",
-            message: { content: "destination-only history", role: "user" },
-            parentId: null,
-            type: "message",
-          }),
-        );
+      createTranscriptEventInserter(
+        destinationDatabase.db,
+        "destination-only-previous",
+      )({
+        seq: 0,
+        eventJson: JSON.stringify({
+          id: "destination-only-message",
+          message: { content: "destination-only history", role: "user" },
+          parentId: null,
+          type: "message",
+        }),
+        createdAt: 4,
+      });
 
       insertLegacySession({
         agentId: "ops",
@@ -81,7 +81,7 @@ describe("doctor canonical session-key retention repair", () => {
         },
         env,
         eventText: "winner history",
-        sessionKey: "agent:main:main ",
+        sessionKey: "agent:main:shared ",
         storePath: opsStore,
       });
       const sourceDatabase = openOpenClawAgentDatabase({
@@ -90,8 +90,8 @@ describe("doctor canonical session-key retention repair", () => {
         path: resolveSqliteTargetFromSessionStorePath(opsStore, { agentId: "ops", env }).path,
       });
       for (const [label, sourceSessionKey] of [
-        ["winner", "agent:main:main "],
-        ["loser", "agent:main:main"],
+        ["winner", "agent:main:shared "],
+        ["loser", "agent:main:shared"],
       ] as const) {
         sourceDatabase.db
           .prepare(
@@ -109,7 +109,7 @@ describe("doctor canonical session-key retention repair", () => {
         entry: { sessionId: "loser", updatedAt: 10 },
         env,
         eventText: "loser history",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:main:shared",
         storePath: opsStore,
       });
 
@@ -133,7 +133,7 @@ describe("doctor canonical session-key retention repair", () => {
         loadExactSessionEntryReadOnly({
           agentId: "ops",
           env,
-          sessionKey: "agent:main:main ",
+          sessionKey: "agent:main:shared ",
           storePath: opsStore,
         }),
       ).toBeUndefined();
@@ -141,7 +141,7 @@ describe("doctor canonical session-key retention repair", () => {
         loadExactSessionEntryReadOnly({
           agentId: "ops",
           env,
-          sessionKey: "agent:main:main",
+          sessionKey: "agent:main:shared",
           storePath: opsStore,
         }),
       ).toBeUndefined();
@@ -221,14 +221,14 @@ describe("doctor canonical session-key retention repair", () => {
         const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
         const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
         const cfg = {
-          agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+          agents: { entries: { main: {}, ops: {} } },
           session: { mainKey: "work", store: storeTemplate },
         } as OpenClawConfig;
         insertLegacySession({
           agentId: "ops",
           entry: { sessionId: "winner", updatedAt: 20 },
           env,
-          sessionKey: "agent:main:main ",
+          sessionKey: "agent:main:work ",
           storePath: opsStore,
         });
         const sourceDatabase = openOpenClawAgentDatabase({
@@ -241,30 +241,27 @@ describe("doctor canonical session-key retention repair", () => {
             "INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at) VALUES ('winner-conversation', 'webchat', 'default', 'direct', 'winner', 'winner', '{}', 10, 10)",
           )
           .run();
-        const sourceScope = { agentId: "ops", env, storePath: opsStore };
-        const snapshot = { lines: ["Retained progress"], label: "Working" };
-        const progressInput = {
-          conversationRef: "winner-conversation",
-          message: "Progress",
-          platformMessageId: "progress-message",
-          progressSnapshot: snapshot,
-          assertCurrent: () => {},
-        };
-        recordConversationProgressReceipt(sourceScope, {
-          ...progressInput,
-          operationId: "winner-operation",
-          sourceSessionKey: "agent:main:main",
-        });
+        const progressJson = JSON.stringify({ lines: ["Retained progress"], label: "Working" });
+        for (const [operationId, sourceSessionKey] of [
+          ["winner-operation", "agent:main:work"],
+          ["unrelated-operation", "agent:ops:other"],
+        ] as const) {
+          sourceDatabase.db
+            .prepare(
+              "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, platform_message_id, created_at, updated_at) VALUES (?, 'send', 'winner-conversation', ?, 'progress-hash', 'sent', 'progress-message', 10, 10)",
+            )
+            .run(operationId, sourceSessionKey);
+          sourceDatabase.db
+            .prepare(
+              "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES ('conversation-progress', ?, ?, 10)",
+            )
+            .run(operationId, progressJson);
+        }
         sourceDatabase.db
           .prepare(
             "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('canonical-operation', 'turn', 'winner-conversation', 'agent:main:work', 'canonical-hash', 'sent', 10, 10)",
           )
           .run();
-        recordConversationProgressReceipt(sourceScope, {
-          ...progressInput,
-          operationId: "unrelated-operation",
-          sourceSessionKey: "agent:ops:other",
-        });
 
         expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
           foundGroups: 1,
@@ -290,17 +287,20 @@ describe("doctor canonical session-key retention repair", () => {
             .prepare("SELECT operation_id FROM conversation_deliveries ORDER BY operation_id")
             .all(),
         ).toEqual([{ operation_id: "unrelated-operation" }]);
-        const destinationScope = { agentId: "main", env, storePath: mainStore };
-        expect(getConversationProgressSnapshot(destinationScope, "winner-operation")).toEqual(
-          snapshot,
-        );
         expect(
-          getConversationProgressSnapshot(destinationScope, "unrelated-operation"),
-        ).toBeUndefined();
-        expect(getConversationProgressSnapshot(sourceScope, "winner-operation")).toBeUndefined();
-        expect(getConversationProgressSnapshot(sourceScope, "unrelated-operation")).toEqual(
-          snapshot,
-        );
+          destinationDatabase.db
+            .prepare(
+              "SELECT key, value_json FROM cache_entries WHERE scope = 'conversation-progress'",
+            )
+            .all(),
+        ).toEqual([{ key: "winner-operation", value_json: progressJson }]);
+        expect(
+          sourceDatabase.db
+            .prepare(
+              "SELECT key, value_json FROM cache_entries WHERE scope = 'conversation-progress'",
+            )
+            .all(),
+        ).toEqual([{ key: "unrelated-operation", value_json: progressJson }]);
       },
     );
   });

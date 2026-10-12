@@ -85,14 +85,16 @@ async function startRealService(
           // Publication is a synchronous compare-and-replace: another plugin
           // generation cannot be adopted between the ownership check and write.
           if (state.published) {
-            registerAcpRuntimeBackend({ id: ACPX_BACKEND_ID, ...backend });
+            registerAcpRuntimeBackend({
+              id: ACPX_BACKEND_ID,
+              ...backend,
+              runtime: deferredRuntime,
+            });
           }
           publishedRuntime = backend.runtime;
-          state.ownedRuntime = backend.runtime;
         },
-        retract(runtime) {
-          unregisterOwnedRuntime(runtime);
-        },
+        // The outer service owns the stable facade and retracts it before inner cleanup.
+        retract() {},
       },
     });
     state.realService = service;
@@ -103,7 +105,7 @@ async function startRealService(
     if (!publishedRuntime) {
       throw new Error("ACPX runtime service did not register an ACP backend");
     }
-    if (state.published && getAcpRuntimeBackend(ACPX_BACKEND_ID)?.runtime !== publishedRuntime) {
+    if (state.published && getAcpRuntimeBackend(ACPX_BACKEND_ID)?.runtime !== deferredRuntime) {
       throw new Error("ACPX runtime service lost registry ownership during activation");
     }
     // Registry publication intentionally precedes the startup probe, but callers

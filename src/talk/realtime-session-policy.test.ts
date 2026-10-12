@@ -9,8 +9,8 @@ import {
 } from "./realtime-session-policy.js";
 
 const cfg = {
-  agents: { list: [{ id: "agent-1", identity: { name: "Molty" } }] },
-} as OpenClawConfig;
+  agents: { entries: { "agent-1": { name: "Clawbot", identity: { name: "Molty" } } } },
+} satisfies OpenClawConfig;
 
 describe("realtime voice session policy", () => {
   it("defaults agent-proxy sessions to owner consults and adaptive wake names", () => {
@@ -31,7 +31,7 @@ describe("realtime voice session policy", () => {
       consultToolsAllow: undefined,
       consultPolicy: "always",
       wakeNamePolicy: "automatic",
-      wakeNames: ["openclaw", "molty"],
+      wakeNames: ["openclaw", "clawbot", "molty"],
       autoRespondToAudio: false,
     });
   });

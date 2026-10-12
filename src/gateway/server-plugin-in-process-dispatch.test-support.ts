@@ -5,8 +5,10 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
+import { resolveSessionRequestTargets } from "./session-request-targets.js";
 
 export function createContext(): GatewayRequestContext {
   const context = {
@@ -15,6 +17,8 @@ export function createContext(): GatewayRequestContext {
     getRuntimeConfig: () => ({}),
     logGateway: { error: vi.fn(), warn: vi.fn() },
   } as unknown as GatewayRequestContext;
+  context.resolveSessionRequestTargets = (request) =>
+    resolveSessionRequestTargets({ ...request, context });
   context.createAgentTurnFacade = (principal) =>
     createInternalAgentTurnFacade({
       ...principal,
@@ -26,17 +30,19 @@ export function createContext(): GatewayRequestContext {
   return context;
 }
 
-export function createOperatorClient(params: {
-  caps?: string[];
-  profileId: string;
-  scopes: string[];
-}): NonNullable<GatewayRequestOptions["client"]> {
+export function createOperatorClient(
+  params: { caps?: string[]; scopes: string[] } & ({ profileId: string } | { profileName: string }),
+): NonNullable<GatewayRequestOptions["client"]> {
+  const profileId =
+    "profileId" in params
+      ? params.profileId
+      : ensureProfileForEmail(`${params.profileName}@example.test`).id;
   return {
-    connId: `conn-${params.profileId}`,
-    authenticatedUserId: `${params.profileId}@example.com`,
+    connId: `conn-${profileId}`,
+    authenticatedUserId: `${profileId}@example.com`,
     authenticatedUserProfile: {
-      profileId: params.profileId,
-      displayName: params.profileId,
+      profileId,
+      displayName: profileId,
       hasAvatar: false,
       updatedAt: 1,
     },

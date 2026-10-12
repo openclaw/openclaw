@@ -36,10 +36,10 @@ private final class DiscoverySelectionSession: WebSocketSessioning, @unchecked S
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct GatewayDiscoverySelectionFlowTests {
-    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    @Test(arguments: [false, true])
     func `mounted nearby selection keeps the saved authenticated route`(copiesSavedID: Bool) async throws {
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -78,7 +78,7 @@ struct GatewayDiscoverySelectionFlowTests {
             }
             control.cancel(with: .goingAway, reason: nil)
             controlSession.invalidateAndCancel()
-            try await Self.waitUntil("liveness-control disconnect") { unknown.activeConnectionCount == 0 }
+            try await unknown.waitUntilIdle("liveness-control disconnect")
             try #require(unknownRequests.count == 1)
             unknownRequests.removeAll()
             unknownBytes.withValue { $0.removeAll() }
@@ -168,7 +168,7 @@ struct GatewayDiscoverySelectionFlowTests {
                 window.contentView = nil
                 window.close()
                 do {
-                    try await Self.waitUntil("mounted onboarding disappearance") { !appeared || disappeared }
+                    try await TestWait.state("mounted onboarding disappearance") { !appeared || disappeared }
                 } catch { Issue.record(error) }
                 discovery.stop()
                 await gateway.shutdown()
@@ -184,13 +184,13 @@ struct GatewayDiscoverySelectionFlowTests {
                 window.orderFront(nil)
                 hosting.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
-                try await Self.waitUntil("visible saved-route authenticated probe") {
+                try await TestWait.state("visible saved-route authenticated probe") {
                     appeared && persistenceCalls >= 2 && savedConnectTokens.value.contains(token) &&
                         savedMethods.value.contains("agents.list")
                 }
                 try #require(session.requests.value.allSatisfy { $0.url == savedURL })
                 try await Self.press("Next", in: hosting)
-                try await Self.waitUntil("connection-page discovery start") {
+                try await TestWait.observed("connection-page discovery start") {
                     discovery.statusText != GatewayDiscoveryStatusText.idle
                 }
                 // Stop only this injected discovery producer before supplying its normal public
@@ -209,7 +209,7 @@ struct GatewayDiscoverySelectionFlowTests {
                     stableID: copiesSavedID ? "saved-selection" : "unknown-selection",
                     debugID: "unknown-selection",
                     isLocal: false)]
-                try await Self.waitUntil("mounted Nearby button") {
+                try await TestWait.state("mounted Nearby button") {
                     try await Self.button(name, in: hosting) != nil
                 }
                 // Finish the startup probe/replayed snapshot before attributing later activity to
@@ -223,7 +223,7 @@ struct GatewayDiscoverySelectionFlowTests {
                 let savedMethodCount = savedMethods.value.count
 
                 try await Self.press(name, in: hosting)
-                try await Self.waitUntil("trusted-input sheet or changed saved destination") {
+                try await TestWait.state("trusted-input sheet or changed saved destination") {
                     window.attachedSheet != nil || state.remoteUrl != savedURL.absoluteString
                 }
                 #expect(state.remoteUrl == savedURL.absoluteString)
@@ -247,7 +247,7 @@ struct GatewayDiscoverySelectionFlowTests {
                     }
                 #expect(!fields.contains(unknown.websocketURL().absoluteString))
                 try await Self.press("Cancel", in: sheet)
-                try await Self.waitUntil("trusted-input cancellation") { window.attachedSheet == nil }
+                try await TestWait.state("trusted-input cancellation") { window.attachedSheet == nil }
                 await cleanup()
                 #expect(unknownRequests.isEmpty)
                 #expect(Self.clientObjects(unknownBytes.value).isEmpty)
@@ -262,7 +262,7 @@ struct GatewayDiscoverySelectionFlowTests {
     private static func button(_ title: String, in root: NSView) async throws -> AnyObject? {
         let matches = try await AppKitTestSupport.accessibilityElements(in: root).filter {
             $0.accessibilityRole?() == .button && $0.isAccessibilityEnabled?() == true &&
-                [$0.accessibilityLabel?(), $0.accessibilityTitle?()].compactMap(\.self).contains {
+                [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].compactMap(\.self).contains {
                     $0 == title || (title == "Nearby selection fixture" && $0.contains(title))
                 }
         }
@@ -274,18 +274,6 @@ struct GatewayDiscoverySelectionFlowTests {
         let element = try await self.button(title, in: root)
         let button = try #require(element, "Missing mounted button: \(title)")
         try #require(button.accessibilityPerformPress?() == true)
-    }
-
-    private static func waitUntil(_ description: String, _ condition: () async throws -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
-        while ContinuousClock.now < deadline {
-            if try await condition() { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        throw NSError(
-            domain: "GatewayDiscoverySelectionFlowTests",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "Timed out: \(description)"])
     }
 
     private static func challengeResponse(_ request: String) -> DashboardHTTPFixture.RawResponse? {

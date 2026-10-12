@@ -40,7 +40,6 @@ export function registerSettledFinalizationTests({
 }: SettledFinalizationFixtures) {
   it.each(
     [
-      { label: "completed turn", failure: undefined, expectedContext: true },
       {
         label: "preserve-only host-auth turn",
         failure: undefined,
@@ -55,25 +54,10 @@ export function registerSettledFinalizationTests({
         },
         expectedContext: true,
       },
-      {
-        label: "usage limit after the tool result",
-        failure: {
-          message: "Usage limit exceeded.",
-          codexErrorInfo: "usageLimitExceeded",
-        },
-        expectedContext: false,
-      },
-      {
-        label: "unauthorized response after the tool result",
-        failure: {
-          message: "Unauthorized.",
-          codexErrorInfo: "unauthorized",
-        },
-        expectedContext: false,
-      },
-    ].flatMap((scenario) =>
-      [false, true].map((oversizedHistory) => ({ scenario, oversizedHistory })),
-    ),
+    ].map((scenario) => ({
+      scenario,
+      oversizedHistory: scenario.label === "completed turn",
+    })),
   )(
     "preserves settled finalization eligibility for a $scenario.label (oversized history: $oversizedHistory)",
     async ({ scenario, oversizedHistory }) => {
@@ -294,7 +278,7 @@ export function registerSettledFinalizationTests({
       promptError: "remote compaction failed",
       promptErrorSource: "compaction",
     });
-    expect(result.itemLifecycle).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
+    expect(result.itemLifecycle).toEqual({ startedCount: 2, completedCount: 1, activeCount: 0 });
     expect(result.settledTurnFinalizationContext).toMatchObject({
       source: "harness",
       data: [

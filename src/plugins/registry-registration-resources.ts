@@ -18,6 +18,7 @@ export class PluginRegistrationResourceSource {
   readonly #registrations = new Map<string, RegistrationResources>();
   readonly #pending = new Set<Promise<void>>();
   readonly #dependencies: Array<() => Promise<void>> = [];
+  readonly #cleanupWork = new AsyncWorkScope();
   #claims = 0;
   #closed = false;
 
@@ -34,7 +35,10 @@ export class PluginRegistrationResourceSource {
         if (!release) {
           const last = --this.#claims === 0;
           this.#closed = last;
-          release = Promise.resolve().then(async () => {
+          // Physical custody can outlive the releasing caller's captured work scope.
+          const cleanup = this.#cleanupWork.track(async () => {
+            // Cache the release promise before cleanup can synchronously reenter it.
+            await Promise.resolve();
             const entries = [...this.#registrations]
               // Construction owns rollback failures; the last claim owns successful entries.
               .filter(([, entry]) => (entry.rolledBack ? owner === "inspection" : last));
@@ -82,6 +86,15 @@ export class PluginRegistrationResourceSource {
             }
             return failures;
           });
+          release = (async () => {
+            try {
+              return await cleanup;
+            } finally {
+              if (last) {
+                await this.#cleanupWork.run(() => this.#cleanupWork.drain());
+              }
+            }
+          })();
         }
         return release;
       },

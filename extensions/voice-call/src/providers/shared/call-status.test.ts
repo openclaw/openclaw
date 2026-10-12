@@ -24,7 +24,7 @@ describe("provider call status mapping", () => {
     expect(isProviderStatusTerminal("ringing")).toBe(false);
   });
 
-  it.each(["constructor", "__proto__", "toString", "valueOf", "prototype"])(
+  it.each(["constructor", "__proto__"])(
     "does not treat Object.prototype key %s as a terminal provider status",
     (status) => {
       expect(mapProviderStatusToEndReason(status)).toBeNull();

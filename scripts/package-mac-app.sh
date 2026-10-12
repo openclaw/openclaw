@@ -2,14 +2,36 @@
 set -euo pipefail
 
 # Build and bundle OpenClaw with its matching private worker runtime.
-# Outputs to dist/OpenClaw.app
+# Outputs to dist/OpenClaw.app, or the explicitly selected cloud-worker app.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
 source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
 source "$ROOT_DIR/scripts/lib/build-metadata.sh"
 source "$ROOT_DIR/scripts/lib/mac-app-bundle.sh"
-DEFAULT_APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
+CLOUD_WORKER_HOST="${OPENCLAW_MAC_CLOUD_WORKER_HOST:-0}"
+case "$CLOUD_WORKER_HOST" in
+  0 | 1) ;;
+  *) echo "ERROR: OPENCLAW_MAC_CLOUD_WORKER_HOST must be 0 or 1." >&2; exit 1 ;;
+esac
+APP_BUNDLE_NAME=OpenClaw.app
+if [[ "$CLOUD_WORKER_HOST" == "1" ]]; then
+  APP_BUNDLE_NAME=OpenClawCloudWorker.app
+  if [[ "${BUNDLE_ID:-ai.openclaw.cloud-worker}" != ai.openclaw.cloud-worker ]]; then
+    echo "ERROR: Cloud worker packaging requires BUNDLE_ID=ai.openclaw.cloud-worker." >&2
+    exit 1
+  fi
+  if [[ "${ALLOW_ADHOC_SIGNING:-0}" == 1 || "${SIGN_IDENTITY:-}" == - ||
+        "${DISABLE_LIBRARY_VALIDATION:-0}" == 1 || "${SKIP_TEAM_ID_CHECK:-0}" == 1 ]]; then
+    echo "ERROR: Cloud worker packaging requires a complete Developer ID signature." >&2
+    exit 1
+  fi
+  BUNDLE_ID=ai.openclaw.cloud-worker
+elif [[ "${BUNDLE_ID:-}" == ai.openclaw.cloud-worker ]]; then
+  echo "ERROR: Use OPENCLAW_MAC_CLOUD_WORKER_HOST=1 to build the cloud worker app." >&2
+  exit 1
+fi
+DEFAULT_APP_ROOT="$ROOT_DIR/dist/$APP_BUNDLE_NAME"
 APP_ROOT="${OPENCLAW_PACKAGE_APP_ROOT:-$DEFAULT_APP_ROOT}"
 case "$APP_ROOT" in
   "$ROOT_DIR/dist/"*) ;;
@@ -18,6 +40,10 @@ case "$APP_ROOT" in
     exit 1
     ;;
 esac
+if [[ "$CLOUD_WORKER_HOST" == "1" && "${APP_ROOT##*/}" != OpenClawCloudWorker.app ]]; then
+  echo "ERROR: Cloud worker output must be named OpenClawCloudWorker.app." >&2
+  exit 1
+fi
 APP_DESTINATION="$APP_ROOT"
 APP_STAGE_DIR=""
 SWIFT_BUILD_PID=""
@@ -38,6 +64,10 @@ case "$SIGNING_VARIANT" in
     exit 1
     ;;
 esac
+if [[ "$CLOUD_WORKER_HOST" == "1" && "$SIGNING_VARIANT" != standard ]]; then
+  echo "ERROR: Cloud worker packaging cannot use the elevation-host signing variant." >&2
+  exit 1
+fi
 # OPENCLAW_SKIP_MLX_TTS=1 packages the app without the local MLX voice helper.
 # The helper pulls in the full mlx-swift Metal shader stack, which some beta
 # Xcode toolchains cannot compile (flaky `metal` diagnostics), needlessly
@@ -84,7 +114,7 @@ PRIMARY_ARCH="${BUILD_ARCHS[0]}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI=}"
 SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml}"
 AUTO_CHECKS=true
-if [[ "$BUNDLE_ID" == *.debug ]]; then
+if [[ "$BUNDLE_ID" == *.debug || "$CLOUD_WORKER_HOST" == "1" ]]; then
   SPARKLE_FEED_URL=""
   AUTO_CHECKS=false
 fi
@@ -299,7 +329,7 @@ node "$ROOT_DIR/scripts/prepare-apple-mermaid.mjs"
 # Private Swift and worker staging must stay outside the published dist tree.
 mkdir -p "$(dirname "$APP_DESTINATION")" "$ROOT_DIR/.artifacts"
 APP_STAGE_DIR="$(mktemp -d "$ROOT_DIR/.artifacts/.openclaw-package.XXXXXX")"
-APP_ROOT="$APP_STAGE_DIR/OpenClaw.app"
+APP_ROOT="$APP_STAGE_DIR/$APP_BUNDLE_NAME"
 
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 SWIFT_BUILD_RESULTS="$APP_STAGE_DIR/swift-builds"
@@ -335,12 +365,18 @@ if [[ ! "$PORT_GUARDIAN_STORAGE_VERSION" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleIdentifier "$BUNDLE_ID"
+if [[ "$CLOUD_WORKER_HOST" == "1" ]]; then
+  plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleName "OpenClaw Cloud Worker"
+  plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" CFBundleDisplayName "OpenClaw Cloud Worker"
+  /usr/libexec/PlistBuddy -c 'Add :OpenClawCloudWorkerHostVersion integer 1' "$APP_ROOT/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c 'Delete :CFBundleURLTypes' "$APP_ROOT/Contents/Info.plist"
+fi
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionString "$APP_VERSION"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleVersion "$APP_BUILD"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp "$BUILD_TS"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$BUILD_GIT_COMMIT"
-WORKER_BUILD_ID="$(node -e 'console.log(require(process.argv[1]).buildId)' "$ROOT_DIR/dist/build-info.json")"
-plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" OpenClawWorkerBuildID "$WORKER_BUILD_ID"
+RUNTIME_BUILD_ID="$(node -e 'console.log(require(process.argv[1]).buildId)' "$ROOT_DIR/dist/build-info.json")"
+plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" OpenClawRuntimeBuildID "$RUNTIME_BUILD_ID"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit "$PEEKABOO_SOURCE_COMMIT"
 if [[ "$BUILD_CONFIG" == "release" ]]; then
   EMBEDDED_GIT_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit)"
@@ -457,7 +493,20 @@ if [[ "$SIGNING_VARIANT" == "elevation-host" ]]; then
   echo "🖥  Omitting embedded CUA driver from elevation-host package"
 else
   echo "🖥  Staging embedded CUA driver"
-  "$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"
+  CUA_DRIVER="$APP_ROOT/Contents/Resources/cua-driver"
+  "$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$CUA_DRIVER"
+  if [[ "${#BUILD_ARCHS[@]}" -eq 1 ]]; then
+    CUA_ARCH="${BUILD_ARCHS[0]}"
+    CUA_DRIVER_THIN="${CUA_DRIVER}.thin"
+    echo "🖥  Thinning embedded CUA driver [$CUA_ARCH]"
+    lipo "$CUA_DRIVER" -thin "$CUA_ARCH" -output "$CUA_DRIVER_THIN"
+    chmod 0755 "$CUA_DRIVER_THIN"
+    mv "$CUA_DRIVER_THIN" "$CUA_DRIVER"
+    [[ "$(lipo -archs "$CUA_DRIVER")" == "$CUA_ARCH" ]] || {
+      echo "ERROR: CUA driver architecture did not match requested build: $CUA_ARCH" >&2
+      exit 1
+    }
+  fi
 fi
 
 echo "📦 Staging browser sign-in helper"
@@ -466,7 +515,8 @@ for arch in "${BUILD_ARCHS[@]}"; do
 done
 
 echo "📦 Copying CLI installer"
-INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
+node "$ROOT_DIR/scripts/build-installers.mjs" "$APP_STAGE_DIR/installers"
+INSTALL_CLI_SRC="$APP_STAGE_DIR/installers/install-cli.sh"
 if [ ! -f "$INSTALL_CLI_SRC" ]; then
   echo "ERROR: CLI installer missing at $INSTALL_CLI_SRC" >&2
   exit 1
@@ -474,26 +524,12 @@ fi
 cp "$INSTALL_CLI_SRC" "$APP_ROOT/Contents/Resources/install-cli.sh"
 chmod 0644 "$APP_ROOT/Contents/Resources/install-cli.sh"
 
-echo "📦 Provisioning the matching private node worker [${BUILD_ARCHS[*]}]"
-/bin/bash "$ROOT_DIR/scripts/stage-mac-node-worker.sh" "$APP_ROOT/Contents/Resources/node-worker" "${BUILD_ARCHS[@]}"
+echo "📦 Provisioning the matching private Bun runtime [${BUILD_ARCHS[*]}]"
+/bin/bash "$ROOT_DIR/scripts/stage-mac-runtime.sh" "$APP_ROOT/Contents/Resources/runtime" "${BUILD_ARCHS[@]}"
 
 echo "🌐 Copying app localizations"
 node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos \
   --output "$APP_ROOT/Contents/Resources"
-
-# The native dashboard loads the Gateway-served HTTP UI. Neither the app bundle
-# nor its private `node worker` runtime serves a second Control UI copy.
-if [[ -e "$APP_ROOT/Contents/Resources/control-ui" || -L "$APP_ROOT/Contents/Resources/control-ui" ]]; then
-  echo "ERROR: Standalone Control UI assets must not be embedded in OpenClaw.app" >&2
-  exit 1
-fi
-for arch in "${BUILD_ARCHS[@]}"; do
-  worker_ui="$APP_ROOT/Contents/Resources/node-worker/$arch/lib/node_modules/openclaw/dist/control-ui"
-  if [[ -e "$worker_ui" || -L "$worker_ui" ]]; then
-    echo "ERROR: Private node worker must not embed Control UI assets: $worker_ui" >&2
-    exit 1
-  fi
-done
 
 echo "📦 Copying SwiftPM resource bundles"
 SWIFTPM_BUILD_PRODUCTS=("$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG")
@@ -592,11 +628,24 @@ else
 fi
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"
 codesign --verify --deep --strict "$APP_ROOT"
+if [[ "${CLOUD_WORKER_HOST:-0}" == "1" ]]; then
+  signing_metadata="$(codesign -dv --verbose=4 "$APP_ROOT" 2>&1)"
+  if ! grep -q '^Authority=Developer ID Application:' <<<"$signing_metadata" ||
+     ! grep -Eq '^TeamIdentifier=[A-Z0-9]{10}$' <<<"$signing_metadata"; then
+    echo "ERROR: Cloud worker app did not receive a Developer ID Application signature." >&2
+    exit 1
+  fi
+fi
 for arch in "${BUILD_ARCHS[@]}"; do
-  env -i HOME="$APP_STAGE_DIR" PATH="/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="${TMPDIR:-/tmp}" \
-    "$APP_ROOT/Contents/Resources/node-worker/$arch/bin/node" \
-    "$ROOT_DIR/scripts/verify-mac-node-worker.mjs" \
-    "$APP_ROOT/Contents/Resources/node-worker/$arch" "$ROOT_DIR/dist/build-info.json"
+  if /usr/bin/arch -"$arch" /usr/bin/true 2>/dev/null; then
+    env -i HOME="$APP_STAGE_DIR" PATH="/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="${TMPDIR:-/tmp}" \
+      OPENCLAW_SQLITE_LIBRARY="$APP_ROOT/Contents/Resources/runtime/lib/libsqlite3.dylib" \
+      /usr/bin/arch -"$arch" "$APP_ROOT/Contents/Resources/runtime/bin/bun" \
+      "$ROOT_DIR/scripts/verify-mac-runtime.mjs" \
+      "$APP_ROOT/Contents/Resources/runtime" "$ROOT_DIR/dist/build-info.json" "$APP_ROOT"
+  else
+    echo "WARN: Signed runtime $arch verification skipped; install Rosetta to verify this architecture" >&2
+  fi
 done
 codesign --verify --deep --strict "$APP_ROOT"
 

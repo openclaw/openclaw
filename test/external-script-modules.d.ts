@@ -48,6 +48,20 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
     legacyIssues: Map<number, unknown>;
     pullRequests: Map<number, ContributionRecord>;
   };
+  export function githubNotFoundReferences(
+    response: { data?: unknown; errors?: unknown },
+    numbers: number[],
+  ): number[];
+  export function classifyUnavailableContextualReferences(params: {
+    unresolved: number[];
+    notFound: Set<number>;
+    activeCommits: Array<{ hash: string; subject: string; body: string }>;
+    protectedReferences: Set<number>;
+    highestResolved: number;
+  }): {
+    unavailable: Array<{ number: number; commits: string[] }>;
+    stillUnresolved: number[];
+  };
   export function recoverUnavailablePullRequests(params: {
     numbers: Iterable<number>;
     nodes: Map<number, unknown>;

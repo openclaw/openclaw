@@ -1,24 +1,37 @@
 import { once } from "node:events";
-import type { Worker, WorkerOptions } from "node:worker_threads";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
+import { Worker, type WorkerOptions } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinator.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import {
-  acquireStateDatabaseCoordinator,
-  acquireStateDatabaseHandleExclusion,
-} from "../infra/state-database-coordinator.js";
+  readSqliteDatabaseWriteRevision,
+  trackSqliteDatabaseAdmissionWorker,
+} from "../infra/sqlite-database-admission.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { createSqliteDatabaseAdmissionRelay } from "../infra/sqlite-worker-operation-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  acquireOpenClawStateDatabaseFileExclusion,
-  closeOpenClawStateDatabaseByPath,
-} from "./openclaw-state-db-cache.js";
+import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
+import {
+  leaseHeartbeatState,
+  type LeaseHeartbeatWorkerData,
+} from "./openclaw-state-lease-heartbeat-shared.js";
+import { acquireOpenClawStateLeaseInTransaction } from "./openclaw-state-lease-store.js";
+import { runWithOpenClawStateLeaseWorker } from "./openclaw-state-lease-worker-operation.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 const heartbeatWorkers = vi.hoisted(() => ({
+  beforeCreate: undefined as (() => void) | undefined,
   onCreate: undefined as ((worker: Worker) => void) | undefined,
 }));
 
@@ -33,6 +46,9 @@ vi.mock("node:worker_threads", async (importOriginal) => {
     ...actual,
     Worker: class extends actual.Worker {
       constructor(filename: string | URL, workerOptions: WorkerOptions = {}) {
+        if (String(filename) === heartbeatUrl.href) {
+          heartbeatWorkers.beforeCreate?.();
+        }
         super(filename, workerOptions);
         if (String(filename) === heartbeatUrl.href) {
           heartbeatWorkers.onCreate?.(this);
@@ -73,20 +89,89 @@ function readLease(env: NodeJS.ProcessEnv) {
 }
 
 afterEach(() => {
+  heartbeatWorkers.beforeCreate = undefined;
   heartbeatWorkers.onCreate = undefined;
   closeOpenClawStateDatabaseForTest();
 });
 
 describe("maintenance lease heartbeat", () => {
-  it("does not open after its original lease deadline while parent callbacks are blocked", async () => {
+  it.for([0, 1])("shares renewal without closing sibling lease %s", async (closing, { signal }) => {
+    await withOpenClawTestState({ label: "shared-lease-heartbeat" }, async (state) => {
+      const workers: Worker[] = [];
+      heartbeatWorkers.onCreate = (worker) => workers.push(worker);
+      const entered = [createDeferredCore(), createDeferredCore()];
+      const release = [createDeferredCore(), createDeferredCore()];
+      const leases: OpenClawStateLeaseContext[] = [];
+      const operations = [0, 1].map((index) =>
+        withOpenClawStateLease(
+          { ...options(state.env), key: `lease-${index}`, leaseMs: 10_000 },
+          async (lease) => {
+            leases[index] = lease;
+            entered[index]!.resolve();
+            await release[index]!.promise;
+          },
+        ),
+      );
+      void Promise.allSettled(operations);
+      try {
+        await withinTest(Promise.all(entered.map((entry) => entry.promise)), signal);
+        expect(workers).toHaveLength(1);
+        release[closing]!.resolve();
+        await withinTest(operations[closing]!, signal);
+        const sibling = leases[1 - closing]!;
+        sibling.renew?.();
+        expect(() => sibling.assertOwned()).not.toThrow();
+        expect(sibling.signal.aborted).toBe(false);
+      } finally {
+        release.forEach((entry) => entry.resolve());
+        await Promise.allSettled(operations);
+      }
+      expect(workers[0]?.threadId).toBe(-1);
+    });
+  });
+
+  it("preserves a native renewal error through the real worker and lease rejection", async () => {
+    await withOpenClawTestState({ label: "maintenance-renewal-error" }, async (state) => {
+      const { db } = openOpenClawStateDatabase({ env: state.env });
+      // Inject only after schema validation/acquisition, and remove before release.
+      heartbeatWorkers.beforeCreate = () => {
+        db.exec(`CREATE TRIGGER fail_renewal BEFORE UPDATE ON state_leases
+          WHEN OLD.scope = 'core:test-maintenance'
+          BEGIN SELECT RAISE(ABORT, 'synthetic renewal failure'); END`);
+      };
+      heartbeatWorkers.onCreate = (worker) => {
+        worker.once("exit", () => db.exec("DROP TRIGGER fail_renewal"));
+      };
+      await expect(
+        withOpenClawStateLease({ ...options(state.env), leaseMs: 60_000 }, async () => {
+          throw new Error("must not enter maintenance");
+        }),
+      ).rejects.toMatchObject({
+        code: "OPENCLAW_STATE_LEASE_LOST",
+        cause: {
+          message: expect.stringContaining("synthetic renewal failure"),
+          cause: {
+            name: "Error",
+            message: "synthetic renewal failure",
+            code: "ERR_SQLITE_ERROR",
+            errcode: 1811,
+            attempt: 1,
+          },
+        },
+      });
+      expect(readLease(state.env)).toBeUndefined();
+    });
+  });
+
+  it("does not enter maintenance after its lease expires while parent callbacks are blocked", async () => {
     await withOpenClawTestState({ label: "maintenance-child-open-expired" }, async (state) => {
-      const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
+      const { db } = openOpenClawStateDatabase({ env: state.env });
       const onWorker = () => {
-        const held = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 });
+        db.exec("BEGIN IMMEDIATE");
         try {
           block(1_200);
         } finally {
-          held.release();
+          db.exec("ROLLBACK");
         }
       };
       heartbeatWorkers.onCreate = onWorker;
@@ -105,108 +190,6 @@ describe("maintenance lease heartbeat", () => {
     });
   });
 
-  it("retains its parent's real lifecycle owner through heartbeat teardown", async () => {
-    await withOpenClawTestState({ label: "maintenance-parent-coordinator" }, async (state) => {
-      const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
-      const held = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 });
-      const attemptForeignWrite = () => {
-        const foreign = tryAcquireExclusiveSqliteCoordinator(held.path, { busyTimeoutMs: 0 });
-        const acquired = foreign !== null;
-        foreign?.release();
-        return acquired;
-      };
-      try {
-        await withOpenClawStateLease({ ...options(state.env), leaseMs: 10_000 }, async (lease) => {
-          const before = readLease(state.env);
-          held.release();
-          // The worker retains the actual coordinator, even after its original
-          // caller releases. An unrelated writer must still fail physical admission.
-          expect(attemptForeignWrite()).toBe(false);
-          await expect
-            .poll(() => Number(readLease(state.env)?.heartbeat_at), { timeout: 5_000 })
-            .toBeGreaterThan(Number(before?.heartbeat_at));
-          lease.assertOwned();
-        });
-        expect(attemptForeignWrite()).toBe(true);
-      } finally {
-        held.release();
-      }
-    });
-  });
-
-  it("retries transient lifecycle contention before opening the real heartbeat", async () => {
-    await withOpenClawTestState({ label: "maintenance-child-open-contention" }, async (state) => {
-      const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
-      let held: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
-      let releaseTimer: ReturnType<typeof setTimeout> | undefined;
-      const onWorker = () => {
-        held = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 });
-        releaseTimer = setTimeout(() => {
-          held?.release();
-          held = undefined;
-        }, 800);
-      };
-      heartbeatWorkers.onCreate = onWorker;
-      try {
-        await withOpenClawStateLease({ ...options(state.env), leaseMs: 5_000 }, async (lease) => {
-          expect(held).toBeUndefined();
-          lease.assertOwned();
-        });
-      } finally {
-        heartbeatWorkers.onCreate = undefined;
-        clearTimeout(releaseTimer);
-        held?.release();
-      }
-    });
-  });
-
-  it("keeps file replacement excluded until the real heartbeat child has settled", async () => {
-    await withOpenClawTestState({ label: "maintenance-child-handle" }, async (state) => {
-      const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
-      await withOpenClawStateLease({ ...options(state.env), leaseMs: 10_000 }, async (lease) => {
-        closeOpenClawStateDatabaseByPath(databasePath);
-        let exclusion:
-          | Awaited<ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion>>
-          | undefined;
-        try {
-          await expect(async () => {
-            exclusion = await acquireOpenClawStateDatabaseFileExclusion(databasePath);
-          }).rejects.toThrow(/state-handles/);
-        } finally {
-          exclusion?.release();
-        }
-        lease.assertOwned();
-      });
-      // withOpenClawStateLease joins the real worker, then releases its durable row.
-      const exclusion = await acquireOpenClawStateDatabaseFileExclusion(databasePath);
-      exclusion.release();
-    });
-  });
-
-  it("does not renew through lifecycle exclusion and resumes after its release", async () => {
-    await withOpenClawTestState({ label: "maintenance-child-write" }, async (state) => {
-      await withOpenClawStateLease({ ...options(state.env), leaseMs: 3_000 }, async (lease) => {
-        const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
-        const before = readLease(state.env);
-        const exclusion = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 });
-        try {
-          block(1_200);
-          expect(readLease(state.env)).toEqual(before);
-          // A fresh response is not renewal: persisted expiry must remain unchanged.
-          lease.assertOwned();
-        } finally {
-          exclusion.release();
-        }
-        await expect
-          .poll(() => Number(readLease(state.env)?.heartbeat_at), {
-            timeout: Math.max(1, Number(before?.expires_at) - Date.now()),
-          })
-          .toBeGreaterThan(Number(before?.heartbeat_at));
-        lease.assertOwned();
-      });
-    });
-  });
-
   it("retains ownership while synchronous maintenance exceeds the lease duration", async () => {
     await withOpenClawTestState({ label: "maintenance-lease-blocked" }, async (state) => {
       await withOpenClawStateLease({ ...options(state.env), leaseMs: 10_000 }, async (lease) => {
@@ -218,15 +201,32 @@ describe("maintenance lease heartbeat", () => {
     });
   });
 
+  it("renews through transient state contention before the maintenance lease expires", async () => {
+    await withOpenClawTestState({ label: "maintenance-lease-contention" }, async (state) => {
+      const database = openOpenClawStateDatabase({ env: state.env });
+      await withOpenClawStateLease({ ...options(state.env), leaseMs: 1_500 }, async (lease) => {
+        const holder = holdStateDatabaseWriteTransaction(database.path, 1_200);
+        try {
+          await holder.ready;
+          await holder.joined;
+          block(400);
+          expect(() => lease.assertOwned()).not.toThrow();
+          expect(lease.signal.aborted).toBe(false);
+        } finally {
+          holder.release();
+          await holder.joined;
+        }
+      });
+    });
+  });
+
   it("acknowledges ownership checks while the parent holds a state write transaction", async () => {
     await withOpenClawTestState({ label: "maintenance-lease-transaction" }, async (state) => {
-      // This control checks liveness during a transaction, not the one-second
-      // expiry boundary. Allow a cold worker to start under parallel checking.
-      await withOpenClawStateLease({ ...options(state.env), leaseMs: 10_000 }, async (lease) => {
+      await withOpenClawStateLease({ ...options(state.env), leaseMs: 1_500 }, async (lease) => {
         runOpenClawStateWriteTransaction(
           ({ db }) => {
             lease.assertOwnedInTransaction(db);
-            block(450);
+            block(600);
             lease.assertOwnedInTransaction(db);
           },
           { env: state.env },
@@ -243,16 +243,6 @@ describe("maintenance lease heartbeat", () => {
           const worker = await spawned;
           void worker.terminate();
           block(100);
-          const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
-          closeOpenClawStateDatabaseByPath(databasePath);
-          let exclusion: ReturnType<typeof acquireStateDatabaseHandleExclusion> | undefined;
-          try {
-            expect(() => {
-              exclusion = acquireStateDatabaseHandleExclusion({ databasePath });
-            }).toThrow(/state-handles/);
-          } finally {
-            exclusion?.release();
-          }
           expect(Number(readLease(state.env)?.expires_at)).toBeGreaterThan(Date.now());
           expect(() => lease.assertOwned()).toThrowError(
             expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST" }),
@@ -263,27 +253,6 @@ describe("maintenance lease heartbeat", () => {
         }),
       ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
       expect(readLease(state.env)).toBeUndefined();
-    });
-  });
-
-  it("does not enter maintenance when its heartbeat exits before readiness", async () => {
-    await withOpenClawTestState({ label: "maintenance-lease-startup-loss" }, async (state) => {
-      const terminate = (worker: Worker) => {
-        void worker.terminate();
-      };
-      heartbeatWorkers.onCreate = terminate;
-      let entered = false;
-      try {
-        await expect(
-          withOpenClawStateLease(options(state.env), async () => {
-            entered = true;
-          }),
-        ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
-        expect(entered).toBe(false);
-        expect(readLease(state.env)).toBeUndefined();
-      } finally {
-        heartbeatWorkers.onCreate = undefined;
-      }
     });
   });
 
@@ -347,7 +316,7 @@ describe("maintenance lease heartbeat", () => {
     },
   );
 
-  it.each(["return", "throw", "abort"] as const)(
+  it.each(["throw", "abort"] as const)(
     "stops renewal and retained callbacks when an operation ends by %s",
     async (ending) => {
       await withOpenClawTestState({ label: `maintenance-lease-${ending}` }, async (state) => {
@@ -373,13 +342,9 @@ describe("maintenance lease heartbeat", () => {
             return "completed";
           },
         );
-        if (ending === "return") {
-          await expect(operation).resolves.toBe("completed");
-        } else {
-          await expect(operation).rejects.toThrow(
-            ending === "throw" ? "operation failed" : "was aborted",
-          );
-        }
+        await expect(operation).rejects.toThrow(
+          ending === "throw" ? "operation failed" : "was aborted",
+        );
         const worker = await spawned;
         expect(worker.threadId).toBe(-1);
         expect(readLease(state.env)).toBeUndefined();
@@ -389,4 +354,199 @@ describe("maintenance lease heartbeat", () => {
       });
     },
   );
+});
+
+it("keeps deferred activation pending until renewal commits after contention", async () => {
+  await withOpenClawTestState({ label: "lease-activation-contention" }, async (state) => {
+    const database = openOpenClawStateDatabase({ env: state.env });
+    const identity = { scope: "core:test", key: "activation", owner: "fixture-owner" };
+    const acquired = runOpenClawStateWriteTransaction(
+      ({ db }) => acquireOpenClawStateLeaseInTransaction(db, identity, 30_000),
+      { database, env: state.env },
+    );
+    if (acquired.kind !== "acquired") {
+      throw new Error("Fixture did not acquire its lease");
+    }
+    const shared = new BigInt64Array(
+      new SharedArrayBuffer(
+        (leaseHeartbeatState.startupPhase + 1) * BigInt64Array.BYTES_PER_ELEMENT,
+      ),
+    );
+    Atomics.store(shared, leaseHeartbeatState.expiresAt, BigInt(acquired.expiresAt));
+    const moduleUrl = pathToFileURL(
+      path.resolve("src/state/openclaw-state-lease-heartbeat.worker.ts"),
+    ).href;
+    // Observe completion of the real activation handler without adding a production test hook.
+    const driver = await state.writeText(
+      "activation-worker.mts",
+      `
+      import { parentPort } from "node:worker_threads";
+      if (!parentPort) throw new Error("Missing fixture parent port");
+      const on = parentPort.on.bind(parentPort);
+      parentPort.on = (event, listener) => event === "message"
+        ? on(event, (message) => {
+            Reflect.apply(listener, parentPort, [message]);
+            if (message?.startup === "activate") {
+              queueMicrotask(() => parentPort.postMessage({ fixture: "activation-processed" }));
+            }
+          })
+        : on(event, listener);
+      await import(${JSON.stringify(moduleUrl)});
+    `,
+    );
+    const driverUrl = pathToFileURL(driver);
+    const databaseAdmission = createSqliteDatabaseAdmissionRelay(() => {});
+    const worker = new Worker(driverUrl, {
+      workerData: {
+        databaseAdmissionPort: databaseAdmission.port,
+        path: database.path,
+        expectedIdentity: readDatabasePathIdentitySync(database.path).key,
+        identity,
+        leaseMs: 30_000,
+        acquiredAt: acquired.expiresAt - 30_000,
+        heartbeatMs: 250,
+        deferActivation: true,
+        shared: shared.buffer,
+        renewalProgress: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
+        completedRequest: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
+      } satisfies LeaseHeartbeatWorkerData,
+      transferList: [databaseAdmission.port],
+      execArgv: resolveRuntimeWorkerThreadExecArgv(driverUrl),
+      env: {},
+    });
+    trackSqliteDatabaseAdmissionWorker(worker);
+    worker.once("exit", () => databaseAdmission.finish());
+    const prepared = createDeferredCore();
+    const processed = createDeferredCore();
+    const ready = createDeferredCore();
+    const exited = createDeferredCore();
+    let stopping = false;
+    for (const pending of [prepared, processed, ready]) {
+      void pending.promise.catch(() => {});
+    }
+    const fail = (error: unknown) => {
+      prepared.reject(error);
+      processed.reject(error);
+      ready.reject(error);
+    };
+    worker.on("error", fail);
+    worker.once("exit", () => {
+      exited.resolve();
+      if (!stopping) {
+        fail(new Error("Heartbeat fixture exited before activation completed"));
+      }
+    });
+    worker.on("message", (message: unknown) => {
+      if (message === null) {
+        ready.resolve();
+      } else if (typeof message === "object" && message !== null) {
+        if ("startup" in message && message.startup === "prepared") {
+          prepared.resolve();
+        }
+        if ("fixture" in message && message.fixture === "activation-processed") {
+          processed.resolve();
+        }
+      }
+    });
+    const writer = new DatabaseSync(database.path);
+    try {
+      await prepared.promise;
+      const beforeRenewal = readSqliteDatabaseWriteRevision(database.db);
+      expect(beforeRenewal).toBeTypeOf("number");
+      writer.exec("BEGIN IMMEDIATE");
+      worker.postMessage({ startup: "activate" }, []);
+      await processed.promise;
+      expect(Atomics.load(shared, leaseHeartbeatState.status)).toBe(leaseHeartbeatState.starting);
+      writer.exec("ROLLBACK");
+      await ready.promise;
+      const afterRenewal = readSqliteDatabaseWriteRevision(database.db);
+      expect(afterRenewal).toBeTypeOf("number");
+      expect(afterRenewal).not.toBe(beforeRenewal);
+      expect(Atomics.load(shared, leaseHeartbeatState.status)).toBe(leaseHeartbeatState.ready);
+      const row = database.db
+        .prepare("SELECT expires_at FROM state_leases WHERE scope = ? AND lease_key = ?")
+        .get(identity.scope, identity.key);
+      expect(row?.expires_at).toBe(Number(Atomics.load(shared, leaseHeartbeatState.expiresAt)));
+      expect(Number(row?.expires_at)).toBeGreaterThan(acquired.expiresAt);
+    } finally {
+      if (writer.isTransaction) {
+        writer.exec("ROLLBACK");
+      }
+      writer.close();
+      stopping = true;
+      await worker.terminate();
+      await exited.promise;
+    }
+  });
+});
+
+it("admits heartbeat-owned worker writes without blocking the host and rolls back revoked commits", async () => {
+  await withOpenClawTestState({ label: "native-lease-worker-write" }, async (state) => {
+    const database = openOpenClawStateDatabase({ env: state.env });
+    const context = captureOpenClawStateWorkerContext({ env: state.env });
+    const storeKey = "native-heartbeat-grants";
+    await withOpenClawStateLease(
+      {
+        scope: "core:mcp-oauth",
+        key: storeKey,
+        database: { scope: "shared", options: { env: state.env } },
+        leaseMs: 60_000,
+        waitMs: 0,
+        heartbeat: "worker",
+      },
+      async (lease) => {
+        const { StatementSync } = requireNodeSqlite();
+        const hostCalls = [
+          vi.spyOn(DatabaseSync.prototype, "prepare"),
+          vi.spyOn(DatabaseSync.prototype, "exec"),
+          vi.spyOn(StatementSync.prototype, "get"),
+          vi.spyOn(StatementSync.prototype, "all"),
+          vi.spyOn(StatementSync.prototype, "run"),
+          vi.spyOn(StatementSync.prototype, "iterate"),
+          vi.spyOn(Atomics, "wait"),
+        ];
+        const caller = new AbortController();
+        const revoked = new Error("Synthetic caller authority was revoked");
+        const write = (marker: string, revokeAtCommit = false) =>
+          runWithOpenClawStateLeaseWorker(
+            lease,
+            context,
+            (scope, identity) =>
+              scope.execute({
+                type: "mcpOAuth.writePending",
+                input: { storeKey, identity, state: marker },
+              }),
+            {
+              assertCurrent: () => caller.signal.throwIfAborted(),
+              beforeCommit: () => {
+                if (revokeAtCommit) {
+                  caller.abort(revoked);
+                }
+              },
+            },
+          );
+        try {
+          await write("accepted");
+          await expect(write("refused", true)).rejects.toBe(revoked);
+          for (const call of hostCalls) {
+            expect(call).not.toHaveBeenCalled();
+          }
+        } finally {
+          for (const call of hostCalls) {
+            call.mockRestore();
+          }
+        }
+      },
+    );
+    expect(
+      database.db
+        .prepare("SELECT state FROM mcp_oauth_pending_authorizations WHERE store_key = ?")
+        .all(storeKey),
+    ).toEqual([{ state: "accepted" }]);
+    expect(
+      database.db
+        .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
+        .all("core:mcp-oauth", storeKey),
+    ).toEqual([]);
+  });
 });

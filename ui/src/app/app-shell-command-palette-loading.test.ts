@@ -108,11 +108,15 @@ describe("cold command palette input custody", () => {
     }
   });
 
-  it.each([{ ctrlKey: true }, { metaKey: true }])(
-    "transfers one explicit cold submit intent: %j",
-    (modifier) => {
-      const { state, input } = mountLoader();
-      type(input, "Start this background task");
+  it.each([
+    { modifier: { ctrlKey: true }, submit: true, value: "Start this background task" },
+    { modifier: { metaKey: true }, submit: true, value: "Start this background task" },
+    { modifier: {}, submit: false, value: "unsent prompt" },
+  ])(
+    "handles Enter without leaking a loading prompt ($modifier)",
+    ({ modifier, submit, value }) => {
+      const { state, input, close } = mountLoader();
+      type(input, value);
       const event = new KeyboardEvent("keydown", {
         key: "Enter",
         ...modifier,
@@ -130,35 +134,65 @@ describe("cold command palette input custody", () => {
         }),
       );
       expect(event.defaultPrevented).toBe(true);
+      if (!submit) {
+        expect(close).not.toHaveBeenCalled();
+        expect(state.value).toBe("unsent prompt");
+        const newline = new KeyboardEvent("keydown", {
+          key: "Enter",
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        input.dispatchEvent(newline);
+        expect(newline.defaultPrevented).toBe(false);
+        expect(state.submitRequested).toBe(false);
+        return;
+      }
       const take = state.captureHandoff();
-      expect(take()).toMatchObject({ value: "Start this background task", submitRequested: true });
+      expect(take()).toMatchObject({ value, submitRequested: true });
       expect(take()).toBeUndefined();
       state.begin();
       expect(state.captureHandoff()()?.submitRequested).not.toBe(true);
     },
   );
 
-  it("accepts early input and transfers the latest selection with the original focus target", () => {
-    const { state, input, foreground } = mountLoader();
-    expect(input.disabled).toBe(false);
-    type(input, "early draft");
-    const take = state.captureHandoff();
-    // Input after module readiness still belongs to the live field until focus handoff.
-    type(input, "early draft continued");
-    input.setSelectionRange(6, 11, "backward");
-    const snapshot = take();
-    expect(snapshot).toEqual({
-      value: "early draft continued",
-      selectionStart: 6,
-      selectionEnd: 11,
-      selectionDirection: "backward",
-      returnFocus: foreground,
-    });
-    expect(foreground.value).toBe("Keep this foreground draft");
-    expect([foreground.selectionStart, foreground.selectionEnd]).toEqual([5, 9]);
-    expect(state.active).toBe(false);
-    expect(take()).toBeUndefined();
-  });
+  it.each([
+    { remount: false, value: "early draft continued", start: 6, end: 11 },
+    { remount: true, value: "retain this selection", start: 3, end: 10 },
+  ])(
+    "hands off live text, selection and original focus (remounted: $remount)",
+    ({ remount, value, start, end }) => {
+      const { state, input, foreground, close } = mountLoader();
+      expect(input.disabled).toBe(false);
+      type(input, remount ? value : "early draft");
+      const take = state.captureHandoff();
+      type(input, value);
+      input.setSelectionRange(start, end, "backward");
+      if (remount) {
+        render(nothing, container);
+        render(renderCommandPaletteLoading(state, close), container);
+        const replacement = container.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+        expect(replacement).not.toBe(input);
+        expect(replacement.value).toBe(value);
+        expect([
+          replacement.selectionStart,
+          replacement.selectionEnd,
+          replacement.selectionDirection,
+        ]).toEqual([start, end, "backward"]);
+      }
+      expect(take()).toEqual({
+        value,
+        selectionStart: start,
+        selectionEnd: end,
+        selectionDirection: "backward",
+        returnFocus: foreground,
+      });
+      expect(foreground.value).toBe("Keep this foreground draft");
+      expect([foreground.selectionStart, foreground.selectionEnd]).toEqual([5, 9]);
+      expect(state.active).toBe(false);
+      expect(take()).toBeUndefined();
+    },
+  );
 
   it("keeps the composing field alive until its final input and selection commit", async () => {
     const { state, input } = mountLoader();
@@ -185,22 +219,6 @@ describe("cold command palette input custody", () => {
     );
   });
 
-  it("restores a remounted loader's selection after binding its retained value", () => {
-    const { state, input, close } = mountLoader();
-    type(input, "retain this selection");
-    input.setSelectionRange(3, 10, "backward");
-    render(nothing, container);
-    render(renderCommandPaletteLoading(state, close), container);
-    const replacement = container.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
-    expect(replacement).not.toBe(input);
-    expect(replacement.value).toBe("retain this selection");
-    expect([
-      replacement.selectionStart,
-      replacement.selectionEnd,
-      replacement.selectionDirection,
-    ]).toEqual([3, 10, "backward"]);
-  });
-
   it.each(["composing", "commit-pending"] as const)(
     "retires a %s handoff without reviving its prompt on reopen",
     async (phase) => {
@@ -224,22 +242,4 @@ describe("cold command palette input custody", () => {
       expect(state.value).toBe("");
     },
   );
-
-  it("does not submit, navigate, or insert a newline on plain Enter while loading", () => {
-    const { state, input, close } = mountLoader();
-    type(input, "unsent prompt");
-    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
-    input.dispatchEvent(enter);
-    expect(enter.defaultPrevented).toBe(true);
-    expect(close).not.toHaveBeenCalled();
-    expect(state.value).toBe("unsent prompt");
-    const newline = new KeyboardEvent("keydown", {
-      key: "Enter",
-      shiftKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    input.dispatchEvent(newline);
-    expect(newline.defaultPrevented).toBe(false);
-  });
 });

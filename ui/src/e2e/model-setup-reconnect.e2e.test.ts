@@ -50,6 +50,67 @@ function detection(modelRef: string) {
 }
 
 suite.define(() => {
+  it("offers the saved model after a restart loses the provider wizard", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const modelRef = "fixture/saved-model";
+      const initialDetection = {
+        candidates: [],
+        manualProviders: [],
+        authOptions: [
+          { id: "custom-api-key", label: "Local endpoint", kind: "custom", featured: true },
+        ],
+        workspace: "/tmp/openclaw-e2e",
+        setupComplete: false,
+      };
+      const gateway = await installMockGateway(page, {
+        featureMethods: [
+          "openclaw.setup.detect",
+          "openclaw.setup.auth.start",
+          "openclaw.setup.verify",
+          "wizard.next",
+          "openclaw.chat",
+        ],
+        methodResponses: {
+          "openclaw.setup.detect": initialDetection,
+          "openclaw.setup.auth.start": { done: false, status: "running" },
+          "wizard.next": {
+            done: false,
+            status: "running",
+            step: { id: "endpoint", type: "text", message: "API Base URL" },
+          },
+          "openclaw.setup.verify": { ok: true, modelRef },
+          "openclaw.chat": onboardingWelcome,
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+      await page.locator('[data-auth-choice="custom-api-key"] button').click();
+      await page.getByLabel("API Base URL").waitFor();
+      await gateway.setMethodResponse("openclaw.setup.detect", {
+        ...initialDetection,
+        configuredModel: modelRef,
+        setupComplete: true,
+      });
+      await gateway.setMethodResponse("wizard.next", {
+        __mockError: {
+          code: "INVALID_REQUEST",
+          message: "wizard not found",
+          details: { code: "WIZARD_NOT_FOUND" },
+        },
+      });
+      await gateway.closeLatest(1012, "Gateway restarted during model setup");
+      const dialog = page.locator("openclaw-modal-dialog");
+      await dialog.getByRole("alert").waitFor();
+      await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      await page.getByText("saved-model", { exact: true }).waitFor();
+      expect(await gateway.getRequests("openclaw.setup.verify")).toHaveLength(0);
+      await page.getByRole("button", { name: "Verify & use selected model", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
+      expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(1);
+      expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
+      expect(await gateway.getRequests("openclaw.setup.verify")).toHaveLength(1);
+    });
+  });
+
   it.each(["reconnect", "reopen"])(
     "retains manual first-run activation through restart during config refresh (%s)",
     async (restart) => {

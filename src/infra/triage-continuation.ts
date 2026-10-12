@@ -25,6 +25,7 @@ import {
 } from "./update-control-plane-sentinel.js";
 import {
   createManagedHandoffLeaseStore,
+  prepareManagedHandoffLeaseStore,
   triageFailureSchema as failureSchema,
   type ManagedHandoffLease,
 } from "./update-managed-service-handoff-lease.js";
@@ -36,6 +37,9 @@ import {
 
 // Reuse the handoff admission/shutdown budget; cleanup loss must return to the caller.
 const TRIAGE_HANDOFF_GRACE_MS = 30_000;
+
+/** An admitted triage process failed after its cleanup was confirmed. */
+export class TriageAttemptFailedError extends Error {}
 
 const readySchema = z.strictObject({ type: z.literal("triage-ready"), version: z.literal(2) });
 const continuationSchema = z.strictObject({
@@ -49,6 +53,7 @@ const continuationSchema = z.strictObject({
       channel: z.string().max(4096).optional(),
       accountId: z.string().max(4096).optional(),
       senderId: z.string().max(4096).optional(),
+      authorizationSource: z.string().max(4096).optional(),
     })
     .optional(),
 });
@@ -180,14 +185,15 @@ export async function continueTriageInFreshProcess(params: {
   failure: TriageFailureContext;
   signal: AbortSignal;
   output: (text: string) => void;
-}): Promise<void> {
+}): Promise<"completed" | void> {
   params.signal.throwIfAborted();
   const root = realpathSync(params.root);
   const failure = failureSchema.parse(params.failure);
   if (failure.installationRoot !== root) {
     throw new Error("automatic triage installation root mismatch");
   }
-  const store = createManagedHandoffLeaseStore();
+  const store = await prepareManagedHandoffLeaseStore();
+  params.signal.throwIfAborted();
   const acquired = store.acquire(root, randomUUID(), {
     kind: "triage",
     phase: "reserved",
@@ -383,11 +389,15 @@ export async function continueTriageInFreshProcess(params: {
       );
     }
     params.signal.throwIfAborted();
-    if (!admitted || exit.code !== 0 || exit.signal) {
-      throw new Error(
-        `automatic triage candidate ${admitted ? `failed (exit ${exit.code ?? "signal"})` : "is incompatible"}; run openclaw triage manually`,
+    if (!admitted) {
+      throw new Error("automatic triage candidate is incompatible; run openclaw triage manually");
+    }
+    if (exit.code !== 0 || exit.signal) {
+      throw new TriageAttemptFailedError(
+        `automatic triage candidate failed (exit ${exit.code ?? "signal"}); run openclaw triage manually`,
       );
     }
+    return "completed";
   } finally {
     clearTimeout(timeout);
     clearTimeout(shutdown);
@@ -422,7 +432,7 @@ export async function acceptTriageContinuation(): Promise<
       "automatic triage requires its original connected owner; run openclaw triage manually",
     );
   }
-  const store = createManagedHandoffLeaseStore();
+  const store = await prepareManagedHandoffLeaseStore();
   const controller = new AbortController();
   const parent = store.processIdentity(process.ppid);
   let lease: ManagedHandoffLease | undefined;
@@ -512,11 +522,7 @@ export async function acceptTriageContinuation(): Promise<
     armShutdown();
     try {
       if (lease) {
-        if (cleanup === "closed") {
-          store.settle(lease, "closed");
-        } else {
-          store.settle(lease, "uncertain");
-        }
+        store.settle(lease, cleanup);
       }
     } finally {
       disposed = true;

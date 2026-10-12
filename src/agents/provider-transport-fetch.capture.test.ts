@@ -9,12 +9,11 @@ import { createOpenAIResponsesAssistantOutput } from "../../packages/ai/src/tran
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
 import { buildGuardedModelFetch } from "../plugin-sdk/provider-transport-runtime.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
-import { finalizeDebugProxyCapture } from "../proxy-capture/runtime.js";
-import { createDebugProxyCaptureReader } from "../proxy-capture/store-readonly.js";
-import { acquireDebugProxyCaptureStore } from "../proxy-capture/store.sqlite.js";
-import type { CaptureEventRecord } from "../proxy-capture/types.js";
+import { finalizeDebugProxyCaptureAsync } from "../proxy-capture/runtime.js";
+import { createDebugProxyCaptureReaderAsync } from "../proxy-capture/store-readonly.async.js";
+import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { closeProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
 
 const model: Model<"openai-responses"> = {
@@ -73,15 +72,23 @@ describe("managed provider response capture", () => {
       vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
       vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", sessionId);
       vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", undefined);
-      const lease = acquireDebugProxyCaptureStore({ env: process.env });
-      const captureDone = createDeferredCore<CaptureEventRecord>();
-      const record = lease.store.recordEvent.bind(lease.store);
-      const recording = vi.spyOn(lease.store, "recordEvent").mockImplementation((event) => {
-        record(event);
-        if (event.kind === "response" || event.kind === "error") {
-          captureDone.resolve(event);
-        }
-      });
+      const lease = await acquireDebugProxyCaptureStoreAsync({ env: process.env });
+      const reader = createDebugProxyCaptureReaderAsync({ env: process.env });
+      const readCapturedResponse = () =>
+        vi.waitFor(
+          async () => {
+            const events = await lease.store.getSessionEvents(sessionId, 10);
+            const captured = events.find(
+              (event) => event.kind === "response" || event.kind === "error",
+            );
+            if (!captured) {
+              throw new Error("expected persisted response capture");
+            }
+            return captured;
+          },
+          // The partial-idle fixture exercises the production 10-second body deadline.
+          mode === "partial-idle" ? { timeout: 15_000 } : undefined,
+        );
       const controller = new AbortController();
       const held = createDeferredCore<ServerResponse>();
       const firstEvent = createDeferredCore();
@@ -132,7 +139,7 @@ describe("managed provider response capture", () => {
                 code: "FIXTURE_CANCEL",
               });
               if (mode === "partial-idle") {
-                await captureDone.promise;
+                await readCapturedResponse();
                 caller.abort(cancelReason);
                 controller.abort(cancelReason);
               } else if (mode === "cancel") {
@@ -142,13 +149,14 @@ describe("managed provider response capture", () => {
                 (await held.promise).destroy();
               }
               const outcome = await parsed;
-              const captured = await captureDone.promise;
-              const reader = createDebugProxyCaptureReader({ env: process.env });
-              const rows = reader.getSessionEvents(sessionId, 10);
+              const captured = await readCapturedResponse();
+              const rows = await reader.getSessionEvents(sessionId, 10);
               expect(rows.map((row) => row.kind)).toEqual([captured.kind, "request"]);
               expect(captured.status).toBe(200);
-              expect(typeof captured.dataBlobId).toBe("string");
-              const raw = reader.readBlob(captured.dataBlobId!);
+              if (typeof captured.dataBlobId !== "string") {
+                throw new Error("expected captured response blob");
+              }
+              const raw = await reader.readBlob(captured.dataBlobId);
               expect(raw).toBe(body);
               const events = [];
               for await (const event of Stream.fromSSEResponse<{
@@ -186,13 +194,15 @@ describe("managed provider response capture", () => {
               ) {
                 expect(captured.kind).toBe("error");
                 expect(captured.errorText).toBeTruthy();
-                expect(JSON.parse(captured.metaJson!)).toMatchObject({
+                expect(JSON.parse(String(captured.metaJson))).toMatchObject({
                   bodyCapture: "failed",
                   stage: "response-body",
                 });
               } else if (mode === "partial-idle") {
                 expect(captured.kind).toBe("response");
-                expect(JSON.parse(captured.metaJson!)).toMatchObject({ bodyCapture: "stalled" });
+                expect(JSON.parse(String(captured.metaJson))).toMatchObject({
+                  bodyCapture: "stalled",
+                });
               } else {
                 expect(captured.kind).toBe("response");
               }
@@ -202,16 +212,15 @@ describe("managed provider response capture", () => {
             } finally {
               controller.abort();
               await response.body?.cancel().catch(() => undefined);
-              await captureDone.promise;
+              await finalizeDebugProxyCaptureAsync();
             }
           },
         );
       } finally {
-        finalizeDebugProxyCapture();
-        recording.mockRestore();
-        lease.release();
+        await finalizeDebugProxyCaptureAsync();
+        await lease.release();
         await closeProviderTransportDispatcherPool();
-        closeOpenClawStateDatabaseByPath(lease.store.dbPath);
+        await closeOpenClawStateDatabaseAsync();
         vi.unstubAllEnvs();
         await fs.rm(root, { recursive: true, force: true });
       }

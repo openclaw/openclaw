@@ -25,6 +25,7 @@ export function createSandboxContext(overrides: {
   resolvePinnedMutationTarget?: NonNullable<
     SandboxContext["fsBridge"]
   >["resolvePinnedMutationTarget"];
+  resolveReadPolicyPath?: NonNullable<SandboxContext["fsBridge"]>["resolveReadPolicyPath"];
   runShellCommand?: NonNullable<SandboxContext["backend"]>["runShellCommand"];
   stat?: NonNullable<SandboxContext["fsBridge"]>["stat"];
   writeFile?: NonNullable<SandboxContext["fsBridge"]>["writeFile"];
@@ -74,6 +75,7 @@ export function createSandboxContext(overrides: {
       remove: overrides.remove ?? (async () => undefined),
       rename: async () => undefined,
       resolvePinnedMutationTarget: overrides.resolvePinnedMutationTarget,
+      resolveReadPolicyPath: overrides.resolveReadPolicyPath,
       stat:
         overrides.stat ??
         (async ({ filePath }) => ({

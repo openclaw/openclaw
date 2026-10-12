@@ -68,7 +68,7 @@ WhatsApp YAML scenarios (`qa/scenarios/channels/whatsapp-*.yaml`):
   `whatsapp-group-audio-gating`, `whatsapp-inbound-reaction-no-trigger`.
   These send real WhatsApp image, audio, document, location, contact,
   sticker, and reaction events through the driver.
-- Direct Gateway contract probes: `whatsapp-outbound-media-matrix`,
+- Direct Gateway contract checks: `whatsapp-outbound-media-matrix`,
   `whatsapp-outbound-document-preserves-filename`, `whatsapp-outbound-poll`,
   `whatsapp-outbound-send-serialization`,
   `whatsapp-group-outbound-media`, `whatsapp-group-outbound-poll`,
@@ -98,7 +98,7 @@ contacts, locations, and stickers. QA Lab imports that driver through the
 WhatsApp runtime files. For group observations, `fromJid` is the group JID
 while `participantJid` and `fromPhoneE164` identify the participant sender.
 Message content is redacted by default. Direct Gateway poll, upload-file,
-media, group poll, group media, and reply-shape probes are transport/API
+media, group poll, group media, and reply-shape checks are transport/API
 contract checks; they are not treated as proof that a user prompt made the
 agent choose the same action. User-path action proof comes from scenarios
 such as `whatsapp-agent-message-action-react` and
@@ -107,6 +107,12 @@ WhatsApp message and QA Lab observes the resulting native WhatsApp artifact.
 WhatsApp scenario details include each scenario's posture (`user-path`,
 `direct-gateway`, or `native-approval`) so evidence cannot be mistaken for a
 stronger contract than it actually proves.
+
+WhatsApp module scenarios select their implementation with
+`execution.config.whatsappScenario`. The adapter applies its configuration and
+waits for channel readiness during flow preparation, before the scenario deadline
+starts. Negative scenarios then observe their complete quiet window; configuration
+and reconnection time do not consume that window.
 
 Output artifacts:
 

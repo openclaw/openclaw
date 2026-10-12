@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { diffGatewayReloadPaths } from "../../gateway/config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -36,13 +36,13 @@ import {
 import { getRegisteredAgentHarness } from "./registry.js";
 import { runAgentHarnessAttempt } from "./selection.js";
 
-useNativeProcessFixture();
+const fixture = useNativeProcessFixture();
 
 it.for(["allow", "deny", "cancel", "always-only"] as const)(
   "fences delegated native writes while the Gateway approval waits: %s",
   { timeout: 60000 },
   async (kind, test) => {
-    await withOpenClawTestState({ label: "acp-native-approval-effect" }, async (state) => {
+    const body = withOpenClawTestState({ label: "acp-native-approval-effect" }, async (state) => {
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
@@ -67,12 +67,14 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
       });
       const stopWatchingAuthority = registerAgentRunDelegatedAuthorityClosedHandler(
         (authority, reason) => {
-          cancelAgentRuntimeBoundApprovals({
-            authority,
-            reason,
-            manager,
-            publish: () => {},
-          });
+          void gatewayWork.track(() =>
+            cancelAgentRuntimeBoundApprovals({
+              authority,
+              reason,
+              manager,
+              publish: () => {},
+            }),
+          );
         },
       );
       let native: Awaited<ReturnType<typeof registerNative>> | undefined;
@@ -90,9 +92,8 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
           return decision;
         });
         const abort = new AbortController();
-        attempt.input.abortSignal = abort.signal;
-        const run = runAgentHarnessAttempt(attempt.input);
-        void run.catch(() => {});
+        attempt.input.abortSignal = AbortSignal.any([test.signal, abort.signal]);
+        const run = fixture.track(runAgentHarnessAttempt(attempt.input));
         try {
           const approvalId = await Promise.race([
             entered.promise,
@@ -102,8 +103,8 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
               );
             }),
           ]);
-          expect(manager.listPendingRecords()).toHaveLength(1);
-          expect(manager.getSnapshot(approvalId)).toMatchObject({
+          expect(await manager.listPendingRecords()).toHaveLength(1);
+          expect(await manager.getSnapshot(approvalId)).toMatchObject({
             request: {
               pluginId: "acpx",
               runId: attempt.input.runId,
@@ -149,7 +150,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
             abort.abort();
           }
           // A late allow cannot revive the cancelled native permission request.
-          const resolution = manager.resolveDetailed(
+          const resolution = await manager.resolveDetailed(
             approvalId,
             kind === "deny" || kind === "always-only" ? "deny" : "allow-once",
             {
@@ -162,7 +163,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
           expect(result.terminal).toMatchObject({
             kind: kind === "cancel" ? "aborted" : "ok",
           });
-          expect(manager.listPendingRecords()).toEqual([]);
+          expect(await manager.listPendingRecords()).toEqual([]);
           if (kind === "allow") {
             const transcript = await readVisibleSessionTranscriptMessageEntries(attempt.target);
             expect(transcript.map((row) => row.role)).toEqual(["user", "assistant"]);
@@ -184,13 +185,13 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
                   agentDir: state.agentDir(),
                   workspaceDir: state.workspaceDir,
                 }),
-              ).resolves.toEqual([]);
+              ).resolves.toEqual({ entries: [] });
             } finally {
               next.close();
             }
           }
           if (kind === "cancel") {
-            expect(manager.getSnapshot(approvalId)).toMatchObject({
+            expect(await manager.getSnapshot(approvalId)).toMatchObject({
               status: "cancelled",
               terminalReason: "run-aborted",
             });
@@ -228,5 +229,6 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
         ).toMatchObject({ outcome: { outcome: "selected", optionId: "allow" } });
       }
     });
+    await fixture.track(body);
   },
 );

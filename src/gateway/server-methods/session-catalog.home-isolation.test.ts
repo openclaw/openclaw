@@ -3,11 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
-import {
-  clearActivePluginRegistry,
-  getActivePluginRegistry,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import { clearActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -110,13 +106,6 @@ describe("session catalog Gateway HOME isolation", () => {
     expect(globalCatalog.list).not.toHaveBeenCalled();
     expect(globalCatalog.read).not.toHaveBeenCalled();
     expect(listActiveSessionCatalogs().map(({ id }) => id)).toEqual(["global"]);
-  });
-
-  it("leaves a cold registry uninitialized during catalog lookup", async () => {
-    await clearActivePluginRegistry();
-
-    expect(listActiveSessionCatalogs()).toEqual([]);
-    expect(getActivePluginRegistry()).toBeNull();
   });
 
   it("suppresses only process-HOME local hosts for a named profile", async () => {

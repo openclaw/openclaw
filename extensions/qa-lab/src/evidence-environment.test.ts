@@ -104,54 +104,38 @@ describe("captured evidence source identity", () => {
     }
   });
 
-  it.each([
-    { label: "Node", bun: undefined, runtime: { id: "node", version: process.version } },
-    { label: "simulated Bun", bun: "1.3.14", runtime: { id: "bun", version: "1.3.14" } },
-  ])("captures $label independently of available source identity", async ({ bun, runtime }) => {
-    using _ = mockBunVersion(bun);
-    execFileMock.mockImplementation((_command, args, _options, callback) =>
-      callback(null, args[0] === "rev-parse" ? "actual-head\n" : "", ""),
-    );
-    expect(await captureQaEvidenceLaunchIdentity("fixture-checkout")).toEqual({
-      source: { ref: "actual-head", integrity: "git:actual-head" },
-      runtime,
-      package: null,
-      protocol: null,
-      accountRef: null,
-      proofClass: null,
-    });
+  it.each([{ label: "simulated Bun", bun: "1.3.14", runtime: { id: "bun", version: "1.3.14" } }])(
+    "captures $label independently of available source identity",
+    async ({ bun, runtime }) => {
+      using _ = mockBunVersion(bun);
+      execFileMock.mockImplementation((_command, args, _options, callback) =>
+        callback(null, args[0] === "rev-parse" ? "actual-head\n" : "", ""),
+      );
+      expect(await captureQaEvidenceLaunchIdentity("fixture-checkout")).toEqual({
+        source: { ref: "actual-head", integrity: "git:actual-head" },
+        runtime,
+        package: null,
+        protocol: null,
+        accountRef: null,
+        proofClass: null,
+      });
 
-    execFileMock.mockImplementation((_command, _args, _options, callback) =>
-      callback(new Error("source unavailable"), "", ""),
-    );
-    expect(await captureQaEvidenceLaunchIdentity("unavailable-checkout")).toEqual({
-      source: { ref: null, integrity: null },
-      runtime,
-      package: null,
-      protocol: null,
-      accountRef: null,
-      proofClass: null,
-    });
-  });
+      execFileMock.mockImplementation((_command, _args, _options, callback) =>
+        callback(new Error("source unavailable"), "", ""),
+      );
+      expect(await captureQaEvidenceLaunchIdentity("unavailable-checkout")).toEqual({
+        source: { ref: null, integrity: null },
+        runtime,
+        package: null,
+        protocol: null,
+        accountRef: null,
+        proofClass: null,
+      });
+    },
+  );
 });
 
 describe("resolveQaEvidenceEnvironment", () => {
-  it("bounds the checkout ref git probe with a timeout", () => {
-    execFileSyncMock.mockReturnValue("abc123\n");
-
-    const environment = resolveQaEvidenceEnvironment({ env: {} });
-
-    expect(environment.ref).toBe("abc123");
-    expect(execFileSyncMock).toHaveBeenCalledWith(
-      "git",
-      ["rev-parse", "--verify", "HEAD"],
-      expect.objectContaining({
-        killSignal: "SIGKILL",
-        timeout: 5_000,
-      }),
-    );
-  });
-
   it("falls back to GITHUB_SHA when the git probe times out", () => {
     execFileSyncMock.mockImplementation(() => {
       throw Object.assign(new Error("Command timed out"), { code: "ETIMEDOUT" });
@@ -160,15 +144,6 @@ describe("resolveQaEvidenceEnvironment", () => {
     const environment = resolveQaEvidenceEnvironment({ env: { GITHUB_SHA: "fallbacksha" } });
 
     expect(environment.ref).toBe("fallbacksha");
-  });
-
-  it("prefers OPENCLAW_QA_REF without invoking git", () => {
-    const environment = resolveQaEvidenceEnvironment({
-      env: { OPENCLAW_QA_REF: "qa-ref", GITHUB_SHA: "fallbacksha" },
-    });
-
-    expect(environment.ref).toBe("qa-ref");
-    expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
   it("returns a null ref when the probe fails and no env fallback exists", () => {

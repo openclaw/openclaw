@@ -393,7 +393,7 @@ export function createNodeWorkerContainerFixture(
         },
         env: {},
         mounts: [],
-        image: "node:24.19.0-slim",
+        image: "node:24.21.0-slim",
         entry: bundleEntry,
         workerArgs: ["--internal-worker-session"],
         status: params.status ?? "running",

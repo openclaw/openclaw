@@ -2,24 +2,27 @@ import {
   validateSessionsRecoverParams,
   type SessionsRecoverResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { recoverGatewaySession } from "../session-recovery-service.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
-import { emitSessionArchived, emitSessionsChanged } from "./session-change-event.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import { emitSessionsChanged } from "./session-change-event.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { launchSessionRecoveryContinuation } from "./session-recovery-continuation.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionRecoverHandlers: GatewayRequestHandlers = {
-  "sessions.recover": async ({
-    req,
-    params,
-    respond,
-    client,
-    context,
-    sessionMutationAuthorization,
-  }) => {
+  "sessions.recover": async (options) => {
+    const {
+      req,
+      params,
+      respond,
+      client,
+      context,
+      hasCurrentClientAuthority,
+      sessionMutationAuthorization,
+    } = options;
     if (!assertValidParams(params, validateSessionsRecoverParams, "sessions.recover", respond)) {
       return;
     }
@@ -52,7 +55,9 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
           client,
           ...(commitGuard ? { commitGuard } : {}),
           context,
+          ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
           req,
+          sessionScope: readGatewayRequestMutationAuthority(options).sessionScope,
         }),
     }).catch((error: unknown) => authority.handleClosedError(error));
     if (!recovered) {
@@ -63,12 +68,14 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    if (recovered.sourceKey !== recovered.successorKey) {
-      emitSessionArchived(
-        context,
-        recovered.sourceKey,
-        recovered.sourceKey === "global" ? recovered.agentId : undefined,
-      );
+    if (recovered.sourceKey && recovered.sourceKey !== recovered.successorKey) {
+      emitSessionsChanged(context, {
+        sessionKey: recovered.sourceKey,
+        ...(recovered.sourceKey === "global" && recovered.agentId
+          ? { agentId: recovered.agentId }
+          : {}),
+        reason: "archive",
+      });
     }
     emitSessionsChanged(context, {
       sessionKey: recovered.successorKey,

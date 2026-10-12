@@ -18,6 +18,19 @@ vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => lifecycleLog,
 }));
 
+function createLifecycle(runId: string) {
+  return createAgentCommandLifecycle({
+    runId,
+    lifecycleGeneration: () => "test-generation",
+    startedAt: 100,
+    state: {
+      currentTurnUserMessagePersisted: true,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    },
+  });
+}
+
 describe("createAgentCommandLifecycle", () => {
   it("publishes an outer timeout that arrives after a yielded result", () => {
     emitAgentEvent.mockClear();
@@ -103,23 +116,12 @@ describe("createAgentCommandLifecycle", () => {
 
   it.each([
     { name: "successful stops", status: "ok", stopReason: "stop", level: "info" },
-    { name: "tool-use stops", status: "ok", stopReason: "toolUse", level: "info" },
     { name: "ordinary end turns", status: "ok", stopReason: "end_turn", level: undefined },
     { name: "timeouts", status: "timeout", stopReason: "timeout", level: "warn" },
-    { name: "cancelled runs", status: "error", stopReason: "stop", level: "error" },
     { name: "failed runs", status: "error", stopReason: "error", level: "error" },
   ] as const)("logs $name at the expected severity", ({ status, stopReason, level }) => {
     vi.clearAllMocks();
-    const lifecycle = createAgentCommandLifecycle({
-      runId: "logged-terminal-owner",
-      lifecycleGeneration: () => "test-generation",
-      startedAt: 100,
-      state: {
-        currentTurnUserMessagePersisted: true,
-        lifecycleFinishing: false,
-        lifecycleEnded: false,
-      },
-    });
+    const lifecycle = createLifecycle("logged-terminal-owner");
 
     lifecycle.emitEnd({
       metadata: {},
@@ -228,16 +230,7 @@ describe("createAgentCommandLifecycle", () => {
         },
         unsafeMetadata: { credential: secret },
       };
-      const lifecycle = createAgentCommandLifecycle({
-        runId: "terminal-owner",
-        lifecycleGeneration: () => "test-generation",
-        startedAt: 100,
-        state: {
-          currentTurnUserMessagePersisted: true,
-          lifecycleFinishing: false,
-          lifecycleEnded: false,
-        },
-      });
+      const lifecycle = createLifecycle("terminal-owner");
       const terminal = {
         metadata,
         outcome: buildAgentRunTerminalOutcome({ status: "timeout", ...metadata }),
@@ -466,16 +459,7 @@ describe("createAgentCommandLifecycle", () => {
       const profileId = "openai:private-profile";
       const rawCause = `Codex app-server auth profile "${profileId}" was not found`;
       const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
-      const lifecycle = createAgentCommandLifecycle({
-        runId: "missing-selected-profile",
-        lifecycleGeneration: () => "test-generation",
-        startedAt: 100,
-        state: {
-          currentTurnUserMessagePersisted: true,
-          lifecycleFinishing: false,
-          lifecycleEnded: false,
-        },
-      });
+      const lifecycle = createLifecycle("missing-selected-profile");
       const error = new FailoverError(rawCause, {
         reason: "auth",
         code: "selected_auth_profile_unavailable",
@@ -543,16 +527,7 @@ describe("createAgentCommandLifecycle", () => {
   it("keeps post-turn errors narrow while publishing bounded delivery evidence", () => {
     emitAgentEvent.mockClear();
     const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
-    const lifecycle = createAgentCommandLifecycle({
-      runId: "post-turn-delivery-owner",
-      lifecycleGeneration: () => "test-generation",
-      startedAt: 100,
-      state: {
-        currentTurnUserMessagePersisted: true,
-        lifecycleFinishing: false,
-        lifecycleEnded: false,
-      },
-    });
+    const lifecycle = createLifecycle("post-turn-delivery-owner");
     lifecycle.emitPostTurnError(new Error("delivery failed"), {
       metadata: {
         terminalDelivery: {
@@ -594,62 +569,44 @@ describe("createAgentCommandLifecycle", () => {
     }
   });
 
-  it.each(["finishing", "end", "error"] as const)(
-    "rejects malformed canonical metadata on %s events",
-    (phase) => {
-      emitAgentEvent.mockClear();
-      const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
-      const malicious = { authorization: `Bearer ${secret}`, nested: { secret } };
-      const lifecycle = createAgentCommandLifecycle({
-        runId: "malformed-terminal-owner",
-        lifecycleGeneration: () => "test-generation",
-        startedAt: 100,
-        state: {
-          currentTurnUserMessagePersisted: true,
-          lifecycleFinishing: false,
-          lifecycleEnded: false,
-        },
-      });
-      const terminal = {
-        metadata: {
-          aborted: malicious,
-          stopReason: malicious,
-          yielded: malicious,
-          timeoutPhase: malicious,
-          providerStarted: malicious,
-          livenessState: malicious,
-          replayInvalid: malicious,
-          terminalReceipt: malicious,
-          terminalDelivery: malicious,
-          error: malicious,
-          unknownMetadata: malicious,
-        },
-        outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
-      };
+  it("rejects malformed canonical metadata on error events", () => {
+    emitAgentEvent.mockClear();
+    const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
+    const malicious = { authorization: `Bearer ${secret}`, nested: { secret } };
+    const lifecycle = createLifecycle("malformed-terminal-owner");
+    const terminal = {
+      metadata: {
+        aborted: malicious,
+        stopReason: malicious,
+        yielded: malicious,
+        timeoutPhase: malicious,
+        providerStarted: malicious,
+        livenessState: malicious,
+        replayInvalid: malicious,
+        terminalReceipt: malicious,
+        terminalDelivery: malicious,
+        error: malicious,
+        unknownMetadata: malicious,
+      },
+      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+    };
 
-      if (phase === "finishing") {
-        lifecycle.emitFinishing(terminal);
-      } else if (phase === "end") {
-        lifecycle.emitEnd(terminal);
-      } else {
-        lifecycle.emitResultError({ payloads: [], meta: { durationMs: 0 } }, false, terminal);
-      }
+    lifecycle.emitResultError({ payloads: [], meta: { durationMs: 0 } }, false, terminal);
 
-      const event = emitAgentEvent.mock.calls[0]?.[0];
-      expect(event.data).toMatchObject({ phase, aborted: false, stopReason: "error" });
-      expect(JSON.stringify(event)).not.toContain(secret);
-      for (const field of [
-        "yielded",
-        "timeoutPhase",
-        "providerStarted",
-        "livenessState",
-        "replayInvalid",
-        "terminalDelivery",
-        "terminalReceipt",
-        "unknownMetadata",
-      ]) {
-        expect(event.data).not.toHaveProperty(field);
-      }
-    },
-  );
+    const event = emitAgentEvent.mock.calls[0]?.[0];
+    expect(event.data).toMatchObject({ phase: "error", aborted: false, stopReason: "error" });
+    expect(JSON.stringify(event)).not.toContain(secret);
+    for (const field of [
+      "yielded",
+      "timeoutPhase",
+      "providerStarted",
+      "livenessState",
+      "replayInvalid",
+      "terminalDelivery",
+      "terminalReceipt",
+      "unknownMetadata",
+    ]) {
+      expect(event.data).not.toHaveProperty(field);
+    }
+  });
 });

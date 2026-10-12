@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { snapshotListFixture } from "../pages/cloud-workers/cloud-worker-snapshots.test-support.ts";
+import {
+  buildEnvironmentFixture,
+  snapshotListFixture,
+} from "../pages/cloud-workers/cloud-worker-snapshots.test-support.ts";
 import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -8,25 +11,6 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-
-function buildEnvironmentFixture(state = "provisioning", error?: string) {
-  return {
-    id: "build-app",
-    type: "worker",
-    status: "starting",
-    preparation: { purpose: "build", key: "build-key" },
-    worker: {
-      profileId: "linux-build",
-      providerId: "crabbox",
-      leaseId: "lease-app",
-      state,
-      ageMs: 60_000,
-      attachedSessionIds: [],
-      tunnelStatus: "stopped",
-      ...(error ? { error } : {}),
-    },
-  };
-}
 
 suite.define(() => {
   it("builds a snapshot for the selected profile and local repository", async () => {
@@ -86,7 +70,7 @@ suite.define(() => {
       });
       await page.getByText("Build started", { exact: true }).waitFor();
       await expect.poll(() => dialog.count()).toBe(0);
-      await page.getByRole("button", { name: "Cancel", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Cancel: build-app", exact: true }).waitFor();
     } finally {
       await context.close();
     }
@@ -106,7 +90,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
       await page.getByRole("button", { name: "Snapshots", exact: true }).click();
-      const cancel = page.getByRole("button", { name: "Cancel", exact: true });
+      const cancel = page.getByRole("button", { name: "Cancel: build-app", exact: true });
       await cancel.click();
       const dialog = await waitForConfirmModal(page);
       expect(await dialog.getAttribute("label")).toBe("Cancel build");
@@ -145,7 +129,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
       await page.getByRole("button", { name: "Snapshots", exact: true }).click();
       await page.getByText("Gateway is only bound to loopback", { exact: true }).waitFor();
-      const dismiss = page.getByRole("button", { name: "Dismiss", exact: true });
+      const dismiss = page.getByRole("button", { name: "Dismiss: build-app", exact: true });
       await dismiss.click();
       const dialog = await waitForConfirmModal(page);
       expect(await dialog.getAttribute("label")).toBe("Dismiss failed build");
@@ -188,7 +172,7 @@ suite.define(() => {
           images: [],
           legacyLeases: [],
           recoveredCapture: "capture-uncertain",
-          nextSteps: "Restart the Gateway.",
+          nextSteps: "The next eligible worker can capture again.",
         },
       },
     });
@@ -197,7 +181,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Snapshots", exact: true }).click();
       await page.getByText("github.com/acme/app", { exact: true }).waitFor();
       await page.getByText("Paused: uncertain", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "Recover", exact: true }).click();
+      await page.getByRole("button", { name: "Recover: capture-uncertain", exact: true }).click();
       const dialog = await waitForConfirmModal(page);
       const confirm = dialog.getByRole("button", { name: "Recover", exact: true });
       const acknowledgement = dialog.getByRole("checkbox", {
@@ -223,10 +207,9 @@ suite.define(() => {
       await expect.poll(() => gateway.getRequests("crabbox.images.list")).toHaveLength(2);
       await expect.poll(() => page.getByText("Paused: uncertain", { exact: true }).count()).toBe(0);
       await page
-        .getByText(
-          "Capture reservation cleared. Restart the Gateway after reconciliation; the next eligible worker can capture again.",
-          { exact: true },
-        )
+        .getByText("Capture reservation cleared. The next eligible worker can capture again.", {
+          exact: true,
+        })
         .waitFor();
       await page.getByRole("button", { name: "Refresh", exact: true }).click();
       await expect.poll(() => gateway.getRequests("crabbox.images.list")).toHaveLength(3);
@@ -261,30 +244,32 @@ suite.define(() => {
       const row = page.locator(".settings-row").filter({ hasText: "github.com/acme/app" });
       await row.waitFor();
       await gateway.setMethodResponse("crabbox.images.list", { ...listed, images: [pinned] });
-      await row.getByRole("button", { name: "Pin", exact: true }).click();
+      await row.getByRole("button", { name: "Pin: image-app", exact: true }).click();
       expect((await gateway.waitForRequest("crabbox.images.pin")).params).toEqual({
         checkpointId: "image-app",
         pinned: true,
       });
       await row.getByText("Pinned", { exact: true }).waitFor();
-      expect(await row.getByRole("button", { name: "Delete", exact: true }).isDisabled()).toBe(
-        true,
-      );
       expect(
-        await row.getByRole("button", { name: "Delete", exact: true }).getAttribute("title"),
+        await row.getByRole("button", { name: "Delete: image-app", exact: true }).isDisabled(),
+      ).toBe(true);
+      expect(
+        await row
+          .getByRole("button", { name: "Delete: image-app", exact: true })
+          .getAttribute("title"),
       ).toBe("Unpin this snapshot before deleting it.");
       await gateway.setMethodResponse("crabbox.images.list", listed);
       await gateway.setMethodResponse("crabbox.images.pin", unpinned);
-      await row.getByRole("button", { name: "Unpin", exact: true }).click();
+      await row.getByRole("button", { name: "Unpin: image-app", exact: true }).click();
       await expect.poll(() => gateway.getRequests("crabbox.images.pin")).toHaveLength(2);
       expect((await gateway.getRequests("crabbox.images.pin"))[1]?.params).toEqual({
         checkpointId: "image-app",
         pinned: false,
       });
       await expect
-        .poll(() => row.getByRole("button", { name: "Delete", exact: true }).isEnabled())
+        .poll(() => row.getByRole("button", { name: "Delete: image-app", exact: true }).isEnabled())
         .toBe(true);
-      await row.getByRole("button", { name: "Delete", exact: true }).click();
+      await row.getByRole("button", { name: "Delete: image-app", exact: true }).click();
       const dialog = await waitForConfirmModal(page);
       expect(await gateway.getRequests("crabbox.images.delete")).toHaveLength(0);
       await dialog.getByText("image-app", { exact: true }).waitFor();

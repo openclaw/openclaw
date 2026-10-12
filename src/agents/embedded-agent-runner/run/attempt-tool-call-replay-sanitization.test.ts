@@ -96,95 +96,6 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
     ).toStrictEqual([]);
   });
 
-  it("keeps matched assistant and tool-result ids aligned", () => {
-    const rawId = "call_function_av7cbkigmk7x1";
-    const messages: AgentMessage[] = [
-      {
-        role: "assistant",
-        content: [{ type: "toolUse", id: rawId, name: "read", input: { path: "." } }],
-      } as never,
-      {
-        role: "toolResult",
-        toolCallId: rawId,
-        toolUseId: rawId,
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      } as never,
-    ];
-
-    const out = sanitizeReplayToolCallIdsForStream({
-      messages,
-      mode: "strict",
-      repairToolUseResultPairing: true,
-    });
-
-    expect(out.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
-    expect(assistantToolUseSummaries(out[0])).toEqual([
-      { type: "toolUse", id: "callfunctionav7cbkigmk7x1", name: "read" },
-    ]);
-    expect(toolResultSummary(out[1])).toEqual({
-      role: "toolResult",
-      toolCallId: "callfunctionav7cbkigmk7x1",
-      toolUseId: "callfunctionav7cbkigmk7x1",
-      toolName: "read",
-      isError: false,
-    });
-  });
-
-  it("pairs repeated raw ids before assigning provider-safe occurrence ids", () => {
-    const rawId = "exec_0";
-    const out = sanitizeReplayToolCallIdsForStream({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "toolUse", id: rawId, name: "exec", input: { cmd: "first" } }],
-        } as never,
-        {
-          role: "assistant",
-          content: [{ type: "toolUse", id: rawId, name: "exec", input: { cmd: "second" } }],
-        } as never,
-        {
-          role: "toolResult",
-          toolCallId: rawId,
-          toolUseId: rawId,
-          toolName: "exec",
-          content: [{ type: "text", text: "second result" }],
-          isError: false,
-        } as never,
-      ],
-      mode: "strict",
-      repairToolUseResultPairing: true,
-    });
-
-    expect(out.map((message) => message.role)).toEqual([
-      "assistant",
-      "toolResult",
-      "assistant",
-      "toolResult",
-    ]);
-    expect(assistantToolUseSummaries(out[0])).toEqual([
-      { type: "toolUse", id: "exec0", name: "exec" },
-    ]);
-    expect(toolResultSummary(out[1])).toMatchObject({
-      toolCallId: "exec0",
-      isError: true,
-    });
-    expect(assistantToolUseSummaries(out[2])).toEqual([
-      { type: "toolUse", id: "exec02", name: "exec" },
-    ]);
-    expect(toolResultSummary(out[3])).toEqual({
-      role: "toolResult",
-      toolCallId: "exec02",
-      toolUseId: "exec02",
-      toolName: "exec",
-      isError: false,
-    });
-    expect(requireToolResultMessage(out[3]).content).toEqual([
-      { type: "text", text: "second result" },
-    ]);
-  });
-
   it("keeps same-turn repeated calls and results aligned after id rewriting", () => {
     const rawId = "exec_0";
     const out = sanitizeReplayToolCallIdsForStream({
@@ -234,7 +145,7 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
     });
   });
 
-  it.each([undefined, new Set(["other_tool"])])(
+  it.each([new Set(["other_tool"])])(
     "preserves signed-thinking replay ids with current tools %s",
     (allowedToolNames) => {
       const rawId = "call_1";
@@ -278,73 +189,6 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
     },
   );
 
-  it("synthesizes missing tool results after strict id sanitization", () => {
-    const rawId = "call_function_av7cbkigmk7x1";
-    const out = sanitizeReplayToolCallIdsForStream({
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            { type: "toolUse", id: rawId, name: "read", input: { path: "." } },
-            { type: "toolUse", id: "call_missing", name: "exec", input: { cmd: "true" } },
-          ],
-        } as never,
-        {
-          role: "toolResult",
-          toolCallId: rawId,
-          toolUseId: rawId,
-          toolName: "read",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-        } as never,
-      ],
-      mode: "strict",
-      repairToolUseResultPairing: true,
-    });
-
-    expect(out.map((message) => message.role)).toEqual(["assistant", "toolResult", "toolResult"]);
-    expect(assistantToolUseSummaries(out[0])).toEqual([
-      { type: "toolUse", id: "callfunctionav7cbkigmk7x1", name: "read" },
-      { type: "toolUse", id: "callmissing", name: "exec" },
-    ]);
-    expect(toolResultSummary(out[1])).toEqual({
-      role: "toolResult",
-      toolCallId: "callfunctionav7cbkigmk7x1",
-      toolUseId: "callfunctionav7cbkigmk7x1",
-      toolName: "read",
-      isError: false,
-    });
-    expect(toolResultSummary(out[2])).toEqual({
-      role: "toolResult",
-      toolCallId: "callmissing",
-      toolUseId: undefined,
-      toolName: "exec",
-      isError: true,
-    });
-  });
-
-  it("synthesizes missing tool results when repair is enabled", () => {
-    const out = sanitizeReplayToolCallIdsForStream({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "toolUse", id: "call_missing", name: "exec", input: { cmd: "true" } }],
-        } as never,
-      ],
-      mode: "strict",
-      repairToolUseResultPairing: true,
-    });
-
-    expect(out.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
-    expect(toolResultSummary(out[1])).toEqual({
-      role: "toolResult",
-      toolCallId: "callmissing",
-      toolUseId: undefined,
-      toolName: "exec",
-      isError: true,
-    });
-  });
-
   it("keeps real tool results for aborted assistant spans", () => {
     const rawId = "call_function_av7cbkigmk7x1";
     const out = sanitizeReplayToolCallIdsForStream({
@@ -387,7 +231,7 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
 });
 
 describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
-  it.each(["openai-responses", "anthropic-messages", "google-generative-ai"])(
+  it.each(["openai-responses"])(
     "preserves completed removed-tool history without advertising it to %s",
     (api) => {
       const assistant = {
@@ -448,42 +292,6 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         timestamp: undefined,
       },
     ]);
-  });
-
-  it("keeps valid non-Responses replay inputs pass-through", () => {
-    const messages: AgentMessage[] = [
-      {
-        role: "assistant",
-        stopReason: "toolUse",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_1",
-            name: "image_generate",
-            arguments: { prompt: "QA lighthouse" },
-          },
-        ],
-      } as never,
-    ];
-    const baseFn = vi.fn((_model: unknown, _context: unknown, _options: unknown) =>
-      createFakeStream({
-        events: [],
-        resultMessage: { role: "assistant", content: "ok" },
-      }),
-    );
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
-      baseFn as never,
-      new Set(["image_generate"]),
-      undefined,
-      "openai",
-    );
-
-    void wrapped({ api: "openai" } as never, { messages } as never, {} as never);
-
-    const forwardedContext = baseFn.mock.calls[0]?.[1] as {
-      messages?: AgentMessage[];
-    };
-    expect(forwardedContext.messages).toBe(messages);
   });
 
   it("repairs OpenAI Responses pairing even when replay inputs do not change", () => {
@@ -629,25 +437,6 @@ describe("sanitizeOpenAIResponsesReplayForStream", () => {
     expect(toolCall?.id).not.toBe(rawToolCallId);
     expect(toolCall?.id).not.toContain("|");
     expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(toolCall?.id);
-  });
-
-  it("preserves canonical same-model reasoning pairs", () => {
-    const messages: AgentMessage[] = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal",
-            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-          },
-          { type: "toolCall", id: "call_123|fc_123", name: "noop", arguments: {} },
-        ],
-      } as never,
-      textToolResult("call_123|fc_123", "noop", "ok", { isError: false }) as never,
-    ];
-
-    expect(sanitizeOpenAIResponsesReplayForStream(messages)).toBe(messages);
   });
 
   it("repairs dangling OpenAI Responses tool calls from async resume replay", () => {

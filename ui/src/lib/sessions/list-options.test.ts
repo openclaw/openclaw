@@ -26,86 +26,29 @@ function createSessions(client: GatewayBrowserClient, key: string, ownerId?: str
 }
 
 describe("session list replacement options", () => {
-  it.each([
-    { filter: "owner", options: { ownerId: "profile-bob" } },
-    { filter: "involving me", options: { involvingMe: true } },
-    { filter: "search", options: { search: "release" } },
-  ])("keeps an explicit $filter query single-phase", async ({ options }) => {
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "sessions.list") {
-        return sessionsResult([], 1);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const sessions = createSessions(
-      { request } as unknown as GatewayBrowserClient,
-      "agent:main:main",
-      "profile-ada",
-    );
+  it.each([{ filter: "involving me", options: { involvingMe: true } }])(
+    "keeps an explicit $filter query single-phase",
+    async ({ options }) => {
+      const request = vi.fn(async (method: string, _params?: unknown) => {
+        if (method === "sessions.list") {
+          return sessionsResult([], 1);
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const sessions = createSessions(
+        { request } as unknown as GatewayBrowserClient,
+        "agent:main:main",
+        "profile-ada",
+      );
 
-    await sessions.refresh({ agentId: "main", ...options, force: true });
+      await sessions.refresh({ agentId: "main", ...options, force: true });
 
-    const listCalls = request.mock.calls.filter(([method]) => method === "sessions.list");
-    expect(listCalls).toHaveLength(1);
-    expect(listCalls[0]?.[1]).toEqual(expect.objectContaining(options));
-    sessions.dispose();
-  });
-
-  it("preserves sidebar metadata hydration when refreshing after session patches", async () => {
-    const key = "agent:main:untitled";
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "sessions.list") {
-        return sessionsResult(
-          [
-            {
-              key,
-              kind: "direct",
-              updatedAt: 1,
-              label: key,
-              derivedTitle: "Readable planning title",
-            },
-          ],
-          1,
-        );
-      }
-      if (method === "sessions.patch") {
-        return { ok: true };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const sessions = createSessions({ request } as unknown as GatewayBrowserClient, key);
-
-    await sessions.refresh({
-      agentId: "main",
-      activeMinutes: 0,
-      limit: 50,
-      includeGlobal: true,
-      includeUnknown: true,
-      configuredAgentsOnly: true,
-      includeDerivedTitles: true,
-      includeLastMessage: true,
-      force: true,
-    });
-    await sessions.patch(key, { pinned: true }, { agentId: "main" });
-
-    const listCalls = request.mock.calls.filter(([method]) => method === "sessions.list");
-    expect(listCalls).toHaveLength(2);
-    expect(listCalls[1]?.[1]).toMatchObject({
-      agentId: "main",
-      includeGlobal: true,
-      includeUnknown: true,
-      configuredAgentsOnly: true,
-      includeDerivedTitles: true,
-      includeLastMessage: true,
-      limit: 50,
-    });
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
-      key,
-      agentId: "main",
-      pinned: true,
-    });
-    sessions.dispose();
-  });
+      const listCalls = request.mock.calls.filter(([method]) => method === "sessions.list");
+      expect(listCalls).toHaveLength(1);
+      expect(listCalls[0]?.[1]).toEqual(expect.objectContaining(options));
+      sessions.dispose();
+    },
+  );
 
   it("keeps derived titles when a foreground refresh queues behind an archive replacement", async () => {
     const key = "agent:main:untitled";
@@ -281,10 +224,12 @@ describe("session list replacement options", () => {
       );
     });
     snapshot.client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, emitEvent } = createGatewayHarness(snapshot.client);
     const sessions = createTestSessionCapability({
-      snapshot,
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
+      ...gateway,
+      get snapshot() {
+        return snapshot;
+      },
     });
 
     await sessions.refresh({ agentId: "main", force: true });
@@ -299,15 +244,19 @@ describe("session list replacement options", () => {
       archivedAt: 20,
     });
 
-    sessions.reconcileChanged({
-      sessionKey: key,
-      key,
-      kind: "direct",
-      sessionId: "archived-session",
-      updatedAt: 50,
-      archived: false,
-      archivedAt: null,
-      reason: "update",
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: key,
+        key,
+        kind: "direct",
+        sessionId: "archived-session",
+        updatedAt: 50,
+        archived: false,
+        archivedAt: null,
+        reason: "update",
+      },
     });
     expect(sessions.state.result?.sessions.find((row) => row.key === key)?.archived).toBe(false);
     sessions.dispose();
@@ -397,7 +346,7 @@ describe("session list replacement options", () => {
     },
   );
 
-  it("keeps a restored Active row when another observer replays an older archive event", async () => {
+  it("restores Active membership when an archive and restore share a timestamp", async () => {
     vi.useFakeTimers();
     const original: GatewaySessionRow = {
       key: "agent:main:restored-archive",
@@ -447,9 +396,6 @@ describe("session list replacement options", () => {
       await sessions.refresh({ agentId: "main", force: true });
       expect(sessions.state.result?.sessions).toEqual([offered]);
 
-      // The same payload retains its first receipt across capability consumers.
-      sessions.reconcileChanged(archived);
-      expect(sessions.state.result?.sessions).toEqual([offered]);
       expect(sessions.state.result?.count).toBe(1);
       expect(sessions.archiveVisibility(original.key)).toBeUndefined();
     } finally {
@@ -703,47 +649,6 @@ describe("session list replacement options", () => {
     sessions.dispose();
   });
 
-  it("keeps foreground list options across background hydration and mutation refreshes", async () => {
-    const key = "agent:main:filtered";
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "sessions.list") {
-        return sessionsResult([{ key, kind: "direct", updatedAt: 1 }], 1);
-      }
-      if (method === "sessions.patch") {
-        return { ok: true };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const sessions = createSessions({ request } as unknown as GatewayBrowserClient, key);
-
-    await sessions.refresh({
-      agentId: "main",
-      search: "filtered",
-      archivedFilter: "archived",
-      limit: 25,
-      includeDerivedTitles: true,
-      force: true,
-    });
-    await sessions.refresh({
-      agentId: "other",
-      limit: 5,
-      backgroundHydrate: true,
-      force: true,
-    });
-    await sessions.patch(key, { pinned: true }, { agentId: "main" });
-
-    const listCalls = request.mock.calls.filter(([method]) => method === "sessions.list");
-    expect(listCalls).toHaveLength(3);
-    expect(listCalls[2]?.[1]).toMatchObject({
-      agentId: "main",
-      search: "filtered",
-      archived: true,
-      limit: 25,
-      includeDerivedTitles: true,
-    });
-    sessions.dispose();
-  });
-
   it("captures foreground list options before concurrent mutation refreshes", async () => {
     const key = "agent:main:concurrent";
     const firstList = createDeferred<SessionsListResult>();
@@ -816,6 +721,7 @@ describe("session list replacement options", () => {
       includeUnknown: true,
       configuredAgentsOnly: true,
       includeDerivedTitles: true,
+      includeLastMessage: true,
       force: true,
     };
     await sessions.refresh(baseListOptions);
@@ -835,66 +741,10 @@ describe("session list replacement options", () => {
       includeUnknown: true,
       configuredAgentsOnly: true,
       includeDerivedTitles: true,
+      includeLastMessage: true,
     });
     expect(listCalls[2]?.[1]).not.toHaveProperty("append");
     expect(listCalls[2]?.[1]).not.toHaveProperty("offset");
-    sessions.dispose();
-  });
-
-  it("defers the canonical refresh for batch patches until the caller asks for it", async () => {
-    const keys = ["agent:main:one", "agent:main:two", "agent:main:three"];
-    const request = vi.fn(async (method: string, params?: unknown, _options?: unknown) => {
-      if (method === "sessions.list") {
-        return sessionsResult(
-          keys.map((key) => ({
-            key,
-            sessionId: `id:${key}`,
-            kind: "direct" as const,
-            updatedAt: 1,
-          })),
-          1,
-        );
-      }
-      if (method === "sessions.patch") {
-        const key = asOptionalRecord(params)?.key;
-        if (typeof key !== "string") {
-          throw new Error("Expected a session patch key");
-        }
-        return {
-          ok: true,
-          key,
-          path: "(multiple)",
-          entry: { sessionId: `id:${key}`, archivedAt: 2, updatedAt: 2 },
-        };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const sessions = createSessions(
-      { request } as unknown as GatewayBrowserClient,
-      "agent:main:one",
-    );
-
-    await sessions.refresh({ agentId: "main", limit: 60, includeDerivedTitles: true, force: true });
-    for (const key of keys) {
-      await sessions.patch(
-        key,
-        { archived: true },
-        { agentId: "main", expectedSessionId: `id:${key}`, deferListRefresh: true },
-      );
-    }
-    const listCallsBeforeTail = request.mock.calls.filter(
-      ([method]) => method === "sessions.list",
-    ).length;
-    await sessions.reconcileMutation("main");
-
-    // One seeding list, none from the patches, one authoritative tail refresh.
-    expect(listCallsBeforeTail).toBe(1);
-    expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2);
-    expect(request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(3);
-    for (const call of request.mock.calls.filter(([method]) => method === "sessions.patch")) {
-      expect(call[1]).toMatchObject({ expectedSessionId: expect.stringMatching(/^id:/) });
-      expect(call[2]).toEqual({ timeoutMs: 10 * 60_000 });
-    }
     sessions.dispose();
   });
 

@@ -3,7 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { waitForChildClose, waitForPidFile } from "../../../test/helpers/process-wait.js";
+import { waitForPidFile } from "../../../test/helpers/process-wait.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
@@ -19,7 +24,6 @@ import {
   sshResetNonce,
   startConnectedTunnel,
   success,
-  waitForFast,
   workspaceSetup,
 } from "./tunnel.test-support.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-ssh-argv.test-support.js";
@@ -27,8 +31,64 @@ import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const RECEIVER_CLEANUP_MS = 10_000;
 
 describe("worker tunnel manager", () => {
+  it.each(["setup", "rsync"] as const)(
+    "fences sync after source revocation during %s without retiring the tunnel",
+    async (boundary) => {
+      const localPath = tempDirs.make("worker-sync-authority-");
+      const environmentId = "worker:sync-authority";
+      const setup = workspaceSetup("/home/worker", environmentId, "session:one", 1);
+      let current = true;
+      const fake = fakeRunner((argv, options) => {
+        if (argv[0] === "git") {
+          return { ...success(), code: 128 };
+        }
+        if (
+          typeof options.input === "string" &&
+          options.input.includes("unsafe worker workspace directory")
+        ) {
+          if (boundary === "setup") {
+            current = false;
+          }
+          return success(setup.stdout);
+        }
+        if (argv[0] === "rsync") {
+          current = false;
+          return { ...success(), code: 255 };
+        }
+        return undefined;
+      });
+      const { handle } = await startConnectedTunnel(fake, environmentId, 1, {
+        ssh: { ...SSH, fallbackPorts: [22] },
+      });
+      try {
+        await expect(
+          handle.syncWorkspace({
+            source: { kind: "local", path: localPath },
+            sessionId: "session:one",
+            generation: 1,
+            authorize: () => {
+              if (!current) {
+                throw new Error("initiating source closed");
+              }
+            },
+          }),
+        ).rejects.toThrow("initiating source closed");
+        expect(fake.runs.filter(({ argv }) => argv[0] === "rsync")).toHaveLength(
+          boundary === "setup" ? 0 : 1,
+        );
+        expect(
+          fake.runs.some(({ argv }) => argv.at(-1)?.includes("worker workspace symlink escapes")),
+        ).toBe(false);
+        await expect(handle.runWorkspaceCommand(PWD_COMMAND)).resolves.toEqual(success());
+      } finally {
+        await handle.stop();
+      }
+    },
+  );
+
   it("syncs a dirty workspace over pinned rsync and records an immutable manifest", async () => {
     const manifestRef = `sha256:${"b".repeat(64)}`;
     const { remoteWorkspaceDir, stdout: setupStdout } = workspaceSetup(
@@ -282,7 +342,7 @@ describe("worker tunnel manager", () => {
 
   it.skipIf(process.platform === "win32")(
     "serializes fallback reset behind the live remote receiver",
-    async () => {
+    async ({ signal }) => {
       const root = tempDirs.make("openclaw-worker-convergent-sync-");
       const localPath = path.join(root, "local");
       const remoteHome = path.join(root, "remote-home");
@@ -400,9 +460,17 @@ describe("worker tunnel manager", () => {
           receiverChild.stderr?.on("data", (chunk: string) => {
             receiverStderr += chunk;
           });
-          receiverExited = waitForChildClose(receiverChild, 10_000);
+          const closed = createDeferred<{
+            code: number | null;
+            signal: NodeJS.Signals | null;
+          }>();
+          // Capture close at spawn so teardown can still join it after the test aborts.
+          receiverChild.once("close", (code, exitSignal) =>
+            closed.resolve({ code, signal: exitSignal }),
+          );
+          receiverExited = closed.promise;
           receiverGroupPid = await Promise.race([
-            waitForPidFile(receiverMarker, 10_000),
+            waitForPidFile(receiverMarker, signal),
             receiverExited.then(() => {
               throw new Error(receiverStderr || "test receiver exited before its marker");
             }),
@@ -422,7 +490,29 @@ describe("worker tunnel manager", () => {
           }
         },
       );
-      const manager = createWorkerTunnelManager({ runner: fake.runner });
+      const resetDispatched = createDeferred();
+      const manager = createWorkerTunnelManager({
+        runner: {
+          ...fake.runner,
+          async run(argv, options) {
+            const operation = fake.runner.run(argv, options);
+            if (
+              receiverWorkspace !== undefined &&
+              receiverRelative !== undefined &&
+              argv[0] === "ssh" &&
+              sshArgvPort(argv) === 22 &&
+              sshResetNonce(argv, {
+                workspace: receiverWorkspace,
+                canonicalHome: canonicalRemoteHome,
+                remoteRelative: receiverRelative,
+              })
+            ) {
+              resetDispatched.resolve();
+            }
+            return await operation;
+          },
+        },
+      });
       const handle = await manager.start({
         bundleHash: BUNDLE_HASH,
         environmentId: "worker:convergent-sync",
@@ -447,27 +537,20 @@ describe("worker tunnel manager", () => {
             syncSettled = true;
           },
         );
-        await Promise.race([
-          waitForFast(
-            () => {
-              expect(
-                fake.runs.map((entry) => [
-                  entry.argv[0],
-                  entry.argv[0] === "ssh" ? sshArgvPort(entry.argv) : rsyncArgvPort(entry.argv),
-                ]),
-              ).toContainEqual(["ssh", 22]);
-            },
-            { timeout: 10_000 },
+        await withinTest(
+          awaitGateBeforeSettlement(
+            resetDispatched.promise,
+            syncing,
+            "workspace sync settled before fallback reset",
           ),
-          syncing.then(
-            () => {
-              throw new Error("workspace sync settled before fallback reset");
-            },
-            (error: unknown) => {
-              throw error;
-            },
-          ),
-        ]);
+          signal,
+        );
+        expect(
+          fake.runs.map((entry) => [
+            entry.argv[0],
+            entry.argv[0] === "ssh" ? sshArgvPort(entry.argv) : rsyncArgvPort(entry.argv),
+          ]),
+        ).toContainEqual(["ssh", 22]);
         const primaryTransfers = fake.runs.filter(
           (entry) =>
             entry.argv[0] === "rsync" && entry.argv.some((arg) => arg.startsWith("--files-from=")),
@@ -515,7 +598,7 @@ describe("worker tunnel manager", () => {
         if (!receiverExited) {
           throw new Error("workspace receiver did not start");
         }
-        const receiverExit = await receiverExited;
+        const receiverExit = await withinTest(receiverExited, signal);
         expect(receiverExit.signal).toBeNull();
         expect(receiverExit.code).not.toBe(0);
         const result = await syncing;
@@ -605,8 +688,13 @@ describe("worker tunnel manager", () => {
             const gateWriter = await fs.open(receiverGate, "w");
             await gateWriter.write("cleanup\n");
             await gateWriter.close();
+          } else {
+            receiverChild.kill("SIGTERM");
           }
-          await receiverExited;
+          if (receiverExited) {
+            // Cleanup hang guard after release or SIGTERM, not a readiness race.
+            await withinTest(receiverExited, AbortSignal.timeout(RECEIVER_CLEANUP_MS));
+          }
         }
         await handle.stop();
       }

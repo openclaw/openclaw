@@ -32,14 +32,30 @@ describe("provider login choices", () => {
 
   it("keeps undeclared credential-only support on setup and filters hidden or media choices", () => {
     const choices = [
-      choice(),
+      choice({ docsUrl: "https://docs.example.com/authentication" }),
       choice({ choiceId: "setup", credentialOnly: undefined }),
       choice({ choiceId: "hidden", assistantVisibility: "manual-only" }),
       choice({ choiceId: "undetected", assistantVisibility: "detected-only" }),
       choice({ choiceId: "media", onboardingScopes: ["image-generation"] }),
     ];
+    expect(listProviderLoginOptions(choices)).toMatchObject([
+      { id: "demo/demo-device", docsUrl: "https://docs.example.com/authentication" },
+    ]);
+  });
+
+  it("orders login methods by the provider's declared priority", () => {
+    const choices = [
+      choice({
+        choiceId: "codex-device",
+        choiceLabel: "Codex device code",
+        onboardingFeatured: true,
+        assistantPriority: -40,
+      }),
+      choice({ choiceId: "chatgpt", choiceLabel: "Sign in with ChatGPT", assistantPriority: -50 }),
+    ];
     expect(listProviderLoginOptions(choices).map((option) => option.id)).toEqual([
-      "demo/demo-device",
+      "demo/chatgpt",
+      "demo/codex-device",
     ]);
   });
 

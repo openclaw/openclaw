@@ -90,7 +90,9 @@ export function renderPlaceBrowser(params: {
         />
         ${
           browser.loading
-            ? html`<span class="new-session-page__browser-loading">${t("common.loading")}</span>`
+            ? html`<span class="new-session-page__browser-loading" role="status"
+                >${t("common.loading")}</span
+              >`
             : nothing
         }
         <button
@@ -103,7 +105,11 @@ export function renderPlaceBrowser(params: {
           ${icons.x}
         </button>
       </div>
-      ${browser.error ? html`<div class="new-session-page__error">${browser.error}</div>` : nothing}
+      ${
+        browser.error
+          ? html`<div class="new-session-page__error" role="alert">${browser.error}</div>`
+          : nothing
+      }
       <div
         class="new-session-page__browser-list"
         role="listbox"

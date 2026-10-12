@@ -18,7 +18,7 @@ const MP4_A = "data:video/mp4;base64,YWFhYWFhYWFhYWFhYWFhYQ==";
 const MP4_B = "data:video/mp4;base64,YmJiYmJiYmJiYmJiYmJiYg==";
 const WEBM = "data:video/webm;base64,d2VibQ==";
 
-function model(overrides: Partial<Model> = {}): Model {
+function model(): Model {
   return {
     id: "kimi-k3",
     name: "Kimi K3",
@@ -30,7 +30,6 @@ function model(overrides: Partial<Model> = {}): Model {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 1_048_576,
     maxTokens: 1_048_576,
-    ...overrides,
   } as Model;
 }
 
@@ -67,41 +66,24 @@ function createNativeWrapper(streamFn: StreamFn, requestBytesExclusive = 100_000
   );
 }
 
+async function dispatchPayload(
+  payload: ReturnType<typeof genericPayload>,
+  options: NonNullable<Parameters<StreamFn>[2]> = {},
+  ceiling?: number,
+) {
+  let dispatched: unknown;
+  const wrapped = createNativeWrapper(
+    capturePayloadStream(payload, (value) => (dispatched = value)),
+    ceiling,
+  );
+  await wrapped(model(), { messages: [] } as Context, options);
+  return dispatched;
+}
+
 describe("Moonshot native video wrapper", () => {
-  it("preserves serialized current-user MP4 parts and order", async () => {
-    const payload = genericPayload();
-    let dispatched: unknown;
-    const caller = vi.fn((value: unknown) => {
-      expect(JSON.stringify(value)).not.toContain("__openclaw");
-      expect(JSON.stringify(value)).not.toContain("/private/");
-      expect((value as typeof payload).messages[0]?.content.map((part) => part.type)).toEqual([
-        "text",
-        "image_url",
-        "video_url",
-        "text",
-      ]);
-    });
-    const wrapped = createNativeWrapper(
-      capturePayloadStream(payload, (value) => (dispatched = value)),
-    );
-
-    await wrapped(model(), { messages: [] } as Context, { onPayload: caller });
-
-    expect(caller).toHaveBeenCalledOnce();
-    expect((dispatched as typeof payload).messages[0]?.content[2]).toEqual({
-      type: "video_url",
-      video_url: { url: MP4_A },
-    });
-  });
-
   it("allows valid hook clones and injections while omitting non-MP4 video", async () => {
     const payload = genericPayload([MP4_A, WEBM]);
-    let dispatched: unknown;
-    const wrapped = createNativeWrapper(
-      capturePayloadStream(payload, (value) => (dispatched = value)),
-    );
-
-    await wrapped(model(), { messages: [] } as Context, {
+    const dispatched = await dispatchPayload(payload, {
       onPayload(value) {
         const content = (value as typeof payload).messages[0]!.content;
         const valid = content[2]! as Record<string, unknown>;
@@ -120,12 +102,7 @@ describe("Moonshot native video wrapper", () => {
 
   it("validates a caller replacement after Moonshot thinking post-processing", async () => {
     const payload = genericPayload();
-    let dispatched: unknown;
-    const wrapped = createNativeWrapper(
-      capturePayloadStream(payload, (value) => (dispatched = value)),
-    );
-
-    await wrapped(model(), { messages: [] } as Context, {
+    const dispatched = await dispatchPayload(payload, {
       onPayload(value) {
         return structuredClone(value);
       },
@@ -147,13 +124,7 @@ describe("Moonshot native video wrapper", () => {
     } as never);
     Object.assign(projectedWithSecondOmitted, { reasoning_effort: "max" });
     const ceiling = Buffer.byteLength(JSON.stringify(projectedWithSecondOmitted), "utf8") + 1;
-    let dispatched: unknown;
-    const wrapped = createNativeWrapper(
-      capturePayloadStream(payload, (value) => (dispatched = value)),
-      ceiling,
-    );
-
-    await wrapped(model(), { messages: [] } as Context, {});
+    const dispatched = await dispatchPayload(payload, {}, ceiling);
 
     const content = (dispatched as typeof payload).messages[0]!.content;
     expect(content[2]).toEqual({ type: "video_url", video_url: { url: MP4_A } });
@@ -286,6 +257,7 @@ describe("Moonshot registered transport boundary", () => {
       }
 
       expect(caller, JSON.stringify(streamError)).toHaveBeenCalledOnce();
+      expect(JSON.stringify(callerPayload)).not.toContain("__openclaw");
       expect(JSON.stringify(callerPayload)).not.toContain("/private/");
       expect(JSON.stringify(callerPayload)).toContain("data:video/mp4;base64,dmlkZW8=");
       expect(requestBody, JSON.stringify(streamError)).toBeDefined();

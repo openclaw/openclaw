@@ -14,7 +14,11 @@ import type {
   SessionConnectionOwner,
   SessionGateway,
 } from "./session-capability.ts";
-import { isUiGlobalSessionKey, resolveUiConversationIdentity } from "./session-key.ts";
+import {
+  isUiGlobalSessionKey,
+  resolveUiConversationIdentity,
+  scopedSessionArtifactKey,
+} from "./session-key.ts";
 
 const MAX_RETAINED_PUBLICATIONS = 32;
 
@@ -212,6 +216,26 @@ export function createSessionGitHubPublication(host: Host) {
       if (asNullableRecord(payload)?.reason === "github-publication") {
         const entry = entries.get(key);
         if (entry?.current()) {
+          entry.controller.invalidate();
+        }
+      }
+    },
+    observePullRequests(payload: unknown) {
+      const snapshots = asNullableRecord(asNullableRecord(payload)?.sessions);
+      if (!snapshots) {
+        return;
+      }
+      for (const entry of entries.values()) {
+        const snapshot = asNullableRecord(
+          snapshots[scopedSessionArtifactKey(entry.row.key, entry.row.agentId)],
+        );
+        if (snapshot?.status !== "ready" || !Array.isArray(snapshot.pullRequests)) {
+          continue;
+        }
+        // The Gateway decides coverage. Recheck held failure on fresh PR evidence,
+        // even with the same head: an earlier coverage read may have been unavailable.
+        // Existing controller coalescing shares this read across presentations.
+        if (entry.current() && entry.controller.result?.status === "failed") {
           entry.controller.invalidate();
         }
       }

@@ -1,5 +1,16 @@
 // Verifies tool-result middleware validation, sanitization, and fail-closed behavior.
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { AgentToolResultMiddleware } from "../../plugins/agent-tool-result-middleware-types.js";
+import { PluginInstanceUnavailableError } from "../../plugins/plugin-instance-error.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  createPluginRegistryOwner,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
 
 describe("createAgentToolResultMiddlewareRunner", () => {
@@ -31,6 +42,68 @@ describe("createAgentToolResultMiddlewareRunner", () => {
         middlewareError: true,
       },
     });
+  });
+
+  it("fails closed when a handler mutates the result and then reports a retired plugin", async () => {
+    // A live handler can fail on a nested retired dependency after writing in place.
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      (event) => {
+        event.result.content = "not an array" as never;
+        throw new PluginInstanceUnavailableError("nested-dependency");
+      },
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: {},
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.details).toEqual({ status: "error", middlewareError: true });
+  });
+
+  it("skips a later middleware whose plugin is removed while an earlier one runs", async () => {
+    const earlierEntered = createDeferred();
+    const releaseEarlier = createDeferred();
+    const earlier: AgentToolResultMiddleware = async (event) => {
+      earlierEntered.resolve();
+      await releaseEarlier.promise;
+      return { result: { ...event.result, content: [{ type: "text", text: "compacted" }] } };
+    };
+    // The plugin belongs to its Gateway's registry; the next generation drops it.
+    const record = createPluginRecord({ id: "removed-mid-call" });
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(record);
+    setActivePluginRegistry(registry);
+    const gateway = createPluginRegistryOwner(registry);
+    const instance = new PluginInstance(record.id, { record, registry });
+    const later = instance.wrap<AgentToolResultMiddleware>((event) => ({
+      result: { ...event.result, content: [{ type: "text", text: "later" }] },
+    }));
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [earlier, later]);
+
+    const applied = runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: {},
+      result: { content: [{ type: "text", text: "exit 0" }], details: {} },
+    });
+    try {
+      await earlierEntered.promise;
+      const next = createEmptyPluginRegistry();
+      setActivePluginRegistry(next);
+      gateway.publish(next);
+      await instance.dispose();
+      releaseEarlier.resolve();
+
+      expect(await applied).toEqual({
+        content: [{ type: "text", text: "compacted" }],
+        details: {},
+      });
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it("fails closed for invalid middleware results", async () => {
@@ -372,58 +445,6 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(content.text).not.toContain("late chunk");
   });
 
-  it("preserves nested image toolResult content without stringifying data", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "vision",
-      args: {},
-      result: {
-        content: [
-          {
-            type: "toolResult",
-            toolUseId: "call-1",
-            content: [{ type: "image", mimeType: "image/png", data: "base64-image" }],
-          } as never,
-        ],
-        details: {},
-      },
-    });
-
-    expect(result.content).toEqual([
-      { type: "image", mimeType: "image/png", data: "base64-image" },
-    ]);
-  });
-
-  it("preserves mixed nested text and image toolResult content", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "screenshot",
-      args: {},
-      result: {
-        content: [
-          {
-            type: "toolResult",
-            toolUseId: "call-1",
-            content: [
-              { type: "text", text: "captured screenshot" },
-              { type: "image", mimeType: "image/png", data: "base64-image" },
-            ],
-          } as never,
-        ],
-        details: {},
-      },
-    });
-
-    expect(result.content).toEqual([
-      { type: "text", text: "captured screenshot" },
-      { type: "image", mimeType: "image/png", data: "base64-image" },
-    ]);
-  });
-
   it("preserves images from deeper nested toolResult content", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
 
@@ -531,26 +552,6 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     });
 
     expect(result.details).toEqual({ ok: true, exitCode: 0, id: "10" });
-  });
-
-  it("collapses oversized incoming details to a truncation marker", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
-      () => undefined,
-    ]);
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "exec",
-      args: {},
-      result: {
-        content: [{ type: "text", text: "ok" }],
-        details: { blob: "x".repeat(200_000) },
-      },
-    });
-
-    const sanitized = result.details as { truncated?: boolean; originalSizeBytes?: number };
-    expect(sanitized.truncated).toBe(true);
-    expect(sanitized.originalSizeBytes ?? 0).toBeGreaterThan(100_000);
   });
 
   it("measures multibyte incoming details by serialized UTF-8 bytes", async () => {

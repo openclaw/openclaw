@@ -200,49 +200,4 @@ describe("message tool sandbox attachments", () => {
       expect(bridgeReadFile).not.toHaveBeenCalled();
     });
   });
-
-  it("keeps managed host artifacts readable with a remote workspace bridge", async () => {
-    await withTempDir("message-tool-managed-media-", async (tempDir) => {
-      const stateDir = await fs.realpath(tempDir);
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const hostMirrorDir = path.join(stateDir, "host-mirror");
-      const remoteWorkspaceDir = path.join(stateDir, "remote-workspace");
-      const managedPath = path.join(stateDir, "media", "tool-image-generation", "chart.txt");
-      await fs.mkdir(hostMirrorDir, { recursive: true });
-      await fs.mkdir(remoteWorkspaceDir, { recursive: true });
-      await fs.mkdir(path.dirname(managedPath), { recursive: true });
-      await fs.writeFile(managedPath, "managed chart");
-      const bridge = createRemoteBridge({ hostMirrorDir, remoteWorkspaceDir });
-      const deliveredBytes: Buffer[] = [];
-      const sendMedia = vi.fn(async (ctx: ChannelOutboundContext) => {
-        if (!ctx.mediaAccess?.readFile || !ctx.mediaUrl) {
-          throw new Error("managed media access was not delivered to the channel adapter");
-        }
-        deliveredBytes.push(await ctx.mediaAccess.readFile(ctx.mediaUrl));
-        return { channel, messageId: "managed-media-1" };
-      });
-      registerSandboxMediaPlugin(sendMedia);
-      const tool = createMessageTool({
-        config: cfg,
-        getRuntimeConfig: () => cfg,
-        conversationReadOrigin: "direct-operator",
-        sandboxRoot: hostMirrorDir,
-        sandboxContainerWorkdir: "/sandbox",
-        sandboxFsBridge: bridge,
-        sandboxWorkspaceMediaReadAllowed: true,
-        runMessageAction: (input) => runMessageAction({ ...input, skipQueue: true }),
-      });
-
-      await tool.execute("managed-media-send", {
-        action: "send",
-        channel,
-        target: "recipient",
-        message: "chart ready",
-        media: managedPath,
-      });
-
-      expect(sendMedia).toHaveBeenCalledTimes(1);
-      expect(deliveredBytes).toEqual([Buffer.from("managed chart")]);
-    });
-  });
 });

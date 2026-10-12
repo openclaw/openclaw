@@ -2,7 +2,7 @@ import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   DiagnosticEventPrivateData,
-} from "../api.js";
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { formatError } from "./service-exporter.js";
 import type { createDiagnosticsLogExporter } from "./service-logs.js";
 import type { createHarnessRecorders } from "./service-recorders-harness.js";
@@ -22,229 +22,90 @@ type OtelDiagnosticEventPrivateData = DiagnosticEventPrivateData &
     hostPluginId?: string;
   }>;
 
+type DiagnosticEvent<K extends DiagnosticEventPayload["type"]> = {
+  [Type in K]: Extract<DiagnosticEventPayload, { type: Type }>;
+}[K];
+type DiagnosticHandlers = {
+  [Type in DiagnosticEventPayload["type"]]?: (
+    evt: DiagnosticEvent<Type>,
+    metadata: DiagnosticEventMetadata,
+    privateData: OtelDiagnosticEventPrivateData,
+  ) => unknown;
+};
+
 export function createDiagnosticsEventHandler(params: {
   logger: OtelLogger;
   recorders: DiagnosticsEventRecorders;
-  recordLogRecord: ReturnType<typeof createDiagnosticsLogExporter>["recordLogRecord"];
-  recordSecurityEvent: ReturnType<typeof createDiagnosticsLogExporter>["recordSecurityEvent"];
+  recordLogEvent: ReturnType<typeof createDiagnosticsLogExporter>["recordLogEvent"];
 }) {
-  const { logger, recorders, recordLogRecord, recordSecurityEvent } = params;
-  const {
-    recordGcDuration,
-    recordGatewayEventLoopSample,
-    recordGatewayRpc,
-    recordModelUsage,
-    recordWebhookReceived,
-    recordWebhookProcessed,
-    recordWebhookError,
-    recordMessageQueued,
-    recordMessageReceived,
-    recordMessageDispatchStarted,
-    recordMessageDispatchCompleted,
-    recordMessageProcessed,
-    recordMessageDeliveryStarted,
-    recordMessageDeliveryCompleted,
-    recordMessageDeliveryError,
-    recordTalkEvent,
-    recordLaneEnqueue,
-    recordLaneDequeue,
-    recordSessionState,
-    recordSessionTurnCreated,
-    recordSessionStuck,
-    recordSessionRecoveryRequested,
-    recordSessionRecoveryCompleted,
-    recordRunAttempt,
-    recordHeartbeat,
-    recordLivenessWarning,
-    recordDiagnosticPhaseCompleted,
-    recordRunStarted,
-    recordRunCompleted,
-    recordHarnessRunStarted,
-    recordHarnessRunCompleted,
-    recordHarnessRunError,
-    recordContextAssembled,
-    recordModelCallStarted,
-    recordModelCallFinished,
-    recordToolExecutionStarted,
-    recordToolExecutionFinished,
-    recordToolExecutionBlocked,
-    recordSkillUsed,
-    recordExecProcessCompleted,
-    recordToolLoop,
-    recordMemorySample,
-    recordMemoryPressure,
-    recordAsyncQueueDropped,
-    recordTelemetryExporter,
-    recordPayloadLarge,
-    recordModelFailover,
-  } = recorders;
-  return (
-    evt: DiagnosticEventPayload,
+  const { logger, recorders, recordLogEvent } = params;
+  const handlers: DiagnosticHandlers = {
+    "diagnostic.gc": recorders.recordGcDuration.bind(recorders),
+    "gateway.event_loop.sample": recorders.recordGatewayEventLoopSample.bind(recorders),
+    "gateway.rpc": recorders.recordGatewayRpc.bind(recorders),
+    "model.usage": (evt, metadata, privateData) =>
+      recorders.recordModelUsage(evt, metadata, privateData.hostPluginId),
+    "webhook.received": recorders.recordWebhookReceived.bind(recorders),
+    "webhook.processed": recorders.recordWebhookProcessed.bind(recorders),
+    "webhook.error": recorders.recordWebhookError.bind(recorders),
+    "message.queued": recorders.recordMessageQueued.bind(recorders),
+    "message.received": recorders.recordMessageReceived.bind(recorders),
+    "message.dispatch.started": recorders.recordMessageDispatchStarted.bind(recorders),
+    "message.dispatch.completed": recorders.recordMessageDispatchCompleted.bind(recorders),
+    "message.processed": recorders.recordMessageProcessed.bind(recorders),
+    "message.delivery.started": recorders.recordMessageDeliveryStarted.bind(recorders),
+    "message.delivery.completed": recorders.recordMessageDeliveryFinished.bind(recorders),
+    "message.delivery.error": recorders.recordMessageDeliveryFinished.bind(recorders),
+    "talk.event": recorders.recordTalkEvent.bind(recorders),
+    "queue.lane.enqueue": recorders.recordLaneEnqueue.bind(recorders),
+    "queue.lane.dequeue": recorders.recordLaneDequeue.bind(recorders),
+    "session.state": recorders.recordSessionState.bind(recorders),
+    "session.turn.created": recorders.recordSessionTurnCreated.bind(recorders),
+    "session.stuck": recorders.recordSessionStuck.bind(recorders),
+    "session.recovery.requested": recorders.recordSessionRecoveryRequested.bind(recorders),
+    "session.recovery.completed": recorders.recordSessionRecoveryCompleted.bind(recorders),
+    "run.attempt": recorders.recordRunAttempt.bind(recorders),
+    "diagnostic.heartbeat": recorders.recordHeartbeat.bind(recorders),
+    "diagnostic.liveness.warning": recorders.recordLivenessWarning.bind(recorders),
+    "diagnostic.phase.completed": recorders.recordDiagnosticPhaseCompleted.bind(recorders),
+    "run.started": recorders.recordRunStarted.bind(recorders),
+    "run.completed": recorders.recordRunCompleted.bind(recorders),
+    "harness.run.started": recorders.recordHarnessRunStarted.bind(recorders),
+    "agent.commentary": recorders.recordAgentCommentary.bind(recorders),
+    "harness.run.completed": recorders.recordHarnessRunFinished.bind(recorders),
+    "harness.run.error": recorders.recordHarnessRunFinished.bind(recorders),
+    "context.assembled": recorders.recordContextAssembled.bind(recorders),
+    "model.call.started": recorders.recordModelCallStarted.bind(recorders),
+    "model.call.completed": (evt, metadata, privateData) =>
+      recorders.recordModelCallFinished(evt, metadata, privateData.modelContent),
+    "model.call.error": (evt, metadata, privateData) =>
+      recorders.recordModelCallFinished(evt, metadata, privateData.modelContent),
+    "tool.execution.started": recorders.recordToolExecutionStarted.bind(recorders),
+    "tool.execution.completed": (evt, metadata, privateData) =>
+      recorders.recordToolExecutionFinished(evt, metadata, privateData.toolContent),
+    "tool.execution.error": (evt, metadata, privateData) =>
+      recorders.recordToolExecutionFinished(evt, metadata, privateData.toolContent),
+    "tool.execution.blocked": recorders.recordToolExecutionBlocked.bind(recorders),
+    "skill.used": recorders.recordSkillUsed.bind(recorders),
+    "exec.process.completed": recorders.recordExecProcessCompleted.bind(recorders),
+    "log.record": (evt, metadata) => recordLogEvent?.(evt, metadata),
+    "security.event": (evt, metadata) => recordLogEvent?.(evt, metadata),
+    "tool.loop": recorders.recordToolLoop.bind(recorders),
+    "diagnostic.memory.sample": (evt) => recorders.recordMemoryUsageMetrics(evt),
+    "diagnostic.memory.pressure": recorders.recordMemoryPressure.bind(recorders),
+    "diagnostic.async_queue.dropped": recorders.recordAsyncQueueDropped.bind(recorders),
+    "telemetry.exporter": recorders.recordTelemetryExporter.bind(recorders),
+    "payload.large": recorders.recordPayloadLarge.bind(recorders),
+    "model.failover": recorders.recordModelFailover.bind(recorders),
+  };
+  return <K extends DiagnosticEventPayload["type"]>(
+    evt: DiagnosticEvent<K>,
     metadata: DiagnosticEventMetadata,
     privateData: OtelDiagnosticEventPrivateData,
   ) => {
     try {
-      switch (evt.type) {
-        case "diagnostic.child_process.spawn":
-          // Child-launch counts currently export through Prometheus.
-          return;
-        case "diagnostic.gc":
-          recordGcDuration(evt, metadata);
-          return;
-        case "gateway.event_loop.sample":
-          recordGatewayEventLoopSample(evt, metadata);
-          return;
-        case "gateway.rpc":
-          recordGatewayRpc(evt, metadata);
-          return;
-        case "model.usage":
-          recordModelUsage(evt, metadata, privateData.hostPluginId);
-          return;
-        case "webhook.received":
-          recordWebhookReceived(evt);
-          return;
-        case "webhook.processed":
-          recordWebhookProcessed(evt);
-          return;
-        case "webhook.error":
-          recordWebhookError(evt);
-          return;
-        case "message.queued":
-          recordMessageQueued(evt);
-          return;
-        case "message.received":
-          recordMessageReceived(evt);
-          return;
-        case "message.dispatch.started":
-          recordMessageDispatchStarted(evt, metadata);
-          return;
-        case "message.dispatch.completed":
-          recordMessageDispatchCompleted(evt);
-          return;
-        case "message.processed":
-          recordMessageProcessed(evt, metadata);
-          return;
-        case "message.delivery.started":
-          recordMessageDeliveryStarted(evt);
-          return;
-        case "message.delivery.completed":
-          recordMessageDeliveryCompleted(evt, metadata);
-          return;
-        case "message.delivery.error":
-          recordMessageDeliveryError(evt, metadata);
-          return;
-        case "talk.event":
-          recordTalkEvent(evt, metadata);
-          return;
-        case "queue.lane.enqueue":
-          recordLaneEnqueue(evt);
-          return;
-        case "queue.lane.dequeue":
-          recordLaneDequeue(evt);
-          return;
-        case "session.state":
-          recordSessionState(evt);
-          break;
-        case "session.long_running":
-        case "session.stalled":
-          break;
-        case "session.turn.created":
-          recordSessionTurnCreated(evt);
-          return;
-        case "session.stuck":
-          recordSessionStuck(evt);
-          return;
-        case "session.recovery.requested":
-          recordSessionRecoveryRequested(evt);
-          return;
-        case "session.recovery.completed":
-          recordSessionRecoveryCompleted(evt);
-          return;
-        case "run.attempt":
-          recordRunAttempt(evt);
-          break;
-        case "run.progress":
-          break;
-        case "run.execution_phase":
-          break;
-        case "diagnostic.heartbeat":
-          recordHeartbeat(evt);
-          return;
-        case "diagnostic.liveness.warning":
-          recordLivenessWarning(evt);
-          return;
-        case "diagnostic.phase.completed":
-          recordDiagnosticPhaseCompleted(evt);
-          return;
-        case "run.started":
-          recordRunStarted(evt, metadata);
-          return;
-        case "run.completed":
-          recordRunCompleted(evt, metadata, privateData);
-          return;
-        case "harness.run.started":
-          recordHarnessRunStarted(evt, metadata);
-          return;
-        case "harness.run.completed":
-          recordHarnessRunCompleted(evt, metadata, privateData);
-          return;
-        case "harness.run.error":
-          recordHarnessRunError(evt, metadata, privateData);
-          return;
-        case "context.assembled":
-          recordContextAssembled(evt, metadata);
-          return;
-        case "model.call.started":
-          recordModelCallStarted(evt, metadata);
-          return;
-        case "model.call.completed":
-        case "model.call.error":
-          recordModelCallFinished(evt, metadata, privateData.modelContent);
-          return;
-        case "tool.execution.started":
-          recordToolExecutionStarted(evt, metadata);
-          return;
-        case "tool.execution.completed":
-        case "tool.execution.error":
-          recordToolExecutionFinished(evt, metadata, privateData.toolContent);
-          return;
-        case "tool.execution.blocked":
-          recordToolExecutionBlocked(evt, metadata);
-          return;
-        case "skill.used":
-          recordSkillUsed(evt, metadata);
-          return;
-        case "exec.process.completed":
-          recordExecProcessCompleted(evt, metadata);
-          break;
-        case "exec.approval.followup_suppressed":
-          break;
-        case "log.record":
-          recordLogRecord?.(evt, metadata);
-          return;
-        case "security.event":
-          recordSecurityEvent?.(evt, metadata);
-          return;
-        case "tool.loop":
-          recordToolLoop(evt);
-          return;
-        case "diagnostic.memory.sample":
-          recordMemorySample(evt);
-          return;
-        case "diagnostic.memory.pressure":
-          recordMemoryPressure(evt);
-          return;
-        case "diagnostic.async_queue.dropped":
-          recordAsyncQueueDropped(evt);
-          return;
-        case "telemetry.exporter":
-          recordTelemetryExporter(evt, metadata);
-          return;
-        case "payload.large":
-          recordPayloadLarge(evt);
-          return;
-        case "model.failover":
-          recordModelFailover(evt, metadata);
+      if (Object.hasOwn(handlers, evt.type)) {
+        handlers[evt.type]?.(evt, metadata, privateData);
       }
     } catch (err) {
       logger.error(`diagnostics-otel: event handler failed (${evt.type}): ${formatError(err)}`);

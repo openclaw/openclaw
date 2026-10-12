@@ -1,13 +1,17 @@
+import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
+import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
+import type { ApplicationContext } from "../../../app/context.ts";
+import { resolveControlUiAuthCandidates } from "../../../app/control-ui-auth.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import {
-  COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderKeyboardShortcut } from "../../../components/kbd.ts";
 import {
   personActivityLink,
   renderStandalonePersonLink,
@@ -19,14 +23,37 @@ import { isCloudWorkerPlacementState } from "../../../components/session-row-bad
 import "../../../components/tooltip.ts";
 import "../../../components/workspace-icon.ts";
 import { t } from "../../../i18n/index.ts";
-import { formatRelativeTimestamp } from "../../../lib/format.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../../lib/ime.ts";
+import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import {
   areUiSessionKeysEquivalent,
   resolveUiSessionNavigationParentKey,
 } from "../../../lib/sessions/session-key.ts";
+import type { ChatPageHost } from "../chat-state-host.ts";
+import {
+  ensureSidebarConversation,
+  promoteSidebarPanel,
+  setSidebarDock,
+  setSidebarExpanded,
+  sidebarActivePanel,
+  sidebarDock,
+  sidebarMainPanel,
+  toggleSidebarPanelExpanded,
+  type SidebarLayout,
+  type SidebarSlotId,
+} from "../sidebar-layout.ts";
+import type { HeaderMenuQuickAction } from "./chat-header-session-menu.ts";
+import "./chat-pane-versions-menu.tsx";
+import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
 
 export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
+
+const pendingLayoutActions = new WeakMap<EventTarget, () => void>();
 
 type ChatPaneParentSession = {
   key: string;
@@ -40,6 +67,7 @@ type ChatPaneHeaderProps = {
   navDrawerOpen?: boolean;
   title: string;
   session: GatewaySessionRow | undefined;
+  incognito?: boolean;
   showOwnerChip?: boolean;
   ownerViewing?: boolean;
   personActivity?: PersonActivityRouting;
@@ -50,7 +78,12 @@ type ChatPaneHeaderProps = {
   workspaceRoot: string | null;
   workspaceLabel: string | null;
   /** Gateway-resolved project icon for the chip; absent keeps the folder glyph. */
-  workspaceIcon: { routeUrl: string; authTokens: readonly string[]; authReady: boolean } | null;
+  workspaceIcon: {
+    routeUrl: string;
+    authTokens: readonly string[];
+    authReady: boolean;
+    connectionId?: string;
+  } | null;
   parentSession: ChatPaneParentSession | null;
   branch: string | null;
   branches: SessionBranch[];
@@ -60,20 +93,21 @@ type ChatPaneHeaderProps = {
   copiedAction: ChatPaneHeaderAction | null;
   renameDisabledReason?: string;
   actionsDisabled?: boolean;
-  panelActions: TemplateResult | typeof nothing;
-  panelLayoutActions: TemplateResult | typeof nothing;
-  discussionAction: TemplateResult | typeof nothing;
-  diffAction: TemplateResult | typeof nothing;
-  backgroundTasksAction: TemplateResult | typeof nothing;
-  sessionRailAction: TemplateResult | typeof nothing;
-  workspaceAction: TemplateResult | typeof nothing;
+  panelMenuActions?: (HeaderMenuQuickAction & { shortcut?: KeyboardShortcutCombo })[];
+  layoutMenuActions?: HeaderMenuQuickAction[];
+  sidebarLayout?: SidebarLayout;
+  panelDefinitions?: SidebarPanelDefinition[];
+  onLayoutChange?: ChatPageHost["updateSidebarLayout"];
+  onToggleSidePanel?: () => void;
+  onCloseSidePanel?: (slot: SidebarSlotId) => void;
+  runningSubagentCount?: number;
+  detailsControl?: TemplateResult | typeof nothing;
+  runAction?: TemplateResult | typeof nothing;
   presence?: TemplateResult | typeof nothing;
-  faceControl?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
   publicAccessIndicator?: TemplateResult | typeof nothing;
   placementControl?: TemplateResult | typeof nothing;
   sessionMenuAction: TemplateResult | typeof nothing;
-  onboarding?: boolean;
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
   onCommitRename: () => void;
@@ -97,10 +131,6 @@ function revealLabel(platform: string | null): string {
   }
   return t("chat.sessionHeader.revealFileManager");
 }
-function branchRelativeTime(updatedAt: string | undefined): string {
-  const timestamp = updatedAt ? Date.parse(updatedAt) : Number.NaN;
-  return Number.isFinite(timestamp) ? formatRelativeTimestamp(timestamp, { fallback: "" }) : "";
-}
 
 export function resolveChatPaneParentSession(
   session: GatewaySessionRow | undefined,
@@ -114,19 +144,8 @@ export function resolveChatPaneParentSession(
   return parent ? { key: parent.key, title: resolveSessionDisplayName(parent.key, parent) } : null;
 }
 
-/**
- * Header identity trail: which project, then which session inside it. Segments
- * and separators are rendered from one list so a further segment — the parent
- * session of a nested thread, yielding project / parent / child — slots in
- * without moving the project chip or the title.
- */
-function renderIdentityCrumbs(
-  props: ChatPaneHeaderProps,
-  copied: boolean,
-  copyPathLabel: string,
-  copyBranchLabel: string,
-) {
-  const projectCrumb = renderProjectCrumb(props, copied, copyPathLabel, copyBranchLabel);
+function renderIdentityCrumbs(props: ChatPaneHeaderProps) {
+  const projectCrumb = renderProjectCrumb(props);
   const parentCrumb = renderParentSessionCrumb(props);
   return html`
     <div class="chat-pane__crumbs">
@@ -174,8 +193,10 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
       placeholder=${t("chat.sessionHeader.renameInputPlaceholder")}
       @input=${(event: InputEvent) =>
         props.onRenameInput((event.currentTarget as HTMLInputElement).value)}
+      @compositionend=${recordCompositionEnd}
+      @keyup=${clearCompositionEnd}
       @keydown=${(event: KeyboardEvent) => {
-        if (event.isComposing || event.keyCode === 229) {
+        if (isComposingKeyboardEvent(event)) {
           return;
         }
         if (event.key === "Enter") {
@@ -186,15 +207,19 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
           props.onCancelRename();
         }
       }}
-      @blur=${props.onCommitRename}
+      @blur=${(event: FocusEvent) => {
+        clearCompositionEnd(event);
+        props.onCommitRename();
+      }}
     />`;
   }
+  const title = html`${renderSessionColorDot(props.catalog ? props.catalogColor : props.session?.color)}<span
+      class="chat-pane__session-title-text"
+      >${props.title}</span
+    >`;
   return props.catalog || !props.session || props.renameDisabledReason
     ? html`<span class="chat-pane__session-title" title=${props.renameDisabledReason ?? props.title}
-        >${renderSessionColorDot(props.catalog ? props.catalogColor : props.session?.color)}<span
-          class="chat-pane__session-title-text"
-          >${props.title}</span
-        ></span
+        >${title}</span
       >`
     : html`<button
         class="chat-pane__session-title chat-pane__session-title-button"
@@ -203,22 +228,23 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
         aria-label=${t("chat.sessionHeader.renameAria", { title: props.title })}
         @click=${props.onBeginRename}
       >
-        ${renderSessionColorDot(props.catalog ? props.catalogColor : props.session?.color)}<span
-          class="chat-pane__session-title-text"
-          >${props.title}</span
-        >
+        ${title}
       </button>`;
 }
 
-function renderProjectCrumb(
-  props: ChatPaneHeaderProps,
-  copied: boolean,
-  copyPathLabel: string,
-  copyBranchLabel: string,
-): TemplateResult | null {
+function renderProjectCrumb(props: ChatPaneHeaderProps): TemplateResult | null {
   if (props.catalog || !props.workspaceLabel) {
     return null;
   }
+  const copyPathLabel =
+    props.copiedAction === "copy-path"
+      ? t("chat.sessionHeader.copied")
+      : t("chat.sessionHeader.copyPath");
+  const copyBranchLabel =
+    props.copiedAction === "copy-branch"
+      ? t("chat.sessionHeader.copied")
+      : t("chat.sessionHeader.copyBranch");
+  const copied = props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
   return html`
     <wa-dropdown
       class="chat-pane__workspace-menu"
@@ -245,21 +271,13 @@ function renderProjectCrumb(
           >${copied ? t("chat.sessionHeader.copied") : props.workspaceLabel}</span
         >
       </button>
-      ${
-        props.canReveal && props.workspaceRoot
-          ? html`<wa-dropdown-item value="reveal">${revealLabel(props.platform)}</wa-dropdown-item>`
-          : nothing
-      }
-      ${
-        props.workspaceRoot
-          ? html`<wa-dropdown-item value="copy-path">${copyPathLabel}</wa-dropdown-item>`
-          : nothing
-      }
-      ${
-        props.branch
-          ? html`<wa-dropdown-item value="copy-branch">${copyBranchLabel}</wa-dropdown-item>`
-          : nothing
-      }
+      ${[
+        [props.canReveal && props.workspaceRoot, "reveal", revealLabel(props.platform)],
+        [props.workspaceRoot, "copy-path", copyPathLabel],
+        [props.branch, "copy-branch", copyBranchLabel],
+      ].map(([visible, value, label]) =>
+        visible ? html`<wa-dropdown-item value=${value}>${label}</wa-dropdown-item>` : nothing,
+      )}
     </wa-dropdown>
   `;
 }
@@ -270,6 +288,7 @@ function renderWorkspaceChipIcon(icon: ChatPaneHeaderProps["workspaceIcon"]) {
         .routeUrl=${icon.routeUrl}
         .authTokens=${icon.authTokens}
         .authReady=${icon.authReady}
+        .connectionId=${icon.connectionId}
       ></openclaw-workspace-icon>`
     : icons.folder;
 }
@@ -290,24 +309,22 @@ export function canRevealSessionWorkspace(params: {
 }
 
 export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
-  const copyPathLabel =
-    props.copiedAction === "copy-path"
-      ? t("chat.sessionHeader.copied")
-      : t("chat.sessionHeader.copyPath");
-  const copyBranchLabel =
-    props.copiedAction === "copy-branch"
-      ? t("chat.sessionHeader.copied")
-      : t("chat.sessionHeader.copyBranch");
-  const copied = props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
   const drawerLabel = props.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
-  const compactSessionActions = props.narrow && props.sessionMenuAction !== nothing;
-  const hasFaceControl = props.faceControl !== undefined && props.faceControl !== nothing;
   const hasSharingControl = props.sharingControl !== undefined && props.sharingControl !== nothing;
-  const incognito = props.session?.incognito || isIncognitoSessionKey(props.session?.key);
+  const incognito = (props.incognito ?? props.session?.incognito) || isIncognitoSessionKey(props.session?.key);
+
+  const runningSubagents =
+    (props.runningSubagentCount ?? 0) > 0
+      ? html`<span class="chat-pane__subagents-running"
+          ><span aria-hidden="true">${icons.bot}</span>${t("chat.sessionHeader.subagentsRunning", {
+            count: String(props.runningSubagentCount),
+          })}</span
+        >`
+      : nothing;
 
   return html`
     <div
-      class="chat-pane__header ${hasFaceControl ? "chat-pane__header--centered" : ""}"
+      class=${`chat-pane__header${props.onClosePane ? " chat-pane__header--closable" : ""}${props.narrow && runningSubagents !== nothing ? " chat-pane__header--stacked-status" : ""}`}
       role="group"
       aria-label=${props.title}
       tabindex="-1"
@@ -349,11 +366,10 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
               </openclaw-tooltip>`
             : nothing
         }
-        ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
-        ${props.publicAccessIndicator ?? nothing}
+        ${renderIdentityCrumbs(props)} ${props.publicAccessIndicator ?? nothing}
         ${
           hasSharingControl
-            ? props.sharingControl
+            ? nothing
             : renderStandalonePersonLink(
                 renderSessionOwnerChip(
                   props.showOwnerChip ? props.session?.owner?.actor : undefined,
@@ -386,166 +402,19 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         }
         ${props.placementControl ?? nothing} ${props.presence ?? nothing}
       </div>
-      ${
-        hasFaceControl
-          ? html`<div class="chat-pane__header-center">${props.faceControl}</div>`
-          : nothing
-      }
       <div class="chat-pane__header-trailing">
-        ${
-          !props.catalog && props.branches.length > 1
-            ? html`
-                <wa-dropdown
-                  class="chat-pane__branches-menu"
-                  placement="bottom-end"
-                  @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-                    const leafEntryId = event.detail.item.value;
-                    const branch = props.branches.find(
-                      (candidate) => candidate.leafEntryId === leafEntryId,
-                    );
-                    if (
-                      leafEntryId &&
-                      branch &&
-                      !branch.active &&
-                      !props.branchSwitchDisabledReason
-                    ) {
-                      props.onBranchSelect(leafEntryId);
-                    }
-                  }}
-                >
-                  <button
-                    slot="trigger"
-                    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__branches-trigger"
-                    type="button"
-                    ?disabled=${Boolean(props.branchSwitchDisabledReason)}
-                    title=${props.branchSwitchDisabledReason ?? t("chat.sessionHeader.branches")}
-                    aria-label=${t("chat.sessionHeader.branches")}
-                  >
-                    ${icons.gitBranch}
-                  </button>
-                  ${props.branches.map((branch) => {
-                    const relativeTime = branchRelativeTime(branch.updatedAt);
-                    return html`
-                      <wa-dropdown-item
-                        class="chat-pane__branch-item"
-                        value=${branch.leafEntryId}
-                        ?disabled=${branch.active || Boolean(props.branchSwitchDisabledReason)}
-                        data-active=${branch.active ? "true" : "false"}
-                      >
-                        <span class="chat-pane__branch-copy">
-                          <span class="chat-pane__branch-headline"
-                            >${branch.headline || t("chat.sessionHeader.untitledBranch")}</span
-                          >
-                          <span class="chat-pane__branch-meta"
-                            >${t(
-                              branch.messageCount === 1
-                                ? "chat.sessionHeader.oneMessage"
-                                : "chat.sessionHeader.messages",
-                              { count: String(branch.messageCount) },
-                            )}${relativeTime ? ` · ${relativeTime}` : ""}</span
-                          >
-                        </span>
-                        ${
-                          branch.active
-                            ? html`<span
-                                class="chat-pane__branch-active"
-                                aria-label=${t("chat.sessionHeader.activeBranch")}
-                                >${icons.check}</span
-                              >`
-                            : nothing
-                        }
-                      </wa-dropdown-item>
-                    `;
-                  })}
-                </wa-dropdown>
-              `
-            : nothing
-        }
+        ${props.detailsControl ?? nothing}
+        <openclaw-chat-pane-versions-menu
+          style="display: contents"
+          .menu=${props}
+        ></openclaw-chat-pane-versions-menu>
         <div class="chat-pane__actions">
-          ${props.panelLayoutActions}
-          <fieldset class="chat-pane__actions" ?disabled=${props.actionsDisabled}>
-            ${compactSessionActions ? nothing : props.panelActions}
-            ${compactSessionActions ? nothing : props.discussionAction}
-            ${
-              props.catalog || compactSessionActions
-                ? nothing
-                : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}
-                  ${props.sessionRailAction}`
-            }
-            ${
-              props.onOpenSplitView && !compactSessionActions
-                ? html`<openclaw-tooltip .content=${t("chat.splitView.open")}>
-                    <button
-                      class="btn btn--ghost btn--icon chat-icon-btn chat-open-split-view"
-                      type="button"
-                      aria-label=${t("chat.splitView.open")}
-                      @click=${props.onOpenSplitView}
-                    >
-                      ${icons.columns2}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing
-            }
-            ${
-              !props.narrow && props.onSplitDown
-                ? html`<openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
-                    <button
-                      class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down"
-                      type="button"
-                      aria-label=${t("chat.splitView.splitDown")}
-                      @click=${() => props.onSplitDown?.(props.paneId)}
-                    >
-                      ${icons.panelBottomOpen}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing
-            }
-            ${
-              !props.narrow && props.onSplitRight
-                ? html`<openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
-                    <button
-                      class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-right"
-                      type="button"
-                      aria-label=${t("chat.splitView.splitRight")}
-                      @click=${() => props.onSplitRight?.(props.paneId)}
-                    >
-                      ${icons.panelRightOpen}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing
-            }
-            ${
-              props.onClosePane
-                ? html`<openclaw-tooltip .content=${t("chat.splitView.closePane")}>
-                    <button
-                      class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane"
-                      type="button"
-                      aria-label=${t("chat.splitView.closePane")}
-                      @click=${() => props.onClosePane?.(props.paneId)}
-                    >
-                      ${icons.x}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing
-            }
-            ${
-              props.mergedChrome && !compactSessionActions
-                ? html`<openclaw-tooltip .content=${t("chat.openCommandPalette")}>
-                    <button
-                      class="btn btn--ghost btn--icon chat-icon-btn chat-pane__palette-open"
-                      type="button"
-                      aria-label=${t("chat.openCommandPalette")}
-                      @click=${() => window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT))}
-                    >
-                      ${icons.search}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing
-            }
-            ${props.sessionMenuAction}
-          </fieldset>
+          ${props.narrow ? nothing : runningSubagents} ${props.runAction ?? nothing}
+          ${props.sharingControl ?? nothing} ${renderChatPaneLayoutMenu(props)}
+          ${props.sessionMenuAction}
         </div>
       </div>
+      ${props.narrow ? runningSubagents : nothing}
     </div>
     ${
       incognito
@@ -564,4 +433,227 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing
     }
   `;
+}
+
+function renderChatPaneLayoutMenu(props: ChatPaneHeaderProps) {
+  const layout = props.sidebarLayout;
+  const definitions = props.panelDefinitions ?? [];
+  const side = layout ? sidebarActivePanel(layout) : undefined;
+  const mainSlot = layout ? (sidebarMainPanel(layout)?.slot ?? "conversation") : "conversation";
+  const mainDefinition = definitions.find((definition) => definition.slot === mainSlot);
+  const sideDefinition = definitions.find((definition) => definition.slot === side?.slot);
+  const split = layout?.open === true && !layout.expanded;
+  const actions: (HeaderMenuQuickAction & {
+    className?: string;
+    shortcut?: KeyboardShortcutCombo;
+  })[] = [];
+  if (layout && props.onLayoutChange && (split || layout.expanded)) {
+    actions.push({
+      id: "focus",
+      className: "chat-panel-focus",
+      label: t(layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand"),
+      icon: layout.expanded ? icons.minimize : icons.maximize,
+      active: layout.expanded === true,
+      onActivate: () =>
+        props.onLayoutChange?.(
+          setSidebarExpanded(ensureSidebarConversation(layout), layout.expanded !== true),
+          { dashboardPresentation: "personal" },
+        ),
+    });
+  }
+  if (layout && props.onLayoutChange && split && side && mainDefinition && sideDefinition) {
+    actions.push({
+      id: "swap",
+      className: "chat-panel-swap",
+      label: t("chat.sidePanel.swap", { main: mainDefinition.label, side: sideDefinition.label }),
+      icon: icons.arrowLeftRight,
+      onActivate: () => props.onLayoutChange?.(promoteSidebarPanel(layout, side.id)),
+    });
+  }
+  if (
+    layout &&
+    side &&
+    sideDefinition &&
+    !layout.expanded &&
+    !props.narrow &&
+    props.onLayoutChange
+  ) {
+    actions.push({
+      id: "expand-side-panel",
+      className: "side-panel__expand",
+      label: t(
+        layout.expanded && layout.expandedSide
+          ? "chat.sidePanel.restore"
+          : "chat.sidePanel.expandPanel",
+        { panel: sideDefinition.label },
+      ),
+      icon: layout.expanded && layout.expandedSide ? icons.minimize : icons.maximize,
+      onActivate: () =>
+        props.onLayoutChange?.(toggleSidebarPanelExpanded(layout, side.id), {
+          dashboardPresentation: "personal",
+        }),
+    });
+  }
+  if (side && sideDefinition && props.onCloseSidePanel) {
+    actions.push({
+      id: "close-side-panel",
+      label: t("chat.sidebarColumns.close", { panel: sideDefinition.label }),
+      icon: icons.x,
+      onActivate: () => props.onCloseSidePanel?.(side.slot),
+    });
+  }
+  if (props.onToggleSidePanel) {
+    actions.push({
+      id: "side-panel",
+      className: "chat-side-panel-toggle",
+      label: t(split ? "chat.sidePanel.minimize" : "chat.sidePanel.label"),
+      icon: split ? icons.panelRightClose : icons.panelRightOpen,
+      active: split,
+      onActivate: props.onToggleSidePanel,
+    });
+  }
+  actions.push(...(props.layoutMenuActions ?? []));
+  for (const [id, label, icon, callback] of [
+    ["open-split-view", "chat.splitView.open", icons.columns2, props.onOpenSplitView],
+    ["split-down", "chat.splitView.splitDown", icons.panelBottomOpen, props.onSplitDown],
+    ["split-right", "chat.splitView.splitRight", icons.panelRightOpen, props.onSplitRight],
+    ["close-pane", "chat.splitView.closePane", icons.x, props.onClosePane],
+  ] as const) {
+    if (callback && (!props.narrow || (id !== "split-down" && id !== "split-right"))) {
+      actions.push({
+        id,
+        label: t(label),
+        className: id === "open-split-view" ? "chat-open-split-view" : `chat-pane__${id}`,
+        icon,
+        disabled: props.actionsDisabled,
+        onActivate: () =>
+          id === "open-split-view" ? props.onOpenSplitView?.() : callback(props.paneId),
+      });
+    }
+  }
+  if (layout && props.onLayoutChange && !props.narrow && split) {
+    for (const [dock, label, icon] of [
+      ["left", "dockLeft", icons.panelLeftOpen],
+      ["right", "dockRight", icons.panelRightOpen],
+      ["bottom", "dockBottom", icons.panelBottomOpen],
+    ] as const) {
+      actions.push({
+        id: `dock-${dock}`,
+        label: t(`chat.sidePanel.${label}`),
+        icon,
+        active: sidebarDock(layout) === dock,
+        onActivate: () =>
+          props.onLayoutChange?.(setSidebarDock(layout, dock), { geometryOnly: true }),
+      });
+    }
+  }
+  const panelActions = props.panelMenuActions ?? [];
+  const allActions = [...actions, ...panelActions];
+  if (allActions.length === 0 && !mainDefinition?.headerAction) {
+    return nothing;
+  }
+  const renderAction = (action: (typeof actions)[number]) => {
+    if (action.kind === "status") {
+      return html`<div class="session-menu__status" data-menu-status=${action.id} role="note">
+        <span class="session-menu__check" aria-hidden="true">${action.icon}</span>
+        <span class="session-menu__text"
+          >${action.label}${
+            action.description
+              ? html`<span class="session-menu__description">${action.description}</span>`
+              : nothing
+          }</span
+        >
+      </div>`;
+    }
+    return html`<wa-dropdown-item
+      class=${`session-menu__item ${action.className ?? ""}`}
+      value=${action.id}
+      aria-label=${action.label}
+      type=${action.active === undefined ? nothing : "checkbox"}
+      .checked=${action.active ?? false}
+      ?disabled=${action.disabled}
+    >
+      <span slot="icon" class="session-menu__icon" aria-hidden="true">${action.icon}</span>
+      <span class="session-menu__text"
+        >${action.label}${
+          action.description
+            ? html`<span class="session-menu__description">${action.description}</span>`
+            : nothing
+        }</span
+      >
+      ${
+        action.shortcut
+          ? renderKeyboardShortcut(action.shortcut, {
+              slot: "details",
+              className: "side-panel-type-option__shortcut",
+            })
+          : nothing
+      }
+    </wa-dropdown-item>`;
+  };
+  return html`<wa-dropdown
+    class="chat-pane__layout-menu chat-panel-layout-menu"
+    placement="bottom-end"
+    @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+      const action = allActions.find((candidate) => candidate.id === event.detail.item.value);
+      if (event.currentTarget && action && action.kind !== "status" && !action.disabled) {
+        event.preventDefault();
+        // SAFETY: This wa-select listener is bound directly to this wa-dropdown instance.
+        const menu = event.currentTarget as WaDropdown;
+        pendingLayoutActions.set(menu, action.onActivate);
+        // Opening and closing in one Lit update skips the hide event. Let the
+        // opening update commit before asking Web Awesome to close.
+        void menu.updateComplete.then(() => {
+          menu.open = false;
+          menu.querySelector<HTMLElement>('[slot="trigger"]')?.focus({ preventScroll: true });
+        });
+      }
+    }}
+    @wa-after-hide=${(event: Event) => {
+      if (!event.currentTarget || event.target !== event.currentTarget) {
+        return;
+      }
+      const action = pendingLayoutActions.get(event.currentTarget);
+      pendingLayoutActions.delete(event.currentTarget);
+      action?.();
+    }}
+  >
+    <button
+      slot="trigger"
+      class="btn btn--ghost chat-pane__layout-trigger"
+      type="button"
+      aria-label=${t("chat.sessionHeader.layout")}
+    >
+      <span aria-hidden="true">${icons.columns2}</span>${t("chat.sessionHeader.layout")}
+    </button>
+    ${actions.map(renderAction)}
+    ${
+      panelActions.length
+        ? html`<div class="session-menu__separator" role="separator"></div>
+            ${panelActions.map(renderAction)}`
+        : nothing
+    }
+    ${mainDefinition?.headerAction ?? nothing} ${sideDefinition?.headerAction ?? nothing}
+  </wa-dropdown>`;
+}
+
+export function resolveChatPaneWorkspaceIcon(
+  context: ApplicationContext,
+  sessionKey: string | undefined,
+) {
+  if (!sessionKey) {
+    return null;
+  }
+  const gateway = context.gateway;
+  const authTokens = resolveControlUiAuthCandidates({
+    hello: gateway.snapshot.hello,
+    settings: { token: gateway.connection.token },
+    password: gateway.connection.password,
+  });
+  return {
+    routeUrl: buildControlUiResourcePath("workspaceIcon", context.resourceBasePath, sessionKey),
+    authTokens,
+    authReady: Boolean(gateway.snapshot.hello || authTokens.length),
+    connectionId: gateway.snapshot.hello?.server?.connId,
+  };
 }

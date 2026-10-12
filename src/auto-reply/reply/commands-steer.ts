@@ -2,27 +2,13 @@
 import { logVerbose } from "../../globals.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
-import type {
-  CommandHandler,
-  CommandHandlerResult,
-  HandleCommandsParams,
-} from "./commands-types.js";
+import type { CommandHandler } from "./commands-types.js";
 import {
   parseSteerMessage,
   resolveActiveExplicitSteerSessionKey,
 } from "./explicit-steer-routing.js";
 
 const STEER_USAGE = "Usage: /steer <message>";
-
-function continueWithSteerFallback(
-  params: HandleCommandsParams,
-  message: string,
-  logMessage: string,
-): CommandHandlerResult {
-  logVerbose(logMessage);
-  applyCommandTextToParams(params, message);
-  return { shouldContinue: true };
-}
 
 export const handleSteerCommand: CommandHandler = defineAuthorizedTextCommand(
   { label: "/steer", match: parseSteerMessage },
@@ -38,17 +24,15 @@ export const handleSteerCommand: CommandHandler = defineAuthorizedTextCommand(
       commandBody: params.command.commandBodyNormalized,
     });
     if (!steerTargetSessionKey) {
-      return continueWithSteerFallback(
-        params,
-        message,
-        `steer: no active run; continuing with /steer payload as a normal prompt`,
-      );
+      logVerbose("steer: no active run; continuing with /steer payload as a normal prompt");
     }
     // Session routing resolves the active :direct:/:dm: alias before session
     // preparation. From here the ordinary prepared reply path owns media,
     // transcript persistence, stable queue identity, cancellation, lifecycle
     // adoption, and fallback if the active run disappears before admission.
     applyCommandTextToParams(params, message);
-    return { shouldContinue: true, queueModeOverride: "steer" };
+    return steerTargetSessionKey
+      ? { shouldContinue: true, queueModeOverride: "steer" }
+      : { shouldContinue: true };
   },
 );

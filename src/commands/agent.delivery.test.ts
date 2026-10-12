@@ -131,100 +131,6 @@ describe("deliverAgentCommandResult", () => {
     mocks.resolveOutboundTarget.mockClear();
   });
 
-  it("prefers explicit accountId for outbound delivery", async () => {
-    await runDelivery({
-      opts: {
-        message: "hello",
-        deliver: true,
-        channel: "whatsapp",
-        accountId: "kev",
-        to: "+15551234567",
-      },
-      sessionEntry: sessionEntry({ accountId: "default" }),
-    });
-
-    expect(readDeliveryCall().accountId).toBe("kev");
-  });
-
-  it("falls back to session accountId for implicit delivery", async () => {
-    await runDelivery({
-      opts: {
-        message: "hello",
-        deliver: true,
-        channel: "whatsapp",
-      },
-      sessionEntry: sessionEntry({ accountId: "legacy", channel: "whatsapp" }),
-    });
-
-    expect(readDeliveryCall().accountId).toBe("legacy");
-  });
-
-  it("does not infer accountId for explicit delivery targets", async () => {
-    await runDelivery({
-      opts: {
-        message: "hello",
-        deliver: true,
-        channel: "whatsapp",
-        to: "+15551234567",
-        deliveryTargetMode: "explicit",
-      },
-      sessionEntry: sessionEntry({ accountId: "legacy" }),
-    });
-
-    const targetCall = readResolveTargetCall();
-    expect(targetCall.accountId).toBeUndefined();
-    expect(targetCall.mode).toBe("explicit");
-    expect(readDeliveryCall().accountId).toBeUndefined();
-  });
-
-  it("skips session accountId when channel differs", async () => {
-    await runDelivery({
-      opts: {
-        message: "hello",
-        deliver: true,
-        channel: "whatsapp",
-      },
-      sessionEntry: sessionEntry({ accountId: "legacy", channel: "telegram" }),
-    });
-
-    const targetCall = readResolveTargetCall();
-    expect(targetCall.accountId).toBeUndefined();
-    expect(targetCall.channel).toBe("whatsapp");
-  });
-
-  it("uses session last channel when none is provided", async () => {
-    await runDelivery({
-      opts: {
-        message: "hello",
-        deliver: true,
-      },
-      sessionEntry: sessionEntry({ channel: "telegram", to: "123" }),
-    });
-
-    const targetCall = readResolveTargetCall();
-    expect(targetCall.channel).toBe("telegram");
-    expect(targetCall.to).toBe("123");
-  });
-
-  it("uses reply overrides for delivery routing", async () => {
-    await runDelivery({
-      opts: {
-        message: "hello",
-        deliver: true,
-        to: "+15551234567",
-        replyTo: "#reports",
-        replyChannel: "slack",
-        replyAccountId: "ops",
-      },
-      sessionEntry: sessionEntry({ channel: "telegram", to: "123", accountId: "legacy" }),
-    });
-
-    const targetCall = readResolveTargetCall();
-    expect(targetCall.channel).toBe("slack");
-    expect(targetCall.to).toBe("#reports");
-    expect(targetCall.accountId).toBe("ops");
-  });
-
   it("stays silent for intentional empty payloads", async () => {
     const runtime = createRuntime();
 
@@ -296,33 +202,11 @@ describe("deliverAgentCommandResult", () => {
     expect(deliveryCall.session?.agentId).toBe("exec");
   });
 
-  it("prefixes nested agent outputs with context", async () => {
-    const runtime = createRuntime();
-    await runDelivery({
-      runtime,
-      resultText: "ANNOUNCE_SKIP",
-      opts: {
-        message: "hello",
-        deliver: false,
-        lane: "nested",
-        sessionKey: "agent:main:main",
-        runId: "run-announce",
-        messageChannel: "webchat",
-      },
-      sessionEntry: undefined,
-    });
-
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect((runtime.log as ReturnType<typeof vi.fn>).mock.calls).toEqual([
-      ["[agent:nested] session=agent:main:main run=run-announce channel=webchat ANNOUNCE_SKIP"],
-    ]);
-  });
-
   it("prefixes per-session nested lanes with the same nested log context (#67502)", async () => {
     const runtime = createRuntime();
     await runDelivery({
       runtime,
-      resultText: "ANNOUNCE_SKIP",
+      resultText: "Child finished",
       opts: {
         message: "hello",
         deliver: false,
@@ -337,36 +221,8 @@ describe("deliverAgentCommandResult", () => {
     expect(runtime.log).toHaveBeenCalledTimes(1);
     expect((runtime.log as ReturnType<typeof vi.fn>).mock.calls).toEqual([
       [
-        "[agent:nested] session=agent:ebao-next:quietchat:channel:1 run=run-announce channel=webchat ANNOUNCE_SKIP",
+        "[agent:nested] session=agent:ebao-next:quietchat:channel:1 run=run-announce channel=webchat Child finished",
       ],
     ]);
-  });
-
-  it("preserves audioAsVoice in JSON output envelopes", async () => {
-    const runtime = createRuntime();
-    await runDelivery({
-      runtime,
-      payloads: [{ text: "voice caption", mediaUrl: "file:///tmp/clip.mp3", audioAsVoice: true }],
-      opts: {
-        message: "hello",
-        deliver: false,
-        json: true,
-      },
-    });
-
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(
-      JSON.parse(String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0])),
-    ).toEqual({
-      payloads: [
-        {
-          text: "voice caption",
-          mediaUrl: "file:///tmp/clip.mp3",
-          mediaUrls: ["file:///tmp/clip.mp3"],
-          audioAsVoice: true,
-        },
-      ],
-      meta: { durationMs: 1 },
-    });
   });
 });

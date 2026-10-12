@@ -1,22 +1,17 @@
-/**
- * Claude CLI model-ref normalization. It maps family aliases and retired model
- * ids to current Anthropic runtime refs while preserving auth-profile suffixes.
- */
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_MODEL_ID_ALIASES } from "./cli-constants.js";
 
-/** Normalized Claude CLI selection plus runtime refs used by setup migrations. */
 type ClaudeCliAnthropicModelRefs = {
   selectedRef: string;
   runtimeRefs: string[];
   rewriteRef?: string;
 };
 
-function splitTrailingModelAuthProfile(raw: string): { model: string; profile?: string } {
+export function splitTrailingModelAuthProfile(raw: string): { model: string; profile?: string } {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return { model: "" };
-  }
   const lastSlash = trimmed.lastIndexOf("/");
   let delimiter = trimmed.indexOf("@", lastSlash + 1);
   if (delimiter <= 0) {
@@ -36,21 +31,6 @@ function splitTrailingModelAuthProfile(raw: string): { model: string; profile?: 
 
 function attachModelAuthProfile(model: string, profile?: string): string {
   return profile ? `${model}@${profile}` : model;
-}
-
-function hasRetiredVersionPrefix(normalized: string, prefix: string): boolean {
-  if (normalized === prefix) {
-    return true;
-  }
-  if (!normalized.startsWith(prefix)) {
-    return false;
-  }
-  const next = normalized[prefix.length];
-  return next === "-" || next === "." || next === ":" || next === "@";
-}
-
-function hasAnyRetiredVersionPrefix(normalized: string, prefixes: readonly string[]): boolean {
-  return prefixes.some((prefix) => hasRetiredVersionPrefix(normalized, prefix));
 }
 
 export function normalizeAnthropicProviderId(provider: string): string {
@@ -85,72 +65,31 @@ export function parseAnthropicModelRef(
 }
 
 function canonicalizeKnownClaudeCliModelId(modelId: string): string | null {
-  const split = splitTrailingModelAuthProfile(modelId);
-  const trimmed = split.model.trim();
-  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
+  const { model, profile } = splitTrailingModelAuthProfile(modelId);
+  const normalized = normalizeLowercaseStringOrEmpty(model);
   if (!normalized) {
     return null;
   }
   const upgraded = upgradeOldClaudeModelId(normalized);
   if (upgraded) {
-    return attachModelAuthProfile(upgraded, split.profile);
+    return attachModelAuthProfile(upgraded, profile);
   }
   if (normalized.startsWith("claude-")) {
-    return attachModelAuthProfile(trimmed, split.profile);
+    return attachModelAuthProfile(model, profile);
   }
   const aliasedModel = CLAUDE_MODEL_ID_ALIASES.get(normalized);
-  return aliasedModel ? attachModelAuthProfile(aliasedModel, split.profile) : null;
+  return aliasedModel ? attachModelAuthProfile(aliasedModel, profile) : null;
 }
 
 function upgradeOldClaudeModelId(normalized: string): string | null {
-  // Current Claude families, including Haiku, must never be migrated.
-  if (
-    hasRetiredVersionPrefix(normalized, "claude-opus-5") ||
-    [
-      "claude-opus-4-8",
-      "claude-opus-4.8",
-      "claude-opus-4-7",
-      "claude-opus-4.7",
-      "claude-opus-4-6",
-      "claude-opus-4.6",
-      "claude-sonnet-4-6",
-      "claude-sonnet-4.6",
-      "claude-haiku-4-5",
-      "claude-haiku-4.5",
-    ].some((prefix) => normalized.startsWith(prefix))
-  ) {
-    return null;
-  }
-  if (
-    normalized === "claude-opus-4" ||
-    hasAnyRetiredVersionPrefix(normalized, [
-      "claude-opus-4-5",
-      "claude-opus-4.5",
-      "claude-opus-4-1",
-      "claude-opus-4.1",
-      "claude-opus-4-0",
-      "claude-opus-4.0",
-    ]) ||
-    /^claude-opus-4-20\d{6}/.test(normalized)
-  ) {
-    return "claude-opus-5";
-  }
-  if (
-    normalized === "claude-sonnet-4" ||
-    hasAnyRetiredVersionPrefix(normalized, [
-      "claude-sonnet-4-5",
-      "claude-sonnet-4.5",
-      "claude-sonnet-4-1",
-      "claude-sonnet-4.1",
-      "claude-sonnet-4-0",
-      "claude-sonnet-4.0",
-    ]) ||
-    /^claude-sonnet-4-20\d{6}/.test(normalized)
-  ) {
-    return "claude-sonnet-4-6";
+  const retiredClaude4 = /^claude-(opus|sonnet)-4(?:$|[-.][015](?=$|[-.:@])|-20\d{6})/.exec(
+    normalized,
+  );
+  if (retiredClaude4) {
+    return retiredClaude4[1] === "opus" ? "claude-opus-5-5" : "claude-sonnet-4-6";
   }
   if (normalized.startsWith("claude-3") && normalized.includes("opus")) {
-    return "claude-opus-5";
+    return "claude-opus-5-5";
   }
   if (
     normalized.startsWith("claude-3") &&
@@ -159,7 +98,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     return "claude-sonnet-4-6";
   }
   if (["opus-4.5", "opus-4.1", "opus-4", "opus-3"].includes(normalized)) {
-    return "claude-opus-5";
+    return "claude-opus-5-5";
   }
   if (
     [
@@ -179,7 +118,6 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
   return null;
 }
 
-/** Resolve a Claude CLI model ref into selected and Anthropic-compatible runtime refs. */
 export function resolveClaudeCliAnthropicModelRefs(
   raw: string,
 ): ClaudeCliAnthropicModelRefs | null {
@@ -212,7 +150,6 @@ export function resolveClaudeCliAnthropicModelRefs(
   };
 }
 
-/** Resolve a known Anthropic/Claude CLI model ref to its current Anthropic model ref. */
 export function resolveKnownAnthropicModelRef(raw?: string): string | null {
   if (!raw) {
     return null;
@@ -222,4 +159,18 @@ export function resolveKnownAnthropicModelRef(raw?: string): string | null {
     return null;
   }
   return resolveClaudeCliAnthropicModelRefs(trimmed)?.rewriteRef ?? trimmed;
+}
+
+export function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown> {
+  const base = isRecord(entry) ? { ...entry } : {};
+  const currentRuntimeId = isRecord(base.agentRuntime) ? base.agentRuntime.id : undefined;
+  const currentRuntime = normalizeLowercaseStringOrEmpty(currentRuntimeId);
+  if (currentRuntime && currentRuntime !== "auto") {
+    return base;
+  }
+  base.agentRuntime = {
+    ...(isRecord(base.agentRuntime) ? base.agentRuntime : {}),
+    id: CLAUDE_CLI_BACKEND_ID,
+  };
+  return base;
 }

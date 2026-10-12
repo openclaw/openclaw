@@ -15,15 +15,11 @@ const NON_HARD_TIMEOUTS = [
 
 let runSequence = 0;
 
-async function resolveOuterTimeoutRace(
-  data: Readonly<Record<string, unknown>>,
-  options?: { ignoreCachedSnapshot?: boolean },
-) {
+async function resolveOuterTimeoutRace(data: Readonly<Record<string, unknown>>) {
   const runId = `run-timeout-fallback-${runSequence++}`;
   const waitPromise = waitForAgentJob({
     runId,
     timeoutMs: 5_000,
-    ignoreCachedSnapshot: options?.ignoreCachedSnapshot,
   });
 
   emitAgentEvent({
@@ -487,7 +483,6 @@ describe("waitForAgentJob timeout fallback", () => {
     const waitPromise = waitForAgentJob({
       runId,
       timeoutMs: 1_000,
-      ignoreCachedSnapshot: true,
     });
     emitAgentEvent({
       runId,
@@ -674,7 +669,6 @@ describe("waitForAgentJob timeout fallback", () => {
     const freshWaitPromise = waitForAgentJob({
       runId,
       timeoutMs: 5_000,
-      ignoreCachedSnapshot: true,
     });
     emitAgentEvent({
       runId,
@@ -733,7 +727,7 @@ describe("waitForAgentJob timeout fallback", () => {
     });
   });
 
-  it("ignores a hard timeout that predates a fresh wait", async () => {
+  it("forwards a pending hard timeout that predates a wait", async () => {
     const runId = `run-timeout-fallback-${runSequence++}`;
     emitAgentEvent({
       runId,
@@ -755,17 +749,10 @@ describe("waitForAgentJob timeout fallback", () => {
     const waitPromise = waitForAgentJob({
       runId,
       timeoutMs: 5_000,
-      ignoreCachedSnapshot: true,
     });
     await vi.advanceTimersByTimeAsync(6_000);
 
-    await expect(waitPromise).resolves.toBeNull();
-  });
-
-  it("lets a fresh wait consume a hard timeout it observes", async () => {
-    await expect(
-      resolveOuterTimeoutRace({ timeoutPhase: "provider" }, { ignoreCachedSnapshot: true }),
-    ).resolves.toMatchObject({
+    await expect(waitPromise).resolves.toMatchObject({
       status: "timeout",
       timeoutPhase: "provider",
       endedAt: 1_100,

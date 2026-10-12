@@ -183,9 +183,26 @@ suite.define(() => {
     const fresh = { status: "fresh" as const, cachedFiles: 2, pendingFiles: 0, staleFiles: 0 };
     const partialSessions = sessionsUsage(refreshing, "Historical lineage", partialTotals);
     const freshSessions = sessionsUsage(fresh, "Historical lineage", freshTotals);
+    // Reproduce the original API response separately from the fixed stale-rollup response.
+    const originalResponse = {
+      ...partialSessions,
+      totals: Object.fromEntries(Object.keys(totals).map((key) => [key, 0])),
+      sessions: partialSessions.sessions.map((session) => ({ ...session, usage: null })),
+      aggregates: { ...partialSessions.aggregates, daily: [], costDaily: [] },
+    };
+    let usageUpdatedAt = Date.now();
     const gateway = await installMockGateway(page, {
       methodResponses: {
-        "sessions.usage": partialSessions,
+        "agents.list": {
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "other", name: "Other" },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "sessions.usage": originalResponse,
         "usage.status": { updatedAt: Date.now(), providers: [] },
       },
     });
@@ -193,6 +210,13 @@ suite.define(() => {
     try {
       const response = await page.goto(`${suite.server.baseUrl}usage`);
       expect(response?.status()).toBe(200);
+      const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+      await agentScope.locator(".agent-select__trigger").click();
+      await agentScope
+        .locator("wa-dropdown-item[data-agent-option]")
+        .filter({ hasText: "All agents" })
+        .click();
+      await gateway.waitForRequest("sessions.usage", { match: { agentScope: "all" } });
       await expect
         .poll(() =>
           page.evaluate(() => ({
@@ -201,9 +225,43 @@ suite.define(() => {
           })),
         )
         .toEqual({ visibility: "visible", focused: true });
+      await expect.poll(() => page.locator(".usage-loading-card").count()).toBe(1);
+      await captureProof(page, "usage-original-response.png");
+      const beforeFailure = await requestCount(gateway, "sessions.usage");
+      await gateway.emitGatewayEvent("chat.metadata.changed", {
+        agentId: "main",
+        usageUpdatedAt: ++usageUpdatedAt,
+        usageRefreshFailed: true,
+        modelCatalogChanged: false,
+        authChanged: false,
+      });
+      await expect
+        .poll(() => page.locator(".usage-cache-warning.warning").textContent())
+        .toContain("Automatic checks paused");
+      expect(await page.locator(".usage-loading-card").count()).toBe(0);
+      expect(await requestCount(gateway, "sessions.usage")).toBe(beforeFailure);
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await waitForRequestCount(gateway, "sessions.usage", beforeFailure + 1);
+      await expect.poll(() => page.locator(".usage-loading-card").count()).toBe(0);
+      await expect.poll(() => page.locator(".usage-cache-warning.warning").count()).toBe(1);
+      await gateway.emitGatewayEvent("chat.metadata.changed", {
+        agentId: "other",
+        usageUpdatedAt: ++usageUpdatedAt,
+        modelCatalogChanged: false,
+        authChanged: false,
+      });
+      expect((await gateway.getRequests("sessions.usage")).at(-1)?.params).toMatchObject({
+        agentScope: "all",
+      });
+      await waitForRequestCount(gateway, "sessions.usage", beforeFailure + 2);
+      await expect.poll(() => page.locator(".usage-loading-card").count()).toBe(0);
+      await expect.poll(() => page.locator(".usage-cache-warning.warning").count()).toBe(1);
+      await captureProof(page, "usage-failed-no-rollup.png");
       const refresh = page
         .locator("openclaw-usage-page")
         .getByRole("button", { name: "Refresh", exact: true });
+      await gateway.setMethodResponse("sessions.usage", partialSessions);
+      await refresh.click();
       for (const entry of ["route", "manual"] as const) {
         if (entry === "manual") {
           await gateway.setMethodResponse("sessions.usage", partialSessions);
@@ -215,13 +273,22 @@ suite.define(() => {
         await expect.poll(() => refresh.isEnabled()).toBe(true);
         expect(await page.locator(".usage-callout.danger").count()).toBe(0);
 
+        await captureProof(page, `usage-cache-${entry}-refreshing.png`);
         const sessionsBefore = await requestCount(gateway, "sessions.usage");
-        // Only server data changes. Publish it before optional slow media capture so
-        // recording cannot spend the production retry budget on old fixture data.
+        const catalogsBefore = await requestCount(gateway, "models.list");
         await gateway.setMethodResponse("sessions.usage", freshSessions);
+        const publication = {
+          agentId: "main",
+          usageUpdatedAt: ++usageUpdatedAt,
+          modelCatalogChanged: false,
+          authChanged: false,
+        };
+        await gateway.emitGatewayEvent("chat.metadata.changed", publication);
+        await gateway.emitGatewayEvent("chat.metadata.changed", publication);
         await expect
           .poll(() => requestCount(gateway, "sessions.usage"), { timeout: 10_000 })
-          .toBeGreaterThan(sessionsBefore);
+          .toBe(sessionsBefore + 1);
+        expect(await requestCount(gateway, "models.list")).toBe(catalogsBefore);
         await expect
           .poll(() => usageBadges(page))
           .toEqual(["320 Tokens", "$0.01 Cost", "1 session"]);

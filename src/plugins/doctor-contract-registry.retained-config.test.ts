@@ -1,6 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
 // Retained core-version repairs apply only before an installed plugin owns the channel.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { defineRetiredPluginStateMigration } from "./doctor-retired-state.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import {
   getRegistryJitiMocks,
   resetRegistryJitiMocks,
@@ -13,6 +17,7 @@ vi.mock("./public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleFromCandidatesSync: retainedConfigDoctorMock,
 }));
 let doctor: typeof import("./doctor-contract-registry.js");
+let migrationResources: typeof import("./doctor-migration-resources.js");
 function makeTempDir() {
   return tempDirs.make("openclaw-retained-config-doctor-");
 }
@@ -20,6 +25,7 @@ function makeTempDir() {
 beforeAll(async () => {
   vi.resetModules();
   doctor = await import("./doctor-contract-registry.js");
+  migrationResources = await import("./doctor-migration-resources.js");
 });
 beforeEach(() => {
   resetRegistryJitiMocks();
@@ -101,4 +107,100 @@ describe("retained channel config repairs", () => {
     ).toEqual([]);
     expect(retainedConfigDoctorMock).not.toHaveBeenCalled();
   });
+});
+
+describe("retained plugin state checks", () => {
+  it.each([
+    {
+      name: "selected official owner",
+      trusted: true,
+      declared: true,
+      enabled: true,
+      packageName: "@openclaw/demo",
+      refuses: true,
+    },
+    {
+      name: "external shadow",
+      trusted: false,
+      declared: true,
+      enabled: true,
+      packageName: "@openclaw/demo",
+      refuses: false,
+    },
+    {
+      name: "different package",
+      trusted: true,
+      declared: true,
+      enabled: true,
+      packageName: "@other/demo",
+      refuses: false,
+    },
+    {
+      name: "different migration",
+      trusted: true,
+      declared: false,
+      enabled: true,
+      packageName: "@openclaw/demo",
+      refuses: false,
+    },
+    {
+      name: "disabled owner",
+      trusted: true,
+      declared: true,
+      enabled: false,
+      packageName: "@openclaw/demo",
+      refuses: false,
+    },
+  ])(
+    "checks only the matching $name",
+    async ({ trusted, declared, enabled, packageName, refuses }) => {
+      const stateDir = makeTempDir();
+      const source = path.join(stateDir, "custom-history.jsonl");
+      fs.writeFileSync(source, "opaque historical bytes\n");
+      const migration = defineRetiredPluginStateMigration({
+        id: "retired-log",
+        label: "Call log",
+        intermediateVersion: "2026.9.7",
+        findSources: () => [source],
+      });
+      retainedConfigDoctorMock.mockReturnValue({
+        packageName: "@openclaw/demo",
+        stateMigrations: [migration],
+      });
+      const params = {
+        candidateRoot: stateDir,
+        config: { plugins: { entries: { demo: { enabled } } } },
+        env: {
+          HOME: stateDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        },
+        stateDir,
+        manifestRegistry: {
+          plugins: [
+            createPluginManifestRecordFixture({
+              id: "demo",
+              origin: "global",
+              rootDir: stateDir,
+              packageName,
+              trustedOfficialInstall: trusted,
+              doctorContract: { stateMigrations: [{ id: declared ? "retired-log" : "other" }] },
+            }),
+          ],
+          diagnostics: [],
+        },
+      };
+      const records = doctor
+        .resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true })
+        .filter(doctor.isTrustedForDurableStores);
+      const check = migrationResources.assertPluginStateRetention(records, params);
+      if (refuses) {
+        await expect(check).rejects.toThrow("Install OpenClaw 2026.9.7");
+      } else {
+        await expect(check).resolves.toBeUndefined();
+      }
+      expect(fs.readFileSync(source, "utf8")).toBe("opaque historical bytes\n");
+      expect(fs.readdirSync(stateDir)).toEqual(["custom-history.jsonl"]);
+    },
+  );
 });

@@ -30,7 +30,7 @@ vi.mock("../packages/terminal-core/src/theme.js", () => ({
 }));
 
 import { isVerbose } from "./global-state.js";
-import { shouldLogVerbose, logVerbose, logVerboseConsole } from "./globals.js";
+import { logVerbose, logVerboseConsole } from "./globals.js";
 import { isFileLogLevelEnabled } from "./logging/logger.js";
 
 beforeEach(() => {
@@ -42,30 +42,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-});
-
-describe("shouldLogVerbose", () => {
-  it("returns true when isVerbose is true", () => {
-    vi.mocked(isVerbose).mockReturnValue(true);
-    expect(shouldLogVerbose()).toBe(true);
-  });
-
-  it("returns true when file log level is debug", () => {
-    vi.mocked(isFileLogLevelEnabled).mockReturnValue(true);
-    expect(shouldLogVerbose()).toBe(true);
-  });
-
-  it("returns true when both are true", () => {
-    vi.mocked(isVerbose).mockReturnValue(true);
-    vi.mocked(isFileLogLevelEnabled).mockReturnValue(true);
-    expect(shouldLogVerbose()).toBe(true);
-  });
-
-  it("returns false when both are false", () => {
-    vi.mocked(isVerbose).mockReturnValue(false);
-    vi.mocked(isFileLogLevelEnabled).mockReturnValue(false);
-    expect(shouldLogVerbose()).toBe(false);
-  });
 });
 
 describe("logVerbose", () => {

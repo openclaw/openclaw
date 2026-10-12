@@ -15,7 +15,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
 import type { GatewayClient, RespondFn } from "../../server-methods/types.js";
 import { talkVoiceHandlers } from "./voice.js";

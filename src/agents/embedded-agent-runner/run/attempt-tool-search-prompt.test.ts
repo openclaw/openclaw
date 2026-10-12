@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
@@ -9,7 +10,7 @@ import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-const { createFixture, mocks } = await vi.hoisted(
+const { createFixture, createPromptAssemblyResult, mocks } = await vi.hoisted(
   async () => await import("./attempt-prompt-phase.test-support.js"),
 );
 vi.mock("../../../plugins/providers.runtime-core.js", () => ({
@@ -34,11 +35,12 @@ beforeEach(() => {
 });
 
 describe("embedded Tool Search prompt parity", () => {
-  it.each(
-    (["tools", "code", "directory"] as const).flatMap((mode) =>
-      [undefined, ["fixture_allowed"], []].map((toolsAllow) => ({ mode, toolsAllow })),
+  it.each([
+    { mode: "tools" as const, toolsAllow: undefined },
+    ...(["tools", "directory"] as const).flatMap((mode) =>
+      [["fixture_allowed"], []].map((toolsAllow) => ({ mode, toolsAllow })),
     ),
-  )(
+  ])(
     "submits only the current $mode catalog after hook allowlist $toolsAllow",
     async ({ mode, toolsAllow }) => {
       const fixture = createFixture({ pendingImageCount: 0 });
@@ -51,6 +53,12 @@ describe("embedded Tool Search prompt parity", () => {
         modelToolsEnabled: true,
         executeTool: async () => ({ content: [], details: {} }),
       });
+      const admission = prepareSystemAgentRunAdmission(
+        config,
+        fixture.input.attempt.runId,
+        "main",
+        "tool-search-prompt-test",
+      );
       try {
         const sourceTools = ["fixture_allowed", "fixture_denied"].map(createStubTool);
         const surface = runtime.compactTools([
@@ -63,6 +71,7 @@ describe("embedded Tool Search prompt parity", () => {
         const capabilityToolNames = new Set(sourceTools.map((tool) => tool.name));
         const attempt = {
           ...fixture.input.attempt,
+          admittedRunContext: await admission.admit("embedded"),
           config,
           prompt: "Use the allowed capability.",
           promptMode: "full",
@@ -146,7 +155,7 @@ describe("embedded Tool Search prompt parity", () => {
               await input.prepareSystemPrompt(sessionRuntime.state.systemPromptText),
             );
           }
-          return { hookCtx: {}, transcriptLeafId: null };
+          return createPromptAssemblyResult(input);
         });
         let submittedPrompt = "";
         mocks.submitPrompt.mockImplementation(async () => {
@@ -172,6 +181,7 @@ describe("embedded Tool Search prompt parity", () => {
           expect(submittedPrompt).not.toContain("Call a unique deferred tool name directly");
         }
       } finally {
+        admission.close();
         runtime.cleanup();
       }
     },

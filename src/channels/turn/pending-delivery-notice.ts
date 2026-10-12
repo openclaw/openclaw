@@ -1,12 +1,10 @@
-import {
-  loadSessionEntryReadOnly,
-  updateSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { getGatewayRecoveryRuntime } from "../../gateway/server-recovery-runtime-context.js";
 import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
-  deliveryContextFromSession,
   deliveryContextKey,
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
@@ -14,15 +12,11 @@ import {
 const PENDING_DELIVERY_NOTICE =
   "I couldn’t confirm whether my previous reply reached this chat, so I won’t resend it automatically. Please ask for any missing remainder.";
 
-function noticeId(intentId: string): string {
-  return `main-session-restart-recovery:pending-final:${intentId}`;
-}
-
 export async function deliverPendingDeliveryNotice(
   sessionKey: string,
   storePath: string,
 ): Promise<void> {
-  const entry = loadSessionEntryReadOnly({
+  const entry = await readSessionEntryReadOnlyInWorker({
     sessionKey,
     storePath,
     readConsistency: "latest",
@@ -42,7 +36,7 @@ export async function deliverPendingDeliveryNotice(
   ) {
     return;
   }
-  const idempotencyKey = noticeId(notice.intentId);
+  const idempotencyKey = `main-session-restart-recovery:pending-final:${notice.intentId}`;
   let delivered: boolean;
   try {
     const outcome = await runtime.sendRecoveryNotice({
@@ -55,7 +49,7 @@ export async function deliverPendingDeliveryNotice(
     });
     delivered = !outcome.suppressed;
   } catch {
-    const owner = findDeliveryIntentOwner(idempotencyKey);
+    const owner = await findDeliveryIntentOwner(idempotencyKey);
     if (owner?.status !== "completed" && owner?.status !== "failed") {
       return;
     }

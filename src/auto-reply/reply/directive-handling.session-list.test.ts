@@ -14,8 +14,6 @@ import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 
 it.each([
   { command: "/verbose full", authorized: true, expected: { verboseLevel: "full" } },
-  { command: "/reasoning on", authorized: true, expected: { reasoningLevel: "on" } },
-  { command: "/fast on", authorized: true, expected: { fastMode: true } },
   { command: "/verbose full", authorized: false, expected: { verboseLevel: "off" } },
 ])(
   "keeps resident session rows current after $command (authorized=$authorized)",

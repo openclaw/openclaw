@@ -16,6 +16,41 @@ import type { StoreWriterQueue, StoreWriterTiming } from "../shared/store-writer
 
 type QueueKind = "lifecycle" | "mutation";
 type Operation = QueueKind | "compaction";
+export type SessionLifecycleMutationOperation =
+  | "worktree-cleanup"
+  | "background-result"
+  | "create"
+  | "reset"
+  | "recovery-mark"
+  | "recovery-drain"
+  | "recover"
+  | "placement-activate"
+  | "placement-recover"
+  | "placement-reclaim"
+  | "placement-failed-reclaim"
+  | "placement-dispatch"
+  | "placement-move"
+  | "compact"
+  | "drain"
+  | "rewind"
+  | "fork"
+  | "switch"
+  | "sharing"
+  | "patch"
+  | "archive"
+  | "restore"
+  | "delete"
+  | "assign-owner"
+  | "workspace-edit"
+  | "subagent-kill"
+  | "subagent-kill-sweep"
+  | "plugin-create"
+  | "delete-prepare"
+  | "history-evict"
+  | "archived-delete"
+  | "cron-cleanup"
+  | "rollover"
+  | "acp-spawn-cleanup";
 type Phase =
   | "admission"
   | "activation"
@@ -47,6 +82,10 @@ function state() {
   }));
 }
 
+function identityHash(identity: string) {
+  return createHash("sha256").update(state().salt).update(identity).digest("hex");
+}
+
 function emit(
   message: string,
   operation: LifecycleDiagnosticOperation,
@@ -76,6 +115,13 @@ function emit(
         isMainThread,
         diagnosticEpoch: current.epoch,
         omittedObservations: current.omitted,
+        operationId: operation.id,
+        operation: operation.operation,
+        mutationKind: operation.mutationKind,
+        sessionScopeHash: identityHash(operation.scopeIdentity),
+        identityCount: operation.identityCount,
+        operationTraceId: operation.traceId,
+        operationSpanId: operation.spanId,
         ...fields(),
       });
     });
@@ -89,6 +135,9 @@ function emit(
 export type LifecycleDiagnosticOperation = {
   readonly id: number;
   readonly operation: Operation;
+  readonly mutationKind?: SessionLifecycleMutationOperation;
+  readonly identityCount: number;
+  readonly scopeIdentity: string;
   readonly rootQueue: QueueKind;
   readonly signal?: AbortSignal;
   readonly traceId?: string;
@@ -103,7 +152,9 @@ export type LifecycleDiagnosticOperation = {
 
 export function createLifecycleDiagnosticOperation(
   operation: Operation,
+  identities: readonly string[],
   signal?: AbortSignal,
+  mutationKind?: SessionLifecycleMutationOperation,
 ): LifecycleDiagnosticOperation | undefined {
   try {
     if (!areDiagnosticsEnabledForProcess()) {
@@ -121,6 +172,10 @@ export function createLifecycleDiagnosticOperation(
     const result: LifecycleDiagnosticOperation = {
       id: ++current.sequence,
       operation,
+      mutationKind,
+      identityCount: identities.length,
+      // Keep one scope for batches; hash only when a diagnostic is emitted.
+      scopeIdentity: identities[0] ?? "",
       rootQueue: operation === "lifecycle" ? "lifecycle" : "mutation",
       ...(signal ? { signal } : {}),
       ...(isValidDiagnosticTraceId(traceId) ? { traceId } : {}),
@@ -144,10 +199,6 @@ export function createLifecycleDiagnosticOperation(
           return;
         }
         emit("slow session lifecycle operation", result, () => ({
-          operationId: result.id,
-          operation: result.operation,
-          operationTraceId: result.traceId,
-          operationSpanId: result.spanId,
           elapsedMs: Math.round(elapsedMs),
           ...(finishedAt !== undefined
             ? { completionDelayMs: Math.round(performance.now() - finishedAt) }
@@ -209,18 +260,16 @@ export function beginLifecycleDiagnosticQueue(
         const holder = queue && current.holders.get(queue);
         // This is the holder now, never a predecessor remembered at enqueue.
         emit("session lifecycle queue waiting", operation, () => ({
-          operationId: operation.id,
-          operation: operation.operation,
-          operationTraceId: operation.traceId,
-          operationSpanId: operation.spanId,
           queueKind: kind,
-          identityHash: createHash("sha256").update(current.salt).update(identity).digest("hex"),
+          identityHash: identityHash(identity),
           waitMs: Math.round(now - enqueuedAt),
           holderObserved: Boolean(holder),
           ...(holder
             ? {
                 holderOperationId: holder.operation.id,
                 holderOperation: holder.operation.operation,
+                holderMutationKind: holder.operation.mutationKind,
+                holderSessionScopeHash: identityHash(holder.operation.scopeIdentity),
                 holderPhase: holder.operation.phase,
                 holderTraceId: holder.operation.traceId,
                 holderSpanId: holder.operation.spanId,

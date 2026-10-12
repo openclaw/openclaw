@@ -48,6 +48,15 @@ function pickerTrigger(picker: HTMLElement): HTMLElement | null {
     : picker.querySelector<HTMLElement>("[slot=trigger]");
 }
 
+function dropdownFromEvent(event: Event): HTMLElement | undefined {
+  return event
+    .composedPath()
+    .find(
+      (node): node is HTMLElement =>
+        node instanceof HTMLElement && node.localName === "wa-dropdown",
+    );
+}
+
 function clearPointerFocus(this: HTMLElement): void {
   // Blur and keyboard takeover complete the same pointer-focus lifetime.
   this.removeEventListener("blur", clearPointerFocus);
@@ -147,12 +156,7 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
   ownerDocument.addEventListener(
     "keydown",
     (event) => {
-      const dropdown = event
-        .composedPath()
-        .find(
-          (node): node is HTMLElement =>
-            node instanceof HTMLElement && node.localName === "wa-dropdown",
-        );
+      const dropdown = dropdownFromEvent(event);
       if (dropdown) {
         pointerOpenedDropdowns.delete(dropdown);
         dropdown.removeAttribute(POINTER_OPENED_PICKER_ATTRIBUTE);
@@ -194,12 +198,7 @@ export function handleChatComposerDropdownShow(event: Event): void {
 }
 
 export function markPointerOpenedChatComposerDropdown(event: PointerEvent): void {
-  const dropdown = event
-    .composedPath()
-    .find(
-      (node): node is HTMLElement =>
-        node instanceof HTMLElement && node.localName === "wa-dropdown",
-    );
+  const dropdown = dropdownFromEvent(event);
   if (dropdown) {
     pointerOpenedDropdowns.add(dropdown);
     dropdown.setAttribute(POINTER_OPENED_PICKER_ATTRIBUTE, "");

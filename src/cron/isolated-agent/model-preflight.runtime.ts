@@ -71,13 +71,6 @@ function normalizeProbeApi(providerConfig: ModelProviderConfig): PreflightApi | 
   return api === "ollama" || api === "openai-completions" ? api : undefined;
 }
 
-function buildProbeUrl(api: PreflightApi, baseUrl: string): string {
-  if (api === "ollama") {
-    return `${baseUrl}/api/tags`;
-  }
-  return `${baseUrl}/models`;
-}
-
 function buildLocalProviderSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
   try {
     const parsed = new URL(baseUrl);
@@ -123,31 +116,21 @@ function collectPreflightErrorCauseChain(error: unknown): unknown[] {
   return chain;
 }
 
-function formatPreflightError(error: unknown): string {
-  const causeChain = collectPreflightErrorCauseChain(error);
-  const causeDetails = formatErrorMessageWithCode(error);
+function isPreflightTimeout(error: unknown): boolean {
   // fetchWithSsrFGuard propagates only its owned deadline as TimeoutError.
-  const classified = causeChain.some(
+  return collectPreflightErrorCauseChain(error).some(
     (candidate) => readErrorProperty(candidate, "name") === "TimeoutError",
-  )
+  );
+}
+
+function formatPreflightError(error: unknown): string {
+  const causeDetails = formatErrorMessageWithCode(error);
+  const classified = isPreflightTimeout(error)
     ? `Local provider preflight exceeded its configured ${PREFLIGHT_TIMEOUT_MS}ms deadline | ${causeDetails}`
     : causeDetails;
   return classified.length <= MAX_PREFLIGHT_ERROR_CHARS
     ? classified
     : `${truncateUtf16Safe(classified, MAX_PREFLIGHT_ERROR_CHARS - 1)}…`;
-}
-
-function formatUnavailableReason(params: {
-  provider: string;
-  model: string;
-  baseUrl: string;
-  error: unknown;
-}): string {
-  return [
-    `This automation uses ${params.provider}/${params.model} but the local provider preflight failed at ${params.baseUrl}.`,
-    `The candidate is unavailable for this run; OpenClaw will retry its provider preflight on a later scheduled run.`,
-    `Last error: ${formatPreflightError(params.error)}`,
-  ].join(" ");
 }
 
 function buildUnavailableResult(params: {
@@ -162,12 +145,11 @@ function buildUnavailableResult(params: {
     model: params.model,
     baseUrl: params.baseUrl,
     retryAfterMs: PREFLIGHT_CACHE_TTL_MS,
-    reason: formatUnavailableReason({
-      provider: params.provider,
-      model: params.model,
-      baseUrl: params.baseUrl,
-      error: params.error,
-    }),
+    reason: [
+      `This automation uses ${params.provider}/${params.model} but the local provider preflight failed at ${params.baseUrl}.`,
+      `Start the local provider or correct its configured endpoint; OpenClaw will retry its provider preflight on a later scheduled run.`,
+      `Last error: ${formatPreflightError(params.error)}`,
+    ].join(" "),
   };
 }
 
@@ -176,7 +158,7 @@ async function probeLocalProviderEndpoint(params: {
   baseUrl: string;
 }): Promise<void> {
   const { response, release } = await fetchWithSsrFGuard({
-    url: buildProbeUrl(params.api, params.baseUrl),
+    url: `${params.baseUrl}${params.api === "ollama" ? "/api/tags" : "/models"}`,
     init: { method: "GET" },
     policy: buildLocalProviderSsrFPolicy(params.baseUrl),
     timeoutMs: PREFLIGHT_TIMEOUT_MS,
@@ -240,7 +222,9 @@ export async function preflightCronModelProvider(params: {
   } catch (error) {
     result = { status: "unavailable", error };
   }
-  preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
+  if (result.status === "available" || !isPreflightTimeout(result.error)) {
+    preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
+  }
   if (result.status === "available") {
     return { status: "available" };
   }

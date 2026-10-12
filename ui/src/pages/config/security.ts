@@ -2,6 +2,7 @@
 // the highest-impact policies sit above the schema-backed security/approvals
 // section editor (same composition pattern as mcp.ts).
 import { html, type TemplateResult } from "lit";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsDefaultDescription,
@@ -84,6 +85,7 @@ function renderSecurityOverview(props: SecurityViewProps) {
       control: renderSettingsSegmented({
         value: normalizedToolProfile,
         options: profileOptions,
+        ariaLabel: t("quickSettings.security.toolProfile"),
         disabled: props.configBusy,
         onChange: (profile) => props.onToolProfileChange?.(profile),
       }),
@@ -107,7 +109,9 @@ function renderSecurityOverview(props: SecurityViewProps) {
 export function renderSecurity(props: SecurityViewProps) {
   return html`
     <section class="security-page">
-      <div class="settings-page">${renderSecurityOverview(props)}</div>
+      <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
+        ${renderSecurityOverview(props)}
+      </div>
       ${props.editor}
     </section>
   `;

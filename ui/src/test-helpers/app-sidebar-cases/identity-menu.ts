@@ -84,6 +84,9 @@ describe("AppSidebar footer identity menu", () => {
     expect(buildChip?.querySelector(".sidebar-footer-build__update")?.textContent?.trim()).toBe(
       "Update available",
     );
+    expect(buildChip?.querySelector(".sidebar-footer-build")?.getAttribute("role")).toBe(
+      "menuitem",
+    );
 
     for (const [id, dismissed] of [
       ["bob", false],
@@ -195,7 +198,8 @@ describe("AppSidebar footer identity menu", () => {
     expect(
       menu
         ?.querySelector('wa-dropdown-item[value="command:settings"] .session-menu__shortcut')
-        ?.textContent?.trim(),
+        ?.textContent?.replace(/\s+/gu, "")
+        .trim(),
     ).toMatch(/^(⌘⇧,|Ctrl\+Shift\+,)$/u);
     expect(menu?.style.getPropertyValue("--sidebar-identity-menu-min-width")).toBe("212px");
     expect(menu?.querySelector(".sidebar-pair-mobile")?.hasAttribute("disabled")).toBe(true);

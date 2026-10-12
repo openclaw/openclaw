@@ -6,10 +6,14 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as storage from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { SqliteWorkerError } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
+import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
 import { MemorySourceIndexKernel } from "./manager-source-index-kernel.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -55,7 +59,7 @@ describe("private session source staging", () => {
     "publishes forced $mode memory and session sources without the application-thread kernel",
     async ({ vectorEnabled }) => {
       const { manager, db } = await setup(vectorEnabled);
-      vi.spyOn(MemorySourceIndexKernel.prototype, "replace").mockImplementation(() => {
+      vi.spyOn(MemorySourceIndexKernel.prototype, "replaceRows").mockImplementation(() => {
         throw new Error("source publication reached the application thread");
       });
       await manager.sync({ reason: "cli", force: true });
@@ -71,11 +75,13 @@ describe("private session source staging", () => {
         {
           id: expect.any(String),
           text: expect.stringContaining("Violet session preference."),
-          embedding: vectorEnabled ? "[0,1,0,0]" : "[]",
+          embedding: storage.encodeMemoryEmbedding(vectorEnabled ? [0, 1, 0, 0] : []),
         },
       ]);
       if (vectorEnabled) {
-        const vectors = db
+        const inspection = memoryIndexFixtureWriter(manager);
+        expect((await storage.loadSqliteVecExtension({ db: inspection })).ok).toBe(true);
+        const vectors = inspection
           .prepare(
             "SELECT v.id, hex(v.embedding) AS embedding FROM memory_index_chunks_vec AS v " +
               "JOIN memory_index_chunks AS c ON c.id = v.id WHERE c.source = 'sessions' ORDER BY v.id",
@@ -85,9 +91,17 @@ describe("private session source staging", () => {
           .toString("hex")
           .toUpperCase();
         expect(vectors).toEqual(sessionChunks.map(({ id }) => ({ id, embedding })));
+        const sql = observeHostDataSql();
+        try {
+          await manager.sync({ reason: "after-shadow-publication" });
+          expect(sql.queries).toEqual([]);
+        } finally {
+          sql.restore();
+        }
       }
+      const databasePath = db.location()!;
       await manager.close();
-      const entries = await fs.readdir(path.dirname(db.location()!));
+      const entries = await fs.readdir(path.dirname(databasePath));
       expect(entries.filter((name) => name.includes(".memory-reindex-"))).toEqual([]);
     },
   );
@@ -98,14 +112,16 @@ describe("private session source staging", () => {
     const before = db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all();
     // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted database owner.
     const publish = MemoryIndexDatabase.prototype.publishShadow;
-    vi.spyOn(MemoryIndexDatabase.prototype, "publishShadow").mockImplementation(
-      function (this: MemoryIndexDatabase, input, assertCurrent) {
-        // The shadow is complete; simulate forget advancing the published revision
-        // before the final publication obtains transaction admission.
-        seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["shadow-session"] });
-        return publish.call(this, input, assertCurrent);
-      },
-    );
+    vi.spyOn(MemoryIndexDatabase.prototype, "publishShadow").mockImplementation(function (
+      this: MemoryIndexDatabase,
+      input,
+      assertCurrent,
+    ) {
+      // The shadow is complete; simulate forget advancing the published revision
+      // before the final publication obtains transaction admission.
+      seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["shadow-session"] });
+      return publish.call(this, input, assertCurrent);
+    });
     await expect(manager.sync({ reason: "cli", force: true })).rejects.toThrow(
       "retry the full reindex",
     );
@@ -114,44 +130,41 @@ describe("private session source staging", () => {
     );
   });
 
-  it.each([false, true])(
-    "releases publication capacity and retries cleanup (close failure: %s)",
-    async (failClose) => {
-      const { manager } = await setup();
-      const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
-      const probeReleased: Array<() => Promise<unknown>> = [];
-      vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore").mockImplementation(
-        async (...args) => {
-          const worker = await open(...args);
-          probeReleased.push(() =>
-            worker.run(
-              async () => "still admitted",
-              () => undefined,
-            ),
-          );
-          if (failClose && probeReleased.length === 1) {
-            const close = worker.close.bind(worker);
-            vi.spyOn(worker, "close").mockImplementationOnce(async () => {
-              await close();
-              throw new Error("controlled generation close failure");
-            });
-          }
-          return worker;
-        },
-      );
-      for (let index = 0; index < 2; index++) {
-        const sync = manager.sync({ reason: "repeat-generation", force: true });
-        if (failClose && index === 0) {
-          await expect(sync).rejects.toThrow("controlled generation close failure");
-        } else {
-          await sync;
+  it("releases publication capacity and retries cleanup after a close failure", async () => {
+    const { manager } = await setup();
+    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
+    const probeReleased: Array<() => Promise<unknown>> = [];
+    vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
+      async (...args) => {
+        const worker = await open(...args);
+        probeReleased.push(() =>
+          worker.run(
+            async () => "still admitted",
+            () => undefined,
+          ),
+        );
+        if (probeReleased.length === 1) {
+          const close = worker.close.bind(worker);
+          vi.spyOn(worker, "close").mockImplementationOnce(async () => {
+            await close();
+            throw new Error("controlled generation close failure");
+          });
         }
-        expect(probeReleased).toHaveLength(index + 1);
-        await expect(probeReleased[index]!()).rejects.toThrow("owner is closed");
-        expect((await manager.search("Violet")).length).toBeGreaterThan(0);
+        return worker;
+      },
+    );
+    for (let index = 0; index < 2; index++) {
+      const sync = manager.sync({ reason: "repeat-generation", force: true });
+      if (index === 0) {
+        await expect(sync).rejects.toThrow("controlled generation close failure");
+      } else {
+        await sync;
       }
-    },
-  );
+      expect(probeReleased).toHaveLength(index + 1);
+      await expect(probeReleased[index]!()).rejects.toThrow("owner is closed");
+      expect((await manager.search("Violet")).length).toBeGreaterThan(0);
+    }
+  });
 
   it("preserves publication and generation cleanup failures through sync", async () => {
     const { manager, db } = await setup();
@@ -194,20 +207,24 @@ describe("private session source staging", () => {
 
   it("drains accepted staging before manager close releases its database", async () => {
     const { manager, db } = await setup();
+    const inspection = memoryIndexFixtureWriter(manager);
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();
     // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted database owner.
     const replace = MemoryIndexDatabase.prototype.replaceSource;
-    vi.spyOn(MemoryIndexDatabase.prototype, "replaceSource").mockImplementation(
-      async function (this: MemoryIndexDatabase, input, assertCurrent, prepare) {
-        const result = await replace.call(this, input, assertCurrent, prepare);
-        if (this.isShadow && input.source === "sessions") {
-          entered.resolve();
-          await resume.promise;
-        }
-        return result;
-      },
-    );
+    vi.spyOn(MemoryIndexDatabase.prototype, "replaceSource").mockImplementation(async function (
+      this: MemoryIndexDatabase,
+      input,
+      assertCurrent,
+      prepare,
+    ) {
+      const result = await replace.call(this, input, assertCurrent, prepare);
+      if (this.isShadow && input.source === "sessions") {
+        entered.resolve();
+        await resume.promise;
+      }
+      return result;
+    });
     const sync = manager.sync({ reason: "cli", force: true });
     void sync.catch(() => undefined);
     let close: Promise<void> | undefined;
@@ -221,8 +238,9 @@ describe("private session source staging", () => {
       expect(closed).toBe(false);
       resume.resolve();
       await Promise.all([sync, close]);
+      expect(db.isOpen).toBe(false);
       expect(
-        db.prepare("SELECT source FROM memory_index_sources WHERE source='sessions'").all(),
+        inspection.prepare("SELECT source FROM memory_index_sources WHERE source='sessions'").all(),
       ).toEqual([{ source: "sessions" }]);
     } finally {
       resume.resolve();
@@ -246,14 +264,20 @@ describe("private session source staging", () => {
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();
     const timedOut = createDeferred<void>();
-    const load = storage.loadSqliteVecExtension;
-    vi.spyOn(storage, "loadSqliteVecExtension").mockImplementation(async (input) => {
-      if (!input.db.location()?.includes(".memory-reindex-")) {
-        return load(input);
+    let shadowPath: string | undefined;
+    // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted database owner.
+    const prepareVector = MemoryIndexDatabase.prototype.prepareVector;
+    vi.spyOn(MemoryIndexDatabase.prototype, "prepareVector").mockImplementation(async function (
+      this: MemoryIndexDatabase,
+      ...args
+    ) {
+      if (!this.isShadow) {
+        return prepareVector.apply(this, args);
       }
+      shadowPath = this.db.location()!;
       entered.resolve();
       await resume.promise;
-      return { ok: false, error: "controlled late vector setup" };
+      throw new Error("controlled late vector setup");
     });
     // SAFETY: the fixture injects the existing timeout outcome while leaving
     // the separate underlying setup task pending; no production hook is added.
@@ -261,7 +285,6 @@ describe("private session source staging", () => {
       db: DatabaseSync;
       withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T>;
     };
-    let shadowPath: string | undefined;
     const withTimeout = owner.withTimeout.bind(owner);
     vi.spyOn(owner, "withTimeout").mockImplementation(
       <T>(promise: Promise<T>, timeoutMs: number, message: string) => {
@@ -278,10 +301,6 @@ describe("private session source staging", () => {
       },
     );
     const run = vi.spyOn(MemoryIndexDatabase.prototype, "replaceSource");
-    // replaceSource queues first; the owned store opens only after private admission.
-    const open = vi.spyOn(sqliteRuntime, "openSqliteWorkerStore");
-    const shadowOpens = () =>
-      open.mock.calls.filter(([options]) => options.databasePath === shadowPath);
     const sync = manager.sync({ reason: "cli", force: true });
     void sync.catch(() => undefined);
     let close: Promise<void> | undefined;
@@ -290,16 +309,17 @@ describe("private session source staging", () => {
       await Promise.race([Promise.all([entered.promise, timedOut.promise]), sync]);
       await nextTurn();
       expect(shadowPath).toBeDefined();
-      expect(shadowOpens()).toHaveLength(0);
+      expect(run).not.toHaveBeenCalled();
       close = manager.close().then(() => {
         closed = true;
       });
       await nextTurn();
       expect(closed).toBe(false);
+      expect(run).not.toHaveBeenCalled();
       resume.resolve();
       await Promise.all([sync, close]);
       expect(run).toHaveBeenCalledTimes(1);
-      expect(shadowOpens()).toHaveLength(1);
+      expect(await fs.readdir(path.dirname(shadowPath!))).not.toContain(path.basename(shadowPath!));
     } finally {
       resume.resolve();
       await Promise.allSettled([sync, close]);
@@ -308,6 +328,10 @@ describe("private session source staging", () => {
 
   it("preserves the published index when an accepted transfer fails without replaying inline", async () => {
     const { manager, db } = await setup();
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "transfer.md"),
+      "Violet transfer source.\n".repeat(30_000),
+    );
     await manager.sync({ reason: "baseline", force: true });
     const before = db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all();
     const transfer = await import("./manager-publication-transfer.js");
@@ -317,12 +341,12 @@ describe("private session source staging", () => {
       .mockImplementation(function* (replacement) {
         for (const batch of batches(replacement)) {
           yield batch;
-          if (replacement.source === "sessions") {
+          if (replacement.entry.path === "memory/transfer.md") {
             throw new SqliteWorkerError("controlled accepted transfer failure", "overloaded");
           }
         }
       });
-    vi.spyOn(MemorySourceIndexKernel.prototype, "replace").mockImplementation(() => {
+    vi.spyOn(MemorySourceIndexKernel.prototype, "replaceRows").mockImplementation(() => {
       throw new Error("failed transfer replayed on the application thread");
     });
     await expect(manager.sync({ reason: "cli", force: true })).rejects.toMatchObject({
@@ -337,8 +361,9 @@ describe("private session source staging", () => {
     expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
       before,
     );
+    const databasePath = db.location()!;
     await manager.close();
-    const entries = await fs.readdir(path.dirname(db.location()!));
+    const entries = await fs.readdir(path.dirname(databasePath));
     expect(entries.filter((name) => name.includes(".memory-reindex-"))).toEqual([]);
   });
 });

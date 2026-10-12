@@ -1,5 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { getNodeSqliteKysely, prepareSqliteQuerySync } from "../infra/kysely-sync.js";
+import {
+  createSqliteQueryCache,
+  getNodeSqliteKysely,
+  prepareSqliteQuerySync,
+} from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
   BOARD_WIDGET_SNAPSHOT_COLUMNS,
@@ -50,13 +54,4 @@ function createBoardReadQueries(database: DatabaseSync) {
   };
 }
 
-const boardReadQueries = new WeakMap<DatabaseSync, ReturnType<typeof createBoardReadQueries>>();
-
-export function getBoardReadQueries(database: DatabaseSync) {
-  let queries = boardReadQueries.get(database);
-  if (!queries) {
-    queries = createBoardReadQueries(database);
-    boardReadQueries.set(database, queries);
-  }
-  return queries;
-}
+export const getBoardReadQueries = createSqliteQueryCache(createBoardReadQueries);

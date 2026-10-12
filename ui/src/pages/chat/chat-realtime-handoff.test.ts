@@ -18,8 +18,7 @@ const transports = vi.hoisted(() => ({
   stop: vi.fn(),
 }));
 
-vi.mock("./talk/transport.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./talk/transport.ts")>()),
+vi.mock("./talk/transport.runtime.ts", () => ({
   createRealtimeTalkTransport: vi.fn((_session: unknown, context: RealtimeTalkTransportContext) => {
     transports.contexts.push(context);
     return { start: async () => "ready", stop: transports.stop };

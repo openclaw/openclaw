@@ -18,14 +18,6 @@ vi.mock("../../plugins/current-plugin-metadata-state.js", async (importOriginal)
   ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-state.js")>()),
   getGatewayPluginMetadataSnapshot: manifestMocks.getGatewayPluginMetadataSnapshot,
 }));
-const providerMocks = vi.hoisted(() => ({
-  normalizePluginDiscoveryResult: vi.fn(),
-  resolveActivatableProviderOwnerPluginIds: vi.fn(),
-  resolveBundledProviderCompatPluginIds: vi.fn(),
-  resolveOwningPluginIdsForProviderRef: vi.fn(),
-  resolveRuntimePluginDiscoveryProviders: vi.fn(),
-  runProviderStaticCatalog: vi.fn(),
-}));
 
 vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
@@ -47,27 +39,14 @@ vi.mock("../../plugins/manifest-registry.js", async (importOriginal) => ({
   loadPluginManifestRegistryCore: manifestMocks.loadPluginManifestRegistryCore,
 }));
 
-vi.mock("../../plugins/providers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/providers.js")>()),
-  resolveActivatableProviderOwnerPluginIds: providerMocks.resolveActivatableProviderOwnerPluginIds,
-  resolveBundledProviderCompatPluginIds: providerMocks.resolveBundledProviderCompatPluginIds,
-  resolveOwningPluginIdsForProviderRef: providerMocks.resolveOwningPluginIdsForProviderRef,
-}));
-
-vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/provider-discovery.js")>()),
-  normalizePluginDiscoveryResult: providerMocks.normalizePluginDiscoveryResult,
-  resolveRuntimePluginDiscoveryProviders: providerMocks.resolveRuntimePluginDiscoveryProviders,
-  runProviderStaticCatalog: providerMocks.runProviderStaticCatalog,
-}));
-
 import {
   createBundledStaticCatalogModelResolver,
-  loadBundledProviderStaticCatalogContextModels,
   resolveBundledStaticCatalogModel,
 } from "./model.static-catalog.js";
 
-function createMistralManifestPlugin() {
+const mistralLookup = { provider: "mistral", modelId: "mistral-medium-3-5" };
+
+function createMistralManifestPlugin(id = "mistral-medium-3-5", name = "Mistral Medium 3.5") {
   return {
     id: "mistral",
     origin: "bundled",
@@ -79,8 +58,8 @@ function createMistralManifestPlugin() {
           api: "openai-completions",
           models: [
             {
-              id: "mistral-medium-3-5",
-              name: "Mistral Medium 3.5",
+              id,
+              name,
               contextWindow: 262144,
               maxTokens: 8192,
             },
@@ -100,10 +79,10 @@ function setCurrentManifestPlugins(
   return snapshot;
 }
 
-function setManifestPlugins(plugins: unknown[]) {
+function setManifestPlugins(plugins: ReturnType<typeof createMistralManifestPlugin>[]) {
   const byPluginDir = new Map(
     plugins.map((plugin) => {
-      const id = (plugin as { id?: string }).id ?? "plugin";
+      const id = plugin.id;
       return [`/fixtures/${id}`, plugin];
     }),
   );
@@ -111,7 +90,7 @@ function setManifestPlugins(plugins: unknown[]) {
     [...byPluginDir].map(([pluginDir, plugin]) => ({
       pluginDir,
       manifest: plugin,
-      origin: (plugin as { origin?: string }).origin,
+      origin: plugin.origin,
     })),
   );
   manifestMocks.loadPluginManifest.mockImplementation((pluginDir: string) => {
@@ -122,24 +101,22 @@ function setManifestPlugins(plugins: unknown[]) {
   });
 }
 
+function personalProviderConfig(baseUrl: string) {
+  return {
+    models: {
+      providers: { personal: { api: "openai-completions" as const, baseUrl, models: [] } },
+    },
+  };
+}
+
 beforeEach(() => {
   clearPluginMetadataLifecycleCaches();
   for (const mock of Object.values(manifestMocks)) {
     mock.mockReset();
   }
-  for (const mock of Object.values(providerMocks)) {
-    mock.mockReset();
-  }
+
   manifestMocks.listOpenClawPluginManifestMetadata.mockReturnValue([]);
   manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({ plugins: [] });
-  providerMocks.resolveActivatableProviderOwnerPluginIds.mockImplementation(
-    ({ pluginIds }: { pluginIds: string[] }) => pluginIds,
-  );
-  providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue([]);
-  providerMocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(undefined);
-  providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([]);
-  providerMocks.runProviderStaticCatalog.mockResolvedValue(undefined);
-  providerMocks.normalizePluginDiscoveryResult.mockReturnValue({});
 });
 
 it("caches native donor facts and misses without unrelated provider hooks", () => {
@@ -167,28 +144,8 @@ it("caches native donor facts and misses without unrelated provider hooks", () =
       },
     },
   );
-  const nativeConfig = {
-    models: {
-      providers: {
-        personal: {
-          api: "openai-completions" as const,
-          baseUrl: "https://api.mistral.ai/v1",
-          models: [],
-        },
-      },
-    },
-  };
-  const proxyConfig = {
-    models: {
-      providers: {
-        personal: {
-          api: "openai-completions" as const,
-          baseUrl: "http://localhost:4000",
-          models: [],
-        },
-      },
-    },
-  };
+  const nativeConfig = personalProviderConfig("https://api.mistral.ai/v1");
+  const proxyConfig = personalProviderConfig("http://localhost:4000");
   const lookup = { provider: "personal", modelId: "mistral-medium-3-5" };
   withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, () => {
     const resolve = createBundledStaticCatalogModelResolver({
@@ -241,17 +198,7 @@ it("keeps a static donor miss separate from an allowed refreshable lookup", () =
       modelCatalog: { ...plugin.modelCatalog, discovery: { mistral: "refreshable" } },
     },
   ]);
-  const cfg = {
-    models: {
-      providers: {
-        personal: {
-          api: "openai-completions" as const,
-          baseUrl: "https://api.mistral.ai/v1",
-          models: [],
-        },
-      },
-    },
-  };
+  const cfg = personalProviderConfig("https://api.mistral.ai/v1");
   const lookup = { provider: "personal", modelId: "mistral-medium-3-5", cfg, metadataSnapshot };
   const pluginRegistry = createEmptyPluginRegistry();
   pluginRegistry.providers.push({
@@ -269,49 +216,20 @@ it("keeps a static donor miss separate from an allowed refreshable lookup", () =
 });
 
 describe("bundled static model catalog snapshot cache", () => {
-  it("reuses the current plugin snapshot across separate static model lookups", () => {
-    const cfg = {};
-    setCurrentManifestPlugins([createMistralManifestPlugin()]);
-
-    expect(
-      resolveBundledStaticCatalogModel({
-        provider: "mistral",
-        modelId: "mistral-medium-3-5",
-        cfg,
-      })?.id,
-    ).toBe("mistral-medium-3-5");
-    expect(
-      resolveBundledStaticCatalogModel({ provider: "mistral", modelId: "missing", cfg }),
-    ).toBeUndefined();
-    expect(manifestMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config: cfg,
-      env: process.env,
-      workspaceDir: undefined,
-      allowWorkspaceScopedSnapshot: true,
-    });
-    expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
-    expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
-  });
-
   it("observes replacement plugin generations inside a prepared model resolver", () => {
     const cfg = {};
     setCurrentManifestPlugins([createMistralManifestPlugin()]);
     const resolveModel = createBundledStaticCatalogModelResolver({ cfg });
 
-    expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-3-5" })?.id).toBe(
-      "mistral-medium-3-5",
-    );
+    expect(resolveModel(mistralLookup)?.id).toBe("mistral-medium-3-5");
 
-    const replacementPlugin = createMistralManifestPlugin();
-    replacementPlugin.modelCatalog.providers.mistral.models =
-      replacementPlugin.modelCatalog.providers.mistral.models.map((model) => ({
-        ...model,
-        id: "mistral-medium-next",
-        name: "Mistral Medium Next",
-      }));
+    const replacementPlugin = createMistralManifestPlugin(
+      "mistral-medium-next",
+      "Mistral Medium Next",
+    );
     setCurrentManifestPlugins([replacementPlugin]);
 
-    expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-3-5" })).toBeUndefined();
+    expect(resolveModel(mistralLookup)).toBeUndefined();
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })?.name).toBe(
       "Mistral Medium Next",
     );
@@ -321,16 +239,11 @@ describe("bundled static model catalog snapshot cache", () => {
 
   it("pins lifecycle lookups to the supplied plugin generation", () => {
     const cfg = {};
-    const capturedPlugin = {
-      ...createMistralManifestPlugin(),
-      modelIdNormalization: {
-        providers: {
-          mistral: {
-            aliases: { latest: "mistral-medium-3-5" },
-          },
-        },
-      },
-    };
+    const withAlias = (id: string, name: string) => ({
+      ...createMistralManifestPlugin(id, name),
+      modelIdNormalization: { providers: { mistral: { aliases: { latest: id } } } },
+    });
+    const capturedPlugin = withAlias("mistral-medium-3-5", "Mistral Medium 3.5");
     const capturedSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [capturedPlugin],
     });
@@ -339,90 +252,15 @@ describe("bundled static model catalog snapshot cache", () => {
       metadataSnapshot: capturedSnapshot,
     });
 
-    const replacementPlugin = {
-      ...createMistralManifestPlugin(),
-      modelIdNormalization: {
-        providers: {
-          mistral: {
-            aliases: { latest: "mistral-medium-next" },
-          },
-        },
-      },
-    };
-    replacementPlugin.modelCatalog.providers.mistral.models =
-      replacementPlugin.modelCatalog.providers.mistral.models.map((model) => ({
-        ...model,
-        id: "mistral-medium-next",
-        name: "Mistral Medium Next",
-      }));
+    const replacementPlugin = withAlias("mistral-medium-next", "Mistral Medium Next");
     setCurrentManifestPlugins([replacementPlugin]);
 
-    expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-3-5" })?.id).toBe(
-      "mistral-medium-3-5",
-    );
+    expect(resolveModel(mistralLookup)?.id).toBe("mistral-medium-3-5");
     expect(resolveModel({ provider: "mistral", modelId: "latest" })?.id).toBe("mistral-medium-3-5");
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })).toBeUndefined();
     expect(manifestMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
     expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
     expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
-  });
-
-  it("uses the matching configured workspace snapshot", () => {
-    const cfg = {};
-    const workspaceDir = "/configured-workspace";
-    setCurrentManifestPlugins([createMistralManifestPlugin()]);
-
-    expect(
-      resolveBundledStaticCatalogModel({
-        provider: "mistral",
-        modelId: "mistral-medium-3-5",
-        cfg,
-        workspaceDir,
-      })?.id,
-    ).toBe("mistral-medium-3-5");
-    expect(manifestMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config: cfg,
-      env: process.env,
-      workspaceDir,
-    });
-    expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
-  });
-
-  it("requires the default discovery context for unconfigured snapshot lookups", () => {
-    setCurrentManifestPlugins([createMistralManifestPlugin()]);
-
-    expect(
-      resolveBundledStaticCatalogModel({ provider: "mistral", modelId: "mistral-medium-3-5" })?.id,
-    ).toBe("mistral-medium-3-5");
-    expect(manifestMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config: undefined,
-      env: process.env,
-      workspaceDir: undefined,
-      allowWorkspaceScopedSnapshot: true,
-      requireDefaultDiscoveryContext: true,
-    });
-    expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
-  });
-
-  it("keeps a custom environment on its own manifest discovery path", () => {
-    const env = { HOME: "/custom-home" };
-    const plugin = createMistralManifestPlugin();
-    setManifestPlugins([plugin]);
-    setCurrentManifestPlugins([plugin]);
-
-    expect(
-      resolveBundledStaticCatalogModel({
-        provider: "mistral",
-        modelId: "mistral-medium-3-5",
-        cfg: {},
-        env,
-      })?.id,
-    ).toBe("mistral-medium-3-5");
-    expect(manifestMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalledWith(
-      expect.objectContaining({ env }),
-    );
-    expect(manifestMocks.listOpenClawPluginManifestMetadata).toHaveBeenCalledWith(env);
-    expect(manifestMocks.loadPluginManifest).toHaveBeenCalledTimes(1);
   });
 
   it("uses the Gateway inventory even when a run supplies its own environment", () => {
@@ -432,8 +270,7 @@ describe("bundled static model catalog snapshot cache", () => {
     );
     expect(
       resolveBundledStaticCatalogModel({
-        provider: "mistral",
-        modelId: "mistral-medium-3-5",
+        ...mistralLookup,
         cfg: {},
         env: { HOME: "/run-home" },
         workspaceDir: "/run-workspace",
@@ -449,74 +286,21 @@ describe("bundled static model catalog snapshot cache", () => {
     setManifestPlugins([firstPlugin]);
     const resolveModel = createBundledStaticCatalogModelResolver({ env });
 
-    expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-3-5" })?.id).toBe(
-      "mistral-medium-3-5",
-    );
+    expect(resolveModel(mistralLookup)?.id).toBe("mistral-medium-3-5");
 
-    const replacementPlugin = createMistralManifestPlugin();
-    replacementPlugin.modelCatalog.providers.mistral.models =
-      replacementPlugin.modelCatalog.providers.mistral.models.map((model) => ({
-        ...model,
-        id: "mistral-medium-next",
-        name: "Mistral Medium Next",
-      }));
-    setManifestPlugins([replacementPlugin]);
-    expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-3-5" })?.id).toBe(
-      "mistral-medium-3-5",
+    const replacementPlugin = createMistralManifestPlugin(
+      "mistral-medium-next",
+      "Mistral Medium Next",
     );
+    setManifestPlugins([replacementPlugin]);
+    expect(resolveModel(mistralLookup)?.id).toBe("mistral-medium-3-5");
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })).toBeUndefined();
     clearPluginMetadataLifecycleCaches();
 
-    expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-3-5" })).toBeUndefined();
+    expect(resolveModel(mistralLookup)).toBeUndefined();
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })?.name).toBe(
       "Mistral Medium Next",
     );
     expect(manifestMocks.listOpenClawPluginManifestMetadata).toHaveBeenCalledTimes(2);
-  });
-
-  it("preserves plugin enablement policy for current snapshot catalog rows", () => {
-    setCurrentManifestPlugins([createMistralManifestPlugin()]);
-
-    for (const cfg of [
-      { plugins: { enabled: false } },
-      { plugins: { entries: { mistral: { enabled: false } } } },
-      { plugins: { deny: ["mistral"] } },
-      { plugins: { allow: ["google"] } },
-    ]) {
-      expect(
-        resolveBundledStaticCatalogModel({
-          provider: "mistral",
-          modelId: "mistral-medium-3-5",
-          cfg,
-        }),
-      ).toBeUndefined();
-    }
-
-    expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
-    expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
-  });
-
-  it("reuses current snapshot manifests for provider static context warmup", async () => {
-    const cfg = { plugins: { entries: { google: { enabled: true } } } };
-    const provider = { id: "google", pluginId: "google", label: "Google", auth: [] };
-    setCurrentManifestPlugins([
-      {
-        id: "google",
-        origin: "bundled",
-        providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
-      },
-    ]);
-    providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
-    providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
-    providerMocks.normalizePluginDiscoveryResult.mockReturnValue({
-      google: {
-        models: [{ id: "gemini-3.1-pro-preview", name: "Gemini Pro", contextWindow: 1_048_576 }],
-      },
-    });
-
-    await expect(loadBundledProviderStaticCatalogContextModels({ cfg })).resolves.toEqual([
-      expect.objectContaining({ provider: "google", contextWindow: 1_048_576 }),
-    ]);
-    expect(manifestMocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
   });
 });

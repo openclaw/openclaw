@@ -1,6 +1,9 @@
-// Matrix helper module prepares and chunks outbound formatted text.
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import {
+  resolveMarkdownTableMode,
+  type MarkdownTableMode,
+} from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
@@ -185,7 +188,7 @@ export function prepareMatrixSingleText(
   const cfg = requireRuntimeConfig(opts.cfg, "Matrix text preparation") as CoreConfig;
   const tableMode =
     opts.tableMode ??
-    getMatrixRuntime().channel.text.resolveMarkdownTableMode({
+    resolveMarkdownTableMode({
       cfg,
       channel: "matrix",
       accountId: opts.accountId,
@@ -194,7 +197,7 @@ export function prepareMatrixSingleText(
   const convertedText = renderMatrixMarkdownTables(trimmedText, tableMode);
   const singleEventLimit = normalizeMatrixEventLimit(
     Math.min(
-      getMatrixRuntime().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId),
+      resolveTextChunkLimit(cfg, "matrix", opts.accountId),
       MATRIX_FORMAT_PROFILE.chunk.limit,
     ),
   );
@@ -227,8 +230,11 @@ export function chunkMatrixText(
       chunks: preparedText.convertedText ? [preparedText.convertedText] : [],
     };
   }
-  const cfg = requireRuntimeConfig(opts.cfg, "Matrix text chunking") as CoreConfig;
-  const chunkMode = getMatrixRuntime().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
+  const chunkMode = getMatrixRuntime().channel.text.resolveChunkMode(
+    opts.cfg,
+    "matrix",
+    opts.accountId,
+  );
   const analysis = analyzeMatrixSpoilers(preparedText.convertedText);
   const collisionRedacted = analysis.metadataCollision ? renderMatrixBody(analysis) : undefined;
   const chunkSegment = (segmentText: string): string[] => {

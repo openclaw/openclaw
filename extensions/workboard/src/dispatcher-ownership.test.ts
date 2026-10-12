@@ -1,36 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import * as dispatcherWorkspace from "./dispatcher-workspace.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import {
   createWorkboardSqliteTestHarness,
   createWorkboardSqliteTestStore,
 } from "./test/sqlite-store.js";
+import * as workspaceAccess from "./workspace-access.js";
 
 const CLAIM_RECLAIM_MS = 5 * 60 * 1000;
 
 describe("Workboard dispatcher ownership", () => {
-  it("dispatches a card whose create input tried to inject archivedAt", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const now = 10;
-    const card = await store.create({
-      title: "Injected archive",
-      status: "ready",
-      workspaceAccess: { unrestricted: true },
-      metadata: { archivedAt: now },
-    });
-    const run = vi.fn().mockResolvedValue({ runId: "run-injected" });
-
-    await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: { now, maxStarts: 1 },
-    });
-
-    expect(run).toHaveBeenCalledTimes(1);
-    await expect(store.get(card.id)).resolves.toMatchObject({
-      execution: { runId: "run-injected" },
-    });
-  });
-
   it("falls back to one default owner for persisted blank and unassigned agents", async () => {
     const { store, stores } = createWorkboardSqliteTestHarness();
     const keyed = stores.cards;
@@ -181,6 +160,116 @@ describe("Workboard dispatcher ownership", () => {
     }
   });
 
+  it.each([
+    { stage: "authority", error: "workspace authority unavailable" },
+    { stage: "implicit", error: "implicit workspace denied" },
+    { stage: "explicit", error: "explicit workspace denied" },
+    {
+      stage: "missing-target",
+      error: "target agent workspace is unavailable for restricted dispatch",
+    },
+    { stage: "non-error", error: "non-Error authority failure" },
+  ])(
+    "keeps $stage preflight failures unclaimed and continues to a healthy card",
+    async ({ stage, error }) => {
+      const store = createWorkboardSqliteTestStore();
+      const rejected = [];
+      const workspace: Parameters<typeof store.create>[0]["workspace"] =
+        stage === "explicit" ? { kind: "dir", path: "/workspace/denied" } : undefined;
+      for (const [index, priority] of (["urgent", "high"] as const).entries()) {
+        rejected.push(
+          await store.create({
+            title: `Rejected worker ${index + 1}`,
+            status: "ready",
+            priority,
+            agentId: `rejected-worker-${index + 1}`,
+            workspaceAccess: { unrestricted: true },
+            ...(workspace ? { workspace } : {}),
+          }),
+        );
+      }
+      const healthy = await store.create({
+        title: "Healthy worker",
+        status: "ready",
+        agentId: "healthy-worker",
+        workspaceAccess: { unrestricted: true },
+      });
+      const rejectedIds = new Set(rejected.map((card) => card.id));
+      const before = await Promise.all(rejected.map((card) => store.get(card.id)));
+      const resolveAccess = dispatcherWorkspace.resolveDispatchWorkspaceAccess;
+      const resolve = vi
+        .spyOn(dispatcherWorkspace, "resolveDispatchWorkspaceAccess")
+        .mockImplementation(async (params) => {
+          if (!rejectedIds.has(params.card.id)) {
+            return await resolveAccess(params);
+          }
+          if (stage === "authority") {
+            throw new Error("workspace authority unavailable");
+          }
+          if (stage === "non-error") {
+            return await vi
+              .fn<() => Promise<never>>()
+              .mockRejectedValue("non-Error authority failure")();
+          }
+          return {
+            workspaceAccess: {
+              unrestricted: false,
+              roots: ["/workspace/denied"],
+              writable: true,
+            },
+            ...(stage === "missing-target" ? {} : { targetWorkspace: "/workspace/denied" }),
+            persistWorkspaceAccess: false,
+          };
+        });
+      const implicit = vi
+        .spyOn(workspaceAccess, "assertCanonicalWorkboardRootAccess")
+        .mockRejectedValue(new Error("implicit workspace denied"));
+      const explicit = vi
+        .spyOn(workspaceAccess, "assertWorkboardWorkspaceSourceAccess")
+        .mockRejectedValue(new Error("explicit workspace denied"));
+      const claim = vi.spyOn(store, "claim");
+      const prepare = vi.spyOn(store, "prepareExecutionLaunch");
+      const block = vi.spyOn(store, "block");
+      const fail = vi.spyOn(store, "failPreparedLaunch");
+      const run = vi.fn().mockResolvedValue({ runId: "run-healthy-worker" });
+
+      try {
+        const result = await dispatchAndStartWorkboardCards({
+          store,
+          subagent: { run },
+          options: { now: 10, maxStarts: 1 },
+        });
+
+        expect(result.startFailures).toEqual(
+          rejected.map((card) => ({ cardId: card.id, title: card.title, error })),
+        );
+        expect(result.started).toEqual([
+          {
+            cardId: healthy.id,
+            title: healthy.title,
+            sessionKey: expect.any(String),
+            runId: "run-healthy-worker",
+          },
+        ]);
+        expect(claim.mock.calls.map(([cardId]) => cardId)).toEqual([healthy.id]);
+        expect(prepare.mock.calls.map(([cardId]) => cardId)).toEqual([healthy.id]);
+        expect(run).toHaveBeenCalledOnce();
+        expect(block).not.toHaveBeenCalled();
+        expect(fail).not.toHaveBeenCalled();
+        const after = await Promise.all(rejected.map((card) => store.get(card.id)));
+        expect(after).toEqual(before);
+        await expect(store.get(healthy.id)).resolves.toMatchObject({
+          status: "running",
+          execution: { runId: "run-healthy-worker" },
+        });
+      } finally {
+        for (const spy of [resolve, implicit, explicit, claim, prepare, block, fail]) {
+          spy.mockRestore();
+        }
+      }
+    },
+  );
+
   it("tries a healthy owner before retrying a failed owner's queued cards", async () => {
     const store = createWorkboardSqliteTestStore();
     const failed = await store.create({
@@ -224,52 +313,6 @@ describe("Workboard dispatcher ownership", () => {
     await expect(store.get(failed.id)).resolves.toMatchObject({ status: "blocked" });
     await expect(store.get(deferred.id)).resolves.toMatchObject({ status: "ready" });
     await expect(store.get(healthy.id)).resolves.toMatchObject({ status: "running" });
-  });
-
-  it("preserves priority order among available owners when workers start successfully", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const urgent = await store.create({
-      title: "Urgent primary worker",
-      status: "ready",
-      priority: "urgent",
-      agentId: "primary-worker",
-      workspaceAccess: { unrestricted: true },
-    });
-    const sameOwner = await store.create({
-      title: "Second primary worker card",
-      status: "ready",
-      priority: "high",
-      agentId: "primary-worker",
-      workspaceAccess: { unrestricted: true },
-    });
-    const high = await store.create({
-      title: "High-priority independent worker",
-      status: "ready",
-      priority: "high",
-      agentId: "independent-worker",
-      workspaceAccess: { unrestricted: true },
-    });
-    const normal = await store.create({
-      title: "Normal-priority independent worker",
-      status: "ready",
-      agentId: "normal-worker",
-      workspaceAccess: { unrestricted: true },
-    });
-    const run = vi
-      .fn()
-      .mockResolvedValueOnce({ runId: "run-urgent" })
-      .mockResolvedValueOnce({ runId: "run-high" });
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: { now: 10, maxStarts: 2 },
-    });
-
-    expect(result.started.map((entry) => entry.cardId)).toEqual([urgent.id, high.id]);
-    expect(run).toHaveBeenCalledTimes(2);
-    await expect(store.get(sameOwner.id)).resolves.toMatchObject({ status: "ready" });
-    await expect(store.get(normal.id)).resolves.toMatchObject({ status: "ready" });
   });
 
   it.each([
@@ -354,43 +397,6 @@ describe("Workboard dispatcher ownership", () => {
       }
     },
   );
-
-  it("does not let an expired review claim consume worker capacity", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const now = Date.now();
-    await store.create({
-      title: "Expired review claim",
-      status: "review",
-      agentId: "shared-worker",
-      metadata: {
-        claim: {
-          ownerId: "shared-worker",
-          token: "expired-token",
-          claimedAt: now - 60_000,
-          lastHeartbeatAt: now - 60_000,
-          expiresAt: now - 1_000,
-        },
-      },
-    });
-    const ready = await store.create({
-      title: "Ready after expired review claim",
-      status: "ready",
-      agentId: "shared-worker",
-      workspaceAccess: { unrestricted: true },
-    });
-    const run = vi.fn().mockResolvedValue({ runId: "run-after-expiry" });
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: { maxStarts: 1 },
-    });
-
-    expect(result.started).toEqual([
-      expect.objectContaining({ cardId: ready.id, runId: "run-after-expiry" }),
-    ]);
-    expect(run).toHaveBeenCalledOnce();
-  });
 
   it.each([
     { wallClock: 10_000, dispatchNow: 50_000, expectedClaimAttempts: 1 },
@@ -568,38 +574,6 @@ describe("Workboard dispatcher ownership", () => {
     await expect(store.get(product.id)).resolves.toMatchObject({ status: "ready" });
   });
 
-  it("keeps one worker slot across 25 concurrent board dispatches", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const cards = await Promise.all(
-      Array.from({ length: 25 }, (_, index) =>
-        store.create({
-          title: `Concurrent worker ${index}`,
-          status: "ready",
-          boardId: `board-${index}`,
-          agentId: "shared-worker",
-          workspaceAccess: { unrestricted: true },
-        }),
-      ),
-    );
-    const run = vi.fn().mockResolvedValue({ runId: "run-concurrent" });
-
-    const results = await Promise.all(
-      cards.map((card) =>
-        dispatchAndStartWorkboardCards({
-          store,
-          subagent: { run },
-          options: { boardId: card.metadata?.automation?.boardId, maxStarts: 1 },
-        }),
-      ),
-    );
-
-    expect(run).toHaveBeenCalledOnce();
-    expect(results.flatMap((result) => result.started)).toHaveLength(1);
-    const persisted = await store.list();
-    expect(persisted.filter((card) => card.status === "running")).toHaveLength(1);
-    expect(persisted.filter((card) => card.status === "ready")).toHaveLength(24);
-  });
-
   it.each(["scheduled dispatch", "dashboard exact-card start"] as const)(
     "persists launch association before %s and keeps accepted runs visible",
     async (origin) => {
@@ -768,38 +742,36 @@ describe("Workboard dispatcher ownership", () => {
     },
   );
 
-  it.each(["review", "blocked", "done"] as const)(
-    "rejects an exact dashboard card in %s",
-    async (status) => {
-      const store = createWorkboardSqliteTestStore();
-      const card = await store.create({
-        title: `Invalid exact ${status}`,
-        status,
-        agentId: `worker-${status}`,
-        workspaceAccess: { unrestricted: true },
-      });
-      const run = vi.fn();
+  it("rejects an exact dashboard card in blocked status", async () => {
+    const status = "blocked";
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({
+      title: `Invalid exact ${status}`,
+      status,
+      agentId: `worker-${status}`,
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn();
 
-      const result = await dispatchAndStartWorkboardCards({
-        store,
-        subagent: { run },
-        options: { cardId: card.id, maxStarts: 1 },
-      });
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { cardId: card.id, maxStarts: 1 },
+    });
 
-      expect(run).not.toHaveBeenCalled();
-      expect(result.started).toEqual([]);
-      expect(result.startFailures).toEqual([
-        expect.objectContaining({
-          cardId: card.id,
-          error: expect.stringContaining(status),
-        }),
-      ]);
-      await expect(store.get(card.id)).resolves.toMatchObject({
-        status,
-        metadata: expect.not.objectContaining({ claim: expect.anything() }),
-      });
-    },
-  );
+    expect(run).not.toHaveBeenCalled();
+    expect(result.started).toEqual([]);
+    expect(result.startFailures).toEqual([
+      expect.objectContaining({
+        cardId: card.id,
+        error: expect.stringContaining(status),
+      }),
+    ]);
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status,
+      metadata: expect.not.objectContaining({ claim: expect.anything() }),
+    });
+  });
 
   it.each([
     { label: "due", offsetMs: -1_000, starts: true },

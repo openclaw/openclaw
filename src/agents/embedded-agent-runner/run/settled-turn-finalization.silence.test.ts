@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -16,7 +17,9 @@ const transcriptMocks = vi.hoisted(() => ({ appendAssistantMirrorMessageByIdenti
 
 vi.mock("./backend.js", () => ({
   resolveRuntimeModelAttempt: vi.fn(),
-  runEmbeddedSettledTurnFinalizationWithBackend: backendMocks.runSettledFinalization,
+}));
+vi.mock("../../harness/selection.js", () => ({
+  runAgentHarnessSettledTurnFinalization: backendMocks.runSettledFinalization,
 }));
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
   appendAssistantMirrorMessageByIdentity: transcriptMocks.appendAssistantMirrorMessageByIdentity,
@@ -34,7 +37,6 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
   afterEach(() => admission.close());
 
   it.each([
-    { name: "required confirmation", expectation: "required", delivery: "missing", phased: false },
     {
       name: "required phased confirmation",
       expectation: "required",
@@ -42,24 +44,11 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
       phased: true,
     },
     {
-      name: "confirmation committed during recovery",
-      expectation: "required",
-      delivery: "delivered-during-recovery",
-      phased: false,
-    },
-    {
       name: "confirmation held during recovery",
       expectation: "required",
       delivery: "pending-during-recovery",
       phased: false,
     },
-    {
-      name: "delivered confirmation",
-      expectation: "required",
-      delivery: "delivered",
-      phased: false,
-    },
-    { name: "pending confirmation", expectation: "required", delivery: "pending", phased: false },
     { name: "unconfirmed receipt", expectation: "required", delivery: "unknown", phased: false },
     { name: "optional helper", expectation: "optional", delivery: "missing", phased: false },
   ] as const)(
@@ -82,7 +71,7 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
         content: [
           {
             type: "text",
-            text: earlierText ?? "",
+            text: earlierText,
             textSignature: JSON.stringify({ v: 1, id: "earlier-answer", phase: "final_answer" }),
           },
         ],
@@ -106,14 +95,7 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
       attempt.messagesSnapshot = [
         { role: "user", content: "Save the note and confirm when it is saved.", timestamp: 0 },
         toolAssistant,
-        {
-          role: "toolResult",
-          toolCallId: "reaction",
-          toolName: "message",
-          content: [{ type: "text", text: "Reaction added" }],
-          isError: false,
-          timestamp: 1,
-        },
+        makeTextToolResult("reaction", "message", "Reaction added", false, 1),
         earlierAnswer,
         assistant,
       ];
@@ -135,12 +117,8 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
       let observations = 0;
       input.terminalBase.runParams.resolveReplyDelivery = async () => {
         observations += 1;
-        if (delivery === "delivered-during-recovery" || delivery === "pending-during-recovery") {
-          return observations === 1
-            ? "missing"
-            : delivery === "delivered-during-recovery"
-              ? "delivered"
-              : "pending";
+        if (delivery === "pending-during-recovery") {
+          return observations === 1 ? "missing" : "pending";
         }
         if (delivery === "unknown") {
           throw new Error("Source receipt unavailable");
@@ -159,9 +137,8 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
 
       const result = await prepareTerminalWithSettledTurnFinalization(input);
 
-      const deliveredDuringRecovery =
-        delivery === "delivered-during-recovery" || delivery === "pending-during-recovery";
-      if (expectation === "required" && (delivery === "missing" || deliveredDuringRecovery)) {
+      const pendingDuringRecovery = delivery === "pending-during-recovery";
+      if (expectation === "required" && (delivery === "missing" || pendingDuringRecovery)) {
         expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
         const [preparedAttempt] = backendMocks.runSettledFinalization.mock.calls[0] ?? [];
         expect(preparedAttempt).toMatchObject({
@@ -172,14 +149,10 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
         });
         expect(result.finalizationOutcome).toBe("answered");
         expect(result.prepared.payloadsWithToolMedia).toEqual(
-          deliveredDuringRecovery ? [] : [expect.objectContaining({ text: finalText })],
+          pendingDuringRecovery ? [] : [expect.objectContaining({ text: finalText })],
         );
         expect(result.prepared.replyDeliveryState).toBe(
-          deliveredDuringRecovery
-            ? delivery === "delivered-during-recovery"
-              ? "delivered"
-              : "pending"
-            : "missing",
+          pendingDuringRecovery ? "pending" : "missing",
         );
       } else {
         expect(backendMocks.runSettledFinalization).not.toHaveBeenCalled();

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // Dedicated cold-process entrypoint for native provider hook relays.
 import process from "node:process";
-import { drainProcessOutput } from "../process/output-drain.js";
 import { runNativeHookRelayCliFromArgv } from "./native-hook-relay-cli.js";
 
 process.title = "openclaw-hooks";
@@ -13,6 +12,6 @@ try {
     `native hook relay failed: ${error instanceof Error ? error.message : String(error)}\n`,
   );
 }
-// Preserve the outcome if the event loop drains before the unref'd flush backstop.
+// The relay joins its transport cleanup; natural exit drains both output pipes
+// and disposes the V8 isolate before joining compiler workers.
 process.exitCode = exitCode;
-drainProcessOutput(() => process.exit(exitCode));

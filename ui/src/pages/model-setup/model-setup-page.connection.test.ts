@@ -7,7 +7,12 @@ import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createContext, detection, mountPage } from "./test-helpers/page.test-support.ts";
+import {
+  createContext,
+  detection,
+  mountPage,
+  type TestModelSetupPage,
+} from "./test-helpers/page.test-support.ts";
 
 const authStatus: ModelAuthStatusResult = {
   ts: 1,
@@ -53,14 +58,32 @@ const configSnapshot = {
   issues: [],
 };
 
+async function startSignIn(page: TestModelSetupPage, operation: "connect" | "setup") {
+  if (operation === "setup") {
+    page.querySelector<HTMLButtonElement>('[data-auth-choice="setup-only"] button')!.click();
+    return;
+  }
+  page.querySelector<HTMLButtonElement>("[data-models-connect]")!.click();
+  await waitForFast(() =>
+    expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain("Radius account"),
+  );
+  page.querySelector<HTMLButtonElement>('[data-models-login-provider="radius"]')!.click();
+  await page.updateComplete;
+  [...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button")]
+    .find((button) => button.textContent?.includes("Radius account"))!
+    .click();
+}
+
 afterEach(() => {
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 it.each(["connect", "setup"] as const)(
   "Model Setup completes %s OAuth from a browser callback without manual submission",
   async (operation) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const { context, client, request, runtimeConfig } = createContext();
     vi.spyOn(window, "open").mockReturnValue(null);
     const callback = createDeferred();
@@ -122,21 +145,7 @@ it.each(["connect", "setup"] as const)(
       const setupButton = page.querySelector<HTMLButtonElement>(
         '[data-auth-choice="setup-only"] button',
       )!;
-      if (operation === "connect") {
-        page.querySelector<HTMLButtonElement>("[data-models-connect]")!.click();
-        await waitForFast(() =>
-          expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-            "Radius account",
-          ),
-        );
-        page.querySelector<HTMLButtonElement>('[data-models-login-provider="radius"]')!.click();
-        await page.updateComplete;
-        [...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button")]
-          .find((button) => button.textContent?.includes("Radius account"))!
-          .click();
-      } else {
-        setupButton.click();
-      }
+      await startSignIn(page, operation);
       await waitForFast(() => {
         const signIn = page.querySelector(".wizard-step__sign-in");
         expect(signIn).not.toBeNull();
@@ -147,6 +156,7 @@ it.each(["connect", "setup"] as const)(
       );
       expect(verificationRuns).toBe(0);
       callback.resolve();
+      await vi.advanceTimersByTimeAsync(1_000);
       await waitForFast(
         () =>
           expect(page.textContent).toContain(
@@ -234,11 +244,9 @@ it.each(["agent", "connection", "cancel"] as const)(
 
 it.each([
   ["connect", "terminal"],
-  ["connect", "request"],
-  ["setup", "terminal"],
   ["setup", "request"],
 ] as const)(
-  "Model Setup keeps %s recovery context in Details after a %s failure",
+  "Model Setup shows %s recovery context directly after a %s failure",
   async (operation, failure) => {
     const { context, client, request, runtimeConfig } = createContext();
     vi.spyOn(window, "open").mockReturnValue(null);
@@ -308,21 +316,7 @@ it.each([
         client,
         firstRun: false,
       });
-      if (operation === "connect") {
-        page.querySelector<HTMLButtonElement>("[data-models-connect]")!.click();
-        await waitForFast(() =>
-          expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-            "Radius account",
-          ),
-        );
-        page.querySelector<HTMLButtonElement>('[data-models-login-provider="radius"]')!.click();
-        await page.updateComplete;
-        [...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button")]
-          .find((button) => button.textContent?.includes("Radius account"))!
-          .click();
-      } else {
-        page.querySelector<HTMLButtonElement>('[data-auth-choice="setup-only"] button')!.click();
-      }
+      await startSignIn(page, operation);
       await waitForFast(() =>
         expect(page.querySelector(".wizard-step__sign-in")?.textContent).toContain(
           "Waiting for sign-in",
@@ -334,23 +328,19 @@ it.each([
       expect(modal.textContent).not.toContain(guidance);
       expect(modal.textContent).not.toContain(url);
       finish.resolve();
+      const expectedError = [diagnostic, guidance, authorization].join("\n\n");
       await waitForFast(() =>
-        expect(modal.querySelector("[role=alert]")?.textContent?.trim()).toBe(
-          "Could not finish. Open Details to see what to do next.",
+        expect(modal.querySelector(".model-setup-wizard__error-text")?.textContent).toBe(
+          expectedError,
         ),
       );
       expect(modal.querySelector("h2")?.textContent?.trim()).toBe(label);
       expect(modal.querySelector(".wizard-step__sign-in")).toBeNull();
-      const details = modal.querySelector<HTMLDetailsElement>("details")!;
-      expect(details.open).toBe(false);
       const alert = modal.querySelector("[role=alert]")!;
-      expect(alert.textContent).not.toContain(guidance);
-      expect(alert.textContent).not.toContain(url);
-      details.querySelector("summary")!.click();
-      expect(details.open).toBe(true);
-      expect(details.querySelector("p")?.textContent).toBe(
-        [diagnostic, guidance, authorization].join("\n\n"),
-      );
+      expect(alert.textContent).toContain(guidance);
+      expect(alert.textContent).toContain(url);
+      expect(alert.querySelector<HTMLButtonElement>('button[aria-label="Copy"]')).not.toBeNull();
+      expect(modal.querySelector("details")).toBeNull();
       expect(reads).toBe(4);
       expect(
         request.mock.calls.some(([method]) => method === "openclaw.setup.activate.start"),

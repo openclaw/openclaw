@@ -10,27 +10,27 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import {
   createGatewayBrowserClientFixture,
+  createPaneHeaderWorkspaceFixture,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { isSidebarSlotVisible, type SidebarLayout } from "./sidebar-layout.ts";
 
 type DashboardPane = TestChatPane & {
   visuallyPresented: boolean;
-  fullscreenBoardWidgetMenu: (
+  pageBoardWidgetMenu: (
     layout: SidebarLayout,
     board?: ResolvedBoardView,
   ) => BoardWidgetPageMenu | undefined;
   boardProvider: BoardProvider;
-  routeFace: "chat" | "dashboard";
+  routeFace: "chat" | "dashboard" | undefined;
   dashboardExpanded: boolean;
   narrow: boolean;
   paneWidth: number;
   resolveBoardView: () => ResolvedBoardView;
   syncRetainedBoardSession: (board: ResolvedBoardView) => void;
+  captureNavigationFace: () => "chat" | "dashboard" | undefined;
   commitSidebarPanelResize: (layout: SidebarLayout, columnId: string, size: number) => void;
   handleBoardCommand: (event: BoardCommandEvent) => void;
   saveDashboardDefault: (row: GatewaySessionRow, agentId: string | undefined) => Promise<void>;
@@ -76,6 +76,7 @@ export function createDashboardHarness(
         current = {
           ...current,
           ...(result.entry.updatedAt !== undefined ? { updatedAt: result.entry.updatedAt } : {}),
+          ...(result.entry.boardFace !== undefined ? { boardFace: result.entry.boardFace } : {}),
           ...(Object.hasOwn(result.entry, "boardPresentation")
             ? { boardPresentation: result.entry.boardPresentation }
             : {}),
@@ -143,8 +144,7 @@ export function createDashboardHarness(
   const header = async () => {
     render(
       pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
+        createPaneHeaderWorkspaceFixture(state),
         state.sessionsResult?.sessions[0],
         false,
         undefined,
@@ -154,13 +154,9 @@ export function createDashboardHarness(
       ),
       mount,
     );
-    const menu = mount.querySelector<HeaderMenu>("openclaw-chat-header-session-menu");
+    const menu = mount.querySelector<HeaderMenu>(".chat-pane__layout-menu");
     expect(menu).not.toBeNull();
     await menu!.updateComplete;
-    if (pane.narrow) {
-      select(menu!, "compact:open-layout");
-      await menu!.updateComplete;
-    }
     return menu!;
   };
   return {
@@ -183,7 +179,10 @@ export function createDashboardHarness(
 }
 
 export function select(menu: ParentNode, value: string) {
-  const dropdown = menu.querySelector("wa-dropdown");
+  const dropdown =
+    menu instanceof Element && menu.matches("wa-dropdown")
+      ? menu
+      : menu.querySelector("wa-dropdown");
   expect(dropdown).not.toBeNull();
   dropdown!.dispatchEvent(
     new CustomEvent("wa-select", {
@@ -193,6 +192,9 @@ export function select(menu: ParentNode, value: string) {
       detail: { item: { value } },
     }),
   );
+  if (dropdown!.matches(".chat-pane__layout-menu")) {
+    dropdown!.dispatchEvent(new CustomEvent("wa-after-hide"));
+  }
 }
 
 export function expectPresentation(layout: SidebarLayout, expanded: boolean) {

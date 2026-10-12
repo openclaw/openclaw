@@ -2,63 +2,48 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { hasExactKeys } from "../../chrome-extension/modules/strict-json.js";
+import {
+  assertCurrentNativeHostLaunchContext,
+  assertExpectedNativeHostProfile,
+  NativeHostSetupContextError,
+  resolveInstallConfigPath,
+  resolveInstallStateDir,
+  type NativeHostLaunchContext,
+  type NativeHostRegistrationStatus,
+} from "./extension-install-context.js";
 import { FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID } from "./extension-install-external.js";
 import {
   approvedInstallRealpaths,
   assertOwnedPath,
   chromeProductRoots,
-  type ChromeProduct,
   type ChromeProductRoot,
   ensurePrivateDirectory,
-  type ExtensionInstallDeps,
   generateChromeExtensionIdForPath,
   inspectInstalledCopy,
   pathInfo,
   stableChromeExtensionDir,
 } from "./extension-install-layout.js";
-import { BROWSER_NATIVE_HOST_NAME } from "./extension-native-host.js";
+import { readPrivateNativeHostFile } from "./extension-native-host-file.js";
+import {
+  BROWSER_NATIVE_HOST_DESCRIPTION as NATIVE_HOST_DESCRIPTION,
+  BROWSER_NATIVE_HOST_NAME,
+} from "./extension-native-host.constants.js";
+import { isValidProfileName } from "./profiles.js";
 
 const OWNED_LAUNCHER_MARKER = "# OpenClaw native messaging bootstrap v1";
-const NATIVE_HOST_DESCRIPTION = "OpenClaw browser extension bootstrap";
 
-type NativeHostLaunchContext = { stateDir: string; configPath?: string };
-
-export type NativeHostRegistrationStatus = {
-  product: ChromeProduct;
-  browser: string;
-  manifestPath: string;
-  extensionIds: string[];
-  state: "missing" | "owned" | "foreign" | "invalid";
-  issue?: string;
-  nativeHostPath?: string;
-  launcherPath?: string;
-  launchContext?: NativeHostLaunchContext;
-};
-
-function nativeMessagingRoot(deps: ExtensionInstallDeps = {}): string {
-  return path.join(resolveInstallStateDir(deps), "browser", "native-messaging");
-}
-
-function resolveInstallStateDir(deps: ExtensionInstallDeps): string {
-  return path.resolve(deps.stateDir ?? resolveStateDir(deps.env));
-}
-
-function resolveInstallConfigPath(deps: ExtensionInstallDeps): string | undefined {
-  const env = deps.env ?? process.env;
-  const explicit = env.OPENCLAW_CONFIG_PATH?.trim();
-  return explicit ? resolveStateDir({ ...env, OPENCLAW_STATE_DIR: explicit }) : undefined;
+function nativeMessagingRoot(): string {
+  return path.join(resolveInstallStateDir(), "browser", "native-messaging");
 }
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-async function resolveNativeHostPath(pluginRoot: string, explicit?: string): Promise<string> {
-  if (explicit) {
-    return await fs.realpath(explicit);
-  }
+export async function resolveNativeHostPath(pluginRoot: string): Promise<string> {
   const resolvedPluginRoot = path.resolve(pluginRoot);
   const candidates = [path.join(resolvedPluginRoot, "native-host-entry.js")];
   let cursor = resolvedPluginRoot;
@@ -78,9 +63,9 @@ async function resolveNativeHostPath(pluginRoot: string, explicit?: string): Pro
   throw new Error("Could not resolve the built browser native-host entrypoint; run pnpm build.");
 }
 
-function launcherPathForManifest(manifestPath: string, deps: ExtensionInstallDeps): string {
+function launcherPathForManifest(manifestPath: string): string {
   const suffix = crypto.createHash("sha256").update(manifestPath).digest("hex").slice(0, 16);
-  return path.join(nativeMessagingRoot(deps), `${BROWSER_NATIVE_HOST_NAME}.${suffix}.sh`);
+  return path.join(nativeMessagingRoot(), `${BROWSER_NATIVE_HOST_NAME}.${suffix}.sh`);
 }
 
 function versionedLauncherPath(basePath: string, content: string): string {
@@ -99,14 +84,10 @@ function expectedOriginsForExtensionIds(extensionIds: string[]): string[] {
   );
 }
 
-function pathDerivedExtensionIds(extensionIds: string[]): string[] {
-  return extensionIds.filter(
-    (extensionId) => extensionId !== FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID,
-  );
-}
-
 function isSafeOriginMigration(existingIds: string[], desiredPathIds: string[]): boolean {
-  const existingPathIds = pathDerivedExtensionIds(existingIds).toSorted();
+  const existingPathIds = existingIds
+    .filter((extensionId) => extensionId !== FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID)
+    .toSorted();
   const desiredIds = [...new Set(desiredPathIds)].toSorted();
   if (JSON.stringify(existingPathIds) === JSON.stringify(desiredIds)) {
     return true;
@@ -122,16 +103,12 @@ function isSafeOriginMigration(existingIds: string[], desiredPathIds: string[]):
   );
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-}
-
 function parseOwnedLauncher(params: {
   content: string;
   manifestPath: string;
   launcherPath: string;
   origins: string[];
-}): { targets: string[]; context: NativeHostLaunchContext } | undefined {
+}): { targets: string[]; context: NativeHostLaunchContext; browserProfile?: string } | undefined {
   const quotedValue = String.raw`'(?:[^'\r\n]|'"'"')*'`;
   const command = [
     `(${quotedValue})`,
@@ -145,39 +122,30 @@ function parseOwnedLauncher(params: {
       escapeRegExp(shellQuote(origin)),
     ]),
   ].join(" ");
+  const profileArgument = `(?: ${escapeRegExp(shellQuote("--browser-profile"))} (${quotedValue}))?`;
   const pattern = new RegExp(
-    `^#!/bin/sh\\n${escapeRegExp(OWNED_LAUNCHER_MARKER)}\\nexport OPENCLAW_STATE_DIR=(${quotedValue})\\n(?:export OPENCLAW_CONFIG_PATH=(${quotedValue})\\n)?exec ${command} "\\$@"\\n$`,
+    `^#!/bin/sh\\n${escapeRegExp(OWNED_LAUNCHER_MARKER)}\\nexport OPENCLAW_STATE_DIR=(${quotedValue})\\n(?:export OPENCLAW_CONFIG_PATH=(${quotedValue})\\n)?exec ${command}${profileArgument} "\\$@"\\n$`,
     "u",
   );
-  const [stateDir, configPath, nodePath, nativeHostPath] =
+  const [stateDir, configPath, nodePath, nativeHostPath, savedProfile] =
     pattern.exec(params.content)?.slice(1) ?? [];
   if (stateDir === undefined || nodePath === undefined || nativeHostPath === undefined) {
     return undefined;
   }
   // Decode only shellQuote's words after the entire ownership grammar matches.
   const decode = (value: string) => value.slice(1, -1).replaceAll(`'"'"'`, "'");
+  const browserProfile = savedProfile === undefined ? undefined : decode(savedProfile);
+  if (browserProfile !== undefined && !isValidProfileName(browserProfile)) {
+    return undefined;
+  }
   return {
     targets: [decode(nodePath), decode(nativeHostPath)],
     context: {
       stateDir: decode(stateDir),
       configPath: configPath === undefined ? undefined : decode(configPath),
     },
+    ...(browserProfile === undefined ? {} : { browserProfile }),
   };
-}
-
-async function assertPrivateNativeHostFile(
-  target: string,
-  executable: boolean,
-  platform: NodeJS.Platform,
-): Promise<void> {
-  await assertOwnedPath(target, "file");
-  if (platform === "win32") {
-    return;
-  }
-  const mode = (await fs.lstat(target)).mode & 0o777;
-  if ((mode & 0o077) !== 0 || (executable && (mode & 0o100) === 0)) {
-    throw new Error("native host file has unsafe mode");
-  }
 }
 
 async function assertNativeHostTarget(target: string, accessMode: number): Promise<void> {
@@ -193,12 +161,12 @@ async function resolveLauncherInstall(params: {
   manifestPath: string;
   pluginRoot: string;
   extensionIds: string[];
-  deps: ExtensionInstallDeps;
   launchContext?: NativeHostLaunchContext;
+  browserProfile?: string;
 }): Promise<{ path: string; content: string }> {
-  const launcherPath = launcherPathForManifest(params.manifestPath, params.deps);
-  const nodePath = await fs.realpath(params.deps.nodePath ?? process.execPath);
-  const nativeHostPath = await resolveNativeHostPath(params.pluginRoot, params.deps.nativeHostPath);
+  const launcherPath = launcherPathForManifest(params.manifestPath);
+  const nodePath = await fs.realpath(process.execPath);
+  const nativeHostPath = await resolveNativeHostPath(params.pluginRoot);
   await assertNativeHostTarget(nodePath, fs.constants.X_OK);
   await assertNativeHostTarget(nativeHostPath, fs.constants.R_OK);
   const command = [
@@ -213,9 +181,12 @@ async function resolveLauncherInstall(params: {
       origin,
     ]),
   ];
+  if (params.browserProfile) {
+    command.push("--browser-profile", params.browserProfile);
+  }
   const context = params.launchContext ?? {
-    stateDir: resolveInstallStateDir(params.deps),
-    configPath: resolveInstallConfigPath(params.deps),
+    stateDir: resolveInstallStateDir(),
+    configPath: resolveInstallConfigPath(),
   };
   const content = [
     "#!/bin/sh",
@@ -239,26 +210,24 @@ async function resolveLauncherInstall(params: {
 
 export async function inspectRegistration(
   root: ChromeProductRoot,
-  deps: ExtensionInstallDeps,
   expectedPathExtensionIds?: string[],
 ): Promise<NativeHostRegistrationStatus> {
   const manifestPath = path.join(root.nativeManifestDir, `${BROWSER_NATIVE_HOST_NAME}.json`);
+  const registration = { product: root.product, browser: root.label, manifestPath };
   if (!(await pathInfo(manifestPath))) {
     return {
-      product: root.product,
-      browser: root.label,
-      manifestPath,
+      ...registration,
       extensionIds: [],
       state: "missing",
     };
   }
   try {
-    await assertPrivateNativeHostFile(manifestPath, false, deps.platform ?? process.platform);
-    const manifest = asNullableRecord(JSON.parse(await fs.readFile(manifestPath, "utf8")));
+    const manifestFile = await readPrivateNativeHostFile(manifestPath, false);
+    const manifest = asNullableRecord(JSON.parse(manifestFile.buffer.toString("utf8")));
     if (!manifest) {
       throw new Error("manifest is not an object");
     }
-    const baseLauncher = launcherPathForManifest(manifestPath, deps);
+    const baseLauncher = launcherPathForManifest(manifestPath);
     const expectedLauncher = typeof manifest.path === "string" ? manifest.path : "";
     const versionedPathPattern = new RegExp(
       `^${escapeRegExp(baseLauncher.slice(0, -3))}\\.[a-f0-9]{64}\\.sh$`,
@@ -274,15 +243,12 @@ export async function inspectRegistration(
       (expectedLauncher !== baseLauncher && !versionedPathPattern.test(expectedLauncher))
     ) {
       return {
-        product: root.product,
-        browser: root.label,
-        manifestPath,
+        ...registration,
         extensionIds: ids,
         state: "foreign",
         issue: "same host name is registered to a foreign manifest or launcher",
       };
     }
-    const exactKeys = ["name", "description", "path", "type", "allowed_origins"];
     const stringOrigins = origins.filter((origin): origin is string => typeof origin === "string");
     const validOrigins =
       origins.length > 0 &&
@@ -294,18 +260,16 @@ export async function inspectRegistration(
       ? expectedOriginsForExtensionIds(expectedPathExtensionIds)
       : null;
     if (
-      Object.keys(manifest).length !== exactKeys.length ||
-      !exactKeys.every((key) => Object.hasOwn(manifest, key)) ||
+      !hasExactKeys(manifest, ["name", "description", "path", "type", "allowed_origins"]) ||
       manifest.description !== NATIVE_HOST_DESCRIPTION ||
       manifest.type !== "stdio" ||
       !validOrigins ||
-      JSON.stringify(origins) !== JSON.stringify(canonicalOrigins) ||
-      (expectedOrigins !== null && JSON.stringify(origins) !== JSON.stringify(expectedOrigins))
+      JSON.stringify(origins) !== JSON.stringify(canonicalOrigins)
     ) {
       throw new Error("native host manifest does not contain exact allowed origins");
     }
-    await assertPrivateNativeHostFile(expectedLauncher, true, deps.platform ?? process.platform);
-    const launcherContent = await fs.readFile(expectedLauncher, "utf8");
+    const launcherFile = await readPrivateNativeHostFile(expectedLauncher, true);
+    const launcherContent = launcherFile.buffer.toString("utf8");
     const canonicalContent = launcherContent.replace(
       ` '--launcher' ${shellQuote(expectedLauncher)}`,
       () => ` '--launcher' ${shellQuote(baseLauncher)}`,
@@ -327,32 +291,42 @@ export async function inspectRegistration(
     if (!parsedLauncher) {
       throw new Error("native host launcher and manifest origins do not match");
     }
-    // Removed package versions break readiness, not ownership or managed repair/removal.
+    // Recover selection only from the verified manifest/launcher pair. A supported
+    // bundle relocation changes readiness, not ownership or saved selection.
     let issue: string | undefined;
+    if (
+      expectedPathExtensionIds !== undefined &&
+      JSON.stringify(origins) !== JSON.stringify(expectedOrigins)
+    ) {
+      if (!isSafeOriginMigration(ids, expectedPathExtensionIds)) {
+        throw new Error("native host manifest does not contain exact allowed origins");
+      }
+      issue =
+        "registered native host origins require a supported path migration; run openclaw browser extension install";
+    }
     try {
       for (const [index, target] of parsedLauncher.targets.entries()) {
         await assertNativeHostTarget(target, index === 0 ? fs.constants.X_OK : fs.constants.R_OK);
       }
     } catch {
-      issue =
+      issue ??=
         "registered native host runtime or entry is unavailable or unsafe; run openclaw browser extension install";
     }
     return {
-      product: root.product,
-      browser: root.label,
-      manifestPath,
+      ...registration,
       extensionIds: ids.toSorted(),
       state: "owned",
       nativeHostPath: parsedLauncher.targets[1],
       launcherPath: expectedLauncher,
       launchContext: parsedLauncher.context,
       issue,
+      ...(parsedLauncher.browserProfile === undefined
+        ? {}
+        : { browserProfile: parsedLauncher.browserProfile }),
     };
   } catch (error) {
     return {
-      product: root.product,
-      browser: root.label,
-      manifestPath,
+      ...registration,
       extensionIds: [],
       state: "invalid",
       issue: error instanceof Error ? error.message : String(error),
@@ -364,14 +338,21 @@ export async function installRegistration(params: {
   root: ChromeProductRoot;
   extensionIds: string[];
   pluginRoot: string;
-  deps: ExtensionInstallDeps;
   expectedNativeHostPath?: string;
+  browserProfile?: string;
+  signal?: AbortSignal;
+  requireCurrentLaunchContext?: boolean;
+  expectedRegistrations?: readonly NativeHostRegistrationStatus[];
 }): Promise<NativeHostRegistrationStatus> {
-  const { root, extensionIds, deps } = params;
+  const { root, extensionIds } = params;
   const manifestPath = path.join(root.nativeManifestDir, `${BROWSER_NATIVE_HOST_NAME}.json`);
-  const existing = await inspectRegistration(root, deps);
+  const existing = await inspectRegistration(root);
+  assertExpectedNativeHostProfile(existing, params.expectedRegistrations);
   if (existing.state === "foreign" || existing.state === "invalid") {
     throw new Error(`Refusing to overwrite ${existing.state} native host: ${manifestPath}`);
+  }
+  if (params.requireCurrentLaunchContext) {
+    assertCurrentNativeHostLaunchContext(existing);
   }
   if (
     params.expectedNativeHostPath !== undefined &&
@@ -388,15 +369,20 @@ export async function installRegistration(params: {
   ) {
     throw new Error(`Refusing to overwrite owned native host with unexpected allowed origins`);
   }
-  await ensurePrivateDirectory(nativeMessagingRoot(deps));
+  params.signal?.throwIfAborted();
+  await ensurePrivateDirectory(nativeMessagingRoot());
+  params.signal?.throwIfAborted();
   await ensurePrivateDirectory(root.nativeManifestDir);
   const launcher = await resolveLauncherInstall({
     manifestPath,
     pluginRoot: params.pluginRoot,
     extensionIds,
-    deps,
     // Relocation replaces package targets, never the registered profile/config selection.
-    launchContext: params.expectedNativeHostPath === undefined ? undefined : existing.launchContext,
+    launchContext:
+      params.requireCurrentLaunchContext || params.expectedNativeHostPath !== undefined
+        ? existing.launchContext
+        : undefined,
+    browserProfile: params.browserProfile ?? existing.browserProfile,
   });
   const launcherPath = launcher.path;
   const previousManifest =
@@ -414,22 +400,48 @@ export async function installRegistration(params: {
       );
     }
   } else {
+    params.signal?.throwIfAborted();
     await replaceFileAtomic({ filePath: launcherPath, content: launcher.content, mode: 0o700 });
     createdLauncher = true;
-  }
-  if (process.platform !== "win32") {
-    await fs.chmod(launcherPath, 0o700);
   }
   const manifest = {
     name: BROWSER_NATIVE_HOST_NAME,
     description: NATIVE_HOST_DESCRIPTION,
     path: launcherPath,
     type: "stdio",
-    allowed_origins: expectedOriginsForExtensionIds(extensionIds),
+    allowed_origins: desiredOrigins,
   };
   const manifestContent = `${JSON.stringify(manifest, null, 2)}\n`;
   try {
-    await replaceFileAtomic({ filePath: manifestPath, content: manifestContent, mode: 0o600 });
+    params.signal?.throwIfAborted();
+    if (process.platform !== "win32") {
+      await fs.chmod(launcherPath, 0o700);
+    }
+    params.signal?.throwIfAborted();
+    await replaceFileAtomic({
+      filePath: manifestPath,
+      content: manifestContent,
+      mode: 0o600,
+      beforeRename:
+        params.requireCurrentLaunchContext || params.expectedRegistrations
+          ? async () => {
+              params.signal?.throwIfAborted();
+              const current = await inspectRegistration(root);
+              if (params.requireCurrentLaunchContext) {
+                assertCurrentNativeHostLaunchContext(current);
+              }
+              assertExpectedNativeHostProfile(current, params.expectedRegistrations);
+              const currentManifest =
+                current.state === "missing" ? undefined : await fs.readFile(manifestPath, "utf8");
+              if (current.state !== existing.state || currentManifest !== previousManifest) {
+                throw new NativeHostSetupContextError(
+                  "Chrome's native host selection changed during setup. Inspect the registered OPENCLAW_CONFIG_PATH before trying again.",
+                );
+              }
+              params.signal?.throwIfAborted();
+            }
+          : undefined,
+    });
   } catch (error) {
     // Remove only this attempt's unreferenced candidate. An ambiguous publication
     // leaves it intact; the selected manifest remains the dependency authority.
@@ -439,7 +451,7 @@ export async function installRegistration(params: {
         asNullableRecord(readError)?.code === "ENOENT" ? undefined : null,
       );
     if (createdLauncher && observedManifest === previousManifest) {
-      await assertPrivateNativeHostFile(launcherPath, true, deps.platform ?? process.platform);
+      await readPrivateNativeHostFile(launcherPath, true);
       await fs.unlink(launcherPath);
     }
     throw error;
@@ -450,14 +462,10 @@ export async function installRegistration(params: {
     (await fs.readFile(manifestPath, "utf8")) === manifestContent &&
     (await fs.readFile(previousLauncher.path, "utf8")) === previousLauncher.content
   ) {
-    await assertPrivateNativeHostFile(
-      previousLauncher.path,
-      true,
-      deps.platform ?? process.platform,
-    );
+    await readPrivateNativeHostFile(previousLauncher.path, true);
     await fs.unlink(previousLauncher.path);
   }
-  return await inspectRegistration(root, deps, extensionIds);
+  return await inspectRegistration(root, extensionIds);
 }
 
 /** Inspect or refresh existing registrations without reading personal browser profiles. */
@@ -466,7 +474,6 @@ export async function repairChromeExtensionNativeHosts(params: {
   pluginRoot: string;
   fromNativeHostPath?: string;
   dryRun?: boolean;
-  deps?: ExtensionInstallDeps;
 }): Promise<{
   changes: string[];
   warnings: string[];
@@ -483,16 +490,15 @@ export async function repairChromeExtensionNativeHosts(params: {
       "Native host repair requires --from with the exact absolute registered entrypoint; use --dry-run to inspect targets.",
     );
   }
-  const deps = params.deps ?? {};
   const fromNativeHostPath = params.fromNativeHostPath;
   const changes: string[] = [];
   const warnings: string[] = [];
   const registrations: NativeHostRegistrationStatus[] = [];
   const retained = new Set<string>();
-  const manualRequired = (deps.platform ?? process.platform) === "win32";
+  const manualRequired = process.platform === "win32";
   let retentionSafe = !manualRequired;
-  for (const root of manualRequired ? [] : chromeProductRoots(deps)) {
-    let registration = await inspectRegistration(root, deps);
+  for (const root of manualRequired ? [] : chromeProductRoots()) {
+    let registration = await inspectRegistration(root);
     if (
       !params.dryRun &&
       fromNativeHostPath &&
@@ -500,22 +506,21 @@ export async function repairChromeExtensionNativeHosts(params: {
       registration.nativeHostPath === fromNativeHostPath
     ) {
       try {
-        const installed = stableChromeExtensionDir(deps);
+        const installed = stableChromeExtensionDir();
         if (!(await inspectInstalledCopy(installed)).owned) {
           throw new Error(
             "stable extension copy is not OpenClaw-owned; run browser extension install explicitly",
           );
         }
         const extensionIds = (await approvedInstallRealpaths(installed, params.bundledDir)).map(
-          (candidate) =>
-            generateChromeExtensionIdForPath(candidate, deps.platform ?? process.platform),
+          (candidate) => generateChromeExtensionIdForPath(candidate),
         );
         const launcher = await resolveLauncherInstall({
           manifestPath: registration.manifestPath,
           pluginRoot: params.pluginRoot,
           extensionIds,
-          deps,
           launchContext: registration.launchContext,
+          browserProfile: registration.browserProfile,
         });
         if (
           JSON.stringify(registration.extensionIds) !==
@@ -526,7 +531,6 @@ export async function repairChromeExtensionNativeHosts(params: {
             root,
             extensionIds,
             pluginRoot: params.pluginRoot,
-            deps,
             expectedNativeHostPath: fromNativeHostPath,
           });
           changes.push(`Repaired ${root.label} OpenClaw native messaging registration.`);
@@ -536,7 +540,7 @@ export async function repairChromeExtensionNativeHosts(params: {
         // Manifest publication owns the cutover. A failed publication keeps its
         // prior immutable launcher and dependency available for the next repair.
         retained.add(fromNativeHostPath);
-        registration = await inspectRegistration(root, deps);
+        registration = await inspectRegistration(root);
       }
     }
     registrations.push(registration);
@@ -567,25 +571,32 @@ export async function repairChromeExtensionNativeHosts(params: {
 
 /** Remove only registrations and launchers that carry OpenClaw ownership. */
 export async function uninstallChromeExtensionNativeHosts(
-  params: { deps?: ExtensionInstallDeps } = {},
+  params: {
+    pluginRoot?: string;
+    nativeHostExecutable?: string;
+    browserProfile?: string;
+    removeStore?: boolean;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<{ removed: string[]; refused: string[]; manualRequired: boolean }> {
-  const deps = params.deps ?? {};
-  if ((deps.platform ?? process.platform) === "win32") {
-    return { removed: [], refused: [], manualRequired: true };
+  if (process.platform === "win32") {
+    return (await import("./extension-windows-host.js")).uninstallWindowsNativeHosts({
+      ...params,
+      executable: params.nativeHostExecutable,
+    });
+  }
+  if (params.removeStore) {
+    throw new Error("Use uninstall-store for macOS Store requests.");
   }
   const removed: string[] = [];
   const refused: string[] = [];
-  for (const root of chromeProductRoots(deps)) {
-    const status = await inspectRegistration(root, deps);
+  for (const root of chromeProductRoots()) {
+    const status = await inspectRegistration(root);
     if (status.state === "missing") {
       continue;
     }
-    if (status.state !== "owned") {
-      refused.push(status.manifestPath);
-      continue;
-    }
     const launcherPath = status.launcherPath;
-    if (!launcherPath) {
+    if (status.state !== "owned" || !launcherPath) {
       refused.push(status.manifestPath);
       continue;
     }

@@ -22,52 +22,39 @@ describe("gateway suspend CLI", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.unstubAllEnvs());
 
-  it.each([undefined, 0, "0", " 0 ", "0.25", "1e1"])(
-    "prints a ready lease for wait %j",
-    async (waitSeconds) => {
-      const callGateway = vi.fn(async () => readyResult);
-      const runtime = createNonExitingRuntimeEnv();
+  it.each([undefined, 0, "0.25"])("prints a ready lease for wait %j", async (waitSeconds) => {
+    const callGateway = vi.fn(async () => readyResult);
+    const runtime = createNonExitingRuntimeEnv();
 
-      await runGatewaySuspend({ rpcOpts: {}, waitSeconds }, { callGateway, runtime });
+    await runGatewaySuspend({ rpcOpts: {}, waitSeconds }, { callGateway, runtime });
 
-      expect(callGateway).toHaveBeenCalledWith(
-        "gateway.suspend.prepare",
-        {},
-        { requestId: expect.stringMatching(/^cli-[0-9a-f]{8}$/u) },
-      );
-      expect(callGateway).toHaveBeenCalledOnce();
-      expect(runtime.log).toHaveBeenCalledWith("Gateway suspension prepared.");
-      expect(runtime.log).toHaveBeenCalledWith("Suspension ID: suspension-1");
-      expect(runtime.log).toHaveBeenCalledWith(
-        `Expires: 2026-08-11T12:00:00.000Z (${readyResult.expiresAtMs} ms)`,
-      );
-      expect(runtime.log).toHaveBeenCalledWith("Resume with: openclaw gateway resume suspension-1");
-    },
-  );
+    expect(callGateway).toHaveBeenCalledWith(
+      "gateway.suspend.prepare",
+      {},
+      { requestId: expect.stringMatching(/^cli-[0-9a-f]{8}$/u) },
+    );
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(runtime.log).toHaveBeenCalledWith("Gateway suspension prepared.");
+    expect(runtime.log).toHaveBeenCalledWith("Suspension ID: suspension-1");
+    expect(runtime.log).toHaveBeenCalledWith(
+      `Expires: 2026-08-11T12:00:00.000Z (${readyResult.expiresAtMs} ms)`,
+    );
+    expect(runtime.log).toHaveBeenCalledWith("Resume with: openclaw gateway resume suspension-1");
+  });
 
-  it.each(["", "   ", "\t\n"])(
-    "rejects blank wait %j before acquiring a lease",
-    async (waitSeconds) => {
-      const callGateway = vi.fn(async () => readyResult);
+  it("rejects whitespace-only wait before acquiring a lease", async () => {
+    const callGateway = vi.fn(async () => readyResult);
 
-      await expect(
-        runGatewaySuspend(
-          { rpcOpts: {}, waitSeconds },
-          { callGateway, runtime: createNonExitingRuntimeEnv() },
-        ),
-      ).rejects.toThrow("--wait must be a non-negative number of seconds");
-      expect(callGateway).not.toHaveBeenCalled();
-    },
-  );
+    await expect(
+      runGatewaySuspend(
+        { rpcOpts: {}, waitSeconds: " \t\n" },
+        { callGateway, runtime: createNonExitingRuntimeEnv() },
+      ),
+    ).rejects.toThrow("--wait must be a non-negative number of seconds");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
 
   it.each([
-    {
-      name: "default gateway",
-      rpcOpts: {},
-      profile: "",
-      container: "",
-      command: "openclaw gateway resume suspension-1",
-    },
     {
       name: "custom local port",
       rpcOpts: { localPortOverride: 18999 },

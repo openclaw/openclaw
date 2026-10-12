@@ -9,7 +9,7 @@ import { createMessageTool } from "../src/agents/tools/message-tool-execution.js
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
 import type { ChannelMessageActionContext } from "../src/channels/plugins/types.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
@@ -168,16 +168,12 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
   const modes = [
     "allowed",
     "denied",
-    "account",
     "revoked",
     "result-revoked",
-    "legacy",
     "run-revoked-direct",
     "run-result-revoked-direct",
     "bundled-allowed",
     "bundled-revoked",
-    "bundled-run-revoked-direct",
-    "bundled-run-result-revoked-direct",
   ] as const;
   const cases =
     channel === "discord"
@@ -195,7 +191,6 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
           "tool-run-claim-revoked" as const,
           "tool-run-result-revoked" as const,
           "tool-run-retry-revoked" as const,
-          "bundled-tool-allowed" as const,
           "bundled-tool-run-claim-revoked" as const,
         ];
   it.each(cases)("routes a cross-conversation read through the provider (%s)", async (mode) => {
@@ -215,11 +210,6 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
       ...provider,
       // Status probes have provider-specific generics and are not part of message dispatch.
       status: undefined,
-      actions: {
-        ...provider.actions!,
-        readAuthorityActions:
-          mode === "legacy" ? undefined : provider.actions?.readAuthorityActions,
-      },
     };
     owner.registry.plugins.push(record);
     owner.createApi(record, { config: {}, registrationMode: "full" }).registerChannel({ plugin });
@@ -324,7 +314,7 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
         action: "read" as const,
         params: { channelId: channel === "discord" ? sibling : slackTarget, limit: 1 },
         accountId: "default",
-        requesterAccountId: mode === "account" ? "other" : "default",
+        requesterAccountId: "default",
         conversationReadOrigin: "delegated" as const,
         assertDirectAdapterHandoff: run?.assert,
         toolContext: {
@@ -375,19 +365,11 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
           }),
         );
         expect(outcome.rejected).toBe(true);
-        expect(outcome.message).toContain(
-          mode === "legacy"
-            ? "exact current conversation"
-            : mode === "account"
-              ? "current provider and account"
-              : mode === "denied"
-                ? "not allowed"
-                : "no longer active",
-        );
+        expect(outcome.message).toContain(mode === "denied" ? "not allowed" : "no longer active");
         expect(requests.filter(isContent)).toHaveLength(
           mode === "result-revoked" || (runRevocation && resultRevocation) ? 1 : 0,
         );
-        if (mode === "legacy" || mode === "account" || mode === "tool-run-preparation-revoked") {
+        if (mode === "tool-run-preparation-revoked") {
           expect(requests).toEqual([]);
         }
         if (

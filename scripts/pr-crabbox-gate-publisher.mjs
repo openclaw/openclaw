@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,6 +15,9 @@ import {
   validateForwardAncestry,
 } from "./pr-lib/crabbox-gate-contract.mjs";
 import { resolveCrabboxGatePlan } from "./pr-lib/crabbox-gate-plan.mts";
+import { buildCrabboxGateTransport, executeCrabbox } from "./pr-lib/crabbox-gate-transport.mts";
+
+export { appendCrabboxOutputTail } from "./pr-lib/crabbox-gate-transport.mts";
 
 const REPOSITORY = "openclaw/openclaw";
 const ORGANIZATION = "openclaw";
@@ -262,75 +265,32 @@ function sanitizedCrabboxEnvironment(env, home) {
   return sanitized;
 }
 
-export function appendCrabboxOutputTail(current, chunk) {
-  return Buffer.concat([current, Buffer.from(chunk)]).subarray(-64 * 1024);
-}
-
-async function executeCrabbox({ args, bin, env, stream = false }) {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(bin, args, {
-      cwd: process.cwd(),
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = Buffer.alloc(0);
-    let stderr = Buffer.alloc(0);
-    child.stdout.on("data", (chunk) => {
-      if (stream) {
-        process.stdout.write(chunk);
-      } else {
-        stdout = appendCrabboxOutputTail(stdout, chunk);
-      }
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr = appendCrabboxOutputTail(stderr, chunk);
-      if (stream) {
-        process.stderr.write(chunk);
-      }
-    });
-    child.on("error", reject);
-    child.on("close", (exitCode) => {
-      resolve({ exitCode, stderr: stderr.toString(), stdout: stdout.toString() });
-    });
-  });
-}
-
-function buildCrabboxRunArgs(context, bootstrapSha256) {
+function buildCrabboxRunArgs(context, transport) {
   const label = `openclaw-pr-gate:${context.prNumber}:${context.baseSha}:${context.headSha}`;
   const args =
     `run --provider aws --target linux --class standard --market on-demand --network public ` +
     `--tailscale=false --no-hydrate --fresh-pr ${REPOSITORY}#${context.prNumber} ` +
     `--idle-timeout 90m --ttl 240m --stop-after always --timing-json --label ${label} ` +
-    `--script ${BOOTSTRAP_PATH} --`;
-  const command = buildCrabboxGateCommand(context.plan, bootstrapSha256);
+    `--script-stdin --`;
   return {
-    args: [...args.split(" "), context.headSha, "/bin/bash", "-lc", command],
+    args: [...args.split(" "), ...transport.args],
     label,
   };
 }
 
-export function validateBrokerProof({
-  bootstrapSha256,
-  context,
-  events,
-  log,
-  now,
-  principal,
-  run,
-}) {
+export function validateBrokerProof({ bootstrap, context, events, log, now, principal, run }) {
   const proof = record(run, "Crabbox run");
   const plan = validateCrabboxGatePlan(context.plan);
   if (plan.baseSha !== context.baseSha || plan.headSha !== context.headSha) {
     throw new Error("Crabbox run plan does not bind the requested base and head");
   }
-  const expectedCommand = [
-    "--script",
-    BOOTSTRAP_PATH,
-    context.headSha,
-    "/bin/bash",
-    "-lc",
-    buildCrabboxGateCommand(plan, bootstrapSha256),
-  ];
+  const bootstrapSha256 = createHash("sha256").update(bootstrap).digest("hex");
+  const transport = buildCrabboxGateTransport({
+    bootstrap,
+    command: buildCrabboxGateCommand(plan, bootstrapSha256),
+    headSha: context.headSha,
+  });
+  const expectedCommand = ["--script-stdin", ...transport.args];
   const leaseIds = new Set([
     proof.leaseID,
     ...(Array.isArray(proof.leaseIDs) ? proof.leaseIDs : []),
@@ -370,7 +330,7 @@ export function validateBrokerProof({
   if (!Array.isArray(events) || events.length === 0 || proof.eventCount !== events.length) {
     throw new Error("Crabbox events are missing or incomplete");
   }
-  const expectedUpload = `.crabbox/scripts/${bootstrapSha256.slice(0, 12)}-crabbox-untrusted-bootstrap.sh`;
+  const expectedUpload = transport.uploadPath;
   const eventTypes = [];
   for (const [index, value] of events.entries()) {
     const event = record(value, `Crabbox event ${index + 1}`);
@@ -383,7 +343,9 @@ export function validateBrokerProof({
       throw new Error(`Crabbox proof contains failed event ${eventType}`);
     }
     if (eventType === "script.uploaded" && event.message !== expectedUpload) {
-      throw new Error("Crabbox uploaded bootstrap hash does not match trusted main");
+      throw new Error(
+        "Crabbox uploaded launcher hash does not match the canonical exact-head gate",
+      );
     }
     if (eventType === "lease.created") {
       if (
@@ -436,10 +398,6 @@ export function validateBrokerProof({
   }
 }
 
-function bootstrapHash(bootstrapPath = BOOTSTRAP_PATH) {
-  return createHash("sha256").update(readFileSync(bootstrapPath)).digest("hex");
-}
-
 function resolvePlanInDetachedWorktree(context) {
   const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-gate-plan-"));
   const worktree = path.join(tempRoot, "head");
@@ -472,6 +430,7 @@ function resolvePlanInDetachedWorktree(context) {
 const defaultResolvePlan = resolvePlanInDetachedWorktree;
 
 export async function runPublisher({
+  phase,
   broker,
   clock = Date.now,
   event,
@@ -481,8 +440,20 @@ export async function runPublisher({
   resolvePlan = defaultResolvePlan,
   runCrabbox = executeCrabbox,
 }) {
+  if (phase !== "proof" && phase !== "publish") {
+    throw new Error("Crabbox gate publisher requires --proof or --publish");
+  }
   const context = validatePublisherRequest(event, env);
-  const localBootstrapHash = bootstrapHash();
+  const outputPath = phase === "proof" ? requiredEnv(env, "GITHUB_OUTPUT") : "";
+  if (phase === "publish") {
+    context.runId = requiredEnv(env, "CRABBOX_PROOF_RUN_ID");
+    context.leaseId = requiredEnv(env, "CRABBOX_PROOF_LEASE_ID");
+    if (!RUN_ID_PATTERN.test(context.runId) || !LEASE_ID_PATTERN.test(context.leaseId)) {
+      throw new Error("Crabbox proof step outputs must be exact run and lease IDs");
+    }
+  }
+  const bootstrap = readFileSync(BOOTSTRAP_PATH, "utf8");
+  const localBootstrapHash = createHash("sha256").update(bootstrap).digest("hex");
   validateActiveAdminMembership(
     await organization.request(
       "GET",
@@ -508,28 +479,44 @@ export async function runPublisher({
     throw new Error("Crabbox gate plan does not bind the requested base and head");
   }
   const principal = validateServicePrincipal(await broker.request("/v1/whoami"));
-  const crabboxBin = requiredEnv(env, "CRABBOX_BIN");
-  const crabboxHome = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-publisher-"));
-  try {
-    const crabboxEnv = sanitizedCrabboxEnvironment(env, crabboxHome);
-    const configResult = await runCrabbox({
-      args: ["config", "show", "--provider", "aws", "--json"],
-      bin: crabboxBin,
-      env: crabboxEnv,
-    });
-    if (configResult.exitCode !== 0) {
-      throw new Error(`Crabbox config resolution failed with exit code ${configResult.exitCode}`);
+  if (phase === "proof") {
+    const crabboxBin = requiredEnv(env, "CRABBOX_BIN");
+    const crabboxHome = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-publisher-"));
+    try {
+      const crabboxEnv = sanitizedCrabboxEnvironment(env, crabboxHome);
+      const configResult = await runCrabbox({
+        args: ["config", "show", "--provider", "aws", "--json"],
+        bin: crabboxBin,
+        env: crabboxEnv,
+      });
+      if (configResult.exitCode !== 0) {
+        throw new Error(`Crabbox config resolution failed with exit code ${configResult.exitCode}`);
+      }
+      validateCrabboxConfig(
+        JSON.parse(configResult.stdout),
+        requiredEnv(env, "CRABBOX_COORDINATOR"),
+      );
+      const transport = buildCrabboxGateTransport({
+        bootstrap,
+        command: buildCrabboxGateCommand(context.plan, localBootstrapHash),
+        headSha: context.headSha,
+      });
+      const { args, label } = buildCrabboxRunArgs(context, transport);
+      const timing = parseCrabboxTiming(
+        await runCrabbox({
+          args,
+          bin: crabboxBin,
+          env: crabboxEnv,
+          input: transport.input,
+          stream: true,
+        }),
+        label,
+      );
+      context.runId = timing.runId;
+      context.leaseId = timing.leaseId;
+    } finally {
+      rmSync(crabboxHome, { force: true, recursive: true });
     }
-    validateCrabboxConfig(JSON.parse(configResult.stdout), requiredEnv(env, "CRABBOX_COORDINATOR"));
-    const { args, label } = buildCrabboxRunArgs(context, localBootstrapHash);
-    const timing = parseCrabboxTiming(
-      await runCrabbox({ args, bin: crabboxBin, env: crabboxEnv, stream: true }),
-      label,
-    );
-    context.runId = timing.runId;
-    context.leaseId = timing.leaseId;
-  } finally {
-    rmSync(crabboxHome, { force: true, recursive: true });
   }
   const runResponse = record(
     await broker.request(`/v1/runs/${context.runId}`),
@@ -540,7 +527,7 @@ export async function runPublisher({
     "Crabbox events response",
   );
   validateBrokerProof({
-    bootstrapSha256: localBootstrapHash,
+    bootstrap,
     context,
     events: eventsResponse.events,
     log: await broker.request(`/v1/runs/${context.runId}/logs`, { text: true }),
@@ -548,6 +535,12 @@ export async function runPublisher({
     principal,
     run: runResponse.run,
   });
+  if (phase === "proof") {
+    // App tokens expire after one hour. Hand off only joined, verified proof;
+    // the next workflow step mints fresh membership authority before publication.
+    appendFileSync(outputPath, `run_id=${context.runId}\nlease_id=${context.leaseId}\n`);
+    return { checkId: null, context };
+  }
   validatePullRequest(
     await github.request("GET", `/repos/${REPOSITORY}/pulls/${context.prNumber}`),
     context,
@@ -656,7 +649,7 @@ export function createGitHubApi({ token, fetchImpl = fetch }) {
   };
 }
 
-async function main() {
+async function main(phase) {
   const event = JSON.parse(readFileSync(requiredEnv(process.env, "GITHUB_EVENT_PATH"), "utf8"));
   const brokerUrl = requiredEnv(process.env, "CRABBOX_COORDINATOR");
   const broker = createJsonApi({
@@ -669,7 +662,17 @@ async function main() {
   const organization = createGitHubApi({
     token: requiredEnv(process.env, "GH_APP_TOKEN"),
   });
-  const result = await runPublisher({ broker, env: process.env, event, github, organization });
+  const result = await runPublisher({
+    phase,
+    broker,
+    env: process.env,
+    event,
+    github,
+    organization,
+  });
+  if (phase === "proof") {
+    return;
+  }
   console.log(`published_check_id=${result.checkId}`);
   console.log(`published_head_sha=${result.context.headSha}`);
 }
@@ -682,8 +685,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       );
       const bootstrapSha256 = requiredString(process.argv[4], "bootstrap SHA-256");
       console.log(buildCrabboxGateCommand(plan, bootstrapSha256));
+    } else if (process.argv.length === 3 && ["--proof", "--publish"].includes(process.argv[2])) {
+      await main(process.argv[2].slice(2));
     } else {
-      await main();
+      throw new Error("Crabbox gate publisher requires --proof or --publish");
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

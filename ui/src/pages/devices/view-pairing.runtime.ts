@@ -1,4 +1,3 @@
-// Devices page renders the mobile device pairing setup dialog.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { handleCopyButton, renderCopyButton } from "../../components/copy-button.ts";
@@ -44,6 +43,52 @@ function accessLabel(access: DevicePairSetupLifecycle["access"]): string {
     return t("devices.pairing.nodeAccessSummary");
   }
   return t("devices.pairing.fullAccessSummary");
+}
+
+function renderPairingOutcome(props: DevicePairSetupProps, description: string) {
+  const lifecycle = props.lifecycle;
+  if (
+    lifecycle.phase !== "success" &&
+    lifecycle.phase !== "delivery-uncertain" &&
+    lifecycle.phase !== "expired"
+  ) {
+    return nothing;
+  }
+  const success = lifecycle.phase === "success";
+  const uncertain = lifecycle.phase === "delivery-uncertain";
+  const action = html`<button
+    class="btn primary"
+    type="button"
+    @click=${success ? props.onClose : props.onRefresh}
+  >
+    ${success ? t("devices.pairing.done") : html`${icons.refresh} ${t("devices.pairing.generateNewCode")}`}
+  </button>`;
+  return keyed(
+    lifecycle.phase,
+    html`<div
+      class="device-pair-setup__state"
+      role=${uncertain ? "alert" : "status"}
+      aria-live=${uncertain ? nothing : "polite"}
+    >
+      <div
+        class=${success ? "device-pair-setup__state-icon device-pair-setup__state-icon--success" : "device-pair-setup__state-icon"}
+        aria-hidden="true"
+      >
+        ${success ? icons.badgeCheck : uncertain ? icons.alertTriangle : icons.refresh}
+      </div>
+      <h3>${success ? (lifecycle.deviceName ?? description) : description}</h3>
+      ${
+        success
+          ? html`<p>
+              ${lifecycle.deviceName ? html`${description} <span aria-hidden="true">·</span> ` : nothing}${accessLabel(lifecycle.access)}
+            </p>`
+          : uncertain
+            ? html`<p>${t("devices.pairing.deliveryUncertainHint")}</p>`
+            : nothing
+      }
+      ${uncertain ? html`<div class="device-pair-setup__actions">${action}</div>` : action}
+    </div>`,
+  );
 }
 
 export function renderDevicePairSetup(props: DevicePairSetupProps) {
@@ -142,21 +187,13 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
               : nothing
           }
           ${
-            lifecycle.phase === "loading"
+            lifecycle.phase === "loading" || lifecycle.phase === "reconciling"
               ? html`
                   <div class="device-pair-setup__loading" role="status" aria-live="polite">
                     <span class="device-pair-setup__spinner" aria-hidden="true"></span>
-                    <span>${t("devices.pairing.generating")}</span>
-                  </div>
-                `
-              : nothing
-          }
-          ${
-            lifecycle.phase === "reconciling"
-              ? html`
-                  <div class="device-pair-setup__loading" role="status" aria-live="polite">
-                    <span class="device-pair-setup__spinner" aria-hidden="true"></span>
-                    <span>${t("common.loading")}</span>
+                    <span
+                      >${t(lifecycle.phase === "loading" ? "devices.pairing.generating" : "common.loading")}</span
+                    >
                   </div>
                 `
               : nothing
@@ -294,59 +331,7 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                 `
               : nothing
           }
-          ${
-            lifecycle.phase === "success"
-              ? html`<div class="device-pair-setup__state" role="status" aria-live="polite">
-                  <div
-                    class="device-pair-setup__state-icon device-pair-setup__state-icon--success"
-                    aria-hidden="true"
-                  >
-                    ${icons.badgeCheck}
-                  </div>
-                  <h3>${lifecycle.deviceName ?? t("devices.pairing.pairedTitle")}</h3>
-                  <p>
-                    ${
-                      lifecycle.deviceName
-                        ? html`${t("devices.pairing.pairedTitle")}
-                            <span aria-hidden="true">·</span> `
-                        : nothing
-                    }${accessLabel(lifecycle.access)}
-                  </p>
-                  <button class="btn primary" type="button" @click=${props.onClose}>
-                    ${t("devices.pairing.done")}
-                  </button>
-                </div>`
-              : nothing
-          }
-          ${
-            lifecycle.phase === "delivery-uncertain"
-              ? html`<div class="device-pair-setup__state" role="alert">
-                  <div class="device-pair-setup__state-icon" aria-hidden="true">
-                    ${icons.alertTriangle}
-                  </div>
-                  <h3>${t("devices.pairing.deliveryUncertainTitle")}</h3>
-                  <p>${t("devices.pairing.deliveryUncertainHint")}</p>
-                  <div class="device-pair-setup__actions">
-                    <button class="btn primary" type="button" @click=${props.onRefresh}>
-                      ${icons.refresh} ${t("devices.pairing.generateNewCode")}
-                    </button>
-                  </div>
-                </div>`
-              : nothing
-          }
-          ${
-            lifecycle.phase === "expired"
-              ? html`<div class="device-pair-setup__state" role="status" aria-live="polite">
-                  <div class="device-pair-setup__state-icon" aria-hidden="true">
-                    ${icons.refresh}
-                  </div>
-                  <h3>${t("devices.pairing.expiredTitle")}</h3>
-                  <button class="btn primary" type="button" @click=${props.onRefresh}>
-                    ${icons.refresh} ${t("devices.pairing.generateNewCode")}
-                  </button>
-                </div>`
-              : nothing
-          }
+          ${renderPairingOutcome(props, description)}
         </div>
 
         <footer class="device-pair-setup__footer">

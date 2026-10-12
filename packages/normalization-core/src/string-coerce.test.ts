@@ -1,5 +1,6 @@
 import {
   normalizeBoundedOptionalString,
+  normalizeFastMode,
   normalizeStringifiedEntries,
   readNonBlankString,
   readNonEmptyStringPreservingWhitespace,
@@ -8,6 +9,16 @@ import {
 import { describe, expect, it } from "vitest";
 
 describe("normalization-core/string-coerce", () => {
+  it.each([
+    [" Ultrafast ", "ultrafast"],
+    ["fast", true],
+    ["off", false],
+    ["auto", "auto"],
+    ["unknown-speed", undefined],
+  ])("normalizes speed preference %s without collapsing Ultrafast", (input, expected) => {
+    expect(normalizeFastMode(input)).toBe(expected);
+  });
+
   it("normalizes primitive stringified entries", () => {
     expect(normalizeStringifiedEntries([" a ", 42, true, 0n, "", "  ", null, {}])).toEqual([
       "a",

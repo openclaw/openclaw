@@ -4,6 +4,7 @@ import { tryParsePersistedExecApprovals } from "../infra/exec-approvals-config.j
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import { projectionValues } from "../infra/exec-approvals-sqlite.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 
 type SnapshotSanitizerDatabase = Pick<OpenClawStateKyselyDatabase, "exec_approvals_config">;
@@ -19,17 +20,14 @@ const FAIL_CLOSED_EXEC_APPROVALS: ExecApprovalsFile = {
   agents: {},
 };
 
-function tableExists(database: DatabaseSync, tableName: string): boolean {
-  const row = database // sqlite-allow-raw -- Offline snapshot maintenance boundary.
-    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName) as { ok?: unknown } | undefined;
-  return row?.ok === 1;
-}
-
 /** Remove coordination rows that must never survive restore. */
 export function sanitizeOpenClawStateLeaseRows(database: DatabaseSync): void {
-  if (tableExists(database, "state_leases")) {
-    database.prepare("DELETE FROM state_leases").run(); // sqlite-allow-raw -- Offline snapshot maintenance boundary.
+  // A copied agent lease still names a live source PID, but owns no handle in
+  // this snapshot. Keeping it would incorrectly block copied-state maintenance.
+  for (const table of ["state_leases", "agent_database_leases"]) {
+    if (tableExists(database, table)) {
+      database.prepare(`DELETE FROM ${table}`).run(); // sqlite-allow-raw -- Offline snapshot maintenance boundary; fixed table names.
+    }
   }
 }
 

@@ -3,12 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
-import { getRefsFileExtents } from "../../../test/helpers/refs.js";
+import { getRefsFullClusterLcns } from "../../../test/helpers/refs.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
-import { listTemplates } from "./template-registry.js";
+import { listTemplatesAsync } from "./template-registry-async.js";
 
 const execFileAsync = promisify(execFile);
 const refsRoot = process.env.OPENCLAW_TEST_REFS_ROOT;
@@ -21,9 +21,9 @@ describe.skipIf(process.platform !== "win32" || !refsRoot)(
   () => {
     const initializeRepository = useManagedWorktreeTestRepository();
     const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-      afterEach(() => {
+      afterEach(async () => {
         vi.unstubAllEnvs();
-        closeOpenClawStateDatabaseForTest();
+        await closeStateDatabaseForTest();
         cleanup();
       }),
     );
@@ -37,7 +37,7 @@ describe.skipIf(process.platform !== "win32" || !refsRoot)(
       vi.stubEnv("GIT_ATTR_NOSYSTEM", "1");
       vi.stubEnv("GIT_CONFIG_GLOBAL", configPath);
       const repo = await initializeRepository(root);
-      const payload = Buffer.alloc(128 * 1024, 0x5a);
+      const payload = Buffer.alloc(128 * 1024 + 1, 0x5a);
       await fs.writeFile(path.join(repo, "payload"), payload);
       await git(repo, "add", "payload");
       await git(repo, "commit", "-m", "ReFS source fixture");
@@ -50,17 +50,17 @@ describe.skipIf(process.platform !== "win32" || !refsRoot)(
         getConfig: () => ({ worktreeRoot }),
       });
       const first = await service.create({ repoRoot: repo, name: "first", baseRef: "HEAD" });
-      const template = listTemplates(env)[0];
+      const template = (await listTemplatesAsync(env))[0];
       assert(template);
       expect(template.backend).toBe("refs");
       expect(path.relative(worktreeRoot, first.path).startsWith("..")).toBe(false);
       const second = await service.create({ repoRoot: repo, name: "second", baseRef: "HEAD" });
-      expect(listTemplates(env).map((entry) => entry.id)).toEqual([template.id]);
-      const templateExtents = getRefsFileExtents(path.join(template.path, "payload"));
-      expect(templateExtents.some((extent) => extent.lcn >= 0n)).toBe(true);
+      expect((await listTemplatesAsync(env)).map((entry) => entry.id)).toEqual([template.id]);
+      const templateExtents = getRefsFullClusterLcns(path.join(template.path, "payload"));
+      expect(templateExtents.some((lcn) => lcn >= 0n)).toBe(true);
       for (const record of [first, second]) {
         expect(await fs.readFile(path.join(record.path, "payload"))).toEqual(payload);
-        expect(getRefsFileExtents(path.join(record.path, "payload"))).toEqual(templateExtents);
+        expect(getRefsFullClusterLcns(path.join(record.path, "payload"))).toEqual(templateExtents);
         expect(await git(record.path, "status", "--porcelain")).toBe("");
         expect(await git(record.path, "symbolic-ref", "--short", "HEAD")).toBe(record.branch);
       }
@@ -80,11 +80,13 @@ describe.skipIf(process.platform !== "win32" || !refsRoot)(
       await git(repo, "commit", "-m", "invalidate ReFS template");
       const third = await service.create({ repoRoot: repo, name: "third", baseRef: "HEAD" });
       expect(await fs.readFile(path.join(third.path, "README.md"), "utf8")).toBe("new source\n");
-      expect(listTemplates(env)[0]?.sourceCommit).toBe(await git(repo, "rev-parse", "HEAD"));
+      expect((await listTemplatesAsync(env))[0]?.sourceCommit).toBe(
+        await git(repo, "rev-parse", "HEAD"),
+      );
       await expect(fs.access(template.path)).rejects.toMatchObject({ code: "ENOENT" });
       now += IDLE_GC_MS + 1;
       expect((await service.gc()).removed).toEqual([]);
-      expect(listTemplates(env)).toEqual([]);
+      expect(await listTemplatesAsync(env)).toEqual([]);
       expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("saved edit\n");
       expect(await fs.readFile(path.join(second.path, "payload"))).toEqual(payload);
       expect(await git(second.path, "status", "--porcelain")).toBe("");

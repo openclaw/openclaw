@@ -4,13 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { generateUniqueCode } from "./pairing-store-model.js";
 
 const pairingMocks = vi.hoisted(() => ({
   getPairingAdapter: vi.fn<
@@ -45,15 +45,16 @@ type PairingTestDatabase = Pick<
 >;
 
 let fixtureRoot = "";
-let caseId = 0;
-type RandomIntSync = (minOrMax: number, max?: number) => number;
+let pairingEnv: NodeJS.ProcessEnv;
 
 beforeAll(() => {
   fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pairing-"));
+  pairingEnv = { ...process.env, OPENCLAW_STATE_DIR: fixtureRoot };
+  openOpenClawStateDatabase({ env: pairingEnv });
 });
 
-afterAll(() => {
-  closeOpenClawStateDatabaseForTest();
+afterAll(async () => {
+  await closeStateDatabaseForTest();
   fs.rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
@@ -66,14 +67,10 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
+  openOpenClawStateDatabase({ env: pairingEnv }).db.exec(
+    "DELETE FROM channel_pairing_requests; DELETE FROM channel_pairing_allow_entries;",
+  );
 });
-
-function createTestEnv(): { stateDir: string; env: NodeJS.ProcessEnv } {
-  const stateDir = path.join(fixtureRoot, `case-${caseId++}`);
-  fs.mkdirSync(stateDir, { recursive: true });
-  return { stateDir, env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-}
 
 function requireFirstPairingRequest(
   requests: Awaited<ReturnType<typeof listChannelPairingRequests>>,
@@ -84,31 +81,6 @@ function requireFirstPairingRequest(
     throw new Error("expected pairing request");
   }
   return request;
-}
-
-async function withMockRandomInt(params: {
-  initialValue?: number;
-  sequence?: number[];
-  fallbackValue?: number;
-  run: () => Promise<void>;
-}) {
-  const spy = vi.spyOn(crypto, "randomInt") as unknown as {
-    mockImplementation: (impl: RandomIntSync) => void;
-    mockReturnValue: (value: number) => void;
-    mockRestore: () => void;
-  };
-  try {
-    if (params.initialValue !== undefined) {
-      spy.mockReturnValue(params.initialValue);
-    }
-    if (params.sequence) {
-      let index = 0;
-      spy.mockImplementation(() => params.sequence?.[index++] ?? params.fallbackValue ?? 1);
-    }
-    await params.run();
-  } finally {
-    spy.mockRestore();
-  }
 }
 
 function writeAllowFromFixture(params: {
@@ -125,7 +97,7 @@ function writeAllowFromFixture(params: {
 
 describe("pairing store", () => {
   it("normalizes allowlist entries through channel pairing adapters", async () => {
-    const { env } = createTestEnv();
+    const env = pairingEnv;
     pairingMocks.getPairingAdapter.mockReturnValue({
       idLabel: "Telegram user",
       normalizeAllowEntry: (entry) => entry.replace(/^telegram:/i, ""),
@@ -157,7 +129,7 @@ describe("pairing store", () => {
   });
 
   it("skips malformed persisted requests while approving valid codes", async () => {
-    const { env } = createTestEnv();
+    const env = pairingEnv;
     const database = openOpenClawStateDatabase({ env });
     const db = getNodeSqliteKysely<PairingTestDatabase>(database.db);
     executeSqliteQuerySync(
@@ -196,7 +168,7 @@ describe("pairing store", () => {
   });
 
   it("handles pending request reuse, expiry, and per-account limits", async () => {
-    const { env } = createTestEnv();
+    const env = pairingEnv;
     const first = await upsertChannelPairingRequest({
       channel: "demo-a",
       id: "u1",
@@ -249,7 +221,7 @@ describe("pairing store", () => {
   });
 
   it("persists a channel-derived approval entry from request metadata", async () => {
-    const { env } = createTestEnv();
+    const env = pairingEnv;
     const request = await upsertChannelPairingRequest({
       channel: "demo-a",
       id: "alice",
@@ -276,7 +248,7 @@ describe("pairing store", () => {
   });
 
   it("approves and dismisses account-scoped requests by opaque id", async () => {
-    const { env } = createTestEnv();
+    const env = pairingEnv;
     await upsertChannelPairingRequest({
       channel: "telegram",
       accountId: "alpha",
@@ -295,14 +267,15 @@ describe("pairing store", () => {
     const betaRequest = requireFirstPairingRequest(
       await listChannelPairingRequests("telegram", env, "beta"),
     );
-    const alphaRequestId = resolveChannelPairingRequestId("telegram", alphaRequest);
+    const alphaChannel = " TeLeGrAm ";
+    const alphaRequestId = resolveChannelPairingRequestId(alphaChannel, alphaRequest);
     const betaRequestId = resolveChannelPairingRequestId("telegram", betaRequest);
 
     expect(alphaRequestId).not.toBe(betaRequestId);
     expect(alphaRequestId).not.toContain(alphaRequest.code);
     await expect(
       approveChannelPairingRequest({
-        channel: "telegram",
+        channel: alphaChannel,
         accountId: "alpha",
         requestId: alphaRequestId,
         env,
@@ -332,62 +305,22 @@ describe("pairing store", () => {
     await expect(listChannelPairingRequests("telegram", env)).resolves.toEqual([]);
   });
 
-  it("regenerates colliding codes and reports exhaustion without leaking codes", async () => {
-    const { env } = createTestEnv();
-    await withMockRandomInt({
-      initialValue: 0,
-      run: async () => {
-        const first = await upsertChannelPairingRequest({
-          channel: "telegram",
-          id: "123",
-          accountId: DEFAULT_ACCOUNT_ID,
-          env,
-        });
-        expect(first.code).toBe("AAAAAAAA");
+  it("regenerates colliding codes and reports exhaustion without leaking codes", () => {
+    const randomInt = vi.spyOn(crypto, "randomInt").mockImplementation(() => 0);
+    expect(generateUniqueCode(new Set())).toBe("AAAAAAAA");
 
-        await withMockRandomInt({
-          sequence: Array(8).fill(0).concat(Array(8).fill(1)),
-          fallbackValue: 1,
-          run: async () => {
-            await expect(
-              upsertChannelPairingRequest({
-                channel: "telegram",
-                id: "456",
-                accountId: DEFAULT_ACCOUNT_ID,
-                env,
-              }),
-            ).resolves.toMatchObject({ code: "BBBBBBBB" });
-          },
-        });
-      },
-    });
+    let draws = 0;
+    randomInt.mockImplementation(() => (draws++ < 8 ? 0 : 1));
+    expect(generateUniqueCode(new Set(["AAAAAAAA"]))).toBe("BBBBBBBB");
 
-    const second = createTestEnv();
-    await withMockRandomInt({
-      initialValue: 0,
-      run: async () => {
-        await upsertChannelPairingRequest({
-          channel: "telegram",
-          id: "123",
-          accountId: DEFAULT_ACCOUNT_ID,
-          env: second.env,
-        });
-        await expect(
-          upsertChannelPairingRequest({
-            channel: "telegram",
-            id: "456",
-            accountId: DEFAULT_ACCOUNT_ID,
-            env: second.env,
-          }),
-        ).rejects.toThrow(
-          "failed to generate unique pairing code after 500 attempts; existing code count: 1",
-        );
-      },
-    });
+    randomInt.mockImplementation(() => 0);
+    expect(() => generateUniqueCode(new Set(["AAAAAAAA"]))).toThrow(
+      "failed to generate unique pairing code after 500 attempts; existing code count: 1",
+    );
   });
 
   it("keeps allowFrom and pending requests isolated by account", async () => {
-    const { env } = createTestEnv();
+    const env = pairingEnv;
     await addChannelAllowFromStoreEntry({
       channel: "telegram",
       accountId: "alpha",
@@ -437,13 +370,19 @@ describe("pairing store", () => {
   });
 
   it("reads current SQLite entries without a process-local file cache", async () => {
-    const { env } = createTestEnv();
+    const env = pairingEnv;
     writeAllowFromFixture({ env, channel: "telegram", accountId: "yy", allowFrom: ["1001"] });
     await expect(readChannelAllowFromStore("telegram", env, "yy")).resolves.toEqual(["1001"]);
     expect(readChannelAllowFromStoreSync("telegram", env, "yy")).toEqual(["1001"]);
 
     writeAllowFromFixture({ env, channel: "telegram", accountId: "yy", allowFrom: ["10022"] });
     await expect(readChannelAllowFromStore("telegram", env, "yy")).resolves.toEqual(["10022"]);
-    expect(readChannelAllowFromStoreSync("telegram", env, "yy")).toEqual(["10022"]);
+    const sql = observeHostDataSql();
+    try {
+      expect(readChannelAllowFromStoreSync("telegram", env, "yy")).toEqual(["10022"]);
+      expect(sql.queries.filter((query) => query.includes("channel_pairing_requests"))).toEqual([]);
+    } finally {
+      sql.restore();
+    }
   });
 });

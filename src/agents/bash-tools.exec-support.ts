@@ -1,44 +1,18 @@
 import type { ExecHost } from "../infra/exec-approvals.js";
 import { requireValidExecTarget } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { invalidateTaskActivity } from "../tasks/task-registry-activity.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { EXEC_RETENTION_CAP_NOTE, renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolArgs } from "./bash-tools.exec-request-preparation.js";
-import { type ExecProcessOutcome, resolveExecTarget } from "./bash-tools.exec-runtime.js";
-import {
-  type BackgroundExecTaskHandle,
-  finalizeBackgroundExecTask,
-} from "./bash-tools.exec-task-tracking.js";
+import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import type {
+  ExecProcessOutcome,
   ExecToolApprovalReview,
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { failedTextResult, textResult } from "./tools/common.js";
-
-export function createExecProcessSettlement() {
-  const settlement: {
-    outcome: ExecProcessOutcome | null;
-    backgroundTask: BackgroundExecTaskHandle | null;
-    settle: (outcome: ExecProcessOutcome) => void;
-    activity: (at: number) => void;
-  } = {
-    outcome: null,
-    backgroundTask: null,
-    activity(at) {
-      if (settlement.backgroundTask && !settlement.outcome) {
-        invalidateTaskActivity(settlement.backgroundTask.taskId, at);
-      }
-    },
-    settle(outcome: ExecProcessOutcome) {
-      settlement.outcome = outcome;
-      finalizeBackgroundExecTask({ handle: settlement.backgroundTask, outcome });
-    },
-  };
-  return settlement;
-}
 
 export function attachExecApprovalReview(
   result: AgentToolResult<ExecToolDetails>,
@@ -59,6 +33,19 @@ export function buildExecForegroundResult(params: {
 }): AgentToolResult<ExecToolDetails> {
   const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
   const retentionCapNote = params.aggregateOutputDropped ? EXEC_RETENTION_CAP_NOTE : "";
+  const outcome = params.outcome;
+  const details: ExecToolDetails = {
+    status: outcome.status,
+    exitCode: outcome.status === "failed" ? (outcome.exitCode ?? null) : outcome.exitCode,
+    exitSignal: outcome.exitSignal,
+    ...(outcome.status === "failed" ? { failureKind: outcome.failureKind } : {}),
+    exitReason: outcome.exitReason,
+    durationMs: outcome.durationMs,
+    aggregated: outcome.aggregated,
+    ...(outcome.status === "failed" ? { timedOut: outcome.timedOut } : {}),
+    noOutputTimedOut: outcome.noOutputTimedOut,
+    cwd: params.cwd,
+  };
   if (params.outcome.status === "failed") {
     const linuxOomGuidance =
       params.outcome.failureKind === "signal" &&
@@ -70,30 +57,10 @@ export function buildExecForegroundResult(params: {
           "Check cgroup memory events or kernel logs. If they show memory pressure, narrow the command or adjust memory, concurrency, or resource limits."
         : "";
     const outputText = `${retentionCapNote}${warningText}${params.outcome.reason}${linuxOomGuidance}`;
-    return failedTextResult(outputText, {
-      status: "failed",
-      exitCode: params.outcome.exitCode ?? null,
-      exitSignal: params.outcome.exitSignal,
-      failureKind: params.outcome.failureKind,
-      exitReason: params.outcome.exitReason,
-      durationMs: params.outcome.durationMs,
-      aggregated: params.outcome.aggregated,
-      timedOut: params.outcome.timedOut,
-      noOutputTimedOut: params.outcome.noOutputTimedOut,
-      cwd: params.cwd,
-    });
+    return failedTextResult(outputText, { ...details, status: "failed" });
   }
   const outputText = `${retentionCapNote}${warningText}${renderExecOutputText(params.outcome.aggregated)}`;
-  return textResult(outputText, {
-    status: "completed",
-    exitCode: params.outcome.exitCode,
-    exitSignal: params.outcome.exitSignal,
-    exitReason: params.outcome.exitReason,
-    durationMs: params.outcome.durationMs,
-    aggregated: params.outcome.aggregated,
-    noOutputTimedOut: params.outcome.noOutputTimedOut,
-    cwd: params.cwd,
-  });
+  return textResult(outputText, details);
 }
 
 export function resolveExecReviewerDefaults(params: {

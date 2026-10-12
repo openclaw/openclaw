@@ -1,3 +1,4 @@
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { formatUiError } from "../format-error.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
@@ -35,16 +36,7 @@ function readLegacyStoredGroups(): string[] {
     const parsed: unknown = JSON.parse(
       getSafeLocalStorage()?.getItem(LEGACY_GROUPS_STORAGE_KEY) ?? "[]",
     );
-    return Array.isArray(parsed)
-      ? [
-          ...new Set(
-            parsed
-              .filter((name): name is string => typeof name === "string")
-              .map((name) => name.trim())
-              .filter(Boolean),
-          ),
-        ]
-      : [];
+    return normalizeUniqueTrimmedStringList(parsed);
   } catch {
     return [];
   }
@@ -52,8 +44,6 @@ function readLegacyStoredGroups(): string[] {
 
 export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
   let loadedEpoch = -1;
-  let loadGeneration = 0;
-  let catalogGeneration = 0;
   let defaultsStatus: SessionGroupDefaultsStatus = "idle";
   let pendingLoad: Promise<readonly SessionGroupSettings[] | null> | null = null;
   let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -65,23 +55,16 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     }
   };
 
-  const invalidate = () => {
-    loadedEpoch = -1;
-    loadGeneration += 1;
-    catalogGeneration += 1;
-    pendingLoad = null;
-    clearRetry();
-    defaultsStatus = "loading";
-    // Every invalidation publishes its generation, including back-to-back
-    // events while the previous reload is still pending.
-    host.publish({ ...host.readState() });
-  };
-
   const dispose = () => {
     loadedEpoch = -1;
-    loadGeneration += 1;
     pendingLoad = null;
     clearRetry();
+  };
+
+  const invalidate = () => {
+    dispose();
+    defaultsStatus = "loading";
+    host.publish({ ...host.readState() });
   };
 
   const publishCatalog = (
@@ -89,52 +72,17 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     sectionOrder: readonly string[],
     status: SessionGroupDefaultsStatus,
   ) => {
-    const state = host.readState();
-    const groups = groupSettings.map((group) => group.name);
-    const groupsUnchanged =
-      groups.length === state.groups.length &&
-      groups.every((group, i) => group === state.groups[i]);
-    const orderUnchanged =
-      sectionOrder.length === state.sectionOrder.length &&
-      sectionOrder.every((sectionId, i) => sectionId === state.sectionOrder[i]);
-    const settingsUnchanged =
-      groupSettings.length === state.groupSettings.length &&
-      groupSettings.every((group, index) => {
-        const current = state.groupSettings[index];
-        return (
-          current?.name === group.name &&
-          current.position === group.position &&
-          current.cwd === group.cwd &&
-          current.worktree === group.worktree
-        );
-      });
-    const statusChanged = defaultsStatus !== status;
     defaultsStatus = status;
-    if (!groupsUnchanged || !settingsUnchanged || !orderUnchanged || statusChanged) {
-      host.publish({
-        ...state,
-        groups: [...groups],
-        groupSettings: [...groupSettings],
-        sectionOrder: [...sectionOrder],
-      });
-    }
+    host.publish({
+      ...host.readState(),
+      groups: groupSettings.map((group) => group.name),
+      groupSettings: [...groupSettings],
+      sectionOrder: [...sectionOrder],
+    });
   };
 
-  const finishMutationFailure = (current: boolean, error: unknown): SessionGroupMutationResult => {
-    if (!current) {
-      return "stale";
-    }
-    host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-    throw error;
-  };
-
-  const finishLoadFailure = (
-    scope: SessionConnectionScope,
-    generation: number,
-    error: unknown,
-    retry: boolean,
-  ) => {
-    if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+  const finishLoadFailure = (scope: SessionConnectionScope, error: unknown, retry: boolean) => {
+    if (!host.connection.isCurrent(scope)) {
       return null;
     }
     if (defaultsStatus !== "unavailable") {
@@ -149,7 +97,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     if (delay !== null) {
       retryTimer = setTimeout(() => {
         retryTimer = null;
-        if (host.connection.isCurrent(scope) && generation === loadGeneration) {
+        if (host.connection.isCurrent(scope)) {
           void load();
         }
       }, delay);
@@ -159,12 +107,12 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
 
   const loadAttempt = async (
     scope: SessionConnectionScope,
-    generation: number,
     advertised: boolean | null,
+    isCurrentLoad: () => boolean,
   ) => {
     try {
       const listed = await scope.client.request(GROUPS_LIST_METHOD, {});
-      if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+      if (!host.connection.isCurrent(scope)) {
         return null;
       }
       let settings = readSessionCustomGroups(listed);
@@ -179,8 +127,12 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
         }).allowed
       ) {
         if (settings.length === 0) {
+          // Legacy import replaces persisted groups; an invalidated read cannot authorize it.
+          if (!isCurrentLoad()) {
+            return null;
+          }
           const put = await scope.client.request("sessions.groups.put", { names: legacy });
-          if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+          if (!host.connection.isCurrent(scope)) {
             return null;
           }
           settings = readSessionCustomGroups(put);
@@ -207,18 +159,18 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       publishCatalog(settings, sectionOrder, "loading");
       try {
         const defaults = await scope.client.request(GROUPS_DEFAULTS_METHOD, {});
-        if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+        if (!host.connection.isCurrent(scope)) {
           return null;
         }
         settings = mergeSessionGroupDefaults(settings, defaults);
       } catch (error) {
-        return finishLoadFailure(scope, generation, error, true);
+        return finishLoadFailure(scope, error, true);
       }
       publishCatalog(settings, sectionOrder, "ready");
       return settings;
     } catch (error) {
       // Gateways without feature metadata retain the legacy one-shot probe.
-      return finishLoadFailure(scope, generation, error, advertised === true);
+      return finishLoadFailure(scope, error, advertised === true);
     }
   };
 
@@ -233,7 +185,6 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     }
     const advertised = isGatewayMethodAdvertised(host.snapshot(), GROUPS_LIST_METHOD);
     clearRetry();
-    const generation = ++loadGeneration;
     loadedEpoch = scope.epoch;
     if (defaultsStatus !== "loading") {
       defaultsStatus = "loading";
@@ -243,17 +194,16 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       publishCatalog([], [], "ready");
       return [];
     }
-    const promise = loadAttempt(scope, generation, advertised)
-      .then((result) => {
-        // Another invalidation can join the same admitted bootstrap task.
-        // Its completion must include the current catalog generation.
-        return host.connection.isCurrent(scope) && generation !== loadGeneration ? load() : result;
-      })
-      .finally(() => {
-        if (pendingLoad === promise) {
-          pendingLoad = null;
-        }
-      });
+    // Concurrent catalog changes settle best effort until the next invalidation or reconnect.
+    const promise: Promise<readonly SessionGroupSettings[] | null> = loadAttempt(
+      scope,
+      advertised,
+      () => pendingLoad === promise,
+    ).finally(() => {
+      if (pendingLoad === promise) {
+        pendingLoad = null;
+      }
+    });
     pendingLoad = promise;
     return promise;
   };
@@ -269,117 +219,79 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     void load();
   };
 
-  const put = async (
-    names: readonly string[],
-    sectionOrder?: readonly string[],
+  const mutate = async (
+    method: string,
+    params: unknown,
+    apply: (result: unknown) => void,
   ): Promise<SessionGroupMutationResult> => {
     const scope = host.connection.capture();
     if (!scope) {
       return "stale";
     }
     try {
-      const result = await scope.client.request("sessions.groups.put", {
-        names: [...names],
-        ...(sectionOrder === undefined ? {} : { sectionOrder: [...sectionOrder] }),
-      });
+      const result = await scope.client.request(method, params);
       if (!host.connection.isCurrent(scope)) {
         return "stale";
       }
-      publishPathFreeMutation(
-        mergeSessionGroupDefaults(readSessionCustomGroups(result), {
-          defaults: host.readState().groupSettings,
-        }),
-        readSidebarSectionOrder(result),
-      );
+      apply(result);
       return "completed";
     } catch (error) {
-      return finishMutationFailure(host.connection.isCurrent(scope), error);
+      if (!host.connection.isCurrent(scope)) {
+        return "stale";
+      }
+      host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
+      throw error;
     }
   };
 
-  const rename = async (from: string, to: string): Promise<SessionGroupMutationResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return "stale";
-    }
-    try {
-      const result = await scope.client.request("sessions.groups.rename", { name: from, to });
-      if (!host.connection.isCurrent(scope)) {
-        return "stale";
-      }
+  const applyCatalogMutation = (result: unknown, defaults = host.readState().groupSettings) => {
+    publishPathFreeMutation(
+      mergeSessionGroupDefaults(readSessionCustomGroups(result), { defaults }),
+      readSidebarSectionOrder(result),
+    );
+  };
+
+  const put = (names: readonly string[], sectionOrder?: readonly string[]) =>
+    mutate(
+      "sessions.groups.put",
+      {
+        names: [...names],
+        ...(sectionOrder === undefined ? {} : { sectionOrder: [...sectionOrder] }),
+      },
+      applyCatalogMutation,
+    );
+
+  const rename = (from: string, to: string) =>
+    mutate("sessions.groups.rename", { name: from, to }, (result) => {
       const current = host.readState().groupSettings;
       const targetExists = current.some((group) => group.name === to);
       const renamedDefaults = current.flatMap((group) =>
         group.name === from ? (targetExists ? [] : [{ ...group, name: to }]) : [group],
       );
-      publishPathFreeMutation(
-        mergeSessionGroupDefaults(readSessionCustomGroups(result), { defaults: renamedDefaults }),
-        readSidebarSectionOrder(result),
-      );
+      applyCatalogMutation(result, renamedDefaults);
       // Mutation response commits before a background member-row reconciliation.
       void host.refreshRows();
-      return "completed";
-    } catch (error) {
-      return finishMutationFailure(host.connection.isCurrent(scope), error);
-    }
-  };
+    });
 
-  const remove = async (name: string): Promise<SessionGroupMutationResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return "stale";
-    }
-    try {
-      const result = await scope.client.request("sessions.groups.delete", { name });
-      if (!host.connection.isCurrent(scope)) {
-        return "stale";
-      }
-      publishPathFreeMutation(
-        mergeSessionGroupDefaults(readSessionCustomGroups(result), {
-          defaults: host.readState().groupSettings,
-        }),
-        readSidebarSectionOrder(result),
-      );
+  const remove = (name: string) =>
+    mutate("sessions.groups.delete", { name }, (result) => {
+      applyCatalogMutation(result);
       void host.refreshRows();
-      return "completed";
-    } catch (error) {
-      return finishMutationFailure(host.connection.isCurrent(scope), error);
-    }
-  };
+    });
 
-  const update = async (
-    name: string,
-    defaults: { cwd: string | null; worktree: boolean },
-  ): Promise<SessionGroupMutationResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return "stale";
-    }
-    try {
-      const result = await scope.client.request("sessions.groups.update", { name, ...defaults });
-      if (!host.connection.isCurrent(scope)) {
-        return "stale";
-      }
+  const update = (name: string, defaults: { cwd: string | null; worktree: boolean }) =>
+    mutate("sessions.groups.update", { name, ...defaults }, (result) => {
       const state = host.readState();
-      const pathFreeGroups = state.groupSettings.map(({ name: groupName, position }) => ({
-        name: groupName,
-        position,
-      }));
       publishCatalog(
-        mergeSessionGroupDefaults(pathFreeGroups, result),
+        mergeSessionGroupDefaults(state.groupSettings, result),
         state.sectionOrder,
         "ready",
       );
-      return "completed";
-    } catch (error) {
-      return finishMutationFailure(host.connection.isCurrent(scope), error);
-    }
-  };
+    });
 
   return {
     delete: remove,
     dispose,
-    generation: () => catalogGeneration,
     invalidate,
     load,
     put,

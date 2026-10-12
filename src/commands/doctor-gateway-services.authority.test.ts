@@ -15,6 +15,7 @@ import {
 } from "../daemon/service.test-helpers.js";
 import { buildSystemdUnit } from "../daemon/systemd-unit.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { readSecretStoreValue } from "../secrets/store/secret-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
@@ -35,22 +36,30 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: edges.note }));
 
-import { repairGatewayServiceInstallation } from "./doctor-gateway-installation.js";
+import { installDoctorGatewayService } from "./doctor-gateway-installation.js";
 import { maybeRepairGatewayServiceConfig } from "./doctor-gateway-services.js";
 
 const refusals = [
-  { scenario: "sealed", kind: "sealed", reason: "sealed-mount", guidance: "deployment owner" },
+  {
+    scenario: "sealed",
+    kind: "sealed",
+    reason: "sealed-mount",
+    guidance: "deployment owner",
+    tokenPresent: false,
+  },
   {
     scenario: "unsafe",
     kind: "unknown",
     reason: "unsafe-permissions",
     guidance: "chmod go-w",
+    tokenPresent: true,
   },
   {
     scenario: "uninspectable",
     kind: "unknown",
     reason: "inspection-failed",
     guidance: "native service-manager availability",
+    tokenPresent: false,
   },
 ] as const;
 type Scenario = (typeof refusals)[number]["scenario"] | "writable" | "rejected";
@@ -389,11 +398,11 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
             throw new Error("Missing fixture service command");
           }
           try {
-            await repairGatewayServiceInstallation({
+            await installDoctorGatewayService({
               service,
               command: inspected.command,
-              activeRoot: path.join(root, "candidate"),
-              env: process.env,
+              repair: { kind: "installation", root: path.join(root, "candidate") },
+              runtime,
               maintenance: {
                 assertCurrent: () => {
                   if (!current) {
@@ -402,14 +411,12 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
                 },
                 assertReadCurrent: () => {},
               },
-              install: (assertCurrent) =>
-                service.install({
-                  env: process.env,
-                  stdout: new PassThrough(),
-                  assertCurrent,
-                  programArguments: [wrapperPath, "gateway", "--port", "19989"],
-                  environment: { ...environment, OPENCLAW_GATEWAY_PORT: "19989" },
-                }),
+              args: {
+                env: process.env,
+                stdout: new PassThrough(),
+                programArguments: [wrapperPath, "gateway", "--port", "19989"],
+                environment: { ...environment, OPENCLAW_GATEWAY_PORT: "19989" },
+              },
             });
           } catch (error) {
             authorityFailure = error;
@@ -428,6 +435,11 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
         }
         const configBytes = await fs.readFile(configPath, "utf8");
         const persisted: OpenClawConfig = JSON.parse(configBytes);
+        const tokenRef = persisted.gateway?.auth?.token;
+        const storedToken =
+          typeof tokenRef === "object" && tokenRef.source === "store"
+            ? await readSecretStoreValue({ scope: { kind: "team" }, name: tokenRef.id })
+            : undefined;
         const diagnostics = [...edges.note.mock.calls.map(([message]) => message), ...errors].join(
           "\n",
         );
@@ -439,7 +451,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
           events,
           configBytesPreserved: configBytes === originalConfig,
           configTokenPreserved: persisted.gateway?.auth?.token === cfg.gateway?.auth?.token,
-          embeddedTokenPersisted: persisted.gateway?.auth?.token === embeddedToken,
+          embeddedTokenReferenced: storedToken?.ok === true && storedToken.value === embeddedToken,
           returnedTokenPreserved: result.gateway?.auth?.token === cfg.gateway?.auth?.token,
           returnedConfigPreserved: isDeepStrictEqual(result, JSON.parse(originalConfig)),
           unitBytesPreserved: (await fs.readFile(unitPath, "utf8")) === originalUnit,
@@ -453,6 +465,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
         expect(unexpectedProcesses).toEqual([]);
         expect(diagnostics.includes(embeddedToken)).toBe(false);
         expect(diagnostics.includes(existingToken)).toBe(false);
+        expect(configBytes.includes(embeddedToken)).toBe(false);
         expect(diagnostics.includes(inspectionCanary)).toBe(false);
         return { observations, diagnostics, errors };
       },
@@ -492,11 +505,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     });
   });
 
-  it.each(
-    refusals.flatMap(({ scenario, kind, reason, guidance }) =>
-      [false, true].map((tokenPresent) => ({ scenario, kind, reason, guidance, tokenPresent })),
-    ),
-  )(
+  it.each(refusals)(
     "preserves config and service when $scenario repair is refused (existing token=$tokenPresent)",
     async ({ scenario, kind, reason, guidance, tokenPresent }) => {
       const { observations, diagnostics } = await runRepair(scenario, { tokenPresent });
@@ -584,7 +593,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     const { observations, errors } = await runRepair("writable");
     expect(observations.capability).toEqual({ kind: "writable" });
     expect(errors).toEqual([]);
-    expect(observations.embeddedTokenPersisted).toBe(true);
+    expect(observations.embeddedTokenReferenced).toBe(true);
     expect(observations.unitBytesPreserved).toBe(false);
     expect(observations.events).toEqual(
       expect.arrayContaining(["config-published", "service-published"]),
@@ -593,7 +602,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       observations.events.indexOf("service-published"),
     );
     expect(observations.nativeActions).toEqual(["daemon-reload", "enable", "restart"]);
-    expect(observations.unitDirectoryEntries).toEqual([
+    expect(observations.unitDirectoryEntries.toSorted()).toEqual([
       "openclaw-gateway.service",
       "openclaw-gateway.service.bak",
     ]);

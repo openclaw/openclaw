@@ -25,12 +25,6 @@ type GoalToolOptions = {
   config?: OpenClawConfig;
 };
 
-type GoalSessionScope = {
-  sessionKey: string;
-  agentId: string;
-  storePath: string;
-};
-
 const CreateGoalToolSchema = Type.Object({
   objective: Type.String({
     description: "Concrete objective; explicit request only.",
@@ -49,7 +43,7 @@ const UpdateGoalToolSchema = Type.Object({
   note: Type.Optional(Type.String({ description: "Short status note." })),
 });
 
-function resolveGoalSessionScope(options: GoalToolOptions): GoalSessionScope {
+function resolveGoalSessionScope(options: GoalToolOptions) {
   const sessionKey = options.runSessionKey?.trim() || options.agentSessionKey?.trim();
   if (!sessionKey) {
     throw new ToolInputError("session key required");

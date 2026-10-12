@@ -49,51 +49,36 @@ export function readNativeHookRelayBridgeSnapshotFromDatabase(params: {
   );
 }
 
-function sameNativeHookRelayBridgeSnapshot(
-  left: NativeHookRelayBridgeSnapshot,
-  right: NativeHookRelayBridgeSnapshot,
-): boolean {
-  return (
-    left.updatedAtMs === right.updatedAtMs &&
-    left.record.relayId === right.record.relayId &&
-    left.record.pid === right.record.pid &&
-    left.record.hostname === right.record.hostname &&
-    left.record.port === right.record.port &&
-    left.record.token === right.record.token &&
-    left.record.expiresAtMs === right.record.expiresAtMs
-  );
+function nativeHookRelayBridgeRow({
+  record,
+  updatedAtMs,
+}: {
+  record: NativeHookRelayBridgeRecord;
+  updatedAtMs: number;
+}): NativeHookRelayBridgeRow {
+  return {
+    relay_id: record.relayId,
+    pid: record.pid,
+    hostname: record.hostname,
+    port: record.port,
+    token: record.token,
+    expires_at_ms: record.expiresAtMs,
+    updated_at_ms: updatedAtMs,
+  };
 }
 
 export function writeNativeHookRelayBridgeRecordInDatabase(
   database: { db: DatabaseSync },
   params: { record: NativeHookRelayBridgeRecord; updatedAtMs: number },
 ): void {
-  const { record, updatedAtMs } = params;
-  const { token } = record;
+  const { relay_id, ...fields } = nativeHookRelayBridgeRow(params);
   const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
   executeSqliteQuerySync(
     database.db,
     db
       .insertInto("native_hook_relay_bridges")
-      .values({
-        relay_id: record.relayId,
-        pid: record.pid,
-        hostname: record.hostname,
-        port: record.port,
-        token,
-        expires_at_ms: record.expiresAtMs,
-        updated_at_ms: updatedAtMs,
-      })
-      .onConflict((conflict) =>
-        conflict.column("relay_id").doUpdateSet({
-          pid: record.pid,
-          hostname: record.hostname,
-          port: record.port,
-          token,
-          expires_at_ms: record.expiresAtMs,
-          updated_at_ms: updatedAtMs,
-        }),
-      ),
+      .values({ relay_id, ...fields })
+      .onConflict((conflict) => conflict.column("relay_id").doUpdateSet(fields)),
   );
 }
 
@@ -101,48 +86,20 @@ export function renewOrRestoreNativeHookRelayBridgeRecordInDatabase(
   database: { db: DatabaseSync },
   params: { record: NativeHookRelayBridgeRecord; updatedAtMs: number },
 ): boolean {
-  const { record, updatedAtMs } = params;
-  const { token } = record;
+  const { relay_id, ...fields } = nativeHookRelayBridgeRow(params);
   const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
-  const current = readNativeHookRelayBridgeSnapshotFromDatabase({
-    database,
-    relayId: record.relayId,
-  });
-  if (!current) {
-    const result = executeSqliteQuerySync(
-      database.db,
-      db
-        .insertInto("native_hook_relay_bridges")
-        .values({
-          relay_id: record.relayId,
-          pid: record.pid,
-          hostname: record.hostname,
-          port: record.port,
-          token,
-          expires_at_ms: record.expiresAtMs,
-          updated_at_ms: updatedAtMs,
-        })
-        .onConflict((conflict) => conflict.column("relay_id").doNothing()),
-    );
-    return result.numAffectedRows === 1n;
-  }
-  if (current.record.pid !== record.pid || current.record.token !== token) {
-    return false;
-  }
   const result = executeSqliteQuerySync(
     database.db,
     db
-      .updateTable("native_hook_relay_bridges")
-      .set({
-        hostname: record.hostname,
-        port: record.port,
-        expires_at_ms: record.expiresAtMs,
-        updated_at_ms: updatedAtMs,
-      })
-      .where("relay_id", "=", record.relayId)
-      .where("pid", "=", record.pid)
-      .where("token", "=", token)
-      .where("updated_at_ms", "=", current.updatedAtMs),
+      .insertInto("native_hook_relay_bridges")
+      .values({ relay_id, ...fields })
+      .onConflict((conflict) =>
+        conflict
+          .column("relay_id")
+          .doUpdateSet(fields)
+          .where("native_hook_relay_bridges.pid", "=", params.record.pid)
+          .where("native_hook_relay_bridges.token", "=", params.record.token),
+      ),
   );
   return result.numAffectedRows === 1n;
 }
@@ -151,13 +108,6 @@ export function deleteNativeHookRelayBridgeRecordIfOwnedInDatabase(
   database: { db: DatabaseSync },
   params: { relayId: string; pid: number; token: string },
 ): boolean {
-  const current = readNativeHookRelayBridgeSnapshotFromDatabase({
-    database,
-    relayId: params.relayId,
-  });
-  if (!current || current.record.pid !== params.pid || current.record.token !== params.token) {
-    return false;
-  }
   const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
   const result = executeSqliteQuerySync(
     database.db,
@@ -165,8 +115,7 @@ export function deleteNativeHookRelayBridgeRecordIfOwnedInDatabase(
       .deleteFrom("native_hook_relay_bridges")
       .where("relay_id", "=", params.relayId)
       .where("pid", "=", params.pid)
-      .where("token", "=", params.token)
-      .where("updated_at_ms", "=", current.updatedAtMs),
+      .where("token", "=", params.token),
   );
   return result.numAffectedRows === 1n;
 }
@@ -192,37 +141,29 @@ export function pruneNativeHookRelayBridgeRecordsInDatabase(
   const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
   const pruned: NativeHookRelayBridgePruneResult[] = [];
   for (const candidate of candidates) {
-    const current = readNativeHookRelayBridgeSnapshotFromDatabase({
-      database,
-      relayId: candidate.snapshot.record.relayId,
-    });
-    if (
-      !current ||
-      !sameNativeHookRelayBridgeSnapshot(current, candidate.snapshot) ||
-      (candidate.reason === "expired" && nowMs <= current.record.expiresAtMs)
-    ) {
+    const { record, updatedAtMs } = candidate.snapshot;
+    if (candidate.reason === "expired" && nowMs <= record.expiresAtMs) {
       continue;
     }
     const result = executeSqliteQuerySync(
       database.db,
       db
         .deleteFrom("native_hook_relay_bridges")
-        .where("relay_id", "=", current.record.relayId)
-        .where("token", "=", current.record.token)
-        .where("updated_at_ms", "=", current.updatedAtMs),
+        .where("relay_id", "=", record.relayId)
+        .where("pid", "=", record.pid)
+        .where("hostname", "=", record.hostname)
+        .where("port", "=", record.port)
+        .where("token", "=", record.token)
+        .where("expires_at_ms", "=", record.expiresAtMs)
+        .where("updated_at_ms", "=", updatedAtMs),
     );
     if (result.numAffectedRows === 1n) {
       pruned.push({
-        relayId: current.record.relayId,
-        pid: current.record.pid,
+        relayId: record.relayId,
+        pid: record.pid,
         reason: candidate.reason,
       });
     }
   }
   return pruned;
-}
-
-export function clearNativeHookRelayBridgeRecordsInDatabase(database: { db: DatabaseSync }): void {
-  const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
-  executeSqliteQuerySync(database.db, db.deleteFrom("native_hook_relay_bridges"));
 }

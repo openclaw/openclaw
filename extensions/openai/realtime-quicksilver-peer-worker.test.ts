@@ -2,11 +2,15 @@ import { once } from "node:events";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { MessageChannel, Worker } from "node:worker_threads";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
-import {
-  OpenAIQuicksilverAudioPeer,
-  type QuicksilverAudioWorkerEvent,
-} from "./realtime-quicksilver-peer.runtime.js";
+import { realtimeAudioTestEntrypoints } from "./realtime-audio-worker-entrypoints.test-support.js";
+import type { QuicksilverAudioWorkerEvent } from "./realtime-quicksilver-peer.runtime.js";
+
+const peerModule: typeof import("./realtime-quicksilver-peer.runtime.js") = await import(
+  resolveRuntimeWorkerUrl(realtimeAudioTestEntrypoints.peer).href
+);
+const { OpenAIQuicksilverAudioPeer } = peerModule;
 
 // Observe encrypted RTP on another event loop: a same-thread receiver would
 // hide the gap by processing its queued callbacks after the deliberate stall.
@@ -49,8 +53,10 @@ const receiverSource = `const { parentPort, workerData } = require('node:worker_
 // in the same turn avoids racing the 80 ms reorder timer on a loaded test host.
 const interruptionSource = `const { parentPort, workerData } = require('node:worker_threads');
 (async () => {
-  const { register } = await import(workerData.tsxApiUrl);
-  register();
+  if (workerData.tsxApiUrl) {
+    const { register } = await import(workerData.tsxApiUrl);
+    register();
+  }
   const { OpenAIQuicksilverAudioPeer } = await import(workerData.mediaUrl);
   const { RtpHeader, RtpPacket } = await import(workerData.weriftUrl);
   const create = OpenAIQuicksilverAudioPeer.create;
@@ -82,17 +88,19 @@ const interruptionSource = `const { parentPort, workerData } = require('node:wor
 
 describe("GPT-Live audio thread", () => {
   it("does not restamp pre-clear reordered RTP as the next output generation", async () => {
-    const workerUrl = new URL("./realtime-quicksilver-audio.worker.ts", import.meta.url);
+    const workerUrl = resolveRuntimeWorkerUrl(realtimeAudioTestEntrypoints.worker);
     const worker = new Worker(interruptionSource, {
       eval: true,
-      // Register inside the worker: tsx automatic preloads only install on main.
+      // Source fallback registers inside the worker; prepared children need no loader.
       execArgv: [],
       workerData: {
         iceServers: [],
         reportMediaErrors: false,
         workerUrl: workerUrl.href,
-        tsxApiUrl: import.meta.resolve("tsx/esm/api"),
-        mediaUrl: new URL("./realtime-quicksilver-media.runtime.ts", import.meta.url).href,
+        tsxApiUrl: workerUrl.pathname.endsWith(".ts")
+          ? import.meta.resolve("tsx/esm/api")
+          : undefined,
+        mediaUrl: resolveRuntimeWorkerUrl(realtimeAudioTestEntrypoints.media).href,
         weriftUrl: pathToFileURL(createRequire(import.meta.url).resolve("werift")).href,
       },
     });
@@ -189,6 +197,20 @@ describe("GPT-Live audio thread", () => {
           weriftUrl: pathToFileURL(createRequire(import.meta.url).resolve("werift")).href,
         },
       });
+      // The receiver outlives each hang-up under test. On Linux, Bun reports the
+      // ICMP refusal of its next echo or RTCP send as a socket error that werift
+      // leaves uncaught, which fails the receiver thread. Only that is expected.
+      let hungUp = false;
+      const receiverErrors: { hungUp: boolean; error: unknown }[] = [];
+      receiver.on("error", (error) => receiverErrors.push({ hungUp, error }));
+      const expectReceiverHealthy = () =>
+        expect(
+          receiverErrors.filter(
+            ({ hungUp: afterHangUp, error }) =>
+              !afterHangUp ||
+              !(error instanceof Error && "code" in error && error.code === "ECONNREFUSED"),
+          ),
+        ).toEqual([]);
       const errors: Error[] = [];
       let audibleSamples = 0;
       let failAudioSink = false;
@@ -256,6 +278,7 @@ describe("GPT-Live audio thread", () => {
             "PCM messages reaching the playback worker during stall: " + mediaDuringStall,
           );
           expect(mediaDuringStall).toBeGreaterThanOrEqual(10);
+          hungUp = true;
           peer.close();
           expect(Atomics.load(new Int32Array(state), 0)).toBe(1);
           const afterClose = Atomics.load(counts, 1);
@@ -263,8 +286,11 @@ describe("GPT-Live audio thread", () => {
             setTimeout(resolve, 80);
           });
           expect(Atomics.load(counts, 1)).toBe(afterClose);
+          expectReceiverHealthy();
           return;
         }
+        // The next PCM batch fails the sink, which hangs up the peer.
+        hungUp = true;
         failAudioSink = true;
         const failureDeadline = Date.now() + 2_000;
         while (errors.length === 0 && Date.now() < failureDeadline) {
@@ -274,6 +300,7 @@ describe("GPT-Live audio thread", () => {
         }
         expect(errors).toEqual([sinkError]);
         await expect(peer.createOffer()).rejects.toThrow("closed");
+        expectReceiverHealthy();
       } finally {
         peer?.close();
         await receiver.terminate();

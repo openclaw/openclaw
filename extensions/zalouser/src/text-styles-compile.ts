@@ -7,28 +7,21 @@ import {
   type TextEdit,
 } from "./text-styles-shared.js";
 import {
-  sourceContainerPrefixLength,
   sourceContainerProjection,
   sourceListItemContent,
+  type MarkdownSource,
 } from "./text-styles-source-spans.js";
 import { sourceAtxIsMarkerOnly } from "./text-styles-source.js";
 import { TextStyle } from "./zca-constants.js";
 
 export function collectBlockEdits(
   ir: MarkdownIRWithBlockMetadata,
-  sourceIR: MarkdownIRWithBlockMetadata,
   offsets: number[],
   projectedText: string,
-  source: string,
+  context: MarkdownSource,
 ): TextEdit[] {
   const edits: TextEdit[] = [];
-  const sourceLines = source.split("\n");
-  const sourceLineStarts = sourceLines.reduce<number[]>((starts, _line, index) => {
-    starts.push(
-      index === 0 ? 0 : (starts[index - 1] ?? 0) + (sourceLines[index - 1]?.length ?? 0) + 1,
-    );
-    return starts;
-  }, []);
+  const { source, ir: sourceIR, lines: sourceLines } = context;
   for (const [itemIndex, item] of (ir.listItems ?? []).entries()) {
     if (!item.listMarker) {
       continue;
@@ -42,18 +35,16 @@ export function collectBlockEdits(
       )
       .map((candidate) => candidate.start!);
     const nestedStart = nestedStarts.length > 0 ? Math.min(...nestedStarts) : item.listMarker.end;
-    const materializedBlock = (ir.blocks ?? []).some(
+    const containedBlocks = (ir.blocks ?? []).filter(
       (block) =>
-        block.kind !== "blockquote" &&
         item.start !== undefined &&
         item.end !== undefined &&
         block.start >= item.start &&
         block.end <= item.end,
     );
+    const materializedBlock = containedBlocks.some((block) => block.kind !== "blockquote");
     const sourceItem = sourceIR.listItems?.[itemIndex];
-    const sourceContent = sourceItem
-      ? sourceListItemContent(source, sourceIR, sourceLineStarts, sourceLines, sourceItem)
-      : "";
+    const sourceContent = sourceItem ? sourceListItemContent(context, sourceItem) : "";
     const hasRenderedContent =
       item.contentStart !== undefined &&
       item.contentEnd !== undefined &&
@@ -67,15 +58,8 @@ export function collectBlockEdits(
       (!hasRenderedContent && !materializedBlock && sourceItem?.sourceMarker
         ? source.slice(sourceItem.sourceMarker.start, sourceItem.sourceMarker.end)
         : "");
-    const markerQuoteDepth = (ir.blocks ?? [])
-      .filter(
-        (block) =>
-          block.kind === "blockquote" &&
-          item.start !== undefined &&
-          item.end !== undefined &&
-          block.start >= item.start &&
-          block.end <= item.end,
-      )
+    const markerQuoteDepth = containedBlocks
+      .filter((block) => block.kind === "blockquote")
       .reduce((depth, block) => Math.max(depth, block.blockquoteDepth ?? 0), 0);
     const existingQuoteIndent = (ir.blocks ?? [])
       .filter(
@@ -111,16 +95,7 @@ export function collectBlockEdits(
       (candidate) =>
         candidate.kind === "code_block" && candidate.sourceStartLine === block.sourceStartLine,
     );
-    const normalized = normalizeCodeBlock(
-      ir.text.slice(block.start, block.end),
-      block.codeOrigin,
-      !source.endsWith("\n") && block.sourceEndLine === sourceLines.length,
-      sourceIR,
-      sourceLines,
-      sourceLineStarts,
-      block.sourceStartLine,
-      block.blockquoteDepth ?? 0,
-    );
+    const normalized = normalizeCodeBlock(ir.text.slice(block.start, block.end), block, context);
     const sourceHasNbsp = sourceLines
       .slice(
         (block.sourceStartLine ?? 0) + (block.codeOrigin === "fenced" ? 1 : 0),
@@ -143,13 +118,7 @@ export function collectBlockEdits(
       end,
       text:
         block.codeOrigin === "fenced" && block.codeClosed === false && sourceBlock
-          ? renderUnclosedCodeBlock(
-              sourceBlock,
-              sourceIR,
-              sourceLines,
-              sourceLineStarts,
-              normalized,
-            )
+          ? renderUnclosedCodeBlock(sourceBlock, context, normalized)
           : normalized,
       ...(!listOwnsBlock &&
       ((block.codeOrigin === "fenced" && block.codeClosed === false) ||
@@ -232,11 +201,8 @@ export function collectBlockEdits(
       const lineIndex = sourceBlock.sourceStartLine ?? 0;
       const line = sourceLines[lineIndex] ?? "";
       const projection = sourceContainerProjection(
-        line,
+        context,
         lineIndex,
-        sourceIR,
-        sourceLineStarts,
-        sourceLines,
         sourceBlock.blockquoteDepth ?? 0,
       );
       const markerMatch = /^( {0,3}#{5,6}[ \t]+)/u.exec(line.slice(projection.offset))?.[0] ?? "";
@@ -249,44 +215,29 @@ export function collectBlockEdits(
           text: marker,
         });
       }
-    } else if (block.kind === "heading" && sourceBlock.headingOrigin === "setext") {
-      const lineIndex = (sourceBlock.sourceEndLine ?? 1) - 1;
+    } else if (
+      (block.kind === "heading" && sourceBlock.headingOrigin === "setext") ||
+      block.kind === "thematic_break"
+    ) {
+      const isHeading = block.kind === "heading";
+      const lineIndex = isHeading
+        ? (sourceBlock.sourceEndLine ?? 1) - 1
+        : (sourceBlock.sourceStartLine ?? 0);
       const line = sourceLines[lineIndex] ?? "";
       const projection = sourceContainerProjection(
-        line,
+        context,
         lineIndex,
-        sourceIR,
-        sourceLineStarts,
-        sourceLines,
-        sourceBlock.blockquoteDepth ?? 0,
-      );
-      const marker = `${" ".repeat(projection.residual)}${line.slice(projection.offset)}`;
-      const offset = projectOffset(offsets, block.end);
-      edits.push({
-        start: offset,
-        end: offset,
-        text: `\n${marker}`,
-      });
-    } else if (block.kind === "thematic_break") {
-      const lineIndex = sourceBlock.sourceStartLine ?? 0;
-      const line = sourceLines[lineIndex] ?? "";
-      const projection = sourceContainerProjection(
-        line,
-        lineIndex,
-        sourceIR,
-        sourceLineStarts,
-        sourceLines,
         sourceBlock.blockquoteDepth ?? 0,
       );
       edits.push({
-        start: projectOffset(offsets, block.start),
+        start: projectOffset(offsets, isHeading ? block.end : block.start),
         end: projectOffset(offsets, block.end),
-        text: `${" ".repeat(projection.residual)}${line.slice(projection.offset)}`,
+        text: `${isHeading ? "\n" : ""}${" ".repeat(projection.residual)}${line.slice(projection.offset)}`,
       });
     }
   }
   edits.push(
-    ...collectSourceSpacingEdits(ir, sourceIR, offsets, projectedText, source).filter(
+    ...collectSourceSpacingEdits(ir, offsets, projectedText, context).filter(
       (spacingEdit) =>
         !edits.some((edit) => spacingEdit.start < edit.end && spacingEdit.end > edit.start),
     ),
@@ -311,19 +262,15 @@ export function collectBlockEdits(
 
 function renderUnclosedCodeBlock(
   block: MarkdownBlockMetadata,
-  sourceIR: MarkdownIRWithBlockMetadata,
-  sourceLines: string[],
-  sourceLineStarts: number[],
+  context: MarkdownSource,
   payload: string,
 ): string {
+  const { lines: sourceLines } = context;
   const sourceStartLine = block.sourceStartLine ?? 0;
   const openingLine = sourceLines[sourceStartLine] ?? "";
   const projection = sourceContainerProjection(
-    openingLine,
+    context,
     sourceStartLine,
-    sourceIR,
-    sourceLineStarts,
-    sourceLines,
     block.blockquoteDepth ?? 0,
   );
   const opening =
@@ -338,18 +285,10 @@ function renderUnclosedCodeBlock(
 
 function collectSourceSpacingEdits(
   ir: MarkdownIRWithBlockMetadata,
-  sourceIR: MarkdownIRWithBlockMetadata,
   offsets: number[],
   text: string,
-  source: string,
+  { ir: sourceIR, lines: sourceLines, lineStarts: sourceLineStarts }: MarkdownSource,
 ): TextEdit[] {
-  const sourceLines = source.split("\n");
-  const sourceLineStarts = sourceLines.reduce<number[]>((starts, _line, index) => {
-    starts.push(
-      index === 0 ? 0 : (starts[index - 1] ?? 0) + (sourceLines[index - 1]?.length ?? 0) + 1,
-    );
-    return starts;
-  }, []);
   const boundaries = [
     ...(ir.blocks ?? []).map((block) =>
       Object.assign({}, block, {
@@ -457,14 +396,12 @@ function sourceContainerContent(line: string): string {
 
 function normalizeCodeBlock(
   text: string,
-  origin: "fenced" | "indented" | undefined,
-  trimTerminalNewline: boolean,
-  ir: MarkdownIRWithBlockMetadata,
-  sourceLines: string[],
-  sourceLineStarts: number[],
-  sourceStartLine: number | undefined,
-  blockquoteDepth: number,
+  block: MarkdownBlockMetadata,
+  context: MarkdownSource,
 ): string {
+  const { source, lines: sourceLines } = context;
+  const { codeOrigin: origin, sourceStartLine, blockquoteDepth = 0 } = block;
+  const trimTerminalNewline = !source.endsWith("\n") && block.sourceEndLine === sourceLines.length;
   const indent = origin === "indented" ? "\u00A0".repeat(4) : "";
   const normalized = text
     .split("\n")
@@ -477,14 +414,7 @@ function normalizeCodeBlock(
       }
       const lineIndex = sourceStartLine + index;
       const rawLine = sourceLines[lineIndex] ?? "";
-      const prefixLength = sourceContainerPrefixLength(
-        rawLine,
-        lineIndex,
-        ir,
-        sourceLineStarts,
-        sourceLines,
-        blockquoteDepth,
-      );
+      const prefixLength = sourceContainerProjection(context, lineIndex, blockquoteDepth).offset;
       const sourceContent = rawLine.slice(prefixLength);
       return /^[ \t]+$/u.test(sourceContent)
         ? normalizeCodeBlockLeadingWhitespace(sourceContent)

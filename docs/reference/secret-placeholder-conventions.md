@@ -6,7 +6,7 @@ read_when:
 title: "Secret Placeholder Conventions"
 ---
 
-# Secret placeholder conventions
+# Secret Placeholder Conventions
 
 Use placeholders that are human-readable but do not resemble real secrets.
 

@@ -1,35 +1,25 @@
-/**
- * Dynamic tool profile rules for Codex app-server tool loading and filtering.
- */
 import type {
   CodexAppServerConnectionClass,
   CodexDynamicToolsLoading,
   CodexPluginConfig,
 } from "./config-contracts.js";
 
-/** Tool names owned by Codex app-server and normally excluded from OpenClaw dynamic tools. */
-const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
-  "read",
-  "write",
-  "edit",
-  "apply_patch",
-  "exec",
-  "process",
-  "update_plan",
-  "tool_call",
-  "tool_describe",
-  "tool_search",
-  "tool_search_code",
-] as const;
-const CODEX_NATIVE_GOAL_TOOL_EXCLUDES = ["get_goal", "create_goal", "update_goal"] as const;
-const CODEX_APP_SERVER_OWNED_REPLACEABLE_TOOL_EXCLUDES = new Set([
-  "read",
-  "write",
-  "edit",
-  "apply_patch",
-  ...CODEX_NATIVE_GOAL_TOOL_EXCLUDES,
+/** Replacement policy for tools owned by Codex app-server. */
+const CODEX_NATIVE_TOOLS = new Map<string, "workspace" | "shell" | "goal" | "always">([
+  ["read", "workspace"],
+  ["write", "workspace"],
+  ["edit", "workspace"],
+  ["apply_patch", "workspace"],
+  ["exec", "shell"],
+  ["process", "shell"],
+  ["update_plan", "always"],
+  ["tool_call", "always"],
+  ["tool_describe", "always"],
+  ["tool_search", "always"],
+  ["get_goal", "goal"],
+  ["create_goal", "goal"],
+  ["update_goal", "goal"],
 ]);
-const CODEX_APP_SERVER_OWNED_SHELL_TOOL_EXCLUDES = new Set(["exec", "process"]);
 
 const DYNAMIC_TOOL_NAME_ALIASES: Record<string, string> = {
   bash: "exec",
@@ -41,7 +31,6 @@ type CodexDynamicToolProfileEnv = {
   OPENCLAW_QA_FORCE_RUNTIME?: string;
 };
 
-/** Normalizes OpenClaw/Codex tool names before filtering and allowlist checks. */
 export function normalizeCodexDynamicToolName(name: string): string {
   const normalized = name.trim().toLowerCase();
   return DYNAMIC_TOOL_NAME_ALIASES[normalized] ?? normalized;
@@ -68,7 +57,6 @@ export function isMessageOnlyCodexSourceReply(params: {
   );
 }
 
-/** Returns true for private QA runs that force the Codex runtime profile. */
 export function isForcedPrivateQaCodexRuntime(
   env: CodexDynamicToolProfileEnv = process.env,
 ): boolean {
@@ -78,7 +66,6 @@ export function isForcedPrivateQaCodexRuntime(
   );
 }
 
-/** Resolves whether dynamic tools load directly or through Codex tool search. */
 export function resolveCodexDynamicToolsLoading(
   config: Pick<CodexPluginConfig, "codexDynamicToolsLoading">,
   env: CodexDynamicToolProfileEnv = process.env,
@@ -88,34 +75,9 @@ export function resolveCodexDynamicToolsLoading(
     : (config.codexDynamicToolsLoading ?? "searchable");
 }
 
-function normalizeCodexModelId(modelId: string | undefined): string {
-  const normalized = modelId?.trim().toLowerCase();
-  if (!normalized) {
-    return "";
-  }
-  return normalized.includes("/") ? normalized.split("/").at(-1)! : normalized;
-}
-
-/** Returns true when model behavior requires direct dynamic-tool registration. */
-function shouldUseDirectCodexDynamicToolsForModel(modelId: string | undefined): boolean {
-  return shouldDisableCodexToolSearchForModel(modelId);
-}
-
 /** Returns true for models whose tool-search path is unsupported or inefficient. */
 export function shouldDisableCodexToolSearchForModel(modelId: string | undefined): boolean {
-  return normalizeCodexModelId(modelId) === "gpt-5.4-nano";
-}
-
-/** Resolves dynamic-tool loading after applying model-specific restrictions. */
-function resolveCodexDynamicToolsLoadingForModel(
-  config: Pick<CodexPluginConfig, "codexDynamicToolsLoading">,
-  modelId: string | undefined,
-  env: CodexDynamicToolProfileEnv = process.env,
-): CodexDynamicToolsLoading {
-  const loading = resolveCodexDynamicToolsLoading(config, env);
-  return loading === "searchable" && shouldUseDirectCodexDynamicToolsForModel(modelId)
-    ? "direct"
-    : loading;
+  return modelId?.trim().toLowerCase().split("/").at(-1) === "gpt-5.4-nano";
 }
 
 /** Resolves dynamic-tool loading for the app-server connection that will execute the turn. */
@@ -125,64 +87,46 @@ export function resolveCodexDynamicToolsLoadingForRuntime(
   options: { connectionClass?: CodexAppServerConnectionClass } = {},
   env: CodexDynamicToolProfileEnv = process.env,
 ): CodexDynamicToolsLoading {
-  const loading = resolveCodexDynamicToolsLoadingForModel(config, modelId, env);
-  return loading === "searchable" && options.connectionClass === "remote" ? "direct" : loading;
+  const loading = resolveCodexDynamicToolsLoading(config, env);
+  return loading === "searchable" &&
+    (shouldDisableCodexToolSearchForModel(modelId) || options.connectionClass === "remote")
+    ? "direct"
+    : loading;
 }
 
 /** Filters OpenClaw tools that Codex owns natively or config explicitly excludes. */
 export function filterCodexDynamicTools<T extends { name: string }>(
   tools: T[],
   config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
-  env: CodexDynamicToolProfileEnv = process.env,
+  options: {
+    env?: CodexDynamicToolProfileEnv;
+    disabledNativeSurface?: { preserveShell: boolean };
+  } = {},
 ): T[] {
-  return filterCodexDynamicToolsWithOptions(tools, config, env, {
-    preserveOpenClawReplacements: false,
-    preserveOpenClawShell: false,
-  });
-}
-
-/** Keeps OpenClaw coding tools that replace a disabled Codex native surface. */
-export function filterCodexDynamicToolsForDisabledNativeSurface<T extends { name: string }>(
-  tools: T[],
-  config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
-  options: { preserveShell: boolean },
-  env: CodexDynamicToolProfileEnv = process.env,
-): T[] {
-  return filterCodexDynamicToolsWithOptions(tools, config, env, {
-    preserveOpenClawReplacements: true,
-    preserveOpenClawShell: options.preserveShell,
-  });
-}
-
-function filterCodexDynamicToolsWithOptions<T extends { name: string }>(
-  tools: T[],
-  config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
-  env: CodexDynamicToolProfileEnv,
-  options: { preserveOpenClawReplacements: boolean; preserveOpenClawShell: boolean },
-): T[] {
+  const { disabledNativeSurface } = options;
   const excludes = new Set<string>();
-  if (!options.preserveOpenClawReplacements) {
-    for (const name of CODEX_NATIVE_GOAL_TOOL_EXCLUDES) {
-      excludes.add(name);
-    }
-  }
-  if (isForcedPrivateQaCodexRuntime(env)) {
-    // Native apply_patch is registered first; advertising a second handler
-    // makes Codex reject the duplicate before either QA patch can execute.
-    excludes.add("apply_patch");
-  } else {
-    for (const name of CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES) {
-      if (
-        options.preserveOpenClawReplacements &&
-        CODEX_APP_SERVER_OWNED_REPLACEABLE_TOOL_EXCLUDES.has(name)
-      ) {
-        continue;
+  const privateQa = isForcedPrivateQaCodexRuntime(options.env ?? process.env);
+  for (const [name, replacement] of CODEX_NATIVE_TOOLS) {
+    if (replacement === "goal") {
+      if (!disabledNativeSurface) {
+        excludes.add(name);
       }
-      if (options.preserveOpenClawShell && CODEX_APP_SERVER_OWNED_SHELL_TOOL_EXCLUDES.has(name)) {
-        continue;
-      }
-      excludes.add(name);
+      continue;
     }
+    if (privateQa) {
+      // Native apply_patch must never collide with a second QA handler.
+      if (name === "apply_patch") {
+        excludes.add(name);
+      }
+      continue;
+    }
+    if (
+      (replacement === "workspace" && disabledNativeSurface) ||
+      (replacement === "shell" && disabledNativeSurface?.preserveShell)
+    ) {
+      continue;
+    }
+    excludes.add(name);
   }
   for (const name of config.codexDynamicToolsExclude ?? []) {
     const trimmed = normalizeCodexDynamicToolName(name);

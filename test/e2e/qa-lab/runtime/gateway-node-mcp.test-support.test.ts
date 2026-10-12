@@ -3,8 +3,9 @@ import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../helpers/promise.js";
+import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   createChildEnv,
@@ -17,10 +18,21 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+// Tree signaling joins dispatch, not the foreign descendant's waitpid completion.
+async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (processIsAlive(pid)) {
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (error) {
+    throw new Error(`timed out waiting for fixture descendant ${pid} to exit`, { cause: error });
+  }
+}
+
 describe("gateway node MCP fixture ownership", () => {
-  it.each(["existing", "published"] as const)(
+  it.for(["existing", "published"] as const)(
     "joins its watcher when the gate is %s",
-    async (mode) => {
+    async (mode, { signal }) => {
       const root = tempDirs.make("mcp-gate-publication-");
       const gate = path.join(root, "gate");
       if (mode === "existing") {
@@ -38,10 +50,10 @@ describe("gateway node MCP fixture ownership", () => {
       const { waitForMcpFixtureGate: waitForGate } =
         await import("./gateway-node-mcp.test-support.js");
       let watcher: nodeFs.FSWatcher | undefined;
-      const waiting = waitForGate(gate);
+      const waiting = waitForGate(gate, signal);
       try {
         if (mode === "published") {
-          watcher = await watching.promise;
+          watcher = await withinTest(watching.promise, signal);
           const closed = once(watcher, "close");
           await fs.writeFile(gate, "ready");
           await waiting;
@@ -53,24 +65,26 @@ describe("gateway node MCP fixture ownership", () => {
         expect(await fs.readFile(gate, "utf8")).toBe("ready");
       } finally {
         watcher?.close();
-        await waiting;
+        await waiting.catch(() => {});
         vi.doUnmock("node:fs");
         vi.resetModules();
       }
     },
   );
 
-  it("releases its deadline when the real gate watcher cannot be constructed", async () => {
+  it("releases its deadline when the real gate watcher cannot be constructed", async ({
+    signal,
+  }) => {
     const root = tempDirs.make("mcp-gate-watch-failure-");
     const timers = vi.spyOn(globalThis, "setTimeout");
     const cleared = vi.spyOn(globalThis, "clearTimeout");
     try {
-      await expect(waitForMcpFixtureGate(path.join(root, "missing", "gate"))).rejects.toMatchObject(
-        {
-          code: "ENOENT",
-          syscall: "watch",
-        },
-      );
+      await expect(
+        waitForMcpFixtureGate(path.join(root, "missing", "gate"), signal),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+        syscall: "watch",
+      });
       const allocated = timers.mock.results.flatMap((result, index) =>
         result.type === "return" && timers.mock.calls[index]?.[1] === 30_000 ? [result.value] : [],
       );
@@ -98,8 +112,12 @@ describe("gateway node MCP fixture ownership", () => {
     ).toEqual(fact);
   });
 
-  it("kills a spawned fixture when readiness validation fails", async () => {
-    const root = tempDirs.make("mcp-fixture-startup-failure-");
+  it("kills a spawned fixture when readiness validation fails", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const fixtureDirs = useAutoCleanupTempDirTracker(onTestFinished);
+    const root = fixtureDirs.make("mcp-fixture-startup-failure-");
     const fixturePath = path.join(root, "invalid-fixture.mjs");
     const pidPath = path.join(root, "fixture.pid");
     await fs.writeFile(
@@ -108,26 +126,38 @@ describe("gateway node MCP fixture ownership", () => {
       "utf8",
     );
 
-    await expect(
-      startHttpFixture({
-        fixturePath,
-        labelPrefix: "node",
-        env: createChildEnv({ home: root, tempDir: os.tmpdir() }),
-      }),
-    ).rejects.toThrow("invalid readiness");
-    const pid = Number(await fs.readFile(pidPath, "utf8"));
+    let pid: number | undefined;
+    const startingFixture = startHttpFixture({
+      fixturePath,
+      signal,
+      labelPrefix: "node",
+      env: createChildEnv({ home: root, tempDir: os.tmpdir() }),
+    });
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        await stopChild(await startingFixture.catch(() => undefined));
+        if (pid !== undefined && processIsAlive(pid)) {
+          process.kill(pid, "SIGKILL");
+        }
+      })());
+    onTestFinished(cleanup);
     try {
-      await vi.waitFor(() => expect(processIsAlive(pid)).toBe(false), { timeout: 1_000 });
+      await expect(startingFixture).rejects.toThrow("invalid readiness");
+      const fixturePid = Number(await fs.readFile(pidPath, "utf8"));
+      pid = fixturePid;
+      expect(processIsAlive(fixturePid)).toBe(false);
     } finally {
-      if (processIsAlive(pid)) {
-        process.kill(pid, "SIGKILL");
-      }
+      await cleanup();
     }
-    expect(processIsAlive(pid)).toBe(false);
   });
 
-  it("kills task-owned fixture descendants when stopping the captured root", async () => {
-    const root = tempDirs.make("mcp-fixture-descendant-cleanup-");
+  it("kills task-owned fixture descendants when stopping the captured root", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const fixtureDirs = useAutoCleanupTempDirTracker(onTestFinished);
+    const root = fixtureDirs.make("mcp-fixture-descendant-cleanup-");
     const fixturePath = path.join(root, "fixture.mjs");
     const descendantPidPath = path.join(root, "descendant.pid");
     await fs.writeFile(
@@ -136,23 +166,39 @@ describe("gateway node MCP fixture ownership", () => {
       "utf8",
     );
 
-    const fixture = await startHttpFixture({
+    const startingFixture = startHttpFixture({
       fixturePath,
+      signal,
       labelPrefix: "node",
       env: createChildEnv({ home: root, tempDir: os.tmpdir() }),
     });
-    const descendantPid = Number(await fs.readFile(descendantPidPath, "utf8"));
+    let descendantPid: number | undefined;
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        const fixture = await startingFixture.catch(() => undefined);
+        if (!fixture) {
+          return;
+        }
+        // The fixture records its descendant before publishing readiness.
+        descendantPid ??= Number(await fs.readFile(descendantPidPath, "utf8"));
+        await stopChild(fixture);
+        if (processIsAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      })());
+    onTestFinished(cleanup);
     try {
-      expect(processIsAlive(descendantPid)).toBe(true);
+      const fixture = await startingFixture;
+      const childPid = Number(await fs.readFile(descendantPidPath, "utf8"));
+      descendantPid = childPid;
+      expect(processIsAlive(childPid)).toBe(true);
 
       await stopChild(fixture);
 
-      await vi.waitFor(() => expect(processIsAlive(descendantPid)).toBe(false), { timeout: 1_000 });
+      await waitForDescendantExit(childPid, signal);
     } finally {
-      await stopChild(fixture);
-      if (processIsAlive(descendantPid)) {
-        process.kill(descendantPid, "SIGKILL");
-      }
+      await cleanup();
     }
   });
 });

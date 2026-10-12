@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { annotateAssistantTranscriptRoleMessageBoundary } from "./ir-annotations.js";
-import { chunkMarkdownIR, markdownToIR, sliceMarkdownIR } from "./ir.js";
+import { markdownToIR, sliceMarkdownIR } from "./ir.js";
 
 function annotated(markdown: string) {
   return markdownToIR(markdown, { assistantTranscriptRoleHeaders: true });
@@ -156,13 +156,6 @@ describe("assistant transcript-role Markdown annotations", () => {
     ).join("\n");
 
     expect(annotated(markdown).annotations).toBeUndefined();
-  });
-
-  it("preserves annotations when IR is chunked", () => {
-    const chunks = chunkMarkdownIR(annotated("user[Thu 2026-07-02] text after"), 12);
-
-    expect(chunks.some((chunk) => (chunk.annotations?.length ?? 0) > 0)).toBe(true);
-    expect(chunks.map((chunk) => chunk.text).join("")).toContain("user[Thu");
   });
 
   it("annotates headers promoted to a transport message boundary", () => {

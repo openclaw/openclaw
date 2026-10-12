@@ -14,16 +14,18 @@ import {
 } from "./session-accessor.sqlite-projection-read.js";
 import { resolveVisibleMessagePositions } from "./session-accessor.sqlite-reset-window.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { transcriptEventNavigationSql, transcriptEventRunIdSql } from "./transcript-payload.js";
+import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 // These derived facts omit transcript bodies and remain inside the admitted snapshot.
 const inputMessageJson =
   /* kysely-allow-raw: Project only input provenance and exact run correlation without hydrating message bodies. */
-  sql<string>`json_object('role', json_extract(event.event_json, '$.message.role'),
-    'idempotencyKey', json_extract(event.event_json, '$.message.idempotencyKey'),
-    'provenance', json_extract(event.event_json, '$.message.provenance'),
+  sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql("event")}, '$.message.role'),
+    'idempotencyKey', json_extract(${transcriptEventNavigationSql("event")}, '$.message.idempotencyKey'),
+    'provenance', json_extract(${transcriptEventNavigationSql("event")}, '$.message.provenance'),
     '__openclaw', json_object(
-      'runId', json_extract(event.event_json, '$.message.__openclaw.runId'),
-      'steerTargetRunId', json_extract(event.event_json, '$.message.__openclaw.steerTargetRunId')))`;
+      'runId', ${transcriptEventRunIdSql("event")},
+      'steerTargetRunId', json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.steerTargetRunId')))`;
 
 type RunInputVisibility =
   | { hidden: false }
@@ -77,7 +79,11 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
         .onRef("event.session_id", "=", "active.session_id")
         .onRef("event.seq", "=", "active.event_seq"),
     )
-    .select(["active.message_position", inputMessageJson.as("message_json")])
+    .select([
+      "active.message_position",
+      "event.navigation_valid",
+      inputMessageJson.as("message_json"),
+    ])
     .where("active.session_id", "=", projection.resolved.sessionId)
     .where("active.message_position", "<", projection.state.activeMessageCount)
     .where((eb) =>
@@ -88,11 +94,8 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
           ])
         : eb("active.message_position", ">=", visible.postStart),
     )
-    .where(
-      /* kysely-allow-raw: Validate the persisted role without materializing input bodies. */
-      sql<string>`json_extract(event.event_json, '$.message.role')`,
-      "=",
-      "user",
+    .where((eb) =>
+      eb.or([eb("event.message_role", "=", "user"), eb("event.navigation_valid", "=", 0)]),
     )
     .$narrowType<{ message_position: number }>();
   let readAfter = params.previous?.scannedThroughMessagePosition;
@@ -110,12 +113,13 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
           /* kysely-allow-raw: A steering admission cannot identify the input that originated its receiving run. */
           sql<
             string | null
-          >`json_extract(event.event_json, '$.message.__openclaw.steerTargetRunId')`,
+          >`json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.steerTargetRunId')`,
           "is",
           null,
         )
         .limit(1),
     );
+    assertTranscriptNavigationValid(anchor?.navigation_valid);
     if (!anchor || !params.isHiddenInput(JSON.parse(anchor.message_json))) {
       return { hidden: false };
     }
@@ -130,20 +134,16 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
       eb.or([
         eb(
           /* kysely-allow-raw: Match only steering committed to this exact run. */
-          sql<string>`json_extract(event.event_json, '$.message.__openclaw.steerTargetRunId')`,
+          sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.steerTargetRunId')`,
           "=",
           params.runId,
         ),
-        eb(
-          /* kysely-allow-raw: Retained user records can carry the receiving run explicitly. */
-          sql<string>`json_extract(event.event_json, '$.message.__openclaw.runId')`,
-          "=",
-          params.runId,
-        ),
+        eb(transcriptEventRunIdSql("event"), "=", params.runId),
       ]),
     )
     .orderBy("active.message_position", "asc");
   for (const row of iterateSqliteQuerySync(projection.database.db, laterInputs)) {
+    assertTranscriptNavigationValid(row.navigation_valid);
     if (!params.isHiddenInput(JSON.parse(row.message_json))) {
       const firstVisibleMessageSeq = resolveHistoryMessageSequence(
         visible,

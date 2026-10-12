@@ -9,10 +9,8 @@ import {
   isSameGatewayLockIdentity,
   readActiveGatewayLockIdentity,
 } from "../../infra/gateway-lock.js";
-import {
-  readGatewayOwnerLease,
-  type GatewayOwnerLeaseIdentity,
-} from "../../infra/gateway-owner-lease.js";
+import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
+import type { GatewayOwnerLeaseIdentity } from "../../infra/gateway-owner-lease.types.js";
 import {
   findVerifiedGatewayListenerPidsOnPortSync,
   formatGatewayPidList,
@@ -50,12 +48,6 @@ async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void>
   }
 }
 
-export function resolveVerifiedGatewayListenerPids(port: number): number[] {
-  return findVerifiedGatewayListenerPidsOnPortSync(port).filter(
-    (pid): pid is number => Number.isFinite(pid) && pid > 0,
-  );
-}
-
 export async function signalGatewayRestart(
   port: number,
   params: {
@@ -67,10 +59,10 @@ export async function signalGatewayRestart(
     env?: NodeJS.ProcessEnv;
   },
 ) {
-  if (params.enforceRestartConfig) {
-    await assertUnmanagedGatewayRestartEnabled(port);
-  }
-  const pids = resolveVerifiedGatewayListenerPids(port);
+  const restartIntent = params.restartIntent?.force
+    ? { force: true, drainBudgetMs: params.restartIntent.waitMs }
+    : params.restartIntent;
+  const pids = findVerifiedGatewayListenerPidsOnPortSync(port, { env: params.env });
   if (pids.length === 0) {
     return null;
   }
@@ -96,18 +88,12 @@ export async function signalGatewayRestart(
       `gateway lock identity does not match the verified listener on port ${port}; use "openclaw gateway status --deep" and restart through its supervisor or original terminal`,
     );
   }
-  const intentWritten = previousLockIdentity.ownerId
-    ? false
-    : writeGatewayRestartIntentSync({
-        targetPid: pid,
-        reason: "gateway.restart",
-        ...(params.restartIntent ? { intent: params.restartIntent } : {}),
-      });
-  if (!previousLockIdentity.ownerId && !intentWritten) {
-    throw new Error("failed to persist the gateway restart intent");
-  }
-  try {
+  const assertTargetCurrent = async () => {
     const currentLockIdentity = await readActiveGatewayLockIdentity({ env: params.env });
+    const currentPids = findVerifiedGatewayListenerPidsOnPortSync(port, { env: params.env });
+    if (currentPids.length !== 1 || currentPids[0] !== pid) {
+      throw new Error(`Gateway listener changed before restart on port ${port}`);
+    }
     if (
       !currentLockIdentity ||
       currentLockIdentity.pid !== pid ||
@@ -134,41 +120,48 @@ export async function signalGatewayRestart(
         throw new Error(`Foreground Gateway owner changed before restart on port ${port}`);
       }
     }
-    if (previousLockIdentity.ownerId) {
+  };
+  if (params.enforceRestartConfig) {
+    await assertTargetCurrent();
+    await assertUnmanagedGatewayRestartEnabled(port);
+    await assertTargetCurrent();
+  }
+  const intentWritten = previousLockIdentity.ownerId
+    ? false
+    : writeGatewayRestartIntentSync({
+        targetPid: pid,
+        reason: "gateway.restart",
+        ...(params.restartIntent ? { intent: params.restartIntent } : {}),
+      });
+  if (!previousLockIdentity.ownerId && !intentWritten) {
+    throw new Error("failed to persist the gateway restart intent");
+  }
+  try {
+    await assertTargetCurrent();
+    const ownerId = previousLockIdentity.ownerId;
+    if (ownerId || isWindows) {
+      // Pre-owner-ID Windows Gateways use the PID-bound persisted intent instead
+      // of target fields they do not understand. The exact port and lock stay verified.
       const result = await callGatewayCli<{ pid: number }>({
         method: "gateway.restart.request",
-        params: {
-          reason: "gateway.restart",
-          target: {
-            pid,
-            ownerId: previousLockIdentity.ownerId,
-            port,
-          },
-          ...(params.restartIntent ? { restartIntent: params.restartIntent } : {}),
-        },
+        params: ownerId
+          ? {
+              reason: "gateway.restart",
+              target: { pid, ownerId, port },
+              ...(restartIntent ? { restartIntent } : {}),
+            }
+          : { reason: "gateway.restart", skipDeferral: true },
         localPortOverride: port,
         ignoreEnvUrlOverride: true,
         timeoutMs: 10_000,
       });
-      expectDefined(result.pid === pid ? result : undefined, "invalid restart acknowledgement");
-    } else if (isWindows) {
-      // Gateways started before lock owner IDs were introduced do not understand the
-      // targeted payload. The exact loopback port plus the revalidated legacy lock is
-      // the strongest available target; the PID-bound persisted intent carries options.
-      await callGatewayCli({
-        method: "gateway.restart.request",
-        params: {
-          reason: "gateway.restart",
-          skipDeferral: true,
-        },
-        localPortOverride: port,
-        ignoreEnvUrlOverride: true,
-        timeoutMs: 10_000,
-      });
+      if (ownerId) {
+        expectDefined(result.pid === pid ? result : undefined, "invalid restart acknowledgement");
+      }
     } else {
       // Pre-owner-ID releases use SIGUSR1. Current Gateways always publish an
       // owner ID and receive targeted RPC, leaving SIGUSR1 to Node's debugger.
-      signalVerifiedGatewayPidSync(pid, "SIGUSR1");
+      signalVerifiedGatewayPidSync(pid, "SIGUSR1", { env: params.env, port });
     }
   } catch (err) {
     if (intentWritten) {

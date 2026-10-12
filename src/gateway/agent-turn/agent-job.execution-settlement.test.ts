@@ -11,6 +11,24 @@ import { getAgentJobSession, setGatewayDedupeEntry, waitForAgentJob } from "./ag
 let runSequence = 0;
 
 describe("waitForAgentJob settled execution", () => {
+  it("observes completed hidden refreshes without treating acceptance as completion", async () => {
+    const runId = `progress-card-refresh:completed-${runSequence++}`;
+    const dedupe = new Map<string, DedupeEntry>();
+    for (const status of ["accepted", "completed"] as const) {
+      setGatewayDedupeEntry({
+        dedupe,
+        key: `chat:${runId}`,
+        entry: { ts: Date.now(), ok: true, payload: { runId, status } },
+      });
+      const result = await waitForAgentJob({ runId, source: "chat", timeoutMs: 0 });
+      if (status === "accepted") {
+        expect(result).toBeNull();
+      } else {
+        expect(result).toMatchObject({ status: "ok" });
+      }
+    }
+  });
+
   it("normalizes an outer timeout after yield before publishing the wait snapshot", async () => {
     const runId = `outer-timeout-after-yield-${runSequence++}`;
     const waiter = waitForAgentJob({ runId, timeoutMs: 60_000 });
@@ -61,11 +79,20 @@ describe("waitForAgentJob settled execution", () => {
     vi.useRealTimers();
   });
 
-  it.each(["ok", "error", "timeout"] as const)(
-    "returns recorded reply evidence only after chat settles: %s",
-    async (status) => {
-      const runId = `chat-recorded-reply-${runSequence++}`;
-      const terminalReply = { disposition: "visible", text: "The requested answer" } as const;
+  it.each([
+    ["agent", true, "ok", { disposition: "visible", text: "Recorded reply" }],
+    ["agent", false, "ok", { disposition: "visible", text: "Recorded reply" }],
+    ["chat", true, "error", { disposition: "visible", text: "Recorded reply" }],
+    ["chat", true, "timeout", { disposition: "visible", text: "Recorded reply" }],
+    ["chat", false, "ok", { disposition: "silent" }],
+    ["chat", false, "ok", { disposition: "empty", code: "message-tool-not-called" }],
+  ] as const)(
+    "keeps %s timing and reply evidence (lifecycle first=%s, status=%s, reply=%j)",
+    async (source, lifecycleFirst, status, terminalReply) => {
+      const runId = `execution-timing-${runSequence++}`;
+      const dedupe = new Map<string, DedupeEntry>();
+      const publishedAt = Date.now();
+      const entry = { ts: publishedAt, ok: status === "ok", payload: { runId, status } };
       const terminalReceipt = {
         runId,
         sessionId: "session-a",
@@ -76,53 +103,102 @@ describe("waitForAgentJob settled execution", () => {
         rerouted: false,
         terminalDisposition: "visible",
       };
-      const waiter = waitForAgentJob({ runId, source: "chat", timeoutMs: 60_000 });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "end", executionSettled: true, terminalReply, terminalReceipt },
+      const waiter = lifecycleFirst
+        ? waitForAgentJob({ runId, source, timeoutMs: 60_000 })
+        : undefined;
+      const recordLifecycle = () =>
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: {
+            phase: "end",
+            executionSettled: true,
+            startedAt: 100,
+            endedAt: 200,
+            terminalReply,
+            terminalReceipt,
+          },
+        });
+      if (lifecycleFirst) {
+        recordLifecycle();
+        await expect(waitForAgentJob({ runId, source, timeoutMs: 0 })).resolves.toBeNull();
+      }
+      setGatewayDedupeEntry({ dedupe, key: `${source}:${runId}`, entry });
+      if (!lifecycleFirst) {
+        recordLifecycle();
+      }
+      const expected = {
+        status,
+        startedAt: 100,
+        endedAt: status === "ok" ? 200 : publishedAt,
+        terminalReply,
+        terminalReceipt,
+      };
+      if (waiter) {
+        await expect(waiter).resolves.toMatchObject(expected);
+      }
+      for (const selectedSource of [undefined, source]) {
+        await expect(
+          waitForAgentJob({ runId, source: selectedSource, timeoutMs: 0 }),
+        ).resolves.toMatchObject(expected);
+      }
+      expect(dedupe.get(`${source}:${runId}`)).toBe(entry);
+      await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
+      await expect(waitForAgentJob({ runId, source, timeoutMs: 0 })).resolves.toMatchObject({
+        endedAt: expected.endedAt,
       });
-      // Runtime completion must not release the chat delivery barrier.
-      await expect(waitForAgentJob({ runId, source: "chat", timeoutMs: 0 })).resolves.toBeNull();
-      setGatewayDedupeEntry({
-        dedupe: new Map<string, DedupeEntry>(),
-        key: `chat:${runId}`,
-        entry: { ts: Date.now(), ok: status === "ok", payload: { runId, status } },
-      });
-      await expect(waiter).resolves.toMatchObject({ status, terminalReply, terminalReceipt });
-      await expect(waitForAgentJob({ runId, source: "chat", timeoutMs: 0 })).resolves.toMatchObject(
-        {
-          status,
-          terminalReply,
-          terminalReceipt,
-        },
-      );
+      await vi.advanceTimersByTimeAsync(2);
+      await expect(waitForAgentJob({ runId, source, timeoutMs: 0 })).resolves.toBeNull();
     },
   );
 
   it.each([
-    { disposition: "visible", text: "Recorded reply" },
-    { disposition: "silent" },
-    { disposition: "empty", code: "message-tool-not-called" },
-  ] as const)("preserves late lifecycle reply disposition: $disposition", async (terminalReply) => {
-    const runId = `chat-late-reply-${runSequence++}`;
-    setGatewayDedupeEntry({
-      dedupe: new Map<string, DedupeEntry>(),
-      key: `chat:${runId}`,
-      entry: { ts: Date.now(), ok: true, payload: { runId, status: "ok" } },
-    });
+    "new attempt",
+    "different session",
+    "different generation",
+    "expired lifecycle",
+  ] as const)("does not borrow timing from a %s", async (change) => {
+    const runId = `execution-timing-fence-${runSequence++}`;
+    const dedupe = new Map<string, DedupeEntry>();
+    const original = {
+      agentId: "main",
+      sessionKey: "agent:main:original",
+      sessionId: "original",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    };
     emitAgentEvent({
       runId,
+      ...original,
       stream: "lifecycle",
-      data: {
-        phase: "end",
-        executionSettled: true,
-        terminalReply,
-      },
+      data: { phase: "end", executionSettled: true, startedAt: 100, endedAt: 200 },
     });
-    await expect(waitForAgentJob({ runId, source: "chat", timeoutMs: 0 })).resolves.toMatchObject({
+    if (change === "new attempt") {
+      setGatewayDedupeEntry({
+        dedupe,
+        key: `agent:${runId}`,
+        startNewAttempt: true,
+        entry: { ts: Date.now(), ok: true, payload: { runId, status: "accepted" } },
+      });
+    } else if (change === "expired lifecycle") {
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
+    }
+    const session =
+      change === "different session"
+        ? { ...original, sessionKey: "agent:main:replacement", sessionId: "replacement" }
+        : change === "different generation"
+          ? { ...original, lifecycleGeneration: "replacement-generation" }
+          : original;
+    const publishedAt = Date.now();
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `agent:${runId}`,
+      session,
+      entry: { ts: publishedAt, ok: true, payload: { runId, status: "ok" } },
+    });
+    await expect(waitForAgentJob({ runId, source: "agent", timeoutMs: 0 })).resolves.toMatchObject({
       status: "ok",
-      terminalReply,
+      startedAt: undefined,
+      endedAt: publishedAt,
     });
   });
 

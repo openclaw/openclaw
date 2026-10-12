@@ -1,5 +1,3 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
-
 export type LobsterSceneLane = { start: number; end: number; y: number };
 export type LobsterSceneTravel = {
   from: { x: number; y: number };
@@ -116,20 +114,19 @@ export function lobsterLanePoint(lane: LobsterSceneLane | null, pct: number) {
 
 // Geometry has one lifecycle owner. Observers never watch pet mutations, and
 // queued measurements cannot revive a detached host or reroll a visit.
-export class LobsterComposerGeometry implements ReactiveController {
+export class LobsterComposerGeometry {
   scene: LobsterComposerScene = { top: null, floor: null, passage: null };
   private resize: ResizeObserver | null = null;
   private mutation: MutationObserver | null = null;
   private active = false;
-  private queued = false;
+  private frame: number | null = null;
   private observed: Element[] = [];
 
   constructor(
-    private readonly host: ReactiveControllerHost & HTMLElement,
+    private readonly host: HTMLElement,
     private readonly twins: () => boolean,
-  ) {
-    host.addController(this);
-  }
+    private readonly notify: () => void,
+  ) {}
 
   planWalk(anchor: "top" | "floor", spotPct: number, roll: number): LobsterSceneMove | null {
     const lane = this.scene[anchor];
@@ -184,10 +181,11 @@ export class LobsterComposerGeometry implements ReactiveController {
     };
   }
 
-  hostConnected() {
+  connect() {
     this.active = true;
     if (typeof ResizeObserver !== "undefined") {
-      this.resize = new ResizeObserver(this.scheduleMeasure);
+      // ResizeObserver runs after layout; keep collision lanes current for this paint.
+      this.resize = new ResizeObserver(() => this.measure());
     } else {
       window.addEventListener("resize", this.scheduleMeasure);
     }
@@ -213,8 +211,12 @@ export class LobsterComposerGeometry implements ReactiveController {
     this.scheduleMeasure();
   }
 
-  hostDisconnected() {
+  dispose() {
     this.active = false;
+    if (this.frame !== null) {
+      cancelAnimationFrame(this.frame);
+      this.frame = null;
+    }
     this.resize?.disconnect();
     this.resize = null;
     this.mutation?.disconnect();
@@ -224,19 +226,22 @@ export class LobsterComposerGeometry implements ReactiveController {
   }
 
   readonly scheduleMeasure = () => {
-    if (!this.active || this.queued) {
+    if (!this.active || this.frame !== null) {
       return;
     }
-    this.queued = true;
-    queueMicrotask(() => {
-      this.queued = false;
-      if (this.active && this.host.isConnected) {
-        this.measure();
-      }
-    });
+    // Menu insertion schedules more custom-element updates. A microtask read
+    // flushes their unfinished styles, then the same rows need layout again.
+    this.frame = requestAnimationFrame(() => this.measure());
   };
 
   private measure() {
+    if (this.frame !== null) {
+      cancelAnimationFrame(this.frame);
+      this.frame = null;
+    }
+    if (!this.active || !this.host.isConnected) {
+      return;
+    }
     const composer = this.host.parentElement;
     if (!composer?.matches(".agent-chat__input")) {
       return;
@@ -304,7 +309,7 @@ export class LobsterComposerGeometry implements ReactiveController {
     this.host.toggleAttribute("data-scene-ready", next.top !== null);
     if (JSON.stringify(next) !== JSON.stringify(this.scene)) {
       this.scene = next;
-      this.host.requestUpdate();
+      this.notify();
     }
   }
 }

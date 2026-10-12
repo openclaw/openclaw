@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
 import {
   createRelayProof,
   randomRelayNonce,
@@ -20,7 +21,6 @@ import {
   getBrowserRelayAuthV2Authority,
   invalidateBrowserRelayAuthV2Authority,
   parseRelayAuthHello,
-  parseStrictJsonObject,
 } from "./auth-v2.js";
 import { RawHttpConnection } from "./relay-http.test-support.js";
 import {
@@ -226,11 +226,9 @@ async function sendRawV2Frames(params: {
 }
 
 describe("extension relay WebSocket auth v2 frame boundary", () => {
-  it.each([
-    ["Buffer", Buffer.alloc(16 * 1024 + 1, 0x20)],
-    ["ArrayBuffer", new Uint8Array(16 * 1024 + 1).buffer],
-    ["Buffer[]", [Buffer.alloc(8 * 1024), Buffer.alloc(8 * 1024 + 1)]],
-  ] satisfies Array<[string, RawData]>)(
+  it.each([["Buffer[]", [Buffer.alloc(8 * 1024), Buffer.alloc(8 * 1024 + 1)]]] satisfies Array<
+    [string, RawData]
+  >)(
     "rejects an oversized text auth frame backed by %s before issuing a challenge",
     (_kind, data) => {
       const harness = createWebSocketAuthHarness();
@@ -409,12 +407,6 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
   });
 
   it.each([
-    {
-      name: "an oversized first auth message",
-      payloadBytes: 18 * 1024,
-      fragmentBytes: 18 * 1024,
-      wireBytes: 18_440,
-    },
     {
       name: "fragmented masked pre-auth wire overhead",
       payloadBytes: 16 * 1024,

@@ -729,10 +729,13 @@ describe.skipIf(process.platform === "win32")(
               clientFactory: shared.factory,
               nativeHookRelay: { enabled: false },
             };
-            const initialized = await runCodexAppServerAttempt(
-              { ...params, prompt: "Initialize the source." },
-              runOptions,
-            );
+            // Both turns use production process policy with separate run authorities.
+            const initialParams = { ...params, prompt: "Initialize the source." };
+            const closeInitialHost =
+              await bindProductionHarnessHostCapabilitiesForTest(initialParams);
+            cleanups.push(async () => closeInitialHost());
+            const initialized = await runCodexAppServerAttempt(initialParams, runOptions);
+            closeInitialHost();
             expect(initialized.terminal).toEqual({ kind: "ok" });
             const initialBinding = await readCodexAppServerBinding(params.sessionFile);
             if (!initialBinding) {
@@ -761,7 +764,6 @@ describe.skipIf(process.platform === "win32")(
             fixture.setPhase("action");
             params.runId = "run-settled-action";
             if (hidden) {
-              params.agentId = "main";
               params.prompt =
                 "Background task completed. Use exec_command exactly once to run " +
                 "`printf 'completed-once\\n' >> completed-actions.txt; cat completed-actions.txt`, " +

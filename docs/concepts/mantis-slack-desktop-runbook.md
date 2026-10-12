@@ -42,6 +42,12 @@ Mantis uses three storage layers:
 Never bake secrets, browser cookies, Slack login state, repository checkouts,
 `node_modules`, or `dist/` into a provider image.
 
+Reusing `--output-dir` replaces the current run's evidence while preserving unrelated
+diagnostics and unselected approval checkpoints. Each run determines its verdict from
+its own staged incoming artifacts. Concurrent runs sharing fixed output paths can
+interleave files and summaries. Concurrent runs must use separate output directories
+when they need coherent per-run bundles.
+
 ## GitHub dispatch
 
 Run the workflow from `main`:

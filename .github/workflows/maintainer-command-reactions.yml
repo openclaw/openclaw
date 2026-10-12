@@ -14,10 +14,10 @@ jobs:
   react:
     # Custom commands may be any text; only defaults require a slash.
     if: >-
-      ${{
+      ${{ (
         !endsWith(github.actor, '[bot]') &&
         (vars.MAINTAINER_COMMAND_REACTIONS != '' || contains(github.event.comment.body, '/'))
-      }}
+      ) }}
     runs-on: ubuntu-24.04
     permissions:
       issues: write

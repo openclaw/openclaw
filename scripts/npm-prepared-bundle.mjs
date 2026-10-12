@@ -14,7 +14,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import {
@@ -22,6 +22,10 @@ import {
   inspectActionsArtifactZipWithPolicy,
   readBoundedRegularFile,
 } from "./lib/actions-artifact-archive.mjs";
+import {
+  collectPublishableCorePackages,
+  CORE_PACKAGE_POLICY,
+} from "./lib/npm-core-release-packages.mjs";
 import { assertNpmShrinkwrapDependencies } from "./lib/npm-shrinkwrap-dependencies.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveReleaseTagPackageIdentity } from "./lib/release-version.mjs";
@@ -47,15 +51,12 @@ const CALLER_WORKFLOWS = new Set([
   ".github/workflows/full-release-candidate.yml",
   ".github/workflows/full-release-artifacts.yml",
 ]);
-const CORE_PACKAGE_POLICY = JSON.parse(
-  readFileSync(new URL("./lib/npm-core-release-packages.json", import.meta.url), "utf8"),
-);
 const CORE_PACKAGES = CORE_PACKAGE_POLICY.map((entry) => entry.name);
 const MAX_TARBALL_BYTES = 192 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
-// SDK evidence embeds complete declaration diffs, which have exceeded 4 MiB.
+// SDK evidence embeds complete declaration diffs, which have exceeded 16 MiB.
 // Qualified manifests carry that evidence; raw package descriptors do not.
-const MAX_SDK_EVIDENCE_BYTES = 16 * 1024 * 1024;
+const MAX_SDK_EVIDENCE_BYTES = 32 * 1024 * 1024;
 
 function requireMatch(value, pattern, label) {
   if (typeof value !== "string" || !pattern.test(value)) {
@@ -93,7 +94,7 @@ function readJson(path, maxBytes = MAX_MANIFEST_BYTES) {
 }
 
 function writeJson(path, value) {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+  writeFileSync(path, `${JSON.stringify(value)}\n`);
 }
 
 function same(left, right, label) {
@@ -693,6 +694,44 @@ function normalizePackModes(directory) {
   }
 }
 
+function runPackagePack(directory, destination, releaseRef, prepareRoot) {
+  const options = {
+    cwd: directory,
+    env: {
+      ...process.env,
+      OPENCLAW_PREPACK_PREPARED: "1",
+      ...(/^[a-f0-9]{40}$/u.test(releaseRef)
+        ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
+        : {}),
+    },
+    stdio: "inherit",
+    timeout: 30 * 60 * 1000,
+  };
+  if (prepareRoot) {
+    execFileSync("pnpm", ["run", "prepack"], options);
+  }
+  try {
+    prepareRoot?.();
+    // Bundled dependencies require the hoisted linker. Root bytes are already
+    // sealed after prepack; other packages keep their pack hooks enabled.
+    execFileSync(
+      "pnpm",
+      [
+        "pack",
+        ...(prepareRoot ? ["--config.ignore-scripts=true"] : []),
+        "--config.node-linker=hoisted",
+        "--pack-destination",
+        destination,
+      ],
+      options,
+    );
+  } finally {
+    if (prepareRoot) {
+      execFileSync("pnpm", ["run", "--if-present", "postpack"], options);
+    }
+  }
+}
+
 export function prepareNpmPackageBundle({
   sourceDir,
   outputDir,
@@ -700,6 +739,32 @@ export function prepareNpmPackageBundle({
   releaseTag: requestedReleaseTag = "",
   npmDistTag,
   producer,
+  sanitizeRootDeclarations = (distRoot) => {
+    const toolingScriptsDir = dirname(fileURLToPath(import.meta.url));
+    // Frozen candidates can own an older compiler API. The release tooling
+    // parses candidate text with its pinned parser, matching other frozen-target checks.
+    execFileSync(
+      process.execPath,
+      [
+        "--import",
+        join(toolingScriptsDir, "tsx.mjs"),
+        join(toolingScriptsDir, "lib/sanitize-bundler-helper-dts-exports.mts"),
+        distRoot,
+      ],
+      { cwd: sourceDir, stdio: "inherit" },
+    );
+  },
+  refreshRootDistInventory = (directory) => {
+    execFileSync(
+      process.execPath,
+      [
+        "--import",
+        join(sourceDir, "scripts/tsx.mjs"),
+        join(sourceDir, "scripts/write-package-dist-inventory.ts"),
+      ],
+      { cwd: directory, stdio: "inherit" },
+    );
+  },
   prepareRootShrinkwrap = ({ aiTarballPath }) => {
     execFileSync(
       process.execPath,
@@ -712,17 +777,14 @@ export function prepareNpmPackageBundle({
       { cwd: sourceDir, stdio: "inherit" },
     );
   },
-  runPack = (directory, destination) =>
-    execFileSync("pnpm", ["--dir", directory, "pack", "--pack-destination", destination], {
-      env: {
-        ...process.env,
-        OPENCLAW_PREPACK_PREPARED: "1",
-        ...(/^[a-f0-9]{40}$/u.test(releaseRef)
-          ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
-          : {}),
-      },
-      stdio: "inherit",
-      timeout: 30 * 60 * 1000,
+  runPack = (directory, destination) => runPackagePack(directory, destination, releaseRef),
+  runRootPack = (directory, destination) =>
+    runPackagePack(directory, destination, releaseRef, () => {
+      // Frozen prepack hooks may rebuild dist even when preparation already ran.
+      // Sanitize the final declarations and refresh their hashes, then disable
+      // pack hooks so those exact bytes and inventory stay sealed.
+      sanitizeRootDeclarations(join(directory, "dist"));
+      refreshRootDistInventory(directory);
     }),
 }) {
   const { sourceSha, root, releaseTag, baseTag } = readReleaseSourceIdentity({
@@ -745,9 +807,9 @@ export function prepareNpmPackageBundle({
   }
   // Preserve non-root installs before hashing; qualified consumers never rewrite the archive.
   normalizePackModes(sourceDir);
-  const pack = (directory, packageName) => {
+  const pack = (directory, packageName, packer = runPack) => {
     const before = new Set(readdirSync(outputDir));
-    runPack(directory, outputDir);
+    packer(directory, outputDir);
     const added = readdirSync(outputDir).filter((name) => !before.has(name));
     if (added.length !== 1) {
       throw new Error(`Expected one new tarball for ${packageName}.`);
@@ -787,24 +849,9 @@ export function prepareNpmPackageBundle({
       ),
     };
   };
-  const corePackageTarballs = CORE_PACKAGE_POLICY.flatMap((policy) => {
-    const packageName = policy.name;
-    const directory = join(sourceDir, policy.path);
-    if (policy.dependency) {
-      if (typeof root.dependencies?.[policy.dependency] !== "string") {
-        return [];
-      }
-    } else if (
-      !existsSync(join(directory, "package.json")) ||
-      readJson(join(directory, "package.json")).openclaw?.release?.publishToNpm !== true
-    ) {
-      return [];
-    }
-    if (readJson(join(directory, "package.json")).version !== root.version) {
-      throw new Error(`Core package version mismatch: ${packageName}.`);
-    }
-    return [pack(directory, packageName)];
-  });
+  const corePackageTarballs = collectPublishableCorePackages(sourceDir, root).map((policy) =>
+    pack(join(sourceDir, policy.path), policy.name),
+  );
   const aiPackage = corePackageTarballs.find(({ packageName }) => packageName === "@openclaw/ai");
   const hasRootShrinkwrap = existsSync(join(sourceDir, "npm-shrinkwrap.json"));
   if (aiPackage && hasRootShrinkwrap) {
@@ -812,7 +859,7 @@ export function prepareNpmPackageBundle({
       aiTarballPath: join(outputDir, aiPackage.tarballName),
     });
   }
-  const packed = pack(sourceDir, "openclaw");
+  const packed = pack(sourceDir, "openclaw", runRootPack);
   const manifest = {
     schema: PACKAGE_MANIFEST_SCHEMA,
     producer,

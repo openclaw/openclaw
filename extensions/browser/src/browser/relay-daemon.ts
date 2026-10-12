@@ -1,7 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { getRuntimeConfig } from "../config/config.js";
-import { extractErrorCode } from "../infra/errors.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { readExtensionRelayToken } from "./extension-relay/relay-auth.js";
 import {
@@ -33,7 +33,6 @@ type RelayDaemonRun = {
  */
 export async function runExtensionRelayDaemon(params: {
   port: number;
-  readToken?: () => string | null;
   /**
    * Accept the legacy one-directional relay auth (Bearer/Basic/token
    * subprotocol). Defaults to false: the standalone daemon is v2-only, so a
@@ -42,18 +41,12 @@ export async function runExtensionRelayDaemon(params: {
    * silently reverted. The extension and mcporter both speak v2.
    */
   allowLegacyAuth?: boolean;
-  idleExitMs?: number;
-  pollMs?: number;
-  now?: () => number;
 }): Promise<RelayDaemonRun> {
-  const readToken = params.readToken ?? readExtensionRelayToken;
   const allowLegacyAuth = params.allowLegacyAuth ?? false;
-  const now = params.now ?? Date.now;
-  const idleExitMs = params.idleExitMs ?? RELAY_DAEMON_IDLE_EXIT_MS;
-  const pollMs = params.pollMs ?? IDLE_POLL_MS;
+  const now = Date.now;
   const completion = createDeferred<RelayDaemonExitReason>();
 
-  const token = readToken();
+  const token = readExtensionRelayToken();
   if (!token) {
     log.warn("relay daemon refused to start: no extension relay credential");
     completion.resolve("no-credential");
@@ -101,11 +94,11 @@ export async function runExtensionRelayDaemon(params: {
       lastActiveAtMs = now();
       return;
     }
-    if (now() - lastActiveAtMs >= idleExitMs) {
+    if (now() - lastActiveAtMs >= RELAY_DAEMON_IDLE_EXIT_MS) {
       log.info("relay daemon idle (no extension, no CDP clients); exiting");
       finish("idle");
     }
-  }, pollMs);
+  }, IDLE_POLL_MS);
   idleTimer.unref?.();
 
   return {

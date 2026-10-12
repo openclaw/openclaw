@@ -22,8 +22,9 @@ How Slack conversations map to OpenClaw sessions, and where replies land.
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
 - `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable). Room thread seeding is also bounded by `historyLimit`.
 - `channels.slack.implicitMentions.replyToBot` controls whether a reply to the bot's own message bypasses mention gating (default `true`).
-- `channels.slack.implicitMentions.threadParticipation` controls whether follow-ups in a thread where the bot has replied bypass mention gating (default `true`). Set it to `false` to require a new explicit mention in those follow-ups. `openclaw doctor --fix` migrates the former `channels.slack.thread.requireExplicitMention` key to this positive canonical flag.
+- `channels.slack.implicitMentions.threadParticipation` controls whether follow-ups in a thread where the bot has replied bypass mention gating (default `true`). Set it to `false` to require a new explicit mention in those follow-ups. `openclaw doctor --fix` migrates the former `channels.slack.thread.requireExplicitMention` key to this positive flag.
 - Account overrides live at `channels.slack.accounts.<id>.implicitMentions`; shared defaults live at `channels.defaults.implicitMentions`.
+- `requireMentionInBotThreads` overrides mention gating in threads started by this bot: `false` allows unmentioned replies; `true` requires a mention regardless of implicit reply or participation signals. Configure it at the Slack root, account, or channel scope. Omit it to retain the implicit-mention behavior above. Threads started by other people keep their normal policy. See [bot-created thread setup](/channels/slack/access-control#bot-created-threads).
 
 Reply threading controls:
 
@@ -63,6 +64,17 @@ The marker is durable and keyed by account, workspace, and Slack app ID, so Agen
 Admitted channel and group turns fetch a recent window from Slack, including after
 a Gateway restart. `channels.slack.historyLimit` bounds the window (default `50`,
 with `messages.groupChat.historyLimit` as a fallback). Account overrides apply.
+Automatic observed-message windows are capped at 200 messages; the JSON integer
+maximum (`9007199254740991`) selects the 50-message default.
+
+For observed DM context, `dmHistoryLimit` and `dms.<userId>.historyLimit` use a
+default of `0` (disabled) and a maximum of 200 messages. The JSON integer maximum
+selects that disabled default, including for a per-DM override.
+
+These saved fields also control embedded session transcript trimming in user
+turns, where `0` means no trimming and the existing eviction cushion still
+applies. Doctor preserves the configured values; the observed-message ceiling
+does not impose a new transcript-turn ceiling.
 With `requireMention: true`, messages that do not satisfy the configured mention
 or implicit-mention gates do not start agent turns or automatic history reads.
 

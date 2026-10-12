@@ -1,7 +1,8 @@
 // Host-owned authorization for exact delegated OpenClaw changes.
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
-import { isPersistentSystemAgentOperation, type SystemAgentOperation } from "./operations-parse.js";
+import type { SystemAgentOperation } from "./operation-types.js";
+import { isPersistentSystemAgentOperation } from "./operations-parse.js";
 
 export type SystemAgentProposalRef = { current?: string; operation?: SystemAgentOperation };
 

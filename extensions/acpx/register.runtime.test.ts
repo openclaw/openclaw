@@ -25,7 +25,6 @@ const { realRuntime, realServiceStartMock, realServiceStopMock, createRealServic
       async cancel() {},
       async close() {},
       isHealthy: vi.fn(() => true),
-      probeAvailability: vi.fn(async () => {}),
     };
     const start = vi.fn(async (_ctx: unknown, backendLifecycle?: BackendLifecycle) => {
       if (backendLifecycle) {
@@ -137,7 +136,7 @@ describe("acpx register runtime service", () => {
       }),
     );
     expect(realServiceStartMock).toHaveBeenCalledWith(ctx, expect.any(Object));
-    expect(runtimeRegistry.get("acpx")?.runtime).toBe(realRuntime);
+    expect(runtimeRegistry.get("acpx")?.runtime).toBe(deferredRuntime);
     expect(ctx.logger.info).toHaveBeenCalledWith("embedded acpx runtime backend registered lazily");
 
     await service.stop?.(ctx as never);
@@ -226,7 +225,7 @@ describe("acpx register runtime service", () => {
       (error: unknown) => error,
     );
     await published.promise;
-    expect(runtimeRegistry.get("acpx")?.runtime).toBe(realRuntime);
+    expect(runtimeRegistry.get("acpx")?.runtime).toBe(deferredRuntimeA);
 
     let concurrentCallSettled = false;
     const concurrentCallResult = deferredRuntimeA

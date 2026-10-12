@@ -1,9 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { Worker } from "node:worker_threads";
+import { setEnvironmentData, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptWorkerClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   encodeSessionArchiveContent,
@@ -14,13 +20,14 @@ import {
   closeOpenClawAgentDatabasesAsync,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { writeSessionCostUsageRollupInDatabase } from "./session-cost-usage-cache.kernel.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import {
   discoverAllSessions,
-  loadCostUsageSummaryFromCache,
+  loadCostUsageSummary,
   loadSessionCostSummary,
   loadSessionCostSummariesFromCache,
   loadSessionUsageTimeSeries,
@@ -28,6 +35,13 @@ import {
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
 
 function requireValue<T>(value: T | null | undefined, message: string): T {
   if (value == null) {
@@ -50,11 +64,13 @@ async function withUsageWorkerPreload(
   operation: () => Promise<void>,
 ) {
   await closeOpenClawAgentDatabasesAsync();
+  await closeStateDatabaseForTest();
   await withEnvAsync({ OPENCLAW_STATE_DIR: root, ...sqliteWorkerPreloadEnv(preload) }, async () => {
     try {
       await operation();
     } finally {
       await closeOpenClawAgentDatabasesAsync();
+      await closeStateDatabaseForTest();
     }
   });
 }
@@ -91,7 +107,7 @@ if (!isMainThread) {
       for (const method of ["all", "get", "iterate"]) {
         const original = statement[method];
         statement[method] = function(...args) {
-          if (!args.includes("session-cost-usage-rollup-v2")) {
+          if (!args.includes("session-cost-usage-rollup-v3")) {
             return Reflect.apply(original, this, args);
           }
           record({ kind: "cache" });
@@ -187,7 +203,9 @@ describe("session cost usage worker I/O", () => {
     },
   );
 
-  it("joins compressed archive materialization before settling summary cancellation", async () => {
+  it("joins compressed archive materialization before settling summary cancellation", async ({
+    signal,
+  }) => {
     const root = tempDirs.make("openclaw-usage-worker-native-archive-");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -204,26 +222,32 @@ describe("session cost usage worker I/O", () => {
     );
     await fs.writeFile(archive, encoded.bytes);
     const entered = path.join(root, "native-entered");
-    const released = path.join(root, "native-release");
+    const release = new Int32Array(new SharedArrayBuffer(4));
+    setEnvironmentData(entered, release.buffer);
+    const releaseNative = () => {
+      Atomics.store(release, 0, 1);
+      Atomics.notify(release, 0);
+    };
     const completed = path.join(root, "native-completed");
     const preload = path.join(root, "hold-archive-native.cjs");
     await fs.writeFile(
       preload,
       `const fs = require("node:fs");
 const zlib = require("node:zlib");
-const { isMainThread, threadId } = require("node:worker_threads");
+const { getEnvironmentData, isMainThread, threadId } = require("node:worker_threads");
+${fixtureReceiptWorkerClientSource(receipts.broadcastName).replace(
+  'import { BroadcastChannel as FixtureReceiptBroadcastChannel } from "node:worker_threads";',
+  'const { BroadcastChannel: FixtureReceiptBroadcastChannel } = require("node:worker_threads");',
+)}
 if (!isMainThread) {
   const compressed = Buffer.from(${JSON.stringify(encoded.bytes.toString("base64"))}, "base64");
   const decompress = zlib.zstdDecompressSync;
   zlib.zstdDecompressSync = function(bytes, ...args) {
     if (!Buffer.from(bytes).equals(compressed)) return Reflect.apply(decompress, this, [bytes, ...args]);
     fs.writeFileSync(${JSON.stringify(entered)}, String(threadId));
-    const deadline = Date.now() + 10000;
-    const pause = new Int32Array(new SharedArrayBuffer(4));
-    while (!fs.existsSync(${JSON.stringify(released)})) {
-      if (Date.now() >= deadline) throw new Error("Archive native gate timed out");
-      Atomics.wait(pause, 0, 0, 10);
-    }
+    sendReceipt(${JSON.stringify(entered)}, "entered");
+    const release = new Int32Array(getEnvironmentData(${JSON.stringify(entered)}));
+    while (Atomics.load(release, 0) === 0) Atomics.wait(release, 0, 0);
     const result = Reflect.apply(decompress, this, [bytes, ...args]);
     fs.writeFileSync(${JSON.stringify(completed)}, "complete");
     return result;
@@ -248,12 +272,15 @@ if (!isMainThread) {
           return result;
         });
         try {
-          await vi.waitFor(
-            async () => expect(Number(await fs.readFile(entered, "utf8"))).toBeGreaterThan(0),
-            {
-              interval: 5,
-              timeout: 10_000,
-            },
+          // The marker precedes both the receipt and any summary settlement.
+          await withinTest(
+            Promise.race([
+              receipts.waitFor(entered, "entered"),
+              outcome.then(async () => {
+                expect(Number(await fs.readFile(entered, "utf8"))).toBeGreaterThan(0);
+              }),
+            ]),
+            signal,
           );
           const dispatch = posts.mock.calls.findIndex(
             ([message]) =>
@@ -281,7 +308,7 @@ if (!isMainThread) {
           expect(drainSettled).toBe(false);
           expect(worker.threadId).toBeGreaterThan(0);
           expect(termination).toBe(-1);
-          await fs.writeFile(released, "release");
+          releaseNative();
           expect(await outcome).toMatchObject({ status: "rejected" });
           await draining;
           expect(await fs.readFile(completed, "utf8")).toBe("complete");
@@ -289,7 +316,7 @@ if (!isMainThread) {
           expect(scope.hasPendingWork).toBe(false);
         } finally {
           try {
-            await fs.writeFile(released, "release");
+            releaseNative();
           } finally {
             scope.beginClose(reason);
             try {
@@ -303,6 +330,7 @@ if (!isMainThread) {
         }
       });
     } finally {
+      setEnvironmentData(entered, undefined);
       await fs.rm(archive, { force: true });
       expect(() => materializeSessionArchiveForRead(archive)).toThrow(/ENOENT/);
     }
@@ -448,11 +476,10 @@ if (!isMainThread) {
       sessions.map((session) => session.sessionFile),
     );
     await probe.run(async () => {
-      const warmed = await loadCostUsageSummaryFromCache({
+      const warmed = await loadCostUsageSummary({
         agentId: "main",
         startMs: Date.UTC(2026, 1, 5),
         endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
-        refreshMode: "sync-when-empty",
       });
       expect(warmed.cacheStatus?.status).toBe("fresh");
       expect(warmed.totals.missingCostByModel).toEqual({ "custom/unpriced-batch": 2 });
@@ -492,6 +519,7 @@ if (!isMainThread) {
               rollupId: path.join(sessionsDir, "unrequested.jsonl"),
               previousValueJson: null,
               valueJson: unrelatedValue,
+              blob: null,
               updatedAt: selectedRow.updatedAt,
             }),
           { agentId: "main" },
@@ -516,15 +544,18 @@ if (!isMainThread) {
         ["2026-02-06"],
       ]);
       const reads = await probe.read();
-      expect(reads.filter((entry) => entry.kind === "cache")).toHaveLength(1);
+      expect(reads.filter((entry) => entry.kind === "cache")).toHaveLength(3);
       expect(reads.filter((entry) => entry.kind === "transcript")).toEqual([]);
       const cacheRows = reads.filter((entry) => entry.kind === "cache-row");
       const returnedBytes = cacheRows.reduce((total, row) => total + row.valueBytes, 0);
       expect(returnedBytes, "selected cache JSON bytes").toBeGreaterThan(0);
       expect(returnedBytes, "selected cache JSON bytes").toBeLessThan(16 * 1_024);
-      expect(cacheRows.map((row) => row.key).toSorted()).toEqual(
-        sessions.map((session) => session.sessionFile).toSorted(),
-      );
+      expect(
+        cacheRows
+          .filter((row) => row.valueBytes > 0)
+          .map((row) => row.key)
+          .toSorted(),
+      ).toEqual(sessions.map((session) => session.sessionFile).toSorted());
     });
   });
 });

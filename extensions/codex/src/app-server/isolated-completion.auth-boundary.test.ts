@@ -8,7 +8,7 @@ import { CodexAppServerClient } from "./client.js";
 import { turnStartResult } from "./codex-app-server.test-fixtures.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { runCodexIsolatedCompletion } from "./isolated-completion.js";
-import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -30,14 +30,14 @@ const storedProfile: AuthProfileStore = {
   },
 };
 
-function createParams(agentDir: string, withProfile: boolean): IsolatedParams {
+function createParams(agentDir: string): IsolatedParams {
   return {
     authorization: {
       owner: "harness",
       plan: {
         providerForAuth: "openai",
         authProfileProviderForAuth: "openai",
-        ...(withProfile ? { forwardedAuthProfileId: "openai:stored-b" } : {}),
+        forwardedAuthProfileId: "openai:stored-b",
         modelRoute: {
           provider: "openai",
           modelId: "gpt-5.4",
@@ -47,7 +47,7 @@ function createParams(agentDir: string, withProfile: boolean): IsolatedParams {
           requestTransportOverrides: "none",
         },
       },
-      authProfileStore: withProfile ? storedProfile : { version: 1, profiles: {} },
+      authProfileStore: storedProfile,
     },
     config: {},
     provider: "openai",
@@ -196,33 +196,30 @@ describe("isolated completion account and daemon ownership", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([false, true])(
-    "keeps native account A authoritative with a stored profile present: %s",
-    async (withProfile) => {
-      await withTempDir("codex-isolated-auth-", async (root) => {
-        const boundary = createNativeBoundary();
-        const pluginConfig = createPluginConfig(root, "user");
-        const result = await runCodexIsolatedCompletion(createParams(root, withProfile), {
-          pluginConfig,
-        });
-
-        expect(result.assistant.content).toEqual([
-          { type: "text", text: `Garden Planning (${nativeAccount})` },
-        ]);
-        expect(boundary.calls.some((call) => call.method === "account/read")).toBe(true);
-        expect(boundary.calls.filter((call) => call.method === "account/login/start")).toEqual([]);
-        expect(boundary.inferenceAccounts).toEqual([nativeAccount]);
-        expect(JSON.stringify(boundary.calls)).not.toContain("synthetic-stored-b-access");
-        expect(readStart(boundary)).toMatchObject(pluginConfig.appServer);
+  it("keeps native account A authoritative despite a stored profile for B", async () => {
+    await withTempDir("codex-isolated-auth-", async (root) => {
+      const boundary = createNativeBoundary();
+      const pluginConfig = createPluginConfig(root, "user");
+      const result = await runCodexIsolatedCompletion(createParams(root), {
+        pluginConfig,
       });
-    },
-  );
+
+      expect(result.assistant.content).toEqual([
+        { type: "text", text: `Garden Planning (${nativeAccount})` },
+      ]);
+      expect(boundary.calls.some((call) => call.method === "account/read")).toBe(true);
+      expect(boundary.calls.filter((call) => call.method === "account/login/start")).toEqual([]);
+      expect(boundary.inferenceAccounts).toEqual([nativeAccount]);
+      expect(JSON.stringify(boundary.calls)).not.toContain("synthetic-stored-b-access");
+      expect(readStart(boundary)).toMatchObject(pluginConfig.appServer);
+    });
+  });
 
   it("rejects an incompatible native account before inference without logging in stored B", async () => {
     await withTempDir("codex-isolated-auth-", async (root) => {
       const boundary = createNativeBoundary("apiKey");
       await expect(
-        runCodexIsolatedCompletion(createParams(root, true), {
+        runCodexIsolatedCompletion(createParams(root), {
           pluginConfig: createPluginConfig(root, "user"),
         }),
       ).rejects.toThrow("requires ChatGPT auth in the native Codex home");
@@ -238,7 +235,7 @@ describe("isolated completion account and daemon ownership", () => {
       await withTempDir("codex-isolated-proxy-", async (root) => {
         const boundary = createNativeBoundary();
         const pluginConfig = createPluginConfig(root, homeScope, true);
-        await runCodexIsolatedCompletion(createParams(root, true), { pluginConfig });
+        await runCodexIsolatedCompletion(createParams(root), { pluginConfig });
 
         const start = readStart(boundary);
         expect(start).toMatchObject({

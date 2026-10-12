@@ -32,7 +32,8 @@ it.each(["off", "all"] as const)(
       const paths: string[] = [];
       for (const agentId of ["main", "work"]) {
         const bytes = `${agentId} attachment contents`;
-        const request = normalizeChatSendRequest({
+        const fileName = "notes café 雪 🦞.txt";
+        const request = await normalizeChatSendRequest({
           client: null,
           params: {
             agentId,
@@ -41,7 +42,7 @@ it.each(["off", "all"] as const)(
             idempotencyKey: `media-${agentId}`,
             attachments: [
               {
-                fileName: "notes.txt",
+                fileName,
                 mimeType: "text/plain",
                 content: Buffer.from(bytes).toString("base64"),
               },
@@ -76,10 +77,9 @@ it.each(["off", "all"] as const)(
         if (!result.ok) {
           throw new Error("attachment preparation failed");
         }
-        const staged = result.value.mediaPathOffloadPaths[0]!;
-        const file = result.value.mediaPathOffloadWorkspaceDir
-          ? path.join(result.value.mediaPathOffloadWorkspaceDir, staged)
-          : staged;
+        const media = result.value.mediaPathOffloads[0]!;
+        expect(media.fileName).toBe(fileName);
+        const file = path.resolve(media.workspaceDir!, media.path!);
         expect(await fs.readFile(file, "utf8")).toBe(bytes);
         paths.push(file);
         if (mode === "all") {

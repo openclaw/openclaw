@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
-import { prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { sql } from "kysely";
+import { createSqliteQueryCache, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { bindSessionNode, bindSessionRoot } from "./session-accessor.sqlite-session-row.js";
 
@@ -8,7 +8,8 @@ type SessionWindowWriteRow = Omit<ReturnType<typeof bindSessionRoot>, "primary_c
   transcript_observed_at: number;
 };
 
-function prepareSessionEntryWriteQueries(database: DatabaseSync) {
+// Cache fixed SQL shapes only; every write binds fresh rows through the normal executor.
+export const getSessionEntryWriteQueries = createSqliteQueryCache((database) => {
   const db = getSessionKysely(database);
   const window = (retainOwner: boolean) =>
     prepareSqliteQuerySync<SessionWindowWriteRow>(database, (parameter) =>
@@ -79,6 +80,10 @@ function prepareSessionEntryWriteQueries(database: DatabaseSync) {
           session_key: parameter((row) => row.session_key),
           current_session_id: parameter((row) => row.current_session_id),
           entry_json: parameter((row) => row.entry_json),
+          session_started_at: /* kysely-allow-raw: exact int64 bind; generated INTEGER reads are numbers. */ sql<
+            number | null
+          >`${parameter((row) => row.session_started_at)}`,
+          has_optional_references: parameter((row) => row.has_optional_references),
           entry_valid: parameter((row) => row.entry_valid),
           updated_at: parameter((row) => row.updated_at),
           status: parameter((row) => row.status),
@@ -106,6 +111,8 @@ function prepareSessionEntryWriteQueries(database: DatabaseSync) {
           conflict.column("session_key").doUpdateSet((eb) => ({
             current_session_id: eb.ref("excluded.current_session_id"),
             entry_json: eb.ref("excluded.entry_json"),
+            session_started_at: eb.ref("excluded.session_started_at"),
+            has_optional_references: eb.ref("excluded.has_optional_references"),
             entry_valid: eb.ref("excluded.entry_valid"),
             updated_at: eb.ref("excluded.updated_at"),
             status: eb.ref("excluded.status"),
@@ -131,32 +138,7 @@ function prepareSessionEntryWriteQueries(database: DatabaseSync) {
           })),
         ),
     ),
-    markValid: prepareSqliteQuerySync<string>(database, (parameter) =>
-      db
-        .updateTable("session_nodes")
-        .set({ entry_valid: 1 })
-        .where(
-          "session_key",
-          "=",
-          parameter((key) => key),
-        ),
-    ),
     claimWindow: window(false),
     retainWindow: window(true),
   };
-}
-
-// Cache fixed SQL shapes only; every write binds fresh rows through the normal executor.
-const sessionEntryWriteQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareSessionEntryWriteQueries>
->();
-
-export function getSessionEntryWriteQueries(database: DatabaseSync) {
-  let queries = sessionEntryWriteQueries.get(database);
-  if (!queries) {
-    queries = prepareSessionEntryWriteQueries(database);
-    sessionEntryWriteQueries.set(database, queries);
-  }
-  return queries;
-}
+});

@@ -2,9 +2,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import * as chatHistoryPages from "./chat-history-pages.js";
+import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import type { RespondFn } from "./types.js";
 
 describe("chat history worker availability", () => {
@@ -16,6 +16,7 @@ describe("chat history worker availability", () => {
     "returns retryable history errors when a worker is $code",
     async ({ code, message }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const context = await createHistoryReadContext();
         const readSpy = vi
           .spyOn(chatHistoryPages, "readChatHistoryPage")
           .mockRejectedValue(new WorkerTaskError("internal worker failure detail", code));
@@ -28,7 +29,7 @@ describe("chat history worker availability", () => {
             )({
               params: { sessionKey: "agent:main:worker-availability" },
               client: null,
-              context: createDirectChatContext(),
+              context,
               respond,
               req: { type: "req", id: "worker-availability", method },
               isWebchatConnect: () => false,
@@ -54,6 +55,7 @@ describe("chat history worker availability", () => {
 
   it("preserves unexpected history worker failures for the request error owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const context = await createHistoryReadContext();
       const failure = new WorkerTaskError("unexpected worker task failure", "failed");
       const readSpy = vi
         .spyOn(chatHistoryPages, "readChatHistoryPage")
@@ -67,7 +69,7 @@ describe("chat history worker availability", () => {
           )({
             params: { sessionKey: "agent:main:worker-availability" },
             client: null,
-            context: createDirectChatContext(),
+            context,
             respond,
             req: { type: "req", id: "worker-availability", method: "chat.history" },
             isWebchatConnect: () => false,

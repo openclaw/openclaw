@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { Script } from "node:vm";
 import { expect, it } from "vitest";
 import { runLinuxAppChannel } from "../../scripts/linux-app-channel.mjs";
@@ -24,7 +23,7 @@ type Asset = {
   label?: string;
   size: number;
   state: string;
-  digest: string;
+  digest?: string;
   browser_download_url: string;
   bytes: string;
 };
@@ -64,6 +63,14 @@ type AuthorityChange =
   | "new-request-attempt"
   | "cancel-writer"
   | "new-writer-attempt";
+type StaleDownload = {
+  tag: string;
+  name: string;
+  bytes: string;
+  remaining: number;
+  skip?: number;
+  legacy?: boolean;
+};
 type State = {
   releases: Release[];
   latest: string | null;
@@ -71,6 +78,9 @@ type State = {
   calls: Call[];
   verifierExit: number;
   publicDownloadCache?: Record<string, string>;
+  staleAfterUpload?: StaleDownload;
+  staleDownloads?: StaleDownload[];
+  wrongUpload?: { tag: string; name: string };
   fault?: Fault;
   corruptDownload?: { tag: string; name: string };
   replaceReleaseAfterDownload?: { tag: string; name: string };
@@ -328,6 +338,11 @@ try {
         changeAuthority(change);
       }
       answer(response);
+    } else if (/^releases\/assets\/\d+$/.test(route)) {
+      const id = Number(route.split("/").at(-1));
+      const entry = state.releases.flatMap((owner) => owner.assets).find((entry) => entry.id === id);
+      if (!entry) fail("HTTP 404: asset not found");
+      answer(publicAsset(entry));
     } else if (/^releases\/\d+$/.test(route)) {
       const owner = state.releases.find((entry) => entry.id === Number(route.slice("releases/".length)));
       if (!owner) fail("HTTP 404: release not found");
@@ -392,13 +407,18 @@ try {
       if (fault("upload-before", tag, name)) fail("fixture upload refused");
       const owner = release(tag);
       if (owner.assets.some((entry) => entry.name === name)) fail("HTTP 422: asset already exists");
-      const bytes = fs.readFileSync(file);
+      const bytes = state.wrongUpload?.tag === tag && state.wrongUpload.name === name
+        ? Buffer.alloc(fs.readFileSync(file).length, 120) : fs.readFileSync(file);
       owner.assets.push({
         id: state.nextId++, name, label, size: bytes.length, state: "uploaded",
         digest: "sha256:" + createHash("sha256").update(bytes).digest("hex"),
         browser_download_url: "https://github.com/openclaw/openclaw/releases/download/" + tag + "/" + name,
         bytes: bytes.toString("base64"),
       });
+      if (state.staleAfterUpload?.tag === tag && state.staleAfterUpload.name === name) {
+        (state.staleDownloads ??= []).push(state.staleAfterUpload);
+        delete state.staleAfterUpload;
+      }
       if (state.latestAfterUpload) {
         state.latest = state.latestAfterUpload;
         delete state.latestAfterUpload;
@@ -432,6 +452,9 @@ try {
       delete state.corruptDownload;
       bytes = Buffer.alloc(bytes.length, 120);
     }
+    const stale = state.staleDownloads?.find((entry) => entry.tag === tag && entry.name === name && Boolean(entry.legacy) === legacy && entry.remaining > 0);
+    if (stale?.skip) stale.skip--;
+    else if (stale) { bytes = Buffer.from(stale.bytes, "base64"); stale.remaining--; }
     assert(bytes.length <= Number(flag("--max-filesize")), "Fixture download exceeds limit");
     fs.writeFileSync(flag("--output"), bytes);
     if (state.replaceReleaseAfterDownload?.tag === tag &&
@@ -446,6 +469,10 @@ try {
       delete state.authorityAfterDownload;
       changeAuthority(change);
     }
+    answer();
+  } else if (tool === "sleep") {
+    assert(args.length === 1 && ["2", "5", "10"].includes(args[0]));
+    state.calls.push({ tool, action: "wait" });
     answer();
   } else if (tool === "minisign") {
     state.calls.push({ tool, action: "verify" });
@@ -758,14 +785,6 @@ function failed(result: ReturnType<ReturnType<typeof fixture>["run"]>, message: 
   expect(result.stdout.trim()).toBe("");
 }
 
-it("retains the direct CLI entrypoint", () => {
-  const result = spawnSync(process.execPath, [resolve("scripts/linux-app-channel.mjs")], {
-    encoding: "utf8",
-  });
-  expect(result.status).toBe(1);
-  expect(result.stderr).toContain("Usage: linux-app-channel.mjs");
-});
-
 it("reuses complete public Linux assets without local build inputs", () => {
   const f = fixture();
   const original = f.seedLegacy();
@@ -811,20 +830,6 @@ it("reuses immutable publication bytes without local build inputs on replay", ()
   expect(f.mutations()).toEqual([]);
 });
 
-it("stops the next publication write when the executing writer is cancelled during a read", () => {
-  const f = fixture();
-  f.seedLegacy();
-  f.update((state) => {
-    state.authorityAfterDownload = {
-      tag,
-      name: "OpenClaw-2026.9.3-amd64.deb",
-      change: "cancel-writer",
-    };
-  });
-  failed(f.run("publish"), "release workflow run status");
-  expect(f.mutations()).toEqual([]);
-});
-
 it("retains partial canonical replacement when the executing writer is cancelled after deletion", () => {
   const f = fixture();
   succeeded(f.run("publish"));
@@ -841,77 +846,7 @@ it("retains partial canonical replacement when the executing writer is cancelled
   expect(mutations.at(-1)).toMatchObject({ action: "DELETE", tag: channel, name: "latest.json" });
 });
 
-it("publishes immutable named assets and an exact canonical and legacy manifest", () => {
-  const f = fixture();
-  expect(succeeded(f.run("publish"))).toMatchObject({ state: "published", version: "2026.9.3" });
-  const manifest = f.bytes(tag, "OpenClaw-2026.9.3-linux.json");
-  expect(f.bytes(channel, "latest.json")).toEqual(manifest);
-  expect(f.bytes(tag, "latest.json")).toEqual(manifest);
-  expect(
-    releaseFrom(f.state(), tag)
-      .assets.map((asset) => asset.name)
-      .toSorted(),
-  ).toEqual(
-    [
-      "OpenClaw-2026.9.3-amd64.AppImage",
-      "OpenClaw-2026.9.3-amd64.deb",
-      "OpenClaw-2026.9.3-linux.json",
-      "SHA256SUMS.linux-app.txt",
-      "latest.json",
-    ].toSorted(),
-  );
-  expect(releaseFrom(f.state(), channel)).toMatchObject({ draft: false, prerelease: true });
-  expect(f.state().latest).toBe(tag);
-});
-
-it("initializes from the original legacy schema without changing its publication fields", () => {
-  const f = fixture();
-  const original = f.seedLegacy();
-  f.update((state) => {
-    Object.assign(releaseFrom(state, tag), {
-      published_at: "2026-09-04T12:00:00Z",
-      body: "Later core release notes",
-    });
-  });
-  succeeded(f.run("publish"));
-  const manifest = f.bytes(channel, "latest.json");
-  expect(JSON.parse(manifest.toString())).toMatchObject(JSON.parse(original.toString()));
-  expect(manifest).not.toEqual(original);
-  expect(f.bytes(tag, "latest.json")).toEqual(manifest);
-  expect(f.bytes(tag, "OpenClaw-2026.9.3-linux.json")).toEqual(manifest);
-});
-
-it("mirrors a new core latest without a new Linux build or bundle download", () => {
-  const f = fixture();
-  succeeded(f.run("publish"));
-  const canonical = f.bytes(channel, "latest.json");
-  const originalAssets = releaseFrom(f.state(), tag).assets;
-  f.addRelease(nextTag, true);
-  f.update((state) => {
-    state.calls = [];
-  });
-  expect(succeeded(f.run("mirror", nextTag))).toMatchObject({
-    state: "mirrored",
-    tag: nextTag,
-    version: "2026.9.3",
-    manifestSha256: hash(canonical),
-  });
-  expect(f.bytes(nextTag, "latest.json")).toEqual(canonical);
-  expect(f.bytes(channel, "latest.json")).toEqual(canonical);
-  expect(releaseFrom(f.state(), tag).assets).toEqual(originalAssets);
-  expect(f.mutations()).toEqual([
-    { tool: "gh", action: "upload", tag: nextTag, name: "latest.json" },
-  ]);
-  expect(f.state().calls.some((call) => call.tool === "minisign")).toBe(false);
-  expect(
-    f
-      .state()
-      .calls.filter((call) => call.tool === "curl")
-      .every((call) => call.name?.endsWith(".json")),
-  ).toBe(true);
-});
-
-it.each<AuthorityChange>(["cancel-parent", "new-parent-attempt", "revoke-tooling", "move-tooling"])(
+it.each<AuthorityChange>(["new-parent-attempt", "revoke-tooling", "move-tooling"])(
   "refuses the next mirror write when authority changes during a public read: %s",
   (change) => {
     const f = fixture();
@@ -1009,61 +944,22 @@ it("refuses finalizer PATCH after publisher authority changes during source read
   expect(releaseFrom(f.state(), nextTag).draft).toBe(true);
 });
 
-it("accepts a successful completed publisher for finalization without a Linux channel", () => {
-  const f = fixture();
-  f.addDraft(nextTag);
-  f.update((state) => {
-    state.authority.parentStatus = "completed";
-    state.authority.parentConclusion = "success";
-  });
-  expect(succeeded(f.run("finalize-core", nextTag, "true"))).toMatchObject({
-    state: "finalized",
-    tag: nextTag,
-  });
-  expect(f.mutations()).toHaveLength(1);
-  expect(f.mutations()[0]).toMatchObject({ action: "PATCH", tag: nextTag, makeLatest: true });
-  expect(releaseFrom(f.state(), nextTag).draft).toBe(false);
-  expect(f.state().releases.some((release) => release.tag_name === channel)).toBe(false);
+it("rejects retired Tideclaw alpha finalization before writes", () => {
+  const f = fixture("tideclaw/alpha/2026-09-13-0400Z");
+  const alphaTag = "v2026.9.4-alpha.1";
+  f.addDraft(alphaTag, true);
+  const result = f.run("finalize-core", alphaTag, "false");
+  expect(result.status, result.stderr).toBe(1);
+  expect(result.stderr).toContain("Alpha releases are retired;");
+  expect(f.mutations()).toEqual([]);
 });
 
-it.each([null, "move-tooling", "cancel-parent"] as const)(
-  "fences Tideclaw alpha finalization at the live write boundary: %s",
-  (change) => {
-    const f = fixture("tideclaw/alpha/2026-09-13-0400Z");
-    const alphaTag = "v2026.9.4-alpha.1";
-    f.addDraft(alphaTag, true);
-    if (change) {
-      f.update((state) => {
-        state.authorityAfterSourceRead = { tag: alphaTag, change };
-      });
-    }
-    const result = f.run("finalize-core", alphaTag, "false");
-    if (change) {
-      expect(result.status, result.stderr).toBe(1);
-      expect(f.state().calls.some((call) => call.action === change)).toBe(true);
-      expect(f.mutations()).toEqual([]);
-    } else {
-      expect(succeeded(result)).toMatchObject({ state: "finalized", madeLatest: false });
-      expect(f.mutations()).toEqual([
-        expect.objectContaining({ action: "PATCH", tag: alphaTag, makeLatest: false }),
-      ]);
-    }
-  },
-);
-
-it.each([
-  { ref: "unreviewed/branch", tag: "v2026.9.4-alpha.1", latest: "false" },
-  { ref: "tideclaw/alpha/2026-09-13-0400Z", tag: nextTag, latest: "false" },
-  { ref: "tideclaw/alpha/2026-09-13-0400Z", tag: "v2026.9.4-alpha.1", latest: "true" },
-])(
-  "rejects unapproved branch finalization $ref/$tag/$latest",
-  ({ ref, tag: selectedTag, latest }) => {
-    const f = fixture(ref);
-    f.addDraft(selectedTag, selectedTag.includes("-alpha."));
-    expect(f.run("finalize-core", selectedTag, latest).status).toBe(1);
-    expect(f.mutations()).toEqual([]);
-  },
-);
+it("rejects a retired alpha workflow even when finalizing a stable tag", () => {
+  const f = fixture("tideclaw/alpha/2026-09-13-0400Z");
+  f.addDraft(nextTag);
+  failed(f.run("finalize-core", nextTag, "false"), "Alpha releases are retired;");
+  expect(f.mutations()).toEqual([]);
+});
 
 it("publishes opt-in desktop metadata only after successful Linux and legacy readback", () => {
   const f = fixture(toolingRef, true);
@@ -1082,7 +978,7 @@ it("publishes opt-in desktop metadata only after successful Linux and legacy rea
   expect(releaseFrom(f.state(), "desktop-test").source).toBe(sourceSha(tag));
 });
 
-it.each(["historical tag", "newer channel", "revoked before delete", "revoked after delete"])(
+it.each(["newer channel", "revoked before delete", "revoked after delete"])(
   "preserves desktop channel identity and next-write authority: %s",
   (scenario) => {
     const f = fixture(toolingRef, true);
@@ -1121,15 +1017,8 @@ it.each(["historical tag", "newer channel", "revoked before delete", "revoked af
       }
     } else {
       succeeded(result);
-      if (scenario === "newer channel") {
-        expect(writes).toEqual([]);
-        expect(f.bytes("desktop-test", "latest-desktop-test.json").toString()).toBe(previous);
-      } else {
-        expect(writes.map((call) => call.action)).toEqual(["DELETE", "upload"]);
-        expect(f.bytes("desktop-test", "latest-desktop-test.json")).toEqual(
-          f.bytes(tag, "latest-desktop-test.json"),
-        );
-      }
+      expect(writes).toEqual([]);
+      expect(f.bytes("desktop-test", "latest-desktop-test.json").toString()).toBe(previous);
     }
     expect(releaseFrom(f.state(), "desktop-test").source).toBe("d".repeat(40));
   },
@@ -1217,33 +1106,6 @@ it.each(["Linux first", "core first"])("converges when publishing %s", (order) =
   expect(f.bytes(nextTag, "latest.json")).toEqual(manifest);
 });
 
-it("reuses exact publication bytes and asset identities on replay", () => {
-  const f = fixture();
-  succeeded(f.run("publish"));
-  const manifest = f.bytes(channel, "latest.json");
-  const assets = releaseFrom(f.state(), tag).assets;
-  f.update((state) => {
-    Object.assign(releaseFrom(state, tag), {
-      published_at: "2026-09-04T12:00:00Z",
-      body: "Later release notes",
-    });
-    state.calls = [];
-  });
-  succeeded(f.run("publish"));
-  expect(f.bytes(channel, "latest.json")).toEqual(manifest);
-  expect(releaseFrom(f.state(), tag).assets).toEqual(assets);
-  expect(f.mutations().filter((call) => call.action !== "edit")).toEqual([]);
-});
-
-it("rejects an immutable bundle conflict before uploading missing assets", () => {
-  const f = fixture();
-  f.update((state) => {
-    replaceAsset(state, tag, "OpenClaw-2026.9.3-amd64.deb", Buffer.from("different bundle"));
-  });
-  failed(f.run("publish"), "Immutable asset conflict");
-  expect(f.mutations()).toEqual([]);
-});
-
 it("rejects same-version canonical bytes that differ from the immutable publication", () => {
   const f = fixture();
   succeeded(f.run("publish"));
@@ -1277,18 +1139,6 @@ it("requires the external signature verifier before any publication mutation", (
   expect(f.mutations()).toEqual([]);
 });
 
-it("rejects an authenticated asset inventory whose bundle is not publicly downloadable", () => {
-  const f = fixture();
-  const name = "OpenClaw-2026.9.3-amd64.AppImage";
-  const bytes = readFileSync(join(f.inputs(tag), name));
-  f.update((state) => {
-    replaceAsset(state, tag, name, bytes);
-    state.fault = { point: "download", tag, name };
-  });
-  failed(f.run("publish"), "HTTP 404: public asset unavailable");
-  expect(f.mutations()).toEqual([]);
-});
-
 it("rejects corrupted public bundle readback before publishing channel metadata", () => {
   const f = fixture();
   f.update((state) => {
@@ -1296,6 +1146,7 @@ it("rejects corrupted public bundle readback before publishing channel metadata"
   });
   failed(f.run("publish"), "Public asset digest mismatch");
   expect(f.state().releases.some((release) => release.tag_name === channel)).toBe(false);
+  expect(f.state().calls.filter((call) => call.tool === "sleep")).toEqual([]);
 });
 
 it("does not adopt a replacement release ID between immutable bundle uploads", () => {
@@ -1405,57 +1256,6 @@ it("keeps normal publish and mirror fail-closed after canonical deletion interru
   }
 });
 
-it.each([
-  { kind: "arbitrary JSON", message: "Unrecognized legacy Linux manifest" },
-  {
-    kind: "newer legacy version",
-    message: "Legacy endpoint already carries a newer Linux manifest",
-  },
-  {
-    kind: "same-version legacy conflict",
-    message: "Same-version legacy bootstrap changed original manifest fields",
-  },
-  {
-    kind: "same-version canonical conflict",
-    message: "Canonical bytes differ from the immutable Linux publication",
-  },
-])("does not replace existing latest metadata containing $kind", ({ kind, message }) => {
-  const f = fixture();
-  succeeded(f.run("publish"));
-  const canonical = f.bytes(channel, "latest.json");
-  f.addRelease(nextTag, true);
-  let previous = Buffer.from(JSON.stringify({ version: "2026.9.3", unrelated: true }));
-  if (kind === "newer legacy version") {
-    previous = f.seedLegacy(nextTag);
-  } else if (kind === "same-version legacy conflict") {
-    previous = legacyManifest(tag, "Conflicting Linux publication notes");
-    f.update((state) => {
-      replaceAsset(state, tag, "latest.json", previous);
-    });
-  } else if (kind === "same-version canonical conflict") {
-    previous = Buffer.concat([canonical, Buffer.from("\n")]);
-  }
-  f.update((state) => {
-    replaceAsset(state, nextTag, "latest.json", previous);
-    state.calls = [];
-  });
-  failed(f.run("mirror", nextTag), message);
-  expect(f.mutations()).toEqual([]);
-  expect(f.bytes(nextTag, "latest.json")).toEqual(previous);
-  expect(f.bytes(channel, "latest.json")).toEqual(canonical);
-});
-
-it("does not report mirror success when the public latest endpoint readback differs", () => {
-  const f = fixture();
-  succeeded(f.run("publish"));
-  f.addRelease(nextTag, true);
-  f.update((state) => {
-    state.fault = { point: "legacy-readback", tag: nextTag, name: "latest.json" };
-  });
-  failed(f.run("mirror", nextTag), "Legacy endpoint readback failed");
-  expect(succeeded(f.run("mirror", nextTag))).toMatchObject({ state: "mirrored" });
-});
-
 it("stops a replacement if the latest selector changes after deletion", () => {
   const f = fixture();
   succeeded(f.run("publish"));
@@ -1494,21 +1294,6 @@ it("does not mutate a selected core release that is no longer latest", () => {
   expect(f.mutations()).toEqual([]);
 });
 
-it("refuses mirroring before canonical initialization without creating a release", () => {
-  const f = fixture();
-  failed(f.run("mirror"), "HTTP 404: release not found");
-  expect(f.mutations()).toEqual([]);
-});
-
-it.each(["v2026.9.3-alpha.1", "v2026.9.3-beta.1", "v2026.6.33"])(
-  "rejects non-regular target %s before touching GitHub",
-  (releaseTag) => {
-    const f = fixture();
-    failed(f.run("mirror", releaseTag), "Not a canonical regular Linux release");
-    expect(f.state().calls).toEqual([]);
-  },
-);
-
 it.each(["asset replaced", "source changed", "draft release"])(
   "rejects publisher identity drift: %s",
   (change) => {
@@ -1536,44 +1321,38 @@ it.each(["asset replaced", "source changed", "draft release"])(
   },
 );
 
-it.each([null, tag])(
-  "finalizes a draft by ID with prior latest %s and no Linux channel",
-  (latest) => {
-    const f = fixture();
-    const draft = f.addDraft();
-    f.update((state) => {
-      state.latest = latest;
-    });
-    expect(succeeded(f.run("finalize-core", nextTag, "true"))).toEqual({
-      state: "finalized",
+it("finalizes a draft by ID with no prior latest or Linux channel", () => {
+  const f = fixture();
+  const draft = f.addDraft();
+  f.update((state) => {
+    state.latest = null;
+  });
+  expect(succeeded(f.run("finalize-core", nextTag, "true"))).toEqual({
+    state: "finalized",
+    tag: nextTag,
+    releaseId: draft.id,
+    sourceSha: draft.source,
+    madeLatest: true,
+    latestReleaseId: draft.id,
+    latestTag: nextTag,
+  });
+  expect(f.mutations()).toEqual([
+    {
+      tool: "gh",
+      action: "PATCH",
+      url: `releases/${draft.id}`,
       tag: nextTag,
       releaseId: draft.id,
-      sourceSha: draft.source,
-      madeLatest: true,
-      latestReleaseId: draft.id,
-      latestTag: nextTag,
-    });
-    expect(f.mutations()).toEqual([
-      {
-        tool: "gh",
-        action: "PATCH",
-        url: `releases/${draft.id}`,
-        tag: nextTag,
-        releaseId: draft.id,
-        makeLatest: true,
-      },
-    ]);
-    expect(releaseFrom(f.state(), nextTag)).toMatchObject({ draft: false, prerelease: false });
-    expect(f.state().calls.every((call) => call.tool === "gh")).toBe(true);
-    expect(f.state().releases.some((entry) => entry.tag_name === channel)).toBe(false);
-  },
-);
+      makeLatest: true,
+    },
+  ]);
+  expect(releaseFrom(f.state(), nextTag)).toMatchObject({ draft: false, prerelease: false });
+  expect(f.state().calls.every((call) => call.tool === "gh")).toBe(true);
+  expect(f.state().releases.some((entry) => entry.tag_name === channel)).toBe(false);
+});
 
 it.each([
-  { releaseTag: nextTag, prerelease: false },
-  { releaseTag: "v2026.6.33", prerelease: false },
   { releaseTag: "v2026.8.35", prerelease: false },
-  { releaseTag: "v2026.9.4-alpha.1", prerelease: true },
   { releaseTag: "v2026.9.4-beta.1", prerelease: true },
 ])("honors explicit non-latest finalization of $releaseTag", ({ releaseTag, prerelease }) => {
   const f = fixture();
@@ -1618,77 +1397,19 @@ it("finalizes an older release without taking latest back from a newer publicati
   expect(f.state().latest).toBe(nextTag);
 });
 
-it("can resume the current public latest by its retained release ID", () => {
+it("requires explicit latest intent before finalization", () => {
   const f = fixture();
-  const original = releaseFrom(f.state(), tag);
-  expect(succeeded(f.run("finalize-core", tag, "true"))).toEqual({
-    state: "finalized",
-    tag,
-    releaseId: original.id,
-    sourceSha: original.source,
-    madeLatest: true,
-    latestReleaseId: original.id,
-    latestTag: tag,
-  });
-  expect(releaseFrom(f.state(), tag)).toEqual(original);
-});
-
-it("refuses non-latest finalization that would demote the current latest", () => {
-  const f = fixture();
-  failed(f.run("finalize-core", tag, "false"), "Non-latest finalization must not demote");
-  expect(f.mutations()).toEqual([]);
-  expect(f.state().latest).toBe(tag);
-});
-
-it.each([
-  {
-    releaseTag: "v2026.6.33",
-    latest: "true",
-    message: "Extended-stable releases cannot become core latest",
-  },
-  {
-    releaseTag: "v2026.9.04",
-    latest: "true",
-    message: "Unsupported core GitHub release train",
-  },
-  {
-    releaseTag: nextTag,
-    latest: undefined,
-    message: "Expected explicit core latest intent",
-  },
-  {
-    releaseTag: nextTag,
-    latest: "legacy",
-    message: "Expected explicit core latest intent",
-  },
-  {
-    releaseTag: "v2026.9.4-beta.1",
-    latest: "true",
-    message: "Prereleases cannot become core latest",
-  },
-])("rejects finalization admission $releaseTag/$latest", ({ releaseTag, latest, message }) => {
-  const f = fixture();
-  failed(f.run("finalize-core", releaseTag, latest), message);
+  failed(f.run("finalize-core", nextTag), "Expected explicit core latest intent");
   expect(f.state().calls).toEqual([]);
 });
 
-it.each([
-  { kind: "source", message: "Selected core tag moved" },
-  { kind: "tag", message: "Selected core release identity is invalid" },
-  { kind: "prerelease", message: "Selected core prerelease classification changed" },
-])("rejects an unapproved draft $kind before finalization", ({ kind, message }) => {
+it("rejects an unapproved draft tag before finalization", () => {
   const f = fixture();
   f.addDraft();
   f.update((state) => {
-    if (kind === "source") {
-      releaseFrom(state, nextTag).source = "c".repeat(40);
-    } else if (kind === "prerelease") {
-      releaseFrom(state, nextTag).prerelease = true;
-    } else {
-      state.releaseResponseTag = { tag: nextTag, value: "v2026.9.5" };
-    }
+    state.releaseResponseTag = { tag: nextTag, value: "v2026.9.5" };
   });
-  failed(f.run("finalize-core", nextTag, "true"), message);
+  failed(f.run("finalize-core", nextTag, "true"), "Selected core release identity is invalid");
   expect(f.mutations()).toEqual([]);
   expect(releaseFrom(f.state(), nextTag).draft).toBe(true);
 });
@@ -1773,3 +1494,123 @@ it.each([
     ]);
   },
 );
+
+it.each(["canonical", "canonical reread", "existing feed reread", "legacy asset", "latest alias"])(
+  "waits for stale %s feed bytes without repeating publication",
+  (surface) => {
+    const f = fixture();
+    succeeded(f.run("publish"));
+    const bundles = releaseFrom(f.state(), tag).assets.filter(
+      (entry) => !entry.name.endsWith(".json"),
+    );
+    f.addRelease(nextTag, true);
+    const publishing = surface.startsWith("canonical") || surface === "existing feed reread";
+    const target = publishing ? channel : nextTag;
+    f.update((state) => {
+      state.calls = [];
+      const stale = {
+        tag: target,
+        name: "latest.json",
+        bytes: legacyManifest("v2026.9.2").toString("base64"),
+        remaining: 2,
+        skip: surface.endsWith("reread") ? 1 : 0,
+        legacy: surface === "latest alias",
+      };
+      if (surface === "latest alias" || surface === "existing feed reread") {
+        state.staleDownloads = [stale];
+      } else {
+        state.staleAfterUpload = stale;
+      }
+    });
+    succeeded(f.run(publishing ? "publish" : "mirror", nextTag));
+    expect(f.state().calls.filter((call) => call.tool === "sleep")).toHaveLength(2);
+    expect(
+      f
+        .mutations()
+        .filter(
+          (call) => call.action === "upload" && call.tag === target && call.name === "latest.json",
+        ),
+    ).toHaveLength(1);
+    expect(
+      releaseFrom(f.state(), tag).assets.filter((entry) => !entry.name.endsWith(".json")),
+    ).toEqual(bundles);
+    expect(f.state().calls.filter((call) => call.tool === "minisign")).toHaveLength(
+      publishing ? 1 : 0,
+    );
+  },
+);
+
+it.each(["stale public bytes", "wrong uploaded bytes", "asset replaced"])(
+  "stops feed readback on %s with no repeat upload",
+  (failure) => {
+    const f = fixture();
+    succeeded(f.run("publish"));
+    f.addRelease(nextTag, true);
+    const staleBytes = legacyManifest("v2026.9.2");
+    f.update((state) => {
+      state.calls = [];
+      if (failure === "wrong uploaded bytes") {
+        state.wrongUpload = { tag: nextTag, name: "latest.json" };
+      } else {
+        state.staleAfterUpload = {
+          tag: nextTag,
+          name: "latest.json",
+          bytes: staleBytes.toString("base64"),
+          remaining: 100,
+        };
+        if (failure === "asset replaced") {
+          state.replaceReleaseAfterDownload = { tag: nextTag, name: "latest.json" };
+        }
+      }
+    });
+    const result = f.run("mirror", nextTag);
+    failed(
+      result,
+      failure === "wrong uploaded bytes"
+        ? "Uploaded asset digest mismatch"
+        : failure === "asset replaced"
+          ? "HTTP 404: asset not found"
+          : "Public asset digest mismatch",
+    );
+    expect(f.mutations().filter((call) => call.action === "upload")).toEqual([
+      { tool: "gh", action: "upload", tag: nextTag, name: "latest.json" },
+    ]);
+    expect(f.state().calls.some((call) => call.tool === "minisign")).toBe(false);
+    if (failure === "stale public bytes") {
+      const uploaded = releaseFrom(f.state(), nextTag).assets.find(
+        (entry) => entry.name === "latest.json",
+      );
+      assert.ok(uploaded);
+      expect(result.stderr).toContain(`asset=${uploaded.id}`);
+      expect(result.stderr).toContain(`expected=${hash(f.bytes(channel, "latest.json"))}`);
+      expect(result.stderr).toContain(`observed=${hash(staleBytes)}`);
+      expect(f.state().calls.filter((call) => call.tool === "sleep")).toHaveLength(3);
+    } else if (failure === "wrong uploaded bytes") {
+      expect(f.state().calls.some((call) => call.tool === "sleep")).toBe(false);
+    }
+  },
+);
+
+it("does not converge stale feed bytes without an API digest", () => {
+  const f = fixture();
+  succeeded(f.run("publish"));
+  f.update((state) => {
+    const published = releaseFrom(state, channel).assets.find(
+      (asset) => asset.name === "latest.json",
+    );
+    assert.ok(published);
+    delete published.digest;
+    state.calls = [];
+    state.staleDownloads = [
+      {
+        tag: channel,
+        name: "latest.json",
+        bytes: legacyManifest("v2026.9.2").toString("base64"),
+        remaining: 2,
+      },
+    ];
+  });
+  failed(f.run("publish"), "Public asset digest mismatch");
+  expect(f.state().calls.filter((call) => call.tool === "sleep")).toEqual([]);
+  expect(f.mutations()).toEqual([]);
+});

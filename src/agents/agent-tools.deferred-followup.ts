@@ -74,6 +74,15 @@ function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<s
         `No spawn for quick lookup/single read. Check spawns via ${guidance}.`,
       );
     }
+    // Only subagents exposes execution and delivery status; history is a transcript.
+    // Diagnose missing announcing results without routine polling or treating
+    // intentional cancellation as authority to restart work.
+    if (availableTools.has("subagents")) {
+      description = description.replace(
+        "After spawn, do non-overlap work; follow the receipt's completion mode.",
+        "After spawn, do non-overlap work; follow the receipt's completion mode. When diagnosing a missing result from an announcing child, use `subagents` to inspect execution and delivery status. Recover existing results or follow up within the still-authorized task; respect intentional cancellation and never loop-poll.",
+      );
+    }
   }
   return description;
 }

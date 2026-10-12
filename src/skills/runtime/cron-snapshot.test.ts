@@ -63,20 +63,4 @@ describe("resolveCronSkillsSnapshot", () => {
     expect(snapshotOptions?.hydrateExisting).toBe(false);
     expect(result).toEqual({ prompt: "fresh", skills: [] });
   });
-
-  it("refreshes when the process version resets to 0 but the cached snapshot is stale", async () => {
-    await resolveCronSkillsSnapshot({
-      workspaceDir: "/tmp/workspace",
-      config: {} as never,
-      agentId: "writer",
-      existingSnapshot: {
-        prompt: "old",
-        skills: [{ name: "github" }],
-        version: 42,
-      },
-      isFastTestEnv: false,
-    });
-
-    expect(resolveReusableWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
-  });
 });

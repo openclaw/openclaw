@@ -7,7 +7,6 @@ import { resolveStateDir } from "../config/paths.js";
 import {
   classifyMediaReferenceSource,
   MediaReferenceError,
-  normalizeMediaReferenceSource,
   parseInboundMediaUri,
   resolveInboundMediaReference,
   resolveMediaReferenceLocalPath,
@@ -34,11 +33,6 @@ async function expectMediaReferenceError(
 }
 
 describe("media reference helpers", () => {
-  it("normalizes outbound MEDIA tags without changing canonical media URIs", () => {
-    expect(normalizeMediaReferenceSource("  MEDIA: ./out.png")).toBe("./out.png");
-    expect(normalizeMediaReferenceSource("media://inbound/a.png")).toBe("media://inbound/a.png");
-  });
-
   it("classifies supported and unsupported media reference schemes", () => {
     expect(classifyMediaReferenceSource("media://inbound/a.png")).toStrictEqual({
       hasScheme: true,

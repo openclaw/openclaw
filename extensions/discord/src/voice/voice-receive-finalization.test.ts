@@ -100,14 +100,14 @@ defineDiscordVoiceTests(
         const finishing =
           held === "recording" ? vi.spyOn(DiscordVoiceRecording.prototype, "finish") : undefined;
         if (finishing) {
-          finishing.mockImplementationOnce(
-            async function (this: InstanceType<typeof DiscordVoiceRecording>) {
-              entered.resolve();
-              await release.promise;
-              finishing.mockRestore();
-              await this.finish();
-            },
-          );
+          finishing.mockImplementationOnce(async function (
+            this: InstanceType<typeof DiscordVoiceRecording>,
+          ) {
+            entered.resolve();
+            await release.promise;
+            finishing.mockRestore();
+            await this.finish();
+          });
         }
         transcribeAudioFileMock.mockImplementation(async ({ filePath }) => {
           const wav = await fs.readFile(filePath);

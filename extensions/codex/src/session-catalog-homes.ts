@@ -34,7 +34,7 @@ type CatalogHomeCandidate = {
 
 type CatalogGeneration = {
   config: OpenClawConfig;
-  assertCurrent(): void;
+  assertCurrent: () => void;
   pluginConfig: unknown;
   agentIds?: string[];
   agentDirs: Map<string, string>;
@@ -165,7 +165,6 @@ export function createCodexCatalogHomeResolver(params: {
     fleet: boolean,
   ) => {
     await scheduler.yield();
-    snapshot.assertCurrent();
     if (!agentIds(snapshot).includes(agentId)) {
       return [];
     }
@@ -203,7 +202,6 @@ export function createCodexCatalogHomeResolver(params: {
       }
       candidates.push(...(await sharedCandidates(snapshot)));
     }
-    snapshot.assertCurrent();
     const homes: CodexCatalogHome[] = [];
     const seen = new Set<string>();
     for (const candidate of candidates) {
@@ -214,7 +212,7 @@ export function createCodexCatalogHomeResolver(params: {
       const sourceHomeId = codexCatalogHomeIdFromCanonicalPath(candidate.codexHome);
       const primary = homes.length === 0;
       homes.push({
-        assertCurrent: snapshot.assertCurrent.bind(snapshot),
+        assertCurrent: snapshot.assertCurrent,
         sourceHomeId,
         hostId: primary
           ? CODEX_LOCAL_SESSION_HOST_ID
@@ -257,7 +255,6 @@ export function createCodexCatalogHomeResolver(params: {
         return prepareAgentHomes(snapshot, id, true);
       }
     }
-    snapshot.assertCurrent();
     return [];
   });
 
@@ -290,14 +287,13 @@ export function createCodexCatalogHomeResolver(params: {
         };
       }
       const codexHome = await homePath(snapshot, resolveCodexAppServerUserHomeDir(env));
-      snapshot.assertCurrent();
       const appServer = params.resolveRuntimeOptions({
         pluginConfig: snapshot.pluginConfig,
         config: snapshot.config,
         env,
       });
       return {
-        assertCurrent: snapshot.assertCurrent.bind(snapshot),
+        assertCurrent: snapshot.assertCurrent,
         sourceHomeId: codexCatalogHomeIdFromCanonicalPath(codexHome),
         codexHome,
         localSessionsRoot: path.join(codexHome, "sessions"),

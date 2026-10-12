@@ -1,5 +1,5 @@
 import { UPDATE_ACTIVATION_TIMEOUT_REASON } from "../../shared/update-outcome.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 export class UpdateActivationTimeoutError extends UpdateCommandRecoveryPendingError {
   readonly reason = UPDATE_ACTIVATION_TIMEOUT_REASON;

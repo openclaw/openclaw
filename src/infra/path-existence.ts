@@ -1,12 +1,12 @@
 import fs from "node:fs";
-import { hasErrnoCode } from "./errno.js";
+import { isMissingPathError } from "./errno.js";
 
-/** Only a definite missing leaf permits callers to treat a path as absent. */
+/** Only definite absence, including a non-directory ancestor, permits an absent verdict. */
 export function pathMayExistSync(filePath: string): boolean {
   try {
     fs.lstatSync(filePath);
     return true;
   } catch (error) {
-    return !hasErrnoCode(error, "ENOENT");
+    return !isMissingPathError(error);
   }
 }

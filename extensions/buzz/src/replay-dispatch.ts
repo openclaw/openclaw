@@ -1,3 +1,5 @@
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+
 const REPLAY_DISPATCH_CONCURRENCY = 8;
 export const BUZZ_REPLAY_DISPATCH_MAX_PENDING = 1_024;
 const REPLAY_HISTORY_MAX_PER_ROOM = 100;
@@ -9,28 +11,16 @@ export type BuzzReplayDispatchReservation = {
   release: () => void;
 };
 
-type BuzzReplayDispatchQueue = {
-  enqueue: (task: () => Promise<void>) => BuzzReplayDispatchAdmission;
-  reserveCapacity: (slots: number) => Promise<BuzzReplayDispatchReservation | undefined>;
-  close: () => Promise<void>;
-};
-
-export function createBuzzReplayDispatchQueue(params: {
-  onTaskError: (error: unknown) => void;
-}): BuzzReplayDispatchQueue {
+export function createBuzzReplayDispatchQueue(params: { onTaskError: (error: unknown) => void }) {
   const pending: Array<() => Promise<void>> = [];
   let pendingHead = 0;
   let active = 0;
   let closed = false;
-  let resolveDrained: (() => void) | undefined;
-  const drained = new Promise<void>((resolve) => {
-    resolveDrained = resolve;
-  });
+  const drained = createDeferred();
 
   const settleDrained = () => {
     if (closed && active === 0) {
-      resolveDrained?.();
-      resolveDrained = undefined;
+      drained.resolve();
     }
   };
 
@@ -54,12 +44,9 @@ export function createBuzzReplayDispatchQueue(params: {
     }
     const startCount = Math.min(REPLAY_DISPATCH_CONCURRENCY - active, pending.length - pendingHead);
     for (let index = 0; index < startCount; index += 1) {
-      const task = pending[pendingHead];
+      const task = pending[pendingHead]!;
       pendingHead += 1;
       compactPending();
-      if (!task) {
-        continue;
-      }
       active += 1;
       void Promise.resolve()
         .then(task)
@@ -116,11 +103,7 @@ export function createBuzzReplayDispatchQueue(params: {
 
   const settleReservationWaiters = () => {
     while (reservationWaiters.length > 0) {
-      const waiter = reservationWaiters[0];
-      if (!waiter) {
-        reservationWaiters.shift();
-        continue;
-      }
+      const waiter = reservationWaiters[0]!;
       if (closed) {
         reservationWaiters.shift();
         waiter.resolve(undefined);
@@ -136,7 +119,7 @@ export function createBuzzReplayDispatchQueue(params: {
 
   return {
     enqueue: enqueueTask,
-    async reserveCapacity(slots) {
+    async reserveCapacity(slots: number) {
       if (closed) {
         return undefined;
       }
@@ -153,7 +136,7 @@ export function createBuzzReplayDispatchQueue(params: {
       pendingHead = 0;
       settleReservationWaiters();
       settleDrained();
-      await drained;
+      await drained.promise;
     },
   };
 }

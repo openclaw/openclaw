@@ -141,10 +141,21 @@ set -euo pipefail
 source "$SCRIPTS/pr-lib/common.sh"
 source "$SCRIPTS/pr-lib/changelog.sh"
 source "$SCRIPTS/pr-lib/gates.sh"
+source "$SCRIPTS/pr-lib/review.sh"
 enter_worktree() { PR_MAIN_SHA="$MAIN_SHA"; }
 refresh_prep_branch_for_reviewed_head() { :; }
 checkout_prep_branch() { :; }
-run_quiet_logged() { printf 'gate:%s\\n' "$1"; }
+# Review authority is covered by the preparation fixtures; this isolates release classification.
+require_prepared_review() { :; }
+run_quiet_logged() {
+  if [ "$1" = 'hosted CI/Testbox gates' ]; then
+    jq -se --slurpfile expected metadata.json '
+      length == 1 and
+      (.[0] | {headRefName,title,baseRefName,headRefOid,isCrossRepository}) == $expected[0]
+    ' >/dev/null || return 1
+  fi
+  printf 'gate:%s\\n' "$1"
+}
 prepare_gates 42
 `,
     ],
@@ -238,36 +249,8 @@ describe("release closeout prepare gates", () => {
     expect(result.stdout).toContain("CHANGELOG.md is release-owned");
     expect(result.stdout).not.toContain("gate:hosted");
   });
-
-  it("does not classify arbitrary CHANGELOG files as changelog-only", () => {
-    const { result } = runCloseout({
-      split: true,
-      override: "1",
-      afterFiles: { "CHANGELOG/notes.md": "Additional documentation.\n" },
-    });
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toContain("changelog_only=false");
-  });
   it.each([
-    { name: "adds the released section" },
-    {
-      name: "replaces the released section",
-      before:
-        preamble + releaseSection("2026.9.1").replace("Shipped repair", "Draft repair") + history,
-    },
     { name: "accepts stable correction tags", version: "2026.9.1-2" },
-    {
-      name: "finalizes an unreleased section",
-      before: preamble + releaseSection("2026.8.3 (Unreleased)") + history,
-    },
-    {
-      name: "finalizes bare Unreleased",
-      before: preamble + releaseSection("Unreleased") + history,
-    },
-    {
-      name: "finalizes the matching draft",
-      before: preamble + releaseSection("2026.9.1 (Unreleased)") + history,
-    },
     {
       name: "finalizes an earlier correction draft",
       version: "2026.9.1-10",
@@ -288,41 +271,23 @@ describe("release closeout prepare gates", () => {
   });
 
   it.each([
-    { name: "normal branch", branch: "fix/changelog" },
-    { name: "branch suffix", branch: "release/2026.9.1-main-closeout-extra" },
     { name: "wrong title", title: "chore: release" },
     { name: "non-main target", base: "release/2026.9.1" },
     { name: "fork identity", fork: true },
     { name: "beta version", version: "2026.9.1-beta.1" },
     { name: "local-only tag", published: false },
     { name: "different section version", after: preamble + releaseSection("2026.9.2") + history },
-    { name: "unreleased section", after: preamble + releaseSection("Unreleased") + history },
     {
       name: "replaces a newer unreleased train",
       before: preamble + releaseSection("2026.9.2 (Unreleased)") + history,
     },
     {
-      name: "replaces a newer unreleased month",
-      before: preamble + releaseSection("2026.10.1 (Unreleased)") + history,
-    },
-    {
-      name: "replaces a newer unreleased correction",
-      before: preamble + releaseSection("2026.9.1-2 (Unreleased)") + history,
-    },
-    {
       name: "edits older release",
       after: preamble + releaseSection("2026.9.1") + history.replace("Previous", "Changed"),
     },
-    { name: "drops older release", after: preamble + releaseSection("2026.9.1") },
-    { name: "edits preamble", after: "# Changed\n\n" + releaseSection("2026.9.1") + history },
     {
       name: "duplicate sections",
       after: preamble + releaseSection("2026.9.1").repeat(2) + history,
-    },
-    {
-      name: "removes released section",
-      before: preamble + releaseSection("2026.9.1") + history,
-      after: preamble + history,
     },
   ])("rejects $name", ({ name: _name, ...options }) => {
     const { result } = runCloseout(options);

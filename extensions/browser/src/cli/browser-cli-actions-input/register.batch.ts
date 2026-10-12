@@ -1,7 +1,5 @@
-/**
- * Browser CLI batch command: runs nested act requests in one /act call.
- */
 import type { Command } from "commander";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserActRequest } from "../../browser/client-actions.types.js";
 import {
@@ -9,10 +7,8 @@ import {
   runBrowserCliCommand,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
-import { danger, defaultRuntime } from "../core-api.js";
-import { runBrowserAction, readActionsPayload, resolveBrowserActionContext } from "./shared.js";
+import { runBrowserAction, readActionsPayload, parseBrowserInputArray } from "./shared.js";
 
-/** Registers the Browser CLI batch command. */
 export function registerBrowserBatchCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -25,7 +21,7 @@ export function registerBrowserBatchCommands(
     .option("--continue", "Continue through all actions instead of stopping on first error")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      const parent = parentOpts(cmd);
       if (opts.actions !== undefined && opts.actionsFile !== undefined) {
         defaultRuntime.error(danger("Specify only one of --actions or --actions-file"));
         defaultRuntime.exit(1);
@@ -41,22 +37,10 @@ export function registerBrowserBatchCommands(
           actions: opts.actions,
           actionsFile: opts.actionsFile,
         });
-        if (!payload.trim()) {
-          throw new Error("actions are required");
-        }
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(payload);
-        } catch (cause) {
-          throw new Error("actions must be valid JSON", { cause });
-        }
-        if (!Array.isArray(parsed)) {
-          throw new Error("actions must be a JSON array");
-        }
-        if (!parsed.length) {
+        const actions = parseBrowserInputArray(payload, "actions");
+        if (!actions.length) {
           throw new Error("actions must contain at least one entry");
         }
-        const actions = parsed;
         const targetId = normalizeOptionalString(opts.targetId);
         const request = {
           kind: "batch",
@@ -66,7 +50,6 @@ export function registerBrowserBatchCommands(
         } as BrowserActRequest;
         await runBrowserAction({
           parent,
-          profile,
           body: request,
           successMessage: `batch ran ${actions.length} action(s)`,
         });

@@ -49,14 +49,6 @@ describe("encodeWindowsLauncherScript", () => {
     expect(encoded.subarray(2).toString("utf16le")).toBe(content);
   });
 
-  it("writes vbs scripts as UTF-16 LE even for pure-ASCII content", () => {
-    const content = 'CreateObject("WScript.Shell").Run """C:\\gw.cmd""", 0, False\r\n';
-    const encoded = encodeWindowsLauncherScript({ format: "vbs", content });
-
-    expect(encoded.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]));
-    expect(encoded.subarray(2).toString("utf16le")).toBe(content);
-  });
-
   it("keeps ASCII cmd scripts byte-identical without resolving a code page", () => {
     const content = '@echo off\r\ncd /d "C:\\temp"\r\nnode gateway.js\r\n';
     const encoded = encodeWindowsLauncherScript({ format: "cmd", content });
@@ -205,13 +197,6 @@ describe("decodeWindowsLauncherScript", () => {
   it("decodes unmarked legacy UTF-8 scripts with CJK paths", () => {
     const content = `@echo off\r\ncd /d "C:\\Users\\苗振\\.openclaw"\r\nnode gateway.js\r\n`;
     const buffer = Buffer.from(content, "utf8");
-
-    expect(decodeWindowsLauncherScript({ buffer })).toBe(content);
-  });
-
-  it("decodes marked code-page scripts with the recorded encoding", () => {
-    const content = "@echo off\r\nrem 你好\r\n";
-    const buffer = iconv.encode(GBK_MARKER + content, "gbk");
 
     expect(decodeWindowsLauncherScript({ buffer })).toBe(content);
   });

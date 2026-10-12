@@ -3,11 +3,13 @@
  *
  * Creates temporary agent/workspace directories and OpenAI-compatible mock config.
  */
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { buildAttemptReplayMetadata } from "../embedded-agent-runner/run/attempt-terminal-evidence.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 
@@ -20,7 +22,8 @@ export type EmbeddedAgentRunnerTestWorkspace = {
 export async function createEmbeddedAgentRunnerTestWorkspace(
   prefix: string,
 ): Promise<EmbeddedAgentRunnerTestWorkspace> {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  // openclaw-temp-dir: allow suite-owned workspace drains agent databases before removal
+  const tempRoot = await fs.mkdtemp(path.join(realpathSync.native(os.tmpdir()), prefix));
   const agentDir = path.join(tempRoot, "agent");
   const workspaceDir = path.join(tempRoot, "workspace");
   await fs.mkdir(agentDir, { recursive: true });
@@ -34,13 +37,14 @@ export async function cleanupEmbeddedAgentRunnerTestWorkspace(
   if (!workspace) {
     return;
   }
+  await closeOpenClawAgentDatabasesAsync(workspace.tempRoot);
   await fs.rm(workspace.tempRoot, { recursive: true, force: true });
 }
 
 export function createEmbeddedAgentRunnerOpenAiConfig(modelIds: string[]): OpenClawConfig {
   return {
     agents: {
-      list: [{ id: "main" }, { id: "test" }, { id: "embedded-agent" }],
+      entries: { main: {}, test: {}, "embedded-agent": {} },
     },
     models: {
       providers: {

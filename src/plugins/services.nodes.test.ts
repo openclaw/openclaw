@@ -1,5 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGatewayMethodRegistry } from "../gateway/methods/registry.js";
+import {
+  readOperatorToolGatewayAuthority,
+  runWithOperatorToolGatewayAuthority,
+} from "../gateway/operator-tool-gateway-authority.js";
 import { dispatchGatewayRequestInProcess } from "../gateway/server-in-process-dispatch.js";
 import type {
   GatewayRequestContext,
@@ -11,11 +17,17 @@ import {
   withOperatorToolGatewayAuthority,
 } from "../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
+import { createGatewayRequestContext } from "../gateway/server-request-context.js";
+import { makeContextParams } from "../gateway/server-request-context.test-support.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
+import { createLazyPluginRuntime } from "./loader-module-runtime.js";
+import * as nativeModuleRequire from "./native-module-require.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   adoptPluginRegistryRecords,
@@ -27,10 +39,14 @@ import { bindPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextLifetime,
+  getInProcessGatewayRequestContext,
+  getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "./runtime/gateway-request-scope.js";
+import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import { startPluginServices, type PluginServicesHandle } from "./services.js";
+import { createPluginServiceNodeInvoker } from "./service-nodes.js";
+import { startPluginServices, type PluginServicesHandle } from "./services.test-support.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginServiceContext } from "./types.js";
 
@@ -40,7 +56,9 @@ afterEach(async () => {
   handles.clear();
 });
 
-async function startFixture(options: { stop?: () => Promise<void>; bound?: boolean } = {}) {
+async function startFixture(
+  options: { stop?: () => Promise<void>; gateway?: "bound" | "unbound" | "absent" } = {},
+) {
   const registry = createEmptyPluginRegistry();
   const record = createPluginRecord({ id: "files" });
   registry.plugins.push(record);
@@ -57,9 +75,15 @@ async function startFixture(options: { stop?: () => Promise<void>; bound?: boole
   } as unknown as GatewayRequestContext;
   const resolveContext = () => context;
   const subagent = {} as PluginRuntime["subagent"];
-  if (options.bound !== false) {
+  const gateway = options.gateway ?? "bound";
+  if (gateway === "bound") {
     bindGatewayContextResolver(subagent, resolveContext);
-    bindPluginRegistryRuntime(registry, { subagent } as PluginRuntime);
+  }
+  if (gateway !== "absent") {
+    bindPluginRegistryRuntime(
+      registry,
+      createLazyPluginRuntime(gateway === "bound" ? { runtimeOptions: { subagent } } : {}),
+    );
   }
   markPluginRegistryActive(registry);
   let serviceContext: OpenClawPluginServiceContext | undefined;
@@ -109,6 +133,38 @@ const request = {
 };
 
 describe("service-owned node invocation", () => {
+  it("releases retiring callers while stopped node capabilities remain reachable", async () => {
+    type NodeInvoker = NonNullable<ReturnType<typeof createPluginServiceNodeInvoker>>;
+    class RetiringCaller {
+      stop(invoker: NodeInvoker) {
+        invoker.stop();
+      }
+    }
+    const { registry, record } = await startFixture();
+    const invokers = Array.from({ length: 12 }, () => {
+      const invoker = createPluginServiceNodeInvoker({
+        registry,
+        record,
+        lease: createPluginRuntimeCapabilityLease("retained node capability"),
+        isStopping: () => false,
+      });
+      if (!invoker) {
+        throw new Error("Node invoker was not created");
+      }
+      new RetiringCaller().stop(invoker);
+      return invoker;
+    });
+    // Inspect retention before any error matcher can materialize the lazy stack.
+    expect(queryObjects(RetiringCaller)).toBe(0);
+    for (const invoker of invokers) {
+      const reason: unknown = await invoker.invoke(request).catch((error: unknown) => error);
+      expect(reason).toBeInstanceOf(Error);
+      expect(reason).toMatchObject({ message: "Plugin service node access stopped" });
+      await expect(invoker.invoke(request)).rejects.toBe(reason);
+      await expect(invoker.openDuplex(request)).rejects.toBe(reason);
+    }
+  });
+
   it.each([false, true])(
     "preserves document read access for a profile-backed=%s reader",
     async (profileBacked) => {
@@ -173,9 +229,34 @@ describe("service-owned node invocation", () => {
     },
   );
 
-  it("omits node access outside a Gateway host", async () => {
-    expect((await startFixture({ bound: false })).serviceContext.invokeNode).toBeUndefined();
-  });
+  it.each(["absent", "unbound"] as const)(
+    "omits node access for an %s host under a foreign Gateway scope",
+    async (gateway) => {
+      const loadRuntime = vi
+        .spyOn(nativeModuleRequire, "tryNativeRequireModule")
+        .mockImplementation(() => {
+          throw new Error("Service metadata must not load the broad runtime");
+        });
+      try {
+        const foreign = await startFixture();
+        await withPluginRuntimeGatewayRequestScope(
+          {
+            context: foreign.context,
+            resolveGatewayContext: foreign.resolveContext,
+            isWebchatConnect: () => false,
+          },
+          async () => {
+            const { serviceContext } = await startFixture({ gateway });
+            expect(serviceContext.invokeNode).toBeUndefined();
+            expect(serviceContext.openNodeDuplex).toBeUndefined();
+            expect(loadRuntime).not.toHaveBeenCalled();
+          },
+        );
+      } finally {
+        loadRuntime.mockRestore();
+      }
+    },
+  );
 
   it("rejects core and other-plugin commands", async () => {
     const fixture = await startFixture();
@@ -375,4 +456,68 @@ describe("service-owned node duplex", () => {
     }
     expect(fixture.nodeHandler).not.toHaveBeenCalled();
   });
+});
+
+it("starts and reloads background services outside the RPC and tool authority", async () => {
+  const runtime = createPluginRuntime();
+  const context = createGatewayRequestContext(makeContextParams());
+  bindGatewayContextResolver(runtime, () => context);
+  const registry = createEmptyPluginRegistry();
+  bindPluginRegistryRuntime(registry, runtime);
+  const callbacks: Array<() => void> = [];
+  const broadcastPluginEvent = vi.fn();
+  registry.services.push({
+    id: "background",
+    pluginId: "background",
+    origin: "bundled",
+    source: "synthetic",
+    service: {
+      id: "background",
+      start(ctx) {
+        const runBackground = AsyncLocalStorage.snapshot();
+        callbacks.push(() =>
+          runBackground(() => {
+            readOperatorToolGatewayAuthority()?.signal.throwIfAborted();
+            expect(getPluginRuntimeGatewayRequestScope()?.client).toBeUndefined();
+            expect(getInProcessGatewayRequestContext()).toBe(context);
+            ctx.gatewayEvents?.emit("changed", {}, { scope: "operator.read" });
+          }),
+        );
+      },
+    },
+  });
+  const callerLifetime = new AbortController();
+  const inCaller = <T>(run: () => T) =>
+    runWithOperatorToolGatewayAuthority(
+      {
+        signal: callerLifetime.signal,
+        scopes: ["operator.read"],
+        operatorRoleActor: { kind: "system" },
+      },
+      () =>
+        withPluginRuntimeGatewayRequestScope(
+          {
+            context,
+            client: createSyntheticPluginRuntimeClient({ scopes: ["operator.read"] }),
+            signal: callerLifetime.signal,
+            isWebchatConnect: () => false,
+          },
+          run,
+        ),
+    );
+  const handle = await inCaller(() =>
+    startPluginServices({ registry, config: {}, broadcastPluginEvent }),
+  );
+  try {
+    await inCaller(() => handle.reload({}, new Set(["background"])));
+    callerLifetime.abort(new Error("Originating tool settled"));
+    expect(callbacks).toHaveLength(2);
+    expect(() => callbacks[0]?.()).toThrow("no longer active");
+    callbacks[1]?.();
+    expect(broadcastPluginEvent).toHaveBeenCalledTimes(1);
+    await handle.stop();
+    expect(() => callbacks[1]?.()).toThrow("no longer active");
+  } finally {
+    await handle.stop();
+  }
 });

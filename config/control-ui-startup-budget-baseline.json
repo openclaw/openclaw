@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 365261,
-  "reason": "Approved #153178 rebase measurement with frozen Pako 3.0.2: 365172 B rounds up to 365261 B (356.7 KiB), above the previous 364954 B baseline. The existing 512 B growth and 64 B build-variance allowances remain unchanged, giving an explicit 365837 B enforcement limit.",
-  "updatedAt": "2026-09-20"
+  "startupJsGzipBytes": 450000,
+  "reason": "Solid transition allowance: Peter approved relaxing the startup budget while Lit and Solid coexist (2026-10-11). Main measured 422,013 B gzip at 9fec51a0; the 450,000 B ceiling leaves headroom for remaining ports. Restore to 374,285 B or lower after the Lit sweep (the Solid shell saves about 18 KB). Retain the 64 B build-variance and 512 B growth allowances and all request, CSS, asset, and route budgets except the startup CSS request count (2 during the transition).",
+  "updatedAt": "2026-10-11"
 }

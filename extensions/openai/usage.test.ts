@@ -31,6 +31,21 @@ async function fetchAdminUsage(params: {
 }
 
 describe("OpenAI provider usage", () => {
+  it("does not offer token-sharing credentials to Codex usage or API-key fallback", async () => {
+    const resolveApiKeyFromConfigAndStore = vi.fn();
+    const result = await resolveOpenAIUsageAuth({
+      config: {},
+      env: {},
+      provider: "openai",
+      resolveApiKeyFromConfigAndStore,
+      resolveOAuthToken: async () => ({
+        token: "test-chatpass-token",
+        authFlow: "chatgpt-token-sharing",
+      }),
+    });
+    expect(result).toEqual({ handled: true });
+    expect(resolveApiKeyFromConfigAndStore).not.toHaveBeenCalled();
+  });
   it("aggregates provider-reported costs, tokens, models, and categories", async () => {
     const fetchFn = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       const url = requestUrl(input);

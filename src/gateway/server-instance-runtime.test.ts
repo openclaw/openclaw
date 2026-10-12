@@ -14,7 +14,6 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
@@ -49,6 +48,43 @@ function createRegistry(handlers: GatewayRequestHandlers) {
 }
 
 describe("createGatewayInstanceRuntime", () => {
+  it.each([false, true])(
+    "revalidates recovery authority across admission (dedicated principal=%s)",
+    async (dedicatedPrincipal) => {
+      const context = createContext();
+      const payload = { runId: "bound-recovery", status: "ok", summary: "completed" };
+      context.dedupe.set("agent:bound-recovery", { ts: Date.now(), ok: true, payload });
+      const runtime = createGatewayInstanceRuntime({
+        getContext: () => context,
+        getMethodRegistry: () => createRegistry({}),
+        isDispatchAvailable: () => true,
+      });
+      let requesterCurrent = true;
+      const options = {
+        expectFinal: true,
+        ...(dedicatedPrincipal
+          ? { internalDeliveryMediaUrls: ["https://example.test/media"] }
+          : {}),
+        assertAdmissionCurrent: () => {
+          if (!requesterCurrent) {
+            throw new Error("Recovery requester retired");
+          }
+        },
+      };
+      const request = { message: "completed media", idempotencyKey: "bound-recovery" };
+      try {
+        await expect(runtime.recovery.dispatchAgent(request, undefined, options)).resolves.toEqual(
+          payload,
+        );
+        const pending = runtime.recovery.dispatchAgent(request, undefined, options);
+        requesterCurrent = false;
+        await expect(pending).rejects.toThrow("Recovery requester retired");
+      } finally {
+        runtime.close();
+      }
+    },
+  );
+
   it("uses the typed recovery path and fails closed when the owning instance closes", async () => {
     let available = false;
     const rawAgent = vi.fn<NonNullable<GatewayRequestHandlers["agent"]>>(({ respond }) => {
@@ -56,10 +92,12 @@ describe("createGatewayInstanceRuntime", () => {
     });
     const registry = createRegistry({ agent: rawAgent });
     const context = createContext();
+    const preparing = createDeferred<number | undefined>();
     const runtime = createGatewayInstanceRuntime({
       getContext: () => context,
       getMethodRegistry: () => registry,
       isDispatchAvailable: () => available,
+      prepareRestartRecovery: () => preparing.promise,
     });
     expect(getGatewayRecoveryRuntime()).toBe(runtime.recovery);
 
@@ -112,7 +150,10 @@ describe("createGatewayInstanceRuntime", () => {
     const retainedFacade = await runtime.createAgentTurnFacade({
       client: createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] }),
     });
+    const preparation = runtime.recovery.prepareRestartRecovery();
     runtime.close();
+    preparing.resolve(undefined);
+    await expect(preparation).rejects.toThrow("Gateway instance dispatch unavailable");
     expect(getGatewayRecoveryRuntime()).toBeUndefined();
     await expect(runtime.recovery.waitForAgent({ runId: "run-1" })).rejects.toThrow(
       "Gateway instance dispatch unavailable",
@@ -123,39 +164,6 @@ describe("createGatewayInstanceRuntime", () => {
     await expect(retainedFacade.wait({ runId: "run-1" })).rejects.toThrow(
       "Gateway instance dispatch unavailable",
     );
-  });
-
-  it("captures trusted agent principal fields verbatim", () => {
-    const client = createSyntheticPluginRuntimeClient({
-      allowModelOverride: true,
-      agentRunTracking: "plugin_subagent",
-      cronRunContinuation: true,
-      internalDeliveryMediaUrls: ["https://example.test/media"],
-      internalDeliverySuppressText: true,
-      pluginRuntimeOwnerId: "memory-core",
-      delegatedToolPolicyHandoffId: "handoff-1",
-      sessionCreation: {
-        via: "spawn",
-        actor: { type: "agent", id: "main" },
-        requesterSessionKey: "agent:main:main",
-      },
-    });
-
-    const principal = captureAgentTurnPrincipal(client);
-
-    expect(principal?.connect).toBe(client.connect);
-    expect(principal?.internal).toBe(client.internal);
-    expect(principal?.internal).toEqual(client.internal);
-
-    const recoveryClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
-    const recoveryPrincipal = captureAgentTurnPrincipal(recoveryClient);
-    expect(recoveryPrincipal?.connect?.client.mode).toBe("backend");
-    expect(recoveryPrincipal?.internal).toEqual({
-      syntheticClient: true,
-      allowModelOverride: false,
-    });
-    expect(recoveryPrincipal?.internal?.agentRunTracking).toBeUndefined();
-    expect(recoveryPrincipal?.internal?.sessionCreation).toBeUndefined();
   });
 
   it("sends recovery notices through normal outbound without invoking plugin actions", async () => {
@@ -227,7 +235,9 @@ describe("createGatewayInstanceRuntime", () => {
         await runtime.recovery.sendRecoveryNotice(notice);
         await runtime.recovery.sendRecoveryNotice(notice);
 
-        expect(findDeliveryIntentOwner(idempotencyKey)).toMatchObject({ status: "completed" });
+        expect(await findDeliveryIntentOwner(idempotencyKey)).toMatchObject({
+          status: "completed",
+        });
         expect(visibleSend).toHaveBeenCalledOnce();
 
         let ownerCurrent = true;
@@ -241,7 +251,7 @@ describe("createGatewayInstanceRuntime", () => {
           isCurrent: () => ownerCurrent,
         });
         await vi.waitFor(() => expect(sendText).toHaveBeenCalledTimes(2));
-        const queuedResumption = findDeliveryIntentOwner(
+        const queuedResumption = await findDeliveryIntentOwner(
           "main-session-restart-recovery:run-2:failed-notice",
         );
         ownerCurrent = false;
@@ -269,12 +279,12 @@ describe("createGatewayInstanceRuntime", () => {
           isCurrent: () => true,
         };
         await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
-        expect(findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
+        expect(await findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
           status: "completed",
         });
         await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
         expect(visibleSend).toHaveBeenCalledTimes(2);
-        expect(findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
+        expect(await findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
           status: "completed",
         });
       } finally {
@@ -284,7 +294,7 @@ describe("createGatewayInstanceRuntime", () => {
     });
   });
 
-  it("keeps approval subscribers isolated by Gateway instance and unregisters exactly once", () => {
+  it("keeps approval subscribers isolated by Gateway instance and unregisters exactly once", async () => {
     const registry = createRegistry({});
     const first = createGatewayInstanceRuntime({
       getContext: createContext,
@@ -323,17 +333,94 @@ describe("createGatewayInstanceRuntime", () => {
     const declined = vi.fn();
     first.nativeApprovals.subscribe({
       eventKinds: new Set(["exec"]),
-      shouldHandle: () => false,
+      shouldHandle: async () => false,
       onRequested: declined,
       onResolved: vi.fn(),
     });
-    expect(first.approvalEvents.publishRequested("exec", request)).toBe(0);
+    expect(await first.approvalEvents.publishRequestedAsync("exec", request)).toBe(0);
     expect(declined).not.toHaveBeenCalled();
     first.close();
     expect(getGatewayRecoveryRuntime()).toBe(second.recovery);
     second.close();
     expect(getGatewayRecoveryRuntime()).toBeUndefined();
   });
+
+  it("refuses synchronous publication before sending when a subscriber requires async eligibility", async () => {
+    const logError = vi.fn();
+    const runtime = createGatewayInstanceRuntime({
+      getContext: createContext,
+      getMethodRegistry: () => createRegistry({}),
+      isDispatchAvailable: () => true,
+      logError,
+    });
+    const pending = createDeferred<boolean>();
+    const onRequested = vi.fn();
+    runtime.nativeApprovals.subscribe({
+      eventKinds: new Set(["exec"]),
+      shouldHandle: () => true,
+      onRequested,
+      onResolved: vi.fn(),
+    });
+    runtime.nativeApprovals.subscribe({
+      eventKinds: new Set(["exec"]),
+      shouldHandle: () => pending.promise,
+      onRequested,
+      onResolved: vi.fn(),
+    });
+    try {
+      expect(() =>
+        runtime.approvalEvents.publishRequested("exec", {
+          id: "legacy-async-eligibility",
+          request: {},
+          createdAtMs: 1,
+          expiresAtMs: 2,
+        }),
+      ).toThrow("use approvalEvents.publishRequestedAsync");
+      expect(onRequested).not.toHaveBeenCalled();
+      pending.reject(new Error("eligibility rejected"));
+      await Promise.resolve();
+      expect(logError).toHaveBeenCalledWith(expect.stringContaining("eligibility rejected"));
+      expect(onRequested).not.toHaveBeenCalled();
+    } finally {
+      runtime.close();
+    }
+  });
+
+  it.each(["unsubscribe", "resolve", "close"] as const)(
+    "retires native approval delivery when %s wins an async eligibility wait",
+    async (retire) => {
+      const eligibility = createDeferred<boolean>();
+      const runtime = createGatewayInstanceRuntime({
+        getContext: createContext,
+        getMethodRegistry: () => createRegistry({}),
+        isDispatchAvailable: () => true,
+      });
+      const onRequested = vi.fn();
+      const unsubscribe = runtime.nativeApprovals.subscribe({
+        eventKinds: new Set(["exec"]),
+        shouldHandle: () => eligibility.promise,
+        onRequested,
+        onResolved: vi.fn(),
+      });
+      const publication = runtime.approvalEvents.publishRequestedAsync("exec", {
+        id: "pending-eligibility",
+        request: { command: "echo test" },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      });
+      if (retire === "unsubscribe") {
+        unsubscribe();
+      } else if (retire === "resolve") {
+        runtime.approvalEvents.publishResolved("exec", { id: "pending-eligibility" });
+      } else {
+        runtime.close();
+      }
+      eligibility.resolve(true);
+      expect(await publication).toBe(0);
+      expect(onRequested).not.toHaveBeenCalled();
+      runtime.close();
+    },
+  );
 
   it("rejects methods outside each closed internal principal", async () => {
     const runtime = createGatewayInstanceRuntime({

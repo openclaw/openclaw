@@ -1,6 +1,7 @@
 import { createPersistentDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { writeLruMapEntry } from "./monitor/lru-map-cache.js";
 import { getOptionalSlackRuntime } from "./runtime.js";
 
 /**
@@ -127,14 +128,7 @@ export function recordSlackThreadFailureNotice(params: SlackFailureNotice): bool
   if (threadFailureNotices.get(key) === fingerprint) {
     return false;
   }
-  threadFailureNotices.delete(key);
-  threadFailureNotices.set(key, fingerprint);
-  if (threadFailureNotices.size > MAX_FAILURE_NOTICES) {
-    const oldestKey = threadFailureNotices.keys().next().value;
-    if (oldestKey !== undefined) {
-      threadFailureNotices.delete(oldestKey);
-    }
-  }
+  writeLruMapEntry(threadFailureNotices, key, fingerprint, MAX_FAILURE_NOTICES);
   return true;
 }
 

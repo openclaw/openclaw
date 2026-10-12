@@ -12,6 +12,19 @@ export class PluginInstanceUnavailableError extends Error {
   }
 }
 
+export const PluginSourceRecoveryUnavailableError = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginSourceRecoveryUnavailableError"),
+  () =>
+    class SourceRecoveryUnavailableError extends Error {
+      constructor(cause: unknown) {
+        super("Captured plugin source is missing; its previous code cannot be recovered.", {
+          cause,
+        });
+        this.name = "PluginSourceRecoveryUnavailableError";
+      }
+    },
+);
+
 // Source Gateway owners and compiled SDK instances share this diagnostic identity.
 export const PluginInstanceDrainTimeoutError = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginInstanceDrainTimeoutError"),

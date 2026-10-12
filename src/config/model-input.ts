@@ -1,9 +1,9 @@
-// Normalizes model input config into provider and model references.
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   normalizeGooglePreviewModelId,
   normalizeTogetherModelId,
 } from "@openclaw/model-catalog-core/provider-model-id-normalize";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
@@ -37,11 +37,8 @@ export function resolveAgentModelTimeoutMsValue(model?: AgentToolModelConfig): n
   if (!model || typeof model !== "object") {
     return undefined;
   }
-  return typeof model.timeoutMs === "number" &&
-    Number.isFinite(model.timeoutMs) &&
-    model.timeoutMs > 0
-    ? Math.floor(model.timeoutMs)
-    : undefined;
+  const timeout = asPositiveFiniteNumber(model.timeoutMs);
+  return timeout === undefined ? undefined : Math.floor(timeout);
 }
 
 /** Converts legacy string model config into the object shape used by model patch helpers. */

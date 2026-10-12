@@ -1,3 +1,4 @@
+import { normalizeBasePath } from "../../../app-route-paths.ts";
 import {
   buildAssistantMediaUrl,
   type AssistantMediaContext,
@@ -39,28 +40,30 @@ export function buildAssistantAttachmentUrl(
   resourceBasePath?: string,
   mediaTicket?: string | null,
   context?: AssistantMediaContext,
+  filename?: string,
 ): string {
   if (!isLocalAssistantAttachmentSource(source)) {
     return source;
   }
-  return buildAssistantMediaUrl(source, resourceBasePath, mediaTicket, context);
+  return buildAssistantMediaUrl(source, resourceBasePath, mediaTicket, context, filename);
 }
 
-export function appendAttachmentUrlSearchParam(
+export function applyResourceBasePath(
   source: string,
-  name: string,
-  value: string,
+  resourceBasePath: string | undefined,
 ): string {
-  const trimmed = source.trim();
-  if (!trimmed) {
-    return trimmed;
+  if (!source.startsWith("/") || source.startsWith("//")) {
+    return source;
   }
-  const hashIndex = trimmed.indexOf("#");
-  const hash = hashIndex === -1 ? "" : trimmed.slice(hashIndex);
-  const withoutHash = hashIndex === -1 ? trimmed : trimmed.slice(0, hashIndex);
-  const queryIndex = withoutHash.indexOf("?");
-  const path = queryIndex === -1 ? withoutHash : withoutHash.slice(0, queryIndex);
-  const params = new URLSearchParams(queryIndex === -1 ? "" : withoutHash.slice(queryIndex + 1));
-  params.set(name, value);
-  return `${path}?${params.toString()}${hash}`;
+  try {
+    const parsed = new URL(source, window.location.origin);
+    const basePath = normalizeBasePath(resourceBasePath ?? "");
+    const pathname =
+      basePath && parsed.pathname !== basePath && !parsed.pathname.startsWith(`${basePath}/`)
+        ? `${basePath}${parsed.pathname}`
+        : parsed.pathname;
+    return `${pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return source;
+  }
 }

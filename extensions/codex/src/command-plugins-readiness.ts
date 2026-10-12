@@ -1,8 +1,4 @@
-import {
-  renderMessagePresentationFallbackText,
-  type MessagePresentation,
-  type MessagePresentationBlock,
-} from "openclaw/plugin-sdk/interactive-runtime";
+import type { MessagePresentationBlock } from "openclaw/plugin-sdk/interactive-runtime";
 import type { PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import {
   findCodexMarketplacePluginSummary,
@@ -17,6 +13,7 @@ import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
 import { formatCodexAccountLine, formatCodexDisplayText } from "./command-formatters.js";
 import {
   buildCodexPluginAppLinks,
+  buildCodexPluginStatusButtons,
   CODEX_PLUGIN_APP_LINK_PAGE_SIZE,
 } from "./command-plugin-app-links.js";
 import {
@@ -26,6 +23,7 @@ import {
   type CodexPluginsConfigBlock,
 } from "./command-plugin-config.js";
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
+import { buildCodexPresentationReply } from "./command-presentation.js";
 import { discoverCodexMarketplacePlugins } from "./plugin-marketplace-discovery.js";
 
 type Evidence<T> =
@@ -406,34 +404,10 @@ export function formatCodexPluginReadiness(
         type: "text",
         text: "Flags reflect Codex's runtime snapshot; status does not refresh hosted tools. After connecting, /codex plugins refresh refreshes hosted inventory for the current Codex account/runtime, across all apps. Use Check status separately to inspect this plugin without refreshing. OpenClaw app-access changes take effect on your next message; use /new or /reset after connecting.",
       });
-      blocks.push({
-        type: "buttons",
-        buttons: [
-          ...(canRefreshHostedApps
-            ? [
-                {
-                  label: "Refresh hosted apps",
-                  action: { type: "command" as const, command: "/codex plugins refresh" },
-                },
-              ]
-            : []),
-          {
-            label: "Check status",
-            action: {
-              type: "command",
-              command: `/codex plugins status ${readiness.commandId}`,
-            },
-          },
-        ],
-      });
+      blocks.push(buildCodexPluginStatusButtons(readiness.commandId, canRefreshHostedApps));
     }
   }
-  const presentation: MessagePresentation = { title: "Codex plugin status", blocks };
-  return {
-    text: renderMessagePresentationFallbackText({ presentation }),
-    presentation,
-    presentationTextMode: "fallback",
-  };
+  return buildCodexPresentationReply({ title: "Codex plugin status", blocks });
 }
 
 async function readEvidence<T>(read: () => Promise<T>): Promise<Evidence<T>> {

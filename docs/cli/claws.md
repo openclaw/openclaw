@@ -9,10 +9,11 @@ title: "Claws"
 
 # `openclaw claws`
 
-A Claw is a versioned setup for one new OpenClaw agent. It can describe the
+A Claw is a versioned setup for one OpenClaw agent. It can describe the
 agent's portable identity, workspace files, skills, plugins, MCP servers, and
 cron jobs. Harness-specific agent settings may be carried in a conventional
-package profile. A Claw does not replace or modify an existing agent.
+package profile. Adding a Claw creates a separate agent; `claws migrate` can
+enroll an existing agent without replacing it or moving its workspace.
 
 Claws are experimental. Their schema, command output, and lifecycle may change.
 Enable the command surface explicitly:
@@ -28,6 +29,17 @@ contract with `"stability": "experimental"`.
 The current CLI reads a local package directory, `CLAW.md`, or grouped JSON manifest.
 Publishing, searching, and installing whole Claws through ClawHub are a
 separate registry track and are not part of this command surface yet.
+
+Commands that access installed Claw state (`add`, `update`, `remove`, `migrate`,
+`status`, and `export`, including previews) require exclusive offline ownership.
+Stop the Gateway through its service owner, wait for ownership to release, then
+run the command again. These commands refuse before accessing state when a
+Gateway owns it. Package-only `create`, `validate`, `build`, `dev`, and `inspect`
+remain available while the Gateway runs.
+
+Removal of a Claw-created agent still requires Gateway monitor drainage and is
+unavailable through this offline CLI path. Removing ownership adopted with
+`migrate` works offline and retains the existing agent and workspace.
 
 ## Bundled role Claws
 
@@ -173,7 +185,7 @@ extensions:
 ```
 
 `format` asserts the artifact format that OpenClaw must detect (`openclaw`,
-`claude`, `codex`, or `cursor`). The canonical plugin preflight resolves the
+`claude`, `codex`, or `cursor`). The shared plugin preflight resolves the
 exact artifact and reports which components the current OpenClaw adapter maps
 and which remain unavailable. Missing identity, integrity, format detection, or
 adapter identity blocks apply. Extension-backed plugins use the existing
@@ -253,7 +265,7 @@ The dry run uses the existing skill and plugin preflight paths to resolve the
 exact artifact, integrity, and any ClawHub trust warning before consent. The
 warning remains visible in the integrity-bound plan. Each requirement is shown
 as satisfied, missing-installable, conflicting, or setup-required. The exact
-plan consent approves missing installs; OpenClaw completes those canonical
+plan consent approves missing installs; OpenClaw completes those standard
 plugin actions before creating the agent or workspace. Apply reuses matching
 artifacts and records whether the Claw introduced or referenced each resource.
 Plugins remain process-wide OpenClaw capabilities rather than per-agent
@@ -320,25 +332,25 @@ the root `CLAW.md`, rejects package scripts and lifecycle hooks, discovers a
 single unambiguous project root, and reports files excluded from the package.
 
 `dev` validates and builds the same artifact that would be published, then
-runs that artifact through the canonical add planner. It does not install
+runs that artifact through the shared add planner. It does not install
 packages, contact ClawHub, start an agent turn, enable schedules, deliver
 messages, or modify OpenClaw state. Dependencies that require online preflight
 appear as blockers instead of weakening that boundary. Use `--agent-id` or
 `--workspace` to preview collision-free local destinations.
 
-`build` writes a deterministic npm-compatible `.tgz` with a `package/` root.
+`build` writes a reproducible npm-compatible `.tgz` with a `package/` root.
 Only package metadata, `CLAW.md`, optional `BOOTSTRAP.md`, the OpenClaw profile,
 and sources selected by the manifest are included. Tests, caches, ambient or
 unselected credentials, unselected files, prior artifacts, and source-control
 state remain outside the package. Selected source bytes are package content, so
 authors must not select secret-bearing files. Build refuses to overwrite an
 existing artifact, reports its SHA-256 integrity, and re-opens it through the
-canonical Claw reader before success.
+shared Claw reader before success.
 
 ## Inspect and preview
 
 Validate the source without planning local changes. For OpenClaw profile
-extensions, inspect also performs the canonical read-only artifact probe and
+extensions, inspect also performs the shared read-only artifact check and
 reports mapped and unavailable components:
 
 ```bash
@@ -373,7 +385,7 @@ Adding a Claw first realizes consented shared plugin requirements, then creates
 the new agent and workspace configuration, seeds optional first-run
 instructions, writes declared workspace assets, realizes workspace skills, and
 records package, MCP, and cron provenance. Existing files are not overwritten,
-and retries fail closed when owned content drifted.
+and retries are rejected when owned content drifted.
 
 With a local Gateway running, Claw add and update apply their plugin requirements
 before continuing to the agent, workspace, MCP, and cron phases. One bounded
@@ -415,6 +427,52 @@ Claw provenance distinguishes two relationships:
 This is not a reference count. Ordinary plugin, skill, and agent commands keep
 their existing behavior; Claws add provenance and guarded lifecycle operations
 on top.
+
+## Migrate an existing agent
+
+`claws migrate` enrolls one already configured local agent without creating a
+second agent or moving its workspace. It creates a local package under the
+OpenClaw state directory, previews the exact profile and existing files that
+will become Claw-managed, lists the generated package files, and asks for
+confirmation:
+
+```bash
+openclaw claws migrate research-agent
+```
+
+For automation, inspect the read-only plan and apply only that exact plan:
+
+```bash
+openclaw claws migrate research-agent --dry-run --json
+openclaw claws migrate research-agent \
+  --yes \
+  --plan-integrity <SHA256_FROM_DRY_RUN> \
+  --json
+```
+
+Migration supports Claw v1 agent identity and OpenClaw profile settings, plus
+the existing `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and
+`HEARTBEAT.md` prompt files. Migration stops when a setting cannot be
+represented faithfully, workspace ownership is ambiguous, a selected file is
+unsafe, or likely secret material is detected. Selected files are recorded
+with their existing content digests and are not rewritten. `BOOTSTRAP.md`,
+credentials, sessions, transcripts, databases, and every other workspace entry
+remain local and outside Claw ownership.
+
+Inherited model, subagent allowlist/delegation, heartbeat schedule, sandbox
+mode/scope/workspace access, and human-delay defaults are copied into the
+generated profile. Host ownership pointers such as `heartbeat.agentId` remain in
+OpenClaw config. Other inherited agent defaults that Claw v1 cannot carry,
+including provider params, skills, model policy/catalog, or unsupported
+heartbeat/sandbox fields and custom compaction settings, block migration with
+their setting paths in the diagnostic. An empty compaction placeholder or the
+effective `safeguard` default materialized by OpenClaw has no effect beyond the
+runtime default and is ignored.
+
+`claws status` and `claws update` use the generated package after migration.
+Removing an adopted Claw releases its ownership records while retaining the
+pre-existing agent, workspace, local package, credentials, databases, sessions,
+and transcripts.
 
 ## Update an installed Claw
 
@@ -474,14 +532,18 @@ monitors, including disabled monitors, as removal actions. Ordinary schedules,
 imported heartbeat tasks, uncorroborated monitors, and jobs in another scheduler store
 remain blockers.
 Modified files and resources with another current owner are retained or
-blocked. Cleanup choices are part of the plan digest; `--yes` never broadens
+blocked. The workspace is retained if it contains untracked files or its contents
+cannot be fully checked, including when a child directory disappears during cleanup.
+Cleanup choices are part of the plan digest; `--yes` never broadens
 them. By default, globally installed plugins are retained while this Claw's reference is
 released. Removal reports which retained requirements Claw add introduced; use
 the ordinary plugin lifecycle separately when you intend to uninstall a
 process-wide plugin.
 
 Directories containing another agent's registered database are retained, even
-when that database is closed. If removal reports that an agent database is
+when that database is closed. Removal previews read current registry rows, including
+registrations made by a completed offline operation since the last preview.
+If removal reports that an agent database is
 still open, stop the command or restart the Gateway holding it before retrying.
 Preview works offline. Persisted monitor rows remain blockers until the serving
 Gateway can verify their ownership. Actual removal requires a running Gateway
@@ -557,7 +619,7 @@ package-authored prompt content: do not include credentials, tokens, private
 answers, or machine-specific paths. Export does not infer questions, render
 personal-data templates, persist answers, or add a separate setup lifecycle.
 
-The result contains `package.json`, canonical `CLAW.md`, and managed workspace
+The result contains `package.json`, standard `CLAW.md`, and managed workspace
 sidecars. Managed `SOUL.md` content is emitted as the `CLAW.md` body when it is
 non-empty UTF-8 and the combined document fits the manifest limit. Otherwise,
 export retains it as an explicit sidecar so the package remains importable. It
@@ -571,7 +633,7 @@ credentials, sessions, and unowned local state are excluded.
 | `claws create [path]`               | Create a minimal local Claw project.                |
 | `claws validate [path]`             | Validate project inputs and package contents.       |
 | `claws dev [path]`                  | Build and preview locally without mutation.         |
-| `claws build [path] --out <tgz>`    | Build a deterministic package artifact.             |
+| `claws build [path] --out <tgz>`    | Build a reproducible package artifact.              |
 | `claws inspect <source>`            | Validate a package directory or grouped manifest.   |
 | `claws add <source>`                | Preview or create one new agent and workspace.      |
 | `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |

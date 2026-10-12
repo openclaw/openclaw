@@ -1,5 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-
 type ParsedVcard = {
   name?: string;
   phones: string[];
@@ -73,12 +71,5 @@ function normalizeVcardName(value: string): string {
 }
 
 function normalizeVcardPhone(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("tel:")) {
-    return trimmed.slice(4).trim();
-  }
-  return trimmed;
+  return value.toLowerCase().startsWith("tel:") ? value.slice(4).trim() : value;
 }

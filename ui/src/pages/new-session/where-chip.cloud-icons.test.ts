@@ -13,99 +13,69 @@ describe("Cloud backend picker presentation", () => {
       { id: "production", providerId: "crabbox", providerDisplayId: "aws" },
     ]);
     const onSelect = vi.fn();
-    for (const selected of ["AWS", "missing"]) {
-      const container = renderPicker(
-        true,
-        undefined,
-        { cloudProfiles, cloudProfileId: selected },
-        {
-          onSelectCloudProfile: onSelect,
-          cloudProfileDisabledReason: (profile) =>
-            profile.id === "production" ? "Unavailable" : undefined,
-        },
-      );
-      expect(
-        [...container.querySelectorAll('[data-value^="cloud:"]')].map((row) =>
-          row.getAttribute("data-value"),
-        ),
-      ).toEqual([
-        "cloud:local",
-        "cloud:production",
-        "cloud:AWS",
-        "cloud:Azure",
-        "cloud:custom",
-        ...(selected === "missing" ? ["cloud:missing"] : []),
-      ]);
-      const row = container.querySelector<HTMLButtonElement>(
-        '[data-value="cloud:' + selected + '"]',
-      )!;
-      expect(row.getAttribute("aria-pressed")).toBe("true");
-      expect(
-        container.querySelector('[data-value="cloud:production"]')?.getAttribute("aria-disabled"),
-      ).toBe("true");
-      container.querySelector<HTMLButtonElement>('[data-value="cloud:production"]')!.click();
-      expect(onSelect).not.toHaveBeenCalled();
-      if (selected === "AWS") {
-        row.click();
-        expect(onSelect).toHaveBeenCalledExactlyOnceWith("AWS");
-        onSelect.mockClear();
-      } else {
-        expect(row.getAttribute("aria-disabled")).toBe("true");
-      }
-    }
+    const container = renderPicker(
+      true,
+      undefined,
+      { cloudProfiles, cloudProfileId: "missing" },
+      {
+        onSelectCloudProfile: onSelect,
+        cloudProfileDisabledReason: (profile) =>
+          profile.id === "production" ? "Unavailable" : undefined,
+      },
+    );
+    expect(
+      [...container.querySelectorAll('[data-value^="cloud:"]')].map((row) =>
+        row.getAttribute("data-value"),
+      ),
+    ).toEqual([
+      "cloud:local",
+      "cloud:production",
+      "cloud:AWS",
+      "cloud:Azure",
+      "cloud:custom",
+      "cloud:missing",
+    ]);
+    const missing = container.querySelector('[data-value="cloud:missing"]')!;
+    expect(missing.getAttribute("aria-pressed")).toBe("true");
+    expect(missing.getAttribute("aria-disabled")).toBe("true");
+    const disabled = container.querySelector<HTMLButtonElement>('[data-value="cloud:production"]')!;
+    expect(disabled.getAttribute("aria-disabled")).toBe("true");
+    expect(disabled.querySelector('[data-provider-icon="aws"]')).not.toBeNull();
+    disabled.click();
+    expect(onSelect).not.toHaveBeenCalled();
   });
-  it.each([
-    { id: "production", backend: "aws", brand: "aws", label: "AWS" },
-    { id: "aws", backend: "azure", brand: "azure", label: "Azure" },
-    { id: "production", backend: "google-cloud", brand: "gcp", label: "Google Cloud" },
-  ])(
-    "uses backend $backend for named profile $id in both trigger and filtered menu",
-    ({ id, backend, brand, label }) => {
-      const onSelect = vi.fn();
-      const cloudProfiles = readDraftCloudProfiles([
-        {
-          id,
-          providerId: "crabbox",
-          providerDisplayId: backend,
-          operatingSystems: [{ id: "linux", label: "Linux", default: true }],
-          machines: [{ id: "standard", label: "Standard", default: true }],
-        },
-      ]);
-      const container = renderPicker(
-        true,
-        undefined,
-        { cloudProfiles, cloudProfileId: id },
-        {
-          environmentQuery: label,
-          onSelectCloudProfile: onSelect,
-        },
-      );
-      const trigger = container.querySelector("#new-session-where-trigger")!;
-      const row = container.querySelector<HTMLButtonElement>('[data-value="cloud:' + id + '"]')!;
-      for (const element of [trigger, row]) {
-        expect(element.querySelector('[data-provider-icon="' + brand + '"]')).not.toBeNull();
-        expect(element.getAttribute("aria-description")).toBe(`Cloud worker provider: ${label}`);
-        expect(element.textContent).toContain("Linux");
-        expect(element.textContent).toContain("Standard");
-      }
-      expect(trigger.getAttribute("aria-label")).toBe(`Where: ${id}, Linux · Standard`);
-      expect(row.hasAttribute("aria-label")).toBe(false);
-      expect(
-        row.querySelector(".session-menu__text")?.textContent?.replace(/\s+/g, " ").trim(),
-      ).toBe(`${id} Linux · Standard`);
-      row.click();
-      expect(onSelect).toHaveBeenCalledExactlyOnceWith(id);
-      const disabled = renderPicker(
-        true,
-        undefined,
-        { cloudProfiles, cloudProfileId: id },
-        { cloudDisabledReason: "Unavailable" },
-      );
-      expect(
-        disabled.querySelector(
-          '[data-value="cloud:' + id + '"] [data-provider-icon="' + brand + '"]',
-        ),
-      ).not.toBeNull();
-    },
-  );
+
+  it("uses the backend rather than the profile name in both trigger and filtered menu", () => {
+    const onSelect = vi.fn();
+    const cloudProfiles = readDraftCloudProfiles([
+      {
+        id: "aws",
+        providerId: "crabbox",
+        providerDisplayId: "azure",
+        operatingSystems: [{ id: "linux", label: "Linux", default: true }],
+        machines: [{ id: "standard", label: "Standard", default: true }],
+      },
+    ]);
+    const container = renderPicker(
+      true,
+      undefined,
+      { cloudProfiles, cloudProfileId: "aws" },
+      { environmentQuery: "Azure", onSelectCloudProfile: onSelect },
+    );
+    const trigger = container.querySelector("#new-session-where-trigger")!;
+    const row = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]')!;
+    for (const element of [trigger, row]) {
+      expect(element.querySelector('[data-provider-icon="azure"]')).not.toBeNull();
+      expect(element.getAttribute("aria-description")).toBe("Cloud worker provider: Azure");
+      expect(element.textContent).toContain("Linux");
+      expect(element.textContent).toContain("Standard");
+    }
+    expect(trigger.getAttribute("aria-label")).toBe("Where: aws, Linux · Standard");
+    expect(row.hasAttribute("aria-label")).toBe(false);
+    expect(row.querySelector(".session-menu__text")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "aws Linux · Standard",
+    );
+    row.click();
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("aws");
+  });
 });

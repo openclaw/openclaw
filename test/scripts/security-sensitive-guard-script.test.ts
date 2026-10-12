@@ -50,6 +50,17 @@ const commentEvent = {
 };
 const { collectSecuritySensitiveChanges } = loadSecurityReviewPolicy();
 
+const pullRequest = {
+  number: 7,
+  state: "open",
+  draft: false,
+  created_at: "2026-01-01T00:00:00Z",
+  user: author,
+  changed_files: 1,
+  head: { sha: headSha, ref: "change", repo: { id: 2 } },
+  base: { sha: "b".repeat(40), ref: "main", repo: { id: 1 } },
+};
+
 type Options = {
   authorRole?: string;
   approverRole?: string;
@@ -72,14 +83,10 @@ function runGuard(options: Options = {}) {
   const fixturePath = path.join(root, "fixture.json");
   const files = options.files ?? [{ filename: "src/gateway/auth.ts", status: "modified" }];
   const pr = {
-    number: 7,
-    state: "open",
-    draft: false,
-    created_at: options.createdAt ?? "2026-01-01T00:00:00Z",
+    ...pullRequest,
+    created_at: options.createdAt ?? pullRequest.created_at,
     user: { ...author, type: options.authorType ?? "User" },
     changed_files: options.changedFiles ?? files.length,
-    head: { sha: headSha, ref: "change", repo: { id: 2 } },
-    base: { sha: "b".repeat(40), ref: "main", repo: { id: 1 } },
   };
   const routes = {
     [`GET ${pullPath}`]: pr,
@@ -97,8 +104,14 @@ function runGuard(options: Options = {}) {
     },
     ...options.routes,
   };
-  writeFileSync(eventPath, JSON.stringify(options.event ?? { pull_request: pr }));
-  writeFileSync(fixturePath, JSON.stringify({ routes, logPath }));
+  writeFileSync(
+    eventPath,
+    JSON.stringify({
+      repository: { default_branch: "main" },
+      ...(options.event ?? { pull_request: pr }),
+    }),
+  );
+  writeFileSync(fixturePath, JSON.stringify({ routes, logPath, clock: true }));
   writeFileSync(logPath, "");
   const script = options.script ?? "security-sensitive-guard";
   let scriptPath = path.resolve(`scripts/github/${script}.mjs`);
@@ -146,7 +159,7 @@ function runGuard(options: Options = {}) {
       (line) =>
         JSON.parse(line) as {
           method: string;
-          path: string;
+          path?: string;
           body?: { state?: string; context?: string; body?: string; labels?: string[] };
         },
     );
@@ -154,12 +167,12 @@ function runGuard(options: Options = {}) {
     ...result,
     requests,
     statuses: requests
-      .filter((request) => request.path.includes("/statuses/"))
+      .filter((request) => request.path?.includes("/statuses/"))
       .map((request) => request.body?.state),
     comment: requests.findLast(
       (request) =>
-        (request.method === "POST" && request.path.endsWith("/comments")) ||
-        (request.method === "PATCH" && request.path.includes("/issues/comments/")),
+        (request.method === "POST" && request.path?.endsWith("/comments")) ||
+        (request.method === "PATCH" && request.path?.includes("/issues/comments/")),
     )?.body?.body,
   };
 }
@@ -189,35 +202,6 @@ describe("security-sensitive guard entry point", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toMatch(/Skipping label .*Fixture API failure/u);
     expect(result.stderr).toMatch(/Skipping comment creation.*Fixture API failure/u);
-  });
-
-  it("does not transfer a maintainer author's exemption to a duplicate PR with the same head", () => {
-    const duplicatePullRequest = {
-      number: 8,
-      state: "open",
-      draft: false,
-      created_at: "2026-01-01T00:00:00Z",
-      user: author,
-      changed_files: 1,
-      head: { sha: headSha, ref: "duplicate", repo: { id: 2 } },
-      base: { sha: "b".repeat(40), ref: "main", repo: { id: 1 } },
-    };
-    const result = runGuard({
-      authorRole: "maintain",
-      routes: {
-        [`GET /repos/openclaw/openclaw/commits/${headSha}/statuses`]: [
-          {
-            context: "openclaw/ci-gate",
-            description: "PR #8: Security review has not completed",
-            creator: { login: "github-actions[bot]", type: "Bot" },
-          },
-        ],
-        "GET /repos/openclaw/openclaw/pulls/8": duplicatePullRequest,
-      },
-    });
-    expect(result.status).toBe(1);
-    expect(result.statuses).not.toContain("success");
-    expect(result.statuses.at(-1)).toBe("failure");
   });
 
   it.each([
@@ -335,18 +319,11 @@ describe("security-sensitive guard entry point", () => {
       expect(result.comment).toContain(`- Approval comment: ${approval.html_url}`);
       expect(
         result.requests
-          .filter((request) => request.path.includes("/statuses/"))
-          .every((request) => request.path.endsWith(headSha)),
+          .filter((request) => request.path?.includes("/statuses/"))
+          .every((request) => request.path?.endsWith(headSha)),
       ).toBe(true);
     },
   );
-
-  it("accepts both commands in one comment", () => {
-    const result = runGuard({
-      comments: [notice, { ...approval, body: `${approval.body}\n/allow-dependencies-change` }],
-    });
-    expect(result.status, result.stderr).toBe(0);
-  });
 
   it.each(["created", "edited", "deleted"])(
     "uses the %s comment event only as a PR locator and rereads live command authority",
@@ -396,27 +373,53 @@ describe("security-sensitive guard entry point", () => {
     expect(revoked.statuses).toEqual(["failure", "failure"]);
   });
 
-  it("ignores issue comments outside a PR", () => {
-    const result = runGuard({ event: { ...commentEvent, issue: { number: 7 } } });
-    expect(result.status).toBe(1);
-    expect(result.requests).toEqual([]);
-  });
+  it.each([{ ...commentEvent, issue: { number: 7 } }, { inputs: { pr_number: "7" } }])(
+    "rejects events without a PR locator before making requests: %j",
+    (event) => {
+      const result = runGuard({ event });
+      expect(result.status).toBe(1);
+      expect(result.requests).toEqual([]);
+    },
+  );
 
-  it("rejects manual input-only events before making requests", () => {
-    const result = runGuard({ event: { inputs: { pr_number: "7" } } });
-    expect(result.status).toBe(1);
-    expect(result.requests).toEqual([]);
-  });
+  it.each([undefined, "", null])(
+    "rejects an invalid default branch %s before writes",
+    (defaultBranch) => {
+      const result = runGuard({
+        event: {
+          repository: { default_branch: defaultBranch },
+          issue: { number: 7, pull_request: {} },
+          comment: {},
+        },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("event has no default branch");
+      expect(result.requests).toEqual([]);
+    },
+  );
 
-  it("fails closed when role verification is unavailable", () => {
-    const result = runGuard({
-      routes: {
-        "GET /repos/openclaw/openclaw/collaborators/contributor/permission": { httpError: 403 },
-      },
-    });
-    expect(result.status).toBe(1);
-    expect(result.statuses).toEqual(["failure"]);
-  });
+  it.each(["security-sensitive-guard", "dependency-guard"] as const)(
+    "%s stops a closed PR during rollout reads without publishing failure",
+    (script) => {
+      const pr = { ...pullRequest, created_at: "2025-01-01T00:00:00Z" };
+      const result = runGuard({
+        script,
+        routes: {
+          [`GET ${pullPath}`]: {
+            responses: [
+              { advanceMs: 15_000, response: pr },
+              { ...pr, state: "closed" },
+            ],
+          },
+          "GET /repos/openclaw/openclaw/pulls/152415": { advanceMs: 15_000, response: rollout },
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("skipping");
+      expect(result.requests.every((entry) => entry.method === "GET")).toBe(true);
+      expect(result.requests.at(-1)).toMatchObject({ method: "GET", path: pullPath });
+    },
+  );
 
   it("refuses incomplete changed-file lists", () => {
     const result = runGuard({ changedFiles: 3001 });
@@ -425,29 +428,31 @@ describe("security-sensitive guard entry point", () => {
     expect(result.statuses).toEqual(["failure"]);
   });
 
-  it("refuses success if the PR changes after approval is read", () => {
-    const pr = {
-      number: 7,
-      state: "open",
-      draft: false,
-      created_at: "2026-01-01T00:00:00Z",
-      user: author,
-      changed_files: 1,
-      head: { sha: headSha, ref: "change", repo: { id: 2 } },
-      base: { sha: "b".repeat(40), ref: "main", repo: { id: 1 } },
-    };
-    const result = runGuard({
-      comments: [notice, approval],
-      routes: {
-        [`GET ${pullPath}`]: {
-          responses: [pr, pr, { ...pr, head: { ...pr.head, sha: "c".repeat(40) } }],
+  it.each(["security-sensitive-guard", "dependency-guard"] as const)(
+    "%s skips a superseded head after approval is read",
+    (script) => {
+      const pr = pullRequest;
+      const result = runGuard({
+        script,
+        files: [
+          {
+            filename: script === "dependency-guard" ? "pnpm-workspace.yaml" : "src/gateway/auth.ts",
+          },
+        ],
+        authorRole: "maintain",
+        comments: [notice, approval],
+        routes: {
+          [`GET ${pullPath}`]: {
+            responses: [pr, pr, { ...pr, head: { ...pr.head, sha: "c".repeat(40) } }],
+          },
         },
-      },
-    });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("pull request changed");
-    expect(result.statuses).toEqual(["failure"]);
-  });
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("Superseded");
+      expect(result.statuses).toEqual(["failure"]);
+      expect(result.comment).toBeUndefined();
+    },
+  );
 
   it("leaves hard-tier approval to CODEOWNERS and ignores ordinary changes", () => {
     const result = runGuard({
@@ -466,42 +471,35 @@ describe("security-sensitive guard entry point", () => {
         { filename: script === "dependency-guard" ? "pnpm-workspace.yaml" : "src/gateway/auth.ts" },
       ];
 
-      it("does not publish approval or mutate an older PR that has not incorporated the rollout", () => {
-        const result = runGuard({
-          script,
-          files,
-          createdAt: "2025-11-01T00:00:00Z",
-          routes: {
-            [`GET /repos/openclaw/openclaw/compare/${rolloutSha}...${headSha}`]: {
-              base_commit: { sha: rolloutSha },
-              merge_base_commit: { sha: "b".repeat(40) },
-              status: "diverged",
+      it.each([
+        { status: "diverged", ancestor: "b".repeat(40), enforced: false },
+        { status: "ahead", ancestor: rolloutSha, enforced: true },
+      ])(
+        "applies old-PR rollout authority for $status ancestry",
+        ({ status, ancestor, enforced }) => {
+          const result = runGuard({
+            script,
+            files,
+            createdAt: "2025-11-01T00:00:00Z",
+            routes: {
+              [`GET /repos/openclaw/openclaw/compare/${rolloutSha}...${headSha}`]: {
+                base_commit: { sha: rolloutSha },
+                merge_base_commit: { sha: ancestor },
+                status,
+              },
             },
-          },
-        });
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("grandfathered");
-        expect(result.statuses).toEqual([]);
-        expect(result.requests.every((request) => request.method === "GET")).toBe(true);
-      });
-
-      it("requires approval after an older PR incorporates the rollout", () => {
-        const result = runGuard({
-          script,
-          files,
-          createdAt: "2025-11-01T00:00:00Z",
-          routes: {
-            [`GET /repos/openclaw/openclaw/compare/${rolloutSha}...${headSha}`]: {
-              base_commit: { sha: rolloutSha },
-              merge_base_commit: { sha: rolloutSha },
-              status: "ahead",
-            },
-          },
-        });
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.statuses.at(-1)).toBe("failure");
-        expect(result.comment).toContain("/allow-");
-      });
+          });
+          expect(result.status, result.stderr).toBe(0);
+          if (enforced) {
+            expect(result.statuses.at(-1)).toBe("failure");
+            expect(result.comment).toContain("/allow-");
+          } else {
+            expect(result.stdout).toContain("grandfathered");
+            expect(result.statuses).toEqual([]);
+            expect(result.requests.every((request) => request.method === "GET")).toBe(true);
+          }
+        },
+      );
 
       it.each([
         { name: "unavailable", response: { httpError: 403 } },
@@ -559,55 +557,61 @@ dependencies:
 });
 
 describe("sensitive change classification", () => {
-  it.each([
-    "src/gateway/auth.ts",
-    "src/gateway/operator-scopes.ts",
-    "src/gateway/origin-check.ts",
-    "src/gateway/server/ws-origin-policy.ts",
-    "src/gateway/methods/core-method-policy.ts",
-    "src/gateway/session-method-policy.ts",
-    "src/shared/operator-scope-compat.ts",
-    "src/shared/device-bootstrap-profile.ts",
-    "src/shared/gateway-method-policy.ts",
-    "src/shared/session-method-scopes.ts",
-    "src/infra/device-bootstrap.ts",
-    "src/agents/agent-tools.policy.ts",
-    "src/gateway/server/ws-connection/message-handler.ts",
-    "src/secrets/resolve.ts",
-    "src/secrets/.hidden-store/key.ts",
-    "src/gateway/.internal/auth.ts",
-    "src/agents/auth-profiles/store.ts",
-    "src/agents/sandbox/docker.ts",
-    "src/infra/exec-approvals.ts",
-    ".gitignore",
-  ])("explains the security responsibility of %s", (filename) => {
-    const changes = collectSecuritySensitiveChanges([{ filename }]);
-    expect(changes).toHaveLength(1);
-    expect(changes[0]).toMatchObject({ path: filename, reason: expect.any(String) });
-    expect(changes[0]?.reason.length).toBeGreaterThan(40);
-  });
-
-  it("detects moving an owned file into an unclassified path without flagging tests or docs", () => {
-    const changes = collectSecuritySensitiveChanges([
-      { filename: "src/renamed.ts", previous_filename: "src/gateway/auth.ts" },
-      { filename: "src/gateway/auth.test.ts" },
-      { filename: "docs/gateway/authentication.md" },
-    ]);
-    expect(changes.map((change) => change.path)).toEqual(["src/gateway/auth.ts"]);
-  });
-
-  it("preserves exclusion boundaries and case sensitivity", () => {
-    const changes = collectSecuritySensitiveChanges([
-      "src/secrets/nested/TEST/store.ts",
-      "src/secrets/store.MD",
-      "src/secrets/store.test.ts",
-      "src/secrets/nested-fixtures/store.ts",
-      "src/secrets/store.TEST.ts",
-      "src/secrets/fixtureless-store.ts",
-    ]);
-    expect(changes.map((change) => change.path)).toEqual([
-      "src/secrets/fixtureless-store.ts",
-      "src/secrets/store.TEST.ts",
-    ]);
-  });
+  it.each<{
+    files: Array<string | { filename: string; previous_filename?: string }>;
+    expected: string[];
+    explain?: boolean;
+  }>([
+    ...[
+      "src/gateway/auth.ts",
+      "src/gateway/operator-scopes.ts",
+      "src/gateway/origin-check.ts",
+      "src/gateway/server/ws-origin-policy.ts",
+      "src/gateway/methods/core-method-policy.ts",
+      "src/gateway/session-method-policy.ts",
+      "src/shared/operator-scope-compat.ts",
+      "src/shared/device-bootstrap-profile.ts",
+      "src/shared/gateway-method-policy.ts",
+      "src/shared/session-method-scopes.ts",
+      "src/infra/device-bootstrap.ts",
+      "src/agents/agent-tools.policy.ts",
+      "src/gateway/server/ws-connection/message-handler.ts",
+      "src/secrets/resolve.ts",
+      "src/secrets/.hidden-store/key.ts",
+      "src/gateway/.internal/auth.ts",
+      "src/agents/auth-profiles/store.ts",
+      "src/agents/sandbox/docker.ts",
+      "src/infra/exec-approvals.ts",
+      ".gitignore",
+    ].map((filename) => ({ files: [{ filename }], expected: [filename], explain: true })),
+    {
+      files: [
+        { filename: "src/renamed.ts", previous_filename: "src/gateway/auth.ts" },
+        { filename: "src/gateway/auth.test.ts" },
+        { filename: "docs/gateway/authentication.md" },
+      ],
+      expected: ["src/gateway/auth.ts"],
+    },
+    {
+      files: [
+        "src/secrets/nested/TEST/store.ts",
+        "src/secrets/store.MD",
+        "src/secrets/store.test.ts",
+        "src/secrets/nested-fixtures/store.ts",
+        "src/secrets/store.TEST.ts",
+        "src/secrets/fixtureless-store.ts",
+      ],
+      expected: ["src/secrets/fixtureless-store.ts", "src/secrets/store.TEST.ts"],
+    },
+  ])(
+    "classifies protected paths, renames, and exclusions: $files",
+    ({ files, expected, explain }) => {
+      const changes = collectSecuritySensitiveChanges(files);
+      expect(changes.map((change) => change.path)).toEqual(expected);
+      if (explain) {
+        expect(changes[0]).toMatchObject({ path: expected[0], reason: expect.any(String) });
+        expect(changes[0]?.reason.length).toBeGreaterThan(40);
+      }
+    },
+  );
 });

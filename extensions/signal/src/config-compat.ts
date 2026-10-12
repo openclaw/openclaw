@@ -6,6 +6,10 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
 import { resolveSignalAccountKey } from "./account-selection.js";
 import type { SignalTransportConfig } from "./account-types.js";
 import {
+  hasLegacySignalTransportFields,
+  LEGACY_SIGNAL_TRANSPORT_FIELDS,
+} from "./legacy-transport.js";
+import {
   allocateSignalManagedNativePort,
   assignSignalManagedNativePort,
   DEFAULT_SIGNAL_MANAGED_NATIVE_PORT,
@@ -18,18 +22,6 @@ import {
   buildSignalTransportHttpUrl,
   normalizeSignalTransportUrl,
 } from "./transport-url.js";
-
-const LEGACY_TRANSPORT_FIELDS = [
-  "configPath",
-  "httpUrl",
-  "httpHost",
-  "httpPort",
-  "cliPath",
-  "autoStart",
-  "startupTimeoutMs",
-  "receiveMode",
-  "ignoreStories",
-] as const;
 
 const PENDING_LEGACY_TRANSPORT_WARNING =
   "- channels.signal: legacy auto transport is ambiguous while its endpoint is unavailable; bring the endpoint online and rerun openclaw doctor --fix, or replace the retired fields with an explicit account-owned transport in openclaw.json.";
@@ -51,35 +43,21 @@ function isSignalTransportConfig(value: unknown): value is SignalTransportConfig
   if (!isRecord(value)) {
     return false;
   }
-  if (value.kind === "managed-native") {
-    try {
+  try {
+    if (value.kind === "managed-native") {
       assertSignalSocketTransport(value);
-    } catch {
+      if (value.httpPort !== undefined && !isValidSignalManagedNativePort(value.httpPort)) {
+        return false;
+      }
+      if (value.url === undefined) {
+        return true;
+      }
+    } else if (value.kind !== "external-native" && value.kind !== "container") {
       return false;
-    }
-    if (value.httpPort !== undefined && !isValidSignalManagedNativePort(value.httpPort)) {
-      return false;
-    }
-    if (value.url === undefined) {
-      return true;
     }
     if (typeof value.url !== "string") {
       return false;
     }
-    try {
-      normalizeSignalTransportUrl(value.url);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  if (
-    (value.kind !== "external-native" && value.kind !== "container") ||
-    typeof value.url !== "string"
-  ) {
-    return false;
-  }
-  try {
     normalizeSignalTransportUrl(value.url);
     return true;
   } catch {
@@ -100,10 +78,6 @@ function legacyBaseUrl(entry: Record<string, unknown>, parent: Record<string, un
   const rawPort = inherited(entry, parent, "httpPort");
   const port = typeof rawPort === "number" ? rawPort : 8080;
   return buildSignalTransportHttpUrl(host, port);
-}
-
-function hasLegacyFields(entry: Record<string, unknown>): boolean {
-  return LEGACY_TRANSPORT_FIELDS.some((field) => Object.hasOwn(entry, field));
 }
 
 function wasLegacySignalAccountConfigured(
@@ -312,7 +286,7 @@ async function resolveLegacyTransport(params: {
 }
 
 function clearLegacyTransportFields(entry: Record<string, unknown>): void {
-  for (const field of LEGACY_TRANSPORT_FIELDS) {
+  for (const field of LEGACY_SIGNAL_TRANSPORT_FIELDS) {
     delete entry[field];
   }
 }
@@ -350,7 +324,8 @@ function nestedDefaultOwnsEffectiveTransport(entries: Record<string, unknown>[])
   const nestedDefault = nestedDefaultKey ? accounts[nestedDefaultKey] : undefined;
   return (
     isRecord(nestedDefault) &&
-    (isSignalTransportConfig(nestedDefault.transport) || hasLegacyFields(nestedDefault))
+    (isSignalTransportConfig(nestedDefault.transport) ||
+      hasLegacySignalTransportFields(nestedDefault))
   );
 }
 
@@ -562,6 +537,13 @@ function hasContainerTransportWithoutEffectiveAccount(cfg: OpenClawConfig): bool
   return false;
 }
 
+function pendingSignalTransportMigration(
+  cfg: OpenClawConfig,
+  warning: string,
+): ChannelDoctorConfigMutation {
+  return { config: cfg, changes: [], warnings: [warning] };
+}
+
 function prepareLegacySignalTransportMigration(cfg: OpenClawConfig):
   | ChannelDoctorConfigMutation
   | {
@@ -577,8 +559,8 @@ function prepareLegacySignalTransportMigration(cfg: OpenClawConfig):
   const accounts = isRecord(signal.accounts) ? signal.accounts : {};
   const hasLegacy =
     Object.hasOwn(signal, "apiMode") ||
-    hasLegacyFields(signal) ||
-    Object.values(accounts).some((entry) => isRecord(entry) && hasLegacyFields(entry));
+    hasLegacySignalTransportFields(signal) ||
+    Object.values(accounts).some(hasLegacySignalTransportFields);
   if (!hasLegacy) {
     return { config: cfg, changes: [] };
   }
@@ -593,13 +575,10 @@ function prepareLegacySignalTransportMigration(cfg: OpenClawConfig):
         (entry.transport.kind !== "managed-native" || !isSignalTransportConfig(entry.transport)),
     )
   ) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: [
-        "- channels.signal: invalid transport.socketPath configuration; correct the socket path and remove conflicting HTTP or receiveMode on-start options, then run openclaw doctor --fix.",
-      ],
-    };
+    return pendingSignalTransportMigration(
+      cfg,
+      "- channels.signal: invalid transport.socketPath configuration; correct the socket path and remove conflicting HTTP or receiveMode on-start options, then run openclaw doctor --fix.",
+    );
   }
   const migrationEntries = entries.filter((_, index) => shouldMaterializeTransport(entries, index));
   const legacyResolutionEntries = migrationEntries.filter(
@@ -607,22 +586,15 @@ function prepareLegacySignalTransportMigration(cfg: OpenClawConfig):
   );
   const invalidDerivedEndpoint = findInvalidLegacyDerivedEndpoint(legacyResolutionEntries, signal);
   if (invalidDerivedEndpoint) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: [
-        invalidDerivedEndpoint === "port"
-          ? PENDING_LEGACY_INVALID_PORT_WARNING
-          : PENDING_LEGACY_INVALID_HOST_WARNING,
-      ],
-    };
+    return pendingSignalTransportMigration(
+      cfg,
+      invalidDerivedEndpoint === "port"
+        ? PENDING_LEGACY_INVALID_PORT_WARNING
+        : PENDING_LEGACY_INVALID_HOST_WARNING,
+    );
   }
   if (hasInvalidLegacyHttpUrl(legacyResolutionEntries, signal)) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_INVALID_URL_WARNING],
-    };
+    return pendingSignalTransportMigration(cfg, PENDING_LEGACY_INVALID_URL_WARNING);
   }
   return { signal, apiMode, entries, legacyResolutionEntries };
 }
@@ -633,11 +605,7 @@ function finishLegacySignalTransportMigration(
   resolvedTransports: Array<SignalTransportConfig | undefined>,
 ): ChannelDoctorConfigMutation {
   if (hasInvalidManagedTransportPort(resolvedTransports)) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_INVALID_PORT_WARNING],
-    };
+    return pendingSignalTransportMigration(cfg, PENDING_LEGACY_INVALID_PORT_WARNING);
   }
   const transports = allocateMigratedManagedPorts({
     entries,
@@ -646,22 +614,14 @@ function finishLegacySignalTransportMigration(
   if (
     transports.some((transport, index) => shouldMaterializeTransport(entries, index) && !transport)
   ) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_TRANSPORT_WARNING],
-    };
+    return pendingSignalTransportMigration(cfg, PENDING_LEGACY_TRANSPORT_WARNING);
   }
   const next = applyMigratedSignalTransports({ cfg, entries, transports });
   if (!next) {
     return { config: cfg, changes: [] };
   }
   if (hasContainerTransportWithoutEffectiveAccount(next)) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_CONTAINER_ACCOUNT_WARNING],
-    };
+    return pendingSignalTransportMigration(cfg, PENDING_LEGACY_CONTAINER_ACCOUNT_WARNING);
   }
   return {
     config: next,
@@ -684,11 +644,7 @@ export async function migrateLegacySignalTransportConfig(params: {
     !params.detect &&
     legacyResolutionEntries.some((entry) => requiresDetection(entry, signal, apiMode))
   ) {
-    return {
-      config: params.cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_TRANSPORT_WARNING],
-    };
+    return pendingSignalTransportMigration(params.cfg, PENDING_LEGACY_TRANSPORT_WARNING);
   }
   const resolvedTransports = await Promise.all(
     entries.map(async (entry, index) =>

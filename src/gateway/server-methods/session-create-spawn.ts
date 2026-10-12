@@ -1,8 +1,47 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  ErrorCodes,
+  errorShape,
+  type SessionsCreateParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { createGatewaySession } from "../session-create-service.js";
-import type { TrustedSessionCreation } from "./session-creation-provenance.js";
+import type { TrustedSessionCreation } from "../session-creation-provenance.js";
 import type { GatewayClient } from "./types.js";
+
+export function validateSessionCreateSpawnRequest(
+  creation: TrustedSessionCreation,
+  params: Pick<
+    SessionsCreateParams,
+    "parentSessionKey" | "fork" | "forkFrom" | "incognito" | "visibility"
+  >,
+) {
+  const parent = normalizeOptionalString(params.parentSessionKey);
+  const requester =
+    creation.via === "spawn" ? normalizeOptionalString(creation.requesterSessionKey) : undefined;
+  if (creation.inheritedToolPolicy && parent !== requester) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "spawn parent must match the trusted agent caller",
+    );
+  }
+  if (
+    creation.childSessionPublication &&
+    (creation.via !== "spawn" ||
+      requester !== parent ||
+      creation.childSessionPublication.requesterSessionKey !== parent ||
+      params.fork === true ||
+      params.forkFrom !== undefined ||
+      params.incognito === true ||
+      params.visibility === "draft")
+  ) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "Public ingress requires a fresh isolated, non-private child.",
+    );
+  }
+  return undefined;
+}
 
 export function resolveSessionCreateSpawnContext(params: {
   client: GatewayClient | null;
@@ -16,7 +55,7 @@ export function resolveSessionCreateSpawnContext(params: {
   assertRuntimeCurrent?: () => void;
 }): Pick<
   Parameters<typeof createGatewaySession>[0],
-  "spawnToolPolicy" | "activeParentFork" | "preparedModelSelection"
+  "spawnToolPolicy" | "activeParentFork" | "preparedModelSelection" | "preparedPermissionSelection"
 > {
   const spawnToolPolicy =
     params.creation.via === "spawn" && params.creation.inheritedToolPolicy
@@ -32,6 +71,9 @@ export function resolveSessionCreateSpawnContext(params: {
     !params.creation.inheritedToolPolicy ||
     params.creation.actor?.type !== "agent"
   ) {
+    if (params.creation.inheritedPermissionMode) {
+      throw new Error("Permission inheritance requires a trusted spawn requester.");
+    }
     if (params.creation.resolvedModel) {
       throw new Error("Resolved model inheritance requires a trusted spawn requester.");
     }
@@ -57,13 +99,26 @@ export function resolveSessionCreateSpawnContext(params: {
     !requester ||
     requester.sessionKey !== requesterSessionKey ||
     requesterSessionKey !== params.parentSessionKey ||
-    normalizeAgentId(requester.agentId) !== params.agentId ||
-    normalizeAgentId(params.creation.actor.id) !== params.agentId
+    normalizeAgentId(params.creation.actor.id) !== normalizeAgentId(requester.agentId)
   ) {
+    if (params.creation.inheritedPermissionMode) {
+      throw new Error("Permission inheritance requires a current matching spawn requester.");
+    }
     if (params.creation.resolvedModel) {
       throw new Error("Resolved model inheritance requires a current same-agent requester.");
     }
     return { spawnToolPolicy };
+  }
+  // Permission policy belongs to the live caller even for a different target
+  // agent. Model inheritance and active transcript forks still require the same agent.
+  const preparedPermissionSelection = params.creation.inheritedPermissionMode
+    ? { mode: params.creation.inheritedPermissionMode, assertCurrent: requester.assertCurrent }
+    : undefined;
+  if (normalizeAgentId(requester.agentId) !== params.agentId) {
+    if (params.creation.resolvedModel) {
+      throw new Error("Resolved model inheritance requires a current same-agent requester.");
+    }
+    return { spawnToolPolicy, preparedPermissionSelection };
   }
   const resolvedModel = params.creation.resolvedModel;
   if (resolvedModel && params.model !== `${resolvedModel.provider}/${resolvedModel.model}`) {
@@ -73,11 +128,12 @@ export function resolveSessionCreateSpawnContext(params: {
     ? { ref: { ...resolvedModel }, assertCurrent: requester.assertCurrent }
     : undefined;
   if (params.fork !== true || params.forkFrom !== undefined || params.emitCommandHooks === true) {
-    return { spawnToolPolicy, preparedModelSelection };
+    return { spawnToolPolicy, preparedModelSelection, preparedPermissionSelection };
   }
   return {
     spawnToolPolicy,
     preparedModelSelection,
+    preparedPermissionSelection,
     activeParentFork: {
       requesterSessionKey: requester.sessionKey,
       assertCurrent: requester.assertCurrent,

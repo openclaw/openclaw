@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import { compose, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 const BACKUP_ARCHIVE_IDLE_TIMEOUT_MS = 5 * 60_000;
 
@@ -89,8 +89,7 @@ export async function writeArchiveStreamToFile(params: {
   let idleTimeoutError: Error | undefined;
   let lastEntryPath: string | undefined;
   let lastProgress: BackupArchiveProgress | undefined;
-  let outputBytes = 0;
-  let producerBytes = 0;
+  const bytes = { output: 0, raw: 0 };
   let settled = false;
   const reportProgress = (progress?: BackupArchiveProgress) => {
     // One archive owns this watchdog. Late producer callbacks must not refresh
@@ -104,10 +103,10 @@ export async function writeArchiveStreamToFile(params: {
         lastEntryPath = progress.entryPath;
       }
       if (progress.bytes) {
-        if (progress.phase === "output") {
-          outputBytes += progress.bytes;
-        } else if (progress.phase === "raw") {
-          producerBytes += progress.bytes;
+        const phase =
+          progress.phase === "output" ? "output" : progress.phase === "raw" ? "raw" : undefined;
+        if (phase) {
+          bytes[phase] += progress.bytes;
         }
       }
     }
@@ -118,7 +117,7 @@ export async function writeArchiveStreamToFile(params: {
           ? `, entry=${JSON.stringify(sliceUtf16Safe(lastEntryPath, -512))}`
           : "";
         idleTimeoutError = new Error(
-          `Backup archive write stalled: no progress observed for ${BACKUP_ARCHIVE_IDLE_TIMEOUT_MS}ms (phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${producerBytes}, outputBytes=${outputBytes})`,
+          `Backup archive write stalled: no progress observed for ${BACKUP_ARCHIVE_IDLE_TIMEOUT_MS}ms (phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${bytes.raw}, outputBytes=${bytes.output})`,
         );
         archiveStream?.destroy(idleTimeoutError);
         controller.abort(idleTimeoutError);
@@ -161,23 +160,21 @@ export async function writeArchiveStreamToFile(params: {
     return { archivePath: params.archivePath, identity: currentIdentity };
   } catch (err) {
     archiveWriteStream.destroy();
-    let cleanupReceipt: BackupArchiveCleanupReceipt | undefined = openedIdentity
-      ? { archivePath: params.archivePath, identity: openedIdentity }
-      : undefined;
-    if (!cleanupReceipt) {
+    let cleanupReceipt: BackupArchiveCleanupReceipt | undefined = {
+      archivePath: params.archivePath,
+    };
+    if (openedIdentity) {
+      cleanupReceipt.identity = openedIdentity;
+    } else {
       try {
         const currentIdentity = fsSync.lstatSync(params.archivePath);
-        cleanupReceipt = currentIdentity.isFile()
-          ? {
-              archivePath: params.archivePath,
-              identity: currentIdentity,
-            }
-          : { archivePath: params.archivePath };
+        if (currentIdentity.isFile()) {
+          cleanupReceipt.identity = currentIdentity;
+        }
       } catch (cleanupError) {
-        if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") {
-          // Preserve the cleanup obligation even when the filesystem cannot
-          // supply an identity until a later outer-cleanup attempt.
-          cleanupReceipt = { archivePath: params.archivePath };
+        // Preserve unknown identities for a later outer-cleanup attempt.
+        if ((cleanupError as NodeJS.ErrnoException).code === "ENOENT") {
+          cleanupReceipt = undefined;
         }
       }
     }

@@ -9,7 +9,6 @@ import { restoreRegisteredAgentHarnesses } from "./harness/registry.test-support
 import type { AgentHarness } from "./harness/types.js";
 import {
   hasResolvedThinkingCatalogEntry,
-  needsThinkHydration,
   resolveCandidateThinkingLevel,
   resolveEffectiveAgentRuntime,
 } from "./thinking-runtime.js";
@@ -38,15 +37,15 @@ describe("hasResolvedThinkingCatalogEntry", () => {
   });
 
   it.each([
-    { nativeRuntime: undefined, agentRuntime: undefined, resolved: true, hydrate: undefined },
-    { nativeRuntime: "native-test", agentRuntime: undefined, resolved: true, hydrate: undefined },
-    { nativeRuntime: undefined, agentRuntime: "openclaw", resolved: true, hydrate: false },
-    { nativeRuntime: "openclaw", agentRuntime: "openclaw", resolved: true, hydrate: false },
-    { nativeRuntime: "native-test", agentRuntime: "openclaw", resolved: false, hydrate: true },
-    { nativeRuntime: "native-test", agentRuntime: "native-test", resolved: true, hydrate: true },
+    { nativeRuntime: undefined, agentRuntime: undefined, resolved: true },
+    { nativeRuntime: "native-test", agentRuntime: undefined, resolved: true },
+    { nativeRuntime: undefined, agentRuntime: "openclaw", resolved: true },
+    { nativeRuntime: "openclaw", agentRuntime: "openclaw", resolved: true },
+    { nativeRuntime: "native-test", agentRuntime: "openclaw", resolved: false },
+    { nativeRuntime: "native-test", agentRuntime: "native-test", resolved: true },
   ])(
     "keeps observed=$nativeRuntime capabilities scoped to selected=$agentRuntime",
-    ({ nativeRuntime, agentRuntime, resolved, hydrate }) => {
+    ({ nativeRuntime, agentRuntime, resolved }) => {
       const catalog = [{ provider: "fixture", id: "model", reasoning: true, nativeRuntime }];
       expect(
         hasResolvedThinkingCatalogEntry({
@@ -56,9 +55,6 @@ describe("hasResolvedThinkingCatalogEntry", () => {
           agentRuntime,
         }),
       ).toBe(resolved);
-      if (agentRuntime !== undefined) {
-        expect(needsThinkHydration(catalog, "fixture", "model", agentRuntime)).toBe(hydrate);
-      }
     },
   );
 });
@@ -293,7 +289,7 @@ describe("resolveEffectiveAgentRuntime", () => {
     ).toBe("medium");
   });
 
-  it("clamps an unsupported candidate level without changing the requested value", () => {
+  it("preserves logical Ultra across candidate fallback", () => {
     const requested = "ultra" as const;
 
     expect(
@@ -303,7 +299,7 @@ describe("resolveEffectiveAgentRuntime", () => {
         modelId: "demo-model",
         level: requested,
       }),
-    ).toBe("high");
+    ).toBe("ultra");
     expect(requested).toBe("ultra");
   });
 
@@ -327,7 +323,7 @@ describe("resolveEffectiveAgentRuntime", () => {
         modelId: "gpt-5.6-luna",
         level: requested,
       }),
-    ).toBe("max");
+    ).toBe("ultra");
     expect(
       resolveCandidateThinkingLevel({
         cfg,

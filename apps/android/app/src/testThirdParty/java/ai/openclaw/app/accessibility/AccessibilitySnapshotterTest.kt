@@ -128,9 +128,9 @@ class AccessibilitySnapshotterTest {
       values = mapOf("n0" to "first"),
     )
 
-    assertEquals(GenerationTarget.Stale, store.resolve("wrong-snapshot", "n0"))
-    assertEquals(GenerationTarget.Stale, store.resolve("snapshot-1", "missing"))
-    assertEquals(GenerationTarget.Found("first"), store.resolve("snapshot-1", "n0"))
+    assertEquals(null, store.resolve("wrong-snapshot", "n0"))
+    assertEquals(null, store.resolve("snapshot-1", "missing"))
+    assertEquals("first", store.resolve("snapshot-1", "n0"))
 
     store.replace(
       snapshotId = "snapshot-2",

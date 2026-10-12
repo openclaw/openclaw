@@ -8,6 +8,8 @@ import {
   type PackageRootIntegrityFingerprint,
   type PackageLauncherFingerprint,
   packageLauncherDifferences,
+  packageIntegrityDifferences,
+  PackageIntegrityMismatchError,
 } from "./package-update-integrity.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 
@@ -99,7 +101,7 @@ export async function createNpmPackageRootLinkLifecycle(params: {
         return null;
       } catch (error) {
         assertCurrent();
-        return `Could not retire retained npm package link at ${params.backupRoot}: ${formatErrorMessage(error)}`;
+        return `Could not retire retained npm package link: ${formatErrorMessage(error)}; backup retained at ${params.backupRoot}`;
       }
     },
   };
@@ -126,19 +128,23 @@ export async function verifyNpmRootRecovery(
   const { root, fromBackup, hadPackage, previousRoot, targetSwapRoot, shims } = params;
   const reader = createPackageIntegrityReader(timeoutMs);
   return await reader.observe(fromBackup ? "retained" : "restored", async () => {
+    const actual =
+      hadPackage && previousRoot
+        ? await reader.rootEntry(root, targetSwapRoot, previousRoot.kind)
+        : undefined;
     if (
       hadPackage
         ? previousRoot
-          ? !isDeepStrictEqual(
-              await reader.rootEntry(root, targetSwapRoot, previousRoot.kind),
-              previousRoot,
-            )
+          ? !isDeepStrictEqual(actual, previousRoot)
           : !params.previousIdentity ||
             !isDeepStrictEqual(await reader.directoryIdentity(root), params.previousIdentity)
         : !fromBackup && (await reader.exists(root))
     ) {
-      throw new Error(
+      throw new PackageIntegrityMismatchError(
         `Package rollback verification failed: ${fromBackup ? "retained" : "restored"} package ${previousRoot?.kind === "link" ? "link" : "tree"} changed at ${root}. Inspect this ${fromBackup ? "backup" : "installation"} and resolve the changes before retrying recovery.`,
+        previousRoot?.kind === "directory" && actual?.kind === "directory"
+          ? packageIntegrityDifferences(previousRoot.tree, actual.tree)
+          : [],
       );
     }
     for (const shim of shims) {

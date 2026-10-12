@@ -1,26 +1,20 @@
 import path from "node:path";
 import {
-  loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
   type AuthProfileCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
 
-type QaAuthProfileCredential = AuthProfileCredential;
-
-function resolveQaAgentAuthDir(params: { stateDir: string; agentId: string }): string {
-  return path.join(params.stateDir, "agents", params.agentId, "agent");
-}
-
 export async function writeQaAuthProfiles(params: {
   agentId: string;
-  profiles: Record<string, QaAuthProfileCredential>;
+  profiles: Record<string, AuthProfileCredential>;
   replace?: boolean;
   stateDir: string;
 }): Promise<void> {
-  const agentDir = resolveQaAgentAuthDir(params);
+  const agentDir = path.join(params.stateDir, "agents", params.agentId, "agent");
   // Surface pending legacy-source errors before the locked updater, whose
   // public failure contract is intentionally nullable.
-  loadAuthProfileStoreWithoutExternalProfiles(agentDir, { inheritedAuthDir: agentDir });
+  await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir, { inheritedAuthDir: agentDir });
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     stateDir: params.stateDir,
@@ -46,15 +40,15 @@ export async function writeQaAuthProfiles(params: {
   }
 }
 
-export function readQaAuthProfiles(agentDir: string): {
+export async function readQaAuthProfiles(agentDir: string): Promise<{
   version: number;
-  profiles: Record<string, QaAuthProfileCredential>;
-} {
-  const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
+  profiles: Record<string, AuthProfileCredential>;
+}> {
+  const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir, {
     inheritedAuthDir: agentDir,
   });
   return {
     version: store.version,
-    profiles: store.profiles as Record<string, QaAuthProfileCredential>,
+    profiles: store.profiles,
   };
 }

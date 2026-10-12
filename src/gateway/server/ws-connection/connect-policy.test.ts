@@ -37,7 +37,6 @@ function expectMissingDeviceDecision(
     sharedAuthOk: true,
     authOk: true,
     hasSharedAuth: true,
-    isLocalClient: false,
     ...overrides,
   };
   expect(evaluateMissingDeviceIdentity(params).kind).toBe(expected);
@@ -71,12 +70,7 @@ describe("ws connect policy", () => {
     expectMissingDeviceDecision({ hasDeviceIdentity: true, role: "node" }, "allow");
 
     expectMissingDeviceDecision(
-      { role: "operator", isControlUi: true, isLocalClient: false },
-      "reject-control-ui-insecure-auth",
-    );
-
-    expectMissingDeviceDecision(
-      { role: "operator", isControlUi: true, isLocalClient: true },
+      { role: "operator", isControlUi: true },
       "reject-control-ui-insecure-auth",
     );
 
@@ -87,7 +81,6 @@ describe("ws connect policy", () => {
         localBackendSelfPairingOk: true,
         sharedAuthOk: false,
         hasSharedAuth: false,
-        isLocalClient: true,
       },
       "allow",
     );
@@ -98,7 +91,6 @@ describe("ws connect policy", () => {
         localBackendSelfPairingOk: true,
         sharedAuthOk: false,
         hasSharedAuth: false,
-        isLocalClient: true,
       },
       "reject-device-required",
     );

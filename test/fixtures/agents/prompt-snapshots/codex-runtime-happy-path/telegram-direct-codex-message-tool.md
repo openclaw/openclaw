@@ -44,9 +44,7 @@
       "userTimezone": "UTC"
     },
     "entries": {
-      "main": {
-        "default": true
-      }
+      "main": {}
     }
   },
   "messages": {
@@ -154,7 +152,7 @@
     },
     "openclaw_source_delivery": {
       "kind": "application",
-      "value": "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):\nVisible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.\n\n`send`: `message`; current source is default target. Set `target` only elsewhere."
+      "value": "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):\nVisible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.\n\n`send`: `message`; current source is default target. Set `target` only elsewhere.\n\nCommentary is optional progress and may be hidden. Answer user questions or status requests received during ongoing work with `message(action=send, final=false)`, then continue the task. Before finishing, deliver every still-pending answer through this turn's visible-reply route. Do not repeat answers already delivered."
     },
     "openclaw_temporal_context": {
       "kind": "application",
@@ -238,8 +236,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 ```json
 {
   "additionalContext": {
-    "chars": 1025,
-    "roughTokens": 257
+    "chars": 1348,
+    "roughTokens": 337
   },
   "codexCollaborationModeDeveloperInstructions": {
     "chars": 0,
@@ -258,24 +256,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 66710,
-    "roughTokens": 16678
+    "chars": 71622,
+    "roughTokens": 17906
   },
   "openClawDeveloperInstructions": {
-    "chars": 2745,
-    "roughTokens": 687
+    "chars": 3194,
+    "roughTokens": 799
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 26808,
-    "roughTokens": 6702
+    "chars": 27580,
+    "roughTokens": 6895
   },
   "totalWithDynamicToolsJson": {
-    "chars": 93520,
-    "roughTokens": 23380
+    "chars": 99204,
+    "roughTokens": 24801
   },
   "userInputText": {
     "chars": 879,
@@ -486,12 +484,13 @@ You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for
 
 Deferred searchable OpenClaw dynamic tools available: automations, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search.
 
-Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`.
+Deferred tools may be absent from the direct tool list. Call a tool that is in the direct tool list directly. Use `tool_search` to find a tool that is not listed; if `tool_search` is not directly callable, use `exec` to filter `ALL_TOOLS` by name and description and call the matching entry through `tools`. Never use `exec` to look up a tool that is already listed, and do not re-run a completed call to get a result you already have.
 
 Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
+Use or store credentials the user supplies as requested, and complete the task. In the final reply, briefly acknowledge how the supplied credential was used or stored, without repeating its value. Keep the acknowledgment factual and non-alarming.
 For user-requested login or pairing in a group, deliver short-lived codes and verification URLs only to the requesting user in private, then acknowledge in the group without them.
 
 ### Message Context
@@ -538,7 +537,9 @@ This turn asks Codex app-server to resolve its built-in Default collaboration-mo
 <openclaw_source_delivery>Current source-delivery policy for this turn (replaces earlier source-delivery guidance):
 Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.
 
-`send`: `message`; current source is default target. Set `target` only elsewhere.</openclaw_source_delivery>
+`send`: `message`; current source is default target. Set `target` only elsewhere.
+
+Commentary is optional progress and may be hidden. Answer user questions or status requests received during ongoing work with `message(action=send, final=false)`, then continue the task. Before finishing, deliver every still-pending answer through this turn's visible-reply route. Do not repeat answers already delivered.</openclaw_source_delivery>
 ```
 
 ### Developer: OpenClaw Additional Context (openclaw_temporal_context)
@@ -679,7 +680,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "final": {
-          "description": "For admitted message-tool-only source turns, set false for progress; set true, or omit, for the completed reply. Ignored for other sends.",
+          "description": "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true only when the user explicitly requested the reaction to the current source message as the complete response; omit or set false for acknowledgements or reactions followed by more work.",
           "type": "boolean"
         },
         "forceDocument": {

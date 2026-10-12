@@ -128,7 +128,17 @@ export function withCodeModeSourceAppend(
   message: AgentMessage,
   options: object | undefined,
   append: (token?: CodeModeSourceAppend) => string | undefined,
-): string | undefined {
+): string | undefined;
+export function withCodeModeSourceAppend(
+  message: AgentMessage,
+  options: object | undefined,
+  append: (token?: CodeModeSourceAppend) => Promise<string | undefined>,
+): Promise<string | undefined>;
+export function withCodeModeSourceAppend(
+  message: AgentMessage,
+  options: object | undefined,
+  append: (token?: CodeModeSourceAppend) => string | undefined | Promise<string | undefined>,
+): string | undefined | Promise<string | undefined> {
   const token = options && pendingAppends.get(options);
   if (options) {
     pendingAppends.delete(options);
@@ -138,11 +148,18 @@ export function withCodeModeSourceAppend(
     return append();
   }
   state.active = true;
+  let result: string | undefined | Promise<string | undefined>;
   try {
-    return append(token);
-  } finally {
+    result = append(token);
+  } catch (error) {
     sourceAppends.delete(token);
+    throw error;
   }
+  if (result instanceof Promise) {
+    return result.finally(() => sourceAppends.delete(token));
+  }
+  sourceAppends.delete(token);
+  return result;
 }
 
 export function readCodeModeSourceFields(

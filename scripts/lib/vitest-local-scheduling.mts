@@ -234,13 +234,13 @@ export function resolveLocalVitestScheduling(
   }
 
   if (loadRatio >= 0.75) {
-    const loadWorkers = Math.max(2, Math.ceil(inferred * 0.75));
+    const loadWorkers = Math.ceil(inferred * 0.75);
     const maxWorkers =
       memoryPressureLimit === null ? loadWorkers : Math.min(loadWorkers, memoryPressureLimit);
     return {
       maxWorkers,
       fileParallelism: maxWorkers > 1,
-      throttledBySystem: maxWorkers < inferred || maxWorkers < loadWorkers,
+      throttledBySystem: maxWorkers < inferred || memoryPressureLimit === 1,
     };
   }
 

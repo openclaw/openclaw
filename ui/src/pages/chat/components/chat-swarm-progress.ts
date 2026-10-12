@@ -11,16 +11,15 @@ import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts
 type SwarmDotStatus = "queued" | "running" | "done" | "failed";
 
 type SwarmDot = {
-  key: string;
   label: string;
   status: SwarmDotStatus;
   duration: string;
 };
 
 const SWARM_STATUS_LABEL_KEYS: Record<SwarmDotStatus, string> = {
-  queued: "tasksPage.status.queued",
-  running: "tasksPage.status.running",
-  done: "tasksPage.status.completed",
+  queued: "common.queued",
+  running: "common.running",
+  done: "common.completed",
   failed: "labsPage.swarm.failedOrStopped",
 };
 
@@ -61,8 +60,7 @@ function collectSwarmTasks(
     entries.push({
       phaseRank: row.swarmPhaseRank ?? Number.MAX_SAFE_INTEGER,
       dot: {
-        key: row.key,
-        label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
+        label: resolveSessionDisplayName(row.key, row),
         status,
         duration: swarmDuration(row, status),
       },

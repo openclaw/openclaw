@@ -4,21 +4,11 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  embeddedAgentLog,
-  type CodexBundleMcpThreadConfig,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { startCodexAttemptThread } from "./attempt-startup.js";
-import { CodexAppServerClient, isCodexAppServerConnectionClosedError } from "./client.js";
+import { startFixtureAttempt } from "./attempt-startup-retry.test-support.js";
+import { CodexAppServerClient } from "./client.js";
 import { threadStartResult } from "./codex-app-server.test-fixtures.js";
-import {
-  resolveCodexAppServerRuntimeOptions,
-  resolveCodexComputerUseConfig,
-  type CodexPluginConfig,
-} from "./config.js";
-import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
+import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import {
   resetCodexTestBindingStore,
@@ -30,29 +20,22 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
-import { createCodexTestModel } from "./test-support.js";
+import { findCodexAppServerSpawnError } from "./spawn-error.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
 }));
 
-vi.mock("./desktop-generation.js", () => ({
-  isCodexDesktopGenerationCurrent: () => false,
+vi.mock("./desktop-generation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./desktop-generation.js")>()),
   waitForCodexDesktopGeneration: async () => undefined,
 }));
 
 const tempRoots = new Set<string>();
 
 async function createStartupFailureFixture(
-  mode:
-    | "transient"
-    | "contention"
-    | "persistent"
-    | "unsupported"
-    | "overload"
-    | "registration-race"
-    | "refusal",
+  mode: "transient" | "persistent" | "unsupported" | "overload" | "refusal",
 ) {
   const root = path.join(os.tmpdir(), `openclaw-codex-startup-retry-${randomUUID()}`);
   tempRoots.add(root);
@@ -69,25 +52,15 @@ async function createStartupFailureFixture(
       "const [spawnCountPath, mode, codexHome, requestLogPath] = process.argv.slice(2);",
       'const attempt = Number(fs.existsSync(spawnCountPath) ? fs.readFileSync(spawnCountPath, "utf8") : 0) + 1;',
       'fs.writeFileSync(spawnCountPath, String(attempt), "utf8");',
-      "const startedAtPath = `${spawnCountPath}.started-at`;",
-      'if (attempt === 1) fs.writeFileSync(startedAtPath, String(Date.now()), "utf8");',
-      'const stillContended = mode === "contention" && Date.now() - Number(fs.readFileSync(startedAtPath, "utf8")) < 750;',
-      'if (mode === "registration-race" && attempt === 1) {',
-      '  process.on("SIGUSR2", () => {',
-      '    fs.writeSync(2, "Error: failed to initialize sqlite state runtime: database is locked\\n");',
-      "    process.exit(1);",
-      "  });",
-      "  setInterval(() => {}, 1_000);",
-      '  fs.writeFileSync(`${spawnCountPath}.ready`, "ready");',
-      '} else if (mode === "persistent" || (mode === "transient" && attempt === 1) || stillContended) {',
+      'process.stdout.write(JSON.stringify({ method: "fixture/ready" }) + "\\n");',
+      'if (mode === "persistent" || (mode === "transient" && attempt === 1)) {',
       "  console.error(`Error: failed to initialize sqlite state runtime under ${codexHome}: failed to initialize state runtime at ${codexHome}`);",
       // Keep the persistent fixture alive through process registration so this
-      // case reaches the retry owner; immediate-exit registration is covered above.
+      // case reaches the startup owner; immediate-exit registration has its own case.
       '  if (mode === "persistent") setTimeout(() => { process.exitCode = 1; }, 1_000);',
       "  else process.exitCode = 1;",
       "} else {",
       '  if (mode === "refusal") fs.writeSync(2, "startup diagnostic: inspection probe\\n");',
-      '  fs.writeFileSync(`${spawnCountPath}.ready`, "ready");',
       "  const lines = readline.createInterface({ input: process.stdin });",
       '  lines.on("line", (line) => {',
       "    const message = JSON.parse(line);",
@@ -103,7 +76,9 @@ async function createStartupFailureFixture(
       "        ? { config: {}, origins: {}, layers: [] }",
       '        : message.method === "configRequirements/read"',
       "          ? { requirements: null }",
-      `          : ${JSON.stringify(threadStartResult("thread-recovered", "/repo"))};`,
+      '          : message.method === "skills/list"',
+      "            ? { data: [] }",
+      `            : ${JSON.stringify(threadStartResult("thread-recovered", "/repo"))};`,
       "    process.stdout.write(`${JSON.stringify({ id: message.id, result })}\\n`);",
       "  });",
       "}",
@@ -121,70 +96,33 @@ async function createStartupFailureFixture(
   return { root, spawnCountPath, requestLogPath, pluginConfig };
 }
 
-function startFixtureAttempt(
-  fixture: Awaited<ReturnType<typeof createStartupFailureFixture>>,
-  attemptClientFactory = getLeasedSharedCodexAppServerClient,
-) {
-  const agentDir = path.join(fixture.root, "agent");
-  const workspaceDir = path.join(fixture.root, "workspace");
-  const bundleMcpThreadConfig = {
-    configPatch: undefined,
-    diagnostics: [],
-    evaluated: false,
-    fingerprint: undefined,
-    staticServerNames: [],
-    userStaticServerNames: [],
-  } satisfies CodexBundleMcpThreadConfig;
-  return startCodexAttemptThread({
-    bindingStore: testCodexAppServerBindingStore,
-    attemptClientFactory,
-    appServer: resolveCodexAppServerRuntimeOptions({ pluginConfig: fixture.pluginConfig }),
-    pluginConfig: fixture.pluginConfig,
-    computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig: fixture.pluginConfig }),
-    startupAuthProfileId: undefined,
-    startupAuthBindingFingerprint: undefined,
-    startupAuthAccountCacheKey: undefined,
-    startupEnvApiKeyCacheKey: undefined,
-    agentDir,
-    config: undefined,
-    buildAttemptParams: () =>
-      ({
-        hostCapabilities: createCodexTestHostCapabilities(),
-        prompt: "hello",
-        sessionId: "session-1",
-        sessionKey: "agent:agent-1:session-1",
-        agentDir,
-        sessionFile: path.join(fixture.root, "session.jsonl"),
-        effectiveCwd: workspaceDir,
-        workspaceDir,
-        runId: "run-1",
-        provider: "codex",
-        modelId: "gpt-5.4-codex",
-        model: createCodexTestModel("codex"),
-        thinkLevel: "medium",
-        disableTools: true,
-        timeoutMs: 5_000,
-        authStorage: {} as never,
-        authProfileStore: { version: 1, profiles: {} },
-        modelRegistry: {} as never,
-      }) as EmbeddedRunAttemptParams,
-    sessionAgentId: "agent-1",
-    effectiveWorkspace: workspaceDir,
-    effectiveCwd: workspaceDir,
-    dynamicTools: [],
-    webSearchAllowed: false,
-    developerInstructions: undefined,
-    finalConfigPatch: undefined,
-    bundleMcpThreadConfig,
-    nativeToolSurfaceEnabled: true,
-    nativeProviderWebSearchSupport: "supported",
-    sandboxExecServerEnabled: false,
-    sandbox: null,
-    contextEngineProjection: undefined,
-    startupTimeoutMs: 10_000,
-    signal: new AbortController().signal,
-    onStartupTimeout: vi.fn(),
-    spawnedBy: undefined,
+function waitForFixtureReady(child: childProcess.ChildProcess): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let output = "";
+    const onData = (chunk: Buffer) => {
+      output += chunk.toString();
+      if (output.includes('"fixture/ready"')) {
+        cleanup();
+        resolve();
+      }
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error("Fixture closed before readiness"));
+    };
+    const cleanup = () => {
+      child.stdout?.off("data", onData);
+      child.off("close", onClose);
+      child.off("error", onError);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    child.stdout?.on("data", onData);
+    // Exit can precede buffered stdout. Only close proves readiness is absent.
+    child.once("close", onClose);
+    child.once("error", onError);
   });
 }
 
@@ -200,98 +138,6 @@ describe("Codex app-server startup retry", () => {
     resetCodexTestBindingStore();
   });
 
-  it.skipIf(process.platform === "win32").each([
-    ["shared", getLeasedSharedCodexAppServerClient],
-    ["isolated", createIsolatedCodexAppServerClient],
-  ] as const)(
-    "retries %s startup when inspection finishes before the exit event",
-    async (_mode, factory) => {
-      const fixture = await createStartupFailureFixture("registration-race");
-      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-      const spawn = childProcess.spawn;
-      const readCommand = processSnapshot.readCodexAppServerProcessCommand;
-      let firstChild: childProcess.ChildProcess | undefined;
-      let exitDelivered = false;
-      const spawnSpy = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
-        const child = spawn(...args);
-        if (
-          !firstChild &&
-          Array.isArray(args[1]) &&
-          args[1].includes(path.join(fixture.root, "startup-failure.mjs"))
-        ) {
-          firstChild = child;
-          child.once("exit", () => {
-            exitDelivered = true;
-          });
-        }
-        return child;
-      });
-      const commandSpy = vi
-        .spyOn(processSnapshot, "readCodexAppServerProcessCommand")
-        .mockImplementation(async (observed, deadline) => {
-          if (observed.pid !== firstChild?.pid) {
-            return readCommand(observed, deadline);
-          }
-          await expect
-            .poll(() => fs.readFile(`${fixture.spawnCountPath}.ready`, "utf8").catch(() => ""))
-            .toBe("ready");
-          expect(await readCommand(observed, deadline)).toBeDefined();
-          firstChild.kill("SIGUSR2");
-          // Keep Node's event loop occupied until the OS has exited the real child.
-          // Inspection then refuses registration before JS can deliver exit or stderr.
-          const exitedBy = Date.now() + 5_000;
-          let exited = false;
-          while (Date.now() < exitedBy) {
-            const inspected = childProcess.spawnSync(
-              "ps",
-              ["-o", "stat=", "-p", String(observed.pid)],
-              {
-                encoding: "utf8",
-              },
-            );
-            if (inspected.status === 1 || inspected.stdout.trim().startsWith("Z")) {
-              exited = true;
-              break;
-            }
-          }
-          expect(exited).toBe(true);
-          expect(exitDelivered).toBe(false);
-          expect(firstChild.exitCode).toBeNull();
-          throw new processSnapshot.ProcessInspectionError("unavailable");
-        });
-      try {
-        const result = await startFixtureAttempt(fixture, factory);
-        try {
-          expect(result.thread.threadId).toBe("thread-recovered");
-          expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("2");
-          expect(firstChild?.exitCode).toBe(1);
-          expect(firstChild?.signalCode).toBeNull();
-          expect(warn).toHaveBeenCalledWith(
-            expect.any(String),
-            expect.objectContaining({
-              error: expect.stringContaining(
-                "failed to initialize sqlite state runtime: database is locked",
-              ),
-            }),
-          );
-        } finally {
-          result.turnRoute.release();
-          result.releaseSharedClientLease();
-          await result.client.closeAndWait();
-        }
-      } finally {
-        warn.mockRestore();
-        spawnSpy.mockRestore();
-        commandSpy.mockRestore();
-        if (firstChild && firstChild.exitCode === null && firstChild.signalCode === null) {
-          const exited = once(firstChild, "exit");
-          firstChild.kill("SIGKILL");
-          await exited;
-        }
-      }
-    },
-  );
-
   afterEach(async () => {
     await clearSharedCodexAppServerClientAndWait();
     defaultCodexPluginMetadataCache.clear();
@@ -302,57 +148,9 @@ describe("Codex app-server startup retry", () => {
     tempRoots.clear();
   });
 
-  it("retries a real app-server that fails sqlite initialization before registration completes", async (ctx) => {
-    const fixture = await createStartupFailureFixture("transient");
-    let firstChildExit: Promise<unknown> | undefined;
-    const spawn = childProcess.spawn;
-    const snapshot = processSnapshot.readCodexAppServerProcessSnapshot;
-    const spawnSpy = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
-      const child = spawn(...args);
-      if (
-        Array.isArray(args[1]) &&
-        args[1].includes(path.join(fixture.root, "startup-failure.mjs"))
-      ) {
-        firstChildExit ??= once(child, "exit");
-      }
-      return child;
-    });
-    const snapshotSpy = vi
-      .spyOn(processSnapshot, "readCodexAppServerProcessSnapshot")
-      .mockImplementation(async (...args) => {
-        // A slow inspector must not replace the child's retryable startup error.
-        await firstChildExit;
-        return await snapshot(...args);
-      });
-    ctx.onTestFinished(() => {
-      spawnSpy.mockRestore();
-      snapshotSpy.mockRestore();
-    });
-    const result = await startFixtureAttempt(fixture);
-
-    expect(firstChildExit).toBeDefined();
-    expect(result.thread.threadId).toBe("thread-recovered");
-    expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("2");
-    result.turnRoute.release();
-    result.releaseSharedClientLease();
-  });
-
-  it("waits out transient sqlite contention before retrying app-server startup", async () => {
-    const fixture = await createStartupFailureFixture("contention");
-    const result = await startFixtureAttempt(fixture);
-
-    expect(result.thread.threadId).toBe("thread-recovered");
-    expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("2");
-    result.turnRoute.release();
-    result.releaseSharedClientLease();
-  });
-
-  it.skipIf(process.platform === "win32").each([
-    ["shared", getLeasedSharedCodexAppServerClient],
-    ["isolated", createIsolatedCodexAppServerClient],
-  ] as const)(
-    "keeps live-child registration failures non-retryable for %s startup",
-    async (_mode, factory) => {
+  it.skipIf(process.platform === "win32")(
+    "keeps live-child registration failures non-retryable for shared startup",
+    async () => {
       for (const failure of ["snapshot", "command", "commit"] as const) {
         const fixture = await createStartupFailureFixture("refusal");
         const { createPluginStateSyncKeyedStore } =
@@ -366,6 +164,7 @@ describe("Codex app-server startup retry", () => {
         const readSnapshot = processSnapshot.readCodexAppServerProcessSnapshot;
         const readCommand = processSnapshot.readCodexAppServerProcessCommand;
         let child: childProcess.ChildProcess | undefined;
+        let ready: Promise<void> | undefined;
         const spawnSpy = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
           const spawned = spawn(...args);
           if (
@@ -373,6 +172,7 @@ describe("Codex app-server startup retry", () => {
             args[1].includes(path.join(fixture.root, "startup-failure.mjs"))
           ) {
             child = spawned;
+            ready = waitForFixtureReady(spawned);
           }
           return spawned;
         });
@@ -382,9 +182,7 @@ describe("Codex app-server startup retry", () => {
             if (!child) {
               return readSnapshot(...args);
             }
-            await expect
-              .poll(() => fs.readFile(`${fixture.spawnCountPath}.ready`, "utf8").catch(() => ""))
-              .toBe("ready");
+            await ready;
             expect(child.exitCode).toBeNull();
             expect(child.signalCode).toBeNull();
             return failure === "snapshot" ? readSnapshot(Date.now() - 1) : readSnapshot(...args);
@@ -403,11 +201,11 @@ describe("Codex app-server startup retry", () => {
             return failure === "command" ? readCommand(args[0], Date.now() - 1) : command;
           });
         try {
-          const error = await startFixtureAttempt(fixture, factory).catch(
-            (caught: unknown) => caught,
-          );
+          const error = await startFixtureAttempt(
+            fixture,
+            getLeasedSharedCodexAppServerClient,
+          ).catch((caught: unknown) => caught);
           expect(error).toBeInstanceOf(Error);
-          expect(isCodexAppServerConnectionClosedError(error)).toBe(false);
           expect((error as Error).message).toContain(
             failure === "commit" ? "512-row limit" : "Process inspection exceeded its deadline",
           );
@@ -443,6 +241,7 @@ describe("Codex app-server startup retry", () => {
       let current = true;
       const spawn = childProcess.spawn;
       let child: childProcess.ChildProcess | undefined;
+      let ready: Promise<void> | undefined;
       let closed: Promise<unknown> | undefined;
       const spawnSpy = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
         const spawned = spawn(...args);
@@ -451,6 +250,7 @@ describe("Codex app-server startup retry", () => {
           args[1].includes(path.join(fixture.root, "startup-failure.mjs"))
         ) {
           child = spawned;
+          ready = mode === "live child" ? waitForFixtureReady(spawned) : undefined;
           closed = once(spawned, "close");
         }
         return spawned;
@@ -462,9 +262,7 @@ describe("Codex app-server startup retry", () => {
           if (mode === "natural exit") {
             await closed;
           } else {
-            await expect
-              .poll(() => fs.readFile(`${fixture.spawnCountPath}.ready`, "utf8").catch(() => ""))
-              .toBe("ready");
+            await ready;
           }
           const rows = await readSnapshot(...args);
           current = false;
@@ -500,6 +298,7 @@ describe("Codex app-server startup retry", () => {
     const spawn = childProcess.spawn;
     const readCommand = processSnapshot.readCodexAppServerProcessCommand;
     let child: childProcess.ChildProcess | undefined;
+    let ready: Promise<void> | undefined;
     let closed: Promise<unknown> | undefined;
     const spawnSpy = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
       const spawned = spawn(...args);
@@ -508,6 +307,7 @@ describe("Codex app-server startup retry", () => {
         args[1].includes(path.join(fixture.root, "startup-failure.mjs"))
       ) {
         child = spawned;
+        ready = waitForFixtureReady(spawned);
         closed = once(spawned, "close");
       }
       return spawned;
@@ -515,9 +315,7 @@ describe("Codex app-server startup retry", () => {
     const commandSpy = vi
       .spyOn(processSnapshot, "readCodexAppServerProcessCommand")
       .mockImplementation(async (...args) => {
-        await expect
-          .poll(() => fs.readFile(`${fixture.spawnCountPath}.ready`, "utf8").catch(() => ""))
-          .toBe("ready");
+        await ready;
         const command = await readCommand(...args);
         controller.abort();
         return command;
@@ -543,13 +341,13 @@ describe("Codex app-server startup retry", () => {
     }
   });
 
-  it("bounds retries when sqlite state initialization keeps failing", async () => {
+  it("returns the initial sqlite startup failure without replaying native startup", async () => {
     const fixture = await createStartupFailureFixture("persistent");
 
     await expect(startFixtureAttempt(fixture)).rejects.toThrow(
       "failed to initialize sqlite state runtime",
     );
-    expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("3");
+    expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("1");
   });
 
   it("rejects an unsupported app-server version without retrying", async () => {
@@ -561,13 +359,18 @@ describe("Codex app-server startup retry", () => {
     expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("1");
   });
 
-  it("preserves spawn failure without classifying it as a retryable exit", async () => {
+  it("preserves spawn failure without retrying", async () => {
     const fixture = await createStartupFailureFixture("refusal");
     const command = path.join(fixture.root, "missing-executable");
     fixture.pluginConfig.appServer.command = command;
     const spawnSpy = vi.spyOn(childProcess, "spawn");
     try {
-      await expect(startFixtureAttempt(fixture)).rejects.toMatchObject({ code: "ENOENT" });
+      const error = await startFixtureAttempt(fixture).catch((caught: unknown) => caught);
+      expect(findCodexAppServerSpawnError(error)).toMatchObject({
+        command,
+        cause: expect.objectContaining({ code: "ENOENT" }),
+      });
+      await expect(startFixtureAttempt(fixture)).rejects.toBe(error);
       expect(spawnSpy.mock.calls.filter(([program]) => program === command)).toHaveLength(1);
     } finally {
       spawnSpy.mockRestore();

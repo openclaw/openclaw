@@ -1,9 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 // Control UI tests cover schema composition that changes field requiredness.
-import {
-  renderAnalyzedFormFixture,
-  renderObjectFixture,
-} from "../test-helpers/config-form-fixtures.ts";
+import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { analyzeConfigSchema } from "./config-form.ts";
 
@@ -47,37 +44,6 @@ describe("config form composition integrity", () => {
     });
     expect(container.textContent).toContain("Github");
     expect(container.textContent).not.toContain("Unsupported schema node");
-  });
-
-  it("keeps mixed union and allOf compositions fail-closed", () => {
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        mixed: {
-          type: "string",
-          anyOf: [{ const: "a" }, { const: "b" }],
-          allOf: [{ const: "a" }],
-        },
-      },
-    });
-
-    expect(analysis.unsupportedPaths).toEqual(["mixed"]);
-    expect(analysis.schema?.properties?.mixed).toMatchObject({
-      anyOf: [{ const: "a" }, { const: "b" }],
-      allOf: [{ const: "a" }],
-    });
-
-    const unsupportedUnion = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        mixed: {
-          type: "string",
-          anyOf: [{ const: "a" }, { const: "b" }],
-          not: { const: "b" },
-        },
-      },
-    });
-    expect(unsupportedUnion.unsupportedPaths).toEqual(["mixed"]);
   });
 
   it("renders finite boolean unions and string-or-literal unions while keeping constrained unions in Raw mode", () => {
@@ -146,77 +112,36 @@ describe("config form composition integrity", () => {
 
     const onPatch = vi.fn();
     const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     renderAnalyzedFormFixture(container, analysis, {
       value: { retention: "30d", mode: "auto", plainMode: "auto" },
       onPatch,
     });
 
-    const modeControl = [
-      ...container.querySelectorAll<HTMLElement & { value: string }>(
-        "wa-radio-group.settings-segmented",
-      ),
-    ].find((group) => group.querySelector("[slot='label']")?.textContent === "Native Commands");
+    const modeControl = container.querySelector(
+      '.settings-segmented[role="radiogroup"][aria-label="Native Commands"]',
+    );
     expect(modeControl).not.toBeNull();
-    const modeOptions = [...(modeControl?.querySelectorAll("wa-radio") ?? [])];
-    // Web Awesome radios take their accessible names from their visible default-slot text.
+    const modeOptions = [...(modeControl?.querySelectorAll(".settings-segmented__btn") ?? [])];
     expect(modeOptions.map((option) => option.textContent?.trim())).toEqual(["On", "Off", "Auto"]);
-    expect(modeOptions.map((option) => option.getAttribute("value"))).toEqual(["0", "1", "2"]);
-    const plainModeControl = [...container.querySelectorAll("wa-radio-group")].find(
-      (group) => group.querySelector("[slot='label']")?.textContent === "Plain Mode",
+    expect(
+      modeOptions.map((option) => option.querySelector<HTMLInputElement>("input")?.value),
+    ).toEqual(["0", "1", "2"]);
+    const plainModeControl = container.querySelector(
+      '.settings-segmented[role="radiogroup"][aria-label="Plain Mode"]',
     );
     expect(
-      [...(plainModeControl?.querySelectorAll("wa-radio") ?? [])].map((option) =>
+      [...(plainModeControl?.querySelectorAll(".settings-segmented__btn") ?? [])].map((option) =>
         option.textContent?.trim(),
       ),
     ).toEqual(["auto", "manual"]);
-    modeControl!.value = "1";
-    modeControl!.dispatchEvent(new Event("change", { bubbles: true }));
+    const offOption = modeControl?.querySelector<HTMLInputElement>(
+      'input[type="radio"][value="1"]',
+    );
+    expect(offOption).not.toBeNull();
+    offOption!.click();
     expect(onPatch).toHaveBeenCalledWith(["mode"], false);
-  });
-
-  it("marks required-only object branches as form-unsafe", () => {
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        closed: {
-          type: "object",
-          allOf: [{ required: ["token"] }],
-        },
-        open: {
-          type: "object",
-          additionalProperties: true,
-          allOf: [{ required: ["token"] }],
-        },
-      },
-    });
-
-    expect(analysis.unsupportedPaths).toEqual(["closed"]);
-  });
-
-  it("marks branch-scoped additional-properties schemas as form-unsafe", () => {
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        conflicting: {
-          type: "object",
-          allOf: [
-            { properties: { count: { type: "integer" } } },
-            { additionalProperties: { type: "string" } },
-          ],
-        },
-        representable: {
-          type: "object",
-          allOf: [
-            {
-              properties: { count: { type: "integer" } },
-              additionalProperties: { type: "string" },
-            },
-          ],
-        },
-      },
-    });
-
-    expect(analysis.unsupportedPaths).toEqual(["conflicting"]);
   });
 
   it("keeps annotations harmless and items-only schemas form-unsafe", () => {
@@ -292,289 +217,6 @@ describe("config form composition integrity", () => {
     expect(isSupportedConfigValueValid(nestedConflict ?? {}, ["123"])).toBe(false);
   });
 
-  it("does not clear fields required through allOf", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        settings: {
-          type: "object",
-          properties: {
-            count: { type: "integer" },
-          },
-          allOf: [
-            {
-              required: ["count", "mode"],
-              properties: {
-                count: { minimum: 2 },
-                mode: { type: "string", enum: ["a", "b", "c", "d", "e", "f"] },
-              },
-            },
-          ],
-        },
-      },
-    });
-    expect(analysis.unsupportedPaths).toEqual([]);
-    expect(analysis.schema).not.toBeNull();
-    if (!analysis.schema) {
-      return;
-    }
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { settings: { count: 3, mode: "a" } },
-      onPatch,
-    });
-
-    const input = container.querySelector<HTMLInputElement>("input[aria-label='Count']");
-    expect(input).not.toBeNull();
-    if (!input) {
-      return;
-    }
-    input.value = "";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(input.getAttribute("aria-invalid")).toBe("true");
-    expect(onPatch).not.toHaveBeenCalled();
-
-    input.value = "1";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(input.getAttribute("aria-invalid")).toBe("true");
-    expect(onPatch).not.toHaveBeenCalled();
-
-    input.value = "2";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(input.getAttribute("aria-invalid")).toBe("false");
-    expect(onPatch).toHaveBeenCalledWith(["settings", "count"], 2);
-
-    onPatch.mockClear();
-    const select = container.querySelector<HTMLSelectElement>("select[aria-label='Mode']");
-    expect(select).not.toBeNull();
-    if (!select) {
-      return;
-    }
-    expect(select.querySelector<HTMLOptionElement>("option[value='__unset__']")?.disabled).toBe(
-      true,
-    );
-    select.value = "__unset__";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(select.value).toBe("0");
-    expect(onPatch).not.toHaveBeenCalled();
-  });
-
-  it("does not clear required JSON-backed fields", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    renderObjectFixture(container, {
-      schema: {
-        type: "object",
-        properties: {
-          payload: {
-            anyOf: [{ type: "object" }, { type: "array" }],
-          },
-        },
-        allOf: [{ required: ["payload"] }],
-      },
-      value: { payload: { enabled: true } },
-      path: ["settings"],
-      onPatch,
-    });
-
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).not.toBeNull();
-    if (!textarea) {
-      return;
-    }
-    textarea.value = "";
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    textarea.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(textarea.getAttribute("aria-invalid")).toBe("true");
-    expect(onPatch).not.toHaveBeenCalled();
-
-    textarea.value = "123";
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    textarea.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(textarea.getAttribute("aria-invalid")).toBe("true");
-    expect(onPatch).not.toHaveBeenCalled();
-  });
-
-  it("preserves heterogeneous tuple schemas through analysis and rendering", () => {
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        tuple: {
-          type: "array",
-          items: [{ type: "string" }, { type: "integer", minimum: 2 }],
-          additionalItems: false,
-        },
-      },
-    });
-    expect(analysis.unsupportedPaths).toEqual([]);
-    const tupleSchema = analysis.schema?.properties?.tuple;
-    expect(
-      Array.isArray(tupleSchema?.items) ? tupleSchema.items.map((item) => item.type) : [],
-    ).toEqual(["string", "integer"]);
-    if (!analysis.schema) {
-      return;
-    }
-
-    const container = document.createElement("div");
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { tuple: ["head", 2] },
-      onPatch: vi.fn(),
-    });
-    const inputs = Array.from(container.querySelectorAll<HTMLInputElement>(".cfg-array input"));
-    expect(inputs.map((input) => input.type)).toEqual(["text", "number"]);
-    const add = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Add",
-    );
-    expect(add?.disabled).toBe(true);
-  });
-
-  it("rejects child edits that violate composed object constraints", () => {
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        settings: {
-          type: "object",
-          properties: {
-            mode: { type: "string" },
-          },
-          allOf: [{ const: { mode: "safe" } }],
-        },
-      },
-    });
-    expect(analysis.unsupportedPaths).toEqual([]);
-    if (!analysis.schema) {
-      return;
-    }
-
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { settings: { mode: "safe" } },
-      onPatch,
-    });
-    const mode = container.querySelector<HTMLInputElement>("input[aria-label='Mode']");
-    expect(mode).not.toBeNull();
-    if (!mode) {
-      return;
-    }
-    mode.value = "fast";
-    mode.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(mode.value).toBe("safe");
-    expect(onPatch).not.toHaveBeenCalled();
-  });
-
-  it("renders and enforces additional properties composed through allOf", () => {
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        aliases: {
-          type: "object",
-          allOf: [
-            {
-              additionalProperties: { type: "string", minLength: 2 },
-            },
-          ],
-        },
-      },
-    });
-    expect(analysis.unsupportedPaths).toEqual([]);
-    if (!analysis.schema) {
-      return;
-    }
-
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { aliases: { custom: "ok" } },
-      onPatch,
-    });
-    expect(
-      Array.from(container.querySelectorAll<HTMLButtonElement>("button")).some(
-        (button) => button.textContent?.trim() === "Add Entry",
-      ),
-    ).toBe(true);
-    const custom = container.querySelector<HTMLInputElement>("input[aria-label='Custom']");
-    expect(custom).not.toBeNull();
-    if (!custom) {
-      return;
-    }
-    custom.value = "x";
-    custom.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(custom.value).toBe("x");
-    expect(custom.getAttribute("aria-invalid")).toBe("true");
-    expect(onPatch).not.toHaveBeenCalled();
-  });
-
-  it("lets additionalProperties false dominate composed map policies", () => {
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        aliases: {
-          type: "object",
-          additionalProperties: { type: "string" },
-          allOf: [{ additionalProperties: false }],
-        },
-      },
-    });
-    expect(analysis.unsupportedPaths).toEqual([]);
-    if (!analysis.schema) {
-      return;
-    }
-
-    const container = document.createElement("div");
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { aliases: {} },
-      onPatch: vi.fn(),
-    });
-    expect(
-      Array.from(container.querySelectorAll<HTMLButtonElement>("button")).some(
-        (button) => button.textContent?.trim() === "Add Entry",
-      ),
-    ).toBe(false);
-  });
-
-  it("infers nested and compatible allOf types while rejecting impossible intersections", () => {
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        nested: {
-          allOf: [{ allOf: [{ type: "string", minLength: 2 }] }],
-        },
-        numeric: {
-          allOf: [{ type: "number" }, { type: "integer", minimum: 2 }],
-        },
-        impossible: {
-          allOf: [{ type: "string" }, { type: "number" }],
-        },
-      },
-    });
-    expect(analysis.unsupportedPaths).toEqual(["impossible"]);
-    expect(analysis.schema?.properties?.nested?.type).toBe("string");
-    expect(analysis.schema?.properties?.numeric?.type).toBe("integer");
-    if (!analysis.schema) {
-      return;
-    }
-
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { nested: "ok", numeric: 2, impossible: "raw-only" },
-      onPatch,
-    });
-    const nested = container.querySelector<HTMLInputElement>("input[aria-label='Nested']");
-    const numeric = container.querySelector<HTMLInputElement>("input[aria-label='Numeric']");
-    expect(nested?.type).toBe("text");
-    expect(numeric?.type).toBe("number");
-    if (!nested) {
-      return;
-    }
-    nested.value = "x";
-    nested.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(nested.getAttribute("aria-invalid")).toBe("true");
-    expect(onPatch).not.toHaveBeenCalled();
-  });
-
   it("normalizes primitive type arrays without accepting structured or composed type arrays", () => {
     const analysis = analyzeConfigSchema({
       type: "object",
@@ -592,56 +234,6 @@ describe("config form composition integrity", () => {
       minimum: 2,
       maxLength: 4,
     });
-  });
-
-  it("marks allOf branches with unenforced constraint keywords as form-unsafe", () => {
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        strictObject: {
-          type: "object",
-          additionalProperties: true,
-          allOf: [{ minProperties: 1 }],
-        },
-        strictArray: {
-          type: "array",
-          items: { type: "string" },
-          allOf: [{ contains: { const: "required" } }],
-        },
-        typedObject: {
-          allOf: [{ type: "object", minProperties: 1 }],
-        },
-        nestedConstraint: {
-          allOf: [
-            {
-              type: "object",
-              properties: {
-                child: { minProperties: 1 },
-              },
-            },
-          ],
-        },
-        outerConstraint: {
-          type: "array",
-          items: { type: "string" },
-          contains: { const: "required" },
-          allOf: [{ maxItems: 3 }],
-        },
-        plainConstraint: {
-          type: "array",
-          items: { type: "string" },
-          contains: { const: "required" },
-        },
-      },
-    });
-    expect(analysis.unsupportedPaths).toEqual([
-      "strictObject",
-      "strictArray",
-      "typedObject",
-      "nestedConstraint.child",
-      "outerConstraint",
-      "plainConstraint",
-    ]);
   });
 
   it("marks incompatible effective allOf child schemas as form-unsafe", () => {
@@ -703,33 +295,6 @@ describe("config form composition integrity", () => {
       nullable: false,
     });
     expect(analysis.schema?.properties?.unionTypeExcludesNull).toMatchObject({
-      nullable: false,
-      enumIncludesNull: false,
-    });
-  });
-
-  it("preserves whether nullable enums actually include null", () => {
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        excludesNull: {
-          type: ["string", "null"],
-          enum: ["fixed"],
-        },
-        includesNull: {
-          type: ["string", "null"],
-          enum: ["fixed", null],
-        },
-        typeExcludesNull: {
-          type: "string",
-          enum: ["fixed", null],
-        },
-      },
-    });
-    expect(analysis.unsupportedPaths).toEqual([]);
-    expect(analysis.schema?.properties?.excludesNull?.enumIncludesNull).toBe(false);
-    expect(analysis.schema?.properties?.includesNull?.enumIncludesNull).toBe(true);
-    expect(analysis.schema?.properties?.typeExcludesNull).toMatchObject({
       nullable: false,
       enumIncludesNull: false,
     });

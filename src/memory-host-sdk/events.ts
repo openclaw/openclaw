@@ -30,7 +30,8 @@ export async function appendMemoryHostEvent(
   });
 }
 
-async function readMemoryHostEventRecordsRaw(params: {
+/** Read recent memory host event records, including opt-in diagnostic variants. */
+export async function readMemoryHostEventRecords(params: {
   workspaceDir: string;
   limit?: number;
   env?: NodeJS.ProcessEnv;
@@ -53,7 +54,7 @@ export async function readMemoryHostEvents(params: {
   limit?: number;
   env?: NodeJS.ProcessEnv;
 }): Promise<MemoryHostEvent[]> {
-  const events = await readMemoryHostEventRecordsRaw({
+  const events = await readMemoryHostEventRecords({
     workspaceDir: params.workspaceDir,
     ...(params.env ? { env: params.env } : {}),
   });
@@ -61,13 +62,4 @@ export async function readMemoryHostEvents(params: {
     (event): event is MemoryHostEvent => event.type !== "memory.recall.skipped",
   );
   return applyMemoryHostEventLimit(legacyEvents, params.limit);
-}
-
-/** Read recent memory host event records, including opt-in diagnostic variants. */
-export async function readMemoryHostEventRecords(params: {
-  workspaceDir: string;
-  limit?: number;
-  env?: NodeJS.ProcessEnv;
-}): Promise<MemoryHostEventRecord[]> {
-  return await readMemoryHostEventRecordsRaw(params);
 }

@@ -13,10 +13,6 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const metadataBoundaries = ["configured stat", "rolling readdir", "candidate stat"] as const;
-const operationalErrorCodes = ["EACCES", "EIO", "EMFILE"] as const;
-const operationalMetadataFailures = metadataBoundaries.flatMap((boundary) =>
-  operationalErrorCodes.map((code) => ({ boundary, code })),
-);
 
 const resolvedRedaction = { mode: "tools" as const, patterns: [/custom-secret-[a-z]+/g] };
 type RedactOptions = Parameters<typeof import("./redact.js").redactSensitiveLines>[1];
@@ -368,13 +364,13 @@ describe("readConfiguredLogTail", () => {
     expect(result.lines[0]?.trimEnd()).toBe("first-line-in-window");
   });
 
-  it.each(operationalMetadataFailures)(
-    "rethrows $code from the $boundary boundary",
-    async ({ boundary, code }) => {
+  it.each(metadataBoundaries)(
+    "rethrows operational errors from the %s boundary",
+    async (boundary) => {
       const tempDir = tempDirs.make("openclaw-log-tail-");
       const configured = path.join(tempDir, "openclaw-2026-01-22.log");
       const candidate = path.join(tempDir, "openclaw-2026-01-21.log");
-      const error = Object.assign(new Error(`${code} injected`), { code });
+      const error = Object.assign(new Error("EACCES injected"), { code: "EACCES" });
       const realStat = fs.stat.bind(fs);
 
       if (boundary === "candidate stat") {

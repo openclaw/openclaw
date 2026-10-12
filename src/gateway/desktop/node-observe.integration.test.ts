@@ -366,7 +366,7 @@ describe("worker environment node desktop observe integration", () => {
       const completedInvocations: boolean[] = [];
       const passwordFilePath = path.join(workerSupport.testState.root, "vnc.password");
       await fs.writeFile(passwordFilePath, "memory-only-password\n", { mode: 0o600 });
-      const record = workerSupport.seedReadyNodeDesktop("worker-node-desktop-byte-flow", {
+      const record = await workerSupport.seedReadyNodeDesktop("worker-node-desktop-byte-flow", {
         ...workerSupport.DESKTOP,
         port: rfb.port,
         passwordFilePath,

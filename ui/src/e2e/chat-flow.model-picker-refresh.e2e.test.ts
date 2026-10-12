@@ -67,7 +67,7 @@ suite.define(() => {
         .toBe(true);
       expect(await picker.getAttribute("open")).not.toBeNull();
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -122,9 +122,6 @@ suite.define(() => {
         'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
       );
       await picker.locator('[data-chat-model-select="true"]').tap();
-      await picker
-        .locator('[data-chat-model-provider-group="openai"] [data-chat-model-provider-toggle]')
-        .tap();
       await picker.getByRole("option", { name: "GPT-5.6 Terra", exact: true }).waitFor();
       await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
       await screenshot(page, "05-picker-before-touch-selection.png");
@@ -165,9 +162,6 @@ suite.define(() => {
       await page.reload();
       picker = page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker');
       await picker.locator('[data-chat-model-select="true"]').tap();
-      await picker
-        .locator('[data-chat-model-provider-group="openai"] [data-chat-model-provider-toggle]')
-        .tap();
       await picker.locator('[data-chat-model-default="true"]').waitFor();
       await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
       await expect
@@ -215,11 +209,12 @@ suite.define(() => {
       await screenshot(page, "09-configure-models-no-tooltip.png");
       await configureModels.tap();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
-      expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
-      await page.locator("[data-models-login-search]").waitFor({ state: "visible" });
-      await screenshot(page, "10-models-connection-navigation.png");
+      expect(new URL(page.url()).searchParams.get("provider")).toBe("openai");
+      expect(new URL(page.url()).searchParams.has("connect")).toBe(false);
+      await page.locator('[data-provider-id="openai"]').waitFor({ state: "visible" });
+      await screenshot(page, "10-provider-settings-navigation.png");
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -280,7 +275,7 @@ suite.define(() => {
       await picker.locator('[data-chat-model-select="true"]').click();
       await screenshot(page, "04-pin-cleared.png");
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -340,7 +335,7 @@ suite.define(() => {
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       await screenshot(page, "02-picker-after-background-apply.png");
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -427,7 +422,7 @@ suite.define(() => {
       });
       await expect.poll(() => picker.getAttribute("open")).toBe(null);
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 });

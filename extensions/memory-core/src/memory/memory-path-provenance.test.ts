@@ -89,6 +89,21 @@ describe("memory path provenance", () => {
       curatedRoot: true,
       originClass: "agent",
     });
+    await expect(classify("users/person/USER.md")).resolves.toEqual({
+      curatedRoot: false,
+      originClass: "agent",
+    });
+    await expect(classify("users/person/notes.md")).resolves.toMatchObject({
+      originClass: "untrusted",
+    });
+    vi.mocked(readMemoryArtifactProvenance).mockResolvedValueOnce({
+      fileHash: "0".repeat(64),
+      originClass: "untrusted",
+      observedAt: 1,
+    });
+    await expect(classify("users/person/USER.md")).resolves.toMatchObject({
+      originClass: "untrusted",
+    });
     await expect(classify("memory/2026-07-27.md")).resolves.toMatchObject({
       originClass: "agent",
     });

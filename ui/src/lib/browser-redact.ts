@@ -1,4 +1,3 @@
-// Browser-safe redaction for tool details rendered by the Control UI.
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -10,8 +9,6 @@ import {
 import { DEFAULT_REDACT_PATTERNS } from "../../../src/logging/redact-patterns.js";
 
 const URL_QUERY_PAIR_RE = /([?&])([^=&#\s]+)=([^&#\s"'<>]+)/gu;
-const PRIVATE_PATH_RE =
-  /(^|[\s"'`=])(?:\/Users\/|\/home\/|\/var\/folders\/|[A-Za-z]:\\)[^\s"'`,;]+/g;
 const SECRET_DETAIL_PATTERNS = DEFAULT_REDACT_PATTERNS.map((source) =>
   typeof source === "string" ? new RegExp(...parseRedactPatternSource(source)) : source,
 );
@@ -73,16 +70,15 @@ function redactUrlQueryPairs(detail: string): string {
   );
 }
 
-export function redactToolDetail(detail: string, options?: { preservePaths?: boolean }): string {
+export function redactToolDetail(detail: string): string {
   let redacted = redactUrlQueryPairs(detail);
   for (const pattern of SECRET_DETAIL_PATTERNS) {
     redacted = replaceRedactPattern(redacted, pattern, redactMatch);
   }
-  redacted = SENSITIVE_TEXT_PATTERNS.reduce(
+  return SENSITIVE_TEXT_PATTERNS.reduce(
     (text, [pattern, replacement]) => text.replace(pattern, replacement),
     redacted,
   );
-  return options?.preservePaths ? redacted : redacted.replace(PRIVATE_PATH_RE, "$1[redacted path]");
 }
 
 export const redactToolPayloadText = redactToolDetail;

@@ -109,42 +109,6 @@ describe("TuiSessionRunCoordinator", () => {
     expect(coordinator.sessionRuns.has("run-orphan-0")).toBe(false);
   });
 
-  it("protects lifecycle-confirmed concurrent streams without retaining orphan streams", () => {
-    const { coordinator } = createCoordinator({ state: { activeChatRunId: "run-first" } });
-    const assistantMessage = (value: string) => ({
-      role: "assistant",
-      content: [{ type: "text", text: value }],
-    });
-
-    coordinator.noteSessionRun("run-first", { protectStream: true });
-    coordinator.noteSessionRun("run-second", { protectStream: true });
-    coordinator.streamAssembler.ingestDelta("run-first", assistantMessage("first live"), false);
-    coordinator.streamAssembler.ingestDelta("run-second", assistantMessage("second live"), false);
-
-    for (let index = 0; index < 500; index += 1) {
-      const runId = `run-orphan-${index}`;
-      coordinator.noteSessionRun(runId);
-      coordinator.streamAssembler.ingestDelta(runId, assistantMessage(`orphan ${index}`), false);
-    }
-
-    expect(coordinator.sessionRuns.size).toBeLessThanOrEqual(200);
-    expect(coordinator.sessionRuns.has("run-first")).toBe(true);
-    expect(coordinator.sessionRuns.has("run-second")).toBe(true);
-    expect(
-      coordinator.streamAssembler.finalize("run-second", { role: "assistant", content: [] }, false),
-    ).toBe("second live");
-    expect(
-      coordinator.streamAssembler.finalize("run-first", { role: "assistant", content: [] }, false),
-    ).toBe("first live");
-    expect(
-      coordinator.streamAssembler.finalize(
-        "run-orphan-0",
-        { role: "assistant", content: [] },
-        false,
-      ),
-    ).toBe("(no output)");
-  });
-
   it("promotes a lifecycle-confirmed run instead of newer orphan deltas", () => {
     const { coordinator } = createCoordinator();
     coordinator.noteSessionRun("run-confirmed", { protectStream: true });

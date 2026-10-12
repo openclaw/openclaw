@@ -3,11 +3,11 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
 import {
   GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE,
   GUEST_FILESYSTEM_PYTHON,
-} from "../../infra/guest-filesystem.js";
+} from "@openclaw/fs-safe/guest";
+import { describe, expect, it } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { buildPinnedMutationPlan } from "./fs-bridge-mutation-helper.js";
 
@@ -30,17 +30,11 @@ function runMutationWithSource(source: string, args: string[], input?: string) {
 function runWritePlan(args: string[], input?: string) {
   const plan = buildPinnedMutationPlan({
     kind: "write",
-    check: {
-      target: {
-        hostPath: args[1] ?? "",
-        containerPath: args[1] ?? "",
-        relativePath: path.posix.join(args[2] ?? "", args[3] ?? ""),
-        writable: true,
-      },
-      options: {
-        action: "write files",
-        requireWritable: true,
-      },
+    target: {
+      hostPath: args[1] ?? "",
+      containerPath: args[1] ?? "",
+      relativePath: path.posix.join(args[2] ?? "", args[3] ?? ""),
+      writable: true,
     },
     pinned: {
       mountRootPath: args[1] ?? "",
@@ -78,35 +72,39 @@ const FORCED_COPY_FAILURE_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(
   "        raise OSError(errno.ENOSPC, 'forced copy failure')\n        copy_completed = True",
 );
 
+const FIFO_READ_WATCHDOG_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(
+  "def read_file(parent_fd, basename, max_bytes=None):",
+  "def read_file(parent_fd, basename, max_bytes=None):\n    import signal\n    signal.alarm(1)",
+);
+
 const FORCED_CREATE_FAILURE_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(
   "        # exclusive create payload is durable before publication",
   "        raise OSError(errno.ENOSPC, 'forced create failure')\n        # exclusive create payload is durable before publication",
 );
 
-const FORCED_CREATE_FAILURE_WITH_REPLACEMENT_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(
-  "        # Publish with a native atomic no-replace rename.",
-  [
-    "        replacement_fd = os.open(basename, WRITE_FLAGS, 0o600, dir_fd=parent_fd)",
-    "        try:",
-    "            os.write(replacement_fd, b'replacement')",
-    "        finally:",
-    "            os.close(replacement_fd)",
-    "        # Publish with a native atomic no-replace rename.",
-  ].join("\n"),
-);
+function injectCreatePublicationRace(lines: string[]): string {
+  const publication = "        rename_no_replace(staging_fd, temp_name, parent_fd, basename)";
+  // A changed guest fragment must fail loudly instead of silently dropping the race.
+  expect(GUEST_FILESYSTEM_PYTHON).toContain(publication);
+  return GUEST_FILESYSTEM_PYTHON.replace(publication, [...lines, publication].join("\n"));
+}
 
-const FORCED_CREATE_TEMP_SUBSTITUTION_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(
-  "        # Publish with a native atomic no-replace rename.",
-  [
-    "        os.unlink(temp_name, dir_fd=staging_fd)",
-    "        replacement_fd = os.open(temp_name, WRITE_FLAGS, 0o600, dir_fd=staging_fd)",
-    "        try:",
-    "            os.write(replacement_fd, b'replacement')",
-    "        finally:",
-    "            os.close(replacement_fd)",
-    "        # Publish with a native atomic no-replace rename.",
-  ].join("\n"),
-);
+const FORCED_CREATE_FAILURE_WITH_REPLACEMENT_MUTATION_PYTHON = injectCreatePublicationRace([
+  "        replacement_fd = os.open(basename, WRITE_FLAGS, 0o600, dir_fd=parent_fd)",
+  "        try:",
+  "            os.write(replacement_fd, b'replacement')",
+  "        finally:",
+  "            os.close(replacement_fd)",
+]);
+
+const FORCED_CREATE_TEMP_SUBSTITUTION_MUTATION_PYTHON = injectCreatePublicationRace([
+  "        os.unlink(temp_name, dir_fd=staging_fd)",
+  "        replacement_fd = os.open(temp_name, WRITE_FLAGS, 0o600, dir_fd=staging_fd)",
+  "        try:",
+  "            os.write(replacement_fd, b'replacement')",
+  "        finally:",
+  "            os.close(replacement_fd)",
+]);
 
 const FORCED_MISSING_RENAMEAT2_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(
   "    is_linux = sys.platform.startswith('linux')",
@@ -545,13 +543,15 @@ describe("sandbox pinned mutation helper", () => {
       await fs.mkdir(workspace, { recursive: true });
       expect(spawnSync("mkfifo", [fifoPath]).status).toBe(0);
 
+      expect(FIFO_READ_WATCHDOG_MUTATION_PYTHON).not.toBe(GUEST_FILESYSTEM_PYTHON);
       const result = spawnSync(
         "python3",
-        ["-c", GUEST_FILESYSTEM_PYTHON, "read", workspace, "", "live.pipe"],
+        ["-c", FIFO_READ_WATCHDOG_MUTATION_PYTHON, "read", workspace, "", "live.pipe"],
         {
           encoding: "utf8",
           stdio: ["pipe", "pipe", "pipe"],
-          timeout: 1_000,
+          // Bound startup and cleanup separately from the one-second read watchdog.
+          timeout: 10_000,
           killSignal: "SIGKILL",
         },
       );

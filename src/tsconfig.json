@@ -1,8 +1,19 @@
 {
-  "extends": "../tsconfig.json",
-  "compilerOptions": {
-    "allowJs": true
-  },
-  // Oxlint discovers this project for CommonJS test preloads; other sources use the root project.
-  "include": ["**/*.test-support.cjs"]
+  "extends": "../config/tsconfig/oxlint.source.json",
+  // Each excluded area has a discoverable lint/editor project. Imports still
+  // cross these boundaries; only unrelated explicit roots are removed.
+  "exclude": [
+    "../node_modules",
+    "../dist",
+    "../**/dist/**",
+    "../**/*.test-compat.d.ts",
+    "agents/**",
+    "gateway/**",
+    "infra/**",
+    "commands/**",
+    "plugins/**",
+    "config/**",
+    "cli/**",
+    "auto-reply/**"
+  ]
 }

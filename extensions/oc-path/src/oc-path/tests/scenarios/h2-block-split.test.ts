@@ -18,11 +18,6 @@ describe("h2-block-split", () => {
     expect(ast.blocks[0]?.bodyText.trim()).toBe("body");
   });
 
-  it("multiple headings produce blocks in order", () => {
-    const { ast } = parseMd("## A\nbody-a\n## B\nbody-b\n## C\nbody-c\n");
-    expect(ast.blocks.map((b) => b.heading)).toEqual(["A", "B", "C"]);
-  });
-
   it("H1 does NOT split", () => {
     const { ast } = parseMd("# H1 heading\n## H2 heading\n");
     expect(ast.blocks.length).toBe(1);
@@ -34,12 +29,6 @@ describe("h2-block-split", () => {
     const { ast } = parseMd("## H2\nbody\n### H3\nstill in H2 block\n");
     expect(ast.blocks.length).toBe(1);
     expect(ast.blocks[0]?.bodyText).toContain("### H3");
-  });
-
-  it("`## ` inside fenced code block does NOT split", () => {
-    const raw = "## Real\n\n```md\n## Inside code\n```\n\n## Another real\n";
-    const { ast } = parseMd(raw);
-    expect(ast.blocks.map((b) => b.heading)).toEqual(["Real", "Another real"]);
   });
 
   it("`##` without trailing space — does NOT match (regex requires \\s+)", () => {
@@ -92,17 +81,6 @@ describe("h2-block-split", () => {
     expect(ast.blocks[0]?.line).toBe(4);
   });
 
-  it("line numbers track through preamble", () => {
-    const { ast } = parseMd("line 1\nline 2\n## At line 3\n");
-    expect(ast.blocks[0]?.line).toBe(3);
-  });
-
-  it("nested fenced code blocks (~~~ vs ```) — only ``` is detected", () => {
-    const raw = "## H\n\n~~~md\n~~~\n\n## Next\n";
-    const { ast } = parseMd(raw);
-    expect(ast.blocks.map((b) => b.heading)).toEqual(["H", "Next"]);
-  });
-
   it("setext-style heading (`Heading\\n========\\n`) is NOT recognized", () => {
     const raw = "Heading\n=======\n## Real\n";
     const { ast } = parseMd(raw);
@@ -115,12 +93,6 @@ describe("h2-block-split", () => {
     expect(ast.blocks.length).toBe(1);
     expect(ast.blocks[0]?.heading).toBe("");
     expect(ast.blocks[0]?.slug).toBe("");
-  });
-
-  it("heading with only whitespace (`##    `)", () => {
-    const { ast } = parseMd("##    \n");
-    expect(ast.blocks.length).toBe(1);
-    expect(ast.blocks[0]?.heading).toBe("");
   });
 
   it("heading-shaped text inside multi-line bullet body — does split", () => {

@@ -9,11 +9,15 @@ const localWorkspaceRoot = path.resolve("gateway-workspace");
 const remoteWorkspaceRoot = "/remote/codex-workspace";
 
 describe("Codex remote workspace paths", () => {
-  it("maps a gateway workspace artifact into the remote execution workspace", () => {
+  it.each([
+    [localWorkspaceRoot, path.join(localWorkspaceRoot, "reports", "slack-upload.txt")],
+    ["/", "/reports/slack-upload.txt"],
+    ["C:\\", "C:\\reports\\slack-upload.txt"],
+  ])("maps an artifact under gateway workspace %s into the remote workspace", (root, value) => {
     expect(
       mapCodexAppServerRemoteWorkspacePath({
-        value: path.join(localWorkspaceRoot, "reports", "slack-upload.txt"),
-        localWorkspaceRoot,
+        value,
+        localWorkspaceRoot: root,
         remoteWorkspaceRoot,
       }),
     ).toBe(`${remoteWorkspaceRoot}/reports/slack-upload.txt`);

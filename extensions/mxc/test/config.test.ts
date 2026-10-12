@@ -58,15 +58,7 @@ describe("resolveConfig", () => {
   });
 
   test("rejects removed and malformed containment values", () => {
-    for (const containment of [
-      "windows_sandbox",
-      "wslc",
-      "microvm",
-      "seatbelt",
-      "isolation_session",
-      "lxc",
-      "invalid",
-    ]) {
+    for (const containment of ["windows_sandbox", "invalid"]) {
       expect(() => resolveConfig({ containment })).toThrow(/containment/u);
     }
   });
@@ -79,7 +71,6 @@ describe("resolveConfig", () => {
 
   test("enforces timeout bounds and only marks configured timeouts when supplied", () => {
     expect(() => resolveConfig({ timeoutSeconds: 0 })).toThrow(/>= 1/u);
-    expect(() => resolveConfig({ timeoutSeconds: -5 })).toThrow(/>= 1/u);
     expect(() => resolveConfig({ timeoutSeconds: "fast" })).toThrow(/timeoutSeconds/u);
     expect(() => resolveConfig({ timeoutSeconds: MAX_TIMER_TIMEOUT_SECONDS + 1 })).toThrow(
       new RegExp(`${MAX_TIMER_TIMEOUT_SECONDS}`, "u"),

@@ -16,6 +16,16 @@ public struct OpenClawNativeStateError: Error, LocalizedError, Sendable {
     }
 }
 
+public struct OpenClawNativeStateConfigValue: Equatable, Sendable {
+    public let value: String
+    public let updatedAtMilliseconds: Int64
+
+    public init(value: String, updatedAtMilliseconds: Int64) {
+        self.value = value
+        self.updatedAtMilliseconds = updatedAtMilliseconds
+    }
+}
+
 public enum OpenClawNativeStateCanonicalTable: Sendable {
     case deviceAuthTokens
     case deviceIdentities
@@ -40,7 +50,7 @@ public enum OpenClawNativeStateSQLiteValueType: Equatable, Sendable {
 /// One recursive connection lock serializes transactions and statement access.
 public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION. Native clients never upgrade this database.
-    private static let maximumSupportedSchemaVersion: Int64 = 17
+    private static let maximumSupportedSchemaVersion: Int64 = 20
     private static let defaultBusyTimeoutMilliseconds: Int32 = 5000
 
     private struct SchemaObject: Hashable {
@@ -203,49 +213,72 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     ]
 
     private let databaseURL: URL
-    private let handleLease: OpenClawNativeStateHandleLease
+    private let readOnly: Bool
+    private let admission: OpenClawNativeStateAdmission
+    private let databaseIdentity: OpenClawNativeStateAdmission.DatabaseIdentity
+    private var admittedConfigMachineStateAvailable: Bool?
     fileprivate let database: OpaquePointer
     fileprivate let connectionLock = NSRecursiveLock()
 
     public init(
         databaseURL: URL,
         busyTimeoutMilliseconds: Int32 = 5000,
-        createIfMissing: Bool = true) throws
+        createIfMissing: Bool = true,
+        readOnly: Bool = false) throws
     {
         self.databaseURL = databaseURL
-        self.handleLease = try OpenClawNativeStateHandleLease(databaseURL: databaseURL)
-        if createIfMissing {
+        self.readOnly = readOnly
+        self.admission = try OpenClawNativeStateAdmission(databaseURL: databaseURL)
+        if createIfMissing && !readOnly {
             try Self.secureDirectory(databaseURL.deletingLastPathComponent())
         }
         var database: OpaquePointer?
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
-            | (createIfMissing ? SQLITE_OPEN_CREATE : 0)
+        let flags = (readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE) | SQLITE_OPEN_FULLMUTEX
+            | (createIfMissing && !readOnly ? SQLITE_OPEN_CREATE : 0)
         let result = sqlite3_open_v2(databaseURL.path, &database, flags, nil)
         guard result == SQLITE_OK, let database else {
             let detail = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown SQLite error"
             if let database { sqlite3_close(database) }
             throw OpenClawNativeStateError("Could not open native state database: \(detail)")
         }
-        var initializationSucceeded = false
+        var databaseOwnedByInstance = false
         defer {
-            if !initializationSucceeded { sqlite3_close(database) }
+            if !databaseOwnedByInstance { sqlite3_close(database) }
         }
         self.database = database
+        try OpenClawNativeStateAdmission.assertDatabaseHasNotMoved(database)
+        self.databaseIdentity = try OpenClawNativeStateAdmission.databaseIdentity(at: databaseURL)
+        // Once all stored properties exist, a throwing initializer also runs deinit.
+        databaseOwnedByInstance = true
+        try self.admission.assertAvailable()
         let timeout = busyTimeoutMilliseconds > 0
             ? busyTimeoutMilliseconds
             : Self.defaultBusyTimeoutMilliseconds
         guard sqlite3_busy_timeout(database, timeout) == SQLITE_OK else {
             throw self.databaseError(operation: "configure SQLite busy timeout")
         }
-        try Self.secureDatabaseFiles(databaseURL)
-        initializationSucceeded = true
+        try self.admission.assertAvailable()
+        try self.assertCurrentDatabase()
+        if readOnly {
+            self.admittedConfigMachineStateAvailable = try self.admitReadOnlySchema()
+        } else {
+            try Self.secureDatabaseFiles(databaseURL)
+        }
     }
 
     deinit {
-        // Statements retain this owner. Its handle lease is released only after
-        // SQLite closes and final metadata maintenance has completed.
+        let sourceIsCurrent = (try? self.assertCurrentDatabase()) != nil
         sqlite3_close(self.database)
-        try? Self.secureDatabaseFiles(self.databaseURL)
+        if !self.readOnly, sourceIsCurrent,
+           (try? self.admission.assertAvailable()) != nil,
+           (try? OpenClawNativeStateAdmission.databaseIdentity(at: self.databaseURL)) == self.databaseIdentity
+        {
+            try? Self.secureDatabaseFiles(self.databaseURL)
+        }
+    }
+
+    public static func assertNoOfflineMaintenance(databaseURL: URL) throws {
+        _ = try OpenClawNativeStateAdmission(databaseURL: databaseURL)
     }
 
     public var changes: Int32 {
@@ -257,12 +290,15 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
             try self.execute("BEGIN IMMEDIATE")
             var committed = false
             defer {
-                if !committed { try? self.execute("ROLLBACK") }
+                if !committed { sqlite3_exec(self.database, "ROLLBACK", nil, nil, nil) }
             }
             let value = try body()
+            // Protect journal/WAL files while the write transaction still excludes removal.
+            try self.withCurrentDatabase {
+                try Self.secureDatabaseFiles(self.databaseURL)
+            }
             try self.execute("COMMIT")
             committed = true
-            try Self.secureDatabaseFiles(self.databaseURL)
             return value
         }
     }
@@ -303,6 +339,26 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         }
     }
 
+    /// Uses the read-only handle's admitted schema; core remains the value writer.
+    public func configMachineStateValue(key: String) throws -> OpenClawNativeStateConfigValue? {
+        try self.withCurrentDatabase {
+            guard let available = self.admittedConfigMachineStateAvailable else {
+                throw OpenClawNativeStateError("Config machine-state reads require a read-only database handle")
+            }
+            guard available else { return nil }
+            let query = try self.prepare(
+                "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = ? LIMIT 1")
+            try query.bindText(key, at: 1)
+            guard try query.step() == .row else { return nil }
+            guard query.valueType(at: 1) == .integer else {
+                throw OpenClawNativeStateError("Config machine-state timestamp must be an integer")
+            }
+            return try OpenClawNativeStateConfigValue(
+                value: query.requiredText(at: 0, field: "config machine-state value"),
+                updatedAtMilliseconds: query.int64(at: 1))
+        }
+    }
+
     public func validateCanonicalTable(_ table: OpenClawNativeStateCanonicalTable) throws {
         try self.withConnectionLock {
             try self.validateTableShape(Self.descriptor(table))
@@ -310,7 +366,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     }
 
     public func prepare(_ sql: String) throws -> OpenClawNativeStateSQLiteStatement {
-        try self.withConnectionLock {
+        try self.withCurrentDatabase {
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(self.database, sql, -1, &statement, nil) == SQLITE_OK,
                   let statement
@@ -322,7 +378,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     }
 
     public func execute(_ sql: String) throws {
-        try self.withConnectionLock {
+        try self.withCurrentDatabase {
             var errorMessage: UnsafeMutablePointer<CChar>?
             let result = sqlite3_exec(self.database, sql, nil, nil, &errorMessage)
             guard result == SQLITE_OK else {
@@ -389,6 +445,21 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         return try body()
     }
 
+    fileprivate func withCurrentDatabase<T>(_ body: () throws -> T) throws -> T {
+        try self.withConnectionLock {
+            try self.admission.assertAvailable()
+            try self.assertCurrentDatabase()
+            return try body()
+        }
+    }
+
+    fileprivate func assertCurrentDatabase() throws {
+        try OpenClawNativeStateAdmission.assertDatabaseHasNotMoved(self.database)
+        guard try OpenClawNativeStateAdmission.databaseIdentity(at: self.databaseURL) == self.databaseIdentity else {
+            throw OpenClawNativeStateError("Native state database was replaced; reopen it before use")
+        }
+    }
+
     private static func descriptor(_ table: OpenClawNativeStateCanonicalTable) -> CanonicalTable {
         switch table {
         case .deviceAuthTokens: self.deviceAuthTokens
@@ -396,6 +467,24 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         case .execApprovalsConfig: self.execApprovalsConfig
         case .macosPortGuardianRecords: self.macosPortGuardianRecords
         }
+    }
+
+    private func admitReadOnlySchema() throws -> Bool {
+        let version = try self.scalarInt64("PRAGMA user_version")
+        guard version <= Self.maximumSupportedSchemaVersion else {
+            throw OpenClawNativeStateError("The shared state database requires a newer OpenClaw app")
+        }
+        if version == 0 {
+            try self.validateVersionZeroOwnership()
+            return false
+        }
+        try self.validateSharedDatabaseMetadata(userVersion: version)
+        let available = try self.schemaObjectExists(type: "table", name: "config_machine_state")
+        // This table was added during schema 5 and became required with the canonical schema in version 6.
+        guard available || (1...5).contains(version) else {
+            throw OpenClawNativeStateError("The shared state database is missing config_machine_state")
+        }
+        return available
     }
 
     private func validateVersionZeroOwnership() throws {
@@ -630,10 +719,14 @@ public final class OpenClawNativeStateSQLiteStatement {
     }
 
     public func step() throws -> OpenClawNativeStateSQLiteStep {
-        try self.connection.withConnectionLock {
+        try self.connection.withCurrentDatabase {
             switch sqlite3_step(self.statement) {
-            case SQLITE_ROW: .row
-            case SQLITE_DONE: .done
+            case SQLITE_ROW:
+                try self.connection.assertCurrentDatabase()
+                return .row
+            // SQLITE_DONE may have committed and released the last file lock.
+            // Later removal must not turn that durable receipt into a failed write.
+            case SQLITE_DONE: return .done
             default: throw self.connection.databaseError(operation: "step SQLite statement")
             }
         }

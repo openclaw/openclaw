@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionCatalogHost } from "../../packages/gateway-protocol/src/index.js";
 import { createConfigIO } from "../config/io.factory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
@@ -10,6 +9,7 @@ import { SessionCatalogListLifetime } from "../gateway/server-methods/session-ca
 import { listSessionCatalogProvider } from "../gateway/server-methods/session-catalog-provider-access.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createPluginRegistry } from "./registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -285,12 +285,10 @@ describe("registered native catalog access", () => {
     expect(state.instance.hasRetainedConsumers).toBe(false);
   });
 
-  it.each(["queued", "completed"] as const)(
-    "retains the registered instance through a %s operation and its publication tail",
+  it(
+    "retains the registered instance through a completed operation and its publication tail",
     { timeout: 15_000 },
-    async (phase) => {
-      const blockers = createDeferredCore<SessionCatalogHost[]>();
-      const first = createDeferredCore<{ done: false }>();
+    async () => {
       const publication = createDeferredCore();
       const close = vi.fn();
       const next = vi.fn();
@@ -302,34 +300,17 @@ describe("registered native catalog access", () => {
             async next() {
               next();
               params.waitUntil?.(publication.promise.then(() => guardedPublication()));
-              return phase === "queued" ? await first.promise : { done: true, hosts: [] };
+              return { done: true, hosts: [] };
             },
             close,
           };
         },
       });
       state.instance.lifecycle.onDispose(cleanup);
-      const published = vi.fn(() => {
-        if (phase === "queued") {
-          throw new Error("publication rejected");
-        }
-      });
+      const published = vi.fn();
       guardedPublication = state.instance.wrap(published);
       const owner = new AbortController();
-      const lifetime = new SessionCatalogListLifetime(
-        () => true,
-        [owner.signal],
-        [state.provider.id],
-      );
-      const blocker: SessionCatalogProvider = {
-        id: "blocking",
-        label: "Blocking",
-        list: () => blockers.promise,
-        read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-      };
-      const active = Array.from({ length: phase === "queued" ? 3 : 0 }, () =>
-        listSessionCatalogProvider(blocker, {}),
-      );
+      const lifetime = new SessionCatalogListLifetime([owner.signal], [state.provider.id]);
       const pending = withPluginRuntimeGatewayRequestScope(
         { pluginRegistry: state.registry, pluginId: "fixture", isWebchatConnect: () => false },
         () =>
@@ -338,54 +319,37 @@ describe("registered native catalog access", () => {
           ),
       );
       const outcome = pending.catch((error: unknown) => error);
-      const successorStarted = createDeferredCore();
-      const successor =
-        phase === "queued"
-          ? listSessionCatalogProvider(
-              {
-                ...blocker,
-                list: () => {
-                  successorStarted.resolve();
-                  return blockers.promise;
-                },
-              },
-              {},
-            )
-          : Promise.resolve([]);
       try {
-        if (phase === "queued") {
-          first.resolve({ done: false });
-          await successorStarted.promise;
-        } else {
-          await expect(pending).resolves.toEqual([]);
-          expect(close).toHaveBeenCalledOnce();
-        }
+        await expect(pending).resolves.toEqual([]);
+        expect(close).toHaveBeenCalledOnce();
         vi.useFakeTimers();
-        const disposal = state.dispose();
-        await vi.advanceTimersByTimeAsync(5_050);
+        const disposal = state.instance.dispose();
+        await vi.advanceTimersByTimeAsync(4_999);
         expect(cleanup).not.toHaveBeenCalled();
         expect(state.instance.lifecycle.signal.aborted).toBe(false);
         expect(state.instance.hasRetainedConsumers).toBe(true);
-        if (phase === "queued") {
-          const retirement = new Error("catalog owner retired");
-          owner.abort(retirement);
-          expect(await outcome).toBe(retirement);
-          expect(close).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(51);
+        const timeout = (await disposal).errors[0];
+        expect(timeout).toBeInstanceOf(PluginInstanceDrainTimeoutError);
+        if (!(timeout instanceof PluginInstanceDrainTimeoutError)) {
+          throw new Error("Expected bounded logical retirement");
         }
+        expect(timeout.forcedRetirement).toEqual({ activeCallCount: 0, retainedConsumerCount: 1 });
+        expect(state.instance.lifecycle.signal.aborted).toBe(true);
+        expect(state.instance.hasRetainedConsumers).toBe(true);
+        expect(cleanup).not.toHaveBeenCalled();
         expect(next).toHaveBeenCalledOnce();
         expect(published).not.toHaveBeenCalled();
         publication.resolve();
-        await disposal;
+        await timeout.settled;
         expect(published).toHaveBeenCalledOnce();
         expect(cleanup).toHaveBeenCalledOnce();
         expect(state.instance.hasRetainedConsumers).toBe(false);
         expect(state.instance.lifecycle.signal.aborted).toBe(true);
       } finally {
         owner.abort(new Error("test cleanup"));
-        first.resolve({ done: false });
-        blockers.resolve([]);
         publication.resolve();
-        await Promise.allSettled([...active, pending, successor]);
+        await outcome;
         lifetime.finishListing();
       }
     },

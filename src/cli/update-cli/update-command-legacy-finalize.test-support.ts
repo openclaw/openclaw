@@ -30,10 +30,6 @@ const overrides = new Map<string, string>([
     }`,
   ],
   [
-    source("./update-command-repair-service.ts"),
-    `export async function repairUpdateService(p) { return p.result; }`,
-  ],
-  [
     source("../../infra/tmp-openclaw-dir.ts"),
     process.env.OPENCLAW_TEST_LEGACY_TEMP_FALLBACK === "1"
       ? `import {resolvePreferredOpenClawTmpDir as actual} from ${JSON.stringify(source("../../infra/tmp-openclaw-dir.ts") + "?fixture-original")};
@@ -103,6 +99,11 @@ if (process.env.OPENCLAW_TEST_COMPLETED_TERMINAL === "1") {
      }`,
   );
 }
+// These modules export only the function already replaced by this fixture.
+const completeOverrides = new Set([
+  source("./update-command-convergence.ts"),
+  source("./update-command-restart-context.ts"),
+]);
 registerHooks({
   load(url, context, nextLoad) {
     const replacement = overrides.get(url);
@@ -110,7 +111,9 @@ registerHooks({
       ? nextLoad(url, context)
       : {
           format: "module",
-          source: `export * from ${JSON.stringify(url + "?fixture-original")};\n${replacement}`,
+          source: completeOverrides.has(url)
+            ? replacement
+            : `export * from ${JSON.stringify(url + "?fixture-original")};\n${replacement}`,
           shortCircuit: true,
         };
   },

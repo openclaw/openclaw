@@ -3,8 +3,19 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
+import { decodeLaunchAgentPlistFixture } from "../../daemon/launchd-plist.test-support.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
-import type { runCommandWithTimeout, runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
+import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../../infra/update-npm-prefix.js";
+import { recordCommandProcessFailure } from "../../process/exec-result.js";
+import type {
+  BufferedCommandOptions,
+  BufferedCommandResult,
+  runCommandWithTimeout,
+  runExec,
+  runUtf8CommandWithTimeout,
+} from "../../process/exec.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 
 export function isLegacyUpdateDoctorCommand(argv: readonly string[]) {
@@ -13,6 +24,85 @@ export function isLegacyUpdateDoctorCommand(argv: readonly string[]) {
     argv[3] === "--non-interactive" &&
     (argv.length === 4 || argv[4] === "--fix")
   );
+}
+
+// The real snapshot worker has separate WAL/source-inode boundary coverage.
+// Retain real rehearsal config projection and drift checks in this CLI fixture.
+export async function runUpdateBufferedCommandFixture(
+  argv: string[],
+  options: BufferedCommandOptions = {},
+): Promise<BufferedCommandResult> {
+  if (argv[0] === "pacman") {
+    return pkgQueryResult("", {
+      code: null,
+      termination: "error",
+      error: Object.assign(new Error("pacman is absent in this fixture"), { code: "ENOENT" }),
+    });
+  }
+  if (typeof options.input !== "string") {
+    throw new Error("Unexpected buffered update command without snapshot input");
+  }
+  const input: unknown = JSON.parse(options.input);
+  const mode = isRecord(input) ? input.mode : undefined;
+  if (mode !== "inventory" && mode !== "snapshot") {
+    throw new Error("Unexpected update state worker mode");
+  }
+  return pkgQueryResult(
+    JSON.stringify(
+      mode === "inventory"
+        ? { databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json" }
+        : { versions: [], pluginPaths: {} },
+    ),
+  );
+}
+
+export function createUpdateExecTransportFixture(params: {
+  run: typeof runExec;
+  nativeRun: typeof runExec;
+  hostPlatform: NodeJS.Platform;
+  isMacosAclInspection: (command: string, args: readonly string[]) => boolean;
+  isPlistStdinConversion: (command: string, args: readonly string[]) => boolean;
+}): typeof runExec {
+  return async (...args: Parameters<typeof runExec>) => {
+    const options = args[2];
+    if (args[1][0] === "-e" && args[1][1]?.includes("sqliteSelectionError")) {
+      const result = await params.run(...args);
+      if (result.stdout.trim() || result.stderr.trim()) {
+        return result;
+      }
+      return {
+        stdout: JSON.stringify({
+          nodeVersion: process.versions.node,
+          bunVersion:
+            args[0] === process.execPath
+              ? (process.versions.bun ?? null)
+              : path.win32
+                    .basename(args[0])
+                    .toLowerCase()
+                    .replace(/\.exe$/u, "") === "bun"
+                ? "1.4.3"
+                : null,
+          sqliteVersion: "3.53.4",
+          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+          sqliteSelectionError: null,
+          nodeSharedSqlite: false,
+        }),
+        stderr: "",
+      };
+    }
+    if (
+      params.isPlistStdinConversion(args[0], args[1]) &&
+      typeof options === "object" &&
+      options.input !== undefined
+    ) {
+      return params.hostPlatform === "darwin"
+        ? params.nativeRun(...args)
+        : decodeLaunchAgentPlistFixture(options.input, args[1][1]);
+    }
+    return params.isMacosAclInspection(args[0], args[1])
+      ? params.nativeRun(...args)
+      : params.run(...args);
+  };
 }
 
 // Native effects/results remain fixture-owned. Preserve real child admission,
@@ -28,8 +118,9 @@ export async function createUpdateCommandTransportFixture(transport: {
   const { spawn: spawnChild } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return async (...[argv, options]: Parameters<typeof transport.run>) => {
+    const npmProbe = argv.at(-2);
     if (
-      argv.at(-2) === "prefix" &&
+      (npmProbe === "prefix" || npmProbe === "root") &&
       argv.at(-1) === "-g" &&
       ((argv.length === 3 && argv[0] === "npm") ||
         (argv.length === 4 &&
@@ -37,15 +128,25 @@ export async function createUpdateCommandTransportFixture(transport: {
           path.basename(argv[1] ?? "") === "npm-cli.js"))
     ) {
       const result = await transport.run(argv, options);
-      // Supply the fixture's inspected empty prefix when an effect double omits read-only metadata.
+      // Both npm probes describe the same empty prefix when an effect double omits metadata.
       return result.code === 0 && result.stdout === ""
-        ? { ...result, stdout: `${transport.npmPrefix}\n` }
+        ? {
+            ...result,
+            stdout: `${
+              npmProbe === "root"
+                ? resolveNpmGlobalPrefixLayoutFromPrefix(transport.npmPrefix).globalRoot
+                : transport.npmPrefix
+            }\n`,
+          }
         : result;
     }
     if (typeof options === "number" || !options.beforeInput) {
       return transport.run(argv, options);
     }
-    const child = spawnChild(process.execPath, ["-e", "process.stdin.resume()"], {
+    // Admission needs a fresh live PID and joined exit, not a Node runtime boot.
+    const executable = hostPlatform === "win32" ? process.execPath : "cat";
+    const args = hostPlatform === "win32" ? ["-e", "process.stdin.resume()"] : [];
+    const child = spawnChild(executable, args, {
       stdio: ["pipe", "ignore", "ignore"],
       cwd: transport.hostCwd,
       env: transport.hostEnv,
@@ -116,38 +217,85 @@ export async function createUpdateCommandTransportFixture(transport: {
 }
 
 export async function createUpdateUtf8CommandTransportFixture(
-  transport: Parameters<typeof createUpdateCommandTransportFixture>[0],
+  transport: Parameters<typeof createUpdateCommandTransportFixture>[0] & { exec: typeof runExec },
   run: typeof runUtf8CommandWithTimeout,
 ): Promise<typeof runUtf8CommandWithTimeout> {
+  const hostPlatform = process.platform;
   const { spawnSync: spawnMetadata } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const runDoctorFixture = await createUpdateCommandTransportFixture(transport);
   return async (argv, options) => {
+    if (argv[2] === "doctor" && argv[3] === "--repair") {
+      // Legacy Doctor now uses the custody runner; keep its effects in the shared fixture.
+      try {
+        const result = await transport.exec(
+          expectDefined(argv[0], "Doctor executable"),
+          argv.slice(1),
+          options,
+        );
+        return commandResult({ ...result, cleanup: "normal" });
+      } catch (error) {
+        // This effect double starts no native child, including on diagnostic failures.
+        throw recordCommandProcessFailure(error, {
+          code: null,
+          cleanup: "normal",
+          termination: "exit",
+        });
+      }
+    }
+    if (
+      argv.length === 3 &&
+      argv[2] === "--check" &&
+      path.basename(argv[1] ?? "") ===
+        path.basename(runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath)
+    ) {
+      // These CLI fixture packages do not implement the delegated post-core worker.
+      return commandResult({ code: 1 });
+    }
     if (argv.at(-1) === "--doctor" && typeof options !== "number" && options.beforeInput) {
       // Keep Doctor effects fixture-owned without bypassing live child admission.
       const result = await runDoctorFixture(argv, options);
       // The fixture has joined and checked its real child's exit before returning.
       return { ...result, cleanup: result.cleanup ?? "normal" };
     }
-    if (argv.includes("--eval") && typeof options !== "number" && options.input) {
+    const stateWorker = argv.some((arg) =>
+      /[/\\]update-candidate-state\.worker\.[cm]?[jt]s$/u.test(arg),
+    );
+    if ((argv.includes("--eval") || stateWorker) && typeof options !== "number" && options.input) {
       const input: unknown = JSON.parse(String(options.input));
-      if (isRecord(input) && Array.isArray(input.files)) {
-        // Inspect real fixture metadata using the host transport even while
-        // the CLI simulates another service platform or installer environment.
+      const metadataRequest =
+        argv.includes("--eval") && isRecord(input) && Array.isArray(input.files);
+      const foreignPlatformSqlite =
+        process.platform !== hostPlatform &&
+        isRecord(input) &&
+        ((argv.includes("--eval") && typeof input.directory === "string") ||
+          (stateWorker &&
+            typeof input.stateDir === "string" &&
+            [
+              "discover",
+              "versions",
+              "database-backup",
+              "database-generations",
+              "database-restore-preparation",
+            ].includes(String(input.mode))));
+      if (metadataRequest || foreignPlatformSqlite) {
+        // SQLite workers use the real host executable/VFS even when service tests simulate Windows.
         const metadata = spawnMetadata(
           expectDefined(argv[0], "metadata executable"),
           argv.slice(1),
           {
             input: options.input,
             timeout: options.timeoutMs,
-            cwd: transport.hostCwd,
-            env: transport.hostEnv,
+            cwd: options.cwd ?? transport.hostCwd,
+            env: { ...transport.hostEnv, ...options.baseEnv, ...options.env },
             encoding: "utf8",
           },
         );
         if (metadata.error) {
           throw metadata.error;
         }
+        options.onOutputChunk?.(Buffer.from(metadata.stdout), "stdout");
+        options.onOutputChunk?.(Buffer.from(metadata.stderr), "stderr");
         return commandResult({
           code: metadata.status,
           stdout: metadata.stdout,

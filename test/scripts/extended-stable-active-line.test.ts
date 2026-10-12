@@ -11,7 +11,7 @@ const nodeExecutable = resolveTestNodeExecPath();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("extended-stable live publication eligibility", () => {
-  it("retires the same qualified candidate when main advances, including the year boundary", () => {
+  it("keeps only the trailing completed month eligible across the year boundary", () => {
     expect(() => validateActiveExtendedStableLine("2026.12.34", "2027.1.1")).not.toThrow();
     expect(() => validateActiveExtendedStableLine("2026.12.34", "2027.2.1")).toThrow(
       "only the trailing completed month",

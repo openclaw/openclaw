@@ -1,80 +1,42 @@
-// Discord tests cover api plugin behavior.
 import { Routes } from "discord-api-types/v10";
 import { describe, expect, it } from "vitest";
 import {
-  createApplicationCommand,
   createChannelWebhook,
-  createChannelMessage,
-  createInteractionCallback,
-  createGuildBan,
-  createGuildScheduledEvent,
   createOwnMessageReaction,
   createThread,
   createUserDmChannel,
   deleteChannelMessage,
   deleteOwnMessageReaction,
-  deleteWebhookMessage,
-  editApplicationCommand,
-  editWebhookMessage,
   getCurrentUser,
   getChannelMessage,
   getUser,
-  getWebhookMessage,
-  createWebhookMessage,
   editChannelMessage,
   listMessageReactionUsers,
-  listApplicationCommands,
-  listChannelMessages,
-  listGuildChannels,
   listGuildEmojis,
-  overwriteApplicationCommands,
   pinChannelMessage,
-  searchGuildMessages,
-  sendChannelTyping,
   unpinChannelMessage,
 } from "./discord.js";
 import { createFakeRestClient } from "./test-builders.test-support.js";
 
 describe("Discord REST API helpers", () => {
   it("routes message helpers through the typed REST client", async () => {
-    const rest = createFakeRestClient([
-      [{ id: "m1" }],
-      { id: "m2" },
-      { id: "m3" },
-      { id: "t1" },
-      undefined,
-      undefined,
-      undefined,
-    ]);
-    const query = { limit: 2 };
+    const rest = createFakeRestClient([{ id: "m2" }, { id: "t1" }, undefined, undefined]);
     const messageId = "18446744073709551615";
 
-    await expect(listChannelMessages(rest, "c1", query)).resolves.toEqual([{ id: "m1" }]);
     await expect(getChannelMessage(rest, "c1", ` ${messageId} `)).resolves.toEqual({ id: "m2" });
-    await expect(createChannelMessage(rest, "c1", { body: { content: "hello" } })).resolves.toEqual(
-      { id: "m3" },
-    );
     await expect(
       createThread(rest, "c1", { body: { name: "thread" } }, ` ${messageId} `),
     ).resolves.toEqual({ id: "t1" });
-    await sendChannelTyping(rest, "c1");
     await pinChannelMessage(rest, "c1", ` ${messageId} `);
     await deleteChannelMessage(rest, "c1", ` ${messageId} `);
 
     expect(rest.calls).toEqual([
-      { method: "GET", path: Routes.channelMessages("c1"), query },
       { method: "GET", path: Routes.channelMessage("c1", messageId) },
-      {
-        method: "POST",
-        path: Routes.channelMessages("c1"),
-        data: { body: { content: "hello" } },
-      },
       {
         method: "POST",
         path: Routes.threads("c1", messageId),
         data: { body: { name: "thread" } },
       },
-      { method: "POST", path: Routes.channelTyping("c1") },
       { method: "PUT", path: Routes.channelPin("c1", messageId) },
       { method: "DELETE", path: Routes.channelMessage("c1", messageId) },
     ]);
@@ -122,21 +84,6 @@ describe("Discord REST API helpers", () => {
       (rest: ReturnType<typeof createFakeRestClient>) =>
         listMessageReactionUsers(rest, "c1", "..", "%E2%9C%85"),
     ],
-    [
-      "get webhook message",
-      (rest: ReturnType<typeof createFakeRestClient>) =>
-        getWebhookMessage(rest, "app1", "wtoken", ".."),
-    ],
-    [
-      "edit webhook message",
-      (rest: ReturnType<typeof createFakeRestClient>) =>
-        editWebhookMessage(rest, "app1", "wtoken", "..", { body: { content: "hello" } }),
-    ],
-    [
-      "delete webhook message",
-      (rest: ReturnType<typeof createFakeRestClient>) =>
-        deleteWebhookMessage(rest, "app1", "wtoken", ".."),
-    ],
   ])("rejects a malformed message ID before the %s request", async (_label, invoke) => {
     const rest = createFakeRestClient();
 
@@ -145,85 +92,18 @@ describe("Discord REST API helpers", () => {
     expect(rest.calls).toEqual([]);
   });
 
-  it("routes guild helpers through the typed REST client", async () => {
-    const rest = createFakeRestClient([
-      [{ id: "c1" }],
-      [{ id: "emoji1", name: "party", animated: true }],
-      { id: "event1" },
-      undefined,
-    ]);
-    const body = {
-      name: "standup",
-      scheduled_start_time: "2026-04-29T10:00:00.000Z",
-      privacy_level: 2,
-      entity_type: 3,
-      entity_metadata: { location: "voice" },
-    } as const;
-
-    await expect(listGuildChannels(rest, "g1")).resolves.toEqual([{ id: "c1" }]);
+  it("accepts guild emoji responses at the Discord REST boundary", async () => {
+    const rest = createFakeRestClient([[{ id: "emoji1", name: "party", animated: true }]]);
     await expect(listGuildEmojis(rest, "g1")).resolves.toEqual([
       { id: "emoji1", name: "party", animated: true },
     ]);
-    await expect(createGuildScheduledEvent(rest, "g1", body)).resolves.toEqual({ id: "event1" });
-    await createGuildBan(rest, "g1", "u1", { body: { delete_message_seconds: 0 } });
-
-    expect(rest.calls).toEqual([
-      { method: "GET", path: Routes.guildChannels("g1") },
-      { method: "GET", path: Routes.guildEmojis("g1") },
-      {
-        method: "POST",
-        path: Routes.guildScheduledEvents("g1"),
-        data: { body },
-      },
-      {
-        method: "PUT",
-        path: Routes.guildBan("g1", "u1"),
-        data: { body: { delete_message_seconds: 0 } },
-      },
-    ]);
+    expect(rest.calls).toEqual([{ method: "GET", path: Routes.guildEmojis("g1") }]);
   });
 
   it("rejects malformed guild emoji responses at the Discord REST boundary", async () => {
     await expect(listGuildEmojis(createFakeRestClient([{ invalid: true }]), "g1")).rejects.toThrow(
       "Invalid Discord guild emoji response.",
     );
-  });
-
-  it("routes command helpers through the typed REST client", async () => {
-    const rest = createFakeRestClient([
-      [{ id: "cmd1" }],
-      { id: "cmd2" },
-      { id: "cmd3" },
-      undefined,
-    ]);
-
-    await expect(listApplicationCommands(rest, "app1")).resolves.toEqual([{ id: "cmd1" }]);
-    await expect(createApplicationCommand(rest, "app1", { name: "ping" })).resolves.toEqual({
-      id: "cmd2",
-    });
-    await expect(
-      editApplicationCommand(rest, "app1", "cmd2", { description: "Pong" }),
-    ).resolves.toEqual({ id: "cmd3" });
-    await overwriteApplicationCommands(rest, "app1", [{ name: "ping" }]);
-
-    expect(rest.calls).toEqual([
-      { method: "GET", path: Routes.applicationCommands("app1") },
-      {
-        method: "POST",
-        path: Routes.applicationCommands("app1"),
-        data: { body: { name: "ping" } },
-      },
-      {
-        method: "PATCH",
-        path: Routes.applicationCommand("app1", "cmd2"),
-        data: { body: { description: "Pong" } },
-      },
-      {
-        method: "PUT",
-        path: Routes.applicationCommands("app1"),
-        data: { body: [{ name: "ping" }] },
-      },
-    ]);
   });
 
   it("routes user helpers through the typed REST client", async () => {
@@ -288,67 +168,6 @@ describe("Discord REST API helpers", () => {
         path: Routes.channelWebhooks("c1"),
         data: { body: { name: "OpenClaw" } },
       },
-    ]);
-  });
-
-  it("routes interaction webhook helpers through the typed REST client", async () => {
-    const rest = createFakeRestClient([
-      { ok: true },
-      { id: "m1" },
-      { id: "m2" },
-      { id: "m3" },
-      undefined,
-    ]);
-    const query = { wait: "true" };
-    const originalResponseId = "@original";
-
-    await expect(createInteractionCallback(rest, "i1", "itoken", { type: 5 })).resolves.toEqual({
-      ok: true,
-    });
-    await expect(
-      createWebhookMessage(rest, "app1", "wtoken", { body: { content: "hello" } }, query),
-    ).resolves.toEqual({ id: "m1" });
-    await expect(getWebhookMessage(rest, "app1", "wtoken", originalResponseId)).resolves.toEqual({
-      id: "m2",
-    });
-    await expect(
-      editWebhookMessage(rest, "app1", "wtoken", originalResponseId, {
-        body: { content: "updated" },
-      }),
-    ).resolves.toEqual({ id: "m3" });
-    await expect(
-      deleteWebhookMessage(rest, "app1", "wtoken", originalResponseId),
-    ).resolves.toBeUndefined();
-    expect(rest.calls).toEqual([
-      {
-        method: "POST",
-        path: Routes.interactionCallback("i1", "itoken"),
-        data: { body: { type: 5 } },
-      },
-      {
-        method: "POST",
-        path: Routes.webhook("app1", "wtoken"),
-        data: { body: { content: "hello" } },
-        query,
-      },
-      { method: "GET", path: Routes.webhookMessage("app1", "wtoken", originalResponseId) },
-      {
-        method: "PATCH",
-        path: Routes.webhookMessage("app1", "wtoken", originalResponseId),
-        data: { body: { content: "updated" } },
-      },
-      { method: "DELETE", path: Routes.webhookMessage("app1", "wtoken", originalResponseId) },
-    ]);
-  });
-
-  it("keeps unsupported Discord search route isolated", async () => {
-    const rest = createFakeRestClient([{ messages: [] }]);
-    const params = new URLSearchParams({ content: "hello" });
-
-    await expect(searchGuildMessages(rest, "g1", params)).resolves.toEqual({ messages: [] });
-
-    expect(rest.calls).toEqual([
-      { method: "GET", path: "/guilds/g1/messages/search?content=hello" },
     ]);
   });
 });

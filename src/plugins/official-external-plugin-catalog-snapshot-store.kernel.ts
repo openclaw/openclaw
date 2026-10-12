@@ -11,6 +11,7 @@ import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-numb
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   HostedCatalogSignedFeedMonotonicityError,
+  isOfficialExternalPluginCatalogRollback,
   isOfficialExternalPluginCatalogSequence,
   parseOfficialExternalPluginCatalogTimestamp,
 } from "./official-external-plugin-catalog-source.js";
@@ -21,20 +22,7 @@ import type {
   HostedOfficialExternalPluginCatalogTrustState,
 } from "./official-external-plugin-catalog.types.js";
 
-type HostedCatalogSnapshotRow = {
-  feed_url: string;
-  body: string;
-  status: number | bigint;
-  etag: string | null;
-  last_modified: string | null;
-  checksum: string;
-  saved_at: string;
-  trust_mode: string | null;
-  trust_key_id: string | null;
-  trust_signature_count: number | bigint | null;
-  trust_threshold: number | bigint | null;
-  trust_verified_at: string | null;
-};
+type HostedCatalogSnapshotRow = NonNullable<ReturnType<typeof readHostedCatalogSnapshotRow>>;
 
 type HostedCatalogSnapshotDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -68,11 +56,6 @@ function rowToTrustState(
   };
 }
 
-function decodeBase64Payload(payload: string): string {
-  const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-  return Buffer.from(normalized, "base64").toString("utf8");
-}
-
 function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicState | undefined {
   try {
     const document: unknown = JSON.parse(body);
@@ -80,7 +63,9 @@ function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicS
       return undefined;
     }
     const payload =
-      typeof document.payload === "string" ? decodeBase64Payload(document.payload) : body;
+      typeof document.payload === "string"
+        ? Buffer.from(document.payload, "base64").toString("utf8")
+        : body;
     const feed: unknown = typeof document.payload === "string" ? JSON.parse(payload) : document;
     if (!isRecord(feed) || !isOfficialExternalPluginCatalogSequence(feed.sequence)) {
       return undefined;
@@ -104,22 +89,6 @@ function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicS
   }
 }
 
-function isMonotonicRollback(params: {
-  candidate: HostedOfficialExternalPluginCatalogSnapshotMonotonicState;
-  current: StoredHostedCatalogMonotonicState;
-}): boolean {
-  if (params.candidate.sequence < params.current.sequence) {
-    return true;
-  }
-  if (params.candidate.sequence > params.current.sequence) {
-    return false;
-  }
-  if (params.candidate.generatedAt === undefined || params.current.generatedAt === undefined) {
-    return false;
-  }
-  return Date.parse(params.candidate.generatedAt) < Date.parse(params.current.generatedAt);
-}
-
 function assertSignedSnapshotWriteIsMonotonic(params: {
   candidate: HostedOfficialExternalPluginCatalogSnapshotMonotonicState | undefined;
   candidateBody: string;
@@ -132,7 +101,7 @@ function assertSignedSnapshotWriteIsMonotonic(params: {
   if (!current) {
     return;
   }
-  if (isMonotonicRollback({ candidate: params.candidate, current })) {
+  if (isOfficialExternalPluginCatalogRollback({ candidate: params.candidate, current })) {
     throw new HostedCatalogSignedFeedMonotonicityError(
       "hosted catalog signed feed sequence is older than current snapshot",
     );
@@ -182,12 +151,9 @@ function rowToSnapshot(
   };
 }
 
-export function readHostedCatalogSnapshotInDatabase(
-  db: DatabaseSync,
-  url: string,
-): HostedOfficialExternalPluginCatalogSnapshot | null {
+function readHostedCatalogSnapshotRow(db: DatabaseSync, url: string) {
   const stateDb = getNodeSqliteKysely<HostedCatalogSnapshotDatabase>(db);
-  const row: HostedCatalogSnapshotRow | undefined = executeSqliteQueryTakeFirstSync(
+  return executeSqliteQueryTakeFirstSync(
     db,
     stateDb
       .selectFrom("official_external_plugin_catalog_snapshots")
@@ -207,7 +173,13 @@ export function readHostedCatalogSnapshotInDatabase(
       ])
       .where("feed_url", "=", url),
   );
-  return rowToSnapshot(row);
+}
+
+export function readHostedCatalogSnapshotInDatabase(
+  db: DatabaseSync,
+  url: string,
+): HostedOfficialExternalPluginCatalogSnapshot | null {
+  return rowToSnapshot(readHostedCatalogSnapshotRow(db, url));
 }
 
 /** The caller owns the write transaction containing the reread and upsert. */
@@ -217,65 +189,33 @@ export function writeHostedCatalogSnapshotInDatabase(
   now: number,
 ): void {
   const stateDb = getNodeSqliteKysely<HostedCatalogSnapshotDatabase>(db);
-  const current: HostedCatalogSnapshotRow | undefined = executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("official_external_plugin_catalog_snapshots")
-      .select([
-        "feed_url",
-        "body",
-        "status",
-        "etag",
-        "last_modified",
-        "checksum",
-        "saved_at",
-        "trust_mode",
-        "trust_key_id",
-        "trust_signature_count",
-        "trust_threshold",
-        "trust_verified_at",
-      ])
-      .where("feed_url", "=", snapshot.metadata.url),
-  );
   assertSignedSnapshotWriteIsMonotonic({
     candidate: snapshot.monotonic,
     candidateBody: snapshot.body,
-    current,
+    current: readHostedCatalogSnapshotRow(db, snapshot.metadata.url),
   });
+  const values = {
+    body: snapshot.body,
+    status: snapshot.metadata.status,
+    etag: snapshot.metadata.etag ?? null,
+    last_modified: snapshot.metadata.lastModified ?? null,
+    checksum: snapshot.metadata.checksum,
+    saved_at: snapshot.savedAt,
+    updated_at_ms: now,
+    trust_mode: snapshot.trust?.mode ?? null,
+    trust_key_id: snapshot.trust?.signedBy ?? null,
+    trust_signature_count: snapshot.trust?.signatureCount ?? null,
+    trust_threshold: snapshot.trust?.threshold ?? null,
+    trust_verified_at: snapshot.trust?.verifiedAt ?? null,
+  };
   executeSqliteQuerySync(
     db,
     stateDb
       .insertInto("official_external_plugin_catalog_snapshots")
       .values({
         feed_url: snapshot.metadata.url,
-        body: snapshot.body,
-        status: snapshot.metadata.status,
-        etag: snapshot.metadata.etag ?? null,
-        last_modified: snapshot.metadata.lastModified ?? null,
-        checksum: snapshot.metadata.checksum,
-        saved_at: snapshot.savedAt,
-        updated_at_ms: now,
-        trust_mode: snapshot.trust?.mode ?? null,
-        trust_key_id: snapshot.trust?.signedBy ?? null,
-        trust_signature_count: snapshot.trust?.signatureCount ?? null,
-        trust_threshold: snapshot.trust?.threshold ?? null,
-        trust_verified_at: snapshot.trust?.verifiedAt ?? null,
+        ...values,
       })
-      .onConflict((conflict) =>
-        conflict.column("feed_url").doUpdateSet({
-          body: snapshot.body,
-          status: snapshot.metadata.status,
-          etag: snapshot.metadata.etag ?? null,
-          last_modified: snapshot.metadata.lastModified ?? null,
-          checksum: snapshot.metadata.checksum,
-          saved_at: snapshot.savedAt,
-          updated_at_ms: now,
-          trust_mode: snapshot.trust?.mode ?? null,
-          trust_key_id: snapshot.trust?.signedBy ?? null,
-          trust_signature_count: snapshot.trust?.signatureCount ?? null,
-          trust_threshold: snapshot.trust?.threshold ?? null,
-          trust_verified_at: snapshot.trust?.verifiedAt ?? null,
-        }),
-      ),
+      .onConflict((conflict) => conflict.column("feed_url").doUpdateSet(values)),
   );
 }

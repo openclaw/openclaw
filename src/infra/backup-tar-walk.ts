@@ -1,9 +1,9 @@
 import { constants, type Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import type { HeaderData } from "tar";
 import { hasErrnoCode } from "./errno.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 /** Open sources before emitting headers so a vanished name cannot leave a partial entry. */
 export async function* walkBackupTar(params: {

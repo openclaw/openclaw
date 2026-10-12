@@ -63,22 +63,54 @@ export function createChannelSecretTargetRegistryEntries(params: {
   account?: readonly (string | ChannelSecretTargetPathSpec)[];
   channel?: readonly (string | ChannelSecretTargetPathSpec)[];
 }): SecretTargetRegistryEntry[] {
-  return [
-    ...(params.account ?? []).map((spec) =>
+  const entriesForScope = (scope: "account" | "channel") =>
+    (params[scope] ?? []).map((spec) =>
       buildChannelSecretTargetRegistryEntry({
         channelKey: params.channelKey,
-        scope: "account",
+        scope,
         spec,
       }),
-    ),
-    ...(params.channel ?? []).map((spec) =>
-      buildChannelSecretTargetRegistryEntry({
+    );
+  return [...entriesForScope("account"), ...entriesForScope("channel")];
+}
+
+type ChannelSecretCollectorParams = {
+  config: { channels?: Record<string, unknown> };
+  defaults?: SecretDefaults;
+  context: ResolverContext;
+};
+
+/** Keeps registry discovery and account-surface resolution shared while channels own activation. */
+export function createChannelSecretContract(
+  params: Parameters<typeof createChannelSecretTargetRegistryEntries>[0] & {
+    collect: (
+      params: ChannelSecretCollectorParams & {
+        channelKey: string;
+        channel: Record<string, unknown>;
+        surface: ChannelAccountSurface;
+        defaults: SecretDefaults | undefined;
+      },
+    ) => void;
+  },
+) {
+  return {
+    secretTargetRegistryEntries: createChannelSecretTargetRegistryEntries(params),
+    collectRuntimeConfigAssignments(
+      this: void,
+      collectorParams: ChannelSecretCollectorParams,
+    ): void {
+      const resolved = getChannelSurface(collectorParams.config, params.channelKey);
+      if (!resolved) {
+        return;
+      }
+      params.collect({
+        ...collectorParams,
         channelKey: params.channelKey,
-        scope: "channel",
-        spec,
-      }),
-    ),
-  ];
+        ...resolved,
+        defaults: collectorParams.defaults,
+      });
+    },
+  };
 }
 
 /** Builds the common registry and runtime collector used by simple channel secrets. */
@@ -110,16 +142,13 @@ export function createSimpleChannelSecretContract(params: {
       ? params.mode.collectionFields
       : [...new Set([...params.accountFields, ...params.channelFields])];
 
-  const collectRuntimeConfigAssignments = (collectorParams: {
-    config: { channels?: Record<string, unknown> };
-    defaults?: SecretDefaults;
-    context: ResolverContext;
-  }): void => {
-    if (params.mode === "channel-only") {
-      const channel = getChannelRecord(collectorParams.config, params.channelKey);
-      if (!channel) {
-        return;
-      }
+  const collectRuntimeConfigAssignments = (collectorParams: ChannelSecretCollectorParams): void => {
+    const channelOnly = params.mode === "channel-only";
+    const channel = getChannelRecord(collectorParams.config, params.channelKey);
+    if (!channel) {
+      return;
+    }
+    if (channelOnly) {
       for (const field of collectionFields) {
         collectSecretInputAssignment({
           value: channel[field],
@@ -145,11 +174,7 @@ export function createSimpleChannelSecretContract(params: {
       return;
     }
 
-    const resolved = getChannelSurface(collectorParams.config, params.channelKey);
-    if (!resolved) {
-      return;
-    }
-    const { channel, surface } = resolved;
+    const surface = resolveChannelAccountSurface(channel);
     for (const field of collectionFields) {
       const topInactiveReason =
         params.mode === "channel-surface"
@@ -369,44 +394,13 @@ export function collectSimpleChannelFieldAssignments(params: {
   topInactiveReason: string;
   accountInactiveReason: string;
 }): void {
-  collectTopLevelChannelFieldAssignments({
-    channelKey: params.channelKey,
-    channel: params.channel,
-    value: params.channel[params.field],
-    fieldPath: `channels.${params.channelKey}.${params.field}`,
-    expected: "string",
-    surface: params.surface,
-    defaults: params.defaults,
-    context: params.context,
-    activeWithoutAccounts: params.surface.channelEnabled,
-    inheritedAccountActive: ({ account, enabled }) =>
+  collectConditionalChannelFieldAssignments({
+    ...params,
+    topLevelActiveWithoutAccounts: true,
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
       enabled && !hasOwnProperty(account, params.field),
-    inactiveReason: params.topInactiveReason,
-    apply: (value) => {
-      params.channel[params.field] = value;
-    },
+    accountActive: ({ enabled }) => enabled,
   });
-  if (!params.surface.hasExplicitAccounts) {
-    return;
-  }
-  for (const { accountId, account, enabled } of params.surface.accounts) {
-    if (!hasOwnProperty(account, params.field)) {
-      continue;
-    }
-    collectSecretInputAssignment({
-      value: account[params.field],
-      path: `${appendConfigPathSegment(`channels.${params.channelKey}.accounts`, accountId)}.${params.field}`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: enabled,
-      inactiveReason: params.accountInactiveReason,
-      owner: createChannelAccountSecretOwner(params.channelKey, accountId, params.channel, account),
-      apply: (value) => {
-        account[params.field] = value;
-      },
-    });
-  }
 }
 
 /** Collects a channel field whose active state depends on caller-provided account predicates. */
@@ -423,51 +417,12 @@ export function collectConditionalChannelFieldAssignments(params: {
   topInactiveReason: string;
   accountInactiveReason: string | ((entry: ChannelAccountEntry) => string);
 }): void {
-  collectTopLevelChannelFieldAssignments({
-    channelKey: params.channelKey,
-    channel: params.channel,
-    value: params.channel[params.field],
-    fieldPath: `channels.${params.channelKey}.${params.field}`,
-    expected: "string",
-    surface: params.surface,
-    defaults: params.defaults,
-    context: params.context,
-    activeWithoutAccounts: params.surface.channelEnabled && params.topLevelActiveWithoutAccounts,
-    inheritedAccountActive: params.topLevelInheritedAccountActive,
-    inactiveReason: params.topInactiveReason,
-    apply: (value) => {
-      params.channel[params.field] = value;
-    },
+  collectChannelFieldAssignments({
+    ...params,
+    nestedKey: undefined,
+    topLevelActiveWithoutAccounts:
+      params.surface.channelEnabled && params.topLevelActiveWithoutAccounts,
   });
-  if (!params.surface.hasExplicitAccounts) {
-    return;
-  }
-  for (const entry of params.surface.accounts) {
-    if (!hasOwnProperty(entry.account, params.field)) {
-      continue;
-    }
-    collectSecretInputAssignment({
-      value: entry.account[params.field],
-      path: `${appendConfigPathSegment(`channels.${params.channelKey}.accounts`, entry.accountId)}.${params.field}`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: params.accountActive(entry),
-      inactiveReason:
-        typeof params.accountInactiveReason === "function"
-          ? params.accountInactiveReason(entry)
-          : params.accountInactiveReason,
-      owner: createChannelAccountSecretOwner(
-        params.channelKey,
-        entry.accountId,
-        params.channel,
-        entry.account,
-      ),
-      apply: (value) => {
-        entry.account[params.field] = value;
-      },
-    });
-  }
 }
 
 /** Collects a nested channel field from root and account-specific nested config blocks. */
@@ -485,25 +440,41 @@ export function collectNestedChannelFieldAssignments(params: {
   accountActive: ChannelAccountPredicate;
   accountInactiveReason: string | ((entry: ChannelAccountEntry) => string);
 }): void {
-  const topLevelNested = params.channel[params.nestedKey];
-  if (isRecord(topLevelNested)) {
+  collectChannelFieldAssignments({
+    ...params,
+    topLevelActiveWithoutAccounts: params.topLevelActive,
+    topLevelInheritedAccountActive:
+      params.topLevelInheritedAccountActive ??
+      (({ account, enabled }) =>
+        params.topLevelActive && enabled && !hasOwnProperty(account, params.nestedKey)),
+  });
+}
+
+function collectChannelFieldAssignments(
+  params: Parameters<typeof collectConditionalChannelFieldAssignments>[0] & { nestedKey?: string },
+): void {
+  const fieldPath =
+    params.nestedKey === undefined ? params.field : `${params.nestedKey}.${params.field}`;
+  const targetFor = (record: Record<string, unknown>) => {
+    const target = params.nestedKey === undefined ? record : record[params.nestedKey];
+    return isRecord(target) ? target : undefined;
+  };
+  const topLevel = targetFor(params.channel);
+  if (topLevel) {
     collectTopLevelChannelFieldAssignments({
       channelKey: params.channelKey,
       channel: params.channel,
-      value: topLevelNested[params.field],
-      fieldPath: `channels.${params.channelKey}.${params.nestedKey}.${params.field}`,
+      value: topLevel[params.field],
+      fieldPath: `channels.${params.channelKey}.${fieldPath}`,
       expected: "string",
       surface: params.surface,
       defaults: params.defaults,
       context: params.context,
-      activeWithoutAccounts: params.topLevelActive,
-      inheritedAccountActive:
-        params.topLevelInheritedAccountActive ??
-        (({ account, enabled }) =>
-          params.topLevelActive && enabled && !hasOwnProperty(account, params.nestedKey)),
+      activeWithoutAccounts: params.topLevelActiveWithoutAccounts,
+      inheritedAccountActive: params.topLevelInheritedAccountActive,
       inactiveReason: params.topInactiveReason,
       apply: (value) => {
-        topLevelNested[params.field] = value;
+        topLevel[params.field] = value;
       },
     });
   }
@@ -511,13 +482,13 @@ export function collectNestedChannelFieldAssignments(params: {
     return;
   }
   for (const entry of params.surface.accounts) {
-    const nested = entry.account[params.nestedKey];
-    if (!isRecord(nested)) {
+    const target = targetFor(entry.account);
+    if (!target || (params.nestedKey === undefined && !hasOwnProperty(target, params.field))) {
       continue;
     }
     collectSecretInputAssignment({
-      value: nested[params.field],
-      path: `${appendConfigPathSegment(`channels.${params.channelKey}.accounts`, entry.accountId)}.${params.nestedKey}.${params.field}`,
+      value: target[params.field],
+      path: `${appendConfigPathSegment(`channels.${params.channelKey}.accounts`, entry.accountId)}.${fieldPath}`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,
@@ -533,7 +504,7 @@ export function collectNestedChannelFieldAssignments(params: {
         entry.account,
       ),
       apply: (value) => {
-        nested[params.field] = value;
+        target[params.field] = value;
       },
     });
   }

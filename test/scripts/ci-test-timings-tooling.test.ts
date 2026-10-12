@@ -4,10 +4,21 @@ import { refitTestTimings, type CiTimingRun } from "../../scripts/lib/ci-test-ti
 import { createCompactSplitTimingGeneration } from "../../scripts/lib/vitest-shard-metadata.mts";
 
 const file = "test/scripts/measured.test.ts";
-function toolingLog(cost: number, outcome = "0", nativeSeconds?: number, fileName = file) {
+function toolingLog(
+  cost: number,
+  outcome = "0",
+  nativeSeconds?: number,
+  fileName = file,
+  summary: {
+    configs?: string[];
+    includePatterns?: string[];
+    testFiles?: string[];
+    durations?: string[];
+  } = {},
+) {
   const shard_name = "core-tooling-1-hosted-1";
-  const configs = ["test/vitest/vitest.tooling.config.ts"];
-  const includePatterns = [fileName];
+  const configs = summary.configs ?? ["test/vitest/vitest.tooling.config.ts"];
+  const includePatterns = summary.includePatterns ?? [fileName];
   const timing_key = createCompactSplitTimingGeneration({
     configs,
     parentShardName: "core-tooling-1",
@@ -23,7 +34,12 @@ function toolingLog(cost: number, outcome = "0", nativeSeconds?: number, fileNam
       : [
           `2026-09-20T01:00:03Z [shard:${shard_name}] ✓ tooling ${fileName} (2 tests) ${nativeSeconds}s`,
         ]),
-    `2026-09-20T01:00:04Z [shard:${shard_name}] Duration 400s (tests 99%)`,
+    ...(summary.testFiles ?? []).map(
+      (value) => `2026-09-20T01:00:04Z [shard:${shard_name}] Test Files ${value}`,
+    ),
+    ...(summary.durations ?? ["400s (tests 99%)"]).map(
+      (value) => `2026-09-20T01:00:04Z [shard:${shard_name}] Duration ${value}`,
+    ),
     `2026-09-20T01:00:05Z [shard:${timing_key}] end (exit ${outcome})`,
   ].join("\n");
 }
@@ -31,6 +47,7 @@ function run(id: number, text = toolingLog(200), hosted = false): CiTimingRun {
   return {
     id,
     createdAt: "2026-09-20T01:00:00Z",
+    completeInventory: false,
     logs: [
       { kind: "tooling", text, labels: [hosted ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404"] },
     ],
@@ -70,25 +87,94 @@ describe("PR tooling timing weights", () => {
     expect(result.timings.runtimePlacementTimings).toEqual({ blacksmith: [], github: [] });
   });
 
-  it.each(["failed", "unfinished", "no duration", "other family"])(
-    "rejects %s observations",
-    (shape) => {
-      let text = toolingLog(200, shape === "failed" ? "1" : "0");
-      if (shape === "unfinished") {
-        text = text.split("\n").slice(0, -1).join("\n");
-      }
-      if (shape === "no duration") {
-        text = text
+  type TimingCase = {
+    label: string;
+    summary?: Parameters<typeof toolingLog>[4];
+    nativeSeconds?: number;
+    mutate?: (text: string) => string;
+    expected: number | undefined;
+  };
+  it.each<TimingCase>([
+    { label: "singleton wall", expected: 190 },
+    { label: "native file time", nativeSeconds: 120, expected: 120 },
+    { label: "missing file summary", summary: { testFiles: [] }, expected: 391 },
+    { label: "skipped file", summary: { testFiles: ["1 passed | 1 skipped (2)"] }, expected: 391 },
+    { label: "multiple invocations", summary: { durations: ["190.06s", "20s"] }, expected: 391 },
+    {
+      label: "multiple declared files",
+      summary: { includePatterns: [file, "other.test.ts"] },
+      expected: 391,
+    },
+    {
+      label: "multiple configs",
+      summary: { configs: ["test/vitest/vitest.tooling.config.ts", "other.config.ts"] },
+      expected: 391,
+    },
+    { label: "another config", summary: { configs: ["other.config.ts"] }, expected: 391 },
+    ...[
+      ["nested summary", "Test Files 1 passed (1)", "[shard:nested] Test Files 1 passed (1)"],
+      ["nested duration", "Duration 190.06s", "[shard:nested] Duration 20s"],
+      [
+        "foreign file",
+        "Test Files 1 passed (1)",
+        "✓ tooling test/scripts/unselected.test.ts > nested fixture 9000ms",
+      ],
+    ].map(([label, from, nested]) => ({
+      label: label!,
+      expected: 391,
+      mutate: (text: string) =>
+        text.replace(
+          from!,
+          `${nested}\n2026-09-20T01:00:04Z [shard:core-tooling-1-hosted-1] ${from}`,
+        ),
+    })),
+    {
+      label: "repeated begin",
+      expected: 391,
+      mutate: (text) =>
+        text
           .split("\n")
-          .filter((line) => !line.includes("Duration"))
-          .join("\n");
-      }
-      if (shape === "other family") {
-        text = text.replaceAll("core-tooling", "agentic-gateway");
-      }
+          .flatMap((line) => (line.endsWith("] begin") ? [line, line] : [line]))
+          .join("\n"),
+    },
+    {
+      label: "no matched file",
+      expected: undefined,
+      mutate: (text) =>
+        text
+          .split("\n")
+          .filter((line) => !line.includes("✓ tooling"))
+          .join("\n"),
+    },
+    {
+      label: "failed",
+      expected: undefined,
+      mutate: (text) => text.replace("end (exit 0)", "end (exit 1)"),
+    },
+    {
+      label: "unfinished",
+      expected: undefined,
+      mutate: (text) => text.split("\n").slice(0, -1).join("\n"),
+    },
+    { label: "no duration", summary: { durations: [] }, expected: undefined },
+    {
+      label: "other family",
+      expected: undefined,
+      mutate: (text) => text.replaceAll("core-tooling", "agentic-gateway"),
+    },
+  ])(
+    "prices only complete, unambiguous tooling observations: $label",
+    ({ summary, nativeSeconds, mutate, expected }) => {
+      const text = toolingLog(391, "0", nativeSeconds, file, {
+        testFiles: ["1 passed (1)"],
+        durations: ["190.06s"],
+        ...summary,
+      });
+      const observed = mutate?.(text) ?? text;
       expect(
-        refitTestTimings([run(1, text), run(2, text)]).timings.toolingFileSeconds.blacksmith,
-      ).toEqual({});
+        refitTestTimings([run(1, observed), run(2, observed)]).timings.toolingFileSeconds
+          .blacksmith,
+      ).toEqual(expected === undefined ? {} : { [file]: expected });
     },
   );
 

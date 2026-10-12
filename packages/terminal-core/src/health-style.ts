@@ -29,12 +29,9 @@ export function styleHealthChannelLine(line: string, rich: boolean): string {
   // Only the longest recognized status prefix needs case normalization.
   const normalized = normalizeLowercaseStringOrEmpty(detail.slice(0, "not configured".length));
 
-  const applyPrefix = (prefix: string, color: (value: string) => string) =>
-    `${line.slice(0, colon + 1)} ${color(detail.slice(0, prefix.length))}${detail.slice(prefix.length)}`;
-
   for (const [prefix, color] of HEALTH_STATUS_COLORS) {
     if (normalized.startsWith(prefix)) {
-      return applyPrefix(prefix, theme[color]);
+      return `${line.slice(0, colon + 1)} ${theme[color](detail.slice(0, prefix.length))}${detail.slice(prefix.length)}`;
     }
   }
 

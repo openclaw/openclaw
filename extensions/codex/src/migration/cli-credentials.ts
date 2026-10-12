@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
+import { decodeOpenAICodexJwtPayload } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerClient } from "../app-server/client.js";
@@ -200,15 +201,8 @@ async function readNativeCredential(
 }
 
 function jwtExpiry(token: string): number | undefined {
-  try {
-    const data = asOptionalRecord(
-      JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")),
-    );
-    const exp = data?.exp;
-    return typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1000 : undefined;
-  } catch {
-    return undefined;
-  }
+  const exp = decodeOpenAICodexJwtPayload(token)?.exp;
+  return typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1000 : undefined;
 }
 
 function parseOAuthCredential(data: Record<string, unknown>): CodexCliCredential | undefined {

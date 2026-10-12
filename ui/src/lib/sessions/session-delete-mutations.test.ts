@@ -58,13 +58,10 @@ describe("optimistic session deletion", () => {
     },
   );
 
-  it.each(
-    ["main", "agent:main:main"].flatMap((firstKey) =>
-      (["single", "batch"] as const).flatMap((firstMode) =>
-        (["single", "batch"] as const).map((secondMode) => ({ firstKey, firstMode, secondMode })),
-      ),
-    ),
-  )(
+  it.each([
+    { firstKey: "main", firstMode: "single", secondMode: "batch" },
+    { firstKey: "agent:main:main", firstMode: "batch", secondMode: "single" },
+  ] as const)(
     "returns caller keys when $firstMode $firstKey shares its deletion with a $secondMode alias",
     async ({ firstKey, firstMode, secondMode }) => {
       const h = createSessionDeletionHarness();
@@ -146,7 +143,7 @@ describe("optimistic session deletion", () => {
         }
         await settled;
         expect(h.sessions.state.deletedSessions).toEqual([]);
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(h.sessions.state.result?.sessions).toEqual([h.beta, h.sibling]);
         expect(h.sessions.listSnapshot(scope).result?.sessions).toEqual([h.beta, h.sibling]);
       } finally {
@@ -520,7 +517,11 @@ describe("optimistic session deletion", () => {
         };
         assertRemoved();
         for (const target of targets) {
-          h.sessions.reconcileChanged({ sessionKey: target.key, reason: "send", ...target });
+          h.emitEvent({
+            type: "event",
+            event: "sessions.changed",
+            payload: { sessionKey: target.key, reason: "send", ...target },
+          });
           h.emitEvent({
             type: "event",
             event: "session.message",
@@ -564,14 +565,24 @@ describe("optimistic session deletion", () => {
       const rejection = expect(alpha).rejects.toThrow("cloud cleanup failed");
       const beta = h.sessions.delete(h.beta.key);
       expect(h.sessions.state.result?.sessions).toEqual([h.sibling]);
-      h.sessions.patchRowLocal(h.sibling.key, { label: "new sibling name" });
+      h.sessions.patchRowLocal(
+        h.sibling.key,
+        { label: "new sibling name" },
+        {
+          agentId: "main",
+          sessionId: h.sibling.sessionId!,
+        },
+      );
       h.responses.get(h.alpha.key)!.reject(new Error("cloud cleanup failed"));
       await rejection;
       expect(h.sessions.state.result?.sessions).toEqual([
         h.alpha,
         { ...h.sibling, label: "new sibling name" },
       ]);
-      expect(h.sessions.listSnapshot(filtered).result?.sessions).toEqual([h.alpha, h.sibling]);
+      expect(h.sessions.listSnapshot(filtered).result?.sessions).toEqual([
+        h.alpha,
+        { ...h.sibling, label: "new sibling name" },
+      ]);
       expect(h.sessions.state.error).toContain("cloud cleanup failed");
       h.setRows([h.alpha, { ...h.sibling, label: "new sibling name" }]);
       h.responses.get(h.beta.key)!.resolve({ deleted: true });

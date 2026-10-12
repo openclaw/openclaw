@@ -9,6 +9,7 @@ import {
 type SessionProgressCardControllerOptions = {
   gateway: () => ApplicationGateway | null | undefined;
   target: () => ProgressCardGetParams | null | undefined;
+  onChange?: (target: ProgressCardGetParams, card: ProgressCard | null) => void;
 };
 
 /** Keeps one view on the gateway-scoped durable progress-card snapshot. */
@@ -28,8 +29,27 @@ export class SessionProgressCardController implements ReactiveController {
     host.addController(this);
   }
 
+  invalidate(target = this.target): void {
+    if (target) {
+      this.store?.invalidate(target);
+    }
+  }
+
+  hydrate(target: ProgressCardGetParams, card: ProgressCard | null): void {
+    const gateway = this.options.gateway();
+    if (!gateway) {
+      return;
+    }
+    sessionProgressCardsForGateway(gateway).hydrate(target, card);
+    this.synchronize();
+  }
+
   get card(): ProgressCard | null {
     return this.target ? (this.store?.get(this.target) ?? null) : null;
+  }
+
+  get lifetime(): object | undefined {
+    return this.target ? this.store?.getLifetime(this.target) : undefined;
   }
 
   get loading(): boolean {
@@ -101,6 +121,9 @@ export class SessionProgressCardController implements ReactiveController {
     const previous = this.presentation;
     const next = this.readPresentation();
     this.presentation = next;
+    if (this.target && next?.card !== undefined && next.card !== previous?.card) {
+      this.options.onChange?.(this.target, next.card);
+    }
     if (
       next &&
       (!previous ||
@@ -150,6 +173,9 @@ export class SessionProgressCardController implements ReactiveController {
       },
     });
     this.presentation = this.readPresentation();
+    if (this.target && this.presentation?.card !== undefined) {
+      this.options.onChange?.(this.target, this.presentation.card);
+    }
   }
 
   private release(): void {

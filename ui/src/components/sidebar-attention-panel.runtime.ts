@@ -1,8 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import "../app/device-scope-upgrade-controller.runtime.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
 import type { MentionsCapability } from "../app/mentions.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
@@ -10,6 +8,7 @@ import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import "../styles/sidebar-menus.css";
 import "../styles/sidebar-issues.css";
 import { renderHubTabs } from "./hub-tabs.ts";
 import { icons } from "./icons.ts";
@@ -27,7 +26,7 @@ import {
   renderSidebarScopeUpgradeItem,
   renderSidebarUpdateSurface,
 } from "./sidebar-issue-item.ts";
-import { ISSUE_TABS, issueTabLabel, type IssueTab } from "./sidebar-issues-tabs.ts";
+import { ISSUE_TABS, type IssueTab } from "./sidebar-issues-tabs.ts";
 import { renderSidebarOutboxItem } from "./sidebar-outbox-item.ts";
 import "./menu-surface.ts";
 
@@ -47,10 +46,10 @@ type SidebarAttentionPanelParams = {
   mentions: MentionsCapability;
   entries: readonly SidebarInboxEntry[];
   onApprovalDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
-  onClose: (restoreFocus: boolean) => void;
+  onClose: () => void;
   onDismiss: (dismissal: SidebarAttentionDismissal) => void;
   onKeydown: (event: KeyboardEvent) => void;
-  onNavigate: (routeId: NavigationRouteId) => void;
+  onNavigate: ApplicationContext["navigate"];
   onOpen: (item: SidebarAttentionItem) => void;
   onScroll: () => void;
   onSelectTab: (tab: IssueTab) => void;
@@ -97,13 +96,13 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
         return renderSidebarOutboxItem({
           entry,
           context: params.context,
-          onClosePanel: () => params.onClose(false),
+          onNavigate: params.onNavigate,
         });
       case "approval":
         return renderSidebarApprovalItem({
           approval: entry.approval,
           context: params.context,
-          onClosePanel: () => params.onClose(false),
+          onNavigate: params.onNavigate,
           onDecision: params.onApprovalDecision,
         });
       case "attention":
@@ -119,7 +118,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
           context: params.context,
           dismissing: mentions.dismissing.includes(entry.mention.id),
           onDismiss: () => void params.mentions.dismiss([entry.mention.id]),
-          onClosePanel: () => params.onClose(false),
+          onNavigate: params.onNavigate,
         });
       case "scopeUpgrade":
         return renderSidebarScopeUpgradeItem({
@@ -134,7 +133,6 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
           context: params.context,
           onDismiss,
           onNavigate: () => params.onNavigate("updates"),
-          visible: true,
           watchUpdateProgress: params.watchUpdateProgress,
         });
     }
@@ -145,7 +143,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
       type="button"
       class="sidebar-issues-panel__backdrop"
       aria-label=${t("common.close")}
-      @click=${() => params.onClose(true)}
+      @click=${() => params.onClose()}
     ></button>
     <openclaw-menu-surface>
       <section
@@ -202,7 +200,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
               type="button"
               class="sidebar-brand__icon sidebar-issues-panel__mobile-close"
               aria-label=${t("common.close")}
-              @click=${() => params.onClose(true)}
+              @click=${() => params.onClose()}
             >
               ${icons.x}
             </button>
@@ -213,7 +211,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
           active: params.selectedTab,
           tabs: ISSUE_TABS.map((tab) => ({
             value: tab,
-            label: issueTabLabel(tab),
+            label: t(`attention.tabs.${tab}`),
             // A zero count is the tab's resting state, not information — show
             // the badge only when the tab actually holds items.
             count: tabCounts[tab] > 0 ? tabCounts[tab] : null,

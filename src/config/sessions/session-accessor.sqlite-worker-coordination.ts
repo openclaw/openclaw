@@ -1,23 +1,14 @@
-import { performance } from "node:perf_hooks";
-import { setTimeout as delay } from "node:timers/promises";
-import { threadId, type MessagePort } from "node:worker_threads";
-import {
-  createSqliteLifecycleAggregateError,
-  runWithSqliteCoordinator,
-  SqliteCoordinatorError,
-} from "../../infra/sqlite-coordinator.js";
+import type { MessagePort } from "node:worker_threads";
+import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { assertStateDatabaseAccessAllowed } from "../../infra/gateway-state-owner.js";
+import { withSqliteDatabaseAdmissionExchange } from "../../infra/sqlite-database-admission.js";
+import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
+import { exchangeSqliteDatabaseAdmissions } from "../../infra/sqlite-worker-database-admission-relay.js";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
+import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
-import {
-  acquireStateDatabaseCoordinator,
-  attachStateLifecycleDelegate,
-  StateDatabaseCoordinatorContentionError,
-  tryCreateStateLifecycleDelegate,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../../infra/state-database-coordinator.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
-import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { resolveQuarantineStorePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import {
   sqliteMutationWorkerThreadId,
@@ -29,139 +20,117 @@ export type SqliteMutationWorkerCoordination = {
   actorId: string;
   databasePath: string;
   stateContext: SqliteWorkerStateContext;
-  stateLifecycle?: MessagePort;
+  databaseAdmission?: MessagePort;
+  reconciliation?: { identity: string };
 };
 
-async function prepareLifecycleDelegate(context: OpenClawStateWorkerContext, actorId: string) {
-  const deadline = performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS;
-  return withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, async () => {
-    while (true) {
-      try {
-        // Sibling agent workers borrow one parent owner rather than racing native
-        // lifecycle locks while claiming their separate shared-state leases.
-        return runWithSqliteCoordinator(
-          acquireStateDatabaseCoordinator({
-            databasePath: context.admission.databasePath,
-            busyTimeoutMs: 0,
-          }),
-          "SQLite mutation Worker lifecycle admission",
-          () =>
-            tryCreateStateLifecycleDelegate({
-              databasePath: context.admission.databasePath,
-              actorId,
-            }),
-        );
-      } catch (error) {
-        const remaining = deadline - performance.now();
-        if (
-          !(error instanceof StateDatabaseCoordinatorContentionError) ||
-          error.family !== "state-lifecycle" ||
-          remaining <= 0
-        ) {
-          throw error;
-        }
-        // Retry only custody acquisition, before dispatch or any mutation.
-        await delay(Math.min(25, remaining));
-      }
-    }
-  });
-}
-
-/** The original request owns this pin until its result or native exit is settled. */
+/** The request owns its native worker until a result or confirmed exit settles. */
 export async function withSqliteMutationWorkerCoordination<T>(
   context: OpenClawStateWorkerContext,
   transport: SqliteMutationWorkerTransport,
   operationId: number,
   run: (coordination: SqliteMutationWorkerCoordination) => Promise<T>,
+  assertRequestCurrent?: () => void,
 ): Promise<T> {
   const worker = transport.channel;
   const actorId = `${sqliteMutationWorkerThreadId(transport)}:${operationId}`;
-  // Preparation can fail before the mutation request installs its transport owner.
   const preparingError = () => {};
   worker.on("error", preparingError);
   try {
-    return await withSqliteWorkerLifecycleCoordination(context, actorId, run, async () => {
-      await terminateSqliteMutationWorker(transport);
-    });
+    return await withSqliteWorkerLifecycleCoordination(
+      context,
+      actorId,
+      run,
+      async () => {
+        await terminateSqliteMutationWorker(transport);
+      },
+      "retained",
+      assertRequestCurrent,
+    );
   } finally {
     worker.off("error", preparingError);
   }
 }
 
-/** Each transport joins its native operation before relinquishing shared-state custody. */
+/** Join uncertain native work before the transport can release its owned resources. */
 export async function withSqliteWorkerLifecycleCoordination<T>(
   context: OpenClawStateWorkerContext,
   actorId: string,
   run: (coordination: SqliteMutationWorkerCoordination) => Promise<T>,
   settleFailure: () => Promise<void>,
+  mode: "retained" | "reconciliation" = "retained",
+  assertRequestCurrent?: () => void,
 ): Promise<T> {
-  let delegate: ReturnType<typeof tryCreateStateLifecycleDelegate>;
-  let outcome: { value: T } | { error: unknown };
+  const identity = context.admission.identity.key;
+  if (mode === "reconciliation") {
+    context.admission.assertCurrent();
+  }
+  const admission = assertRequestCurrent
+    ? createSqliteWorkerOperationAdmission(() => {
+        throw new Error("SQLite mutation file admission does not grant transaction authority");
+      })
+    : undefined;
+  if (admission && assertRequestCurrent) {
+    admission.bindDatabaseAuthority({
+      databasePath: context.admission.databasePath,
+      assertRequest: assertRequestCurrent,
+      assertAccess() {
+        context.admission.assertCurrent();
+        // First creation stays path-bound until the native lease publishes its file identity.
+        const current = context.admission.identity;
+        if (current.key.startsWith("file:")) {
+          assertExistingDatabaseIdentity(
+            context.admission.databasePath,
+            current.key,
+            current.birthtime,
+          );
+        }
+        context.maintenanceScope?.assertAdmission();
+      },
+      assertCreate(location) {
+        // Raw agent admission may create shared state and its first integrity receipt.
+        if (
+          location !== resolveIdentityPathViaExistingAncestorSync(context.admission.databasePath) &&
+          location !==
+            resolveIdentityPathViaExistingAncestorSync(
+              resolveQuarantineStorePath(context.environment),
+            )
+        ) {
+          throw new Error("SQLite mutation creation target differs from its captured companions");
+        }
+      },
+      acquireSchema() {
+        throw new Error("SQLite mutation file admission does not grant schema maintenance");
+      },
+    });
+  }
+  const releaseService = admission
+    ? retainSqliteWriteAdmissionService([context.admission.databasePath], () => admission.service())
+    : undefined;
   try {
-    delegate = await prepareLifecycleDelegate(context, actorId);
-    outcome = {
-      value: await run({
-        actorId,
-        databasePath: context.admission.databasePath,
-        stateContext: {
-          environment: context.environment,
-          coordinatorRuntime: context.coordinatorRuntime,
-        },
-        // Channel allocation stays inside dispatch, where failure joins native exit.
-        get stateLifecycle() {
-          return delegate?.port;
-        },
-      }),
-    };
+    return await run({
+      actorId,
+      databasePath: context.admission.databasePath,
+      stateContext: { environment: context.environment },
+      ...(mode === "reconciliation" ? { reconciliation: { identity } } : {}),
+      ...(admission ? { databaseAdmission: admission.port } : {}),
+    });
   } catch (error) {
-    outcome = { error };
     try {
       await settleFailure();
     } catch (exitError) {
-      outcome.error = new AggregateError(
-        [error, exitError],
+      throw new AggregateError(
+        [admission?.failure ?? error, exitError],
         "SQLite mutation and Worker exit failed",
-        {
-          cause: error,
-        },
+        { cause: exitError },
       );
     }
+    // A refused grant retires the worker; confirmed exit must not hide the owner's refusal.
+    throw admission?.failure ?? error;
+  } finally {
+    admission?.finish();
+    releaseService?.();
   }
-  try {
-    delegate?.release();
-  } catch (error) {
-    if (delegate && !delegate.closed) {
-      const release = () => {
-        delegate.release();
-        unregister();
-      };
-      const unregister = registerOpenClawStateDatabaseAsyncResource({
-        close: async (identity) => {
-          if (!identity || identity.key === context.admission.identity.key) {
-            release();
-          }
-        },
-      });
-      context.maintenanceScope?.own(delegate, "shared-resources", release);
-    }
-    if ("error" in outcome) {
-      throw createSqliteLifecycleAggregateError(
-        [outcome.error, error],
-        "SQLite mutation and coordinator cleanup failed",
-        outcome.error,
-      );
-    }
-    process.emitWarning(
-      new SqliteCoordinatorError(
-        "SQLite mutation settled before coordinator cleanup failed",
-        error,
-      ),
-    );
-  }
-  if ("error" in outcome) {
-    throw outcome.error;
-  }
-  return outcome.value;
 }
 
 export async function runWithSqliteMutationWorkerCoordination<
@@ -169,34 +138,32 @@ export async function runWithSqliteMutationWorkerCoordination<
   Options extends OpenClawAgentDatabaseOptions,
 >(
   coordination: SqliteMutationWorkerCoordination,
-  operationId: number,
   options: Options,
   run: (options: Options) => Promise<T>,
 ): Promise<T> {
-  if (
-    coordination.actorId !== `${threadId}:${operationId}` ||
-    resolveOpenClawStateSqlitePath(coordination.stateContext.environment) !==
-      coordination.databasePath
-  ) {
-    throw new Error("SQLite mutation Worker shared-state owner changed");
+  const execute = () =>
+    run({
+      ...options,
+      env: { ...options.env, ...coordination.stateContext.environment },
+    });
+  const admission = coordination.databaseAdmission;
+  if (!admission) {
+    return await execute();
   }
-  const delegate = coordination.stateLifecycle
-    ? await attachStateLifecycleDelegate(coordination.stateLifecycle, {
-        actorId: coordination.actorId,
-        databasePath: coordination.databasePath,
-        runtimeDirectory: coordination.stateContext.coordinatorRuntime.directory,
-      })
-    : undefined;
+  let active = true;
   try {
-    return await withStateDatabaseCoordinatorRuntimeDirectory(
-      coordination.stateContext.coordinatorRuntime,
-      () => {
-        const operation = () =>
-          run({ ...options, env: { ...options.env, ...coordination.stateContext.environment } });
-        return delegate ? delegate.run(operation) : operation();
-      },
-    );
+    return await withSqliteDatabaseAdmissionExchange((facts, location, create) => {
+      if (!active) {
+        throw new Error("SQLite mutation file admission outlived its request");
+      }
+      if (create) {
+        // First-open creation can run inside this worker's live schema lease.
+        assertStateDatabaseAccessAllowed(coordination.databasePath);
+      }
+      return exchangeSqliteDatabaseAdmissions(admission, facts, location, create);
+    }, execute);
   } finally {
-    delegate?.close();
+    active = false;
+    admission.close();
   }
 }

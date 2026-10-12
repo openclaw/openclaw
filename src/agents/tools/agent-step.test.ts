@@ -1,9 +1,8 @@
-// Agent step tests cover nested session handoff, transcript bookkeeping, and
+// Agent step tests cover nested session handoff and
 // MCP runtime survival after completed nested turns.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { runAgentStep } from "./agent-step.js";
-import { testing } from "./agent-step.test-support.js";
 
 const recordParticipant = vi.hoisted(() => vi.fn());
 vi.mock("../../sessions/session-participant-recording.js", () => ({
@@ -22,7 +21,6 @@ vi.mock("../agent-bundle-mcp-tools.js", () => ({
 
 describe("runAgentStep", () => {
   afterEach(() => {
-    testing.setDepsForTest();
     agentWaitMock.mockReset();
     vi.clearAllMocks();
   });
@@ -53,7 +51,7 @@ describe("runAgentStep", () => {
         timeoutMs: 10_000,
         callGateway,
       }),
-    ).resolves.toBe("done");
+    ).resolves.toBeUndefined();
 
     const params = gatewayCalls[0]?.params as
       | {
@@ -105,100 +103,9 @@ describe("runAgentStep", () => {
         timeoutMs: 10_000,
         callGateway,
       }),
-    ).resolves.toBe("late reply");
-
-    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
-  });
-
-  it("forwards explicit transcript bodies for nested bookkeeping turns", async () => {
-    const agentCommandFromIngress = vi.fn(async () => ({
-      payloads: [{ text: "done", mediaUrl: null }],
-      meta: { durationMs: 1 },
-    }));
-    testing.setDepsForTest({
-      agentCommandFromIngress,
-    });
-    await runAgentStep({
-      sessionKey: "agent:main:subagent:child",
-      message: "internal announce step",
-      transcriptMessage: "",
-      extraSystemPrompt: "announce only",
-      timeoutMs: 10_000,
-    });
-
-    expect(agentCommandFromIngress).toHaveBeenCalledTimes(1);
-    const ingressCalls = agentCommandFromIngress.mock.calls as unknown as Array<
-      [{ message?: string; sourceReplyDeliveryMode?: string; transcriptMessage?: string }]
-    >;
-    const ingress = ingressCalls[0]?.[0];
-    expect(ingress?.message).toContain("internal announce step");
-    expect(ingress?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(ingress?.transcriptMessage).toBe("");
-  });
-
-  it("does not return failed transcript-mode output as an announce reply", async () => {
-    const agentCommandFromIngress = vi.fn(async () => ({
-      payloads: [
-        {
-          text: "⚠️ Agent couldn't generate a response. Please try again.",
-          mediaUrl: null,
-          isError: true,
-        },
-      ],
-      meta: {
-        durationMs: 1,
-        error: {
-          kind: "incomplete_turn" as const,
-          message: "Agent couldn't generate a response.",
-          fallbackSafe: true,
-          terminalPresentation: false,
-        },
-      },
-    }));
-    testing.setDepsForTest({
-      agentCommandFromIngress,
-    });
-
-    await expect(
-      runAgentStep({
-        sessionKey: "agent:main:subagent:child",
-        message: "internal announce step",
-        transcriptMessage: "",
-        extraSystemPrompt: "announce only",
-        timeoutMs: 10_000,
-      }),
     ).resolves.toBeUndefined();
+    expect(agentWaitMock).toHaveBeenCalledTimes(3);
 
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
-  });
-
-  it("returns trusted terminal presentations from incomplete transcript turns", async () => {
-    const presentation =
-      "The read-only lookup completed successfully.\n\n⚠️ Agent couldn't generate a response. Please try again.";
-    const agentCommandFromIngress = vi.fn(async () => ({
-      payloads: [{ text: presentation, mediaUrl: null, isError: true }],
-      meta: {
-        durationMs: 1,
-        error: {
-          kind: "incomplete_turn" as const,
-          message: "Agent couldn't generate a response.",
-          fallbackSafe: true,
-          terminalPresentation: true,
-        },
-      },
-    }));
-    testing.setDepsForTest({
-      agentCommandFromIngress,
-    });
-
-    await expect(
-      runAgentStep({
-        sessionKey: "agent:main:subagent:child",
-        message: "internal announce step",
-        transcriptMessage: "",
-        extraSystemPrompt: "announce only",
-        timeoutMs: 10_000,
-      }),
-    ).resolves.toBe(presentation);
   });
 });

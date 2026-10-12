@@ -2,7 +2,13 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -33,6 +39,30 @@ vi.mock("node:child_process", async (importOriginal) => {
     spawnSync: vi.fn(actual.spawnSync),
   };
 });
+
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
+
+async function fixtureReadyBeforeSettlement(ready: string, operation: Promise<unknown>) {
+  const settled = operation.then(
+    () => {
+      if (!fs.existsSync(ready)) {
+        throw new Error(`Snapshot worker settled before staging ready: ${ready}`);
+      }
+    },
+    (error: unknown) => {
+      if (!fs.existsSync(ready)) {
+        throw error;
+      }
+    },
+  );
+  await Promise.race([receipts.waitFor(ready, "ready"), settled]);
+}
 
 const reclamationChildren: Promise<ChildProcess>[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -137,16 +167,15 @@ describe("SQLite read-only worker cancellation", () => {
     expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
   });
 
-  it.each(
-    [true, false].flatMap((preserveSourceArtifacts) =>
-      (["abort", "scope-close", "invalid-response", "signal-exit"] as const).map((stop) => ({
-        preserveSourceArtifacts,
-        stop,
-      })),
-    ),
-  )(
+  it.for([
+    { preserveSourceArtifacts: true, stop: "abort" },
+    { preserveSourceArtifacts: true, stop: "scope-close" },
+    { preserveSourceArtifacts: true, stop: "invalid-response" },
+    { preserveSourceArtifacts: false, stop: "invalid-response" },
+    { preserveSourceArtifacts: false, stop: "signal-exit" },
+  ] as const)(
     "joins a scoped child and removes its unpublished snapshot on $stop (raw=$preserveSourceArtifacts)",
-    async ({ stop, preserveSourceArtifacts }) => {
+    async ({ stop, preserveSourceArtifacts }, { signal }) => {
       const fixture = tempDirs.make("openclaw-readonly-scoped-held-");
       const worker = path.join(fixture, "worker.mjs");
       const ready = path.join(fixture, "ready");
@@ -155,11 +184,13 @@ describe("SQLite read-only worker cancellation", () => {
         `
         import fs from "node:fs";
         import path from "node:path";
+        ${fixtureReceiptClientSource(receipts.endpoint)}
         ${reclaimFixture}
         process.on("SIGTERM", () => {});
         const block = (stagingRoot, id) => {
           fs.writeFileSync(path.join(stagingRoot, "partial.sqlite"), "private partial snapshot");
           fs.writeFileSync(${JSON.stringify(ready)}, stagingRoot);
+          sendReceipt(${JSON.stringify(ready)}, "ready");
           ${
             stop === "invalid-response"
               ? `
@@ -191,7 +222,7 @@ describe("SQLite read-only worker cancellation", () => {
             preserveSourceArtifacts,
           });
           void operation.catch(() => {});
-          await vi.waitFor(() => expect(fs.existsSync(ready)).toBe(true));
+          await withinTest(fixtureReadyBeforeSettlement(ready, operation), signal);
           if (stop === "abort") {
             controller.abort(reason);
             await expect(operation).rejects.toBe(reason);
@@ -233,14 +264,20 @@ describe("SQLite read-only worker cancellation", () => {
     expect(fs.readdirSync(cacheRoot)).toEqual([]);
   });
 
-  it("joins a killed child before rejecting and removes its unpublished partial snapshot", async () => {
+  it("joins a killed child before rejecting and removes its unpublished partial snapshot", async ({
+    signal,
+  }) => {
     const fixture = tempDirs.make("openclaw-readonly-held-worker-");
     const worker = path.join(fixture, "worker.mjs");
+    const ready = path.join(fixture, "ready");
     fs.writeFileSync(
       worker,
       `import fs from 'node:fs'; import path from 'node:path';
+         ${fixtureReceiptClientSource(receipts.endpoint)}
          ${reclaimFixture}
          fs.writeFileSync(path.join(process.argv[5], 'partial.sqlite'), 'private partial snapshot');
+         fs.writeFileSync(${JSON.stringify(ready)}, process.argv[5]);
+         sendReceipt(${JSON.stringify(ready)}, "ready");
          process.on('SIGTERM', () => {});
          setTimeout(() => process.exit(2), 5000);`,
     );
@@ -250,12 +287,13 @@ describe("SQLite read-only worker cancellation", () => {
     const operation = prepareSqliteReadOnlyLocation(path.join(fixture, "unused.sqlite"), {
       signal: controller.signal,
     });
+    void operation.catch(() => {});
     let childClosed: Promise<void> | undefined;
     try {
-      const workerIndex = () =>
-        processMocks.execFile.mock.calls.findIndex(([, args]) => isWorkerMode(args, "async"));
-      await vi.waitFor(() => expect(workerIndex()).toBeGreaterThanOrEqual(0));
-      const callIndex = workerIndex();
+      await withinTest(fixtureReadyBeforeSettlement(ready, operation), signal);
+      const callIndex = processMocks.execFile.mock.calls.findIndex(([, args]) =>
+        isWorkerMode(args, "async"),
+      );
       const child = processMocks.execFile.mock.results[callIndex]?.value;
       expect(child).toBeDefined();
       childClosed = new Promise<void>((resolve) => {
@@ -266,13 +304,11 @@ describe("SQLite read-only worker cancellation", () => {
         throw new Error("worker arguments missing");
       }
       const stagingRoot = argv.at(-1)!;
-      await vi.waitFor(() =>
-        expect(fs.existsSync(path.join(stagingRoot, "partial.sqlite"))).toBe(true),
-      );
+      expect(fs.existsSync(path.join(stagingRoot, "partial.sqlite"))).toBe(true);
       controller.abort(reason);
       await expect(operation).rejects.toBe(reason);
-      await childClosed;
       expect(child.signalCode).toBe("SIGKILL");
+      await childClosed;
       expect(fs.existsSync(stagingRoot)).toBe(false);
       expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
     } finally {

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -32,5 +33,10 @@ export function ensureWorkerEnvironmentStoreSchema(database: OpenClawStateDataba
     { database },
     { operationLabel: "worker-environments.companion.schema.ensure" },
   );
-  ensuredDatabases.add(database.db);
+  const remember = () => {
+    ensuredDatabases.add(database.db);
+  };
+  if (!deferSqlitePostCommitPublication(database.db, remember)) {
+    remember();
+  }
 }

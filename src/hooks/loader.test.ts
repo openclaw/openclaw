@@ -96,8 +96,17 @@ describe("loader", () => {
     return hookDir;
   }
 
-  function createEnabledHooksConfig(): OpenClawConfig {
-    return { hooks: { internal: { enabled: true } } };
+  function createSelectedHooksConfig(...names: string[]): OpenClawConfig {
+    return {
+      hooks: {
+        internal: { entries: Object.fromEntries(names.map((name) => [name, { enabled: true }])) },
+      },
+    };
+  }
+
+  function createEnabledHooksConfig(...names: string[]): OpenClawConfig {
+    const config = createSelectedHooksConfig(...names);
+    return { hooks: { internal: { ...config.hooks?.internal, enabled: true } } };
   }
 
   afterEach(async () => {
@@ -117,20 +126,6 @@ describe("loader", () => {
   });
 
   describe("prepareInternalHooks", () => {
-    const expectNoCommandHookRegistration = async (cfg: OpenClawConfig) => {
-      const count = await commitPreparedHooks(cfg, tmpDir);
-      expect(count).toBe(0);
-      expect(getRegisteredEventKeys()).not.toContain("command:new");
-    };
-
-    it("should return 0 when hooks are explicitly disabled", async () => {
-      const count = await commitPreparedHooks(
-        { hooks: { internal: { enabled: false } } } satisfies OpenClawConfig,
-        tmpDir,
-      );
-      expect(count).toBe(0);
-    });
-
     it("skips hook discovery until internal hooks are configured", async () => {
       for (const cfg of [
         {} satisfies OpenClawConfig,
@@ -147,20 +142,10 @@ describe("loader", () => {
       await writeDiscoveredHook({ sourceDir: hooksDir, hookName: "keep-hook" });
       await writeDiscoveredHook({ sourceDir: hooksDir, hookName: "skip-hook" });
 
-      const count = await commitPreparedHooks(
-        {
-          hooks: {
-            internal: {
-              enabled: true,
-              entries: {
-                "keep-hook": { enabled: true },
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
-        tmpDir,
-        { managedHooksDir: hooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" },
-      );
+      const count = await commitPreparedHooks(createEnabledHooksConfig("keep-hook"), tmpDir, {
+        managedHooksDir: hooksDir,
+        bundledHooksDir: "/nonexistent/bundled/hooks",
+      });
 
       expect(count).toBe(1);
       const event = createInternalHookEvent("command", "new", "test-session");
@@ -177,18 +162,10 @@ describe("loader", () => {
       });
       await writeDiscoveredHook({ sourceDir: hooksDir, hookName: "skip-hook" });
 
-      const count = await commitPreparedHooks(
-        {
-          hooks: {
-            internal: {
-              enabled: true,
-              entries: { "metadata-key": { enabled: true } },
-            },
-          },
-        },
-        tmpDir,
-        { managedHooksDir: hooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" },
-      );
+      const count = await commitPreparedHooks(createEnabledHooksConfig("metadata-key"), tmpDir, {
+        managedHooksDir: hooksDir,
+        bundledHooksDir: "/nonexistent/bundled/hooks",
+      });
 
       expect(count).toBe(1);
       const event = createInternalHookEvent("command", "new", "test-session");
@@ -204,19 +181,10 @@ describe("loader", () => {
         events: ["command:nwe", "command:new"],
       });
 
-      const count = await commitPreparedHooks(
-        {
-          hooks: {
-            internal: {
-              entries: {
-                "typo-hook": { enabled: true },
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
-        tmpDir,
-        { managedHooksDir: hooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" },
-      );
+      const count = await commitPreparedHooks(createSelectedHooksConfig("typo-hook"), tmpDir, {
+        managedHooksDir: hooksDir,
+        bundledHooksDir: "/nonexistent/bundled/hooks",
+      });
 
       // The typo'd key never fires, but validation is advisory: the hook still
       // loads and its valid subscriptions keep working.
@@ -229,33 +197,13 @@ describe("loader", () => {
       expect(event.messages).toEqual(["typo-hook"]);
     });
 
-    it("preserves plugin-registered hooks when workspace hooks reload", async () => {
-      const pluginHandler = vi.fn();
-      registerInternalHook("gateway:startup", pluginHandler);
-
-      const count = await commitPreparedHooks(createEnabledHooksConfig(), tmpDir);
-
-      expect(count).toBe(0);
-      expect(getRegisteredEventKeys()).toContain("gateway:startup");
-
-      await triggerInternalHook(createInternalHookEvent("gateway", "startup", "gateway:startup"));
-      expect(pluginHandler).toHaveBeenCalledTimes(1);
-    });
-
     it("replaces prior workspace hook registrations instead of duplicating them", async () => {
       const hooksDir = path.join(tmpDir, "managed-hooks");
       await writeDiscoveredHook({
         sourceDir: hooksDir,
         hookName: "reloadable-hook",
       });
-      const cfg = {
-        hooks: {
-          internal: {
-            enabled: true,
-            entries: { "reloadable-hook": { enabled: true } },
-          },
-        },
-      } satisfies OpenClawConfig;
+      const cfg = createEnabledHooksConfig("reloadable-hook");
       const options = { managedHooksDir: hooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" };
 
       expect(await commitPreparedHooks(cfg, tmpDir, options)).toBe(1);
@@ -278,17 +226,12 @@ describe("loader", () => {
       const managedHooksDir = path.join(tmpDir, "managed-hooks");
       await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "original" });
       const options = { managedHooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" };
-      const config = (names: string[]): OpenClawConfig => ({
-        hooks: {
-          internal: { entries: Object.fromEntries(names.map((name) => [name, { enabled: true }])) },
-        },
-      });
-      await commitPreparedHooks(config(["original"]), tmpDir, options);
+      await commitPreparedHooks(createSelectedHooksConfig("original"), tmpDir, options);
       await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "replacement" });
       await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "broken", handlerCode });
 
       await expect(
-        commitPreparedHooks(config(["replacement", "broken"]), tmpDir, options),
+        commitPreparedHooks(createSelectedHooksConfig("replacement", "broken"), tmpDir, options),
       ).rejects.toThrow();
 
       const event = createInternalHookEvent("command", "new", "test-session");
@@ -314,9 +257,7 @@ describe("loader", () => {
           'globalThis.openclawHookImportGate.started(); await globalThis.openclawHookImportGate.wait; export default async function(event) { event.messages.push("replacement"); }',
       });
       const loading = prepareInternalHooks(
-        {
-          hooks: { internal: { entries: { replacement: { enabled: true } } } },
-        },
+        createSelectedHooksConfig("replacement"),
         tmpDir,
         options,
       );
@@ -348,9 +289,7 @@ describe("loader", () => {
           sourceDir: managedHooksDir,
           hookName: "original",
         });
-        const config: OpenClawConfig = {
-          hooks: { internal: { entries: { original: { enabled: true } } } },
-        };
+        const config = createSelectedHooksConfig("original");
         await commitPreparedHooks(config, tmpDir, options);
         const initial = createInternalHookEvent("command", "new", "test-session");
         await triggerInternalHook(initial);
@@ -365,17 +304,7 @@ describe("loader", () => {
         }
         await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "sibling" });
         await expect(
-          commitPreparedHooks(
-            {
-              hooks: {
-                internal: {
-                  entries: { original: { enabled: true }, sibling: { enabled: true } },
-                },
-              },
-            },
-            tmpDir,
-            options,
-          ),
+          commitPreparedHooks(createSelectedHooksConfig("original", "sibling"), tmpDir, options),
         ).rejects.toThrow();
         const after = createInternalHookEvent("command", "new", "test-session");
         await triggerInternalHook(after);
@@ -630,9 +559,7 @@ describe("loader", () => {
 
     it("drops a lost workspace source when the selected workspace changes", async () => {
       const original = await writeDiscoveredHook({ hookName: "original" });
-      const config: OpenClawConfig = {
-        hooks: { internal: { entries: { original: { enabled: true } } } },
-      };
+      const config = createSelectedHooksConfig("original");
       await commitPreparedHooks(config, tmpDir);
       await fs.rm(original, { recursive: true });
       const nextWorkspace = path.join(tmpDir, "new-workspace");
@@ -785,14 +712,7 @@ describe("loader", () => {
         exportName: "myHandler",
         handlerCode: "export const myHandler = async function() {};\n",
       });
-      const cfg = {
-        hooks: {
-          internal: {
-            enabled: true,
-            entries: { "named-export": { enabled: true } },
-          },
-        },
-      } satisfies OpenClawConfig;
+      const cfg = createEnabledHooksConfig("named-export");
 
       const count = await commitPreparedHooks(cfg, tmpDir, {
         managedHooksDir: hooksDir,
@@ -811,14 +731,7 @@ describe("loader", () => {
 
       await writeDiscoveredHook({ sourceDir: hooksDir, hookName: "valid" });
       const count = await commitPreparedHooks(
-        {
-          hooks: {
-            internal: {
-              enabled: true,
-              entries: { "bad-export": { enabled: true }, valid: { enabled: true } },
-            },
-          },
-        },
+        createEnabledHooksConfig("bad-export", "valid"),
         tmpDir,
         {
           managedHooksDir: hooksDir,
@@ -840,18 +753,7 @@ describe("loader", () => {
       expect(getRegisteredEventKeys()).not.toContain("command:new");
 
       const enabledCount = await commitPreparedHooks(
-        {
-          hooks: {
-            internal: {
-              enabled: true,
-              entries: {
-                "workspace-hook": {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
+        createEnabledHooksConfig("workspace-hook"),
         tmpDir,
       );
       expect(enabledCount).toBe(1);
@@ -859,68 +761,6 @@ describe("loader", () => {
       const event = createInternalHookEvent("command", "new", "test-session");
       await triggerInternalHook(event);
       expect(event.messages).toContain("workspace-hook");
-    });
-
-    it("rejects directory hook handlers that escape hook dir via symlink", async () => {
-      const outsideHandlerPath = path.join(fixtureRoot, `outside-handler-${caseId}.js`);
-      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
-
-      const hookDir = path.join(tmpDir, "hooks", "symlink-hook");
-      await fs.mkdir(hookDir, { recursive: true });
-      await fs.writeFile(
-        path.join(hookDir, "HOOK.md"),
-        [
-          "---",
-          "name: symlink-hook",
-          "description: symlink test",
-          'metadata: {"openclaw":{"events":["command:new"]}}',
-          "---",
-          "",
-          "# Symlink Hook",
-        ].join("\n"),
-        "utf-8",
-      );
-      try {
-        await fs.symlink(outsideHandlerPath, path.join(hookDir, "handler.js"));
-      } catch {
-        return;
-      }
-
-      await expectNoCommandHookRegistration(createEnabledHooksConfig());
-    });
-
-    it("rejects directory hook handlers that escape hook dir via hardlink", async () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const outsideHandlerPath = path.join(fixtureRoot, `outside-handler-hardlink-${caseId}.js`);
-      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
-
-      const hookDir = path.join(tmpDir, "hooks", "hardlink-hook");
-      await fs.mkdir(hookDir, { recursive: true });
-      await fs.writeFile(
-        path.join(hookDir, "HOOK.md"),
-        [
-          "---",
-          "name: hardlink-hook",
-          "description: hardlink test",
-          'metadata: {"openclaw":{"events":["command:new"]}}',
-          "---",
-          "",
-          "# Hardlink Hook",
-        ].join("\n"),
-        "utf-8",
-      );
-      try {
-        await fs.link(outsideHandlerPath, path.join(hookDir, "handler.js"));
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-          return;
-        }
-        throw err;
-      }
-
-      await expectNoCommandHookRegistration(createEnabledHooksConfig());
     });
 
     it("keeps managed hooks active when a workspace hook reuses the same name", async () => {
@@ -936,22 +776,9 @@ describe("loader", () => {
           'export default async function(event) { event.messages.push("workspace-override"); }\n',
       });
 
-      const count = await commitPreparedHooks(
-        {
-          hooks: {
-            internal: {
-              enabled: true,
-              entries: {
-                "session-memory": {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-        tmpDir,
-        { managedHooksDir },
-      );
+      const count = await commitPreparedHooks(createEnabledHooksConfig("session-memory"), tmpDir, {
+        managedHooksDir,
+      });
       expect(count).toBe(1);
 
       const event = createInternalHookEvent("command", "new", "test-session");

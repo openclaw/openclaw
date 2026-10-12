@@ -1,12 +1,8 @@
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 import {
@@ -15,17 +11,15 @@ import {
   requestContext,
 } from "./sessions-read-cache.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  disposeSessionReadContexts();
+const tempDirs = useSessionStoreTempDirs(afterAll, "catalog-delivery-selection-");
+afterEach(async () => {
+  await disposeSessionReadContexts();
   resetConfigRuntimeState();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });
 
 it("selects delivery aliases across agents without narrowing provider planning", async () => {
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("catalog-delivery-selection-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make());
   const cfg = { agents: { ownership: "explicit" as const, entries: { main: {}, work: {} } } };
   setRuntimeConfigSnapshot(cfg, cfg);
   for (const agentId of ["main", "work"]) {

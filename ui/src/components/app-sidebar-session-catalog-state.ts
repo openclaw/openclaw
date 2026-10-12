@@ -171,6 +171,11 @@ export async function refetchExpandedSessionCatalogPages(params: {
           }
           let sessions = host.sessions;
           let nextCursor = host.nextCursor;
+          const preserveOnError = (error: NonNullable<SessionCatalog["error"]>) =>
+            preserveExpandedCatalogHost(
+              { ...host, error },
+              previous ?? { ...host, sessions, nextCursor },
+            );
           const requestedCursors = new Set<string>();
           for (let loadedPages = 0; loadedPages < pageDepth && nextCursor; loadedPages += 1) {
             // Pausing automatic replay must retain the full visible window, not its partial prefix.
@@ -190,10 +195,7 @@ export async function refetchExpandedSessionCatalogPages(params: {
                 },
               );
             } catch (error) {
-              return preserveExpandedCatalogHost(
-                { ...host, error: sessionCatalogRequestError(error) },
-                previous ?? { ...host, sessions, nextCursor },
-              );
+              return preserveOnError(sessionCatalogRequestError(error));
             }
             if (!params.isCurrent()) {
               return previous ?? host;
@@ -201,19 +203,10 @@ export async function refetchExpandedSessionCatalogPages(params: {
             const page = result.catalogs.find((candidate) => candidate.id === catalog.id);
             const pageHost = page?.hosts.find((candidate) => candidate.hostId === host.hostId);
             if (page?.error) {
-              return preserveExpandedCatalogHost(
-                { ...host, error: page.error },
-                previous ?? { ...host, sessions, nextCursor },
-              );
+              return preserveOnError(page.error);
             }
             if (!pageHost) {
-              return preserveExpandedCatalogHost(
-                {
-                  ...host,
-                  error: missingCatalogPageError(),
-                },
-                previous ?? { ...host, sessions, nextCursor },
-              );
+              return preserveOnError(missingCatalogPageError());
             }
             if (pageHost.error) {
               return preserveExpandedCatalogHost({ ...host, ...pageHost }, previous ?? host);
@@ -221,10 +214,7 @@ export async function refetchExpandedSessionCatalogPages(params: {
             sessions = mergeCatalogSessionRows(sessions, pageHost.sessions);
             nextCursor = pageHost.nextCursor;
             if (nextCursor && requestedCursors.has(nextCursor)) {
-              return preserveExpandedCatalogHost(
-                { ...host, error: repeatedCatalogCursorError() },
-                previous ?? { ...host, sessions, nextCursor },
-              );
+              return preserveOnError(repeatedCatalogCursorError());
             }
           }
           const { nextCursor: _cursor, sessions: _sessions, ...freshHost } = host;

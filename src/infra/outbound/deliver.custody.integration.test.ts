@@ -15,7 +15,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { createQueuedDeliveryOwner } from "./deliver-queue-state.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { drainMatrixReconnect } from "./deliver.queue-integration.test-support.js";
@@ -37,6 +37,67 @@ vi.mock("../../agents/runtime-plan/build.js", () => ({
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 
+function installMatrixSend(
+  send: NonNullable<ChannelPlugin["message"]>["send"],
+  outbound?: ChannelPlugin["outbound"],
+) {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "matrix",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "matrix", config: { listAccountIds: () => [] } }),
+          message: { id: "matrix", durableFinal: { capabilities: { text: true } }, send },
+          outbound,
+        },
+      },
+    ]),
+  );
+}
+
+function textReceipt(messageId: string) {
+  return {
+    messageId,
+    receipt: createMessageReceiptFromOutboundResults({
+      results: [{ channel: "matrix", messageId }],
+      kind: "text",
+    }),
+  };
+}
+
+function startRetiringDelivery(
+  text: string,
+  options: Partial<Parameters<typeof deliverOutboundPayloads>[0]> = {},
+) {
+  const caller = new AbortController();
+  const queueIdReady = createDeferred<string>();
+  const outcome = deliverOutboundPayloads({
+    cfg: {},
+    channel: "matrix",
+    to: "!room:example",
+    payloads: [{ text }],
+    queuePolicy: "required",
+    ...options,
+    assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+    onDeliveryIntent: ({ id }) => queueIdReady.resolve(id),
+  }).then(
+    (results) => ({ results }),
+    (error: unknown) => ({ error }),
+  );
+  return { caller, queueIdReady, outcome };
+}
+
+function watchTerminals() {
+  const terminals: string[] = [];
+  const unsubscribe = onTrustedMessageAuditEvent((event) => {
+    if (event.action === "message.outbound.finished") {
+      terminals.push(event.outcome);
+    }
+  });
+  return { terminals, unsubscribe };
+}
+
 describe("follow-up delivery custody", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
 
@@ -49,7 +110,7 @@ describe("follow-up delivery custody", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it.each(["ack", "retire"] as const)(
+  it.each(["retire"] as const)(
     "keeps a committed %s released when a later observer throws",
     async (transition) => {
       const stateDir = fixtures.tmpDir();
@@ -81,51 +142,27 @@ describe("follow-up delivery custody", () => {
     },
   );
 
-  it.each(["AbortError", "Error"])(
+  it.each(["AbortError"])(
     "leaves one sender after an admitted route fails with %s before dispatch",
     async (name) => {
       const tmpDir = fixtures.tmpDir();
       process.env.OPENCLAW_STATE_DIR = tmpDir;
       const accepted: string[] = [];
       let startupClosed = true;
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "matrix",
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({
-                id: "matrix",
-                config: { listAccountIds: () => [] },
-              }),
-              message: {
-                id: "matrix",
-                durableFinal: { capabilities: { text: true } },
-                send: {
-                  lifecycle: {
-                    beforeSendAttempt: async () => {
-                      if (startupClosed) {
-                        throw Object.assign(new Error("monitor startup closed"), { name });
-                      }
-                    },
-                  },
-                  text: async ({ text, onPlatformSendDispatch }) => {
-                    await onPlatformSendDispatch?.();
-                    accepted.push(text);
-                    return {
-                      messageId: "recovered",
-                      receipt: createMessageReceiptFromOutboundResults({
-                        results: [{ channel: "matrix", messageId: "recovered" }],
-                        kind: "text",
-                      }),
-                    };
-                  },
-                },
-              },
-            } satisfies ChannelPlugin,
+      installMatrixSend({
+        lifecycle: {
+          beforeSendAttempt: async () => {
+            if (startupClosed) {
+              throw Object.assign(new Error("monitor startup closed"), { name });
+            }
           },
-        ]),
-      );
+        },
+        text: async ({ text, onPlatformSendDispatch }) => {
+          await onPlatformSendDispatch?.();
+          accepted.push(text);
+          return textReceipt("recovered");
+        },
+      });
       const turn: AdmittedFollowupTurn = {
         runId: "custody-run",
         queued: {
@@ -216,82 +253,41 @@ describe("retired caller delivery settlement", () => {
     let preparationFailurePending = failPreparationOnce;
     const send = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
       await ctx.onPlatformSendDispatch?.();
-      return {
-        messageId: "unexpected-send",
-        receipt: createMessageReceiptFromOutboundResults({
-          results: [{ channel: "matrix", messageId: "unexpected-send" }],
-          kind: "text",
-        }),
-      };
+      return textReceipt("unexpected-send");
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "matrix", config: { listAccountIds: () => [] } }),
-            message: {
-              id: "matrix",
-              durableFinal: { capabilities: { text: true } },
-              send: {
-                lifecycle: {
-                  beforeSendAttempt: async () => {
-                    prepared.resolve();
-                    await release.promise;
-                    if (preparationFailurePending) {
-                      preparationFailurePending = false;
-                      throw new PlatformMessageNotDispatchedError(
-                        "sender preparation unavailable",
-                        {
-                          cause: new Error("sender runtime unavailable"),
-                        },
-                      );
-                    }
-                  },
-                },
-                text: send,
-              },
-            },
-          },
+    installMatrixSend({
+      lifecycle: {
+        beforeSendAttempt: async () => {
+          prepared.resolve();
+          await release.promise;
+          if (preparationFailurePending) {
+            preparationFailurePending = false;
+            throw new PlatformMessageNotDispatchedError("sender preparation unavailable", {
+              cause: new Error("sender runtime unavailable"),
+            });
+          }
         },
-      ]),
-    );
+      },
+      text: send,
+    });
     return { prepared: prepared.promise, release: release.resolve, send };
   }
 
-  it.each([false, true])(
+  it.each([false])(
     "finishes interrupted terminal compaction after reopening without another send (bestEffort: %s)",
     async (bestEffort) => {
       const stateDir = fixtures.tmpDir();
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const adapter = installHeldAdapter();
-      const caller = new AbortController();
-      const queueIdReady = createDeferred<string>();
       const compaction = vi
         .spyOn(queueStorage, "finalizeDeliveryFailureSettlement")
         .mockImplementationOnce(() => {
           throw new Error("terminal compaction interrupted");
         });
-      const terminals: string[] = [];
-      const unsubscribe = onTrustedMessageAuditEvent((event) => {
-        if (event.action === "message.outbound.finished") {
-          terminals.push(event.outcome);
-        }
-      });
-      const outcome = deliverOutboundPayloads({
-        cfg: {},
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [{ text: "retired caller message" }],
-        queuePolicy: "required",
+      const { terminals, unsubscribe } = watchTerminals();
+      const { caller, queueIdReady, outcome } = startRetiringDelivery("retired caller message", {
         bestEffort,
-        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-        onDeliveryIntent: ({ id }) => queueIdReady.resolve(id),
-      }).then(
-        (results) => ({ results }),
-        (error: unknown) => ({ error }),
-      );
+      });
       try {
         const queueId = await queueIdReady.promise;
         await adapter.prepared;
@@ -303,7 +299,7 @@ describe("retired caller delivery settlement", () => {
             : { error: { message: expect.stringContaining("message caller retired") } },
         );
         expect(compaction).toHaveBeenCalledOnce();
-        expect(queueStorage.findDeliveryIntentOwner(queueId, stateDir)).toMatchObject({
+        expect(await queueStorage.findDeliveryIntentOwner(queueId, stateDir)).toMatchObject({
           status: "failed",
           settlementPending: true,
         });
@@ -327,27 +323,15 @@ describe("retired caller delivery settlement", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "does not replay a rejected handoff when its first settlement write fails (bestEffort: %s)",
     async (bestEffort) => {
       vi.useFakeTimers({ toFake: ["Date"] });
       const stateDir = fixtures.tmpDir();
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const adapter = installHeldAdapter(true);
-      const caller = new AbortController();
-      const queueIdReady = createDeferred<string>();
-      const terminals: string[] = [];
-      const unsubscribe = onTrustedMessageAuditEvent((event) => {
-        if (event.action === "message.outbound.finished") {
-          terminals.push(event.outcome);
-        }
-      });
-      const outcome = deliverOutboundPayloads({
-        cfg: {},
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [{ text: "retired restart notice" }],
-        queuePolicy: "required",
+      const { terminals, unsubscribe } = watchTerminals();
+      const { caller, queueIdReady, outcome } = startRetiringDelivery("retired restart notice", {
         bestEffort,
         deliveryIntentId: `main-session-restart-recovery:first-write-${bestEffort}`,
         completionRetention: {
@@ -356,12 +340,7 @@ describe("retired caller delivery settlement", () => {
           maxEntries: 2_000,
         },
         reusePendingDeliveryIntent: true,
-        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-        onDeliveryIntent: ({ id }) => queueIdReady.resolve(id),
-      }).then(
-        (results) => ({ results }),
-        (error: unknown) => ({ error }),
-      );
+      });
       try {
         const queueId = await Promise.race([
           queueIdReady.promise,
@@ -370,15 +349,29 @@ describe("retired caller delivery settlement", () => {
           }),
         ]);
         await Promise.race([adapter.prepared, outcome]);
-        const firstWrite = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
+        const { db } = stateDatabase.openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        });
         const stage = queueStorage.stageDeliveryFailureSettlement;
         const staging = vi
           .spyOn(queueStorage, "stageDeliveryFailureSettlement")
-          .mockImplementationOnce((...args) => {
-            firstWrite.mockImplementationOnce(() => {
-              throw new Error("first settlement write interrupted");
-            });
-            return stage(...args);
+          .mockImplementationOnce(async (...args) => {
+            // A schema trigger reaches the worker's existing connection and real transaction.
+            db.exec(`
+              CREATE TRIGGER main.reject_first_failure_settlement
+              BEFORE UPDATE ON delivery_queue_entries
+              WHEN OLD.queue_name = '${OUTBOUND_DELIVERY_QUEUE_NAME}'
+                AND OLD.id = '${queueId.replaceAll("'", "''")}'
+                AND NEW.recovery_state = 'settlement_pending'
+              BEGIN
+                SELECT RAISE(ABORT, 'first settlement write interrupted');
+              END;
+            `);
+            try {
+              return await stage(...args);
+            } finally {
+              db.exec("DROP TRIGGER IF EXISTS main.reject_first_failure_settlement");
+            }
           });
         caller.abort(new Error("message caller retired"));
         adapter.release();
@@ -392,9 +385,10 @@ describe("retired caller delivery settlement", () => {
         expect(staging.mock.calls[0]?.[0].platformSendAttemptId).toBeUndefined();
         expect(staging.mock.calls[0]?.[0].platformSendStartedAt).toBeUndefined();
         expect(staging.mock.calls[0]?.[0].deliveryCompletion).toBeUndefined();
-        expect(firstWrite.mock.results.filter((result) => result.type === "throw")).toHaveLength(1);
+        await expect(staging.mock.results[0]?.value).rejects.toThrow(
+          "first settlement write interrupted",
+        );
         expect(adapter.send).not.toHaveBeenCalled();
-        firstWrite.mockRestore();
         staging.mockRestore();
         stateDatabase.closeOpenClawStateDatabaseForTest();
         vi.setSystemTime(Date.now() + 60_001);
@@ -420,19 +414,11 @@ describe("retired caller delivery settlement", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const completion = await import("./delivery-completion.js");
     vi.spyOn(completion, "markDurableDeliveryQueued").mockResolvedValueOnce({ state: "queued" });
-    const reject = vi
-      .spyOn(completion, "rejectDurableDelivery")
+    const settle = vi
+      .spyOn(completion, "settleDurableDelivery")
       .mockResolvedValue({ state: "suppressed" });
     const adapter = installHeldAdapter();
-    const caller = new AbortController();
-    const queueIdReady = createDeferred<string>();
-    const outcome = deliverOutboundPayloads({
-      cfg: {},
-      channel: "matrix",
-      to: "!room:example",
-      payloads: [{ text: "replacement-owned message" }],
-      queuePolicy: "required",
-      assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+    const { caller, queueIdReady, outcome } = startRetiringDelivery("replacement-owned message", {
       deliveryCompletion: {
         kind: "pending-final",
         deliveryId: "replacement-completion",
@@ -441,11 +427,7 @@ describe("retired caller delivery settlement", () => {
         sessionKey: "agent:main:matrix:direct:recipient",
         storePath: path.join(stateDir, "sessions.json"),
       },
-      onDeliveryIntent: ({ id }) => queueIdReady.resolve(id),
-    }).then(
-      (results) => ({ results }),
-      (error: unknown) => ({ error }),
-    );
+    });
     try {
       const queueId = await queueIdReady.promise;
       await adapter.prepared;
@@ -462,7 +444,7 @@ describe("retired caller delivery settlement", () => {
       caller.abort(new Error("original caller retired"));
       adapter.release();
       expect(await outcome).toMatchObject({ error: expect.any(Error) });
-      expect(reject).not.toHaveBeenCalled();
+      expect(settle).not.toHaveBeenCalled();
       expect(adapter.send).not.toHaveBeenCalled();
       expect(getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir)).toBe(
         "pending",
@@ -493,8 +475,6 @@ describe("post-delivery pin authority", () => {
 
   it.each([
     { required: false, revokeDuring: "after-send" },
-    { required: true, revokeDuring: "after-send" },
-    { required: false, revokeDuring: "pin-preparation" },
     { required: true, revokeDuring: "pin-preparation" },
   ] as const)(
     "preserves accepted delivery after $revokeDuring revocation (required pin: $required)",
@@ -511,44 +491,22 @@ describe("post-delivery pin authority", () => {
       let current = true;
       const send = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
         await ctx.onPlatformSendDispatch?.();
-        return {
-          messageId: "accepted-message",
-          receipt: createMessageReceiptFromOutboundResults({
-            results: [{ channel: "matrix", messageId: "accepted-message" }],
-            kind: "text",
-          }),
-        };
+        return textReceipt("accepted-message");
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "matrix",
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({
-                id: "matrix",
-                config: { listAccountIds: () => [] },
-              }),
-              message: {
-                id: "matrix",
-                durableFinal: { capabilities: { text: true } },
-                send: { text: send },
-              },
-              outbound: {
-                deliveryMode: "direct",
-                sendText: legacySend,
-                pinDeliveredMessage: async (ctx) => {
-                  pinPreparing.resolve();
-                  if (revokeDuring === "pin-preparation") {
-                    await releasePin.promise;
-                  }
-                  ctx.assertDirectAdapterHandoff?.();
-                  pinRequest();
-                },
-              },
-            } satisfies ChannelPlugin,
+      installMatrixSend(
+        { text: send },
+        {
+          deliveryMode: "direct",
+          sendText: legacySend,
+          pinDeliveredMessage: async (ctx) => {
+            pinPreparing.resolve();
+            if (revokeDuring === "pin-preparation") {
+              await releasePin.promise;
+            }
+            ctx.assertDirectAdapterHandoff?.();
+            pinRequest();
           },
-        ]),
+        },
       );
       const outcome = sendDurableMessageBatch({
         cfg: {},

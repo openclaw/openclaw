@@ -1,4 +1,3 @@
-// Synology Chat plugin module implements inbound context behavior.
 import type {
   ChannelIngressContextBinding,
   ResolvedChannelMessageIngress,

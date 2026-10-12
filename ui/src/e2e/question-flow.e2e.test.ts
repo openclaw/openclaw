@@ -6,6 +6,7 @@ import { beforeEach, afterEach, expect, it } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionUrl,
@@ -641,6 +642,10 @@ suite.define(() => {
     expect(await page.locator("openclaw-app-shell, openclaw-app-sidebar").count()).toBe(0);
     const panel = document.locator("openclaw-chat-question-panel");
     await panel.waitFor();
+    expect(await document.getByRole("heading", { level: 1 }).textContent()).toContain(
+      "Waiting for your answer",
+    );
+    expect(await page.title()).toBe("Waiting for your answer — OpenClaw");
     await screenshot(page, "11-secret-store-ask-pending.png");
     const secretInput = panel.locator('input[type="password"]');
     await secretInput.fill(fakeSecret);
@@ -657,7 +662,12 @@ suite.define(() => {
       answers: { answers: { api_key: [fakeSecret] } },
       secretStoreAllowedHosts: ["api.example.test"],
     });
-    await document.getByRole("heading", { name: "Answered", exact: true }).waitFor();
+    const outcomeHeading = document.getByRole("heading", { name: "Answered", exact: true });
+    await outcomeHeading.waitFor();
+    expect(
+      await outcomeHeading.evaluate((element) => element === element.ownerDocument.activeElement),
+    ).toBe(true);
+    expect(await page.title()).toBe("Answered — OpenClaw");
     expect(await document.textContent()).not.toContain(fakeSecret);
     expect(await document.textContent()).not.toContain("stored");
     expect(new URL(page.url()).pathname).toBe(`/operator/ask/${request.id}`);
@@ -791,7 +801,7 @@ suite.define(() => {
     "updates current panes and sidebar from an authoritative $action without a resolution event",
     async ({ status, closeSubmittingPane }) => {
       const { gateway, page } = await openQuestionPage();
-      await page.getByRole("button", { name: "Open split view" }).click();
+      await selectChatLayoutAction(page, "Open split view");
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
       await expect
@@ -836,7 +846,7 @@ suite.define(() => {
       expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
       const remainingPanes = page.locator("openclaw-chat-pane");
       if (closeSubmittingPane) {
-        await submittingPane.getByRole("button", { name: "Close pane", exact: true }).click();
+        await selectChatLayoutAction(submittingPane, "Close pane");
         await expect.poll(() => remainingPanes.count()).toBe(1);
         await expectQuestionAttention(page, request.questions[0]!.question);
         await gateway.resolveDeferred("question.resolve", result);

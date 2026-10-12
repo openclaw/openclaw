@@ -14,7 +14,12 @@ import { createThemeTool } from "./theme-tool.js";
 vi.mock("./in-process-gateway.js", () => ({ callAgentToolGatewayRequest: vi.fn() }));
 
 const callGateway = vi.mocked(callAgentToolGatewayRequest);
-const definition = createThemeDefinitionFixture();
+const definition = createThemeDefinitionFixture({
+  mascot: "none",
+  workingPhrases: ["Building", "Compiling"],
+  critters: ["penguin", "fedora"],
+  avatarHat: "fedora",
+});
 
 describe("theme tool", () => {
   beforeEach(() => callGateway.mockReset());
@@ -38,7 +43,13 @@ describe("theme tool", () => {
       schema: ThemesSetParamsSchema,
     },
     {
-      args: { action: "import", id: "xenovessel", definition, apply: true, mode: "dark" },
+      args: {
+        action: "import",
+        id: "xenovessel",
+        definition: { ...definition, workingPhrases: [" Building ", "Compiling"] },
+        apply: true,
+        mode: "dark",
+      },
       params: { id: "xenovessel", definition, apply: true, mode: "dark" },
       schema: ThemesImportParamsSchema,
     },
@@ -56,6 +67,10 @@ describe("theme tool", () => {
         description: definition.description,
         modes: ["dark"],
         source: "user",
+        mascot: "none",
+        workingPhrases: ["Building", "Compiling"],
+        critters: ["penguin", "fedora"],
+        avatarHat: "fedora",
       },
       definition,
     };

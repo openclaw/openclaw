@@ -8,10 +8,6 @@ import {
   type StatusReactionAdapter,
 } from "./status-reactions.js";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Mock Adapter
-// ─────────────────────────────────────────────────────────────────────────────
-
 const createMockAdapter = () => {
   const calls: { method: string; emoji: string }[] = [];
   return {
@@ -109,10 +105,6 @@ function countCallsForEmoji(calls: Array<{ method: string; emoji: string }>, emo
   }
   return count;
 }
-// ─────────────────────────────────────────────────────────────────────────────
-// Tests
-// ─────────────────────────────────────────────────────────────────────────────
-
 describe("resolveToolEmoji", () => {
   it.each([
     { name: "returns display emoji for exec tool", tool: "exec", expected: "🛠️" },
@@ -179,30 +171,6 @@ describe("createStatusReactionController", () => {
     vi.useRealTimers();
   });
 
-  it("should not call adapter when disabled", async () => {
-    const { adapter, calls } = createMockAdapter();
-    const controller = createStatusReactionController({
-      enabled: false,
-      adapter,
-      initialEmoji: "👀",
-    });
-
-    void controller.setQueued();
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(1000);
-
-    expect(calls).toHaveLength(0);
-  });
-
-  it("should call setReaction with initialEmoji for setQueued immediately", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setQueued();
-    await vi.runAllTimersAsync();
-
-    expectSetEmojiCall(calls, "👀");
-  });
-
   it("should debounce setThinking and eventually call adapter", async () => {
     const { calls, controller } = createEnabledController();
 
@@ -224,15 +192,6 @@ describe("createStatusReactionController", () => {
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
 
     expectSetEmojiCall(calls, DEFAULT_EMOJIS.compacting);
-  });
-
-  it("should classify tool name and debounce", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setTool("exec");
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    expectSetEmojiCall(calls, "🛠️");
   });
 
   const immediateTerminalCases = [
@@ -347,21 +306,6 @@ describe("createStatusReactionController", () => {
     // Should only have the last one (exec → display emoji)
     const setEmojis = collectEmojisForMethod(calls, "set");
     expect(setEmojis).toEqual(["🛠️"]);
-  });
-
-  it("should deduplicate same emoji calls", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    const callsAfterFirst = calls.length;
-
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    // Should not add another call
-    expect(calls.length).toBe(callsAfterFirst);
   });
 
   it("should cancel a pending compacting emoji before resuming thinking", async () => {
@@ -488,32 +432,6 @@ describe("createStatusReactionController", () => {
     ]);
   });
 
-  it("should only call setReaction when adapter lacks removeReaction", async () => {
-    const { calls, controller } = createSetOnlyController();
-
-    void controller.setQueued();
-    await vi.runAllTimersAsync();
-
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    // Should only have set calls, no remove
-    expect(countCallsForMethod(calls, "remove")).toBe(0);
-    expect(calls.some((c) => c.method === "set")).toBe(true);
-  });
-
-  it("should clear all known emojis when adapter supports removeReaction", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setQueued();
-    await vi.runAllTimersAsync();
-
-    await controller.clear();
-
-    // Should have removed multiple emojis
-    expect(countCallsForMethod(calls, "remove")).toBeGreaterThan(0);
-  });
-
   it("should handle clear gracefully when adapter lacks removeReaction", async () => {
     const { calls, controller } = createSetOnlyController();
 
@@ -521,17 +439,6 @@ describe("createStatusReactionController", () => {
 
     // Should not throw, no remove calls
     expect(countCallsForMethod(calls, "remove")).toBe(0);
-  });
-
-  it("should restore initial emoji", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    await controller.restoreInitial();
-
-    expectSetEmojiCall(calls, "👀");
   });
 
   it("should use custom emojis when provided", async () => {

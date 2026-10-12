@@ -1,6 +1,20 @@
 // Vitest performance config helper normalizes performance test environment settings.
 import path from "node:path";
+import type { Plugin } from "vite";
+import type { CacheKeyIdGenerator } from "vitest/node";
 type EnvMap = Record<string, string | undefined>;
+
+const optimizerCacheKey: CacheKeyIdGenerator = ({ environment }) => environment.config.cacheDir;
+
+export function createVitestProjectCachePlugin(): Plugin {
+  return {
+    name: "openclaw:vitest-project-cache",
+    configureVitest({ defineCacheKeyGenerator }) {
+      // Cached imports embed project-specific optimized dependency paths.
+      defineCacheKeyGenerator(optimizerCacheKey);
+    },
+  };
+}
 
 const isEnabled = (value: string | undefined): boolean => {
   const normalized = value?.trim().toLowerCase();
