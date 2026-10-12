@@ -117,6 +117,8 @@ agent restores the previous version. See
 A review stops without changing anything further if you turn learning off, or
 if the source session is deleted, replaced, or changes permission mode while it
 runs. Changes it already made stay, each with a saved previous version.
+Expected cancellations during Gateway shutdown or a source transcript change
+appear only in debug logs. Provider and storage failures still produce warnings.
 
 ## Turn it on or off
 

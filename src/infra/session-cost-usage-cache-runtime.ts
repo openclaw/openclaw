@@ -5,6 +5,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import type { UsageOverviewOptions, UsageOverviewSession } from "../shared/usage-types.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { isAbortError } from "./abort-signal.js";
 import { formatErrorMessage } from "./errors.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
@@ -486,6 +487,10 @@ async function runQueuedUsageCostRefresh(
           busyRetryDelayMs = USAGE_COST_REFRESH_RETRY_MIN_MS;
         }
       } catch (error) {
+        if (signal?.aborted && !(error instanceof AggregateError) && isAbortError(error)) {
+          logger.debug("background refresh cancelled during shutdown");
+          return;
+        }
         logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });
         if (signal?.aborted || !partialBatch || recoveredPartialFailure) {
           return;
