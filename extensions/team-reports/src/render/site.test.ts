@@ -128,6 +128,19 @@ describe("Team Reports site behavior", () => {
     expect(closedToday).not.toContain('class="quick-card oc-card oc-card-interactive partial"');
   });
 
+  it("preserves stored completeness in overview cards and history", () => {
+    const closed = entry("day", "2026-09-06");
+    const incomplete = home({ day: [{ ...closed, status: "partial" }] });
+    expect(incomplete.match(/oc-badge-warning[^>]*>Incomplete<\/span>/g)).toHaveLength(2);
+    expect(incomplete).toContain('class="quick-card oc-card oc-card-interactive partial"');
+    expect(incomplete).not.toContain(">Intraday</span>");
+    expect(incomplete).not.toContain("Open reporting windows");
+    const complete = home({ day: [closed] });
+    expect(complete).not.toContain(">Incomplete</span>");
+    expect(complete).not.toContain(">Intraday</span>");
+    expect(complete).not.toContain('class="quick-card oc-card oc-card-interactive partial"');
+  });
+
   it("compares an open aggregate snapshot to elapsed prior days instead of the full period", () => {
     const previous = entry("week", "2026-W36", 100);
     const current = entry("week", "2026-W37", 15);
@@ -147,6 +160,28 @@ describe("Team Reports site behavior", () => {
       home({ day: [entry("day", "2026-09-07", 20), entry("day", "2026-09-06", 10)] }),
     ).toContain("+100% vs prev day");
   });
+
+  it.each<Period>(["day", "week", "month"])(
+    "offers Show all only above the visible %s history limit",
+    (period) => {
+      const count = period === "day" ? 7 : 12;
+      const entries = Array.from({ length: count + 1 }, (_, index) =>
+        entry(
+          period,
+          period === "day"
+            ? `2026-08-${String(31 - index).padStart(2, "0")}`
+            : period === "week"
+              ? `2026-W${String(34 - index).padStart(2, "0")}`
+              : `${2026 - Math.floor(index / 12)}-${String(12 - (index % 12)).padStart(2, "0")}`,
+        ),
+      );
+      expect(home({ [period]: entries.slice(0, count) })).not.toContain(`data-toggle="${period}"`);
+      const html = home({ [period]: entries });
+      expect(html).toContain(`Show all ${count + 1}`);
+      expect(html).toContain(" data-extra hidden");
+      expect(html).toContain(`href="/reports/${period}/${entries.at(-1)?.key}/"`);
+    },
+  );
 
   it("renders metric deltas only against preceding periods and labels in-progress totals", () => {
     const report = document();
@@ -316,6 +351,23 @@ describe("Team Reports site behavior", () => {
     }
     expect(html).toContain("118 events · 118 GitHub · 0 Discord");
     expect(html).toContain("7 out of 8 days active");
+  });
+
+  it("links retained calendar cells to daily reports and leaves missing chart days as gaps", () => {
+    const html = renderPersonPage(ctx, { github: ["alice"], display: "Alice" }, [
+      personDay("alice", "2026-09-07", 12),
+      personDay("alice", "2026-09-05", 6),
+    ]);
+    expect(html).toMatch(/class="day-cell[^"\n]*"[^>]*href="\/reports\/day\/2026-09-07\//);
+    expect(html).not.toContain('href="/reports/day/2026-09-06/');
+    expect(html).toContain("GitHub events · left axis");
+    expect(html).toContain("Discord messages · right axis");
+    const paths = [...html.matchAll(/class="person-activity-line[^"]*" d="([^"]*)"/g)];
+    expect(paths).toHaveLength(2);
+    for (const path of paths) {
+      expect(path[1]?.match(/M/g)).toHaveLength(2);
+    }
+    expect(html).toContain("Exact daily values");
   });
 });
 

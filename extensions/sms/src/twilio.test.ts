@@ -13,6 +13,7 @@ import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import {
   buildTwilioInboundMessage,
   listTwilioIncomingPhoneNumbers,
+  listTwilioMessages,
   readTwilioWebhookForm,
   resolveTwilioWebhookSignatureUrl,
   retrieveTwilioMessagingService,
@@ -167,6 +168,27 @@ describe("Twilio SMS helpers", () => {
     clearRuntimeConfigSnapshot();
   });
 
+  it("parses Twilio form bodies and inbound messages", async () => {
+    const form = await readTestTwilioForm(
+      "From=%2B15551234567&To=%2B15557654321&Body=hello+there&MessageSid=SM123",
+    );
+
+    expect(form).toEqual({
+      From: "+15551234567",
+      To: "+15557654321",
+      Body: "hello there",
+      MessageSid: "SM123",
+    });
+    expect(buildTwilioInboundMessage(form)).toEqual({
+      from: "+15551234567",
+      to: "+15557654321",
+      body: "hello there",
+      messageSid: "SM123",
+      accountSid: "",
+      media: [],
+    });
+  });
+
   it("parses media-only Twilio MMS callbacks in provider order", async () => {
     const form = await readTestTwilioForm(
       [
@@ -253,8 +275,10 @@ describe("Twilio SMS helpers", () => {
   });
 
   it.each([
+    ["+1 (555) 123-4567", "+15551234567"],
     ["RcS:+1 (555) 123-4567", "+15551234567"],
     ["whatsapp:+15551234567", null],
+    ["signal:+15551234567", null],
   ] as const)("accepts only supported Twilio inbound From address %s", (from, expected) => {
     const msg = buildTwilioInboundMessage({
       From: from,
@@ -373,14 +397,53 @@ describe("Twilio SMS helpers", () => {
     );
   });
 
+  it("opts delivery commits into bounded connection, timeout, and 5xx retries", () => {
+    const callbackUrl = resolveTwilioStatusCallbackUrl("https://gateway.example.com/webhooks/sms");
+    const overrides = new URLSearchParams(callbackUrl.split("#")[1]);
+
+    expect(overrides.get("rp")?.split(",")).toEqual(["ct", "rt", "5xx"]);
+    expect(overrides.get("rp")?.split(",")).not.toContain("4xx");
+    expect(overrides.get("rt")).toBe("5000");
+    expect(overrides.get("rc")).toBe("1");
+  });
+
   it.each([
+    [
+      "accepts an absolute HTTP callback URL",
+      "http://gateway.example.com/webhooks/sms",
+      "http://gateway.example.com/webhooks/sms#rp=ct,rt,5xx&rt=5000&rc=1",
+    ],
+    [
+      "preserves the query and existing retry policy",
+      "https://gateway.example.com/webhooks/sms?tenant=support#rp=4xx",
+      "https://gateway.example.com/webhooks/sms?tenant=support#rp=4xx,ct,rt,5xx&rt=5000&rc=1",
+    ],
     [
       "preserves an all-failures policy and configured retry count",
       "https://gateway.example.com/webhooks/sms#rt=5000&rp=all&rc=3",
       "https://gateway.example.com/webhooks/sms#rt=5000&rp=all&rc=3",
     ],
+    [
+      "preserves a configured read timeout",
+      "https://gateway.example.com/webhooks/sms#rt=1200&rp=ct",
+      "https://gateway.example.com/webhooks/sms#rt=1200&rp=ct,rt,5xx&rc=1",
+    ],
+    [
+      "repairs an invalid read timeout",
+      "https://gateway.example.com/webhooks/sms#rt=16000",
+      "https://gateway.example.com/webhooks/sms#rt=5000&rp=ct,rt,5xx&rc=1",
+    ],
+    [
+      "repairs a disabled retry count without replacing other overrides",
+      "https://gateway.example.com/webhooks/sms#e=singapore&rc=0",
+      "https://gateway.example.com/webhooks/sms#e=singapore&rc=1&rp=ct,rt,5xx&rt=5000",
+    ],
   ])("%s", (_name, publicWebhookUrl, expected) => {
     expect(resolveTwilioStatusCallbackUrl(publicWebhookUrl)).toBe(expected);
+  });
+
+  it("omits the delivery callback when no public webhook URL is configured", () => {
+    expect(resolveTwilioStatusCallbackUrl("   ")).toBe("");
   });
 
   it("enforces OpenClaw's defensive 4,000-character status callback cap", () => {
@@ -394,7 +457,27 @@ describe("Twilio SMS helpers", () => {
   });
 
   it.each([
+    ["relative", "placeholder"],
+    ["malformed", "https://"],
+    ["missing authority slashes", "https:gateway.example.com/webhooks/sms"],
+    ["single authority slash", "https:/gateway.example.com/webhooks/sms"],
+    ["backslash", String.raw`https://gateway.example.com\webhooks\sms`],
+    ["invalid percent escape", "https://gateway.example.com/webhooks/sms?x=%ZZ"],
+    ["raw query pipe", "https://gateway.example.com/webhooks/sms?x=|"],
+    ["raw query caret", "https://gateway.example.com/webhooks/sms?x=^"],
+    ["raw query backtick", "https://gateway.example.com/webhooks/sms?x=`"],
+    ["raw query braces", "https://gateway.example.com/webhooks/sms?x={}"],
+    ["percent-encoded hostname", "https://%65xample.com/webhooks/sms"],
+    ["invalid hostname", "https://sms_gateway.example.com/webhooks/sms"],
     ["single-label hostname", "http://gateway/webhooks/sms"],
+    ["localhost", "http://localhost/webhooks/sms"],
+    ["IPv4 loopback", "http://127.0.0.1/webhooks/sms"],
+    ["legacy numeric IPv4 loopback", "http://2130706433/webhooks/sms"],
+    ["unspecified IPv4", "http://0.0.0.0/webhooks/sms"],
+    ["private IPv4", "http://10.0.0.1/webhooks/sms"],
+    ["carrier-grade NAT IPv4", "http://100.64.0.1/webhooks/sms"],
+    ["link-local IPv4", "http://169.254.169.254/webhooks/sms"],
+    ["IPv6 loopback", "http://[::1]/webhooks/sms"],
     ["private IPv6", "http://[fd00::1]/webhooks/sms"],
   ])(
     "keeps text sending available with a %s public webhook URL",
@@ -548,6 +631,122 @@ describe("Twilio SMS helpers", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("lists Twilio phone-number webhook settings", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        incoming_phone_numbers: [
+          {
+            sid: "PN123",
+            phone_number: "+15557654321",
+            sms_url: "https://gateway.example.com/webhooks/sms",
+            sms_method: "POST",
+            voice_url: "https://gateway.example.com/voice/webhook",
+          },
+        ],
+      }),
+    );
+
+    await expect(
+      listTwilioIncomingPhoneNumbers({
+        account: createAccount(),
+        phoneNumber: "+15557654321",
+        fetchImpl,
+      }),
+    ).resolves.toEqual([
+      {
+        sid: "PN123",
+        phoneNumber: "+15557654321",
+        smsUrl: "https://gateway.example.com/webhooks/sms",
+        smsMethod: "POST",
+        voiceUrl: "https://gateway.example.com/voice/webhook",
+      },
+    ]);
+
+    const [url, init] = fetchImpl.mock.calls[0] ?? [];
+    expect(url).toBe(
+      "https://api.twilio.com/2010-04-01/Accounts/AC123/IncomingPhoneNumbers.json?PhoneNumber=%2B15557654321",
+    );
+    expect(init?.headers).toMatchObject({
+      authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,
+    });
+  });
+
+  it("lists recent Twilio messages for diagnostics", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        messages: [
+          {
+            sid: "SM123",
+            direction: "inbound",
+            status: "received",
+            to: "+15557654321",
+            from: "+15551234567",
+            error_code: 11200,
+            body: "hello",
+            date_created: "Sun, 31 May 2026 10:00:00 +0000",
+            date_sent: null,
+          },
+        ],
+      }),
+    );
+
+    await expect(
+      listTwilioMessages({
+        account: createAccount(),
+        to: "+15557654321",
+        pageSize: 3,
+        fetchImpl,
+      }),
+    ).resolves.toEqual([
+      {
+        sid: "SM123",
+        direction: "inbound",
+        status: "received",
+        to: "+15557654321",
+        from: "+15551234567",
+        errorCode: "11200",
+        body: "hello",
+        dateCreated: "Sun, 31 May 2026 10:00:00 +0000",
+        dateSent: "",
+      },
+    ]);
+
+    const [url] = fetchImpl.mock.calls[0] ?? [];
+    expect(url).toBe(
+      "https://api.twilio.com/2010-04-01/Accounts/AC123/Messages.json?To=%2B15557654321&PageSize=3",
+    );
+  });
+
+  it("retrieves Twilio Messaging Service webhook settings", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        sid: "MG123",
+        inbound_request_url: "https://gateway.example.com/webhooks/sms",
+        inbound_method: "POST",
+        use_inbound_webhook_on_number: false,
+      }),
+    );
+
+    await expect(
+      retrieveTwilioMessagingService({
+        account: createAccount({ messagingServiceSid: "MG123", fromNumber: "" }),
+        serviceSid: "MG123",
+        fetchImpl,
+      }),
+    ).resolves.toEqual({
+      sid: "MG123",
+      inboundRequestUrl: "https://gateway.example.com/webhooks/sms",
+      inboundMethod: "POST",
+      useInboundWebhookOnNumber: false,
+    });
+
+    const [url, init] = fetchImpl.mock.calls[0] ?? [];
+    expect(url).toBe("https://messaging.twilio.com/v1/Services/MG123");
+    expect(init?.headers).toMatchObject({
+      authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,
+    });
+  });
+
   it("can send through a Twilio Messaging Service SID", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       Response.json({ sid: "SM789" }, { status: 201 }),
@@ -568,6 +767,24 @@ describe("Twilio SMS helpers", () => {
     expect(body.get("StatusCallback")).toBe(
       "https://gateway.example.com/webhooks/sms#rp=ct,rt,5xx&rt=5000&rc=1",
     );
+  });
+
+  it("prefers an explicit from number when both sender options are resolved", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json({ sid: "SM999" }, { status: 201 }),
+    );
+
+    await sendSmsViaTwilio({
+      account: createAccount({ fromNumber: "+15557654321", messagingServiceSid: "MG123" }),
+      to: "+15551234567",
+      text: "hello",
+      fetchImpl,
+    });
+
+    const [, init] = fetchImpl.mock.calls[0] ?? [];
+    const body = readUrlEncodedRequestBody(init);
+    expect(body.get("From")).toBe("+15557654321");
+    expect(body.get("MessagingServiceSid")).toBeNull();
   });
 
   it("throws structured Twilio errors from JSON error bodies", async () => {
@@ -688,6 +905,19 @@ describe("Twilio SMS helpers", () => {
     expect(caught?.message.length).toBeLessThan(8_300);
     expect(tracked.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects malformed JSON from successful Twilio sends", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response("not json", { status: 201 }));
+
+    await expect(
+      sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        text: "hello",
+        fetchImpl,
+      }),
+    ).rejects.toThrow("Twilio SMS send returned malformed JSON.");
   });
 
   it("releases guarded Twilio egress on malformed successful send responses", async () => {

@@ -161,6 +161,31 @@ describe("plugin state data-only comparison", () => {
     }
   });
 
+  it("returns the current row after a legacy write without losing that update", async () => {
+    const { store, legacy } = fixture("conflict");
+    legacy.register("counter", { count: 1 });
+    const before = await store.observe("counter");
+    legacy.register("counter", { count: 2 });
+    const conflict = await store.compareAndApply("counter", before.comparison, {
+      operation: "update",
+      action: "set",
+      value: { count: 3 },
+    });
+    expect(conflict.status).toBe("conflict");
+    if (conflict.status !== "conflict") {
+      throw new Error("Expected an observed conflict");
+    }
+    expect(conflict.current.value).toEqual({ count: 2 });
+    expect(await store.lookup("counter")).toEqual({ count: 2 });
+    expect(
+      await store.compareAndApply("counter", conflict.current.comparison, {
+        operation: "update",
+        action: "set",
+        value: { count: 3 },
+      }),
+    ).toEqual({ status: "applied" });
+  });
+
   it("compares stored bytes without requiring legacy JSON to be reserialized", async () => {
     const f = fixture("legacy-json");
     f.seed("counter", ' { "count" : 1 } ', 1, null);

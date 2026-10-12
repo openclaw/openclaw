@@ -5,6 +5,7 @@ import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
+import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 
@@ -131,6 +132,10 @@ describe("openrouter music generation provider", () => {
     vi.useRealTimers();
   });
 
+  it("declares explicit mode capabilities", () => {
+    expectExplicitMusicGenerationCapabilities(buildOpenRouterMusicGenerationProvider());
+  });
+
   it("streams OpenRouter audio chunks into a generated music asset", async () => {
     const release = vi.fn(async () => {});
     const audioBase64 = Buffer.from("wav-bytes").toString("base64");
@@ -173,7 +178,10 @@ describe("openrouter music generation provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it.each([{ ending: "\r\n", terminated: false }])(
+  it.each([
+    { ending: "\n", terminated: true },
+    { ending: "\r\n", terminated: false },
+  ])(
     "preserves fragmented UTF-8 lines with $ending and terminated=$terminated",
     async ({ ending, terminated }) => {
       const lines = sseResponseLines({
@@ -305,6 +313,26 @@ describe("openrouter music generation provider", () => {
     ).rejects.toThrow("OpenRouter music generation returned malformed base64 audio data");
   });
 
+  it("decodes independently padded OpenRouter audio chunks", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse([
+        `data: ${JSON.stringify({ choices: [{ delta: { audio: { data: Buffer.from("a").toString("base64") } } }] })}\n`,
+        `data: ${JSON.stringify({ choices: [{ delta: { audio: { data: Buffer.from("b").toString("base64") } } }] })}\n`,
+        "data: [DONE]\n",
+      ]),
+      release: vi.fn(async () => {}),
+    });
+
+    const result = await buildOpenRouterMusicGenerationProvider().generateMusic({
+      provider: "openrouter",
+      model: "google/lyria-3-pro-preview",
+      prompt: "chunked soundtrack",
+      cfg: {},
+    });
+
+    expect(result.tracks[0]?.buffer).toEqual(Buffer.from("ab"));
+  });
+
   it("sends reference images as multimodal message content", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: sseResponse([
@@ -341,6 +369,45 @@ describe("openrouter music generation provider", () => {
             ],
           },
         ],
+      }),
+    );
+  });
+
+  it("applies configured OpenRouter request policy without allowing private networks", async () => {
+    const requestPolicy = {
+      allowPrivateNetwork: true,
+      headers: { "X-OpenRouter-Trace": "trace-1" },
+      proxy: { mode: "env-proxy" as const },
+    };
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse([
+        `data: ${JSON.stringify({ choices: [{ delta: { audio: { data: Buffer.from("wav").toString("base64") } } }] })}\n`,
+        "data: [DONE]\n",
+      ]),
+      release: vi.fn(async () => {}),
+    });
+
+    await buildOpenRouterMusicGenerationProvider().generateMusic({
+      provider: "openrouter",
+      model: "google/lyria-3-pro-preview",
+      prompt: "policy soundtrack",
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              request: requestPolicy,
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openrouter",
+        capability: "audio",
+        allowPrivateNetwork: false,
+        request: requestPolicy,
       }),
     );
   });
@@ -396,7 +463,7 @@ describe("openrouter music generation provider", () => {
     }
   });
 
-  it.each(["\n"])(
+  it.each(["\n", ""])(
     "rejects OpenRouter streams that end before completion with ending %j",
     async (ending) => {
       postJsonRequestMock.mockResolvedValue({
@@ -417,7 +484,7 @@ describe("openrouter music generation provider", () => {
     },
   );
 
-  it.each([""])(
+  it.each(["\n", ""])(
     "preserves OpenRouter errors with ending %j when reader cleanup fails",
     async (ending) => {
       const cancel = vi.fn(async () => {
@@ -448,7 +515,7 @@ describe("openrouter music generation provider", () => {
     },
   );
 
-  it.each([16 * 1024])(
+  it.each([16 * 1024, Infinity])(
     "accepts valid SSE events above two megabytes with %s-byte transport chunks",
     async (chunkBytes) => {
       const audio = Buffer.alloc(1_600_000, 0x61);
@@ -475,7 +542,7 @@ describe("openrouter music generation provider", () => {
     },
   );
 
-  it.each(["fragmented", "after completion", "decoder flush"])(
+  it.each(["one chunk", "fragmented", "after completion", "decoder flush"])(
     "rejects SSE events outside the media envelope: %s",
     async (boundary) => {
       const maxBytes = 8;

@@ -502,6 +502,32 @@ describe("registerTelegramMiniAppRoutes", () => {
     }
   });
 
+  it("rejects replayed init-data without minting again", async () => {
+    const route = createRoute(config());
+    const initData = signedInitData("123456", "replay");
+    const launchTicket = launchTickets.issue({ accountId: "default", userId: "123456" });
+    await callRoute({
+      route,
+      method: "POST",
+      url: "/__openclaw_tg_miniapp/auth",
+      contentType: "application/json",
+      body: JSON.stringify({ initData, launchTicket }),
+      ip: "203.0.113.20",
+    });
+    const replay = await callRoute({
+      route,
+      method: "POST",
+      url: "/__openclaw_tg_miniapp/auth",
+      contentType: "application/json",
+      body: JSON.stringify({ initData, launchTicket }),
+      ip: "203.0.113.20",
+    });
+
+    expect(replay.statusCode).toBe(401);
+    expect(replay.body).toBe("This link expired. Run /controlui again in your bot chat.");
+    expect(issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+  });
+
   it("reserves validated init-data before minting", async () => {
     const route = createRoute(config());
     const initData = signedInitData("123456", "concurrent");

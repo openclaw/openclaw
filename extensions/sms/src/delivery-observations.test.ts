@@ -187,7 +187,7 @@ describe("SMS delivery observations", () => {
     );
   });
 
-  it.each(["scheduled"])(
+  it.each(["accepted", "scheduled"])(
     "advances a message from its %s initial state through sent",
     async (initialStatus) => {
       const store = createStore();
@@ -200,6 +200,27 @@ describe("SMS delivery observations", () => {
       expect((await latestRecord(store)).status).toBe("sent");
     },
   );
+
+  it("allows a scheduled message to be canceled before queueing", async () => {
+    const store = createStore();
+    await recordApiStatus(store, "scheduled", 1);
+    const canceled = await recordApiStatus(store, "canceled", 2);
+
+    expect(canceled.status).toBe("canceled");
+  });
+
+  it("does not regress a terminal state when an older transition arrives late", async () => {
+    const store = createStore();
+    await recordApiStatus(store, "delivered", 200);
+    const lateSent = await recordApiStatus(store, "sent", 300);
+
+    expect(lateSent).toMatchObject({
+      status: "delivered",
+      firstObservedAt: 200,
+      lastObservedAt: 300,
+    });
+    expect(lateSent.observations.map((entry) => entry.status)).toEqual(["delivered", "sent"]);
+  });
 
   it("fills a missing error from a later observation of the same state", async () => {
     const store = createStore();
@@ -239,6 +260,38 @@ describe("SMS delivery observations", () => {
       conflict: true,
       errorCode: "30006",
     });
+  });
+
+  it("deduplicates semantic retries despite unrelated form differences", async () => {
+    const store = createStore();
+    const recorder = createSmsDeliveryRecorder(store);
+    const first = {
+      AccountSid: "AC123",
+      From: "+15557654321",
+      To: "+15551234567",
+      Body: "first",
+      MessageSid: "SM123",
+      MessageStatus: "delivered",
+    };
+    const retry = {
+      ...first,
+      From: "+15550000000",
+      To: "+15559999999",
+      Body: "changed",
+    };
+
+    await expect(recorder.record({ account: createAccount(), form: first })).resolves.toMatchObject(
+      {
+        duplicate: false,
+        record: { status: "delivered" },
+      },
+    );
+    await expect(recorder.record({ account: createAccount(), form: retry })).resolves.toMatchObject(
+      {
+        duplicate: true,
+        record: { observations: [{ status: "delivered" }] },
+      },
+    );
   });
 
   it.each([
@@ -351,6 +404,16 @@ describe("SMS delivery observations", () => {
         }),
       ]),
     );
+  });
+
+  it("skips API responses without an initial status", async () => {
+    await expect(
+      recordInitialSmsDeliveryResult({
+        account: createAccount(),
+        result: { sid: "SM123", to: "+15551234567" },
+        store: createStore(),
+      }),
+    ).resolves.toBeNull();
   });
 
   it("bounds retained observations per message", async () => {

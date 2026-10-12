@@ -1,4 +1,5 @@
 // Sms tests cover send plugin behavior.
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -199,6 +200,81 @@ describe("sendSmsMedia", () => {
     ).rejects.toBe(rejection);
 
     expect(sendSmsViaTwilio).not.toHaveBeenCalled();
+  });
+
+  it("preserves the accepted MMS when a later caption chunk fails", async () => {
+    const failure = new Error("second chunk failed");
+    const events: string[] = [];
+    sendSmsViaTwilio
+      .mockImplementationOnce(async ({ onPlatformSendDispatch }) => {
+        await onPlatformSendDispatch?.();
+        events.push("send:first");
+        return { sid: "MM-first", to: "+15551234567" };
+      })
+      .mockImplementationOnce(async ({ onPlatformSendDispatch }) => {
+        await onPlatformSendDispatch?.();
+        events.push("send:second");
+        throw failure;
+      });
+    const onDeliveryResult = vi.fn(async (result) => {
+      events.push(`delivery:${result.messageId}`);
+    });
+    const onPlatformSendDispatch = vi.fn(async () => {
+      events.push("dispatch");
+    });
+
+    let observed: unknown;
+    try {
+      await sendSmsMedia({
+        account: createAccount(5),
+        to: "+15551234567",
+        text: "alpha beta gamma",
+        mediaUrl: "/tmp/photo.jpg",
+        mediaLocalRoots: ["/tmp"],
+        onPlatformSendDispatch,
+        onDeliveryResult,
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(sendSmsViaTwilio).toHaveBeenCalledTimes(2);
+    expect(sendSmsViaTwilio.mock.calls[0]?.[0]).toMatchObject({
+      text: "alpha",
+      mediaUrls: ["https://gateway.example.com/webhooks/sms/media/abc?token=token"],
+    });
+    expect(sendSmsViaTwilio.mock.calls[1]?.[0]).toMatchObject({
+      text: " beta",
+    });
+    expect(sendSmsViaTwilio.mock.calls[1]?.[0]).not.toHaveProperty("mediaUrls");
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult).toMatchObject({
+      messageIds: ["MM-first"],
+      visibleReplySent: true,
+      receipt: {
+        parts: [{ platformMessageId: "MM-first", kind: "media" }],
+      },
+    });
+    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith({
+      channel: "sms",
+      messageId: "MM-first",
+      chatId: "+15551234567",
+      receipt: expect.objectContaining({
+        platformMessageIds: ["MM-first"],
+        parts: [expect.objectContaining({ platformMessageId: "MM-first", kind: "media" })],
+      }),
+    });
+    expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
+    expect(events).toEqual([
+      "dispatch",
+      "send:first",
+      "delivery:MM-first",
+      "dispatch",
+      "send:second",
+    ]);
   });
 
   it("sends media-only MMS without a Body", async () => {

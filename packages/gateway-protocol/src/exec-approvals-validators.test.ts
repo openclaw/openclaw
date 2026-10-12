@@ -49,6 +49,7 @@ describe("exec approvals protocol validators", () => {
       }),
     ).toBe(true);
   });
+
   it("accepts the shipped Windows node approval contract", () => {
     expect(
       validateExecApprovalsNodeSnapshot({
@@ -73,6 +74,31 @@ describe("exec approvals protocol validators", () => {
         nodeId: "windows-node",
         native: { defaultAction: "deny", rules: [] },
         baseHash: "sha256:current",
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts file-backed node snapshots with host-resolved defaults", () => {
+    expect(
+      validateExecApprovalsNodeSnapshot({
+        path: "/tmp/exec-approvals.json",
+        exists: true,
+        hash: "sha256:file",
+        file: { version: 1 },
+      }),
+    ).toBe(true);
+    expect(
+      validateExecApprovalsNodeSnapshot({
+        path: "/tmp/exec-approvals.json",
+        exists: true,
+        hash: "sha256:file",
+        file: { version: 1 },
+        resolvedDefaults: {
+          security: "deny",
+          ask: "on-miss",
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
       }),
     ).toBe(true);
   });
@@ -191,6 +217,29 @@ describe("exec approvals protocol validators", () => {
           },
         },
         baseHash: "abc123",
+      }),
+    ).toBe(false);
+  });
+
+  it("requires command spans to have non-negative starts and positive exclusive ends", () => {
+    expect(
+      validateExecApprovalRequestParams({
+        command: "echo hi",
+        commandSpans: [{ startIndex: 0, endIndex: 4 }],
+      }),
+    ).toBe(true);
+
+    expect(
+      validateExecApprovalRequestParams({
+        command: "echo hi",
+        commandSpans: [{ startIndex: 0, endIndex: 0 }],
+      }),
+    ).toBe(false);
+
+    expect(
+      validateExecApprovalRequestParams({
+        command: "echo hi",
+        commandSpans: [{ startIndex: -1, endIndex: 4 }],
       }),
     ).toBe(false);
   });

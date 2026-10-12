@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadSecretFileSync as loadSecretFileSyncFromCore } from "openclaw/plugin-sdk/core";
 import {
+  fileExists,
   readFileWithinRoot,
   readLocalFileFromRoots,
   removePathWithinRoot,
@@ -50,7 +51,10 @@ describe("plugin SDK fs-safe compatibility exports", () => {
     });
   });
 
-  it("keeps security-runtime file checks limited to regular files", async () => {
+  it.each([
+    { subpath: "file-access-runtime", exists: fileExists },
+    { subpath: "security-runtime", exists: fileExistsFromSecurity },
+  ])("keeps $subpath file checks limited to regular files", async ({ exists }) => {
     await withTestDir({ prefix: "openclaw-sdk-file-exists-" }, async (root) => {
       const filePath = path.join(root, "file.txt");
       const symlinkPath = path.join(root, "linked.txt");
@@ -63,7 +67,7 @@ describe("plugin SDK fs-safe compatibility exports", () => {
         [root, false],
         [symlinkPath, false],
       ] as const) {
-        expect(fileExistsFromSecurity(candidate), candidate).toBe(expected);
+        expect(exists(candidate), candidate).toBe(expected);
       }
     });
   });

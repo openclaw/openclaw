@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { truncateSync, writeFileSync } from "node:fs";
 import path from "node:path";
 // Prepare the native process runtime before the subprocess deadline cases start.
 import "openclaw/plugin-sdk/process-runtime";
@@ -164,9 +164,30 @@ describe("buildCliSpeechProvider", () => {
     ).toEqual({ command: "canonical-command" });
   });
 
+  it("advertises the existing command timeout as its provider default", () => {
+    expect(buildCliSpeechProvider().defaultTimeoutMs).toBe(120_000);
+  });
+
+  it("passes text through stdin when args omit the text template", async () => {
+    const script = createCliFixture();
+    const result = await synthesize(baseProviderConfig(script), { text: "hello 😀 world" });
+
+    expect(result).toMatchObject({
+      outputFormat: "wav",
+      fileExtension: ".wav",
+      voiceCompatible: false,
+    });
+    const audioPayload = parseAudioPayload(result);
+    expect(audioPayload.stdin).toBe("hello world");
+    expect(audioPayload.textArg).toBe("");
+    expect(runFfmpegMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["consecutive empty quotes", "--voice \"\"  ''", [], ["--voice", "", ""]],
     ["quoted whitespace", '--voice " \t "', [], ["--voice", " \t "]],
+    ["adjacent fragments", "--voice a''b\"\"", [], ["--voice", "ab"]],
+    ["explicit array empty arguments", "", ["--voice", ""], ["--voice", ""]],
   ] as const)("preserves %s through the speech process", async (_name, command, args, expected) => {
     const script = createCliFixture();
     const result = await synthesize(
@@ -202,6 +223,7 @@ describe("buildCliSpeechProvider", () => {
       writeFile: false,
     },
     { source: "free-format stdout", audio: FREE_FORMAT_MPEG_FRAME_HEADER, writeFile: false },
+    { source: "untagged frame file", audio: VALID_MPEG_FRAME_HEADER, writeFile: true },
   ])("converts detected MP3 bytes from $source to configured WAV", async (testCase) => {
     const script = createCliFixture(testCase.audio);
     const result = await synthesize(
@@ -225,6 +247,12 @@ describe("buildCliSpeechProvider", () => {
   });
 
   it.each([
+    {
+      codec: "OpusHead",
+      packet: Buffer.from("OpusHeadnative-audio"),
+      transport: "stdout",
+      outputArgs: [],
+    },
     {
       codec: "Vorbis",
       packet: Buffer.from("\x01vorbis-not-OpusHead"),
@@ -274,6 +302,7 @@ describe("buildCliSpeechProvider", () => {
   });
 
   it.each([
+    { label: "reserved MP3 layer", audio: [0xff, 0xf1, 0x90, 0x64] },
     { label: "bare ID3 prefix", audio: [...Buffer.from("ID3audio")] },
     {
       label: "ID3 tag with a non-sync-safe size",
@@ -349,7 +378,24 @@ mkdirSync(process.argv[outIndex + 1]);
     );
   });
 
-  it.each(["synthesize"] as const)(
+  it("rejects oversized ffmpeg output for telephony synthesis", async () => {
+    const script = createCliFixture();
+    runFfmpegMock.mockImplementation(async (args) => {
+      const outputPath = args.at(-1);
+      if (typeof outputPath !== "string") {
+        throw new Error("missing ffmpeg output path");
+      }
+      writeFileSync(outputPath, "");
+      truncateSync(outputPath, MAX_AUDIO_OUTPUT_BYTES + 1);
+    });
+    const run = synthesize(baseProviderConfig(script), {
+      method: "synthesizeTelephony",
+    });
+
+    await expect(run).rejects.toThrow(`File exceeds ${MAX_AUDIO_OUTPUT_BYTES} bytes`);
+  });
+
+  it.each(["synthesize", "synthesizeTelephony"] as const)(
     "keeps %s debug previews free of lone surrogates",
     async (method) => {
       const text = `${"a".repeat(49)}😀tail`;
