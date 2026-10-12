@@ -441,6 +441,7 @@ export function createGitHubPublicationCoordinator(params: {
     ): Promise<SessionGitHubPublicationResult> => {
       warnPluginSdkDeprecation({
         family: "github-publication",
+        compatibility: "This method no longer performs publication work; use its replacement.",
         method: "requestForClaim",
         replacement: "requestForClaimV2",
       });
@@ -472,6 +473,7 @@ export function createGitHubPublicationCoordinator(params: {
     deferClaimPreparation(_claim: WorkerSessionTurnClaim): void {
       warnPluginSdkDeprecation({
         family: "github-publication",
+        compatibility: "This method no longer performs publication work; use its replacement.",
         method: "deferClaimPreparation",
         replacement: "deferClaimPreparationAsync",
       });
@@ -486,6 +488,7 @@ export function createGitHubPublicationCoordinator(params: {
     ): Promise<SessionGitHubPublicationResult> {
       warnPluginSdkDeprecation({
         family: "github-publication",
+        compatibility: "This method no longer performs publication work; use its replacement.",
         method: "requestForSession",
         replacement: "requestForSessionV2",
       });
@@ -515,6 +518,7 @@ export function createGitHubPublicationCoordinator(params: {
     ): Promise<SessionGitHubPublicationResult> {
       warnPluginSdkDeprecation({
         family: "github-publication",
+        compatibility: "This method no longer performs publication work; use its replacement.",
         method: "requestPersonalForSession",
         replacement: "requestPersonalForSessionV2",
       });
@@ -540,6 +544,7 @@ export function createGitHubPublicationCoordinator(params: {
     ): SessionGitHubStatusResult {
       warnPluginSdkDeprecation({
         family: "github-publication",
+        compatibility: "This method no longer performs publication work; use its replacement.",
         method: "personalStatus",
         replacement: "personalStatusAsync",
       });
@@ -560,6 +565,7 @@ export function createGitHubPublicationCoordinator(params: {
     ): Promise<SessionGitHubPublicationResult> {
       warnPluginSdkDeprecation({
         family: "github-publication",
+        compatibility: "This method no longer performs publication work; use its replacement.",
         method: "confirmPersonal",
         replacement: "confirmPersonalV2",
       });
@@ -595,6 +601,7 @@ export function createGitHubPublicationCoordinator(params: {
     deferOrphanedRequests(): void {
       warnPluginSdkDeprecation({
         family: "github-publication",
+        compatibility: "This method no longer performs publication work; use its replacement.",
         method: "deferOrphanedRequests",
         replacement: "deferOrphanedRequestsAsync",
       });
@@ -613,6 +620,7 @@ export function createGitHubPublicationCoordinator(params: {
     }> {
       warnPluginSdkDeprecation({
         family: "github-publication",
+        compatibility: "This method no longer performs publication work; use its replacement.",
         method: "listUnreportedResults",
         replacement: "listUnreportedResultsAsync",
       });
@@ -628,6 +636,7 @@ export function createGitHubPublicationCoordinator(params: {
     read(_requestId: string): SessionGitHubPublicationResult | undefined {
       warnPluginSdkDeprecation({
         family: "github-publication",
+        compatibility: "This method no longer performs publication work; use its replacement.",
         method: "read",
         replacement: "readAsync",
       });
@@ -640,6 +649,7 @@ export function createGitHubPublicationCoordinator(params: {
     markReported(_requestId: string): void {
       warnPluginSdkDeprecation({
         family: "github-publication",
+        compatibility: "This method no longer performs publication work; use its replacement.",
         method: "markReported",
         replacement: "markReportedAsync",
       });
