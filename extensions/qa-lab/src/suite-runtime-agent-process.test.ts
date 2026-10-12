@@ -1,5 +1,8 @@
 // Qa Lab tests cover suite runtime agent process plugin behavior.
 import { EventEmitter } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
+import timersPromises from "node:timers/promises";
+import { promisify } from "node:util";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -654,40 +657,50 @@ describe("qa suite runtime agent process helpers", () => {
     );
   });
 
-  it("retries structured transient history failures through gateway log wrappers", async () => {
-    vi.useFakeTimers();
-    try {
-      const gatewayError = Object.assign(new Error("session history is rebuilding"), {
-        gatewayCode: "UNAVAILABLE",
-        retryable: true,
-        retryAfterMs: 250,
-        details: { method: "chat.history" },
-      });
-      const wrappedError = new Error("gateway call failed", {
-        cause: new Error("gateway rpc failed", { cause: gatewayError }),
-      });
-      const gatewayCall = vi
-        .fn()
-        .mockRejectedValueOnce(wrappedError)
-        .mockResolvedValueOnce({
-          messages: [{ role: "assistant", content: "HISTORY-RETRY-OK" }],
+  it.each([
+    { method: "chat.history" },
+    { code: "agent-database-inspection-pending", agentId: "qa", paths: ["/qa/state.sqlite"] },
+  ])(
+    "retries structured history refusal $method/$code through gateway log wrappers",
+    async (details) => {
+      vi.useFakeTimers();
+      vi.spyOn(timersPromises, "setTimeout").mockImplementation(promisify(setTimeout));
+      syncBuiltinESMExports();
+      try {
+        const gatewayError = Object.assign(new Error("session history is rebuilding"), {
+          gatewayCode: "UNAVAILABLE",
+          retryable: true,
+          retryAfterMs: 250,
+          details,
         });
+        const wrappedError = new Error("gateway call failed", {
+          cause: new Error("gateway rpc failed", { cause: gatewayError }),
+        });
+        const gatewayCall = vi
+          .fn()
+          .mockRejectedValueOnce(wrappedError)
+          .mockResolvedValueOnce({
+            messages: [{ role: "assistant", content: "HISTORY-RETRY-OK" }],
+          });
 
-      const pending = waitForAgentHistoryReply(
-        { gateway: { call: gatewayCall } } as never,
-        "session-history-retry",
-        (text) => text === "HISTORY-RETRY-OK",
-        1_000,
-        1,
-      );
-      await vi.advanceTimersByTimeAsync(250);
+        const pending = waitForAgentHistoryReply(
+          { gateway: { call: gatewayCall } } as never,
+          "session-history-retry",
+          (text) => text === "HISTORY-RETRY-OK",
+          1_000,
+          1,
+        ).catch((error: unknown) => error);
+        await vi.advanceTimersByTimeAsync(250);
 
-      await expect(pending).resolves.toEqual({ text: "HISTORY-RETRY-OK" });
-      expect(gatewayCall).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        await expect(pending).resolves.toEqual({ text: "HISTORY-RETRY-OK" });
+        expect(gatewayCall).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.restoreAllMocks();
+        vi.useRealTimers();
+        syncBuiltinESMExports();
+      }
+    },
+  );
 
   it("preserves the final retryable history failure when the poll deadline expires", async () => {
     const gatewayError = Object.assign(new Error("session history is rebuilding"), {
@@ -739,14 +752,23 @@ describe("qa suite runtime agent process helpers", () => {
     expect(gatewayCall.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it.each([{ method: "chat.startup", retryable: true }])(
-    "does not retry $method errors with retryable=$retryable",
-    async ({ method, retryable }) => {
+  it.each([
+    { details: { method: "chat.startup" }, retryable: true },
+    {
+      details: { method: "chat.startup", code: "agent-database-inspection-pending" },
+      retryable: true,
+    },
+    { details: { code: "agent-database-inspection-failed" }, retryable: true },
+    { details: { code: "agent-database-inspection-pending" }, retryable: false },
+    { details: {}, retryable: true },
+  ])(
+    "does not retry history errors with details=$details and retryable=$retryable",
+    async ({ details, retryable }) => {
       const gatewayError = Object.assign(new Error("history unavailable"), {
         gatewayCode: "UNAVAILABLE",
         retryable,
         retryAfterMs: 250,
-        details: { method },
+        details,
       });
       const gatewayCall = vi.fn().mockRejectedValueOnce(gatewayError);
 
