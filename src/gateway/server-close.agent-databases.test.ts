@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
@@ -9,11 +10,17 @@ import {
   type ReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
 import { runGatewayLoop } from "../cli/gateway-cli/run-loop.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as systemdTimeout from "../infra/systemd-stop-timeout.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -40,8 +47,29 @@ it.each(["stop", "restart"] as const)(
   async (mode) => {
     const fixture = await createGatewayMetadataCloseFixture(`gateway-agent-leases-${mode}`);
     const ownerPid = process.pid;
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: fixture.pluginId });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    setActivePluginRegistry(registry);
+    const sessionScope = {
+      agentId: "main",
+      storePath: path.join(fixture.state.sessionsDir("main"), "sessions.json"),
+      sessionKey: "agent:main:close-preservation",
+    };
+    const pluginState: NonNullable<SessionEntry["pluginExtensions"]> = {
+      [instance.pluginId]: { active: true },
+      other: { value: "preserve" },
+    };
     try {
       const first = await fixture.start(await fixture.reservePort());
+      await replaceSessionEntry(sessionScope, {
+        sessionId: "close-preservation",
+        updatedAt: 1,
+        pluginExtensions: pluginState,
+      });
+      // A sibling without this plugin must not turn Gateway close into plugin removal.
+      setActivePluginRegistry(createEmptyPluginRegistry());
       const siblingPort = await fixture.reservePort();
       const sibling = await fixture.start(siblingPort);
       const options = { agentId: "main", env: fixture.state.env };
@@ -60,6 +88,7 @@ it.each(["stop", "restart"] as const)(
       };
 
       await first.close(closeOptions);
+      expect(loadSessionEntry(sessionScope)?.pluginExtensions).toEqual(pluginState);
       expect(agent.db.isOpen).toBe(true);
       expect(incognito.db.isOpen).toBe(true);
       expect(inspectForDoctor).toThrow(OpenClawAgentDatabaseLeaseActiveError);
@@ -78,6 +107,7 @@ it.each(["stop", "restart"] as const)(
         agentId: "main",
         storePath: incognito.path,
       });
+      expect(loadSessionEntry(sessionScope)?.pluginExtensions).toEqual(pluginState);
     } finally {
       await fixture.cleanup();
     }
@@ -103,6 +133,7 @@ it.skipIf(process.platform !== "linux")(
       for (const name of SUPERVISOR_HINT_ENV_VARS) {
         vi.stubEnv(name, undefined);
       }
+      vi.stubEnv("OPENCLAW_LAUNCHD_LABEL", fixture.state.env.OPENCLAW_LAUNCHD_LABEL);
       vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
       vi.spyOn(systemdTimeout, "readSystemdStopTimeout").mockResolvedValue({
         timeoutMs: 90_000,
