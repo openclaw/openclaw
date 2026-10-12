@@ -554,4 +554,31 @@ describe("completion-cli write-state", () => {
       { [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },
     );
   });
+
+  it("rejects malformed UTF-8 through the registered completion --install command", async () => {
+    const { registerCompletionCli } = await import("./completion-cli.js");
+
+    await withIsolatedCompletionState(async () => {
+      const cachePath = resolveCompletionCachePath("zsh", "openclaw");
+      const profilePath = resolveCompletionProfilePath("zsh");
+      await fs.mkdir(path.dirname(cachePath), { recursive: true });
+      await fs.writeFile(cachePath, "# cached completion\n", "utf8");
+      const profileBytes = Buffer.concat([
+        Buffer.from("keep-"),
+        Buffer.from([0xff]),
+        Buffer.from("-before\n"),
+      ]);
+      await fs.writeFile(profilePath, profileBytes);
+      const program = new Command().name("openclaw");
+      registerCompletionCli(program);
+
+      await expect(
+        program.parseAsync(["completion", "--shell", "zsh", "--install", "--yes"], {
+          from: "user",
+        }),
+      ).rejects.toThrow(/left untouched[\s\S]*load the prepared cache/);
+
+      expect(await fs.readFile(profilePath)).toEqual(profileBytes);
+    });
+  });
 });
