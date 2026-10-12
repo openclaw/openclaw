@@ -237,8 +237,9 @@ repeated or stalled tool calls, or claims that the tool results do not support.
 When it finds one, the agent receives one short correction as hidden context on
 its next turn. When it finds nothing, nothing happens.
 
-Turn it on in **Settings → Agents & Tools → Labs → Advisor**, or in
-config:
+Turn it on in **Settings → Agents & Tools → Labs → Advisor**. Its **Configure**
+button opens the plugin's settings page (**Settings → Plugins → Advisor**), where
+you set the options below. Or use config:
 
 ```json5
 {
@@ -261,9 +262,9 @@ config:
   agent run time in a conversation. Long tool-heavy turns reach this first.
 - `model` (optional): the `provider/model` that runs reviews. Leave it unset to
   use the agent's own model. A different model also needs the plugin's
-  `subagent.allowModelOverride` trust entry; choosing a model in Labs writes it,
-  limited to that one model through `subagent.allowedModels`, and choosing
-  **Agent's model** removes it.
+  `subagent.allowModelOverride` permission; limit it to that one model with
+  `subagent.allowedModels`. Without the permission, reviews fail and the
+  Gateway log names the setting to change.
 
 A review starts when either trigger is reached, and both counters restart after
 each review. Set a trigger to `0` to turn it off. With both at `0`, no reviews

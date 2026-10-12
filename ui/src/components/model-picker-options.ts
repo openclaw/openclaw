@@ -20,7 +20,6 @@ export type ModelPickerParams = {
   showSelectedDetail?: boolean;
   groupByProvider?: boolean;
   searchPlaceholder?: string;
-  preserveOrder?: boolean;
   custom?: {
     label: string;
     placeholder?: string;
@@ -44,7 +43,7 @@ export function modelPickerOptions(params: ModelPickerParams) {
     ...(params.custom ? [{ value: customValue, label: params.custom.label }] : []),
   ];
   const selectedIndex = options.findIndex((option) => option.value === params.value);
-  if (selectedIndex > 0 && !params.preserveOrder) {
+  if (selectedIndex > 0) {
     options.unshift(...options.splice(selectedIndex, 1));
   }
   return { customValue, options, selectedIndex };

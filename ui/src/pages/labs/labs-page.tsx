@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
-import { ModelPicker } from "../../components/solid/model-picker.tsx";
+import { For, createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { pathForPluginSettings } from "../../app-route-paths.ts";
 import {
   LearnMoreLink,
   SettingsPage,
@@ -17,18 +17,13 @@ import {
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import {
-  loadModelCatalog,
-  readAgentModelCatalog,
-  subscribeModelCatalogCache,
-  subscribeModelCatalogChanges,
-} from "../../lib/model-catalog-store.ts";
-import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { PageLayout } from "../page-layout.tsx";
+import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
 import {
   labFeatureMergePatch,
   labFeatureResetPatch,
@@ -41,10 +36,8 @@ function LabsPageContent() {
   const context = useApplication();
   const config = projectRuntimeConfig(untrack(() => context.runtimeConfig));
   const lifecycle = createGatewayConnectionLifecycle(untrack(() => context.gateway.snapshot));
-  const gatewayView = projectGateway(untrack(() => context.gateway));
-  const agentSelection = projectAgentSelection(untrack(() => context.settingsAgentSelection));
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  let pending: { featureId: string; value: boolean | string | number } | null = null;
+  let pending: { featureId: string; value: boolean | string } | null = null;
   let saveError: string | null = null;
   const publish = () => setRevision((value) => value + 1);
   const currentPending = () => {
@@ -69,7 +62,6 @@ function LabsPageContent() {
   createEffect(
     () => context.gateway,
     (gateway) => {
-      gatewayView.replaceSource(gateway);
       lifecycle.transition(gateway.snapshot);
       const unsubscribe = gateway.subscribe((snapshot) => {
         if (context.gateway !== gateway) {
@@ -92,55 +84,6 @@ function LabsPageContent() {
     },
   );
   onCleanup(() => lifecycle.dispose());
-  createEffect(
-    () => context.settingsAgentSelection,
-    (selection) => agentSelection.replaceSource(selection),
-  );
-  createEffect(
-    () => ({
-      snapshot: gatewayView.read().snapshot,
-      agentId: agentSelection.read().state.selectedId,
-      enabled: advisorPlugin()?.enabled === true,
-    }),
-    ({ snapshot, agentId, enabled }) => {
-      if (!enabled || snapshot.phase !== "connected" || !snapshot.client || !agentId) {
-        return undefined;
-      }
-      const client = snapshot.client;
-      const controller = new AbortController();
-      const load = () => {
-        void loadModelCatalog(client, { agentId, signal: controller.signal }).catch(
-          (error: unknown) => {
-            if (!controller.signal.aborted) {
-              saveError = formatUiError(error);
-              publish();
-            }
-          },
-        );
-      };
-      const stopCache = subscribeModelCatalogCache(client, publish);
-      const stopChanges = subscribeModelCatalogChanges(context.gateway, load, { agentId });
-      load();
-      return () => {
-        controller.abort();
-        stopCache();
-        stopChanges();
-      };
-    },
-  );
-  const reviewerModels = createMemo(() => {
-    revision();
-    const snapshot = gatewayView.read().snapshot;
-    return readAgentModelCatalog(
-      snapshot.phase === "connected" ? snapshot.client : null,
-      agentSelection.read().state.selectedId,
-    ).models.map((model) => ({
-      value: `${model.provider}/${model.id}`,
-      label: model.name || `${model.provider}/${model.id}`,
-      provider: model.provider,
-      disabled: model.available === false || model.manualSelectionAllowed === false,
-    }));
-  });
 
   function editableConfig(): Record<string, unknown> | null {
     return resolveEditableSnapshotConfig(config.read().state.configSnapshot);
@@ -167,9 +110,8 @@ function LabsPageContent() {
   }
   async function updateSetting(
     featureId: string,
-    value: boolean | string | number,
+    value: boolean | string,
     raw: Record<string, unknown>,
-    replacePaths?: string[],
   ) {
     const scope = lifecycle.capture();
     const gateway = context.gateway;
@@ -189,11 +131,7 @@ function LabsPageContent() {
     saveError = null;
     publish();
     try {
-      const patched = await runtimeConfig.patch({
-        raw,
-        note: `labs: update ${featureId}`,
-        ...(replacePaths ? { replacePaths } : {}),
-      });
+      const patched = await runtimeConfig.patch({ raw, note: `labs: update ${featureId}` });
       if (isCurrent() && !patched) {
         saveError = runtimeConfig.state.lastError ?? t("labsPage.saveFailed");
       }
@@ -248,64 +186,33 @@ function LabsPageContent() {
           : null;
     return executor === "quickjs" ? "quickjs" : "node";
   }
-  function advisorPlugin() {
-    const plugins = editableConfig()?.plugins;
-    const entries = isRecord(plugins) ? plugins.entries : undefined;
-    const plugin = isRecord(entries) ? entries["advisor"] : undefined;
-    return isRecord(plugin) ? plugin : undefined;
-  }
-  function advisorModel() {
-    const current = currentPending();
-    if (current?.featureId === "advisorModel" && typeof current.value === "string") {
-      return current.value;
-    }
-    const settings = advisorPlugin()?.config;
-    return isRecord(settings) && typeof settings.model === "string" ? settings.model : "";
-  }
-  function setAdvisorModel(model: string) {
-    const subagent = advisorPlugin()?.subagent;
-    // The Gateway refuses to shrink an existing array unless the patch names it.
-    const replacePaths =
-      isRecord(subagent) && Array.isArray(subagent.allowedModels)
-        ? ["plugins.entries.advisor.subagent.allowedModels"]
-        : undefined;
-    void updateSetting(
-      "advisorModel",
-      model,
-      {
-        plugins: {
-          entries: {
-            advisor: {
-              config: { model: model || null },
-              subagent: model ? { allowModelOverride: true, allowedModels: [model] } : null,
-            },
-          },
-        },
-      },
-      replacePaths,
+  function PluginSettingsRow(props: { featureId: string; pluginId: string }) {
+    const location = () =>
+      pluginDetailLocation(
+        { pathname: pathForPluginSettings(props.pluginId, context.basePath), search: "" },
+        true,
+      );
+    return (
+      <SettingsRow
+        nested
+        title={t("labsPage.pluginSettings")}
+        description={t(`labsPage.${props.featureId}.settingsDescription`)}
+        control={
+          <a
+            class="btn btn--sm"
+            href={`${location().pathname}${location().search}`}
+            onClick={(event: MouseEvent) => {
+              if (shouldHandleNavigationClick(event)) {
+                event.preventDefault();
+                context.navigate("plugin-settings", location());
+              }
+            }}
+          >
+            {t("labsPage.configure")}
+          </a>
+        }
+      />
     );
-  }
-  function advisorValue(key: "everyTurns" | "everyMinutes", defaultValue: number) {
-    const current = currentPending();
-    if (current?.featureId === key && typeof current.value === "number") {
-      return current.value;
-    }
-    const settings = advisorPlugin()?.config;
-    return isRecord(settings) && typeof settings[key] === "number" ? settings[key] : defaultValue;
-  }
-  function setAdvisorInterval(key: "everyTurns" | "everyMinutes", raw: string, max: number) {
-    const value = Number(raw);
-    if (raw.trim() === "" || !Number.isInteger(value) || value < 0 || value > max) {
-      saveError = t("labsPage.advisor.invalidValue", {
-        label: t(`labsPage.advisor.${key}`),
-        max: String(max),
-      });
-      publish();
-      return;
-    }
-    void updateSetting(key, value, {
-      plugins: { entries: { advisor: { config: { [key]: value } } } },
-    });
   }
   function FeatureRow(props: { feature: LabFeature }) {
     const featureState = () => resolveLabFeatureState(editableConfig(), props.feature);
@@ -400,63 +307,11 @@ function LabsPageContent() {
             }
           />
         ) : null}
-        {props.feature.id === "advisor" && checked() ? (
-          <>
-            <SettingsRow
-              nested
-              title={t("labsPage.advisor.model")}
-              description={t("labsPage.advisor.modelDescription")}
-              control={
-                <ModelPicker
-                  label={t("labsPage.advisor.model")}
-                  preserveOrder
-                  value={advisorModel()}
-                  options={[
-                    { value: "", label: t("labsPage.advisor.agentModel") },
-                    ...reviewerModels(),
-                  ]}
-                  custom={{
-                    label: t("labsPage.advisor.customModel"),
-                    placeholder: t("labsPage.advisor.customModelPlaceholder"),
-                    commit: "change",
-                  }}
-                  disabled={!canToggle()}
-                  onChange={setAdvisorModel}
-                />
-              }
-            />
-            <For
-              each={
-                [
-                  { key: "everyTurns", defaultValue: 10, max: 1000 },
-                  { key: "everyMinutes", defaultValue: 20, max: 1440 },
-                ] as const
-              }
-            >
-              {(setting) => (
-                <SettingsRow
-                  nested
-                  title={t(`labsPage.advisor.${setting.key}`)}
-                  description={t("labsPage.advisor.triggerHelp")}
-                  control={
-                    <input
-                      class="settings-input"
-                      type="number"
-                      min="0"
-                      max={setting.max}
-                      step="1"
-                      aria-label={t(`labsPage.advisor.${setting.key}`)}
-                      value={advisorValue(setting.key, setting.defaultValue)}
-                      disabled={!canToggle()}
-                      onChange={(event) =>
-                        setAdvisorInterval(setting.key, event.currentTarget.value, setting.max)
-                      }
-                    />
-                  }
-                />
-              )}
-            </For>
-          </>
+        {props.feature.settingsPluginId ? (
+          <PluginSettingsRow
+            featureId={props.feature.id}
+            pluginId={props.feature.settingsPluginId}
+          />
         ) : null}
       </>
     );

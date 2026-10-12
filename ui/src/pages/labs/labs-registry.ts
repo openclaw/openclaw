@@ -26,6 +26,8 @@ export type LabFeature = {
   enableAlso: Readonly<Record<string, LabFeatureValue>> | null;
   /** Reset the parent when its presence changes defaults; null retains required gates. */
   resetScope: LabFeatureResetScope;
+  /** Plugin whose own settings page owns this lab's options; Labs links there. */
+  settingsPluginId?: string;
 };
 
 type LabFeatureState = {
@@ -91,6 +93,7 @@ export const LAB_FEATURES = (
       id: "advisor",
       docsUrl: "https://docs.openclaw.ai/concepts/experimental-features#advisor",
       configPath: ["plugins", "entries", "advisor", "enabled"],
+      settingsPluginId: "advisor",
     },
     {
       ...BOOLEAN_GATE,

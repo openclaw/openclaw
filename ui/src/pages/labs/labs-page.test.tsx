@@ -5,11 +5,9 @@ import { applyMergePatch } from "../../../../src/config/merge-patch.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { SelectPicker } from "../../components/select-picker.ts";
 import { i18n } from "../../i18n/index.ts";
 import { invalidateConfigConnection } from "../../lib/config/config-state-model.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { LabsPage } from "./labs-page.tsx";
@@ -28,11 +26,7 @@ type RuntimeConfigState = {
 };
 
 function createGateway() {
-  const client = {
-    request: vi.fn(async () => ({
-      models: [{ provider: "test", id: "reviewer", name: "Test reviewer", available: true }],
-    })),
-  } as unknown as GatewayBrowserClient;
+  const client = {} as GatewayBrowserClient;
   let snapshot = { client, phase: "connected" } as ApplicationGatewaySnapshot;
   const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   return {
@@ -46,7 +40,6 @@ function createGateway() {
           listeners.delete(listener);
         };
       },
-      subscribeEvents: () => () => {},
     } as unknown as ApplicationContext["gateway"],
     setPhase(phase: ApplicationGatewaySnapshot["phase"]) {
       snapshot = { ...snapshot, phase };
@@ -72,10 +65,7 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
     },
     ensureLoaded: vi.fn(async () => undefined),
     refresh: vi.fn(async () => undefined),
-    patch: vi.fn(
-      async (_input: { raw: Record<string, unknown>; note: string; replacePaths?: string[] }) =>
-        true,
-    ),
+    patch: vi.fn(async (_input: { raw: Record<string, unknown>; note: string }) => true),
     subscribe(listener: (state: RuntimeConfigState) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -83,29 +73,31 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   };
 }
 
-async function mountPage(sourceConfig: Record<string, unknown>): Promise<{
+async function mountPage(
+  sourceConfig: Record<string, unknown>,
+  basePath = "",
+): Promise<{
   page: LabsPageElement;
   unmount: () => void;
   runtimeConfig: ReturnType<typeof createRuntimeConfig>;
   gateway: ReturnType<typeof createGateway>;
+  context: { navigate: ReturnType<typeof vi.fn> };
 }> {
   const runtimeConfig = createRuntimeConfig(sourceConfig);
   const gateway = createGateway();
+  const navigate = vi.fn();
   const context = {
-    basePath: "",
+    basePath,
     gateway: gateway.gateway,
     runtimeConfig,
-    settingsAgentSelection: {
-      state: { selectedId: "main", scopeId: "main" },
-      subscribe: () => () => {},
-    },
+    navigate,
   } as unknown as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
   const { container: page, unmount } = mountSolid(() => <LabsPage />, {
     wrapper: provider.wrapper,
   });
   await waitForSolid(() => expect(page.querySelector(".settings-page")).not.toBeNull());
-  return { page, unmount, runtimeConfig, gateway };
+  return { page, unmount, runtimeConfig, gateway, context: { navigate } };
 }
 
 function labRow(page: LabsPageElement, title: string) {
@@ -174,10 +166,6 @@ describe("LabsPage", () => {
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
     expect(page.textContent).toContain("Host Desktop");
     expect(page.textContent).toContain("Cloud Worker Desktop");
-    expect(page.textContent).toContain("Advisor");
-    expect(labToggle(page, "Advisor").checked).toBe(false);
-    expect(page.querySelector('input[aria-label="Review every N turns"]')).toBeNull();
-    expect(page.querySelector("openclaw-select-picker")).toBeNull();
     expect(codeModeToggle(page).checked).toBe(true);
 
     const docs = LAB_FEATURES.map((feature) => labDocsLink(page, feature.title()));
@@ -260,6 +248,14 @@ describe("LabsPage", () => {
       expectedPatch: { desktop: { host: { enabled: false } } },
       note: "labs: update hostDesktop",
     },
+    {
+      label: "Advisor",
+      sourceConfig: {
+        plugins: { entries: { advisor: { enabled: true, config: { everyTurns: 3 } } } },
+      },
+      expectedPatch: { plugins: { entries: { advisor: { enabled: null } } } },
+      note: "labs: update advisor",
+    },
   ])(
     "restores the default through the canonical patch flow when disabling $label",
     async (testCase) => {
@@ -340,6 +336,12 @@ describe("LabsPage", () => {
       expectedPatch: { cloudWorkers: { desktop: true } },
       note: "labs: update workerDesktop",
     },
+    {
+      label: "Advisor",
+      sourceConfig: {},
+      expectedPatch: { plugins: { entries: { advisor: { enabled: true } } } },
+      note: "labs: update advisor",
+    },
   ])("writes the on value at the registered config path when enabling $label", async (testCase) => {
     const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
     const toggle = labToggle(page, testCase.label);
@@ -355,160 +357,19 @@ describe("LabsPage", () => {
     });
   });
 
-  it.each([true, false])("sets Advisor to %s without changing its settings", async (enabled) => {
-    const settings = { everyTurns: 7, everyMinutes: 15 };
-    const sourceConfig = {
-      plugins: { entries: { advisor: { enabled: !enabled, config: settings } } },
-    };
-    const { page, runtimeConfig } = await mountPage(sourceConfig);
-    const toggle = labToggle(page, "Advisor");
-    toggle.checked = enabled;
-    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+  it("opens the Advisor plugin settings page from Configure", async () => {
+    const { page, context } = await mountPage({}, "/ui");
+    const link = labRow(page, "Settings").querySelector<HTMLAnchorElement>("a");
+    expect(link?.textContent?.trim()).toBe("Configure");
+    expect(link?.getAttribute("href")).toBe("/ui/settings/plugins/advisor?view=settings");
 
-    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    const patch = runtimeConfig.patch.mock.calls[0]?.[0].raw;
-    expect(patch).toEqual({
-      plugins: { entries: { advisor: { enabled: enabled ? true : null } } },
+    link!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+
+    expect(context.navigate).toHaveBeenCalledExactlyOnceWith("plugin-settings", {
+      pathname: "/ui/settings/plugins/advisor",
+      search: "?view=settings",
+      hash: "",
     });
-    expect(applyMergePatch(sourceConfig, patch)).toEqual({
-      plugins: {
-        entries: {
-          advisor: { ...(enabled ? { enabled: true } : {}), config: settings },
-        },
-      },
-    });
-  });
-
-  it.each([
-    { label: "Review every N turns", key: "everyTurns", value: 0, defaultValue: "10" },
-    { label: "Review every N minutes", key: "everyMinutes", value: 1440, defaultValue: "20" },
-  ])("saves only $key and retains the other plugin settings", async (testCase) => {
-    const sibling = testCase.key === "everyTurns" ? { everyMinutes: 35 } : { everyTurns: 8 };
-    const sourceConfig = {
-      plugins: { entries: { advisor: { enabled: true, config: sibling } } },
-    };
-    const { page, runtimeConfig } = await mountPage(sourceConfig);
-    const input = page.querySelector<HTMLInputElement>(`input[aria-label="${testCase.label}"]`)!;
-    expect(input.value).toBe(testCase.defaultValue);
-    expect(runtimeConfig.patch).not.toHaveBeenCalled();
-    input.value = String(testCase.value);
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-
-    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    const patch = runtimeConfig.patch.mock.calls[0]?.[0].raw;
-    expect(patch).toEqual({
-      plugins: { entries: { advisor: { config: { [testCase.key]: testCase.value } } } },
-    });
-    expect(applyMergePatch(sourceConfig, patch)).toEqual({
-      plugins: {
-        entries: {
-          advisor: {
-            enabled: true,
-            config: { ...sibling, [testCase.key]: testCase.value },
-          },
-        },
-      },
-    });
-  });
-
-  it.each([
-    {
-      name: "a catalog model",
-      value: "test/reviewer",
-      model: "test/reviewer",
-      subagent: { allowModelOverride: true, allowedModels: ["test/reviewer"] },
-    },
-    { name: "the agent's model", value: "", model: null, subagent: null },
-  ])("saves $name and its exact model trust in one patch", async (testCase) => {
-    const sourceConfig = {
-      plugins: {
-        entries: {
-          advisor: {
-            enabled: true,
-            config: { everyTurns: 7, everyMinutes: 15, model: "test/previous" },
-            subagent: { allowModelOverride: true, allowedModels: ["test/previous"] },
-          },
-        },
-      },
-    };
-    const { page, runtimeConfig } = await mountPage(sourceConfig);
-    await updatePickers(page);
-    const picker = labRow(page, "Advisor model").querySelector<SelectPicker>(
-      "openclaw-select-picker",
-    )!;
-    expect(picker.querySelector('[role="option"]')?.textContent).toContain("Agent's model");
-    expect(labRow(page, "Advisor model").classList.contains("settings-row--nested")).toBe(true);
-    expect(labRow(page, "Code Mode executor").classList.contains("settings-row--nested")).toBe(
-      true,
-    );
-    await choosePickerValue(picker, testCase.value);
-
-    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    const request = runtimeConfig.patch.mock.calls[0]![0];
-    // Replacing an existing trust list must name it; the Gateway rejects silent array shrinks.
-    expect(request.replacePaths).toEqual(["plugins.entries.advisor.subagent.allowedModels"]);
-    const patch = request.raw;
-    expect(patch).toEqual({
-      plugins: {
-        entries: {
-          advisor: {
-            config: { model: testCase.model },
-            subagent: testCase.subagent,
-          },
-        },
-      },
-    });
-    expect(applyMergePatch(sourceConfig, patch)).toEqual({
-      plugins: {
-        entries: {
-          advisor: {
-            enabled: true,
-            config: {
-              everyTurns: 7,
-              everyMinutes: 15,
-              ...(testCase.model ? { model: testCase.model } : {}),
-            },
-            ...(testCase.subagent ? { subagent: testCase.subagent } : {}),
-          },
-        },
-      },
-    });
-  });
-
-  it.each([
-    { label: "Review every N turns", value: "-1" },
-    { label: "Review every N turns", value: "1.5" },
-    { label: "Review every N turns", value: "1001" },
-    { label: "Review every N minutes", value: "1441" },
-  ])("rejects $value for $label without saving", async ({ label, value }) => {
-    const { page, runtimeConfig } = await mountPage({
-      plugins: { entries: { advisor: { enabled: true } } },
-    });
-    const input = page.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
-    input.value = value;
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-
-    await waitForSolid(() =>
-      expect(page.querySelector('[role="alert"]')?.textContent).toContain(label),
-    );
-    expect(runtimeConfig.patch).not.toHaveBeenCalled();
-  });
-
-  it("shows Advisor setting save failures", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      plugins: { entries: { advisor: { enabled: true } } },
-    });
-    runtimeConfig.state.lastError = "Could not save review interval";
-    runtimeConfig.patch.mockResolvedValueOnce(false);
-    const input = page.querySelector<HTMLInputElement>('input[aria-label="Review every N turns"]')!;
-    input.value = "12";
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-
-    await waitForSolid(() =>
-      expect(page.querySelector('[role="alert"]')?.textContent).toBe(
-        "Could not save review interval",
-      ),
-    );
   });
 
   it("shows default provenance", async () => {
