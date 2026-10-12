@@ -14,7 +14,10 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import { logVerbose } from "../../globals.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { withNativeIncognitoTurnCompletion } from "./agent-runner-completion.native.js";
-import type { AgentTurnCompletion } from "./agent-runner-completion.types.js";
+import type {
+  AgentTurnCompletion,
+  AgentTurnRestartClaimCleanup,
+} from "./agent-runner-completion.types.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { retainReplyOperationUntilComplete } from "./reply-run-registry.state.js";
 
@@ -27,6 +30,7 @@ export async function withAgentTurnCompletion<T>(
     entry?: SessionEntry;
     writer?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "activeWriterRunId">;
     operation: ReplyOperation;
+    prepareRestartClaimCleanup?: (entry: SessionEntry) => AgentTurnRestartClaimCleanup | undefined;
     publish(entry: SessionEntry): void;
   },
   consume: (completion: AgentTurnCompletion | undefined) => Promise<T>,
@@ -118,14 +122,16 @@ export async function withAgentTurnCompletion<T>(
           }
           finished = true;
           await refresh();
+          let restartClaimCleanup = params.prepareRestartClaimCleanup?.(snapshot.entry!);
           let { reducers } = project();
-          if (reducers.length === 0 && !pendingFinalDelivery) {
+          if (reducers.length === 0 && !pendingFinalDelivery && !restartClaimCleanup) {
             return snapshot.entry!;
           }
           const committed: { receipt?: SessionActorReceipt } = {};
           const outcome = await runSessionActorCommand(actor, authority, async (current) => {
             snapshot = current ?? (await actor.read(authority));
             ({ reducers } = project());
+            restartClaimCleanup = params.prepareRestartClaimCleanup?.(snapshot.entry!);
             return actor.completeTurn(
               {
                 commandId: randomUUID(),
@@ -140,11 +146,13 @@ export async function withAgentTurnCompletion<T>(
                   ...(pendingFinalDelivery ? { lifecycle: { updatedAt: Date.now() } } : {}),
                 },
                 pendingFinalDelivery,
+                restartClaimCleanup: restartClaimCleanup?.operation,
               },
               authority,
               {
                 committed: (receipt) => {
                   committed.receipt = receipt.receipt;
+                  restartClaimCleanup?.committed();
                 },
               },
             );

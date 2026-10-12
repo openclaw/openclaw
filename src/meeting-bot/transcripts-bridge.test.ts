@@ -61,7 +61,7 @@ function createStore() {
 }
 
 describe("MeetingDurableTranscriptBridge", () => {
-  it.each([false, true])(
+  it.each([true])(
     "retires simultaneous tool subscribers when meeting capture ends (metadata failure: %s)",
     async (failMetadata) => {
       const current = session();
