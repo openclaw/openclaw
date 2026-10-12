@@ -5,22 +5,27 @@ const sessionsList = vi.hoisted(() => vi.fn());
 const usageStatus = vi.hoisted(() => vi.fn());
 const cronRun = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Count family loads without initializing the agent mutation runtime.
 vi.mock("./server-methods/agents.js", () => {
   loaded("agents");
   return { agentsHandlers: {} };
 });
+// mock-isolation: Test cron dispatch without the scheduler's process-wide state.
 vi.mock("./server-methods/cron.js", () => {
   loaded("cron");
   return { cronHandlers: { "cron.run": cronRun } };
 });
+// mock-isolation: Count family loads without initializing health runtime dependencies.
 vi.mock("./server-methods/health.js", () => {
   loaded("health");
   return { healthHandlers: {} };
 });
+// mock-isolation: Keep session stores outside this handler-loading fixture.
 vi.mock("./server-methods/sessions-read.js", () => {
   loaded("sessions");
   return { sessionReadHandlers: { "sessions.list": sessionsList } };
 });
+// mock-isolation: Keep usage and auth stores outside this handler-loading fixture.
 vi.mock("./server-methods/usage.js", () => {
   loaded("usage");
   return { usageHandlers: { "usage.status": usageStatus } };
