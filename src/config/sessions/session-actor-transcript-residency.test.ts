@@ -35,6 +35,7 @@ import type { PreparedSessionTranscriptHydration } from "./session-history-read.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite() {},
 }));
+// mock-isolation: The fixture controls archival rather than launching disk-budget maintenance.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 const limits = { maxBytes: 1024 * 1024, maxEvents: 100 };
@@ -164,7 +165,7 @@ it("advances retained context through native actor appends and preserves it thro
       const pending = context.replica.beginCommand();
       const appended = f.mutate(command);
       expect(appended.kind).toBe("committed");
-      expect(pending.settle(appended)).toBe(true);
+      expect(pending.settle<unknown>(appended)).toBe(true);
       const reads = trackSqliteStatementExecutions(f.database.db, ["read"], (sql) =>
         /^\s*select\b/iu.test(sql) ? "read" : null,
       );
@@ -189,7 +190,7 @@ it("advances retained context through native actor appends and preserves it thro
       const current = context.replica.read()!;
       const bookkeeping = context.replica.beginCommand();
       expect(
-        bookkeeping.settle(
+        bookkeeping.settle<unknown>(
           f.mutate({
             type: "session.actor.patch",
             input: {
@@ -270,7 +271,7 @@ it("invalidates retained context for every nonactor transcript writer class", as
                 sourceKey: f.target.sessionKey,
                 canonicalSourceKey: f.target.sessionKey,
                 targetKey: f.target.sessionKey,
-                entryId: "answer",
+                entryId: "question",
                 expectedState: before.entry,
               }).status,
             ).toBe("created");

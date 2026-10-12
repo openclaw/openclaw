@@ -82,7 +82,7 @@ function fixture() {
 
 function append(hot: SessionActorHotState, row: SessionActorTranscriptRow, payload = true) {
   const after = structuredClone(hot);
-  after.version.sequence++;
+  after.version = { ...after.version, sequence: after.version.sequence + 1 };
   after.transcript.version.rawSeq = row.rawSeq;
   after.transcript.version.updatedAt = 2;
   after.transcript.watermark.maxSeq = row.rawSeq;

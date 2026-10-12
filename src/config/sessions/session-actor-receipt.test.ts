@@ -10,6 +10,7 @@ import { withActor, type Mutation } from "./session-actor-worker.test-support.js
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite() {},
 }));
+// mock-isolation: The fixture controls archival rather than launching disk-budget maintenance.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 it("publishes only newly committed events with exact stored UTF-8 sizes, including noncanonical JSON", async () => {
