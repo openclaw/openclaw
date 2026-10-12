@@ -8,7 +8,7 @@ import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbea
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import type { MsgContext } from "../auto-reply/templating.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
   listSessionEntriesCore,
   replaceSessionEntry,
@@ -22,15 +22,11 @@ import { resolveCronJobsStorePath } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import { loadCronStoreFromDatabase } from "../cron/store/load.kernel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { HeartbeatDeps } from "./heartbeat-runner.js";
@@ -198,10 +194,8 @@ export async function withTempHeartbeatSandbox<T>(
       await seedHeartbeatScratchForTest({ content: "- Check status\n" });
       return await fn({ tmpDir, storePath, replySpy });
     } finally {
-      await closeOpenClawAgentDatabasesAsync(tmpDir);
+      await cleanupSessionStateForTest({ stateDir: path.join(tmpDir, "state"), rootPath: tmpDir });
       replySpy.mockReset();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
       // A failed drain retains the sandbox for its still-owned resources.
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
