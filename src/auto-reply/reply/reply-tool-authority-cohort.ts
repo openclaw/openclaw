@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-read-ordered.js";
+import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";

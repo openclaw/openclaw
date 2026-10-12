@@ -27,7 +27,7 @@ import {
   getAgentRunContext,
   readAgentRunDelegatedAuthorityFailure,
 } from "../infra/agent-run-registry.js";
-import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
+import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
@@ -114,7 +114,7 @@ async function recoveryFixture(name: string) {
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "lifecycle-source", source);
   const admittedRunContext = await admission.admit("embedded");
   const writeContext = expectDefined(
-    captureAgentRunTerminalWriteContext(runId),
+    captureAgentRunTerminalPersistence(runId).writeContext,
     "The recovery must retain its exact delegated terminal writer",
   );
   const authority = expectDefined(
@@ -250,7 +250,7 @@ it("keeps cross-store patches native and refuses a source revoked before submiss
           workerGuard: { source: fixture.source },
         }),
       ).resolves.toMatchObject({ label: "native cross-store write" });
-      expect(sql.queries.some((query) => /^update "session_nodes" set\b/i.test(query))).toBe(true);
+      expect(sql.queries).toContainEqual(expect.stringMatching(/^insert into "session_nodes" /i));
       // The statement execution observer distinguishes native work from worker-only writes.
       expect(sql.calls[4]).toHaveBeenCalled();
     } finally {

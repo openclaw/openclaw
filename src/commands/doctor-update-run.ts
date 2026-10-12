@@ -186,13 +186,7 @@ async function inspectStaleUpdateRuns(
     const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(
       latest.steps.map((step) => step.detail),
     );
-    const warningSteps = latest.steps.filter((step) => {
-      const completedAtMs = step.detail ? resolvedWarnings.get(step.detail) : undefined;
-      return (
-        completedAtMs === undefined ||
-        completedAtMs < (step.endedAtMs ?? latest.finishedAtMs ?? latest.createdAtMs)
-      );
-    });
+    const warningSteps = latest.steps.filter((step) => !resolvedWarnings.has(step.detail ?? ""));
     const warnings = updateRunWarningMessages(warningSteps);
     if (warnings.length) {
       note(

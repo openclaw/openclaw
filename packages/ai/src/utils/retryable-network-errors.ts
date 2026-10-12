@@ -1,10 +1,12 @@
+// Keep transient network policy aligned across retries and process-level handling.
+// Release harness scripts reach this via src/infra/clawhub-retry.ts from release-target cwds
+// without tsconfig paths or built workspace dist; keep these imports source-relative.
 import {
   collectNestedErrorCandidates,
   extractErrorCodeOrErrno,
   readErrorName,
-} from "@openclaw/normalization-core/error-coercion";
-// Keep transient network policy aligned across retries and process-level handling.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+} from "../../../normalization-core/src/error-coercion.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../normalization-core/src/string-coerce.js";
 
 export const WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE = "ERR_WEBSOCKET_NON_RETRYABLE_CLOSE";
 

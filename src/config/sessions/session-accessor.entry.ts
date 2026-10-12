@@ -48,9 +48,9 @@ import type {
   SessionEntryPatchResult,
 } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
-import { isNativeSessionEntryRead } from "./session-entry-read-request.js";
 import {
   readSessionEntryReadOnlyInWorker,
+  readSessionEntriesFromStoreInWorker,
   withSessionEntriesFromStoresInWorker,
 } from "./session-entry-read-runtime.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
@@ -205,31 +205,29 @@ export async function readResolvedSessionEntriesInWorker(
   });
   const requests: typeof prepared = [];
   for (const request of prepared) {
-    const { agentId, canonicalKey, requestedKey, storePath } = request;
+    const { agentId, canonicalKey, requestedKey } = request;
     const actorScope = {
       ...scope,
       // Omitted environments belong to the captured actor's root, not process.env.
       env: actorEnv,
       sessionKey: canonicalKey,
     };
-    if (captureIncognitoSessionBinding(actorScope)) {
+    const binding = captureIncognitoSessionBinding(actorScope);
+    if (binding || isIncognitoSessionKey(canonicalKey)) {
       result.set(requestedKey, {
         agentId,
         canonicalKey,
         requestedKey,
         storeKey: canonicalKey,
-        entry: await readSessionEntryReadOnlyInWorker({ ...actorScope, agentId }),
+        entry: await readSessionEntryReadOnlyInWorker({
+          ...actorScope,
+          agentId,
+          // Unbound incognito still belongs to its process-local native owner.
+          ...(!binding && {
+            storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: scope.env }),
+          }),
+        }),
       });
-      continue;
-    }
-    if (isNativeSessionEntryRead({ ...scope, storePath, sessionKey: canonicalKey }, agentId)) {
-      result.set(
-        requestedKey,
-        resolveSessionEntryAccessTarget(
-          { ...scope, sessionKey: requestedKey },
-          { projection: projection === "worktree" ? projection : undefined },
-        ),
-      );
       continue;
     }
     requests.push(request);
@@ -382,66 +380,69 @@ export function resolveSessionEntryCandidateTarget(
   };
 }
 
-/** Retain one actor across ordered candidate reads; ordinary routing remains native until P7. */
-export function resolveSessionEntryCandidateTargetForRuntime(
+/** Resolve ordered candidates through the session owner without synchronous discovery. */
+export async function resolveSessionEntryCandidateTargetForRuntime(
   scope: SessionEntryCandidateAccessScope,
-):
-  | ResolvedSessionEntryCandidateTarget
-  | null
-  | Promise<ResolvedSessionEntryCandidateTarget | null> {
-  const candidates = uniqueStrings(scope.candidateKeys.map((key) => key.trim()));
+): Promise<ResolvedSessionEntryCandidateTarget | null> {
+  const candidates = uniqueStrings(scope.candidateKeys.map((key) => key.trim()).filter(Boolean));
   const sessionKey = candidates.find(isIncognitoSessionKey);
   const binding = sessionKey && captureIncognitoSessionBinding({ ...scope, sessionKey });
-  if (!binding) {
-    return resolveSessionEntryCandidateTarget(scope);
-  }
-  const snapshots: Array<{ assertCurrent(): void }> = [];
-  const assertCurrent = () => {
-    binding.admissionSignal?.throwIfAborted();
-    binding.actor.assertReadable();
-    snapshots.forEach((snapshot) => snapshot.assertCurrent());
+  const agentId = binding ? binding.actor.agentId : scope.agentId;
+  const keys = candidates.map((candidateKey) => ({
+    candidateKey,
+    sessionKey: resolveSqliteSessionKey(candidateKey, agentId),
+  }));
+  const fallback = () => {
+    const entry = scope.fallback;
+    const fallbackKey = entry?.sessionKey.trim();
+    return entry && fallbackKey
+      ? {
+          agentId,
+          candidateKey: fallbackKey,
+          entry: structuredClone(entry.entry),
+          persisted: false,
+          sessionKey: fallbackKey,
+        }
+      : null;
   };
-  return binding.actor.sessions
-    .withSharedState(async () => {
-      for (const candidateKey of candidates) {
-        const normalizedKey = resolveSqliteSessionKey(candidateKey, binding.actor.agentId);
-        // The selected incognito store cannot contain durable keys; retain candidate ordering.
-        if (!isIncognitoSessionKey(normalizedKey)) {
+  if (binding) {
+    return binding.actor.sessions.withSharedState(async () => {
+      for (const key of keys) {
+        if (!isIncognitoSessionKey(key.sessionKey)) {
           continue;
         }
         const read = await binding.actor.sessions.read(
           { assertCurrent: () => binding.actor.assertReadable() },
-          { sessionKey: normalizedKey },
+          { sessionKey: key.sessionKey },
           binding.admissionSignal,
         );
-        snapshots.push(read.snapshot);
-        assertCurrent();
         if (read.entry) {
-          return {
-            agentId: binding.actor.agentId,
-            candidateKey,
-            entry: read.entry,
-            persisted: true,
-            sessionKey: normalizedKey,
-          };
+          return { agentId, ...key, entry: read.entry, persisted: true };
         }
       }
-      const fallback = scope.fallback;
-      const fallbackKey = fallback?.sessionKey.trim();
-      return fallback && fallbackKey
-        ? {
-            agentId: binding.actor.agentId,
-            candidateKey: fallbackKey,
-            entry: structuredClone(fallback.entry),
-            persisted: false,
-            sessionKey: fallbackKey,
-          }
-        : null;
-    })
-    .then((result) => {
-      assertCurrent();
-      return result;
+      return fallback();
     });
+  }
+  if (keys.length === 0) {
+    return fallback();
+  }
+  const read = await readSessionEntriesFromStoreInWorker({
+    agentId,
+    env: scope.env,
+    storePath: resolveSessionStorePathCore(scope.cfg.session?.store, {
+      agentId,
+      env: scope.env,
+    }),
+    sessionKeys: keys.map((key) => key.sessionKey),
+    projection: "exact",
+  });
+  for (const key of keys) {
+    const entry = read.entries.find((row) => row.sessionKey === key.sessionKey)?.entry;
+    if (entry) {
+      return { agentId, ...key, entry, persisted: true };
+    }
+  }
+  return fallback();
 }
 
 function resolveSessionEntryStoreTarget(

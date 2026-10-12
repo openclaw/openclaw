@@ -1,7 +1,6 @@
-import { isDeepStrictEqual } from "node:util";
+import { types } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
@@ -89,6 +88,7 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readTrajectoryEvents: reader("trajectory-events", "trajectory events", (value) => value.events),
     readTrajectoryRetention: (input, options) => {
       const captured = {
         ...input,
@@ -110,6 +110,11 @@ export function createSessionHistoryWorkerReaders(
     },
     readCleanup: reader("session-cleanup", "a cleanup snapshot", (value) => value),
     readRawDelta: reader("transcript-raw-delta", "raw transcript delta", (value) => value.result),
+    readLatestAssistant: reader(
+      "transcript-latest-assistant",
+      "latest assistant text",
+      (value) => value.result,
+    ),
     readVisibleDelta: reader(
       "transcript-visible-delta",
       "visible transcript delta",
@@ -140,6 +145,11 @@ export function createSessionHistoryWorkerReaders(
     ),
     readConversations: reader("conversation-rows", "conversations", (value) => value.rows),
     prewarm: reader("prewarm", "prewarm acknowledgement", () => undefined),
+    readRetirement: reader(
+      "session-retirement-read",
+      "session retirement facts",
+      (value) => value.result,
+    ),
     readPendingArchives: reader(
       "session-pending-archives",
       "pending archives",
@@ -321,7 +331,7 @@ export function createSessionHistoryWorkerReaders(
         for (const frame of value.frames) {
           if (
             !isRecord(frame) ||
-            !(frame.data instanceof Uint8Array) ||
+            !types.isUint8Array(frame.data) ||
             typeof frame.endOfEvent !== "boolean"
           ) {
             throw new Error("Session history worker returned an invalid transcript frame");
@@ -465,38 +475,34 @@ export function createSessionHistoryWorkerReaders(
       "a Goal operation receipt",
       (value) => value.result,
     ),
-    readEntryResult: reader("session-entry-read", "an entry", (value) =>
-      value.readError
+    readEntryResult: reader("session-entry-read", "an entry", (value) => ({
+      ...(value.readError
         ? err(decodeSessionTranscriptWorkerReadError(value.readError))
-        : ok(value.entry),
-    ),
+        : ok(value.entry)),
+      source: value.source,
+      facts: value.facts,
+    })),
     readEntryCurrent: reader(
       "session-entry-current",
       "entry currency facts",
       (value) => value.entry,
     ),
     readDiagnosticText: reader("session-diagnostic-text", "diagnostic text", (value) => value.text),
-    readEntries: async (scope, continuation, expectedIdentity) => {
+    // The native reader validates the selected file. Replacement after that read is best effort.
+    readEntries: async (scope, continuation, expectedIdentity, ifRevision) => {
       const captured = expectedIdentity && { ...expectedIdentity };
-      const assertIdentity = () => {
-        if (
-          captured &&
-          !isDeepStrictEqual(readDatabasePathIdentitySync(captured.canonicalPath), captured)
-        ) {
-          throw new Error("Session listing changed its captured physical owner");
-        }
-      };
-      assertIdentity();
       return runRequest(
-        () => {
-          assertIdentity();
-          return { kind: "session-entry-list", scope, continuation, expectedIdentity: captured };
-        },
-        JSON.stringify({ scope, continuation, expectedIdentity: captured }).length * 2,
+        () => ({
+          kind: "session-entry-list",
+          scope,
+          continuation,
+          expectedIdentity: captured,
+          ifRevision,
+        }),
+        JSON.stringify({ scope, continuation, expectedIdentity: captured, ifRevision }).length * 2,
         (value) => {
           assertResultKind(value, "session-entry-list", "entries");
-          assertIdentity();
-          return value.entries;
+          return value;
         },
       );
     },

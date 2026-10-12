@@ -49,6 +49,7 @@ const CRON_SESSION_PREPARATION_OWNER = Symbol.for("openclaw.cronSessionPreparati
 /** Preserve cron FIFO while waiting for full session settlement outside the execution lane. */
 export async function withCronSessionPreparation<T>(
   params: {
+    agentId: string;
     storePath: string;
     sessionKey: string;
     signal?: AbortSignal;
@@ -66,6 +67,7 @@ export async function withCronSessionPreparation<T>(
     params.onLaneWait?.({ waiting: true });
   }
   const admission = await beginSessionWorkAdmission({
+    agentId: params.agentId,
     ...target,
     serializeOwner: true,
     signal: params.signal,
@@ -162,12 +164,13 @@ export class CronSessionLifecycleClaimError extends Error {
   }
 }
 
-export function resolveCronLifecycleRevisionIdentity(lifecycleRevision: string): string {
+function resolveCronLifecycleRevisionIdentity(lifecycleRevision: string): string {
   return `cron-lifecycle-revision:${lifecycleRevision}`;
 }
 
 /** Claim the captured session generation before asynchronous run preparation. */
 export async function beginCronSessionWorkAdmission(params: {
+  agentId: string;
   cronSession: MutableCronSession;
   agentSessionKey: string;
   runSessionKey: string;
@@ -178,6 +181,7 @@ export async function beginCronSessionWorkAdmission(params: {
   const initialSessionEntry = cronSession.initialSessionEntry;
   // Claim before async model prep so maintenance cannot delete this session generation.
   return await beginSessionWorkAdmission({
+    agentId: params.agentId,
     scope: cronSession.storePath,
     identities: [
       agentSessionKey,

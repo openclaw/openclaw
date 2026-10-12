@@ -11,6 +11,11 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
     /no endpoints found for/i.test(msg) ||
     /\brouter not found\b/i.test(msg) ||
     /unknown model/i.test(msg) ||
+    /\bmodel\b[^\r\n]{0,120}?\b(?:was|is|has been) retired\b/i.test(msg) ||
+    // Ollama's retirement response names the model id without the word "model".
+    /\b[a-z0-9][a-z0-9._:/-]* was retired at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4} [a-z]+ \(ref:/i.test(
+      msg,
+    ) ||
     // "Not available" alone also describes outages; require missing-model evidence.
     /model(?:[_\-\s])?not(?:[_\-\s])?found|\bmodel\b.{0,60}?\bnot found\b/i.test(msg) ||
     (/\b404\b/.test(msg) && /not(?:[_\-\s])?found/i.test(msg)) ||
@@ -25,6 +30,12 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
     (/model/i.test(msg) && /does not exist/i.test(msg)) ||
     (/selected model/i.test(msg) && /not(?:[_\-\s])?found/i.test(msg)) ||
     (/model/i.test(msg) && /deprecated/i.test(msg) && /(upgrade|transition) to/i.test(msg)) ||
+    // A failed turn naming the model itself as deprecated ("Model exo-free has been deprecated.").
+    // Requires "model" plus at most its id as the subject; scheduled-removal warnings and
+    // deprecated parameters/fields stay out.
+    /\bmodel\b(?:\s+(?!(?:parameters?|params?|fields?|options?|arguments?|settings?|names?|propert(?:y|ies)|endpoints?|versions?)\b)[`'"]?[\w./:@-]+[`'"]?)?\s+(?:is|was|has been) deprecated\b(?![^.\r\n]{0,80}\b(?:will|scheduled|soon)\b)/i.test(
+      msg,
+    ) ||
     (/stealth model/i.test(msg) && /find it here/i.test(msg)) ||
     /is not a valid model id/i.test(msg) ||
     (/invalid model/i.test(msg) && !/invalid model reference/i.test(msg))

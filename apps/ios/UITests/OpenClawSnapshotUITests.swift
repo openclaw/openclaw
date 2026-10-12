@@ -48,6 +48,24 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.captureReleaseScreenshot(Self.controlScreenshotTarget)
     }
 
+    func testTaskListProgressTagRendersAsBar() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-progress-bar-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Plan, ")).firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "progress-card-collapsed")
+        card.tap()
+        let hasBar = app.progressIndicators.firstMatch.waitForExistence(timeout: 5)
+        self.attachScreenshot(named: "progress-card-expanded")
+        XCTAssertTrue(hasBar, "Task list has no progress bar")
+        XCTAssertTrue(app.staticTexts["Now: reading the sample diff."].exists)
+        let rawTag = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "<progress"))
+        XCTAssertEqual(rawTag.count, 0, "Task list still displays a raw progress tag")
+        XCTAssertEqual(card.label, "Plan, Now: reading the sample diff.")
+    }
+
     func testStreamedReplyIsNotDuplicatedWithSavedRow() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
@@ -106,6 +124,22 @@ final class OpenClawSnapshotUITests: XCTestCase {
                 XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3))
             }
         }
+    }
+
+    func testAssistantRepliesNameTheSpeakerWhenTheAvatarIsHidden() throws {
+        self.launchApp(for: Self.chatScreenshotTarget)
+        let app = try XCTUnwrap(self.app)
+        let reply = app.descendants(matching: .any)["chat-assistant-message-body"].firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 8))
+        let run = app.descendants(matching: .any)["chat-assistant-run"].firstMatch
+        let named = run.exists ? run : reply
+        let avatar = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Molty avatar")).firstMatch
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            XCTAssertFalse(avatar.exists, "A compact width shows no avatar beside a reply")
+        }
+        // The reply names the assistant exactly where no avatar does.
+        XCTAssertEqual(named.label, avatar.exists ? "" : "Molty")
     }
 
     func testReleaseAgentScreenshot() {

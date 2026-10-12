@@ -148,7 +148,7 @@ describe("Codex native hook relay managed policy", () => {
     },
   );
 
-  it.each(["native load", "routing replacement", "unadmitted active"] as const)(
+  it.each(["routing replacement", "native load", "unadmitted active"] as const)(
     "refuses an unqualified receiver read after %s",
     async (change) => {
       const client = createClient();
@@ -184,6 +184,7 @@ describe("Codex native hook relay managed policy", () => {
         return returned.promise;
       });
       const nativeWrite = vi.fn();
+      let loadNotification: Promise<void> | undefined;
       const pending = monitor
         .prepareModelInput({
           threadId: "parent-thread",
@@ -201,10 +202,13 @@ describe("Codex native hook relay managed policy", () => {
             throw new Error("Input admission finished before target read");
           }),
         ]);
-        if (change === "native load") {
-          await notifyChildStarted(client, "parent-thread", threadId);
-        } else if (change === "routing replacement") {
+        if (change === "routing replacement") {
           targetQualification = { assertCurrent: () => {}, hasProvider: () => false };
+        } else if (change === "native load") {
+          loadNotification = client.notify({
+            method: "thread/status/changed",
+            params: { threadId, status: { type: "idle" } },
+          });
         }
         const stale = threadRead({
           childThreadId: threadId,
@@ -219,6 +223,7 @@ describe("Codex native hook relay managed policy", () => {
         );
         expect(nativeWrite).not.toHaveBeenCalled();
       } finally {
+        await loadNotification;
         await monitor.dispose();
         await parent.unregister();
       }

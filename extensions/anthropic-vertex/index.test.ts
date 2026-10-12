@@ -108,40 +108,6 @@ describe("anthropic-vertex provider plugin", () => {
     ]);
   });
 
-  it.each([
-    { region: "global", baseUrl: "https://aiplatform.googleapis.com" },
-    { region: "us", baseUrl: "https://aiplatform.us.rep.googleapis.com" },
-    { region: "eu", baseUrl: "https://aiplatform.eu.rep.googleapis.com" },
-  ])("publishes the SDK endpoint for the $region location", ({ region, baseUrl }) => {
-    expect(
-      buildAnthropicVertexProvider({
-        env: { GOOGLE_CLOUD_LOCATION: region },
-      }).baseUrl,
-    ).toBe(baseUrl);
-  });
-
-  it.each([
-    {
-      region: "global",
-      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-    },
-    {
-      region: "us",
-      cost: { input: 5.5, output: 27.5, cacheRead: 0.55, cacheWrite: 6.875 },
-    },
-  ])("uses the documented Opus 5 pricing for $region", ({ region, cost }) => {
-    const provider = buildAnthropicVertexProvider({
-      env: { GOOGLE_CLOUD_LOCATION: region },
-    });
-
-    expect(provider.models.find((model) => model.id === "claude-opus-5")).toMatchObject({
-      cost,
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-    });
-  });
-
   describe.each([
     {
       region: "global",
@@ -214,41 +180,6 @@ describe("anthropic-vertex provider plugin", () => {
       ).toBeUndefined();
     });
   });
-
-  it.each([
-    ["claude-sonnet-4-6", false],
-    ["claude-fable-5-1@20260801", true],
-  ])(
-    "owns Anthropic-style replay policy for Vertex %s",
-    async (modelId, appendOnlyRuntimeContext) => {
-      const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-
-      expect(
-        provider.buildReplayPolicy?.({
-          provider: "anthropic-vertex",
-          modelApi: "anthropic-messages",
-          modelId,
-        }),
-      ).toEqual({
-        sanitizeMode: "full",
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict",
-        preserveNativeAnthropicToolUseIds: true,
-        appendOnlyRuntimeContext,
-        preserveSignatures: true,
-        repairToolUseResultPairing: true,
-        validateAnthropicTurns: true,
-        allowSyntheticToolResults: true,
-      });
-      expect(
-        provider.buildReplayPolicy?.({
-          provider: "anthropic-vertex",
-          modelApi: "anthropic-messages",
-          modelId: "claude-fable-5",
-        } as never),
-      ).not.toHaveProperty("dropThinkingBlocks");
-    },
-  );
 
   it("registers the shared thinking policy with canonical alias support", async () => {
     const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);

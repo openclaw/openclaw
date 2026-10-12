@@ -130,11 +130,7 @@ function resolveGitDirectoryMarker(dir: string): string | null {
       return null;
     }
     const content = fs.readFileSync(marker, "utf8").trim();
-    const match = /^gitdir:\s*(.+)$/i.exec(content);
-    if (!match) {
-      return null;
-    }
-    const gitDir = match[1]?.trim();
+    const gitDir = /^gitdir:\s*(.+)$/i.exec(content)?.[1]?.trim();
     if (!gitDir) {
       return null;
     }
@@ -160,12 +156,12 @@ function hasTrustedGitWorkspace(root: string): boolean {
   }
 }
 
-function hasGitWorkspace(workspaceDir?: string): boolean {
+function resolveLocalPluginRoots(workspaceDir?: string): string[] {
   const roots = [process.cwd()];
   if (workspaceDir && workspaceDir !== process.cwd()) {
     roots.push(workspaceDir);
   }
-  return roots.some((root) => hasTrustedGitWorkspace(root));
+  return roots;
 }
 
 function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawConfig {
@@ -224,10 +220,7 @@ function resolveLocalPath(params: {
     return null;
   }
   const candidates = new Set<string>();
-  const bases = [process.cwd()];
-  if (params.workspaceDir && params.workspaceDir !== process.cwd()) {
-    bases.push(params.workspaceDir);
-  }
+  const bases = resolveLocalPluginRoots(params.workspaceDir);
   for (const base of bases) {
     const realBase = resolveRealDirectory(base);
     if (!realBase) {
@@ -298,7 +291,6 @@ function resolveInstallDefaultChoice(params: {
 }): InstallChoice {
   const { cfg, entry, localPath, bundledLocalPath, hasClawHubSpec, hasNpmSpec } = params;
   const hasRemoteSpec = hasClawHubSpec || hasNpmSpec;
-  const entryDefault = entry.install.defaultChoice;
   const remoteDefault = (): InstallChoice =>
     resolvePluginInstallSources(entry.install)[0]?.source ?? "skip";
 
@@ -311,23 +303,18 @@ function resolveInstallDefaultChoice(params: {
   if (bundledLocalPath) {
     return "local";
   }
-  const updateChannel = cfg.update?.channel;
   // Dev builds prefer checked-out local plugins; stable/beta prefer published
   // artifacts so installed records match the user's release channel.
-  if (updateChannel === "dev") {
-    return "local";
+  switch (cfg.update?.channel) {
+    case "dev":
+      return "local";
+    case "stable":
+    case "extended-stable":
+    case "beta":
+      return remoteDefault();
+    default:
+      return entry.install.defaultChoice === "local" ? "local" : remoteDefault();
   }
-  if (
-    updateChannel === "stable" ||
-    updateChannel === "extended-stable" ||
-    updateChannel === "beta"
-  ) {
-    return remoteDefault();
-  }
-  if (entryDefault === "local") {
-    return "local";
-  }
-  return remoteDefault();
 }
 
 async function promptInstallChoice(params: {
@@ -451,31 +438,30 @@ function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.message === "timeout";
 }
 
-async function finishOnboardingPluginInstall(params: {
-  cfg: OpenClawConfig;
-  pluginId: string;
-  label: string;
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-  install?: Parameters<typeof recordPluginInstall>[1];
-  prepareConfig?: (cfg: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>;
-}): Promise<OnboardingPluginInstallResult> {
-  const enableResult = enableExplicitlySelectedPluginInConfig(params.cfg, params.pluginId);
+async function finishOnboardingPluginInstall(
+  params: Pick<OnboardingPluginInstallParams, "cfg" | "entry" | "prompter" | "runtime">,
+  options: {
+    pluginId: string;
+    install?: Parameters<typeof recordPluginInstall>[1];
+    prepareConfig?: (cfg: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>;
+  },
+): Promise<OnboardingPluginInstallResult> {
+  const enableResult = enableExplicitlySelectedPluginInConfig(params.cfg, options.pluginId);
   if (!enableResult.enabled) {
-    const safeLabel = sanitizeTerminalText(params.label);
+    const safeLabel = sanitizeTerminalText(params.entry.label);
     const reason = enableResult.reason ?? "plugin disabled";
     await params.prompter.note(
       t("wizard.plugins.enableFailed", { plugin: safeLabel, reason }),
       t("wizard.plugins.installTitle"),
     );
     params.runtime.error?.(
-      `Plugin install failed: ${sanitizeTerminalText(params.pluginId)} is disabled (${reason}).`,
+      `Plugin install failed: ${sanitizeTerminalText(options.pluginId)} is disabled (${reason}).`,
     );
-    return incompletePluginInstall(enableResult.config, params.pluginId, "failed");
+    return incompletePluginInstall(enableResult.config, options.pluginId, "failed");
   }
-  const cfg = params.install
-    ? recordPluginInstall(enableResult.config, params.install)
-    : ((await params.prepareConfig?.(enableResult.config)) ?? enableResult.config);
+  const cfg = options.install
+    ? recordPluginInstall(enableResult.config, options.install)
+    : ((await options.prepareConfig?.(enableResult.config)) ?? enableResult.config);
   // Onboarding has not committed config yet, so invalidate only process-local
   // discovery. The next lookup recovers the new package alongside persisted records.
   clearLoadInstalledPluginIndexInstallRecordsCache();
@@ -483,7 +469,7 @@ async function finishOnboardingPluginInstall(params: {
   await invalidatePluginRuntimeDiscoveryAfterConfigMutation({
     logger: { warn: (message) => params.runtime.log(message) },
   });
-  return { cfg, installed: true, pluginId: params.pluginId, status: "installed" };
+  return { cfg, installed: true, pluginId: options.pluginId, status: "installed" };
 }
 
 async function installLocalOnboardingPlugin(
@@ -496,12 +482,8 @@ async function installLocalOnboardingPlugin(
 ): Promise<OnboardingPluginInstallResult> {
   const consent = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
   try {
-    return await finishOnboardingPluginInstall({
-      cfg: params.cfg,
+    return await finishOnboardingPluginInstall(params, {
       pluginId: params.entry.pluginId,
-      label: params.entry.label,
-      prompter: params.prompter,
-      runtime: params.runtime,
       prepareConfig: async (cfg) => {
         // Bundled sources already belong to the release; linked artifacts still require review.
         if (pathsReferToSameDirectory(params.localPath, params.bundledLocalPath)) {
@@ -763,12 +745,8 @@ async function installPluginFromOverride(
         }
       : {}),
   };
-  return await finishOnboardingPluginInstall({
-    cfg: params.cfg,
+  return await finishOnboardingPluginInstall(params, {
     pluginId: result.pluginId,
-    label: entry.label,
-    prompter,
-    runtime,
     install: installOutcome.capabilityConsent.applyAcceptedSurface(result.pluginId, install),
   });
 }
@@ -802,7 +780,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       }),
     );
   }
-  const allowLocal = hasGitWorkspace(workspaceDir);
+  const allowLocal = resolveLocalPluginRoots(workspaceDir).some(hasTrustedGitWorkspace);
   const bundledLocalPath = resolveBundledLocalPath({ entry, workspaceDir });
   const localPath = bundledLocalPath ?? resolveLocalPath({ entry, workspaceDir, allowLocal });
   const rawClawHubSpec = entry.install.clawhubSpec?.trim();
@@ -907,6 +885,9 @@ export async function ensureOnboardingPluginInstalled(params: {
         );
       }
     }
+    const onFallback = async (message: string) => {
+      await prompter.note(message, t("wizard.plugins.installTitle"));
+    };
     const { attempt: installOutcome, source: installedSource } = await installWithSourceFallback({
       sources,
       install: async (
@@ -933,15 +914,11 @@ export async function ensureOnboardingPluginInstalled(params: {
             (source.source === "npm"
               ? isUnavailableNpmTarget(attempt.result)
               : isUnavailableClawHubTarget(attempt.result)),
-          onFallback: async (message) => {
-            await prompter.note(message, t("wizard.plugins.installTitle"));
-          },
+          onFallback,
         });
       },
       result: (attempt) => (attempt.status === "completed" ? attempt.result : { ok: false }),
-      onFallback: async (message) => {
-        await prompter.note(message, t("wizard.plugins.installTitle"));
-      },
+      onFallback,
     });
     if (installOutcome.status === "timed_out") {
       return await reportPluginInstallTimeout(params, installedSource.spec);
@@ -965,17 +942,16 @@ export async function ensureOnboardingPluginInstalled(params: {
               version: result.version,
               ...buildNpmResolutionInstallFields(result.npmResolution),
             };
-      return await finishOnboardingPluginInstall({
-        cfg: next,
-        pluginId: result.pluginId,
-        label: entry.label,
-        prompter,
-        runtime,
-        install: capabilityConsent.applyAcceptedSurface(result.pluginId, {
+      return await finishOnboardingPluginInstall(
+        { cfg: next, entry, prompter, runtime },
+        {
           pluginId: result.pluginId,
-          ...install,
-        }),
-      });
+          install: capabilityConsent.applyAcceptedSurface(result.pluginId, {
+            pluginId: result.pluginId,
+            ...install,
+          }),
+        },
+      );
     }
     await notePluginInstallFailure(prompter, installedSource.spec, result.error);
     if (localPath && isUnavailablePluginSource(installedSource.source, result)) {

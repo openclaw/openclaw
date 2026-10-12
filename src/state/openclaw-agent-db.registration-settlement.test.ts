@@ -21,7 +21,7 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -357,7 +357,9 @@ describe("agent registration native settlement", () => {
           await projection.ensureMaterialized();
           expect(projection.capture(query)?.entry).toMatchObject(entry);
           expect(observed.trace).toEqual([{ kind: "stores", inTransaction: false }]);
-          expect(snapshot.assertCurrent).toThrow(registryListing.AgentDatabaseRegistryChangedError);
+          expect(snapshot.assertCurrent).toThrow(
+            expect.objectContaining({ name: "AgentDatabaseRegistryChangedError" }),
+          );
         } finally {
           endScope.resolve();
           deliverCommitted?.();

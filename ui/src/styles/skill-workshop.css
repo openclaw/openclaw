@@ -16,7 +16,8 @@
   gap: var(--space-3);
 }
 
-.sw-learning {
+.sw-learning,
+.sw-version-bar__actions {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -84,13 +85,6 @@
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
-.sw-row__split {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding-inline-end: var(--space-3);
-}
-
 .sw-row__main {
   display: grid;
   gap: 3px;
@@ -103,10 +97,6 @@
   font: inherit;
   text-align: start;
   cursor: var(--cursor-action);
-}
-
-.sw-row__split .sw-row__main {
-  padding-bottom: var(--space-3);
 }
 
 .sw-row:not(.sw-row--selected):hover {
@@ -210,7 +200,8 @@
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-.sw-link-button:focus-visible {
+.sw-link-button:focus-visible,
+.sw-tab:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -312,11 +303,6 @@
   font-weight: 600;
 }
 
-.sw-tab:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .sw-detail__body {
   padding: var(--space-4) var(--space-5) var(--space-5);
 }
@@ -356,12 +342,6 @@
   font-size: var(--control-ui-text-sm);
 }
 
-.sw-version-bar__actions {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
 .sw-diff__legend {
   display: flex;
   gap: var(--space-3);
@@ -387,17 +367,21 @@
   background: color-mix(in srgb, var(--ok) 45%, transparent);
 }
 
-.sw-diff__lines {
-  display: grid;
+.sw-diff__lines,
+.sw-file {
   margin: 0;
   max-height: 70vh;
   overflow: auto;
   border-radius: var(--radius-sm);
   background: var(--bg-hover);
-  padding: var(--space-2) 0;
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
   line-height: 1.6;
+}
+
+.sw-diff__lines {
+  display: grid;
+  padding: var(--space-2) 0;
 }
 
 .sw-diff__line {
@@ -487,15 +471,7 @@
 }
 
 .sw-file {
-  margin: 0;
-  max-height: 70vh;
-  overflow: auto;
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
   padding: var(--space-3) var(--space-4);
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

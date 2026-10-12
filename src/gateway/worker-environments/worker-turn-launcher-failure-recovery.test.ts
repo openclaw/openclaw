@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
@@ -9,6 +9,7 @@ import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-messa
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { sessionByKeyReadHandlers } from "../server-methods/sessions-read-by-key.js";
 import { requestContext } from "../server-methods/sessions-read-cache.test-support.js";
@@ -48,9 +49,11 @@ import {
   type WorkerTurnLauncherOptions,
 } from "./worker-turn-launcher.test-support.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("worker turn launcher failure recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it("terminalizes a journal-settled dead worker without waiting for blocked teardown", async () => {
     await seedActivePlacement();

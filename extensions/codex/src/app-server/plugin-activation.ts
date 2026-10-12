@@ -242,14 +242,8 @@ export async function refreshCodexAppRuntimeState(params: {
   targetAppIds?: readonly string[];
   deferAppInventoryRefresh?: boolean;
 }): Promise<void> {
-  // Retire pre-refresh reads before any await. A failed refresh must leave the
-  // previous snapshot stale, and a targeted refresh may only revalidate its apps.
-  params.appCache.invalidate(
-    params.appCacheKey,
-    "Codex plugin app inventory refresh requested",
-    undefined,
-    params.targetAppIds,
-  );
+  // Keep the previous snapshot stale if the refresh fails.
+  params.appCache.invalidate(params.appCacheKey, "Codex plugin app inventory refresh requested");
   if (params.deferAppInventoryRefresh) {
     return;
   }

@@ -147,28 +147,6 @@ describe("dashboard tool", () => {
     ).toBe(false);
   });
 
-  it("reads a compact text plus JSON snapshot", async () => {
-    const harness = recorder();
-    const tool = createDashboardTool({
-      agentSessionKey: "agent:main:main",
-      callGateway: harness.callGateway,
-    });
-    const result = await tool.execute("read", { action: "read" });
-    expect(harness.calls).toEqual([
-      ["board.get", { sessionKey: "agent:main:main" }],
-      ["sessions.describe", { key: "agent:main:main" }],
-    ]);
-    expect(result.details).toEqual({
-      ...snapshot,
-      defaultPresentation: "split",
-      tabs: [{ tabId: "main", title: "Main", position: 0 }],
-    });
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: expect.stringContaining('"revision":3'),
-    });
-  });
-
   it("dispatches through the admitted Gateway and fences replacement or retirement", async () => {
     const admitted = createGatewayAffinityHarness(11);
     const replacement = createGatewayAffinityHarness(22);
@@ -317,11 +295,6 @@ describe("dashboard tool", () => {
       "presentation must be split or expanded",
     ],
     [{ action: "set_presentation" }, "presentation required"],
-    [
-      { action: "set_default_presentation", presentation: "fullscreen" },
-      "presentation must be split or expanded",
-    ],
-    [{ action: "set_default_presentation" }, "presentation required"],
   ])("rejects invalid presentation command %j before broadcasting", async (args, message) => {
     const harness = recorder();
     const tool = createDashboardTool({
@@ -401,59 +374,7 @@ describe("dashboard tool", () => {
     ]);
   });
 
-  it.each(["split", "expanded"] as const)(
-    "saves %s as the shared default without emitting a client command",
-    async (presentation) => {
-      const harness = recorder();
-      const tool = createDashboardTool({
-        agentSessionKey: "agent:main:main",
-        agentId: "main",
-        callGateway: harness.callGateway,
-        emitCommand: harness.emitCommand,
-      });
-      const result = await tool.execute("default", {
-        action: "set_default_presentation",
-        presentation,
-      });
-      expect(harness.calls).toEqual([
-        [
-          "sessions.patch",
-          {
-            key: "agent:main:main",
-            agentId: "main",
-            boardFace: "dashboard",
-            boardPresentation: presentation,
-          },
-        ],
-      ]);
-      expect(result.details).toEqual({
-        ok: true,
-        sessionKey: "agent:main:main",
-        defaultPresentation: presentation,
-      });
-      expect(harness.commands).toEqual([]);
-    },
-  );
-
-  it("does not report a saved default when the authoritative patch fails", async () => {
-    const callGateway = vi.fn(async () => {
-      throw new Error("session is read-only");
-    });
-    const emitCommand = vi.fn();
-    const tool = createDashboardTool({
-      agentSessionKey: "agent:main:main",
-      callGateway,
-      emitCommand,
-    });
-    await expect(
-      tool.execute("default", { action: "set_default_presentation", presentation: "expanded" }),
-    ).rejects.toThrow("session is read-only");
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(emitCommand).not.toHaveBeenCalled();
-  });
-
   it.each([
-    ["focus_tab", { tabId: "notes" }, { kind: "focus_tab", tabId: "notes" }],
     ["set_presentation", { presentation: "split" }, { kind: "set_chat_dock", dock: "right" }],
     ["set_presentation", { presentation: "expanded" }, { kind: "set_chat_dock", dock: "hidden" }],
   ])("emits board.command for %s", async (action, args, command) => {

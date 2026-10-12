@@ -198,7 +198,6 @@ describe("extension relay lifecycle", () => {
     const first = withProfileOperationLease({
       state,
       runtime,
-      configRevision: getProfileLifecycle(runtime).configRevision,
       signal: firstController.signal,
       run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
     });
@@ -208,7 +207,6 @@ describe("extension relay lifecycle", () => {
     const sibling = withProfileOperationLease({
       state,
       runtime,
-      configRevision: getProfileLifecycle(runtime).configRevision,
       run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
     });
     void sibling.catch(() => {});
@@ -243,7 +241,6 @@ describe("extension relay lifecycle", () => {
     const owner = withProfileOperationLease({
       state,
       runtime,
-      configRevision: getProfileLifecycle(runtime).configRevision,
       run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
     });
     void owner.catch(() => {});
@@ -253,7 +250,6 @@ describe("extension relay lifecycle", () => {
     const sibling = withProfileOperationLease({
       state,
       runtime,
-      configRevision: getProfileLifecycle(runtime).configRevision,
       signal: siblingController.signal,
       run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
     });
@@ -292,7 +288,6 @@ describe("extension relay lifecycle", () => {
     const pending = withProfileOperationLease({
       state,
       runtime,
-      configRevision: getProfileLifecycle(runtime).configRevision,
       run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
     });
     void pending.catch(() => {});

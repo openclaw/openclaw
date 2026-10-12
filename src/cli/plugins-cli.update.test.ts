@@ -12,7 +12,6 @@ import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   createTestInstalledPluginIndex,
   pluginCliConfigMock,
-  resolvePluginLifecycleGatewayMock,
   pluginLifecycleGatewayMock,
   readConfigFileSnapshotForWriteMock,
   readPersistedInstalledPluginIndexMock,
@@ -359,8 +358,6 @@ describe("plugins cli update", () => {
       changed: true,
       outcomes: [{ hookId: "hooks", status: "updated", message: "Updated hooks." }],
     });
-    resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
-    pluginLifecycleGatewayMock.mockResolvedValue({ runtime: { generation: 7 } });
 
     await runPluginsCommand([
       "plugins",
@@ -387,12 +384,11 @@ describe("plugins cli update", () => {
     expect(updateNpmInstalledPluginsMock.mock.calls[0]?.[0].config).toEqual({
       plugins: { ...config.plugins, installs: records },
     });
-    expect(pluginLifecycleGatewayMock.mock.calls.map(([method]) => method)).toEqual([
-      "plugins.list",
-      "plugins.refresh",
-    ]);
+    expect(pluginLifecycleGatewayMock).not.toHaveBeenCalled();
     expectInstallRecordsWrittenWithLease(nextRecords, config);
-    expect(pluginsCliRuntimeLogs).toContain("Applied plugin updates in Gateway generation 7.");
+    expect(pluginsCliRuntimeLogs).toContain(
+      "Updates saved; they will load on the next Gateway start.",
+    );
   });
 
   it.each([{ label: "update all", args: ["--all"] }])(
@@ -555,68 +551,6 @@ describe("plugins cli update", () => {
     expect(configWriteMock).not.toHaveBeenCalled();
   });
 
-  it("refreshes the online owner only after releasing the update lease", async () => {
-    const config = {};
-    primeUpdateConfigSnapshot({ config });
-    primeBravePluginRecordUpdate(config);
-    const lifecycle = await import("../plugins/plugin-lifecycle-lease.js");
-    const original = lifecycle.withPluginLifecycleLease;
-    let held = false;
-    const spy = vi
-      .spyOn(lifecycle, "withPluginLifecycleLease")
-      .mockImplementation(
-        async <T>(
-          options: Parameters<typeof original>[0],
-          run: (
-            lease: import("../plugins/plugin-lifecycle-lease.js").PluginLifecycleLeaseContext,
-          ) => Promise<T>,
-        ) =>
-          original(options, async (lease) => {
-            const wasHeld = held;
-            held = true;
-            try {
-              return await run(lease);
-            } finally {
-              held = wasHeld;
-            }
-          }),
-      );
-    resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
-    pluginLifecycleGatewayMock.mockImplementation(async (...args: unknown[]) => {
-      const [method] = args;
-      expect(held).toBe(false);
-      return method === "plugins.refresh"
-        ? {
-            runtime: { generation: 7 },
-            warnings: ["Previous plugin service could not stop."],
-          }
-        : {};
-    });
-    try {
-      await runPluginsCommand(["plugins", "update", "brave"]);
-      expect(pluginLifecycleGatewayMock.mock.calls.map(([method]) => method)).toEqual([
-        "plugins.list",
-        "plugins.refresh",
-      ]);
-      expect(pluginsCliRuntimeLogs).toContainEqual(
-        expect.stringContaining("Previous plugin service could not stop."),
-      );
-      expect(pluginsCliRuntimeLogs).toContain("Applied plugin updates in Gateway generation 7.");
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it("does not mutate packages when the known Gateway is unreachable", async () => {
-    resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
-    pluginLifecycleGatewayMock.mockRejectedValue(new Error("owner unreachable"));
-    await expect(runPluginsCommand(["plugins", "update", "brave"])).rejects.toThrow(
-      "owner unreachable",
-    );
-    expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
-    expect(configWriteMock).not.toHaveBeenCalled();
-  });
-
   it("commits a moved managed npm load path with its replacement record", async () => {
     const previousInstallPath = "/tmp/openclaw/npm/projects/brave-v1/node_modules/brave";
     const nextInstallPath = "/tmp/openclaw/npm/projects/brave-v2/node_modules/brave";
@@ -662,10 +596,7 @@ describe("plugins cli update", () => {
       nextConfig: expectedConfig,
       baseHash: "update-config",
       writeOptions: expect.objectContaining({
-        afterWrite: {
-          mode: "none",
-          reason: "plugin update applies runtime after releasing its lease",
-        },
+        afterWrite: expect.objectContaining({ mode: "none" }),
       }),
     });
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith({

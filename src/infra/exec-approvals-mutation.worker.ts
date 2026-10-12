@@ -1,4 +1,3 @@
-import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
 import {
   generateToken,
@@ -6,16 +5,13 @@ import {
   resolveExecApprovalsDisplayPath,
   resolveExecApprovalsSocketPath,
 } from "./exec-approvals-config.js";
-import type {
-  ExecApprovalsAgent,
-  ExecApprovalsFile,
-  ExecApprovalsSnapshot,
-} from "./exec-approvals-core.js";
+import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
 import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
 import {
   applyExecApprovalsUpdate,
   type ExecApprovalsUpdate,
 } from "./exec-approvals-mutation.kernel.js";
+import { execApprovalsPublication } from "./exec-approvals-publication.js";
 import {
   assertExecApprovalsMutationAllowed,
   deleteExecApprovalsConfigRow,
@@ -28,12 +24,6 @@ import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
-
-type AgentExecApprovalsRemoval = {
-  agentId: string;
-  operationId: string;
-  entries: [string, ExecApprovalsAgent][];
-};
 
 function mutate<T>(
   context: WorkerWriteOperationContext,
@@ -53,34 +43,40 @@ function mutate<T>(
   return context.write(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const current = snapshotFromExecApprovalsDatabase(
-        db,
-        resolveExecApprovalsDisplayPath(options.env),
-      );
-      const edit = operation(current, db);
-      let snapshot = current;
-      if (edit.next !== null) {
-        const raw = edit.raw ?? serializeExecApprovals(edit.next);
-        if (edit.remove || !current.exists || current.raw !== raw) {
-          if (edit.remove) {
-            deleteExecApprovalsConfigRow(db);
-            snapshot = snapshotFromExecApprovalsRow({ path: current.path });
-          } else {
-            const persisted = writeExecApprovalsConfigRow({ db, file: edit.next, raw: edit.raw });
-            snapshot = snapshotFromExecApprovalsRow({
-              path: current.path,
-              row: { raw_json: persisted },
-            });
+      const captured = execApprovalsPublication.capture(db, () => {
+        const current = snapshotFromExecApprovalsDatabase(
+          db,
+          resolveExecApprovalsDisplayPath(options.env),
+        );
+        const edit = operation(current, db);
+        let snapshot = current;
+        if (edit.next !== null) {
+          const raw = edit.raw ?? serializeExecApprovals(edit.next);
+          if (edit.remove || !current.exists || current.raw !== raw) {
+            if (edit.remove) {
+              deleteExecApprovalsConfigRow(db);
+              snapshot = snapshotFromExecApprovalsRow({ path: current.path });
+            } else {
+              const persisted = writeExecApprovalsConfigRow({ db, file: edit.next, raw: edit.raw });
+              snapshot = snapshotFromExecApprovalsRow({
+                path: current.path,
+                row: { raw_json: persisted },
+              });
+            }
           }
         }
-      }
-      const changed = snapshot.raw !== current.raw;
-      const facts = changed ? { kind: "exec-policy-publication", file: snapshot.file } : undefined;
+        const changed = snapshot.raw !== current.raw;
+        return { changed, snapshot, result: edit.result(snapshot) };
+      });
+      const { changed, snapshot, result } = captured.result;
+      const facts = {
+        kind: "exec-policy-publication",
+        file: snapshot.file,
+        execFacts: execApprovalsPublication.bound(captured.receipt),
+      };
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
-      if (changed) {
-        deferSqliteWorkerCommitReceipt(db, facts);
-      }
-      return edit.result(snapshot);
+      deferSqliteWorkerCommitReceipt(db, facts, changed ? "commit" : "settlement");
+      return result;
     },
     { operationLabel: label },
   );
@@ -100,44 +96,6 @@ export const execPolicyMutationOperations = {
         assertExecApprovalsMutationAllowed({ db, current: current.file, next });
       }
       return { next, result: (snapshot) => snapshot };
-    }),
-  "execApprovals.removeAgent": (
-    input: { agentId: string; operationId: string },
-    context: WorkerWriteOperationContext,
-  ): AgentExecApprovalsRemoval =>
-    mutate(context, "exec-approvals.remove-agent", (current, db) => {
-      const entries = Object.entries(current.file.agents ?? {}).filter(([key]) => {
-        const normalized = normalizeAgentIdStrict(key);
-        return normalized.ok && normalized.value === input.agentId;
-      });
-      const agents = { ...current.file.agents };
-      for (const [key] of entries) {
-        delete agents[key];
-      }
-      const next = { ...current.file, agents };
-      assertExecApprovalsMutationAllowed({
-        db,
-        current: current.file,
-        next,
-        authority: { ...input, action: "remove" },
-      });
-      return {
-        next: entries.length ? next : null,
-        result: () => ({ ...input, entries }),
-      };
-    }),
-  "execApprovals.restoreAgent": (
-    input: AgentExecApprovalsRemoval,
-    context: WorkerWriteOperationContext,
-  ) =>
-    mutate(context, "exec-approvals.restore-agent", (current, db) => {
-      const authority = { ...input, action: "restore" as const };
-      const next = {
-        ...current.file,
-        agents: { ...current.file.agents, ...Object.fromEntries(input.entries) },
-      };
-      assertExecApprovalsMutationAllowed({ db, current: current.file, next, authority });
-      return { next, result: () => undefined };
     }),
   "execApprovals.restoreSnapshot": (
     input: { snapshot: ExecApprovalsSnapshot; baseHash: string },

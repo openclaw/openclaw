@@ -63,7 +63,7 @@ type TtsQueueEntry = {
   reject: (error: unknown) => void;
 };
 
-type PendingPlaybackMark = (error?: Error, ignoreLateAck?: boolean) => void;
+type PendingPlaybackMark = (error?: Error) => void;
 
 type PendingConnection = {
   ip: string;
@@ -77,7 +77,6 @@ const DEFAULT_MAX_CONNECTIONS = 128;
 const MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
 const MAX_WS_BUFFERED_BYTES = 1024 * 1024;
 const MAX_PENDING_TTS_OPERATIONS_PER_STREAM = 8;
-const MAX_IGNORED_PLAYBACK_MARKS_PER_STREAM = 64;
 const PLAYBACK_MARK_TIMEOUT_GRACE_MS = 2_000;
 const CLOSE_REASON_LOG_MAX_CHARS = 120;
 
@@ -117,7 +116,6 @@ export class MediaStreamHandler {
   private ttsQueues = new Map<string, TtsQueueEntry[]>();
   private ttsActiveControllers = new Map<string, AbortController>();
   private pendingPlaybackMarks = new Map<string, Map<string, PendingPlaybackMark>>();
-  private ignoredPlaybackMarks = new Map<string, Set<string>>();
 
   constructor(private readonly config: MediaStreamConfig) {
     this.preStartTimeoutMs = resolveTimerTimeoutMs(
@@ -599,7 +597,6 @@ export class MediaStreamHandler {
     if (marks.has(name)) {
       throw new Error(`Telephony playback mark is already pending: ${name}`);
     }
-    this.ignoredPlaybackMarks.get(streamSid)?.delete(name);
 
     let pending!: PendingPlaybackMark;
     const acknowledgement = new Promise<void>((resolve, reject) => {
@@ -616,9 +613,9 @@ export class MediaStreamHandler {
           signal.reason instanceof Error
             ? signal.reason
             : new Error("Telephony playback mark wait aborted");
-        pending(reason, true);
+        pending(reason);
       };
-      pending = (error, ignoreLateAck = false) => {
+      pending = (error) => {
         if (marks.get(name) !== pending) {
           return;
         }
@@ -627,9 +624,6 @@ export class MediaStreamHandler {
         marks.delete(name);
         if (marks.size === 0) {
           this.pendingPlaybackMarks.delete(streamSid);
-        }
-        if (ignoreLateAck) {
-          this.ignorePlaybackMark(streamSid, name);
         }
         if (error) {
           reject(error);
@@ -696,13 +690,7 @@ export class MediaStreamHandler {
   }
 
   private acknowledgePlaybackMark(streamSid: string, name: string): void {
-    const ignored = this.ignoredPlaybackMarks.get(streamSid);
-    if (ignored?.delete(name)) {
-      if (ignored.size === 0) {
-        this.ignoredPlaybackMarks.delete(streamSid);
-      }
-      return;
-    }
+    // TTS marks are unique; cleared playback leaves no waiter for a late carrier echo.
     this.pendingPlaybackMarks.get(streamSid)?.get(name)?.();
   }
 
@@ -713,21 +701,8 @@ export class MediaStreamHandler {
     }
     // Map iteration tolerates settlement deleting entries mid-walk.
     for (const pending of marks.values()) {
-      pending(new Error("Telephony playback cleared before completion"), true);
+      pending(new Error("Telephony playback cleared before completion"));
     }
-  }
-
-  private ignorePlaybackMark(streamSid: string, name: string): void {
-    const ignored = this.ignoredPlaybackMarks.get(streamSid) ?? new Set<string>();
-    ignored.add(name);
-    while (ignored.size > MAX_IGNORED_PLAYBACK_MARKS_PER_STREAM) {
-      const oldest = ignored.values().next().value;
-      if (oldest === undefined) {
-        break;
-      }
-      ignored.delete(oldest);
-    }
-    this.ignoredPlaybackMarks.set(streamSid, ignored);
   }
 
   private async processQueue(streamSid: string): Promise<void> {
@@ -815,7 +790,6 @@ export class MediaStreamHandler {
     this.ttsActiveControllers.delete(streamSid);
     this.ttsQueues.delete(streamSid);
     this.invalidatePlaybackMarks(streamSid);
-    this.ignoredPlaybackMarks.delete(streamSid);
   }
 
   private abortTtsPlayback(streamSid: string): void {

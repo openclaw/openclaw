@@ -8,6 +8,7 @@ import {
   callPersonalPublicationRpc,
   createPersonalPublicationFixture,
   personalPublicationAccount as account,
+  preparePersonalPublicationFixtureAction,
 } from "./github-personal-publication.test-support.js";
 import {
   claimGitHubPublicationExecution,
@@ -21,7 +22,6 @@ import {
   root,
 } from "./github-publication.test-support.js";
 import { insertSharedWorktreeReceipt } from "./github-shared-publication.test-support.js";
-import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
 
 installGitHubPublicationTestHarness();
 let fixture: Awaited<ReturnType<typeof createPersonalPublicationFixture>>;
@@ -91,9 +91,9 @@ describe("publication options after a retained-state upgrade", () => {
       db.exec(
         "CREATE TEMP TRIGGER stop_personal_upgrade_admission AFTER INSERT ON github_personal_publication_requests BEGIN SELECT stop_personal_upgrade_admission(); END",
       );
-      const action = preparePersonalGitHubSessionAction(
-        { client, context, signal: controller.signal },
-        { sessionKey: SESSION_KEY },
+      const action = await preparePersonalPublicationFixtureAction(
+        { client, context },
+        controller.signal,
       );
       await expect(
         coordinator.requestPersonalForSession(
@@ -104,7 +104,7 @@ describe("publication options after a retained-state upgrade", () => {
           },
           action,
         ),
-      ).rejects.toThrow("current");
+      ).rejects.toMatchObject({ name: "AbortError" });
       db.exec("DROP TRIGGER stop_personal_upgrade_admission");
       const recovered = await rpc("sessions.github.options");
       expect(recovered[0], JSON.stringify(recovered[2])).toBe(true);

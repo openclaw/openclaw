@@ -1,11 +1,14 @@
 /* @vitest-environment jsdom */
+import { ContextProvider } from "@lit/context";
 import type {
   CanvasDocumentViewResult,
   SessionsFilesAssetsResult,
 } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
-import { ChatHtmlPreview } from "./chat-html-preview-element.ts";
+import type { ChatHtmlPreviewElement } from "./chat-html-preview-element.tsx";
+import "./chat-html-preview-element.tsx";
 
 const source =
   "<!doctype html>\r\n<style>h1{color:red}</style><h1>HTML</h1><script>window.ready=true</script>\n";
@@ -14,8 +17,6 @@ const metadata: CanvasDocumentViewResult = {
   sandboxUrl: "/mcp-app-sandbox?frames=none",
   sandboxPort: 8444,
 };
-const tag = `test-html-preview-${crypto.randomUUID()}`;
-customElements.define(tag, class extends ChatHtmlPreview {});
 
 function mount(request = vi.fn().mockResolvedValue(metadata), html = source) {
   const listeners = new Set<() => void>();
@@ -29,15 +30,21 @@ function mount(request = vi.fn().mockResolvedValue(metadata), html = source) {
       },
     },
   };
-  const view = document.createElement(tag) as ChatHtmlPreview;
-  Reflect.set(view, "context", context);
+  const wrapper = document.createElement("div");
+  const provider = new ContextProvider(wrapper, {
+    context: applicationContext,
+    initialValue: context as unknown as ApplicationContext,
+  });
+  const view = document.createElement("openclaw-chat-html-preview");
   view.html = html;
   view.sourceIdentity = "file:example.html";
-  document.body.append(view);
+  wrapper.append(view);
+  document.body.append(wrapper);
   return {
     view,
     context,
     request,
+    setContext: (next: ApplicationContext) => provider.setValue(next),
     notify: () => {
       for (const listener of listeners) {
         listener();
@@ -46,7 +53,7 @@ function mount(request = vi.fn().mockResolvedValue(metadata), html = source) {
   };
 }
 
-async function frameFor(view: ChatHtmlPreview) {
+async function frameFor(view: ChatHtmlPreviewElement) {
   await expect.poll(() => view.querySelector("iframe")).not.toBeNull();
   return view.querySelector("iframe")!;
 }
@@ -233,7 +240,6 @@ describe("ordinary HTML preview transport", () => {
     await view.updateComplete;
     expect(view.querySelector('[role="status"]')).toBeNull();
     view.title = "Changed title";
-    view.requestUpdate();
     await view.updateComplete;
     expect(view.querySelector("iframe")).toBe(frame);
     expect(request).toHaveBeenCalledOnce();
@@ -407,7 +413,7 @@ describe("ordinary HTML preview transport", () => {
             }),
         )
         .mockResolvedValue(metadata);
-      const { view, context, notify } = mount(request);
+      const { view, context, notify, setContext } = mount(request);
       await expect.poll(() => request.mock.calls.length).toBe(1);
       if (change === "html") {
         view.html = "<p>new</p>";
@@ -416,7 +422,7 @@ describe("ordinary HTML preview transport", () => {
         view.sourceIdentity = "next.html";
       }
       if (change === "context") {
-        Reflect.set(view, "context", { gateway: { ...context.gateway } });
+        setContext({ gateway: { ...context.gateway } } as unknown as ApplicationContext);
       }
       if (change === "client") {
         context.gateway.snapshot.client = { request: vi.fn().mockResolvedValue(metadata) };
@@ -466,7 +472,7 @@ describe("ordinary HTML preview transport", () => {
     await expect
       .poll(() => view.querySelector('[role="alert"]')?.textContent)
       .toContain("Preview denied");
-    view.requestUpdate();
+    view.title += " ";
     await view.updateComplete;
     expect(request).toHaveBeenCalledOnce();
     view.querySelector("button")!.click();
@@ -475,7 +481,7 @@ describe("ordinary HTML preview transport", () => {
     await view.updateComplete;
     expect(view.querySelector('[role="alert"]')).not.toBeNull();
     expect(view.querySelector("iframe")).toBeNull();
-    view.requestUpdate();
+    view.title += " ";
     await view.updateComplete;
     expect(request).toHaveBeenCalledTimes(2);
     view.querySelector("button")!.click();

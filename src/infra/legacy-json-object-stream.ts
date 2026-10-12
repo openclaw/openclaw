@@ -177,18 +177,14 @@ async function parseSinglePropertyObject(params: {
   }
 }
 
-async function* decodeUtf8Chunks(params: {
-  handle: FileHandle;
-  hash: ReturnType<typeof createHash>;
-  onBytes: (length: number) => void;
-}): AsyncGenerator<string> {
+async function* decodeUtf8Chunks(
+  handle: FileHandle,
+  observeChunk: (chunk: Buffer | string) => Buffer,
+): AsyncGenerator<string> {
   const decoder = new TextDecoder("utf-8", { fatal: true });
-  const stream = params.handle.createReadStream({ autoClose: false, start: 0 });
+  const stream = handle.createReadStream({ autoClose: false, start: 0 });
   for await (const rawChunk of stream) {
-    const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
-    params.hash.update(chunk);
-    params.onBytes(chunk.byteLength);
-    const text = decoder.decode(chunk, { stream: true });
+    const text = decoder.decode(observeChunk(rawChunk), { stream: true });
     if (text) {
       yield text;
     }
@@ -230,14 +226,14 @@ export async function readLegacyJsonObjectStream(params: {
   let size = 0;
   try {
     const before = opened.stat;
+    const observeChunk = (rawChunk: Buffer | string) => {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+      hash.update(chunk);
+      size += chunk.byteLength;
+      return chunk;
+    };
     if (params.property && params.onEntry) {
-      const chunks = decodeUtf8Chunks({
-        handle: opened.handle,
-        hash,
-        onBytes: (length) => {
-          size += length;
-        },
-      });
+      const chunks = decodeUtf8Chunks(opened.handle, observeChunk);
       await parseSinglePropertyObject({
         chunks,
         property: params.property,
@@ -246,9 +242,7 @@ export async function readLegacyJsonObjectStream(params: {
     } else {
       const stream = opened.handle.createReadStream({ autoClose: false, start: 0 });
       for await (const rawChunk of stream) {
-        const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
-        hash.update(chunk);
-        size += chunk.byteLength;
+        observeChunk(rawChunk);
       }
     }
     const after = await opened.handle.stat();

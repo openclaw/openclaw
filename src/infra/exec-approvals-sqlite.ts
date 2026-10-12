@@ -20,6 +20,7 @@ import {
   resetExecApprovalsMigrationGateForTest,
 } from "./exec-approvals-migration-gate.js";
 import { assertExecApprovalsHostPolicyUnchanged } from "./exec-approvals-policy.js";
+import { execApprovalsPublication } from "./exec-approvals-publication.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -33,12 +34,6 @@ type ExecApprovalsDatabase = Pick<
   "agent_deletion_journal" | "exec_approvals_config"
 >;
 
-export type ExecApprovalsMutationAuthority = {
-  action: "remove" | "restore";
-  agentId: string;
-  operationId: string;
-};
-
 export class ExecApprovalsMutationFencedError extends Error {
   constructor() {
     super("Exec approvals cannot be changed while agent deletion is in progress; retry.");
@@ -50,50 +45,25 @@ export function assertExecApprovalsMutationAllowed(params: {
   db: DatabaseSync;
   current: ExecApprovalsFile;
   next: ExecApprovalsFile;
-  authority?: ExecApprovalsMutationAuthority;
 }): void {
   const current = normalizeExecApprovalsInternal(params.current);
   const next = normalizeExecApprovalsInternal(params.next);
   const changed = [
     ...new Set([...Object.keys(current.agents ?? {}), ...Object.keys(next.agents ?? {})]),
   ].filter((agentId) => !isDeepStrictEqual(current.agents?.[agentId], next.agents?.[agentId]));
-  const authority = params.authority;
   const agentIds = new Set(changed.map(normalizeAgentId));
-  if (authority) {
-    // Removal with no policy entries still requires the exact current deletion operation.
-    agentIds.add(authority.agentId);
-  }
   if (agentIds.size === 0) {
     return;
   }
-  const journals = new Map(
-    executeSqliteQuerySync(
-      params.db,
-      getNodeSqliteKysely<ExecApprovalsDatabase>(params.db)
-        .selectFrom("agent_deletion_journal")
-        .select(["agent_id", "operation_id"])
-        .where("agent_id", "in", [...agentIds]),
-    ).rows.map((row) => [row.agent_id, row.operation_id]),
+  const journal = executeSqliteQueryTakeFirstSync(
+    params.db,
+    getNodeSqliteKysely<ExecApprovalsDatabase>(params.db)
+      .selectFrom("agent_deletion_journal")
+      .select("agent_id")
+      .where("agent_id", "in", [...agentIds])
+      .limit(1),
   );
-  if (authority && journals.get(authority.agentId) !== authority.operationId) {
-    throw new ExecApprovalsMutationFencedError();
-  }
-  for (const agentId of changed) {
-    const normalizedAgentId = normalizeAgentId(agentId);
-    const operationId = journals.get(normalizedAgentId);
-    if (operationId === undefined) {
-      continue;
-    }
-    const currentPolicy = current.agents?.[agentId];
-    const nextPolicy = next.agents?.[agentId];
-    if (
-      authority?.agentId === normalizedAgentId &&
-      authority.operationId === operationId &&
-      ((authority.action === "remove" && currentPolicy !== undefined && nextPolicy === undefined) ||
-        (authority.action === "restore" && currentPolicy === undefined && nextPolicy !== undefined))
-    ) {
-      continue;
-    }
+  if (journal) {
     throw new ExecApprovalsMutationFencedError();
   }
 }
@@ -177,6 +147,7 @@ export function writeExecApprovalsConfigRow(params: {
   file: ExecApprovalsFile;
   raw?: string;
   now?: number;
+  change?: "policy" | "usage";
 }): string {
   const normalized = normalizeExecApprovalsInternal(params.file);
   const authored = params.raw ?? serializeExecApprovals(params.file);
@@ -199,6 +170,12 @@ export function writeExecApprovalsConfigRow(params: {
       .values({ config_key: EXEC_APPROVALS_CONFIG_KEY, ...values })
       .onConflict((conflict) => conflict.column("config_key").doUpdateSet(values)),
   );
+  const persisted = parsePersistedExecApprovals(raw);
+  const file = persisted.ok ? persisted.value : createFailClosedExecApprovalsFallback();
+  const { socket: _socket, ...policy } = file;
+  execApprovalsPublication.stagePostimages(params.db, [
+    { file: policy, change: params.change ?? "policy" },
+  ]);
   return raw;
 }
 
@@ -209,6 +186,7 @@ export function deleteExecApprovalsConfigRow(db: DatabaseSync): void {
       .deleteFrom("exec_approvals_config")
       .where("config_key", "=", EXEC_APPROVALS_CONFIG_KEY),
   );
+  execApprovalsPublication.stageDeletions(db, [EXEC_APPROVALS_CONFIG_KEY]);
 }
 
 /** Called only inside the approval owner's winning resolution transaction. */

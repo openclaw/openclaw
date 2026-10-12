@@ -7,10 +7,14 @@ import { isCloudWorkerPlacementState } from "../../packages/gateway-protocol/src
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { FsSafeError } from "../infra/fs-safe.js";
 import { getAgentScopedMediaLocalRoots, getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import { applyHttpOperatorRoleScopeCeiling, resolveHttpProfile } from "./http-auth-user-profile.js";
 import type { AuthorizedControlUiReadRequest } from "./http-auth-utils.js";
@@ -26,6 +30,33 @@ type AssistantMediaSession = {
   agentId: string;
   sessionId: string;
 };
+
+export function assertAssistantMediaPolicyCurrent(
+  selection: Parameters<typeof resolveAssistantMediaPolicy>[0],
+  policy: NonNullable<ReturnType<typeof resolveAssistantMediaPolicy>>,
+  hasAllowance: boolean,
+  requestAuth: AuthorizedControlUiReadRequest | undefined,
+) {
+  policy.assertCurrent?.();
+  // Ordinary session activity changes the global access epoch without revoking media tickets.
+  const current = resolveAssistantMediaPolicy({ ...selection, reader: policy.reader });
+  if (
+    requestAuth?.hasCurrentClientAuthority?.() === false ||
+    !current ||
+    current.session?.sessionKey !== policy.session?.sessionKey ||
+    current.session?.agentId !== policy.session?.agentId ||
+    current.session?.sessionId !== policy.session?.sessionId ||
+    current.remote !== policy.remote ||
+    current.executionCwd !== policy.executionCwd ||
+    current.workspaceOnly !== policy.workspaceOnly ||
+    current.localRoots.length !== policy.localRoots.length ||
+    current.localRoots.some((root, index) => root !== policy.localRoots[index]) ||
+    (hasAllowance && policy.workspaceOnly && !current.canAllow)
+  ) {
+    throw new FsSafeError("path-mismatch", "Media access changed");
+  }
+  return current;
+}
 
 export type AssistantMediaReader = Pick<
   AuthorizedControlUiReadRequest,
@@ -62,13 +93,47 @@ export function resolveAssistantMediaPolicy(params: {
   requestAuth?: AuthorizedControlUiReadRequest;
   reader?: AssistantMediaReader;
 }) {
-  let loaded: ReturnType<typeof loadGatewaySessionEntryReadOnly> | undefined;
+  let loaded:
+    | Pick<
+        ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+        "cfg" | "agentId" | "canonicalKey" | "entry"
+      >
+    | undefined;
+  let assertCurrent: (() => void) | undefined;
   if (params.sessionKey) {
     const owner = resolveRequestedSessionAgentId(params.config, params.sessionKey, params.agentId);
     if (!owner.ok) {
       return undefined;
     }
-    loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: owner.agentId });
+    const canonicalKey = normalizeSessionKeyPreservingOpaquePeerIds(params.sessionKey);
+    const source = captureIncognitoSessionSource({
+      sessionKey: canonicalKey,
+      agentId: owner.agentId,
+    });
+    if (source) {
+      if ("kind" in source) {
+        return undefined;
+      }
+      const media = source.actor.sessions.readMedia(canonicalKey);
+      if (!media) {
+        return undefined;
+      }
+      const claim = source.actor.sessions.captureCurrent(canonicalKey);
+      assertCurrent = () => {
+        source.admissionSignal?.throwIfAborted();
+        source.actor.assertReadable();
+        claim.assertCurrent();
+      };
+      assertCurrent();
+      loaded = {
+        cfg: getRuntimeConfig(),
+        agentId: owner.agentId,
+        canonicalKey,
+        entry: { ...media, ...source.actor.sessions.readSharing(canonicalKey)?.entry },
+      };
+    } else {
+      loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: owner.agentId });
+    }
     if (!loaded.entry?.sessionId) {
       return undefined;
     }
@@ -147,6 +212,7 @@ export function resolveAssistantMediaPolicy(params: {
         .get(session.sessionId)
     : undefined;
   return {
+    assertCurrent,
     session,
     executionCwd,
     remote: remote || isCloudWorkerPlacementState(placement?.state),

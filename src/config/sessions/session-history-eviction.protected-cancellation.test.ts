@@ -132,11 +132,11 @@ describe("protected historical session cancellation", () => {
       }
       if (stage === "materialization") {
         const archive = await import("./session-accessor.sqlite-archive.js");
-        const materialize = archive.materializeSessionStateDeletePlans;
-        vi.spyOn(archive, "materializeSessionStateDeletePlans").mockImplementationOnce(
-          async (plans) => {
-            expect(plans.map((plan) => plan.sessionId)).toEqual([protectedHistory.sessionId]);
-            const prepared = await materialize(plans);
+        const materialize = archive.materializeSessionHistoryEvictionPlan;
+        vi.spyOn(archive, "materializeSessionHistoryEvictionPlan").mockImplementationOnce(
+          async (plan) => {
+            expect(plan.sessionId).toBe(protectedHistory.sessionId);
+            const prepared = await materialize(plan);
             releasePressure();
             return prepared;
           },
@@ -210,7 +210,7 @@ describe("protected historical session cancellation", () => {
         const result = await sweep;
         expect(protectionChanged).toBe(true);
         expect(fs.existsSync(peerArtifact)).toBe(false);
-        if (stage === "worker" || stage === "archived entry") {
+        if (stage === "materialization" || stage === "worker" || stage === "archived entry") {
           expect(admissions.length).toBeGreaterThan(0);
         }
         for (const [index, history] of histories.entries()) {
@@ -218,7 +218,7 @@ describe("protected historical session cancellation", () => {
           expect(loadTranscriptEventsSync({ ...history, storePath })).toEqual(beforeEvents[index]);
           expect(readArchiveNames(history.sessionId)).toEqual([]);
         }
-        if (stage === "worker") {
+        if (stage === "materialization" || stage === "worker") {
           expect(reclaimedHistories).toEqual([
             { sessionId: protectedHistory.sessionId, deleted: false },
           ]);

@@ -91,7 +91,13 @@ export function createRuntimeImportGraph(
   const configText = () =>
     JSON.stringify({
       extends: join(root, "tsconfig.json"),
-      compilerOptions: { allowJs: true, noLib: true, types: [] },
+      compilerOptions: {
+        allowJs: true,
+        noLib: true,
+        types: [],
+        // Source guards follow JSX files without choosing a renderer's emit mode.
+        ...(sourceImports ? { jsx: "preserve" } : {}),
+      },
       files: [...roots],
       include: [],
     });

@@ -153,15 +153,23 @@ export class CodexNativeSubagentSubmissionOwner {
     }
   }
 
-  restore(state: ParentState, owner: ParentOwner): void {
+  async restore(state: ParentState, owner: ParentOwner): Promise<void> {
+    const custody = owner.completionCustody?.retain();
     try {
-      for (const receipt of state.submissionStore?.read() ?? []) {
-        this.capture(state, receipt, undefined, false, owner.completionCustody);
+      const receipts = (await state.submissionStore?.read()) ?? [];
+      if (this.disposed || !this.isCurrent(state) || (custody && !custody.isCurrent())) {
+        return;
+      }
+      state.submissionStore?.assertCurrent();
+      for (const receipt of receipts) {
+        this.capture(state, receipt, undefined, false, custody);
       }
     } catch (error) {
       embeddedAgentLog.warn("Cannot recover native follow-up submission receipts", {
         error: formatErrorMessage(error),
       });
+    } finally {
+      custody?.release();
     }
   }
 

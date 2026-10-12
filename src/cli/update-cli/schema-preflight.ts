@@ -118,14 +118,12 @@ export async function captureTargetDatabaseSchemaContext(
     )
       ? planned
       : undefined;
-  if (before?.path === snapshot.path && !legacyConfigPlan) {
+  if (before?.path === snapshot.path && !legacyConfigPlan && !snapshot.valid) {
     // This is read-only admission. A concurrent save needs a fresh projection,
     // never reuse of the old source's plan or refusal merely because it changed.
-    if (!snapshot.valid) {
-      const { planLegacyConfigForUpdateChannel } =
-        await import("../../commands/doctor/legacy-config-repair.js");
-      legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
-    }
+    const { planLegacyConfigForUpdateChannel } =
+      await import("../../commands/doctor/legacy-config-repair.js");
+    legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
   }
   if (
     (!snapshot.valid && !legacyConfigPlan && configValidation !== "candidate") ||

@@ -8,6 +8,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { openIncognitoTestActor } from "../../state/openclaw-agent-execution-incognito.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -26,8 +27,11 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "./session-accessor.sqlite-entry.js";
+import { emptySessionEntryMaintenancePlan } from "./session-accessor.sqlite-maintenance-store.js";
+import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { withIncognitoSessionBinding } from "./session-incognito-binding.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -63,6 +67,40 @@ describe("SQLite session deletion receipts", () => {
     loadSessionEntry({ sessionKey: key, storePath, readConsistency: "latest" });
 
   const seedReceipt = (key = sessionKey) => seedPersonalGitHubDeletionReceipt(key, sessionId);
+
+  it("removes a deleted incognito session's personal receipt during maintenance", async () => {
+    const incognitoKey = "agent:main:dashboard:incognito-maintenance-receipt";
+    const env = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR };
+    const authority = { assertCurrent() {} };
+    const actor = await openIncognitoTestActor(env, authority);
+    try {
+      const { entry } = await actor.sessions.create(authority, {
+        sessionKey: incognitoKey,
+        entry: { sessionId, lifecycleRevision: "generation-1", updatedAt: 1, incognito: true },
+      });
+      const receipt = await seedReceipt(incognitoKey);
+      expect(receipt().receipt).toBeDefined();
+      const plan = emptySessionEntryMaintenancePlan();
+      plan.entryRemovals = [
+        { sessionKey: incognitoKey, expectedEntry: entry, maintenanceReason: "pruned" },
+      ];
+
+      const result = await withIncognitoSessionBinding({ actor }, () =>
+        finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
+          { agentId: actor.agentId, path: actor.path, env },
+          [plan],
+        ),
+      );
+
+      expect(result.pruned).toBe(1);
+      expect(
+        (await actor.sessions.read(authority, { sessionKey: incognitoKey })).entry,
+      ).toBeUndefined();
+      expect(receipt()).toEqual({ receipt: undefined, lifecycle: undefined });
+    } finally {
+      await actor.close();
+    }
+  });
 
   it.runIf(process.platform !== "win32").each([false, true])(
     "settles workspace-free receipts against the original database after an alias retarget (aborted: %s)",

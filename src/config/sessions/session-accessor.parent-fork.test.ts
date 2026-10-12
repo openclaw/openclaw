@@ -16,9 +16,9 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
   replaceSessionEntrySync,
-  replaceTranscriptEvents,
 } from "./session-accessor.js";
 import { resolveSqliteStoreScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 const forkableClaudeCliBackend = {
   id: "claude-cli",

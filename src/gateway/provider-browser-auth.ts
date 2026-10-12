@@ -79,7 +79,6 @@ export function createProviderBrowserAuthSession(params: {
   let origin: ReturnType<typeof resolveBrowserAuthOrigin>;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let expiresAt: number | undefined;
-  let authorizationStarted = false;
   const originClosed = () =>
     lifetime.abort(
       new Error("Browser sign-in ended because the Gateway address changed. Retry /login."),
@@ -108,10 +107,9 @@ export function createProviderBrowserAuthSession(params: {
     if (!published) {
       throw new ProviderBrowserSignInUnavailableError();
     }
-    if (authorizationStarted) {
+    if (origin) {
       throw new Error("Browser sign-in requires a unique authorization state.");
     }
-    authorizationStarted = true;
     origin = published;
     origin.signal.addEventListener("abort", originClosed, { once: true });
     deadline = setTimeout(

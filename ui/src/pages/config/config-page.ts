@@ -1,7 +1,7 @@
 import { consume } from "@lit/context";
-import "../../styles/config.css";
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
+import "../../styles/config.css";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { html as staticHtml, literal } from "lit/static-html.js";
@@ -18,10 +18,10 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
-import { selectThemeSettings } from "../../app/server-prefs-intent.ts";
+import { resetServerUiPref, selectThemeSettings } from "../../app/server-prefs-controls.ts";
 import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
+import * as serverUiPrefs from "../../app/server-prefs-reconcile.ts";
 import { isAppearancePref, type ResettableServerUiPrefKey } from "../../app/server-prefs-state.ts";
-import { resetServerUiPref, resolveServerUiPrefState } from "../../app/server-prefs.ts";
 import {
   loadSettings,
   normalizeCatalogOpenTarget,
@@ -64,7 +64,6 @@ import {
   discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
   realtimeTalkDeviceIssueMessage,
-  type RealtimeTalkInputDevice,
 } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
 import { isUnknownSystemInfoMethodError } from "../connection/system-info.ts";
@@ -72,6 +71,10 @@ import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
 import { ConfigRouteScrollController } from "./config-route-scroll-controller.ts";
 import {
   configSectionKeysForPage,
+  configSelectionFromSearch,
+  defaultConfigSelection,
+  normalizeConfigSelection,
+  type ConfigSelection,
   SCOPED_CONFIG_SECTION_KEYS,
   type ConfigPageId,
 } from "./config-sections.ts";
@@ -103,7 +106,6 @@ registerSettingsEnglish();
 
 export type { ConfigPageId } from "./config-sections.ts";
 
-type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
 type SessionObserverModelsResult = {
   gateway: ApplicationContext["gateway"];
   client: GatewayBrowserClient;
@@ -112,11 +114,10 @@ type SessionObserverModelsResult = {
 };
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
 
-function createMediaDeviceState(): {
-  devices: RealtimeTalkInputDevice[];
-  permissionRequired: boolean;
-  loading: boolean;
-  error: string | null;
+function createMediaDeviceState(): Omit<
+  NonNullable<ConfigProps["microphone"]>,
+  "selectedDeviceId"
+> & {
   loaded: boolean;
   requestsPermission: boolean;
 } {
@@ -128,39 +129,6 @@ function createMediaDeviceState(): {
     loaded: false,
     requestsPermission: false,
   };
-}
-
-function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
-  const activeSection = configSectionKeysForPage(pageId)?.[0] ?? null;
-  if (activeSection === null && pageId !== "advanced") {
-    throw new Error("Unknown config page");
-  }
-  return { activeSection, activeSubsection: null };
-}
-
-function normalizeConfigSelection(
-  pageId: ConfigPageId,
-  activeSection: string | null,
-  activeSubsection: string | null,
-): ConfigSelection {
-  const sections = configSectionKeysForPage(pageId) ?? null;
-  // Advanced renders without an include list; sections that have a curated
-  // home elsewhere must not activate here.
-  if (pageId === "advanced" && activeSection && SCOPED_CONFIG_SECTION_KEYS.has(activeSection)) {
-    return { activeSection: null, activeSubsection: null };
-  }
-  if (sections && (!activeSection || !sections.includes(activeSection))) {
-    return defaultConfigSelection(pageId);
-  }
-  return { activeSection, activeSubsection };
-}
-
-export function configSelectionFromSearch(pageId: ConfigPageId, search: string): ConfigSelection {
-  const section = new URLSearchParams(search).get("section");
-  if (!section) {
-    return defaultConfigSelection(pageId);
-  }
-  return normalizeConfigSelection(pageId, section, null);
 }
 
 function renderConfigPageSubtitle(pageId: ConfigPageId) {
@@ -715,7 +683,7 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private currentSyncedPref<K extends ResettableServerUiPrefKey>(key: K) {
     const appearance = isAppearancePref(key);
-    return resolveServerUiPrefState(
+    return serverUiPrefs.resolveServerUiPrefState(
       this.context.runtimeConfig.state.configSnapshot?.config,
       key,
       this.context.gateway.connection.gatewayUrl,
@@ -992,7 +960,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       setSessionCatalogHidden: setStoredSessionCatalogHidden,
       ...localPresentationProps(this.settings, (patch) => this.applySettings(patch)),
       forceShowAdvanced: this.pageId === "advanced",
-      forceAdvancedSection: this.routeData?.advanced ? this.routeData.section : null,
+      forceAdvancedSection: this.routeData?.advanced
+        ? (this.routeData.section ?? defaultConfigSelection(this.pageId).activeSection)
+        : null,
       sessionObserverEnabled: controlUiConfig?.sessionObserver !== false,
       sessionObserverUtilityModel:
         typeof agentsDefaults?.utilityModel === "string" ? agentsDefaults.utilityModel : undefined,

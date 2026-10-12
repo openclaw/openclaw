@@ -10,7 +10,6 @@ export function createFileWatchNotifier(output: Writable, onFailure: () => void)
   const pending = new Set<FileWatchNotification>();
   let rejectWrite: ((error: Error) => void) | undefined;
   let accepting = true;
-  let writing = false;
   let failure: Error | undefined;
   let draining: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
@@ -29,7 +28,7 @@ export function createFileWatchNotifier(output: Writable, onFailure: () => void)
     }
   };
   const onClose = () => {
-    if (!accepting && !writing && !pending.size) {
+    if (!accepting && !rejectWrite && !pending.size) {
       return;
     }
     fail(new Error("File watch output closed before notification retirement"));
@@ -55,7 +54,6 @@ export function createFileWatchNotifier(output: Writable, onFailure: () => void)
         pending.delete(event);
         await new Promise<void>((resolve, reject) => {
           const finishWrite = (error?: Error | null) => {
-            writing = false;
             rejectWrite = undefined;
             if (error) {
               reject(error);
@@ -64,7 +62,6 @@ export function createFileWatchNotifier(output: Writable, onFailure: () => void)
             }
           };
           rejectWrite = reject;
-          writing = true;
           try {
             output.write(JSON.stringify(event) + "\n", finishWrite);
           } catch (error) {

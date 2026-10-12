@@ -1,6 +1,5 @@
 import { onTimer } from "./timer-scheduler.js";
 
-export { authorCronRunCompletion, executeJobCoreWithTimeout } from "./timer-job-runner.js";
 export { armTimer, stopTimer } from "./timer-scheduler.js";
 export { runMissedJobs } from "./timer-catchup.js";
 

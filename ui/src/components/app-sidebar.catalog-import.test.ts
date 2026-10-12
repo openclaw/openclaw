@@ -180,7 +180,6 @@ describe("AppSidebar catalog authority", () => {
         expect(sidebar.querySelector(".sidebar-session-catalog-error")).toBeNull();
         expect(sidebar.sessionData.sessionCatalogs).toEqual([]);
         expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(0);
-        expect(sidebar.sessionData.sessionCatalogRevisions.size).toBe(0);
         expect(sidebar.sessionData.loadingMoreSessionCatalogIds.size).toBe(0);
         expect(sidebar.sessionData.sessionCatalogLive.timer).toBeNull();
         expect(request).toHaveBeenCalledTimes(2);

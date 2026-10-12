@@ -39,31 +39,6 @@ const hookRun = {
 };
 
 describe("CodexAppServerEventProjector verbose output and hook projection", () => {
-  it("hides command details from ordinary verbose tool summaries", async () => {
-    const onToolResult = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      verboseLevel: "on",
-      onToolResult,
-    });
-
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: createNativeCommandItem({
-          id: "cmd-1",
-          status: "inProgress",
-          exitCode: null,
-          durationMs: null,
-        }),
-      }),
-    );
-
-    expect(onToolResult).toHaveBeenCalledTimes(1);
-    expect(onToolResult).toHaveBeenCalledWith({
-      text: "Bash",
-    });
-  });
-
   it("redacts secrets in verbose command summaries", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({

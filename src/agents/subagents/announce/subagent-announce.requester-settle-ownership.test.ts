@@ -8,6 +8,7 @@ import {
 } from "../registry/subagent-registry-requester-yield.test-support.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner } from "../registry/subagent-run-generation.js";
+import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import * as announceOutput from "./subagent-announce-output.js";
 import type { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
@@ -113,6 +114,9 @@ function wakeParams() {
 }
 
 beforeEach(() => {
+  vi.spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent").mockReturnValue(() => ({
+    sessionId: "sess-main",
+  }));
   vi.spyOn(announceOutput, "readChildCompletionFindings").mockImplementation((children) =>
     readChildCompletionFindings(children, (runId) =>
       registryRuntimeMock.listSubagentRunsForRequester().find((entry) => entry.runId === runId),
@@ -123,6 +127,7 @@ beforeEach(() => {
   deliverSpy.mockReset().mockResolvedValue({ delivered: true, path: "direct" });
 });
 afterEach(() => {
+  vi.mocked(deliveryRuntime.captureRequesterSessionEntryCurrent).mockRestore();
   vi.mocked(announceOutput.readChildCompletionFindings).mockRestore();
   publishSystemEventStoreResolver(undefined);
 });

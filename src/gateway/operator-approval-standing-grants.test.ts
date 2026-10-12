@@ -5,18 +5,17 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
-import { withCronReceiptAuthorityMutation } from "../cron/store/receipt-authority-owner.js";
 import {
   deleteCronJobRowInDatabase,
   loadCronRows,
   loadedCronStoreFromRows,
   upsertCronJobRow,
 } from "../cron/store/row-codec.js";
+import { releaseLocalCronRunReceiptOwnership } from "../cron/store/run-receipt-store.js";
 import {
+  claimCronRunReceiptInDatabaseForTest,
   prepareCronRunReceiptClaim,
-  releaseLocalCronRunReceiptOwnership,
-} from "../cron/store/run-receipt-store.js";
-import { claimCronRunReceiptInDatabaseForTest } from "../cron/store/run-receipt-store.test-support.js";
+} from "../cron/store/run-receipt-store.test-support.js";
 import type { CronRunReceiptHandle } from "../cron/store/run-receipt.types.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -24,6 +23,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -289,12 +289,7 @@ function consumeInWorker(
   input: Parameters<typeof consumeCronStandingGrant>[1],
 ) {
   const context = captureOpenClawStateWorkerContext(databaseOptions);
-  return consumeCronStandingGrant(
-    context,
-    input,
-    () => {},
-    (run) => withCronReceiptAuthorityMutation(context, run),
-  );
+  return consumeCronStandingGrant(context, input, () => {});
 }
 
 function consume(params: Parameters<typeof grantInput>[0]) {
@@ -901,16 +896,12 @@ describe("standing grant operator surfaces", () => {
     const { databaseOptions } = await seedMintedGrant();
     const [before] = await listCronStandingGrants({ databaseOptions });
     let current = true;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            current = false;
-          }
-          return admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        current = false;
+      }
+      return admit(request, grant);
+    });
     const pending = revokeCronStandingGrant({
       grantId: before!.grantId,
       revokedBy: "reviewer",

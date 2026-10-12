@@ -9,6 +9,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   readSessionProgressCard,
   writeSessionProgressCard,
@@ -79,7 +80,7 @@ import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlit
 import {
   appendTranscriptEventSync,
   replaceTranscriptEvents,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { createLegacyUnsequencedTurnFixture } from "./session-accessor.transcript-turn.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
@@ -1603,27 +1604,22 @@ describe("session accessor seam", () => {
     const unsubscribe = onSessionIdentityMutation(identityListener);
 
     let refusedCommits = 0;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const admissionSpy = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          const publication = isRecord(request.facts) ? request.facts.publication : undefined;
-          if (
-            request.stage === "commit" &&
-            isRecord(publication) &&
-            publication.kind === "session-entry-replacements"
-          ) {
-            expect(publication.changedKeys).toHaveLength(3);
-            expect(publication.changedKeys).toEqual(
-              expect.arrayContaining([exactKey, canonicalKey, previousKey]),
-            );
-            refusedCommits++;
-            throw new Error("injected mixed replacement failure");
-          }
-          callback(request, grant);
-        }, attachment),
-      );
+    const admissionSpy = probe.admission(workerAdmission, (request, grant, callback) => {
+      const publication = isRecord(request.facts) ? request.facts.publication : undefined;
+      if (
+        request.stage === "commit" &&
+        isRecord(publication) &&
+        publication.kind === "session-entry-replacements"
+      ) {
+        expect(publication.changedKeys).toHaveLength(3);
+        expect(publication.changedKeys).toEqual(
+          expect.arrayContaining([exactKey, canonicalKey, previousKey]),
+        );
+        refusedCommits++;
+        throw new Error("injected mixed replacement failure");
+      }
+      callback(request, grant);
+    });
 
     try {
       await expect(

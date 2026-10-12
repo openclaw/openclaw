@@ -5,7 +5,7 @@ import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/composer.css";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import "./chat-comment-pins.ts";
+import "./chat-comment-pins.tsx";
 import { renderCommentPreviewChip, renderCommentPreviewRow } from "./chat-comment-preview.ts";
 import { removeChatSelectionPopup, showChatAnnotationEditor } from "./chat-selection-popup.ts";
 

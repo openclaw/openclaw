@@ -36,8 +36,10 @@ vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: hoisted.acquireRuntimeLeaseMock,
 }));
 
+// mock-isolation: preparation runs without a published plugin generation.
 vi.mock("../plugins/runtime/generation-scope.js", () => ({
   getPluginRuntimeGenerationRegistry: () => undefined,
+  runOutsidePluginRuntimeGenerationScope: (run: () => unknown) => run(),
   withPluginRuntimeGenerationScope: (_snapshot: unknown, run: () => unknown) => run(),
 }));
 
@@ -61,8 +63,10 @@ vi.mock("./embedded-agent-runner/model.js", () => ({
   resolveModelAsync: hoisted.resolveModelAsyncMock,
 }));
 
+// mock-isolation: Completion credential binding uses the fixture store without loading host profiles.
 vi.mock("./auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: hoisted.ensureAuthProfileStoreMock,
+  ensureAuthProfileStoreAsync: hoisted.ensureAuthProfileStoreMock,
 }));
 
 vi.mock("./auth-profiles/usage.js", () => ({

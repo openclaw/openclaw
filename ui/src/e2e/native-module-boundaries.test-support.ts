@@ -103,7 +103,8 @@ export function defineNativeModuleBoundaryTests(
         } else if (action === "Escape") {
           await page.keyboard.press("Escape");
         } else {
-          await page.getByRole("button", { name: "Collapse sidebar" }).click();
+          const collapse = page.locator('[data-navigation-view][aria-pressed="true"]');
+          await collapse.click();
           await expect
             .poll(() => page.getByRole("button", { name: "Expand sidebar" }).isVisible())
             .toBe(true);
@@ -112,9 +113,7 @@ export function defineNativeModuleBoundaryTests(
           await page.evaluate(() => {
             window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
           });
-          await expect
-            .poll(() => page.getByRole("button", { name: "Collapse sidebar" }).isVisible())
-            .toBe(true);
+          await expect.poll(() => collapse.isVisible()).toBe(true);
           if (action === "replacement open") {
             await inbox.click();
           }

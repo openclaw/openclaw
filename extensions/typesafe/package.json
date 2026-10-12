@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/typesafe",
-  "version": "2026.9.9",
+  "version": "2026.10.1",
   "description": "OpenClaw TypeSafe typed decision provider",
   "repository": {
     "type": "git",
@@ -24,11 +24,11 @@
       "minHostVersion": ">=2026.9.6"
     },
     "compat": {
-      "pluginApi": ">=2026.9.9"
+      "pluginApi": ">=2026.10.1"
     },
     "build": {
       "bundledDist": false,
-      "openclawVersion": "2026.9.9"
+      "openclawVersion": "2026.10.1"
     },
     "release": {
       "publishToClawHub": true,

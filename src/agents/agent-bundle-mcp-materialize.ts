@@ -82,7 +82,7 @@ function buildAppToolPolicyProjections(params: {
       name,
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
-      parameters: normalizeToolParameterSchema(tool.inputSchema),
+      parameters: normalizeToolParameterSchema(tool.inputSchema, { toolName: name }),
       execute: async () => {
         throw new Error("MCP App policy projections cannot execute tools");
       },
@@ -231,7 +231,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
       name: safeToolName,
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
-      parameters: normalizeToolParameterSchema(tool.inputSchema),
+      parameters: normalizeToolParameterSchema(tool.inputSchema, { toolName: safeToolName }),
       executionMode,
       ...(params.createExecute && !sessionDeniedOnly
         ? { resultContentSource: "network" as const }
@@ -427,6 +427,21 @@ export async function materializeBundleMcpToolsForRun(params: {
       : undefined;
     const materializedCatalog = mergeMcpConnectCatalog(catalog, runtime.requesterConnect);
     const getPrompt = runtime.getPrompt?.bind(runtime);
+    const createListExecute = (
+      method: "listResources" | "listPrompts",
+      operation: "resources_list" | "prompts_list",
+    ): ((serverName: string) => AnyAgentTool["execute"]) | undefined =>
+      runtime[method]
+        ? (serverName) => (_toolCallId, _input, signal) =>
+            runWithSessionMcpRequestSignal(signal, async () => {
+              runtime.markUsed();
+              return toJsonAgentToolResult({
+                serverName,
+                operation,
+                value: await runtime[method]?.(serverName),
+              });
+            })
+        : undefined;
     const tools = buildBundleMcpToolsFromCatalog({
       catalog: materializedCatalog,
       reservedToolNames,
@@ -552,17 +567,7 @@ export async function materializeBundleMcpToolsForRun(params: {
           }
           return agentResult;
         }),
-      createResourceListExecute: runtime.listResources
-        ? (serverName) => (_toolCallId, _input, signal) =>
-            runWithSessionMcpRequestSignal(signal, async () => {
-              runtime.markUsed();
-              return toJsonAgentToolResult({
-                serverName,
-                operation: "resources_list",
-                value: await runtime.listResources?.(serverName),
-              });
-            })
-        : undefined,
+      createResourceListExecute: createListExecute("listResources", "resources_list"),
       createResourceReadExecute: runtime.readResource
         ? (serverName) => (_toolCallId: string, input: unknown, signal?: AbortSignal) =>
             runWithSessionMcpRequestSignal(signal, async () => {
@@ -575,17 +580,7 @@ export async function materializeBundleMcpToolsForRun(params: {
               });
             })
         : undefined,
-      createPromptListExecute: runtime.listPrompts
-        ? (serverName) => (_toolCallId, _input, signal) =>
-            runWithSessionMcpRequestSignal(signal, async () => {
-              runtime.markUsed();
-              return toJsonAgentToolResult({
-                serverName,
-                operation: "prompts_list",
-                value: await runtime.listPrompts?.(serverName),
-              });
-            })
-        : undefined,
+      createPromptListExecute: createListExecute("listPrompts", "prompts_list"),
       createPromptGetExecute: getPrompt
         ? (serverName) => (_toolCallId: string, input: unknown, signal?: AbortSignal) =>
             runWithSessionMcpRequestSignal(signal, async () => {

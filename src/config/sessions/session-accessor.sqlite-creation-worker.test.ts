@@ -49,7 +49,7 @@ import { recordSessionParticipant } from "./session-accessor.sqlite-participants
 import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 
@@ -140,7 +140,7 @@ it("creates through an admitted store alias with prepared facts and atomic owner
     const originalStateDir = env.OPENCLAW_STATE_DIR;
     const order: string[] = [];
     const publications: Array<ReturnType<typeof readPreparedSessionEntryChange>> = [];
-    const stopFacts = sessionChanges.subscribeFacts((change) => {
+    const stopProjection = sessionChanges.subscribeProjection((change) => {
       if ("sessionKey" in change && change.sessionKey === key) {
         publications.push(readPreparedSessionEntryChange(change, key));
       }
@@ -262,7 +262,7 @@ it("creates through an admitted store alias with prepared facts and atomic owner
     } finally {
       prepared.release();
       sql.restore();
-      stopFacts();
+      stopProjection();
       stop();
     }
     expect(order).toEqual(["committed", "published", "registered"]);

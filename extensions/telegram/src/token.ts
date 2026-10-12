@@ -12,6 +12,7 @@ import {
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/secret-ref-readonly";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultTelegramAccountId } from "./account-selection.js";
 
 type CredentialUnavailableDiagnostic = Extract<
@@ -135,19 +136,15 @@ export function resolveTelegramToken(
 
   // Unknown accounts may inherit the single-bot token, but must not select
   // another bot's credentials in a multi-bot setup (#53876).
-  if (accountId !== DEFAULT_ACCOUNT_ID && !accountCfg) {
-    const accounts = telegramCfg?.accounts;
-    const hasConfiguredAccounts =
-      Boolean(accounts) &&
-      typeof accounts === "object" &&
-      !Array.isArray(accounts) &&
-      Object.keys(accounts).length > 0;
-    if (hasConfiguredAccounts) {
-      opts.logMissingFile?.(
-        `channels.telegram.accounts: unknown accountId "${accountId}" — not found in config, refusing channel-level fallback`,
-      );
-      return { token: "", source: "none" };
-    }
+  if (
+    accountId !== DEFAULT_ACCOUNT_ID &&
+    !accountCfg &&
+    Object.keys(asNonArrayRecord(telegramCfg?.accounts)).length > 0
+  ) {
+    opts.logMissingFile?.(
+      `channels.telegram.accounts: unknown accountId "${accountId}" — not found in config, refusing channel-level fallback`,
+    );
+    return { token: "", source: "none" };
   }
 
   for (const { config, path } of [

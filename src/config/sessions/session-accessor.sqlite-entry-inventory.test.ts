@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, expect, it } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -39,10 +39,14 @@ it("counts mixed validated and raw entries with the same archive filter", async 
       "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
     )
     .run("agent:main:invalid", "invalid", "{");
-  expect(readSessionEntryCount(database)).toBe(4);
+  {
+    using transactionSql = vi.spyOn(database.db, "exec");
+    expect(readSessionEntryCount(database)).toBe(4);
+    expect(transactionSql).not.toHaveBeenCalled();
+  }
   expect(readSessionEntryCount(database, { includeArchived: false })).toBe(2);
   database.db
-    .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+    .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?")
     .run("{}", "agent:main:validated-false");
   expect(readSessionEntryCount(database)).toBe(3);
   expect(readSessionEntryCount(database, { includeArchived: false })).toBe(1);

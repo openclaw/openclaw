@@ -770,12 +770,19 @@ describe("diagnostic-events", () => {
       delayMaxMs: 1_500,
     });
     emitInternalDiagnosticEvent({ type: "diagnostic.gc", durationMs: 25 });
+    emitInternalDiagnosticEvent({ type: "gateway.http.cancelled", source: "client" });
+    expect(internalEvents).toStrictEqual([]);
 
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
     expect(publicEvents).toStrictEqual([]);
-    expect(internalEvents).toEqual(["log.record", "gateway.event_loop.sample", "diagnostic.gc"]);
+    expect(internalEvents).toEqual([
+      "log.record",
+      "gateway.event_loop.sample",
+      "diagnostic.gc",
+      "gateway.http.cancelled",
+    ]);
   });
 });
 

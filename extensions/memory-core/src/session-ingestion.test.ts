@@ -43,14 +43,17 @@ describe("session ingestion", () => {
     "excludes %s sessions from memory ingestion",
     (sessionKind) => {
       expect(
-        sessionIngestionSourceFromCorpus({
-          agentId: "main",
-          artifactKind: "active-session",
-          transcriptSource: "sqlite",
-          sessionFile: "synthetic-session",
-          sessionId: "synthetic-session",
-          sessionKind,
-        }),
+        sessionIngestionSourceFromCorpus(
+          {
+            agentId: "main",
+            artifactKind: "active-session",
+            transcriptSource: "sqlite",
+            sessionFile: "synthetic-session",
+            sessionId: "synthetic-session",
+            sessionKind,
+          },
+          "backfill",
+        ),
       ).toBeNull();
     },
   );
@@ -71,16 +74,19 @@ describe("session ingestion", () => {
         sessionKey,
         entry: { sessionId, updatedAt: 1_000, hookExternalContentSource },
       });
-      const source = sessionIngestionSourceFromCorpus({
-        agentId: "main",
-        artifactKind: "active-session",
-        transcriptSource: "sqlite",
-        sessionFile: sessionKey,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionKind: "interactive",
-      });
+      const source = sessionIngestionSourceFromCorpus(
+        {
+          agentId: "main",
+          artifactKind: "active-session",
+          transcriptSource: "sqlite",
+          sessionFile: sessionKey,
+          sessionId,
+          sessionKey,
+          storePath,
+          sessionKind: "interactive",
+        },
+        "backfill",
+      );
       expect(source).not.toBeNull();
       if (!source) {
         throw new Error("Interactive source was not available");
@@ -111,13 +117,16 @@ describe("session ingestion", () => {
       sessionId: `oversized-${"x".repeat(300)}`,
     },
   ])("preserves file-backed scope identity for $name", ({ sessionFile, sessionId }) => {
-    const source = sessionIngestionSourceFromCorpus({
-      agentId: "main",
-      artifactKind: "active-session",
-      sessionFile,
-      sessionId,
-      sessionKind: "interactive",
-    });
+    const source = sessionIngestionSourceFromCorpus(
+      {
+        agentId: "main",
+        artifactKind: "active-session",
+        sessionFile,
+        sessionId,
+        sessionKind: "interactive",
+      },
+      "backfill",
+    );
 
     expect(source?.scope).toBe(`main:${sessionId}`);
     expect(source?.sessionOrigin).toEqual({ agentId: "main", sessionId });

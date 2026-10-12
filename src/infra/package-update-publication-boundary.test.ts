@@ -19,7 +19,10 @@ import {
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
 import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
-import { assertNoPendingPackageActivation } from "./package-update-activation.js";
+import {
+  assertNoPendingPackageActivation,
+  runPackageActivationRecovery,
+} from "./package-update-activation.js";
 import * as packageFilesystem from "./package-update-filesystem.js";
 import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
 import { createPublicationOwner } from "./package-update-publication-owner.js";
@@ -135,7 +138,7 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
           { name: "openclaw", identity: packageActivationIdentity(f.launcher, "launcher") },
         ]);
         expect(transaction).toBeDefined();
-        expect(reads).toEqual({ previous: 2, candidate: 4 });
+        expect(reads).toEqual({ previous: 2, candidate: 1 });
         if (retirement === "replacement") {
           const obsolete = path.join(anchor, "previous");
           const retained = path.join(root, "retained-previous");
@@ -168,7 +171,7 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
           // Once the candidate is verified, obsolete backup bytes are not rollback input.
           fs.writeFileSync(path.join(anchor, "previous", "previous.payload"), "obsolete bytes");
           await transaction!.complete({ activationVerified: true }, fence.assertCurrent);
-          expect(reads).toEqual({ previous: 2, candidate: 5 });
+          expect(reads).toEqual({ previous: 2, candidate: 1 });
           expect(fs.existsSync(anchor)).toBe(false);
           // A completed transaction stays cached even after its one-slot receipt
           // is reused by another publication under the same executor.
@@ -204,12 +207,11 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
 );
 
 it.skipIf(process.platform === "win32").each(["activation", "publication", "retirement"] as const)(
-  "refuses metadata-preserving candidate byte changes at %s",
+  "detects same-window candidate drift only when recovery reopens %s",
   (boundary) =>
     fixtures.lifetime.run(async () => {
       const f = await createPackageSwapFixture(root);
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
-      const previousIdentity = packageActivationIdentity(f.packageRoot, true);
       const name = "mapped.payload";
       const staged = path.join(f.params.stage.packageRoot, name);
       fs.writeFileSync(staged, "previous bytes");
@@ -260,33 +262,24 @@ it.skipIf(process.platform === "win32").each(["activation", "publication", "reti
             transaction = issued;
           },
         });
+        expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
+        expect(transaction).toBeDefined();
         if (boundary === "retirement") {
-          expect(result.status).toBe("committed");
           change(f.packageRoot);
-          await expect(
-            transaction!.complete({ activationVerified: true }, fence.assertCurrent),
-          ).rejects.toThrow("Package publication object changed");
-        } else {
-          expect(result.status).toBe("failed");
-          expect(result.step.stderrTail).toContain("Package publication object changed");
         }
-        expect(changedBytesRead).toBe(true);
-        if (boundary === "activation") {
-          expect(packageActivationIdentity(f.packageRoot, true)).toBe(previousIdentity);
-          expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
-          expect(fs.existsSync(path.join(anchor, "previous"))).toBe(false);
-        }
-        const previous = fs.existsSync(path.join(anchor, "previous"))
-          ? path.join(anchor, "previous")
-          : f.packageRoot;
-        expect(fs.readFileSync(path.join(previous, "package.json"), "utf8")).toContain(
-          '"version":"1.0.0"',
-        );
-        const candidate =
-          boundary === "activation" ? path.join(anchor, "candidate") : f.packageRoot;
-        expect(fs.readFileSync(path.join(candidate, name), "utf8")).toBe("modified bytes");
-        expect(await fsp.lstat(path.join(candidate, name), { bigint: true })).toEqual(unchanged);
+        expect(changedBytesRead).toBe(false);
       });
+      const record = openPackageActivationJournal(anchor).read();
+      await expect(
+        runPackageActivationRecovery(anchor, "retire", record.descriptor.operationId),
+      ).rejects.toThrow("Package publication object changed");
+      expect(changedBytesRead).toBe(true);
+      expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+      expect(fs.readFileSync(path.join(anchor, "previous", "package.json"), "utf8")).toContain(
+        '"version":"1.0.0"',
+      );
+      expect(fs.readFileSync(path.join(f.packageRoot, name), "utf8")).toBe("modified bytes");
+      expect(await fsp.lstat(path.join(f.packageRoot, name), { bigint: true })).toEqual(unchanged);
     }),
 );
 

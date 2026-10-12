@@ -8,11 +8,9 @@ import {
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
-import {
-  createControlUiPublicSessionRequestGate,
-  type ControlUiPublicSessionRequestGate,
-} from "./control-ui-public-session-admission.js";
+import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
 import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
+import { PUBLIC_SESSION_CONTENT_SECURITY_POLICY } from "./control-ui-public-session-render.js";
 import { resolveControlUiShareOrigin } from "./control-ui-share.js";
 import type { GatewayAttributedIngress } from "./ingress-attribution.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -21,24 +19,26 @@ export function isControlUiPublicSessionPath(pathname: string, basePath: string)
   return pathname === `${basePath}/share/session`;
 }
 
-async function serveControlUiPublicSession(
-  req: IncomingMessage,
-  res: ServerResponse,
-  url: URL,
-  basePath: string,
-  cfg: OpenClawConfig | undefined,
-  requestGate: ControlUiPublicSessionRequestGate,
-  clientKey: string,
-  secureIngress: boolean,
-  publicOrigin?: string,
-  projection?: SessionRowProjection,
-): Promise<void> {
+export async function serveControlUiPublicSession(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  basePath: string;
+  config: OpenClawConfig;
+  ingress: GatewayAttributedIngress;
+  projection?: SessionRowProjection;
+  gate: ControlUiPublicSessionRequestGate;
+}): Promise<true> {
+  const { req, res, basePath, config: cfg, projection, gate: requestGate } = params;
+  const url = req.url ? new URL(req.url, "http://localhost") : undefined;
+  if (!url) {
+    respondNotFound(res);
+    return true;
+  }
+  const publicOrigin = resolveGatewayPublicOrigin(cfg);
+  const secureIngress = isSecurePublicSessionIngress(req, params.ingress, publicOrigin);
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
-  res.setHeader(
-    "Content-Security-Policy",
-    "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
-  );
+  res.setHeader("Content-Security-Policy", PUBLIC_SESSION_CONTENT_SECURITY_POLICY);
   const unavailable = (status: 404 | 429 | 503, retryAfterSeconds = 1) => {
     const body =
       status === 404
@@ -53,6 +53,7 @@ async function serveControlUiPublicSession(
       res.setHeader("Retry-After", String(retryAfterSeconds));
     }
     res.end(req.method === "HEAD" ? undefined : body);
+    return true as const;
   };
   const publicShare = parseControlUiPublicSessionShareUrl(url, basePath);
   const origin = resolveControlUiShareOrigin(req, publicOrigin);
@@ -66,12 +67,10 @@ async function serveControlUiPublicSession(
     url.searchParams.getAll("offset").length > 1 ||
     !/^(?:0|[1-9][0-9]{0,9})$/u.test(offsetText)
   ) {
-    unavailable(404);
-    return;
+    return unavailable(404);
   }
   if (!secureIngress) {
-    unavailable(404);
-    return;
+    return unavailable(404);
   }
   // A truthful HEAD would still need authorization, transcript I/O, redaction, and
   // rendering to compute the GET status and length. Refuse it instead of doing that work.
@@ -80,137 +79,46 @@ async function serveControlUiPublicSession(
     res.setHeader("Allow", "GET");
     res.setHeader("Content-Length", "0");
     res.end();
-    return;
+    return true;
   }
-  const clientAdmission = requestGate.admitClient(clientKey);
+  const clientAdmission = requestGate.admitClient(params.ingress.rateLimit.subject.key);
   if (clientAdmission.kind === "rate-limited") {
-    unavailable(429, clientAdmission.retryAfterSeconds);
-    return;
+    return unavailable(429, clientAdmission.retryAfterSeconds);
   }
   try {
     const { resolvePublicSessionShareToken } = await import("./control-ui-public-session-token.js");
     const locator = await resolvePublicSessionShareToken(publicShare.token);
     if (!locator) {
-      unavailable(404);
-      return;
+      return unavailable(404);
     }
     if (!projection) {
-      unavailable(503);
-      return;
+      return unavailable(503);
     }
-    const { isPublicSessionShareActive, readPublicSessionShare } =
-      await import("./control-ui-public-session-read.js");
-    const { renderPublicSessionDocument } = await import("./control-ui-public-session-render.js");
-    const { withReadySessionRows } = await import("./session-row-prepared-read.js");
-    const admitted = await requestGate.run({
-      publicationKey: locator.shareId,
-      sessionKey: locator.sessionKey,
+    const { servePublicSessionRepresentation } =
+      await import("./control-ui-public-session-response.js");
+    const latestUrl = buildControlUiPublicSessionSharePath({ basePath, token: publicShare.token });
+    const canonicalUrl =
+      publicOrigin || req.socket instanceof TLSSocket ? `${origin}${latestUrl}` : undefined;
+    return await servePublicSessionRepresentation({
+      ...params,
+      locator,
+      projection,
+      offset,
       requestKey: JSON.stringify([
         createHash("sha256").update(publicShare.token).digest("base64url"),
         offset,
         origin,
       ]),
-      config: cfg,
-      work: async () => {
-        const session = await readPublicSessionShare(cfg, locator, { offset, projection });
-        if (!session) {
-          return null;
-        }
-        const latestUrl = buildControlUiPublicSessionSharePath({
-          basePath,
-          token: publicShare.token,
-        });
-        const canonicalUrl =
-          publicOrigin || req.socket instanceof TLSSocket ? `${origin}${latestUrl}` : undefined;
-        return renderPublicSessionDocument({
-          ...session,
-          latestUrl,
-          ...(canonicalUrl ? { canonicalUrl } : {}),
-          isLatest: offset === 0,
-          ...(session.olderOffset !== undefined
-            ? { olderUrl: `${latestUrl}&offset=${session.olderOffset}` }
-            : {}),
-          cardUrl: `${origin}${basePath}/share/card.png`,
-        });
+      document: {
+        latestUrl,
+        canonicalUrl,
+        assetBasePath: basePath,
+        cardUrl: `${origin}${basePath}/share/card.png`,
       },
+      olderUrl: (olderOffset) => `${latestUrl}&offset=${olderOffset}`,
+      unavailable,
     });
-    if (admitted.kind === "rate-limited") {
-      unavailable(429, admitted.retryAfterSeconds);
-      return;
-    }
-    if (admitted.kind === "unavailable") {
-      unavailable(503);
-      return;
-    }
-    await withReadySessionRows(
-      projection,
-      () => [{ key: locator.sessionKey, agentId: locator.agentId }],
-      () => {
-        const representation = admitted.value;
-        if (!representation || !isPublicSessionShareActive(cfg, locator, projection)) {
-          unavailable(404);
-          return;
-        }
-        if (!representation.isCurrent()) {
-          unavailable(503);
-          return;
-        }
-        const { body, etag } = representation;
-        res.setHeader("ETag", etag);
-        if (req.headers["if-none-match"] === etag) {
-          res.statusCode = 304;
-          res.end();
-          return;
-        }
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.setHeader("Content-Length", Buffer.byteLength(body));
-        res.end(body);
-      },
-    );
   } catch {
-    unavailable(503);
+    return unavailable(503);
   }
-}
-
-export function createControlUiPublicSessionRoute(
-  requestGate = createControlUiPublicSessionRequestGate(),
-) {
-  return {
-    matches: isControlUiPublicSessionPath,
-    dispose: () => requestGate.dispose(),
-    reject(res: ServerResponse): true {
-      respondNotFound(res);
-      return true;
-    },
-    async serve(params: {
-      req: IncomingMessage;
-      res: ServerResponse;
-      basePath: string;
-      config: OpenClawConfig;
-      ingress: GatewayAttributedIngress;
-      projection?: SessionRowProjection;
-    }): Promise<true> {
-      const url = params.req.url ? new URL(params.req.url, "http://localhost") : undefined;
-      if (!url) {
-        respondNotFound(params.res);
-        return true;
-      }
-      const publicOrigin = resolveGatewayPublicOrigin(params.config);
-      const secureIngress = isSecurePublicSessionIngress(params.req, params.ingress, publicOrigin);
-      await serveControlUiPublicSession(
-        params.req,
-        params.res,
-        url,
-        params.basePath,
-        params.config,
-        requestGate,
-        params.ingress.rateLimit.subject.key,
-        secureIngress,
-        publicOrigin,
-        params.projection,
-      );
-      return true;
-    },
-  };
 }

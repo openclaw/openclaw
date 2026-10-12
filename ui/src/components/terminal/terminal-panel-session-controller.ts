@@ -195,7 +195,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
   scheduleLifecycleSync(): void {
     const token = ++this.lifecycleSyncToken;
     const generation = this.lifecycleGeneration;
-    // State teardown inside Lit's updated hook schedules a nested update.
+    // State teardown during the render commit can schedule a nested update.
     // Defer it; token + generation reject superseded connection epochs.
     queueMicrotask(() => {
       if (

@@ -18,13 +18,19 @@ Sub-agents report back through completion delivery:
 
 By default, delivery depends on requester depth:
 
-- Top-level requester sessions use a follow-up `agent` call with external delivery (`deliver=true`).
+- Top-level requester sessions use a follow-up `agent` call. External conversations use `deliver=true`; WebChat conversations stay in-session with `deliver=false`.
 - Nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session.
 - If a nested requester subagent session is gone, OpenClaw falls back to that session's requester when available.
 
+The requester turn's captured origin owns completion routing, including after
+`sessions_yield` and for child pause notices. A WebChat origin does not inherit a
+previous external destination from the session. Without a captured origin, the
+stored delivery route remains the fallback; explicit external routing remains
+supported without clearing that history.
+
 For top-level requester sessions, completion-mode direct delivery first
 resolves any bound conversation/thread route and hook override, then fills
-missing channel-target fields from the requester session's stored route.
+missing channel-target fields from the requester's origin and compatible stored route.
 That keeps completions on the right chat/topic even when the completion
 origin only identifies the channel. When an override selects a different
 chat or topic, it does not inherit the previous route's thread. An explicit
@@ -175,5 +181,5 @@ transcript from within an agent turn:
 - Truncates long text blocks (4000 chars per block) and drops thinking signatures, reasoning replay payloads, and inline image data.
 - Caps returned messages at 80 KB; older rows can be dropped or an oversized row replaced with `[sessions_history omitted: message too large]`.
 - Use `nextOffset` when present to page backward through older transcript windows.
-- Returns structured history rather than `/subagents log`'s plain chat lines. Reasoning tags, `<relevant-memories>` / `<relevant_memories>` scaffolding, and tool-call XML can remain in message text: `sessions_history` does not apply the log command's assistant prose sanitizer. See [Session tools](/concepts/session-tool#listing-and-reading-sessions) for the recall guarantees.
+- Returns structured history rather than `/subagents log`'s plain chat lines. Reasoning tags, `<relevant-memories>` / `<relevant_memories>` wrappers, and tool-call XML can remain in message text: `sessions_history` does not apply the log command's assistant prose sanitizer. See [Session tools](/concepts/session-tool#listing-and-reading-sessions) for the recall guarantees.
 - Raw on-disk transcript inspection is the fallback when you need the full byte-for-byte transcript.

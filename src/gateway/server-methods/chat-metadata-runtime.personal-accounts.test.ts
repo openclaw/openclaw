@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { copyFileSync, renameSync, rmSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, test, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
@@ -14,6 +16,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { holdForeignWriter } from "../../infra/sqlite-worker-shared-state-admission.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import * as accountOperations from "../../state/user-model-account-operations.js";
@@ -21,7 +24,13 @@ import {
   clearUserProfileAuthLink,
   listUserProfileAuthLinks,
 } from "../../state/user-model-accounts.js";
+import {
+  ensureCanonicalUserProfileForEmail,
+  mergeCanonicalUserProfiles,
+  setCanonicalUserProfileDisplayName,
+} from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { forbidMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   connectChatMetadataAccount,
@@ -115,9 +124,9 @@ describe("gateway chat metadata personal accounts", () => {
       const viewer = ensureProfileForEmail("viewer@example.test");
       const authProfileId = connectChatMetadataAccount(owner.id);
       let requesterProfileId = owner.id;
-      const readSummary = accountOperations.readUserModelAccountSummaryAsync;
+      const readSummary = accountOperations.readUserModelAccountSelectionAsync;
       const summaryRead = vi
-        .spyOn(accountOperations, "readUserModelAccountSummaryAsync")
+        .spyOn(accountOperations, "readUserModelAccountSelectionAsync")
         .mockImplementationOnce(async (...args) => {
           const summary = await readSummary(...args);
           requesterProfileId = viewer.id;
@@ -138,6 +147,107 @@ describe("gateway chat metadata personal accounts", () => {
       }
     });
   });
+
+  test("prepares cold, merged, missing and foreign-updated account labels without host SQL", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      const harness = createChatMetadataHarness();
+      const owner = await ensureCanonicalUserProfileForEmail("label-owner@example.test");
+      const viewer = await ensureCanonicalUserProfileForEmail("label-viewer@example.test");
+      const successor = await ensureCanonicalUserProfileForEmail("label-successor@example.test");
+      await setCanonicalUserProfileDisplayName(owner.id, "Original");
+      await setCanonicalUserProfileDisplayName(successor.id, "Successor");
+      const { authProfileId } = await accountOperations.connectUserModelAccountAsync({
+        ownerProfileId: owner.id,
+        credential: { type: "token", provider: "test", token: "synthetic-private-label-token" },
+        assertCurrent() {},
+      });
+      const read = async (selected = authProfileId) => {
+        const sql = forbidMainThreadSql("account label queried host SQLite");
+        try {
+          return (
+            await harness.runtime.readStartup({
+              agentId: "main",
+              sessionEntry: { authProfileOverride: selected, authProfileOverrideSource: "user" },
+              readRequesterProfileId: () => viewer.id,
+            })
+          )?.metadata?.accountSelection;
+        } finally {
+          sql.restore();
+        }
+      };
+      const label = (name?: string) => ({
+        kind: "personal",
+        label: name ? `${name}'s account` : "Personal account",
+        source: "user",
+      });
+      try {
+        await harness.runtime.refresh();
+        expect(await read()).toEqual(label("Original"));
+        await mergeCanonicalUserProfiles(owner.id, successor.id);
+        expect(await read()).toEqual(label("Successor"));
+        const foreign = new DatabaseSync(resolveOpenClawStateSqlitePath());
+        try {
+          foreign
+            .prepare("UPDATE user_profiles SET display_name = ? WHERE id = ?")
+            .run("Foreign", successor.id);
+          expect(await read()).toEqual(label("Foreign"));
+        } finally {
+          foreign.close();
+        }
+        expect(await read(`personal:${randomUUID()}:${randomUUID()}`)).toEqual(label());
+      } finally {
+        await harness.runtime.stop();
+      }
+    });
+  });
+
+  test.each(["display", "physical source"])(
+    "refuses a changed %s while its label reply is pending",
+    async (change) => {
+      await withOpenClawTestState({ layout: "state-only" }, async () => {
+        const harness = createChatMetadataHarness();
+        const owner = await ensureCanonicalUserProfileForEmail("stale-label@example.test");
+        await setCanonicalUserProfileDisplayName(owner.id, "Before");
+        const readSelection = accountOperations.readUserModelAccountSelectionAsync;
+        let restoreSource: (() => void) | undefined;
+        const selectionRead = vi
+          .spyOn(accountOperations, "readUserModelAccountSelectionAsync")
+          .mockImplementationOnce(async (...args) => {
+            const selection = await readSelection(...args);
+            if (change === "display") {
+              await setCanonicalUserProfileDisplayName(owner.id, "After");
+            } else {
+              const pathname = resolveOpenClawStateSqlitePath();
+              const original = `${pathname}.original`;
+              renameSync(pathname, original);
+              restoreSource = () => {
+                rmSync(pathname, { force: true });
+                renameSync(original, pathname);
+              };
+              copyFileSync(original, pathname);
+            }
+            return selection;
+          });
+        try {
+          await harness.runtime.refresh();
+          await expect(
+            harness.runtime.readStartup({
+              agentId: "main",
+              sessionEntry: { authProfileOverride: `personal:${owner.id}:${randomUUID()}` },
+            }),
+          ).rejects.toThrow(
+            change === "display"
+              ? "Personal account changed while preparing its metadata"
+              : "SQLite database file identity changed",
+          );
+        } finally {
+          selectionRead.mockRestore();
+          restoreSource?.();
+          await harness.runtime.stop();
+        }
+      });
+    },
+  );
 
   test("reads the startup requester after personal metadata preparation", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async () => {

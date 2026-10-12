@@ -275,6 +275,59 @@ describe("unavailable plugin migration owners", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "retains the blocked-path diagnosis after Doctor settles migration receipts",
+    async () => {
+      await withHome(async (home) => {
+        const pluginId = "blocked-owner-fixture";
+        const pluginPath = path.join(home, "local-plugin");
+        await fs.mkdir(pluginPath);
+        await fs.writeFile(
+          path.join(pluginPath, "openclaw.plugin.json"),
+          JSON.stringify({ id: pluginId, configSchema: { type: "object" } }),
+        );
+        await fs.writeFile(
+          path.join(pluginPath, "index.js"),
+          "throw new Error('must not execute');\n",
+        );
+        await fs.chmod(pluginPath, 0o777);
+        try {
+          await writeOpenClawConfig(home, {
+            gateway: { mode: "local" },
+            plugins: {
+              load: { paths: [pluginPath] },
+              entries: { [pluginId]: { enabled: true, config: { retained: "authored" } } },
+            },
+          });
+          await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+            const result = await runDoctorConfigPreflight(options);
+            const pending = readDeferredPluginMigrations().find(
+              (entry) => entry.pluginId === pluginId,
+            );
+            expect(pending).toMatchObject({
+              reason: expect.stringContaining("present but blocked"),
+              command: "openclaw doctor --fix",
+            });
+            expect(pending?.reason).not.toContain("Install or enable");
+            expect(result.snapshot.sourceConfig.plugins?.entries?.[pluginId]).toEqual({
+              enabled: true,
+              config: { retained: "authored" },
+            });
+            expect(result.stateMigrationStepReceipts).toContainEqual(
+              expect.objectContaining({
+                id: "plugin:blocked-owner-fixture",
+                outcome: "deferred",
+                warnings: [expect.stringContaining("present but blocked")],
+              }),
+            );
+          });
+        } finally {
+          await fs.chmod(pluginPath, 0o755);
+        }
+      });
+    },
+  );
+
   it("keeps retained values and tells Doctor which unavailable plugin to install or enable", async () => {
     await withHome(async (home) => {
       const pluginId = "webhooks";

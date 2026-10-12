@@ -7,7 +7,7 @@ import {
   resolveConfiguredAgentId,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { throwExpectedCliError } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -67,10 +67,6 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
   return opts;
 }
 
-function throwTrajectoryExportError(message: string): never {
-  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
-}
-
 /** Resolves the requested session and exports its trajectory summary or JSON result. */
 export async function exportTrajectoryCommand(
   opts: ExportTrajectoryCommandOptions,
@@ -82,22 +78,22 @@ export async function exportTrajectoryCommand(
       ? { ...opts, ...decodeExportTrajectoryRequest(opts.requestJsonBase64) }
       : opts;
   } catch (error) {
-    throwTrajectoryExportError(
+    throwExpectedCliError(
       `Failed to decode trajectory export request: ${formatErrorMessage(error)}`,
     );
   }
   const sessionKey = resolvedOpts.sessionKey?.trim();
   if (!sessionKey) {
-    throwTrajectoryExportError(
+    throwExpectedCliError(
       `--session-key is required. Run ${formatCliCommand("openclaw sessions")} to choose a session.`,
     );
   }
   const requestedAgent = resolvedOpts.agent?.trim();
   if (resolvedOpts.agent !== undefined && !requestedAgent) {
-    throwTrajectoryExportError("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   if (resolvedOpts.store !== undefined && !resolvedOpts.store.trim()) {
-    throwTrajectoryExportError("--store must not be blank");
+    throwExpectedCliError("--store must not be blank");
   }
   let targetAgentId: string;
   try {
@@ -110,7 +106,7 @@ export async function exportTrajectoryCommand(
             : undefined,
         );
   } catch (error) {
-    throwTrajectoryExportError(formatErrorMessage(error));
+    throwExpectedCliError(formatErrorMessage(error));
   }
   let storePath = resolvedOpts.store
     ? resolveSessionStorePathCore(resolvedOpts.store, { agentId: targetAgentId })
@@ -123,7 +119,7 @@ export async function exportTrajectoryCommand(
         agentId: targetAgentId,
       });
     } catch (error) {
-      throwTrajectoryExportError(formatErrorMessage(error));
+      throwExpectedCliError(formatErrorMessage(error));
     }
   }
   // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
@@ -133,7 +129,7 @@ export async function exportTrajectoryCommand(
     storePath,
   });
   if (!entry?.sessionId) {
-    throwTrajectoryExportError(
+    throwExpectedCliError(
       `Session not found: ${sessionKey}. Run ${formatCliCommand("openclaw sessions")} to see available sessions.`,
     );
   }
@@ -148,7 +144,7 @@ export async function exportTrajectoryCommand(
       storePath,
     });
   } catch (error) {
-    throwTrajectoryExportError(`Failed to resolve session file: ${formatErrorMessage(error)}`);
+    throwExpectedCliError(`Failed to resolve session file: ${formatErrorMessage(error)}`);
   }
   let summary: TrajectoryCommandExportSummary;
   try {
@@ -165,7 +161,7 @@ export async function exportTrajectoryCommand(
       workspaceDir: path.resolve(resolvedOpts.workspace ?? process.cwd()),
     });
   } catch (error) {
-    throwTrajectoryExportError(`Failed to export trajectory: ${formatErrorMessage(error)}`);
+    throwExpectedCliError(`Failed to export trajectory: ${formatErrorMessage(error)}`);
   }
 
   if (resolvedOpts.json) {

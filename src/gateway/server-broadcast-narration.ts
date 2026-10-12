@@ -29,7 +29,6 @@ type NarrationState = {
   last?: SessionNarrationEvent;
   pending?: PendingNarration;
   timer?: ReturnType<typeof setTimeout>;
-  retirePending?: () => void;
 };
 type ConnectionNarration = {
   socket: GatewayWsClient["socket"];
@@ -51,7 +50,6 @@ export function createGatewayNarrationDelivery(params: {
 }) {
   const connections = new WeakMap<GatewayWsClient, ConnectionNarration>();
   const projections = new WeakMap<object, NarrationProjection>();
-  const groups = new WeakMap<AbortSignal, Set<NarrationState>>();
   const subscribers = params.sessionMessageSubscribers;
 
   const isNarration = (connId: string, keys: readonly string[]) => {
@@ -69,8 +67,6 @@ export function createGatewayNarrationDelivery(params: {
   const cancelPending = (state: NarrationState) => {
     clearTimeout(state.timer);
     state.timer = undefined;
-    state.retirePending?.();
-    state.retirePending = undefined;
     state.pending = undefined;
   };
   const connectionFor = (client: GatewayWsClient) => {
@@ -259,31 +255,7 @@ export function createGatewayNarrationDelivery(params: {
       state.subscriptionKeys = sessionKeys;
       connection.sessions.set(key, state);
       if (isRecord(payload.message)) {
-        state.retirePending?.();
-        state.retirePending = undefined;
         state.pending = { payload, projection, sessionKeys, opts };
-        const signal = opts?.liveText?.group;
-        if (signal) {
-          let states = groups.get(signal);
-          if (!states) {
-            states = new Set();
-            groups.set(signal, states);
-            const pendingStates = states;
-            signal.addEventListener(
-              "abort",
-              () => {
-                for (const pending of pendingStates) {
-                  cancelPending(pending);
-                }
-                groups.delete(signal);
-              },
-              { once: true },
-            );
-          }
-          states.add(state);
-          const pendingStates = states;
-          state.retirePending = () => pendingStates.delete(state);
-        }
       }
       if (terminal) {
         if (state.pending?.payload.runId === payload.runId) {

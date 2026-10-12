@@ -180,6 +180,23 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
 
     Non-`off` thinking levels send `enable_thinking: true`. If your endpoint expects DashScope-style top-level flags instead, use `compat.thinkingFormat: "qwen"` to send `enable_thinking` at the request root.
 
+    If your served template accepts effort levels, declare them in `compat.supportedReasoningEfforts`, for example `["low", "medium", "xhigh"]`. OpenClaw then exposes those `/think` choices plus `off`. The shared reasoning resolver maps the selected level to the declared wire value. With `qwen-chat-template`, that value goes in `chat_template_kwargs.reasoning_effort`; with `qwen`, it goes in root `reasoning_effort`.
+
+    Provider-native values are case-sensitive. Use `compat.reasoningEffortMap`, such as `{ low: "LOW", high: "HIGH" }`, to map logical choices to a declared native list such as `["LOW", "HIGH"]`. Unmapped native labels are not advertised as effort choices. Missing, empty, or unusable lists keep binary thinking, as does `compat.supportsReasoningEffort: false`.
+
+    The plugin prepares these mappings as model capabilities before session setup, so advanced choices such as `xhigh` and `max` also survive session-level clamping when their native wire labels differ.
+
+    The default remains `off`, including after upgrading an existing configured model. An explicit enabled level now sends its declared effort instead of silently using the template's default. Ordinary binary Qwen models keep their existing request shape. Per-model `params.extra_body` remains the final request-body override.
+
+  </Accordion>
+
+  <Accordion title="DeepSeek V4 thinking controls">
+    For vLLM model IDs containing `deepseek-v4` or `deepseek_v4`, configure `reasoning: true`. OpenClaw sends the selected effort through `chat_template_kwargs.reasoning_effort`, with both `thinking` and `enable_thinking` set to `true`. Declared efforts and `reasoningEffortMap` use the same shared resolver as other OpenAI-compatible models.
+
+    `/think off` sends both template flags as `false`, because vLLM enables DeepSeek thinking when either flag is true. Hosted DeepSeek's root `thinking` object and root `reasoning_effort` are removed. Existing explicit template kwargs and the final `params.extra_body` override remain authoritative. Explicit Qwen thinking formats take precedence over the model-name match.
+
+    This request shaping does not enable reasoning for catalog rows marked `reasoning: false` or change discovery heuristics. Configure the model explicitly if discovery does not recognize its reasoning capability.
+
   </Accordion>
 
   <Accordion title="Nemotron 3 thinking controls">
@@ -305,7 +322,7 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
     }
     ```
 
-    `timeoutSeconds` applies to vLLM model HTTP requests only: connection setup, response headers, body streaming, and the total guarded-fetch abort. It also raises the LLM idle/stream watchdog ceiling above the implicit ~120s default for this provider. Prefer this over increasing `agents.defaults.timeoutSeconds`, which controls the whole agent run.
+    `timeoutSeconds` applies to vLLM model HTTP requests only: connection setup, response headers, body streaming, and the total guarded-fetch abort. It also raises the LLM idle/stream watchdog ceiling above the implicit ~120s default for this provider. Prefer this over increasing `agents.defaults.timeoutSeconds`, which controls each model attempt's execution budget. A lower agent or run-specific timeout still caps the attempt; each configured fallback gets a fresh budget.
 
   </Accordion>
 

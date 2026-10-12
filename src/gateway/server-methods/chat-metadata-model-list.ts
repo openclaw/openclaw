@@ -39,7 +39,7 @@ export function createChatMetadataModelList(params: {
     }
   }
   const projections = new Map<string, Promise<PreparedModels>>();
-  const prepare = (
+  const prepare = async (
     request: SharedModelsListRequest,
     authority?: CurrentReadAuthority,
   ): Promise<PreparedModels> => {
@@ -51,22 +51,16 @@ export function createChatMetadataModelList(params: {
     ]);
     const existing = projections.get(key);
     if (existing) {
-      return existing.then((projection) => {
-        if (projection.isCurrent()) {
-          return projection;
-        }
-        if (projections.get(key) === existing) {
-          projections.delete(key);
-        }
-        return prepare(request, authority);
-      });
+      const projection = await existing;
+      if (projection.isCurrent()) {
+        return projection;
+      }
+      projections.delete(key);
     }
     const facts = agents.get(request.agentId);
     if (!facts?.owner.catalogOwner || !facts.owner.isCurrent()) {
-      return Promise.reject(
-        new PreparedModelRuntimePublicationSupersededError(
-          "Model catalog changed while preparing this result. Retry the request.",
-        ),
+      throw new PreparedModelRuntimePublicationSupersededError(
+        "Model catalog changed while preparing this result. Retry the request.",
       );
     }
     const { owner, modelCatalog, authStore, authModes } = facts;
@@ -101,9 +95,7 @@ export function createChatMetadataModelList(params: {
     projections.set(key, pending);
     pruneMapToMaxSize(projections, params.maxEntries);
     void pending.catch(() => {
-      if (projections.get(key) === pending) {
-        projections.delete(key);
-      }
+      projections.delete(key);
     });
     return pending;
   };
@@ -147,7 +139,7 @@ export function createChatMetadataModelList(params: {
           captureOpenClawStateReadContext().admission,
           requesterProfileId,
         );
-        // Foreign commits must become visible on the next unpinned read, too.
+        // Personal-account links are read under the requesting human's authority.
         const links = await listUserProfileAuthLinksAsync(requesterProfileId);
         if (!authority()) {
           return { isCurrent: () => false, read: () => ({ models: [] }) };

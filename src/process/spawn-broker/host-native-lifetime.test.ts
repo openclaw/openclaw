@@ -44,6 +44,7 @@ it.each([
     let exited = false;
     const exit = () => {
       exited = true;
+      child.emit("disconnect");
       child.emit("exit", 0, null);
       child.emit("close", 0, null);
     };

@@ -106,7 +106,7 @@ describeLive("openai reasoning compat live", () => {
       await ensureOpenClawModelsJson(cfg);
 
       const agentDir = resolveDefaultAgentDir(cfg);
-      const { authStorage } = discoverAuthStorageFacts(agentDir);
+      const { authStorage } = await discoverAuthStorageFacts(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
       const model = modelRegistry.find(provider, modelId) as Model | null;
 
@@ -163,7 +163,7 @@ describeLive("openai reasoning compat live", () => {
       await ensureOpenClawModelsJson(cfg);
 
       const agentDir = resolveDefaultAgentDir(cfg);
-      const { authStorage } = discoverAuthStorageFacts(agentDir);
+      const { authStorage } = await discoverAuthStorageFacts(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
       const model = modelRegistry.find(provider, modelId) as Model | null;
 

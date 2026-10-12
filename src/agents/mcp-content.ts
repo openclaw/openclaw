@@ -1,6 +1,7 @@
 import type { GetPromptResult } from "@modelcontextprotocol/sdk/types.js";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createMcpStructuredContentMirrorMatcher } from "./mcp-structured-mirror.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { isToolResultError } from "./tool-result-error.js";
 import { toToolSearchJsonSafe } from "./tool-search-json.js";
@@ -109,7 +110,7 @@ function projectMcpCallToolResultContent(result: {
   const sourceContent = Array.isArray(result.content) ? result.content : [];
   if (isRecord(result.structuredContent)) {
     try {
-      let mirroredText: string | undefined;
+      const isStructuredMirror = createMcpStructuredContentMirrorMatcher(result.structuredContent);
       const structuredJson = JSON.stringify(
         JSON.parse(stableStringify(result.structuredContent)),
         null,
@@ -120,12 +121,13 @@ function projectMcpCallToolResultContent(result: {
         content: [
           { type: "text", text: structuredText },
           ...sourceContent
-            // Only the SDK's full pretty-JSON mirror is redundant; overlapping text can carry recovery guidance.
+            // Only a full JSON mirror of structuredContent is redundant; overlapping text can carry recovery guidance.
             .filter(
               (block) =>
                 !isRecord(block) ||
                 block.type !== "text" ||
-                block.text !== (mirroredText ??= JSON.stringify(result.structuredContent, null, 2)),
+                typeof block.text !== "string" ||
+                !isStructuredMirror(block.text),
             )
             .map(mcpContentBlockToAgentContent),
         ],

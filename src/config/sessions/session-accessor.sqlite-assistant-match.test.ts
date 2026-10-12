@@ -7,6 +7,7 @@ import { findAssistantTranscriptEventInDatabase } from "./session-accessor.sqlit
 import type { SessionTranscriptEventMatch } from "./session-history-read.types.js";
 import { findTranscriptEventMatchingInDatabase } from "./session-transcript-match.js";
 import { prepareTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
+import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
 describe("persisted assistant transcript matching", () => {
   let db: DatabaseSync;
@@ -17,7 +18,10 @@ describe("persisted assistant transcript matching", () => {
     // Raw legacy rows can predate identity indexing or contain invalid JSON.
     db.exec(`CREATE TABLE transcript_events (
       session_id TEXT NOT NULL, seq INTEGER NOT NULL, event_json TEXT, event_zstd BLOB,
-      event_utf8_bytes INTEGER, navigation_json TEXT, PRIMARY KEY (session_id, seq)
+      event_utf8_bytes INTEGER, navigation_json TEXT,
+      navigation_type TEXT, navigation_custom_type TEXT, navigation_display INTEGER,
+      message_role TEXT, navigation_last_type TEXT, navigation_last_custom_type TEXT,
+      navigation_valid INTEGER, PRIMARY KEY (session_id, seq)
     ) STRICT;
     CREATE TABLE session_transcript_cold_archives (session_id TEXT PRIMARY KEY) STRICT`);
   });
@@ -28,18 +32,26 @@ describe("persisted assistant transcript matching", () => {
     const payload: TranscriptPayloadRecord = compress
       ? prepareTranscriptPayload(db, json)
       : {
+          ...deriveTranscriptPredicateFields(json),
           event_json: json,
           event_zstd: null,
           event_utf8_bytes: Buffer.byteLength(json),
           navigation_json: null,
         };
-    db.prepare("INSERT INTO transcript_events VALUES (?, ?, ?, ?, ?, ?)").run(
+    db.prepare("INSERT INTO transcript_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
       sessionId,
       seq,
       payload.event_json,
       payload.event_zstd,
       payload.event_utf8_bytes,
       payload.navigation_json,
+      payload.navigation_type,
+      payload.navigation_custom_type,
+      payload.navigation_display,
+      payload.message_role,
+      payload.navigation_last_type,
+      payload.navigation_last_custom_type,
+      payload.navigation_valid,
     );
     return payload;
   };

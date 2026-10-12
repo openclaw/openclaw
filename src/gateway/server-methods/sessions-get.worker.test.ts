@@ -1,9 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  replaceSessionEntrySync,
-  replaceTranscriptEvents,
-} from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";

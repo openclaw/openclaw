@@ -5,7 +5,7 @@ import { routePageSpec } from "../../app-route-paths.ts";
 export const page = definePage({
   ...routePageSpec("connection"),
   component: () =>
-    import("./connection-page.ts").then(() => ({
+    import("./connection-page.tsx").then(() => ({
       header: true,
       render: () => html`<openclaw-connection-page></openclaw-connection-page>`,
     })),

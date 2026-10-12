@@ -211,14 +211,16 @@ export async function withGatewaySessionEntry<T>(
     session: ReturnType<typeof loadGatewaySessionEntry>,
     membership: ReadonlyMap<
       string,
-      readonly import("../config/sessions/session-sharing-store.kernel.js").SessionMember[]
+      readonly import("../config/sessions/session-membership-facts.types.js").SessionMember[]
     >,
     assertSourceCurrent: () => void,
   ) => T,
   cfg: OpenClawConfig = getRuntimeConfig(),
   assertConfigCurrent?: () => void,
 ): Promise<T> {
-  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [
+    { sessionKey, agentId: opts?.agentId },
+  ]);
   const assertConfig = assertConfigCurrent ?? (() => assertRoutingCurrent(getRuntimeConfig()));
   return withGatewaySessionStoreTarget(
     { cfg, key: sessionKey, ...opts },

@@ -355,7 +355,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
             return;
           }
           this.playbackOverflowed = false;
-          this.stopOutput({ releaseDelayedToolResults: this.pendingOutputCancellations === 0 });
+          this.stopOutput(this.pendingOutputCancellations === 0);
           this.activeOutputTurnId = null;
           if (event.talkEvent?.type === "turn.cancelled") {
             this.abortConsults();
@@ -385,11 +385,16 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         case "toolCallCancelled":
           this.completeToolCall(event.callId, true);
           return;
-        case "toolResult":
-          if (this.isFinalToolResult(event)) {
+        case "toolResult": {
+          const talkEvent = event.talkEvent;
+          if (
+            talkEvent?.type !== "tool.progress" &&
+            !(talkEvent?.type === "tool.result" && talkEvent.final === false)
+          ) {
             this.completeToolCall(event.callId);
           }
           return;
+        }
         case "error":
           this.lastRelayError = event.message
             ? formatUiError(event.message)
@@ -424,10 +429,10 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
   }
 
-  private stopOutput(options: { releaseDelayedToolResults?: boolean } = {}): void {
+  private stopOutput(releaseDelayedToolResults = true): void {
     this.outputQueue.stop(this.outputContext);
     this.speechFramesDuringPlayback = 0;
-    if (options.releaseDelayedToolResults ?? true) {
+    if (releaseDelayedToolResults) {
       this.rescheduleDelayedToolResults();
     }
   }
@@ -491,7 +496,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
             message:
               "Tell the person briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.",
           },
-          { willContinue: true },
+          true,
         );
         if (this.completedToolCalls.has(callId)) {
           return;
@@ -519,30 +524,28 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private async submitToolResult(
     callId: string,
     result: unknown,
-    options?: { suppressResponse?: boolean; willContinue?: boolean },
+    willContinue = false,
   ): Promise<void> {
     if (this.completedToolCalls.has(callId)) {
       return;
     }
-    const shouldAllowProviderResponse =
-      options?.suppressResponse !== true && options?.willContinue !== true;
     if (
       !this.closed &&
-      shouldAllowProviderResponse &&
+      !willContinue &&
       (this.pendingOutputCancellations > 0 || this.outputPlaybackDelayMs() > 0)
     ) {
-      const pending = { callId, result, ...(options ? { options } : {}) };
+      const pending = { callId, result };
       this.delayedToolResults.add(pending);
       this.rescheduleDelayedToolResult(pending);
       return;
     }
-    await this.sendToolResultNow(callId, result, options);
+    await this.sendToolResultNow(callId, result, willContinue);
   }
 
   private async sendToolResultNow(
     callId: string,
     result: unknown,
-    options?: { suppressResponse?: boolean; willContinue?: boolean },
+    willContinue = false,
   ): Promise<void> {
     if (this.completedToolCalls.has(callId)) {
       return;
@@ -553,7 +556,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         sessionId: this.session.relaySessionId,
         callId,
         result,
-        ...(options ? { options } : {}),
+        ...(willContinue ? { options: { willContinue: true } } : {}),
       });
     } finally {
       this.submittingToolCalls.delete(callId);
@@ -587,11 +590,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       return;
     }
     this.discardDelayedToolResult(pending);
-    void this.sendToolResultNow(pending.callId, pending.result, pending.options).catch(
-      (error: unknown) => {
-        this.reportToolResultSubmissionError(error);
-      },
-    );
+    void this.sendToolResultNow(pending.callId, pending.result).catch((error: unknown) => {
+      this.reportToolResultSubmissionError(error);
+    });
   }
 
   private rescheduleDelayedToolResults(): void {
@@ -655,14 +656,6 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
   }
 
-  private isFinalToolResult(event: GatewayRelayEvent): boolean {
-    const talkEvent = event.talkEvent;
-    return (
-      talkEvent?.type !== "tool.progress" &&
-      !(talkEvent?.type === "tool.result" && talkEvent.final === false)
-    );
-  }
-
   private cancelOutput(reason: string, requirePlayback = true): void {
     if ((requirePlayback && !this.outputQueue.isPlaying) || this.cancelRequestedForPlayback) {
       return;
@@ -678,7 +671,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     // Releasing earlier can let the provider answer from a turn the user interrupted.
     this.pendingOutputCancellations += 1;
     this.pauseDelayedToolResults();
-    this.stopOutput({ releaseDelayedToolResults: false });
+    this.stopOutput(false);
     void this.ctx.client
       .request("talk.session.cancelOutput", {
         sessionId: this.session.relaySessionId,

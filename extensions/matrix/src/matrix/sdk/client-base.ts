@@ -107,7 +107,6 @@ export abstract class MatrixClientBase {
   protected currentSyncState: MatrixSyncState | null = null;
   protected currentSyncError: unknown = undefined;
   protected currentSyncFromCache = false;
-  protected currentSyncRevision = 0;
   protected readonly transactionScopeHomeserver: string;
   protected readonly transactionScopeAccessTokenHash: string;
   protected transactionScopeDeviceId: string | null;
@@ -501,7 +500,6 @@ export abstract class MatrixClientBase {
       getSync: () => ({
         state: this.currentSyncState,
         fromCache: this.currentSyncFromCache,
-        revision: this.currentSyncRevision,
       }),
     });
   }

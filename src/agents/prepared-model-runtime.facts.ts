@@ -5,7 +5,6 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { stableStringify } from "@openclaw/normalization-core";
-import type { Result } from "@openclaw/normalization-core/result";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -35,6 +34,7 @@ import {
 } from "./embedded-agent-runner/model.static-catalog.js";
 import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
+import { loadManifestModelProviderConfigs } from "./model-catalog-manifest.js";
 import {
   buildConfiguredModelCatalog,
   parseConfiguredModelVisibilityEntries,
@@ -347,22 +347,18 @@ export async function prepareWorkspaceBuildGroup(
       config: input.config,
       env,
       authoritativeSyntheticAuthProviderRefs: pluginMetadataSnapshot.owners.cliBackends.keys(),
-      syntheticAuthProviderRefs:
+      syntheticAuthProviderRefs: scopeSyntheticAuthProviderRefs(
         catalogMode === "static"
-          ? scopeSyntheticAuthProviderRefs(
-              listPreparedSyntheticAuthProviderRefs(preparedSyntheticAuthProviders),
-              options.providerDiscoveryProviderIds,
-            )
-          : scopeSyntheticAuthProviderRefs(
-              resolveRuntimeSyntheticAuthProviderRefs({
-                config: input.config,
-                env,
-                index: pluginMetadataSnapshot.index,
-                registryDiagnostics: pluginMetadataSnapshot.registryDiagnostics,
-                ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-              }),
-              configuredProviderIds,
-            ),
+          ? listPreparedSyntheticAuthProviderRefs(preparedSyntheticAuthProviders)
+          : resolveRuntimeSyntheticAuthProviderRefs({
+              config: input.config,
+              env,
+              index: pluginMetadataSnapshot.index,
+              registryDiagnostics: pluginMetadataSnapshot.registryDiagnostics,
+              ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+            }),
+        catalogMode === "static" ? options.providerDiscoveryProviderIds : configuredProviderIds,
+      ),
       ...(catalogMode === "static"
         ? {
             resolveSyntheticAuth: (provider: string) =>
@@ -446,15 +442,16 @@ export async function prepareWorkspaceBuildGroup(
       });
       const configuredGeneratedCatalogPluginIds = [
         ...new Set(
-          (facts.input.config.models?.mode === "replace" ? [] : facts.providerIds).flatMap(
-            (provider) => {
-              const pluginId = resolvePluginModelCatalogOwnerPluginId({
-                providerId: provider,
-                pluginMetadataSnapshot,
-              });
-              return pluginId ? [pluginId] : [];
-            },
-          ),
+          (facts.input.config.models?.mode === "replace"
+            ? []
+            : [...facts.providerIds, ...Object.keys(facts.credentials).map(normalizeProviderId)]
+          ).flatMap((provider) => {
+            const pluginId = resolvePluginModelCatalogOwnerPluginId({
+              providerId: provider,
+              pluginMetadataSnapshot,
+            });
+            return pluginId ? [pluginId] : [];
+          }),
         ),
       ].toSorted((left, right) => left.localeCompare(right));
       agentFacts.push({
@@ -515,34 +512,28 @@ export async function prepareWorkspaceBuildGroup(
       throw new Error("Prepared media capability provider source is retired");
     }
     const claim = mediaCapabilityProviderSource.resources.retain();
-    let outcome: Result<Awaited<ReturnType<typeof prepare>>, unknown>;
+    let prepared: Awaited<ReturnType<typeof prepare>>;
     try {
-      outcome = { ok: true, value: await run() };
+      prepared = await run();
     } catch (error) {
-      outcome = { ok: false, error };
+      let failure = error;
+      try {
+        await claim.release();
+      } catch (cleanupError) {
+        failure = new AggregateError(
+          [error, cleanupError],
+          "Prepared construction and registration cleanup failed",
+          { cause: error },
+        );
+      }
+      throw failure;
     }
-    try {
-      // The caller still owns the original inspection; construction owns its actual awaited work.
-      await claim.release();
-    } catch (cleanupError) {
-      outcome = {
-        ok: false,
-        error: outcome.ok
-          ? cleanupError
-          : new AggregateError(
-              [outcome.error, cleanupError],
-              "Prepared construction and registration cleanup failed",
-              { cause: outcome.error },
-            ),
-      };
-    }
-    if (!outcome.ok) {
-      throw outcome.error;
-    }
+    // The caller still owns the original inspection; construction owns its actual awaited work.
+    await claim.release();
     if (!isSourceCurrent()) {
       throw new Error("Prepared media capability provider source is retired");
     }
-    return outcome.value;
+    return prepared;
   } catch (error) {
     const cleanup = preparedGeneration ? [discardPreparedPluginGeneration(preparedGeneration)] : [];
     const results = await Promise.allSettled(cleanup);
@@ -599,7 +590,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
 }> {
   const catalogs = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogFacts>();
   let registryCount = 0;
-  const staticProviderConfigs = resolvePreparedProviderStaticConfigs(
+  const preparedStaticProviderConfigs = resolvePreparedProviderStaticConfigs(
     params.pluginGeneration.preparedStaticProviderCatalog,
   );
   const { pluginMetadataSnapshot } = params.pluginGeneration;
@@ -613,6 +604,17 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
     await nextTurn();
     params.assertCurrent?.(facts.input);
     const modelsJsonContents = captureModelsJsonContents(facts.input.agentDir);
+    // Signed-in providers browse known manifest rows until their account listing publishes. Scope
+    // by current credentials: config reloads (API-key sign-in rewrites auth.profiles) leave
+    // credential-only providers out of facts.providerIds.
+    const staticProviderConfigs = {
+      ...loadManifestModelProviderConfigs({
+        config: facts.input.config,
+        metadataSnapshot: pluginMetadataSnapshot,
+        providerIds: Object.keys(facts.credentials).map(normalizeProviderId),
+      }),
+      ...preparedStaticProviderConfigs,
+    };
     const oauthProviders = facts.templateAuthStorage.getOAuthProviders();
     // Root files remain authored inventory even when static preparation returned an empty result.
     const pluginCatalogs = await loadPersistedPluginModelCatalogs(

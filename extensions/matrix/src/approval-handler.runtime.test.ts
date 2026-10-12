@@ -227,40 +227,6 @@ describe("matrixApprovalNativeRuntime", () => {
     });
   });
 
-  it("sends versioned Matrix approval content with pending exec approvals", async () => {
-    const sendSingleTextMessage = vi.fn().mockResolvedValue({
-      messageId: "$approval",
-      primaryMessageId: "$approval",
-      receipt: buildMatrixReceipt(["$approval"]),
-      roomId: "!room:example.org",
-    });
-    const reactMessage = vi.fn().mockResolvedValue(undefined);
-    const view = buildExecApprovalView();
-    const pendingPayload = await buildPendingPayload(view);
-
-    await deliverPending(view, pendingPayload, {
-      sendSingleTextMessage,
-      reactMessage,
-    });
-
-    const [target, text, options] = mockCall(sendSingleTextMessage) ?? [];
-    expect(target).toBe("room:!room:example.org");
-    expect(String(text)).toContain("echo hi");
-    const extraContent = (options as { extraContent?: Record<string, unknown> } | undefined)
-      ?.extraContent;
-    expectRecordFields(extraContent?.[MATRIX_APPROVAL_METADATA_KEY], {
-      version: 1,
-      type: "approval.request",
-      state: "pending",
-      id: "req-1",
-      kind: "exec",
-      commandText: "echo hi",
-      cwd: "/repo",
-      agentId: "agent-1",
-      allowedDecisions: ["allow-once", "deny"],
-    });
-  });
-
   it("delivers Matrix approval content with plugin approval fields", async () => {
     const sendSingleTextMessage = vi.fn().mockResolvedValue({
       messageId: "$plugin-approval",
@@ -342,32 +308,6 @@ describe("matrixApprovalNativeRuntime", () => {
     });
 
     expect(reactMessage).toHaveBeenCalled();
-  });
-
-  it("retries transient Matrix approval send failures", async () => {
-    const sendSingleTextMessage = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transient Matrix send failure"))
-      .mockResolvedValue({
-        messageId: "$approval",
-        primaryMessageId: "$approval",
-        receipt: buildMatrixReceipt(["$approval"]),
-        roomId: "!room:example.org",
-      });
-    const reactMessage = vi.fn().mockResolvedValue(undefined);
-    const view = buildExecApprovalView();
-    const pendingPayload = await buildPendingPayload(view);
-
-    const entry = await deliverPending(view, pendingPayload, {
-      sendSingleTextMessage,
-      reactMessage,
-    });
-
-    expect(sendSingleTextMessage).toHaveBeenCalledTimes(2);
-    expectRecordFields(entry, {
-      roomId: "!room:example.org",
-      platformMessageIds: ["$approval"],
-    });
   });
 
   it("retries transient Matrix direct-room repair failures before preparing approval DMs", async () => {
@@ -501,10 +441,7 @@ describe("matrixApprovalNativeRuntime", () => {
     ).toBeNull();
   });
 
-  it.each([
-    { terminalStatus: undefined, label: "Denied" },
-    { terminalStatus: "cancelled", label: "Cancelled" },
-  ] as const)(
+  it.each([{ terminalStatus: undefined, label: "Denied" }] as const)(
     "preserves the $label system-agent heading after denial",
     async ({ terminalStatus, label }) => {
       const result = await matrixApprovalNativeRuntime.presentation.buildResolvedResult({

@@ -104,6 +104,7 @@ it.each(scenarios)(
       let turns = 0;
       let recorder: UserTurnTranscriptRecorder | undefined;
       let sourceCommittedBeforeEffect = false;
+      let sourceCommittedBeforeStart = false;
       const recordProcessed = vi.fn();
       const markIdle = vi.fn();
       const binding: SessionBindingRecord = {
@@ -261,6 +262,9 @@ it.each(scenarios)(
           shouldRouteToOriginating: false,
           bypassForCommand: false,
           userTurnTranscriptRecorder: recorder,
+          onAgentRunStart: () => {
+            sourceCommittedBeforeStart = recorder?.hasPersisted() === true;
+          },
           recordProcessed,
           markIdle,
         });
@@ -269,6 +273,9 @@ it.each(scenarios)(
         expect(result).not.toBeNull();
         expect(turns).toBe(pendingQuestion || bindingRefused ? 0 : 1);
         expect(sourceCommittedBeforeEffect).toBe(!bindingRefused);
+        if (!pendingQuestion) {
+          expect(sourceCommittedBeforeStart).toBe(true);
+        }
         expect(persistApproved).toHaveBeenCalledOnce();
         expect(recordProcessed).toHaveBeenCalledOnce();
         expect(markIdle).toHaveBeenCalledOnce();

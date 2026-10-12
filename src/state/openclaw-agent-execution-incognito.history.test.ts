@@ -3,9 +3,8 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { readSessionEntryResetRecallCutoff } from "../../packages/memory-host-sdk/src/host/session-files.js";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
@@ -24,6 +23,7 @@ import {
   readSessionTranscriptBoundedMessageTailPageAsync,
 } from "../gateway/session-transcript-readers.js";
 import {
+  readLatestAssistantTextByIdentity,
   readSessionTranscriptRawDelta,
   readSessionTranscriptVisibleMessageDelta,
 } from "../plugin-sdk/session-transcript-runtime.js";
@@ -35,15 +35,21 @@ import {
 } from "./openclaw-agent-execution-incognito.history-completion.test-support.js";
 import { registerIncognitoHistoryWiringTests } from "./openclaw-agent-execution-incognito.history-wiring.test-support.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
+import {
+  useIncognitoActorProbe,
+  openIncognitoTestActor,
+  useIncognitoNoHostSql,
+} from "./openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 // Two retained private actors plus shared ACP state need three broker slots.
-vi.mock("node:os", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:os")>()),
-  availableParallelism: () => 24,
+vi.mock("../infra/worker-pool-sizing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/worker-pool-sizing.js")>()),
+  resolveSqliteBrokerWorkerCount: () => 3,
 }));
 
+const probe = useIncognitoActorProbe();
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
@@ -51,7 +57,6 @@ let lossActor: IncognitoAgentDatabaseExecution;
 let lossWorker: Worker;
 let mainStorePath: string;
 let env: NodeJS.ProcessEnv;
-let sql: ReturnType<typeof observeHostDataSql>;
 
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-history-") };
@@ -59,21 +64,8 @@ beforeAll(async () => {
   openOpenClawStateDatabase({ env });
   const posted = vi.spyOn(Worker.prototype, "postMessage");
   try {
-    const opened = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: "main",
-      env,
-      authority,
-    });
-    const loss = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: "loss",
-      env,
-      authority,
-    });
-    assert(opened && loss);
-    actor = opened;
-    lossActor = loss;
+    actor = await openIncognitoTestActor(env, authority);
+    lossActor = await openIncognitoTestActor(env, authority, "loss");
     const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "loss", env });
     const index = posted.mock.calls.findIndex(
       ([request]) =>
@@ -86,16 +78,7 @@ beforeAll(async () => {
     posted.mockRestore();
   }
 });
-beforeEach(() => {
-  sql = observeHostDataSql();
-});
-afterEach(() => {
-  try {
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
-});
+useIncognitoNoHostSql();
 afterAll(async () => {
   await Promise.all([actor?.close(), lossActor?.close()]);
   await closeOpenClawStateDatabaseAsync();
@@ -150,14 +133,9 @@ function message(content: string) {
   });
 }
 async function hold(owner = actor) {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const held = owner.run(authority, async () => {
-    entered.resolve();
-    await release.promise;
-  });
-  await entered.promise;
-  return { release, held };
+  const barrier = probe.hold(owner, authority);
+  await barrier.entered.promise;
+  return barrier;
 }
 
 async function computeReader(target: IncognitoLifecycleEntry, owner = actor, grant = authority) {
@@ -268,7 +246,7 @@ it("composes anchor publication inside its actor FIFO and accounting/tail reads 
       },
       binding,
     );
-    const following = actor.run(authority, async () => {
+    const following = probe.read(actor, authority, () => {
       expect(published).toBe(true);
     });
     const accounting = readSessionTranscriptAccountingAsync(
@@ -499,7 +477,7 @@ it("keeps Codex history's prefix across appends and joins it before release", as
       released = true;
     });
     // Settle another FIFO turn without invalidating the captured transcript.
-    await actor.run(authority, async () => undefined);
+    await probe.read(actor, authority);
     expect(released).toBe(false);
     resume.resolve();
     await Promise.all([releasing, rejected]);
@@ -937,21 +915,24 @@ it.each(["consume", "pending-list", "pending-read"] as const)(
   },
 );
 
-registerIncognitoHistoryWiringTests({
-  authority,
-  get siblingActor() {
-    return lossActor;
+registerIncognitoHistoryWiringTests(
+  {
+    authority,
+    get siblingActor() {
+      return lossActor;
+    },
+    get actor() {
+      return actor;
+    },
+    get env() {
+      return env;
+    },
+    create,
+    append,
+    targetInput,
   },
-  get actor() {
-    return actor;
-  },
-  get env() {
-    return env;
-  },
-  create,
-  append,
-  targetInput,
-});
+  probe,
+);
 
 const completionFixture = {
   authority,
@@ -963,7 +944,7 @@ const completionFixture = {
   },
   targetInput,
 };
-registerIncognitoCompletionTests(completionFixture);
+registerIncognitoCompletionTests(completionFixture, probe);
 
 it("ends queued history reads with the typed error when their actor is lost", async () => {
   const completion = await createIncognitoCompletionSource(
@@ -985,6 +966,7 @@ it("ends queued history reads with the typed error when their actor is lost", as
       reader.memoryEntry("actor-memory"),
       reader.memoryResetRecall(),
       reader.nativeContext(scope, () => "private result"),
+      withIncognitoSessionActor(lossActor, () => readLatestAssistantTextByIdentity(scope)),
     ].map((result) => expect(result).rejects.toMatchObject({ code: "INCOGNITO_SESSION_ENDED" })),
   );
   let replacing: Promise<IncognitoAgentDatabaseExecution | undefined> | undefined;

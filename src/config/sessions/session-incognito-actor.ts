@@ -9,13 +9,16 @@ import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-work
 import { SqliteWorkerError } from "../../infra/sqlite-worker-store.js";
 import type { AgentDatabaseIncognitoIdentity } from "../../state/openclaw-agent-execution-contract.js";
 import type { TrajectoryRuntimeRetentionLease } from "../../trajectory/runtime-retention.contract.js";
+import type { SessionActorLifetime } from "./session-actor-state.types.js";
 import {
   authorizeSessionFacts,
   incognitoEntryPublication,
   isIncognitoEntryValidationGrant,
+  installIncognitoSessionFacts,
   readIncognitoGrantFacts,
   type IncognitoEntryOperations,
   type IncognitoSessionRunner,
+  type IncognitoSessionPublication,
 } from "./session-incognito-admission.js";
 import {
   bindIncognitoSessionStoreReads,
@@ -37,15 +40,9 @@ import type {
   IncognitoSessionRead,
   IncognitoSessionOperations,
 } from "./session-incognito-contract.js";
-import type { IncognitoEntryPatchResult } from "./session-incognito-entry-patch-contract.js";
-import {
-  incognitoHistoryKeys,
-  isIncognitoHistoryCommand,
-} from "./session-incognito-history-contract.js";
+import type { IncognitoEntryPatchAuthorizer } from "./session-incognito-entry-patch-contract.js";
 import {
   captureIncognitoLifecycleSettlement,
-  incognitoLifecycleKeys,
-  isIncognitoLifecycleCommand,
   isIncognitoLifecycleWrite,
   type IncognitoLifecycleEntry,
   type IncognitoLifecycleOperations,
@@ -62,6 +59,7 @@ import {
   type IncognitoSideDataOperations,
 } from "./session-incognito-side-data-contract.js";
 import {
+  isIncognitoTranscriptReceiptCommand,
   isIncognitoTranscriptWrite,
   type IncognitoTranscriptOperations,
 } from "./session-incognito-transcript-contract.js";
@@ -72,33 +70,29 @@ import type {
   PendingInputRead,
 } from "./session-pending-input-operations.types.js";
 
-export type { IncognitoSessionRunner } from "./session-incognito-admission.js";
-
 export type { IncognitoSessionClaim } from "./session-incognito-authority.js";
 
 /** Borrowed session operations; execution lifetime and ACP orchestration stay with their owner. */
-export type IncognitoSessionActor = {
+export type IncognitoSessionActor = SessionActorLifetime & {
   readonly agentId: string;
   readonly path: string;
   readonly identity: AgentDatabaseIncognitoIdentity;
   readonly sessions: ReturnType<ReturnType<typeof createIncognitoSessionFacts>["bind"]>;
-  assertCurrent(): void;
-  /** Refuse new disclosure even while accepted work retains the actor for settlement. */
-  assertReadable(): void;
 };
 
 /** Actor-local projection owned by its lifetime, never a roster or full-entry cache. */
 export function createIncognitoSessionFacts(
   identity: AgentDatabaseIncognitoIdentity,
   assertActorCurrent: () => void,
-  withGrant: <T>(operation: () => T) => T,
-  assertOutsideGrant: () => void,
+  invalidateActorSnapshots: (
+    targets: readonly Pick<IncognitoSessionFacts, "sessionKey" | "sharing">[] | undefined,
+  ) => void,
   assertAdmittedCurrent: () => void = assertActorCurrent,
 ) {
   const entries = new Map<string, IncognitoSessionFacts>();
   const pending = new Set<string>();
   const unavailable = new Set<string>();
-  const grants = createIncognitoSessionGrants(withGrant);
+  const grants = createIncognitoSessionGrants();
   let topologyRevision = 0;
   let snapshotRevision = 0;
   const current = (sessionKey: string) => {
@@ -114,29 +108,10 @@ export function createIncognitoSessionFacts(
   };
   const install = (facts: IncognitoSessionFacts) => {
     assertActorCurrent();
-    if (!isDeepStrictEqual(facts.identity, identity)) {
-      throw new Error("Incognito publication belongs to another actor");
-    }
-    const previous = entries.get(facts.sessionKey);
-    if (previous && previous.revision > facts.revision) {
-      throw new Error("Incognito publication is older than committed facts");
-    }
-    const next = structuredClone(facts);
-    snapshotRevision = Math.max(snapshotRevision, next.revision);
-    if (previous?.sharing?.entry?.sessionId === next.sharing?.entry?.sessionId && previous) {
-      next.expiresAt = previous.expiresAt;
-    }
-    if (
-      previous?.sharing?.entry?.sessionId !== next.sharing?.entry?.sessionId ||
-      previous?.sharing?.entry?.lifecycleRevision !== next.sharing?.entry?.lifecycleRevision
-    ) {
+    const { revision, topologyChanged } = installIncognitoSessionFacts(identity, entries, facts);
+    snapshotRevision = Math.max(snapshotRevision, revision);
+    if (topologyChanged) {
       topologyRevision += 1;
-    }
-    // Misses belong to their scoped claim, not an ever-growing negative cache.
-    if (next.sharing?.entry) {
-      entries.set(next.sessionKey, next);
-    } else {
-      entries.delete(next.sessionKey);
     }
     unavailable.delete(facts.sessionKey);
   };
@@ -149,11 +124,18 @@ export function createIncognitoSessionFacts(
       readSnapshotRevision: () => snapshotRevision,
       hasUnsettledFacts: () => pending.size > 0 || unavailable.size > 0,
       entries,
-      withGrant,
     });
   return {
     captureRead,
+    invalidate(sessionKey: string) {
+      invalidateActorSnapshots([{ sessionKey, sharing: entries.get(sessionKey)?.sharing }]);
+      if (!unavailable.has(sessionKey)) {
+        unavailable.add(sessionKey);
+        snapshotRevision += 1;
+      }
+    },
     clear() {
+      invalidateActorSnapshots(undefined);
       entries.clear();
       pending.clear();
       unavailable.clear();
@@ -174,12 +156,7 @@ export function createIncognitoSessionFacts(
         signal?: AbortSignal,
         companion?: LifecycleSettlement,
         cleanup = false,
-        publication?: {
-          factsKey?: "entry";
-          prepare?(facts: unknown): void;
-          authorize(stage: "transaction" | "commit", facts: unknown): void;
-          decodeReceipt(facts: unknown): IncognitoSessionOperations[Key]["output"];
-        },
+        publication?: IncognitoSessionPublication<Key>,
         restrict?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest,
         onCommitted?: (value: IncognitoSessionOperations[Key]["output"]) => void,
         onCommittedWithoutReply?: (facts: readonly IncognitoSessionFacts[]) => void,
@@ -201,6 +178,14 @@ export function createIncognitoSessionFacts(
         const commandGrant = grants.command(captured.type, authority.entryCreation);
         let commitGranted = false;
         function unknownOutcome(message: string): never {
+          invalidateActorSnapshots(
+            targets.size
+              ? [...targets].map((sessionKey) => ({
+                  sessionKey,
+                  sharing: entries.get(sessionKey)?.sharing,
+                }))
+              : undefined,
+          );
           for (const key of targets) {
             unavailable.add(key);
           }
@@ -281,15 +266,13 @@ export function createIncognitoSessionFacts(
               const value = outcome.value;
               if (!changing) {
                 // Read results carry current worker facts, never authority captured before a wait.
-                withGrant(() => {
-                  authority.assertCurrent();
-                  assertActorCurrent();
-                  for (const facts of value.facts) {
-                    authorizeSessionFacts(authority, "commit", facts);
-                  }
-                  authority.assertCurrent();
-                  assertActorCurrent();
-                });
+                authority.assertCurrent();
+                assertActorCurrent();
+                for (const facts of value.facts) {
+                  authorizeSessionFacts(authority, "commit", facts);
+                }
+                authority.assertCurrent();
+                assertActorCurrent();
                 value.facts.forEach(install);
               }
               for (const key of targets) {
@@ -355,24 +338,14 @@ export function createIncognitoSessionFacts(
                     (request.stage === "commit" && publication?.factsKey === "entry"
                       ? publication.decodeReceipt(request.facts.entry).facts
                       : undefined);
-                  const facts = readIncognitoGrantFacts(received, identity);
-                  const keys = facts.map((entry) => entry.sessionKey);
-                  const lifecycleKeys = isIncognitoLifecycleCommand(captured)
-                    ? incognitoLifecycleKeys(captured, identity)
-                    : undefined;
-                  const historyKeys = isIncognitoHistoryCommand(captured)
-                    ? incognitoHistoryKeys(captured)
-                    : undefined;
-                  if (
-                    new Set(keys).size !== keys.length ||
-                    (historyKeys && !isDeepStrictEqual(keys, historyKeys)) ||
-                    (lifecycleKeys && !isDeepStrictEqual(keys, lifecycleKeys)) ||
-                    (!historyKeys &&
-                      "sessionKey" in captured.input &&
-                      (keys.length !== 1 || keys[0] !== captured.input.sessionKey)) ||
-                    (request.stage === "commit" && !isDeepStrictEqual(keys, [...targets]))
-                  ) {
-                    throw new Error("Incognito session grant changed its target set");
+                  const facts = readIncognitoGrantFacts(
+                    received,
+                    identity,
+                    captured,
+                    request.stage === "commit" ? targets : undefined,
+                  );
+                  if (changing) {
+                    invalidateActorSnapshots(facts);
                   }
                   commandGrant.capture(request.stage, facts);
                   for (const entry of facts) {
@@ -420,7 +393,6 @@ export function createIncognitoSessionFacts(
       };
       return {
         ...bindIncognitoSessionHistory({
-          assertOutsideGrant,
           assertBorrowed,
           assertActorCurrent,
           retain,
@@ -445,7 +417,8 @@ export function createIncognitoSessionFacts(
           signal?: AbortSignal,
           onCommitted?: (value: IncognitoEntryOperations[Key]["output"]) => void,
           onRead?: (value: IncognitoEntryOperations[Key]["output"]) => void,
-          authorizePrepared?: (refused?: IncognitoEntryPatchResult["refusedSource"]) => void,
+          authorizePrepared?: IncognitoEntryPatchAuthorizer,
+          authorizePublication?: (facts: unknown) => void,
         ): Promise<IncognitoEntryOperations[Key]["output"]> =>
           perform(
             authority,
@@ -458,13 +431,12 @@ export function createIncognitoSessionFacts(
             signal,
             undefined,
             false,
-            incognitoEntryPublication(command.type, authorizePrepared),
+            incognitoEntryPublication(command.type, authorizePrepared, authorizePublication),
             undefined,
             onCommitted ? (result) => onCommitted(result.value) : undefined,
           ),
         /** Join a shared-owner composition without holding this actor's FIFO turn. */
         withSharedState<T>(operation: () => Promise<T>): Promise<T> {
-          assertOutsideGrant();
           assertBorrowed();
           return retain(operation);
         },
@@ -476,7 +448,6 @@ export function createIncognitoSessionFacts(
           signal?: AbortSignal,
           onRead?: (facts: readonly IncognitoSessionFacts[]) => void,
         ): Promise<T> => {
-          assertOutsideGrant();
           assertBorrowed();
           const capturedTarget = structuredClone(target);
           return retain(() =>
@@ -487,7 +458,7 @@ export function createIncognitoSessionFacts(
               captureClaim: (sessionKey, facts) => claim(sessionKey, assertBorrowed, facts),
               authorize: (held) => held.authorize(authority, "commit"),
               operation,
-              execute: (command, observeFacts) =>
+              execute: (command, observeFacts, requestSignal) =>
                 perform(
                   authority,
                   command,
@@ -500,7 +471,9 @@ export function createIncognitoSessionFacts(
                     }
                     return result.value;
                   },
-                  signal,
+                  signal && requestSignal
+                    ? AbortSignal.any([signal, requestSignal])
+                    : (requestSignal ?? signal),
                 ),
               cleanup: (command) =>
                 perform(
@@ -657,16 +630,23 @@ export function createIncognitoSessionFacts(
           signal?: AbortSignal,
           restrict?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest,
           onCommitted?: (value: IncognitoTranscriptOperations[Key]["output"]) => void,
+          onRead?: (value: IncognitoTranscriptOperations[Key]["output"]) => void,
+          authorizePrepared?: IncognitoEntryPatchAuthorizer,
         ): Promise<IncognitoTranscriptOperations[Key]["output"]> =>
           perform(
             authority,
             command,
             isIncognitoTranscriptWrite(command.type),
-            (result) => result.value,
+            (result) => {
+              onRead?.(result.value);
+              return result.value;
+            },
             signal,
             undefined,
             false,
-            undefined,
+            isIncognitoTranscriptReceiptCommand(command.type)
+              ? incognitoEntryPublication(command.type, authorizePrepared)
+              : undefined,
             restrict,
             onCommitted ? (result) => onCommitted(result.value) : undefined,
           ),
@@ -681,6 +661,7 @@ export function createIncognitoSessionFacts(
           command: { type: Key; input: IncognitoLifecycleOperations[Key]["input"] },
           signal?: AbortSignal,
           captureLifecycle?: (entries: readonly IncognitoLifecycleEntry[]) => LifecycleSettlement,
+          onCommitted?: (value: IncognitoLifecycleOperations[Key]["output"]) => void,
         ): Promise<IncognitoLifecycleOperations[Key]["output"]> => {
           assertBorrowed();
           authority.assertCurrent();
@@ -692,6 +673,13 @@ export function createIncognitoSessionFacts(
             (result) => result.value,
             signal,
             captureIncognitoLifecycleSettlement(captured.input, captureLifecycle),
+            false,
+            captured.type === "session.lifecycle.messageCut" ||
+              captured.type === "session.lifecycle.maintenance"
+              ? incognitoEntryPublication<Key>(captured.type)
+              : undefined,
+            undefined,
+            onCommitted ? (result) => onCommitted(result.value) : undefined,
           );
         },
         ...captureRead(assertBorrowed),

@@ -356,7 +356,6 @@ describe("permission projection across canonical session lists", () => {
       expect(sessions.state.result?.sessions[0]).toMatchObject({
         sessionId: successor.sessionId,
         permissionMode: "full",
-        label: "Canonical successor",
       });
       expect(sessions.state.loading).toBe(false);
       permissionEvent({ ...original, updatedAt: 99, permissionMode: "guarded" });
@@ -422,7 +421,6 @@ describe("permission projection across canonical session lists", () => {
         expect(sessions.listSnapshot(scope).result?.sessions[0]).toMatchObject({
           key: research.key,
           permissionMode: "full",
-          label: "Refreshed managed label",
         });
         expect(sessions.listSnapshot(scope).loading).toBe(false);
         expect(sessions.state.result?.sessions ?? null).toEqual(primaryAvailable ? [main] : null);

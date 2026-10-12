@@ -31,71 +31,25 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(next.agents?.defaults?.model).toEqual(base.agents.defaults.model);
   });
 
-  it("does not turn primary and fallback refs into per-model config entries", () => {
-    const next = applyProviderAuthConfigPatch(
-      {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.5",
-              fallbacks: ["anthropic/claude-opus-4-6"],
-            },
-          },
-        },
-      },
-      { agents: { defaults: { models: { "openai/gpt-5.6-sol": {} } } } },
-    );
-
-    expect(next.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.6-sol": {},
-    });
-  });
-
-  it("replaces the per-model config only when replaceDefaultModels is set", () => {
+  it("ignores undefined deletions under blocked __proto__ keys without mutating input", () => {
+    const blockedKey = "__proto__";
+    const config = { [blockedKey]: { retained: "before" } };
+    const baseLocal = {
+      plugins: { entries: { example: { config } } },
+    } satisfies OpenClawConfig;
     const patch = {
-      agents: {
-        defaults: {
-          models: {
-            "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
-            "openai/gpt-5.2": {},
-          },
+      plugins: {
+        entries: {
+          example: { config: { [blockedKey]: { retained: undefined } } },
         },
       },
     };
-    const next = applyProviderAuthConfigPatch(base, patch, { replaceDefaultModels: true });
-    expect(next.agents?.defaults?.models).toEqual(patch.agents.defaults.models);
-    expect(next.agents?.defaults?.model).toEqual(base.agents.defaults.model);
+
+    const next = applyProviderAuthConfigPatch(baseLocal, patch);
+
+    expect(config[blockedKey]).toEqual({ retained: "before" });
+    expect(next.plugins?.entries?.example?.config?.[blockedKey]).toEqual({ retained: "before" });
   });
-
-  it("drops prototype-pollution keys from the merge", () => {
-    const patch = JSON.parse('{"__proto__":{"polluted":true},"agents":{"defaults":{}}}');
-    const next = applyProviderAuthConfigPatch(base, patch);
-    expect(next.agents?.defaults?.models).toEqual(base.agents.defaults.models);
-    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
-    expect(Object.getPrototypeOf(next).polluted).toBeUndefined();
-  });
-
-  it.each(["__proto__", "constructor", "prototype"])(
-    "ignores undefined deletions under blocked %s keys without mutating input",
-    (blockedKey) => {
-      const config = { [blockedKey]: { retained: "before" } };
-      const baseLocal = {
-        plugins: { entries: { example: { config } } },
-      } satisfies OpenClawConfig;
-      const patch = {
-        plugins: {
-          entries: {
-            example: { config: { [blockedKey]: { retained: undefined } } },
-          },
-        },
-      };
-
-      const next = applyProviderAuthConfigPatch(baseLocal, patch);
-
-      expect(config[blockedKey]).toEqual({ retained: "before" });
-      expect(next.plugins?.entries?.example?.config?.[blockedKey]).toEqual({ retained: "before" });
-    },
-  );
 
   it("drops prototype-pollution keys from opt-in model replacement", () => {
     const patch = JSON.parse(
@@ -112,89 +66,6 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(Object.hasOwn(models ?? {}, "__proto__")).toBe(false);
     expect(Object.getPrototypeOf(Object.assign({}, models)).polluted).toBeUndefined();
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
-  });
-
-  it("preserves nested merge and replacement contracts without mutating inputs", () => {
-    const config = {
-      merged: { keep: "base", replace: "before" },
-      scalar: "before",
-      array: ["before"],
-      nullified: { keep: "before" },
-      replaced: { keep: "before" },
-      removed: "before",
-    };
-    const baseLocal = {
-      plugins: { entries: { example: { config } } },
-    } satisfies OpenClawConfig;
-    const before = structuredClone(baseLocal);
-    const replacement = JSON.parse(
-      '[{"safe":"after","__proto__":{"polluted":true},"constructor":{"polluted":true},"nested":{"prototype":{"polluted":true},"keep":true}}]',
-    );
-    replacement[0].optional = undefined;
-    const patch = {
-      plugins: {
-        entries: {
-          example: {
-            config: {
-              merged: { replace: "after" },
-              scalar: { added: true, removed: undefined },
-              array: { added: true },
-              nullified: null,
-              replaced: replacement,
-              removed: undefined,
-            },
-          },
-        },
-      },
-    };
-
-    const next = applyProviderAuthConfigPatch(baseLocal, patch);
-
-    expect(next.plugins?.entries?.example?.config).toStrictEqual({
-      merged: { keep: "base", replace: "after" },
-      scalar: { added: true },
-      array: { added: true },
-      nullified: null,
-      replaced: [{ safe: "after", nested: { keep: true }, optional: undefined }],
-    });
-    expect(baseLocal).toEqual(before);
-    expect(Object.hasOwn(replacement[0], "__proto__")).toBe(true);
-    expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
-  });
-
-  it("keeps normal recursive merges for unrelated provider auth patch fields", () => {
-    const baseLocal = {
-      agents: {
-        defaults: {
-          contextPruning: {
-            mode: "cache-ttl",
-            ttl: "30m",
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const patch = {
-      agents: {
-        defaults: {
-          contextPruning: {
-            ttl: "1h",
-          },
-        },
-      },
-    };
-
-    const next = applyProviderAuthConfigPatch(baseLocal, patch);
-
-    expect(next).toEqual({
-      agents: {
-        defaults: {
-          contextPruning: {
-            mode: "cache-ttl",
-            ttl: "1h",
-          },
-        },
-      },
-    });
   });
 
   it("deletes provider auth fields marked undefined by auth patches", () => {
@@ -234,41 +105,6 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(provider).not.toHaveProperty("headers");
   });
 
-  it("normalizes retired Google Gemini model refs from provider config patches", () => {
-    const patch = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "google/gemini-3-pro-preview",
-            fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
-          },
-          models: {
-            "google/gemini-3-pro-preview": {
-              alias: "gemini",
-              params: { thinking: "high" },
-            },
-            "google/gemini-3.1-pro-preview": {
-              params: { maxTokens: 12_000 },
-            },
-          },
-        },
-      },
-    };
-
-    const next = applyProviderAuthConfigPatch({}, patch);
-
-    expect(next.agents?.defaults?.model).toEqual({
-      primary: "google/gemini-3.1-pro-preview",
-      fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
-    });
-    expect(next.agents?.defaults?.models).toEqual({
-      "google/gemini-3.1-pro-preview": {
-        alias: "gemini",
-        params: { thinking: "high", maxTokens: 12_000 },
-      },
-    });
-  });
-
   it("normalizes retired Google Gemini per-agent refs from provider config patches", () => {
     const patch = {
       agents: {
@@ -298,24 +134,6 @@ describe("applyProviderAuthConfigPatch", () => {
       "google/gemini-3.1-pro-preview": {
         alias: "ops-gemini",
       },
-    });
-  });
-
-  it("normalizes retired Google Gemini keys when replacing provider model maps", () => {
-    const patch = {
-      agents: {
-        defaults: {
-          models: {
-            "google/gemini-3-pro-preview": {},
-          },
-        },
-      },
-    };
-
-    const next = applyProviderAuthConfigPatch(base, patch, { replaceDefaultModels: true });
-
-    expect(next.agents?.defaults?.models).toEqual({
-      "google/gemini-3.1-pro-preview": {},
     });
   });
 

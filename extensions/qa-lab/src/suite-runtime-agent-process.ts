@@ -321,12 +321,17 @@ async function forceMemoryIndex(params: {
   query: string;
   expectedNeedle: string;
 }) {
+  if (!params.env.gateway.restartAfterStateMutation) {
+    throw new Error("qa gateway cannot stop for offline memory indexing");
+  }
+  await params.env.gateway.restartAfterStateMutation(async () => {
+    await runQaCli(params.env, ["memory", "index", "--agent", "qa", "--force"], {
+      timeoutMs: resolveQaLiveTurnTimeoutMs(params.env, 60_000),
+    });
+  });
   await waitForGatewayHealthy(params.env, 60_000);
   await waitForTransportReady(params.env, 60_000);
-  await runQaCli(params.env, ["memory", "index", "--agent", "qa", "--force"], {
-    timeoutMs: resolveQaLiveTurnTimeoutMs(params.env, 60_000),
-  });
-  const result = await waitForMemorySearchMatch({
+  return await waitForMemorySearchMatch({
     expectedNeedle: params.expectedNeedle,
     timeoutMs: resolveQaLiveTurnTimeoutMs(params.env, 20_000),
     search: async () =>
@@ -339,8 +344,6 @@ async function forceMemoryIndex(params: {
         },
       )) as QaMemorySearchResult,
   });
-  await params.env.gateway.restartAfterStateMutation?.(async () => {});
-  return result;
 }
 
 async function waitForPersistedTranscriptToolEvidence(

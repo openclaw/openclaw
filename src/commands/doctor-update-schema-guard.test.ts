@@ -26,6 +26,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-agent-schema-v21.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   getOpenClawDatabaseMaintenanceScope,
@@ -354,8 +355,9 @@ it("revalidates the update owner after integrity work before committing an agent
         active = false;
       }
     });
-    await withDoctorMaintenance({ assertCurrent }, async (maintenance) => {
-      const result = await Promise.allSettled([
+    let result: PromiseSettledResult<void>[] = [];
+    const settled = withDoctorMaintenance({ assertCurrent }, async (maintenance) => {
+      result = await Promise.allSettled([
         maintenance.run(() =>
           withAgentDatabaseMaintenanceLease({ env: state.env }, (lease) =>
             migrateOpenClawAgentDatabaseForMaintenance(
@@ -365,13 +367,16 @@ it("revalidates the update owner after integrity work before committing an agent
           ),
         ),
       ]);
-      const outcome = expectDefined(result[0], "migration outcome");
-      expect(outcome.status).toBe("rejected");
-      if (outcome.status !== "rejected") {
-        throw new Error("Expected retired owner refusal");
-      }
-      expect(collectNestedErrorCandidates(outcome.reason)).toContain(retired);
     });
+    await expect(settled).rejects.toSatisfy((error: unknown) =>
+      collectNestedErrorCandidates(error).includes(retired),
+    );
+    const outcome = expectDefined(result[0], "migration outcome");
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status !== "rejected") {
+      throw new Error("Expected retired owner refusal");
+    }
+    expect(collectNestedErrorCandidates(outcome.reason)).toContain(retired);
     expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
   });
 });
@@ -402,7 +407,7 @@ it("refuses early unregistered WAL state and admits post-core repair after verif
       const before = files.map((file) => fs.readFileSync(file));
       const schemas = await prepareDoctorDatabasePreflight();
       await expect(guardUpdateDoctorSchemaUpgrade({ schemas })).rejects.toThrow(
-        "Missing recoverable canonical backup coverage",
+        "Missing recoverable database backup coverage",
       );
       expect(
         files.map((file) => fs.readFileSync(file)),
@@ -500,13 +505,13 @@ it("requires the captured agent path and owner to be verified canonical archive 
         archive.archivePath,
         agents.map((fact) => Object.assign({}, fact, { sourcePath: `${fact.sourcePath}.missing` })),
       ),
-    ).rejects.toThrow("lacks verified canonical SQLite coverage");
+    ).rejects.toThrow("lacks verified SQLite database coverage");
     await expect(
       backupVerify.verifyBackupArchive(
         archive.archivePath,
         agents.map((fact) => Object.assign({}, fact, { agentId: "another-agent" })),
       ),
-    ).rejects.toThrow("lacks verified canonical SQLite coverage");
+    ).rejects.toThrow("lacks verified SQLite database coverage");
     expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
   });
 });
@@ -639,12 +644,13 @@ it("retains disposable coverage through the real migration of a mixed backed-up 
     }).path;
     await closeOpenClawAgentDatabasesAsync();
     await closeStateDatabaseForTest();
+    fs.unlinkSync(external);
     const database = new DatabaseSync(external);
     try {
-      database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1};`);
-      database
-        .prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'")
-        .run(OPENCLAW_AGENT_SCHEMA_VERSION - 1);
+      database.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
+      database.exec(`PRAGMA user_version = 24;
+        INSERT INTO schema_meta(meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+        VALUES ('primary', 'agent', 24, 'external', '2026.9.9', 1, 1)`);
     } finally {
       database.close();
     }

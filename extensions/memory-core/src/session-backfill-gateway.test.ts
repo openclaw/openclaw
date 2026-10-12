@@ -61,15 +61,16 @@ async function invoke(method: RegisteredMethod, params: unknown) {
 describe("session backfill gateway methods", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    executeBatchMock.mockReset();
   });
 
-  it("registers read preview and admin mutation methods", () => {
+  it("keeps legacy preview read-only and all owner operations admin-only", () => {
     const { methods } = createHarness();
-    expect([...methods.entries()].map(([name, value]) => [name, value.scope])).toEqual([
-      [SESSION_BACKFILL_GATEWAY_METHODS.preview, "operator.read"],
-      [SESSION_BACKFILL_GATEWAY_METHODS.apply, "operator.admin"],
-      [SESSION_BACKFILL_GATEWAY_METHODS.rollback, "operator.admin"],
-    ]);
+    for (const [operation, method] of Object.entries(SESSION_BACKFILL_GATEWAY_METHODS)) {
+      const expectedScope = operation === "preview" ? "operator.read" : "operator.admin";
+      expect(methods.get(method)?.scope).toBe(expectedScope);
+      expect(methods.get(`${method}.owner`)?.scope).toBe("operator.admin");
+    }
   });
 
   it("validates preview params and returns at most three samples per day", async () => {
@@ -271,4 +272,30 @@ describe("session backfill gateway methods", () => {
       removedStagedEntries: 2,
     });
   });
+
+  it.each([
+    [{ cliResult: true }, "expectedOwnerId must be a non-empty string"],
+    [
+      { cliResult: true, expectedOwnerId: "current", operationOwnerId: "previous" },
+      "Gateway owner changed during session backfill",
+    ],
+  ])(
+    "refuses unbound or replaced CLI ownership before opening a backfill (%j)",
+    async (params, message) => {
+      const { methods } = createHarness();
+      const respond = await invoke(
+        methods.get(`${SESSION_BACKFILL_GATEWAY_METHODS.apply}.owner`)!,
+        params,
+      );
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining(message),
+        }),
+      );
+      expect(executeBatchMock).not.toHaveBeenCalled();
+    },
+  );
 });

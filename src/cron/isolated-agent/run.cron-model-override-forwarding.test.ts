@@ -702,12 +702,11 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
       const [provider, model] = raw.split("/");
       return { ref: { provider, model } };
     });
-    loadModelCatalogMock
-      .mockResolvedValueOnce([{ provider: "openai", id: "gpt-5.6-sol", reasoning: true }])
-      .mockResolvedValueOnce([
-        { provider: "openai", id: "gpt-5.6-sol", reasoning: true },
-        { provider: "OLLAMA", id: "minimax-m3:cloud", reasoning: true },
-      ]);
+    loadModelCatalogMock.mockImplementation(({ provider }: { provider?: string }) =>
+      provider?.toLowerCase() === "ollama"
+        ? [{ provider: "OLLAMA", id: "minimax-m3:cloud", reasoning: true }]
+        : [{ provider: "openai", id: "gpt-5.6-sol", reasoning: true }],
+    );
     resolveThinkingDefaultMock.mockImplementation(
       ({
         catalog,
@@ -754,10 +753,18 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
       }),
     );
 
-    expect(loadModelCatalogMock).toHaveBeenCalledTimes(2);
-    expect(runEmbeddedAgentMock.mock.calls.map((call) => call[0].thinkLevel)).toEqual([
-      "off",
-      "medium",
+    expect(loadModelCatalogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "ollama", model: "minimax-m3:cloud" }),
+    );
+    expect(
+      runEmbeddedAgentMock.mock.calls.map(([call]) => ({
+        provider: call.provider,
+        model: call.model,
+        thinkLevel: call.thinkLevel,
+      })),
+    ).toEqual([
+      { provider: "openai", model: "gpt-5.6-sol", thinkLevel: "off" },
+      { provider: "ollama", model: "minimax-m3:cloud", thinkLevel: "medium" },
     ]);
   });
 });

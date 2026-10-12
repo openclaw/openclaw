@@ -52,7 +52,6 @@ type InputDependencies = {
   knownChildren: ReadonlyMap<string, KnownChild>;
   children: ReadonlyMap<string, ChildState>;
   isCurrent: (state: ParentState) => boolean;
-  retainTargetRevision: (threadId: string) => { isCurrent: () => boolean; release: () => void };
   currentModelExecution: (threadId: string) => ParentOwner | undefined;
   admissions: ReadonlyMap<string, NativeChildAdmissionEvidence[]>;
   canPrepareReceiver: (state: ParentState, threadId: string) => boolean;
@@ -187,7 +186,6 @@ export async function prepareNativeModelToolInput(
   }
   let preparedSource: NativeModelSourceOwner | undefined;
   let pendingBinding: NativeModelBinding | undefined;
-  let targetRevision: ReturnType<InputDependencies["retainTargetRevision"]> | undefined;
   let assertTargetCurrent: (() => void) | undefined;
   const assertCurrent = () => {
     request.signal?.throwIfAborted();
@@ -206,9 +204,9 @@ export async function prepareNativeModelToolInput(
   try {
     assertCurrent();
     const targetThreadId = resolveInputTarget(request, dependencies);
-    targetRevision = dependencies.retainTargetRevision(targetThreadId);
     const targetParent = dependencies.parents.get(targetThreadId);
     const targetChild = dependencies.knownChildren.get(targetThreadId);
+    const targetLoad = (targetParent ?? targetChild)?.nativeLoad;
     const targetConfiguration = targetChild?.configurationQualification;
     const targetRouting = request.readQualification(targetThreadId);
     let metadataRead = false;
@@ -231,9 +229,9 @@ export async function prepareNativeModelToolInput(
         throw new Error("Codex native input target is outside the sender's admitted tree");
       }
       if (
-        !targetRevision?.isCurrent() ||
         dependencies.parents.get(targetThreadId) !== targetParent ||
         dependencies.knownChildren.get(targetThreadId) !== targetChild ||
+        (targetParent ?? targetChild)?.nativeLoad !== targetLoad ||
         targetChild?.configurationQualification !== targetConfiguration ||
         request.readQualification(targetThreadId) !== targetRouting
       ) {
@@ -378,7 +376,6 @@ export async function prepareNativeModelToolInput(
       preparedOwner,
     );
   } finally {
-    targetRevision?.release();
     preparedSource?.release();
     if (!preparedSource) {
       capture.release();

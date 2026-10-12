@@ -54,6 +54,7 @@ function captureAgentHarnessSessionMutations(
         run: (
           prepared: ReadonlyMap<string, readonly PreparedAgentHarnessSessionDeletion[]>,
         ) => Promise<T>,
+        assertSourceCurrent?: () => void,
       ): Promise<T> => {
         const pending = targets.flatMap((target) =>
           owners
@@ -73,6 +74,7 @@ function captureAgentHarnessSessionMutations(
           }
           const { owner, target } = candidate;
           let active = true;
+          let preparing = true;
           const assertCurrent = () => {
             target.initialization?.assertRollbackCurrent();
             if (
@@ -87,12 +89,21 @@ function captureAgentHarnessSessionMutations(
               );
             }
           };
-          try {
+          const assertEffectCurrent = () => {
             assertCurrent();
+            if (preparing) {
+              assertSourceCurrent?.();
+            }
+          };
+          try {
+            assertEffectCurrent();
             const result = await owner.prepare<T>(
-              { ...target, assertCurrent },
+              { ...target, assertCurrent: assertEffectCurrent },
               async (mutation) => {
                 assertCurrent();
+                // The transaction now owns forward authority; rollback and terminal
+                // cleanup must settle even if that source is subsequently revoked.
+                preparing = false;
                 const mutations = prepared.get(target.sessionKey) ?? [];
                 mutations.push(
                   Object.assign(

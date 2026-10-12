@@ -127,11 +127,9 @@ export function createBrokerSender(send: IpcSender) {
 
 /** Only the version-matched private peer can supply frames on this channel. */
 export function createBrokerReceiver() {
-  const pending = new Map<number, { total: number; received: number; chunks: Buffer[] }>();
-  let reserved = 0;
+  let pending: { id: number; total: number; received: number; chunks: Buffer[] } | undefined;
   const clear = () => {
-    pending.clear();
-    reserved = 0;
+    pending = undefined;
   };
   return {
     receive(message: unknown): unknown {
@@ -158,22 +156,13 @@ export function createBrokerReceiver() {
       ) {
         throw new SpawnBrokerError("Invalid spawn broker IPC frame");
       }
-      // One serialized producer cannot interleave messages; a new message abandons an incomplete one.
-      if (frame.offset === 0 && !pending.has(frame.id)) {
-        clear();
-      }
-      let assembly = pending.get(frame.id);
+      let assembly = pending?.id === frame.id ? pending : undefined;
       if (!assembly) {
-        if (
-          frame.offset !== 0 ||
-          pending.size >= MAX_PENDING_MESSAGES ||
-          reserved + frame.total > MAX_PENDING_BYTES
-        ) {
+        if (frame.offset !== 0) {
           throw new SpawnBrokerError("Spawn broker receive capacity exceeded");
         }
-        assembly = { total: frame.total, received: 0, chunks: [] };
-        pending.set(frame.id, assembly);
-        reserved += frame.total;
+        // The serialized producer owns one assembly; a new message abandons its predecessor.
+        pending = assembly = { id: frame.id, total: frame.total, received: 0, chunks: [] };
       }
       if (
         assembly.total !== frame.total ||
@@ -187,8 +176,7 @@ export function createBrokerReceiver() {
       if (assembly.received < assembly.total) {
         return undefined;
       }
-      pending.delete(frame.id);
-      reserved -= assembly.total;
+      clear();
       return deserialize(Buffer.concat(assembly.chunks, assembly.total));
     },
     clear,

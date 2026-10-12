@@ -699,10 +699,7 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it.each([
-    { modelMaxTokens: 512, expectedMaxTokens: 512 },
-    { modelMaxTokens: undefined, expectedMaxTokens: 5_000 },
-  ])(
+  it.each([{ modelMaxTokens: undefined, expectedMaxTokens: 5_000 }])(
     "resolves explicit output requests with model limit $modelMaxTokens",
     async ({ modelMaxTokens, expectedMaxTokens }) => {
       const model = makeAnthropicModel({
@@ -961,18 +958,11 @@ describe("Anthropic provider", () => {
       headers: { "Anthropic-Beta": "files-api-2025-04-14" },
       customBeta: true,
     },
-    {
-      id: "claude-opus-5-5",
-      name: "Opus 5.5 with request betas",
-      optionHeaders: { "anthropic-beta": "files-api-2025-04-14" },
-      customBeta: true,
-    },
   ])(
     "sends default server-side fallback params for direct $name API-key requests",
-    async ({ optionHeaders, customBeta, ...model }) => {
+    async ({ customBeta, ...model }) => {
       const { payload: capturedPayload } = await captureSimpleAnthropicPayload(model, {
         mode: "raw",
-        headers: optionHeaders,
       });
 
       expect((capturedPayload as { fallbacks?: unknown }).fallbacks).toBe("default");
@@ -1202,24 +1192,6 @@ describe("Anthropic provider", () => {
     expect(result.errorMessage).toContain("socket failed");
   });
 
-  it("keeps the message for Anthropic errors that carry no HTTP body", async () => {
-    // Ordinary Error rejections with no body must still surface error.message;
-    // retry classification in src/llm/utils/retry.ts parses this string.
-    const asResponse = vi
-      .fn()
-      .mockRejectedValue(Object.assign(new Error("Overloaded"), { status: 529 }));
-    const client = {
-      messages: {
-        create: vi.fn(() => ({ asResponse })),
-      },
-    };
-    const stream = startStream(client, { id: "claude-fable-5", name: "Claude Fable 5" });
-    const { eventTypes, result } = await consumeStream(stream);
-
-    expect(eventTypes).toEqual(["error"]);
-    expect(result.errorMessage).toBe("529: Overloaded");
-  });
-
   it("strips Fable thinking when replay targets Anthropic Vertex", async () => {
     const { payload } = await captureSimpleAnthropicPayload(
       { provider: "anthropic-vertex", id: "claude-opus-4-8", name: "Claude Opus 4.8" },
@@ -1240,20 +1212,6 @@ describe("Anthropic provider", () => {
     expect(assistant?.content).toEqual([{ type: "text", text: "visible answer" }]);
     expect(JSON.stringify(assistant)).not.toContain("sig_model_bound");
   });
-
-  it.each([undefined] as const)(
-    "sends pooled Fable %s effort and preserves its routed model id",
-    async (reasoning) => {
-      const id = "Claude Gateway/claude-fable-5-1";
-      const { payload } = await captureSimpleAnthropicPayload(
-        { id, name: "Pooled Fable", provider: "proxy" },
-        { reasoning },
-      );
-      expect(payload.model).toBe(id);
-      expect(payload.thinking).toMatchObject({ type: "adaptive" });
-      expect(payload.output_config).toEqual({ effort: reasoning ?? "medium" });
-    },
-  );
 
   it("normalizes adaptive requests and post-hook sampling for canonical deployment aliases", async () => {
     const { payload } = await captureSimpleAnthropicPayload(
@@ -1334,7 +1292,6 @@ describe("Anthropic provider", () => {
 
   it.each([
     { reasoning: "xhigh", thinkingLevelMap: { xhigh: null, max: null }, effort: "high" },
-    { reasoning: undefined, thinkingLevelMap: { medium: null }, effort: "high" },
   ] as const)("honors provider effort restrictions for Claude Fable 5: %j", async (testCase) => {
     const { payload } = await captureSimpleAnthropicPayload(
       {

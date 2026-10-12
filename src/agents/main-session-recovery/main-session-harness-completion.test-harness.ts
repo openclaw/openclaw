@@ -115,6 +115,9 @@ export function registerHarnessCompletionRecoveryCases(
     "transcript-read-failure",
     "reserved-successor",
     "human-before-recovery",
+    "failed",
+    "timeout",
+    "killed",
   ])(
     "recovers the admitted harness completion after %s execution is interrupted",
     async (phase) => {
@@ -142,7 +145,12 @@ export function registerHarnessCompletionRecoveryCases(
           sourceChannel: "internal",
           sourceSessionKey: taskRunId,
         } as const;
-        const entry = mainSessionEntry({ lifecycleRevision: "revision-1" });
+        const entry = mainSessionEntry({
+          lifecycleRevision: "revision-1",
+          ...(phase === "failed" || phase === "timeout" || phase === "killed"
+            ? { status: phase }
+            : {}),
+        });
         const binding = await captureAdmittedHarnessCompletionForTest({
           agentId: "main",
           sessionKey,

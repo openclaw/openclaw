@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
   type CronActiveJobMarker,
   noteActiveCronJobRemoval,
@@ -551,7 +552,7 @@ export async function remove(
     }
   };
   if (activeMarker) {
-    onCronJobInactive(activeMarker, () => void cleanup());
+    onCronJobInactive(activeMarker, () => void trackAsyncWork(cleanup));
     if (!outcome.ok) {
       throw outcome.error;
     }

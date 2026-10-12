@@ -141,6 +141,7 @@ initial_update_observation_root=""
 last_update_observation_root=""
 workshop_doctor_observation_root=""
 idempotence_seconds=""
+idempotence_budget_seconds=""
 run_completed="0"
 update_exit_code=""
 
@@ -275,6 +276,7 @@ write_summary() {
     SUMMARY_START_SECONDS="$start_seconds" \
     SUMMARY_UPDATE_RESTART_SECONDS="$update_restart_seconds" \
     SUMMARY_IDEMPOTENCE_SECONDS="$idempotence_seconds" \
+    SUMMARY_IDEMPOTENCE_BUDGET_SECONDS="$idempotence_budget_seconds" \
     SUMMARY_HEALTHZ_SECONDS="$healthz_seconds" \
     SUMMARY_READYZ_SECONDS="$readyz_seconds" \
     SUMMARY_STATUS_SECONDS="$status_seconds" \
@@ -309,6 +311,10 @@ const readJsonOrNull = (file) => {
   if (!file || !fs.existsSync(file)) return null;
   return JSON.parse(fs.readFileSync(file, "utf8"));
 };
+const readArtifact = (name, scenario) =>
+  scenario && process.env.SUMMARY_SCENARIO !== scenario
+    ? undefined
+    : readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), name));
 let firstHopPostCore = { availability: "unavailable" };
 if (process.env.SUMMARY_INITIAL_UPDATE_OBSERVATION_ROOT) {
   try {
@@ -341,43 +347,34 @@ const summary = {
   candidateInstallMode: process.env.SUMMARY_CANDIDATE_INSTALL_MODE || "updater",
   updateRestartMode: process.env.SUMMARY_UPDATE_RESTART_MODE || "manual",
   updateOutcome: process.env.SUMMARY_UPDATE_OUTCOME || "unknown",
-  baselineCompanion: readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "baseline-companion.json")),
+  baselineCompanion: readArtifact("baseline-companion.json"),
   updateRecovery: process.env.SUMMARY_UPDATE_REPAIR_REQUIRED === "1" ? "capability-consent" : null,
   updateRestartSource: process.env.SUMMARY_UPDATE_RESTART_SOURCE || null,
   firstHopPostCore,
-  workshopDoctorRecovery: process.env.SUMMARY_SCENARIO === "workshop-doctor-recovery"
-    ? readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "workshop-doctor-recovery.json"))
-    : undefined,
+  workshopDoctorRecovery: readArtifact("workshop-doctor-recovery.json", "workshop-doctor-recovery"),
   restartFixture: readJsonOrNull(process.env.SUMMARY_RESTART_FIXTURE),
   restartRuntimeFixture: readJsonOrNull(process.env.SUMMARY_RESTART_RUNTIME_FIXTURE),
   restartInference: process.env.SUMMARY_RESTART_INFERENCE || null,
   backupRollback: process.env.SUMMARY_SCENARIO === "legacy-operator-state"
     ? readJsonOrNull(process.env.SUMMARY_BACKUP_ROLLBACK)
     : undefined,
-  backupSchedule: process.env.SUMMARY_SCENARIO === "backup-schedule"
-    ? readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "backup-schedule.json"))
-    : undefined,
+  backupSchedule: readArtifact("backup-schedule.json", "backup-schedule"),
   packageActivationRecovery: readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "package-activation-recovery.json")),
-  nativeAssignmentEligibility: readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "native-assignment-eligibility.json")),
-  nativeAssignments: process.env.SUMMARY_SCENARIO === "legacy-operator-state"
-    ? readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "native-assignment-proof.json"))
-    : undefined,
-  pluginPolicy: process.env.SUMMARY_SCENARIO === "legacy-operator-state"
-    ? readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "webhooks-only-policy", "result.json"))
-    : undefined,
+  nativeAssignmentEligibility: readArtifact("native-assignment-eligibility.json"),
+  nativeAssignments: readArtifact("native-assignment-proof.json", "legacy-operator-state"),
+  pluginPolicy: readArtifact("webhooks-only-policy/result.json", "legacy-operator-state"),
   timings: {
     startupSeconds: numberOrNull(process.env.SUMMARY_START_SECONDS),
     updateRestartSeconds: numberOrNull(process.env.SUMMARY_UPDATE_RESTART_SECONDS),
     idempotenceSeconds: numberOrNull(process.env.SUMMARY_IDEMPOTENCE_SECONDS),
+    idempotenceBudgetSeconds: numberOrNull(process.env.SUMMARY_IDEMPOTENCE_BUDGET_SECONDS),
     healthzSeconds: numberOrNull(process.env.SUMMARY_HEALTHZ_SECONDS),
     readyzSeconds: numberOrNull(process.env.SUMMARY_READYZ_SECONDS),
     statusSeconds: numberOrNull(process.env.SUMMARY_STATUS_SECONDS),
   },
   config: readJsonOrNull(process.env.SUMMARY_CONFIG_COVERAGE),
   liveModels: readJsonOrNull(process.env.SUMMARY_LIVE_MODELS),
-  recovery: process.env.SUMMARY_SCENARIO === "recovery-cleanup"
-    ? readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "recovery-evidence.json"))
-    : undefined,
+  recovery: readArtifact("recovery-evidence.json", "recovery-cleanup"),
   watchosDirectNode: process.env.SUMMARY_SCENARIO === "watchos-direct-node"
     ? {
         contract: {
@@ -1425,14 +1422,7 @@ candidate_update_spec() {
     printf '%s\n' "$CANDIDATE_SPEC"
     return 0
   fi
-  case "$CANDIDATE_SPEC" in
-    file:*)
-      printf '%s\n' "$CANDIDATE_SPEC"
-      ;;
-    *)
-      printf 'file:%s\n' "$CANDIDATE_SPEC"
-      ;;
-  esac
+  printf 'file:%s\n' "${CANDIDATE_SPEC#file:}"
 }
 
 is_extended_stable_release_version() {
@@ -1935,7 +1925,9 @@ repair_fixture_plugin_consent() {
 }
 
 assert_volume_idempotence() {
-  local started_at budget
+  local started_at
+  idempotence_budget_seconds="$(node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    volume-doctor-budget "$ARTIFACT_ROOT/volume-doctor-budget.json")" || return "$?"
   started_at="$(date +%s)"
   if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive >>"$DOCTOR_LOG" 2>&1; then
     echo "openclaw idempotence doctor failed" >&2
@@ -1943,10 +1935,9 @@ assert_volume_idempotence() {
     return 1
   fi
   idempotence_seconds=$(($(date +%s) - started_at))
-  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS 60)"
-  echo "SQLite volume idempotence doctor completed in ${idempotence_seconds}s (budget ${budget}s)."
-  if [ "$idempotence_seconds" -gt "$budget" ]; then
-    node scripts/lib/check-limits.mts scripts/e2e/lib/upgrade-survivor/run.sh "Upgrade idempotence budget" "SQLite volume idempotence exceeded budget: ${idempotence_seconds}s > ${budget}s" || return "$?"
+  echo "SQLite volume idempotence doctor completed in ${idempotence_seconds}s (budget ${idempotence_budget_seconds}s)."
+  if [ "$idempotence_seconds" -gt "$idempotence_budget_seconds" ]; then
+    node scripts/lib/check-limits.mts scripts/e2e/lib/upgrade-survivor/run.sh "Upgrade idempotence budget" "SQLite volume idempotence exceeded budget: ${idempotence_seconds}s > ${idempotence_budget_seconds}s" || return "$?"
   fi
   OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE="$survival_assert_stage" \
     node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
@@ -2212,6 +2203,15 @@ run_project_worktree_doctor() {
     >"$ARTIFACT_ROOT/worktree-doctor.log" 2>&1
 }
 
+require_isolated_manual_baseline() {
+  local expected_baseline="$1"
+  if [ "$baseline_spec" != "$expected_baseline" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
+    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
+    echo "$SCENARIO requires published $expected_baseline, a candidate tarball, isolated manual restart, and no live provider" >&2
+    exit 2
+  fi
+}
+
 validate_worker_cell() {
   if [ "$WORKER_CELL" != "1" ]; then
     return 0
@@ -2240,11 +2240,7 @@ if [ "$SCENARIO" = "package-publication-recovery" ] || [ "$SCENARIO" = "package-
   exit 0
 fi
 if [ "$SCENARIO" = "backup-schedule" ]; then
-  if [ "$baseline_spec" != "openclaw@2026.9.7" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
-    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
-    echo "backup-schedule requires published openclaw@2026.9.7, a candidate tarball, isolated manual restart, and no live provider" >&2
-    exit 2
-  fi
+  require_isolated_manual_baseline openclaw@2026.9.7
   phase configure-backup-baseline node scripts/e2e/lib/upgrade-survivor/backup-schedule.mjs configure
   phase start-backup-baseline start_gateway
   phase seed-backup-schedule node scripts/e2e/lib/upgrade-survivor/backup-schedule.mjs seed "$(package_root)"
@@ -2301,11 +2297,7 @@ if [ "$SCENARIO" = "cron-owner-doctor" ]; then
   exit 0
 fi
 if [ "$SCENARIO" = "dreaming-cron-doctor" ]; then
-  if [ "$baseline_spec" != "openclaw@2026.9.6" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
-    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
-    echo "dreaming-cron-doctor requires published openclaw@2026.9.6, a candidate tarball, isolated manual restart, and no live provider" >&2
-    exit 2
-  fi
+  require_isolated_manual_baseline openclaw@2026.9.6
   phase configure-dreaming-baseline node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs configure
   phase prepare-dreaming-baseline openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
     openclaw doctor --repair --non-interactive >"$BASELINE_DOCTOR_LOG" 2>&1
@@ -2339,11 +2331,7 @@ if [ "$SCENARIO" = "dreaming-cron-doctor" ]; then
   exit 0
 fi
 if [ "$SCENARIO" = "channel-owner-policy" ]; then
-  if [ "$baseline_spec" != "openclaw@2026.9.4" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
-    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
-    echo "$SCENARIO requires published openclaw@2026.9.4, a candidate tarball, isolated manual restart, and no live provider" >&2
-    exit 2
-  fi
+  require_isolated_manual_baseline openclaw@2026.9.4
   phase policy-baseline-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs baseline "$(package_root)"
   phase prepare-policy-database openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive
   phase seed-channel-policy node scripts/e2e/lib/upgrade-survivor/channel-owner-policy.mjs seed
@@ -2432,11 +2420,7 @@ if [ "$WORKER_CELL" = "1" ]; then
   exit 0
 fi
 if [ "$SCENARIO" = "update-report-recovery" ]; then
-  if [ "$baseline_spec" != "openclaw@2026.9.6" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
-    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
-    echo "update-report-recovery requires published openclaw@2026.9.6, a candidate tarball, isolated manual restart, and no live provider" >&2
-    exit 2
-  fi
+  require_isolated_manual_baseline openclaw@2026.9.6
   export OPENCLAW_E2E_COMMAND_TIMEOUT="$COMMAND_TIMEOUT"
   phase setup-report-baseline node scripts/e2e/lib/upgrade-survivor/update-report-recovery.mjs setup "$(package_root)"
   phase validate-report-baseline validate_baseline_config

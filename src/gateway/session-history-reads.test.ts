@@ -6,9 +6,9 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type {
   SessionHistoryReadParams,
   SessionHistorySnapshot,

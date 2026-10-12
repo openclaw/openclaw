@@ -27,6 +27,12 @@ import type {
 // delivery waits at the operation layer, and finalization must not out-wait it.
 const SETTLE_QUEUED_TIMEOUT_MS = 30_000;
 
+const RAW_REPLY_SEND_METHODS = {
+  tool: "sendToolResult",
+  block: "sendBlockReply",
+  final: "sendFinalReply",
+} as const;
+
 type LedgerQueuedSend = {
   queued: boolean;
   outcome?: Promise<ReplyDispatchDeliveryOutcome>;
@@ -88,15 +94,6 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
       terminalDelivery = "pending";
     }
   };
-  const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload): boolean => {
-    if (kind === "tool") {
-      return dispatcher.sendToolResult(payload);
-    }
-    if (kind === "block") {
-      return dispatcher.sendBlockReply(payload);
-    }
-    return dispatcher.sendFinalReply(payload);
-  };
   const sendOperation = (
     kind: ReplyDispatchKind,
     operation: ReplyDispatchOperation,
@@ -109,7 +106,7 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
     const queued =
       operation.kind === "prepared" && dispatcher.sendPreparedReply
         ? dispatcher.sendPreparedReply(kind, operation.plan)
-        : enqueue(kind, payload);
+        : dispatcher[RAW_REPLY_SEND_METHODS[kind]](payload);
     if (!queued) {
       return { queued: false };
     }

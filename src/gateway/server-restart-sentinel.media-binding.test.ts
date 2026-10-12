@@ -8,6 +8,7 @@ import {
   createMediaGenerationTaskLifecycle,
   scheduleMediaGenerationTaskCompletion,
 } from "../agents/tools/media-generate-background-shared.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as transcript from "../config/sessions/transcript.js";
@@ -15,7 +16,6 @@ import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { drainPendingSessionDelivery } from "../infra/session-delivery-queue-recovery.js";
 import * as queueRuntime from "../infra/session-delivery-queue-runtime.js";
 import * as queue from "../infra/session-delivery-queue-storage.js";
-import * as systemEvents from "../infra/system-events.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -43,7 +43,7 @@ async function withMediaSession(
     queueContext: ReturnType<typeof captureOpenClawStateWorkerContext>;
     mediaPath: string;
     dispatch: MockInstance<typeof recoveryRuntime.dispatchGatewayLifecycleMethod>;
-    systemWake: MockInstance<typeof systemEvents.enqueueSystemEvent>;
+    systemWake: MockInstance<typeof sessionEvents.enqueueSessionEventForHost>;
     drain: (id: string) => ReturnType<typeof drainPendingSessionDelivery>;
   }) => Promise<void>,
 ) {
@@ -78,7 +78,7 @@ async function withMediaSession(
         deliveryStatus: { status: "sent" },
       },
     });
-    const systemWake = vi.spyOn(systemEvents, "enqueueSystemEvent");
+    const systemWake = vi.spyOn(sessionEvents, "enqueueSessionEventForHost");
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const drain = (id: string) =>
       drainPendingSessionDelivery({

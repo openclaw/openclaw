@@ -3,6 +3,8 @@ import type { Server } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { reloadControlUiDocument } from "../../ui/src/app/stale-chunk-reload.ts";
+import { sessionNavigationTarget } from "../../ui/src/lib/sessions/route-navigation.ts";
 import { computeInlineScriptHashes } from "./control-ui-csp.js";
 import { AUTH_TOKEN, createTestGatewayServer, sendRequest } from "./server-http.test-harness.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
@@ -87,6 +89,59 @@ afterEach(() => {
 });
 
 describe("canonical anonymous HTTP entry", () => {
+  it("reloads the exact Incognito address produced by in-app navigation", async () => {
+    const sessionKey = "agent:main:dashboard:incognito-12345678-aaaa-4000-8000-000000000001";
+    const target = sessionNavigationTarget({
+      face: "chat",
+      sessionKey,
+      navigationKey: sessionKey,
+      fallbackAgentId: "main",
+      basePath: "/control",
+    });
+    const response = await sendRequest(server(), {
+      path: target.options.pathname + (target.options.search ?? ""),
+      host: "gateway.lan:18789",
+      remoteAddress: "192.168.1.25",
+    });
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain("<openclaw-app>");
+    expect(resolveSession).not.toHaveBeenCalled();
+    expect(reader).not.toHaveBeenCalled();
+  });
+
+  it("reloads a chat through the exact recovery URL without exposing its private transcript", async () => {
+    const replace = vi.fn();
+    const url = new URL(`${route}?draft=Follow+up&dashboard=expanded`, "http://localhost");
+    vi.stubGlobal("window", { location: { replace } });
+    try {
+      reloadControlUiDocument(url);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const recoveryUrl = new URL(replace.mock.calls[0]![0]);
+    const recoveryPath = recoveryUrl.pathname + recoveryUrl.search;
+    resolveSession.mockResolvedValue(null);
+    const instance = server();
+    const privateChat = await request(instance, recoveryPath);
+    expect(privateChat.res.statusCode).toBe(404);
+    expect(privateChat.getBody()).toContain('data-gateway-path="/control"');
+    expect(privateChat.getBody()).not.toContain("Published answer");
+    const entry = `/control/__openclaw__/session-entry?${new URLSearchParams({ path: recoveryPath })}`;
+    expect((await request(instance, `${entry}&probe=1`)).res.statusCode).toBe(401);
+    const app = await request(instance, entry);
+    expect(app.res.statusCode).toBe(200);
+    expect(app.getBody()).toContain("<openclaw-app>");
+    expect(app.getBody()).toContain(JSON.stringify(recoveryPath));
+    const nonSecureApp = await sendRequest(instance, {
+      path: recoveryPath,
+      host: "gateway.lan:18789",
+      remoteAddress: "192.168.1.25",
+    });
+    expect(nonSecureApp.res.statusCode).toBe(200);
+    expect(nonSecureApp.getBody()).toContain("<openclaw-app>");
+    expect(reader).not.toHaveBeenCalled();
+  });
+
   it.each(["token", "password"] as const)(
     "serves the %s app on non-secure ingress without reading a transcript",
     async (mode) => {

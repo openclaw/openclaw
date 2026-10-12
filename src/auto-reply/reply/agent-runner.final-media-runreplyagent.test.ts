@@ -106,10 +106,6 @@ vi.mock("./session-updates.js", () => ({
   incrementCompactionCount: async () => undefined,
 }));
 
-vi.mock("./session-usage.js", () => ({
-  persistSessionUsageUpdate: async () => undefined,
-}));
-
 const { runReplyAgent } = await import("./agent-runner-run.js");
 
 type AgentTurnExecutionResult = Awaited<

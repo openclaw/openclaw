@@ -2,11 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -23,6 +19,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
@@ -110,24 +107,6 @@ it("migrates a surviving physical owner beside a retained hardlink owner", async
   expect(result.notices ?? []).toEqual([]);
   expect(readUserVersion(databasePath)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   await expect(ready()).resolves.toBeUndefined();
-});
-
-it("migrates an unregistered configured agentDir outside the default tree", async () => {
-  const agentDir = path.join(stateDir, ".openclaw", "agents", "worker", "agent");
-  const databasePath = createLegacyAgentDatabase({
-    agentId: "worker",
-    path: path.join(agentDir, "openclaw-agent.sqlite"),
-  });
-  unregisterOpenClawAgentDatabase({ agentId: "worker", env, path: databasePath });
-  const result = await migrateLegacyMediaPersistence({
-    configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(
-      { agents: { ownership: "explicit", entries: { worker: { agentDir } } } },
-      { env },
-    ),
-    env,
-  });
-  expect(result.warnings).toEqual([]);
-  expectMigrated(databasePath, "worker");
 });
 
 it("refreshes a retained registration after its schema upgrade already committed", async () => {

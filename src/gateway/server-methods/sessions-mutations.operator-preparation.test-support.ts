@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import * as sessionFork from "../../auto-reply/reply/session-fork.js";
 import {
   createSessionEntryWithTranscript,
@@ -34,6 +35,7 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { initializeRepository } from "../server.sessions.create.projects.test-support.js";
 import { createGatewaySession } from "../session-create-service.js";
+import * as creationTarget from "../session-create-target.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
@@ -57,7 +59,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
     (method) => (["params", "caller", "target"] as const).map((change) => ({ method, change })),
   );
   describe("session mutation operator preparation", () => {
-    it.each([
+    it.for([
       ...cases,
       { method: "sessions.patchMany" as const, change: "duplicate" as const },
       { method: "sessions.create" as const, change: "incognito" as const },
@@ -65,7 +67,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
       { method: "sessions.create" as const, change: "durable" as const },
     ])(
       "preserves the original $method request when $change changes during authority preparation",
-      async ({ method, change }) => {
+      async ({ method, change }, { signal }) => {
         const key = `agent:main:dashboard:prepare-${method}-${change}`;
         const otherKey = `${key}-other`;
         const originalId = `original-${method}-${change}`;
@@ -120,6 +122,18 @@ export function registerSessionOperatorPreparationTests(fixture: {
             await resume.promise;
             return prepared;
           });
+        const selectedTarget = createDeferredCore();
+        const readTarget = creationTarget.readRequestedSessionCreateTarget;
+        const targetReadSpy =
+          method === "sessions.create" && change === "target"
+            ? vi
+                .spyOn(creationTarget, "readRequestedSessionCreateTarget")
+                .mockImplementation(async (...args) => {
+                  const selected = await readTarget(...args);
+                  selectedTarget.resolve();
+                  return selected;
+                })
+            : undefined;
         const responses: Parameters<RespondFn>[] = [];
         const handler =
           method === "sessions.create"
@@ -158,6 +172,17 @@ export function registerSessionOperatorPreparationTests(fixture: {
               );
             }),
           ]);
+          if (targetReadSpy) {
+            // Profile readiness does not mean the independent worker target read has completed.
+            await withinTest(
+              awaitGateBeforeSettlement(
+                selectedTarget.promise,
+                running,
+                "Handler settled before selecting the original creation target",
+              ),
+              signal,
+            );
+          }
           if (change === "caller") {
             caller.invalidated = true;
           } else if (change === "target") {
@@ -223,6 +248,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
           resume.resolve();
           await running;
           spy.mockRestore();
+          targetReadSpy?.mockRestore();
         }
       },
     );

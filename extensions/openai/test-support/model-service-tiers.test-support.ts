@@ -11,7 +11,6 @@ type CatalogResult = {
 
 /** Register in the provider suite so its auth mocks and cache-reset hooks remain authoritative. */
 export function registerOpenAIServiceTierCatalogTests(params: {
-  modelsUrl: string;
   runCatalogWithFetchGuard: (params: {
     fetchGuard: LiveModelCatalogFetchGuard;
     auth: {
@@ -26,10 +25,10 @@ export function registerOpenAIServiceTierCatalogTests(params: {
     baseUrl?: string;
   }) => Promise<CatalogResult>;
 }): void {
-  const { modelsUrl: OPENAI_CODEX_MODELS_URL, runCatalogWithFetchGuard } = params;
+  const { runCatalogWithFetchGuard } = params;
 
   it("keeps service tiers with the authenticated model/account, never fallback metadata", async () => {
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
       response: Response.json({
         models: [
           {
@@ -41,7 +40,7 @@ export function registerOpenAIServiceTierCatalogTests(params: {
           { slug: "synthetic-invalid", service_tiers: [{ id: 12 }] },
         ],
       }),
-      finalUrl: OPENAI_CODEX_MODELS_URL,
+      finalUrl: url,
       release: async () => {},
     }));
     const result = await runCatalogWithFetchGuard({
@@ -75,6 +74,12 @@ export function registerOpenAIServiceTierCatalogTests(params: {
             serviceTiers: [],
           },
         ],
+        listedModelIds: [
+          "synthetic-tier-model",
+          "synthetic-empty",
+          "synthetic-unknown",
+          "synthetic-invalid",
+        ],
       },
     ]);
     expect(result.provider.models.every((model) => !("serviceTiers" in model))).toBe(true);
@@ -86,9 +91,9 @@ export function registerOpenAIServiceTierCatalogTests(params: {
         source: "profile",
       },
       accountId: "synthetic-other-account",
-      fetchGuard: async () => ({
+      fetchGuard: async ({ url }) => ({
         response: new Response("unavailable", { status: 503 }),
-        finalUrl: OPENAI_CODEX_MODELS_URL,
+        finalUrl: url,
         release: async () => {},
       }),
     });

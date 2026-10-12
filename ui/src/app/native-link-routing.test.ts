@@ -248,8 +248,11 @@ describe("native link routing", () => {
     // module once per sibling file against one persistent document, so stale
     // bootstrap listeners fire alongside this file's own. Reproduce that order
     // and require a single registry definition.
-    vi.resetModules();
-    await import("../components/link-reader-hovercard-registration.ts");
+    // Reevaluate only the bootstrap; resetting all modules splits Solid's scheduler
+    // and tries to register unrelated custom elements twice.
+    const duplicateBootstrap =
+      "../components/link-reader-hovercard-registration.ts?duplicate-bootstrap";
+    await import(duplicateBootstrap);
     const define = vi.spyOn(customElements, "define");
     await focusGitHubLink();
     const hovercardDefines = define.mock.calls.filter(

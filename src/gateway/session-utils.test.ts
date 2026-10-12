@@ -50,7 +50,6 @@ import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-ca
 import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
-  prepareGatewaySessionStoreTargetsReadOnly,
 } from "./session-utils-store-lookup.js";
 import {
   listAgentsForGateway,
@@ -1468,21 +1467,6 @@ describe("gateway session utils", () => {
 
       expect(target.storePath).toBe(path.resolve(fixedStorePath));
       expect(target.store["agent:ops:main"]?.sessionId).toBe("sess-fixed");
-      expect(
-        prepareGatewaySessionStoreTargetsReadOnly({
-          cfg,
-          targets: [{ key: "agent:ops:main" }],
-          projection: "list",
-        }),
-      ).toMatchObject([
-        {
-          ok: true,
-          value: {
-            storePath: path.resolve(fixedStorePath),
-            store: { "agent:ops:main": { sessionId: "sess-fixed" } },
-          },
-        },
-      ]);
     });
   });
 
@@ -1517,7 +1501,7 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("batched session targets preserve explicit sentinel owners and reject discovered collisions", async () => {
+  test("session targets preserve explicit sentinel owners and reject discovered collisions", async () => {
     await withStateDirEnv("session-utils-batch-owners-", async ({ stateDir }) => {
       const cfg = {
         session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
@@ -1534,17 +1518,19 @@ describe("gateway session utils", () => {
         );
       }
       expect(
-        prepareGatewaySessionStoreTargetsReadOnly({
-          cfg,
-          targets: ["research", "ops"].map((agentId) => ({ key: "global", agentId })),
-          projection: "list",
-        }),
+        ["research", "ops"].map((agentId) =>
+          resolveGatewaySessionStoreTargetWithStore({
+            cfg,
+            key: "global",
+            agentId,
+            projection: "list",
+            readOnly: true,
+            exactRead: true,
+          }),
+        ),
       ).toMatchObject([
-        {
-          ok: true,
-          value: { agentId: "research", store: { global: { sessionId: "global-research" } } },
-        },
-        { ok: true, value: { agentId: "ops", store: { global: { sessionId: "global-ops" } } } },
+        { agentId: "research", store: { global: { sessionId: "global-research" } } },
+        { agentId: "ops", store: { global: { sessionId: "global-ops" } } },
       ]);
       for (const directory of ["Retired Agent", "retired-agent"]) {
         seedSessionEntries(path.join(stateDir, "agents", directory, "sessions", "sessions.json"), {
@@ -1555,11 +1541,6 @@ describe("gateway session utils", () => {
       expect(() =>
         resolveGatewaySessionStoreTargetWithStore({ cfg, key, readOnly: true, exactRead: true }),
       ).toThrow("openclaw doctor --fix");
-      expect(
-        prepareGatewaySessionStoreTargetsReadOnly({ cfg, targets: [{ key }], projection: "list" }),
-      ).toMatchObject([
-        { ok: false, error: { message: expect.stringContaining("openclaw doctor --fix") } },
-      ]);
     });
   });
 
@@ -1599,21 +1580,6 @@ describe("gateway session utils", () => {
 
       expect(target.storePath).toBe(path.resolve(retiredStorePath));
       expect(target.store["agent:old:main"]?.sessionId).toBe("sess-retired-cross-root");
-      expect(
-        prepareGatewaySessionStoreTargetsReadOnly({
-          cfg,
-          targets: [{ key: "agent:old:main" }],
-          projection: "list",
-        }),
-      ).toMatchObject([
-        {
-          ok: true,
-          value: {
-            storePath: path.resolve(retiredStorePath),
-            store: { "agent:old:main": { sessionId: "sess-retired-cross-root" } },
-          },
-        },
-      ]);
     });
   });
 
@@ -1650,14 +1616,6 @@ describe("gateway session utils", () => {
       expect(sqlitePath).toBeDefined();
       expect(fs.existsSync(sqlitePath!)).toBe(false);
       expect(fs.readdirSync(retiredSessionsDir)).toEqual(["sessions.json"]);
-      expect(
-        prepareGatewaySessionStoreTargetsReadOnly({
-          cfg,
-          targets: [{ key: "agent:retired:main" }],
-          projection: "list",
-        }),
-      ).toMatchObject([{ ok: true, value: { storePath: retiredStorePath, store: {} } }]);
-      expect(fs.existsSync(sqlitePath!)).toBe(false);
     });
   });
 
@@ -1814,21 +1772,19 @@ describe("gateway session utils", () => {
           });
           try {
             expect(
-              prepareGatewaySessionStoreTargetsReadOnly({
+              resolveGatewaySessionStoreTargetWithStore({
                 cfg,
-                targets: [{ key: "agent:main:main", agentId }],
+                key: "agent:main:main",
+                agentId,
+                readOnly: true,
+                exactRead: true,
                 projection: "list",
               }),
-            ).toMatchObject([
-              {
-                ok: true,
-                value: {
-                  agentId: "main",
-                  storePath: path.resolve(deletedStorePath),
-                  store: { "agent:main:main": { sessionId: "sess-deleted-main" } },
-                },
-              },
-            ]);
+            ).toMatchObject({
+              agentId: "main",
+              storePath: path.resolve(deletedStorePath),
+              store: { "agent:main:main": { sessionId: "sess-deleted-main" } },
+            });
             expect(liveDefaultParses).toBe(0);
           } finally {
             parseSpy.mockRestore();
@@ -1872,23 +1828,6 @@ describe("gateway session utils", () => {
             requestedKey === key ? "incognito-owner" : undefined,
           );
           expect(target.store["agent:main:main"]).toBeUndefined();
-          const [prepared] = prepareGatewaySessionStoreTargetsReadOnly({
-            cfg,
-            targets: [{ key: requestedKey }],
-            projection: "list",
-          });
-          if (!prepared?.ok) {
-            throw new Error("Expected prepared incognito lookup to succeed");
-          }
-          const batched = prepared.value;
-          expect(batched).toMatchObject({
-            storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-            storeKeys: [requestedKey],
-          });
-          expect(batched?.store[requestedKey]?.sessionId).toBe(
-            requestedKey === key ? "incognito-owner" : undefined,
-          );
-          expect(batched?.store["agent:main:main"]).toBeUndefined();
         }
       });
     },
@@ -1915,15 +1854,6 @@ describe("gateway session utils", () => {
       setRuntimeConfigSnapshot(cfg, cfg);
 
       expect(() => loadSessionEntry("agent:main:work")).toThrow("openclaw doctor --fix");
-      expect(
-        prepareGatewaySessionStoreTargetsReadOnly({
-          cfg,
-          targets: [{ key: "agent:main:work" }],
-          projection: "list",
-        }),
-      ).toMatchObject([
-        { ok: false, error: { message: expect.stringContaining("openclaw doctor --fix") } },
-      ]);
     });
   });
 

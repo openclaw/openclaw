@@ -12,7 +12,9 @@ import { ttsHandlers } from "./tts.js";
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
   getSpeechProvider: vi.fn(),
-  isTtsProviderConfigured: vi.fn((_config: unknown, _provider: string | { id: string }) => true),
+  isTtsProviderConfiguredAsync: vi.fn(
+    (_config: unknown, _provider: string | { id: string }) => true,
+  ),
   listSpeechProviders: vi.fn(
     (): Array<{
       id: string;
@@ -26,7 +28,7 @@ const mocks = vi.hoisted(() => ({
   ),
   resolveTtsSettingsSnapshot: vi.fn(),
   resolveTtsProviderOrder: vi.fn(() => ["openai"]),
-  resolveExplicitTtsOverrides: vi.fn(() => ({})),
+  resolveExplicitTtsOverridesAsync: vi.fn(() => ({})),
   resolveTtsConfig: vi.fn(() => ({ maxTextLength: 4096 })),
   synthesizeSpeech: vi.fn(
     async (): Promise<{
@@ -64,23 +66,28 @@ vi.mock("../../tts/provider-registry.js", () => ({
   listSpeechProviders: mocks.listSpeechProviders,
 }));
 
+// mock-isolation: TTS RPCs supply preference settings without reading the host machine's SQLite preference path.
+vi.mock("../../tts/tts-preferences.js", () => ({
+  prepareTtsPreferences: async () => ({}),
+}));
+
 vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../tts/tts-settings.js")>()),
   resolveTtsSettingsSnapshot: mocks.resolveTtsSettingsSnapshot,
 }));
 
+// mock-isolation: TTS RPCs use fixture settings and synthesis without machine preference bindings.
 vi.mock("../../tts/tts.js", () => ({
   getResolvedSpeechProviderConfig: vi.fn(),
   getTtsPersona: vi.fn(() => undefined),
   getTtsProvider: vi.fn(() => "openai"),
   isTtsEnabled: vi.fn(() => true),
-  isTtsProviderConfigured: mocks.isTtsProviderConfigured,
+  isTtsProviderConfiguredAsync: mocks.isTtsProviderConfiguredAsync,
   listTtsPersonas: vi.fn(() => []),
-  resolveExplicitTtsOverrides:
-    mocks.resolveExplicitTtsOverrides as typeof import("../../tts/tts.js").resolveExplicitTtsOverrides,
+  resolveExplicitTtsOverridesAsync: mocks.resolveExplicitTtsOverridesAsync,
   resolveTtsAutoMode: vi.fn(() => false),
   resolveTtsConfig: mocks.resolveTtsConfig,
-  resolveTtsPrefsPath: vi.fn(() => "/tmp/tts.json"),
+  resolveTtsPrefsPathAsync: vi.fn(async () => "/tmp/tts.json"),
   resolveTtsProviderOrder: mocks.resolveTtsProviderOrder,
   setTtsEnabled: vi.fn(),
   setTtsPersona: vi.fn(),
@@ -108,14 +115,14 @@ describe("ttsHandlers", () => {
     mocks.getRuntimeConfig.mockReset();
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.getSpeechProvider.mockReset();
-    mocks.isTtsProviderConfigured.mockReset();
-    mocks.isTtsProviderConfigured.mockReturnValue(true);
+    mocks.isTtsProviderConfiguredAsync.mockReset();
+    mocks.isTtsProviderConfiguredAsync.mockReturnValue(true);
     mocks.listSpeechProviders.mockReset();
     mocks.listSpeechProviders.mockReturnValue([]);
     mocks.resolveTtsProviderOrder.mockReset();
     mocks.resolveTtsProviderOrder.mockReturnValue(["openai"]);
-    mocks.resolveExplicitTtsOverrides.mockReset();
-    mocks.resolveExplicitTtsOverrides.mockReturnValue({});
+    mocks.resolveExplicitTtsOverridesAsync.mockReset();
+    mocks.resolveExplicitTtsOverridesAsync.mockReturnValue({});
     mocks.resolveTtsSettingsSnapshot.mockReset();
     mocks.resolveTtsSettingsSnapshot.mockReturnValue({
       autoMode: "off",
@@ -151,7 +158,7 @@ describe("ttsHandlers", () => {
     });
   });
 
-  it("yields before TTS status setup and reuses one configured-state pass", async () => {
+  it("reuses one configured-state pass for TTS status", async () => {
     const providers = [
       { id: "openai", label: "OpenAI", isConfigured: vi.fn(() => true) },
       { id: "google", label: "Google", isConfigured: vi.fn(() => true) },
@@ -169,15 +176,12 @@ describe("ttsHandlers", () => {
       context: { getRuntimeConfig: mocks.getRuntimeConfig },
     } as never);
 
-    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
-    expect(mocks.listSpeechProviders).not.toHaveBeenCalled();
-
     await statusPromise;
 
     expect(mocks.listSpeechProviders).toHaveBeenCalledOnce();
     expect(mocks.resolveTtsProviderOrder).toHaveBeenCalledWith("openai", {}, providers);
-    expect(mocks.isTtsProviderConfigured).toHaveBeenCalledTimes(2);
-    expect(mocks.isTtsProviderConfigured.mock.calls.map((call) => call[1])).toEqual(providers);
+    expect(mocks.isTtsProviderConfiguredAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.isTtsProviderConfiguredAsync.mock.calls.map((call) => call[1])).toEqual(providers);
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -217,7 +221,7 @@ describe("ttsHandlers", () => {
         },
       ];
       mocks.listSpeechProviders.mockReturnValue(providers);
-      mocks.isTtsProviderConfigured.mockImplementation((_config, provider) => {
+      mocks.isTtsProviderConfiguredAsync.mockImplementation((_config, provider) => {
         const providerId = typeof provider === "string" ? provider : provider.id;
         return providerId === "google";
       });
@@ -238,7 +242,9 @@ describe("ttsHandlers", () => {
       const respond = await callTts(method, {});
 
       expect(mocks.listSpeechProviders).toHaveBeenCalledOnce();
-      expect(mocks.isTtsProviderConfigured.mock.calls.map((call) => call[1])).toEqual(providers);
+      expect(mocks.isTtsProviderConfiguredAsync.mock.calls.map((call) => call[1])).toEqual(
+        providers,
+      );
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({ [providerField]: "google" }),
@@ -274,14 +280,14 @@ describe("ttsHandlers", () => {
     ];
     mocks.listSpeechProviders.mockReturnValue(providers);
     mocks.resolveTtsProviderOrder.mockReturnValue(["openai", "google", "voice-model-only"]);
-    mocks.isTtsProviderConfigured.mockImplementation((_config, provider) => {
+    mocks.isTtsProviderConfiguredAsync.mockImplementation((_config, provider) => {
       const providerId = typeof provider === "string" ? provider : provider.id;
       return providerId !== "google";
     });
 
     const respond = await callTts("tts.status", {});
 
-    expect(mocks.isTtsProviderConfigured.mock.calls.map((call) => call[1])).toEqual([
+    expect(mocks.isTtsProviderConfiguredAsync.mock.calls.map((call) => call[1])).toEqual([
       providers[0],
       providers[1],
       "voice-model-only",
@@ -311,7 +317,7 @@ describe("ttsHandlers", () => {
       };
       mocks.listSpeechProviders.mockReturnValue([invalidProvider]);
       mocks.resolveTtsProviderOrder.mockReturnValue(["openai", "gradium"]);
-      mocks.isTtsProviderConfigured.mockImplementation((_config, provider) => {
+      mocks.isTtsProviderConfiguredAsync.mockImplementation((_config, provider) => {
         const providerId = typeof provider === "string" ? provider : provider.id;
         return providerId !== "gradium";
       });
@@ -330,7 +336,7 @@ describe("ttsHandlers", () => {
   );
 
   it("returns INVALID_REQUEST when TTS override validation fails", async () => {
-    mocks.resolveExplicitTtsOverrides.mockImplementation(() => {
+    mocks.resolveExplicitTtsOverridesAsync.mockImplementation(() => {
       throw new Error('Unknown TTS provider "bad".');
     });
 

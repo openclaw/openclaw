@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "../../../config/config.js";
 import { createGatewayRequestContext } from "../../../gateway/server-request-context.js";
 import { makeContextParams } from "../../../gateway/server-request-context.test-support.js";
 import { resetHeartbeatEventsForTest } from "../../../infra/heartbeat-events.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
@@ -314,29 +315,17 @@ it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"]
     if (change === "pending acknowledgment") {
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const runWorker = stateWorker.runOpenClawStateWorkerOperation;
       let observed = false;
       let settling: Promise<void> | undefined;
-      const held = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementation((context, operation, options) =>
-          runWorker(
-            context,
-            (scope) =>
-              operation({
-                execute: async (command, executeOptions) => {
-                  const result = await scope.execute(command, executeOptions);
-                  if (command.type === "sessionDelivery.mutateSubagentCompletion") {
-                    observed = true;
-                    entered.resolve();
-                    await release.promise;
-                  }
-                  return result;
-                },
-              }),
-            options,
-          ),
-        );
+      const held = probe.command(stateWorker, async (command, executeOptions, scope) => {
+        const result = await scope.execute(command, executeOptions);
+        if (command.type === "sessionDelivery.mutateSubagentCompletion") {
+          observed = true;
+          entered.resolve();
+          await release.promise;
+        }
+        return result;
+      });
       try {
         publishSystemEventStoreResolver(() => "replacement-store");
         publishSystemEventStoreResolver(() => "original-store");

@@ -319,7 +319,7 @@ describe("forced destruction across Gateway restart", () => {
         turnClaim: null,
       });
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
-      expect(placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+      expect(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
       expect.soft(support.testState.store.get(environmentId)).toMatchObject({
         destroyRequestedAtMs: support.testState.nowMs,
         lastError: FORCED_WORKER_ABANDONMENT_ERROR,

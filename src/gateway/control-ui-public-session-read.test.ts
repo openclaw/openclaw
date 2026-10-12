@@ -4,9 +4,9 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import {
   loadSessionEntry,
   patchSessionEntryCore,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

@@ -146,7 +146,6 @@ it("backs off the shared repository after a missing-object snapshot failure", as
   });
   expect((await gc()).removed).toEqual([healthy.id]);
   await requireGit(repoRoot, ["remote", "set-url", "origin", source]);
-  await requireGit(repoRoot, ["cat-file", "blob", "HEAD:missing.txt"]);
   expect((await gc(true)).removed.toSorted()).toEqual(
     records.map((record) => record.id).toSorted(),
   );

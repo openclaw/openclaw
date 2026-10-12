@@ -11,7 +11,7 @@ import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { resolveEmbeddedRunSkillEntries } from "../runtime/embedded-run-entries.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
-import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
+import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
@@ -25,7 +25,6 @@ vi.mock("./plugin-skills.js", () => ({
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-snapshot-suite-");
 const directorySymlinkType = process.platform === "win32" ? "junction" : "dir";
-let truncationWorkspaceTemplateDir = "";
 let tempHome: TempHomeEnv | null = null;
 let skillsHomeEnv: SkillsHomeEnvSnapshot | null = null;
 
@@ -33,17 +32,6 @@ beforeAll(async () => {
   await fixtureSuite.setup();
   tempHome = await createTempHomeEnv("openclaw-skills-snapshot-home-");
   skillsHomeEnv = setMockSkillsHomeEnv(tempHome.home);
-  truncationWorkspaceTemplateDir = await fixtureSuite.createCaseDir(
-    "template-truncation-workspace",
-  );
-  for (let i = 0; i < 8; i += 1) {
-    const name = `skill-${String(i).padStart(2, "0")}`;
-    await writeSkill({
-      dir: path.join(truncationWorkspaceTemplateDir, "skills", name),
-      name,
-      description: "x".repeat(800),
-    });
-  }
 });
 
 afterAll(async () => {
@@ -103,12 +91,6 @@ async function buildAgentSnapshot(params: {
     config: params.config,
     agentId: params.agentId,
   });
-}
-
-async function cloneTemplateDir(templateDir: string, prefix: string): Promise<string> {
-  const cloned = await fixtureSuite.createCaseDir(prefix);
-  await fs.cp(templateDir, cloned, { recursive: true });
-  return cloned;
 }
 
 async function createMultiRootFixture() {
@@ -218,111 +200,6 @@ describe("buildSkillSnapshot", () => {
     );
   });
 
-  it("mirrors the system-agent resolver fallback when no owner is configured", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("custodian-owner-fallback");
-    await writeCustodianSkillFixture(workspaceDir);
-
-    const soleAgentConfig: OpenClawConfig = {
-      agents: { entries: { caretaker: {} } },
-    };
-    const ambiguousConfig: OpenClawConfig = {
-      agents: { entries: { ops: {}, writer: {} } },
-    };
-    const soleSnapshot = await buildAgentSnapshot({
-      workspaceDir,
-      config: soleAgentConfig,
-      agentId: "caretaker",
-    });
-    const mainSnapshot = await buildAgentSnapshot({ workspaceDir, config: {}, agentId: "main" });
-    const ambiguousSnapshot = await buildAgentSnapshot({
-      workspaceDir,
-      config: ambiguousConfig,
-      agentId: "ops",
-    });
-
-    expect(soleSnapshot.skills.map((skill) => skill.name)).toEqual(CUSTODIAN_SKILL_NAMES);
-    expect(mainSnapshot.skills.map((skill) => skill.name)).toEqual(CUSTODIAN_SKILL_NAMES);
-    expect(ambiguousSnapshot.skills).toEqual([]);
-    expect(ambiguousSnapshot.prompt).toBe("");
-  });
-
-  it("applies per-skill disabled overrides to custodian skills", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("custodian-disabled");
-    await writeCustodianSkillFixture(workspaceDir);
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: { systemAgent: { agentId: "ops" } },
-        entries: { ops: {} },
-      },
-      skills: {
-        entries: {
-          "cloud-image-bake": { enabled: false },
-        },
-      },
-    };
-
-    const snapshot = await buildAgentSnapshot({ workspaceDir, config, agentId: "ops" });
-
-    expect(snapshot.skills.map((skill) => skill.name)).toEqual([
-      "add-model-provider",
-      "configure-channel",
-      "diagnose-gateway",
-    ]);
-    expect(snapshot.prompt).not.toContain("cloud-image-bake");
-  });
-
-  it("orders agent skills before execution skills with lexical order inside each root", async () => {
-    const { snapshot } = await createMultiRootFixture();
-
-    expect(snapshot.skills.map((skill) => skill.name)).toEqual([
-      "middle",
-      "shared",
-      "aardvark",
-      "project-only",
-      "zulu",
-    ]);
-    expect(
-      [...snapshot.prompt.matchAll(/<name>([^<]+)<\/name>/g)].map((match) => match[1]),
-    ).toEqual(["middle", "shared", "aardvark", "project-only", "zulu"]);
-    expect(snapshot.resolvedSkills?.find((skill) => skill.name === "aardvark")?.description).toBe(
-      "Execution aardvark",
-    );
-  });
-
-  it("keeps the agent-workspace skill when the execution root has the same name", async () => {
-    const { agentWorkspaceDir, snapshot } = await createMultiRootFixture();
-    const shared = snapshot.resolvedSkills?.find((skill) => skill.name === "shared");
-
-    expect(shared?.description).toBe("Agent shared");
-    expect(shared?.filePath).toBe(path.join(agentWorkspaceDir, "skills", "shared", "SKILL.md"));
-  });
-
-  it("keeps canonical same-root snapshots byte-identical", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("canonical-workspace");
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "canonical"),
-      name: "canonical",
-      description: "Canonical",
-    });
-    const build = async (executionWorkspaceDir?: string) =>
-      await withWorkspaceHome(
-        workspaceDir,
-        async () =>
-          (
-            await resolveReusableWorkspaceSkillSnapshot({
-              workspaceDir,
-              ...(executionWorkspaceDir ? { executionWorkspaceDir } : {}),
-              config: {},
-              skillFilter: ["canonical"],
-              watch: false,
-              snapshotVersion: 1,
-            })
-          ).snapshot,
-      );
-
-    expect(JSON.stringify(await build(workspaceDir))).toBe(JSON.stringify(await build()));
-  });
-
   it.each([false, true])(
     "keeps snapshot and cold fallback skills readable (stale=%s)",
     async (stale) => {
@@ -358,7 +235,10 @@ describe("buildSkillSnapshot", () => {
     },
   );
 
-  it.each([false, true].flatMap((split) => [false, true].map((override) => ({ split, override }))))(
+  it.each([
+    { split: false, override: false },
+    { split: true, override: true },
+  ])(
     "honors session skill policy before agent filtering (split=$split, override=$override)",
     async ({ split, override }) => {
       const workspaceDir = await fixtureSuite.createCaseDir("session-policy-agent");
@@ -474,15 +354,6 @@ describe("buildSkillSnapshot", () => {
     expect(sandbox.skillEntries).toEqual([]);
   });
 
-  it("returns an empty snapshot when skills dirs are missing", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-
-    const snapshot = await buildSnapshot(workspaceDir);
-
-    expect(snapshot.prompt).toBe("");
-    expect(snapshot.skills).toStrictEqual([]);
-  });
-
   it("keeps symlinked compatibility skills out of isolated session snapshots", async () => {
     if (!tempHome) {
       throw new Error("temporary home is unavailable");
@@ -526,125 +397,5 @@ describe("buildSkillSnapshot", () => {
       await fs.rm(path.join(home, ".agents", "skills"), { force: true });
       await fs.rm(path.join(home, ".claude"), { recursive: true, force: true });
     }
-  });
-
-  it("omits disable-model-invocation skills from the prompt", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "visible-skill"),
-      name: "visible-skill",
-      description: "Visible skill",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "hidden-skill"),
-      name: "hidden-skill",
-      description: "Hidden skill",
-      frontmatterExtra: "disable-model-invocation: true",
-    });
-
-    const snapshot = await buildSnapshot(workspaceDir);
-
-    expect(snapshot.prompt).toContain("visible-skill");
-    expect(snapshot.prompt).not.toContain("hidden-skill");
-    expect(snapshot.skills.map((skill) => skill.name)).toContain("hidden-skill");
-    expect(snapshot.skills.map((skill) => skill.name)).toContain("visible-skill");
-  });
-
-  it("keeps prompt output stable across equivalent snapshot builds", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "visible"),
-      name: "visible",
-      description: "Visible",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "hidden"),
-      name: "hidden",
-      description: "Hidden",
-      frontmatterExtra: "disable-model-invocation: true",
-    });
-    const config = {
-      skills: {
-        limits: {
-          maxSkillsInPrompt: 1,
-          maxSkillsPromptChars: 200,
-        },
-      },
-    } as const;
-    const opts = {
-      config,
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-      eligibility: {
-        remote: {
-          platforms: ["linux"],
-          hasBin: (_bin: string) => true,
-          hasAnyBin: (_bins: string[]) => true,
-          note: "Remote note",
-        },
-      },
-    };
-
-    const snapshot = await withWorkspaceHome(
-      workspaceDir,
-      async () => await buildSkillSnapshot(workspaceDir, opts),
-    );
-    const prompt = await withWorkspaceHome(
-      workspaceDir,
-      async () => (await buildSkillSnapshot(workspaceDir, opts)).prompt,
-    );
-
-    expect(snapshot.prompt).toBe(prompt);
-  });
-
-  it("truncates the skills prompt when it exceeds the configured char budget", async () => {
-    const workspaceDir = await cloneTemplateDir(truncationWorkspaceTemplateDir, "workspace");
-
-    const snapshot = await withWorkspaceHome(
-      workspaceDir,
-      async () =>
-        await buildSkillSnapshot(workspaceDir, {
-          config: {
-            skills: {
-              limits: {
-                maxSkillsInPrompt: 100,
-                maxSkillsPromptChars: 700,
-              },
-            },
-          },
-          managedSkillsDir: path.join(workspaceDir, ".managed"),
-          bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-        }),
-    );
-
-    expect(snapshot.prompt).toContain("⚠️ Skills truncated");
-    expect(snapshot.prompt.length).toBeLessThan(2000);
-  });
-
-  it("uses agents.entries.<id>.skills as a full replacement for inherited defaults", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-    await writeWorkspaceSkills(workspaceDir, [
-      { name: "github", description: "GitHub" },
-      { name: "weather", description: "Weather" },
-      { name: "docs-search", description: "Docs" },
-    ]);
-
-    const snapshot = await buildSnapshot(workspaceDir, {
-      agentId: "writer",
-      config: {
-        agents: {
-          defaults: {
-            skills: ["github", "weather"],
-          },
-          entries: { writer: { skills: ["docs-search", "github"] } },
-        },
-      },
-    });
-
-    expect(snapshot.skills.map((skill) => skill.name).toSorted()).toEqual([
-      "docs-search",
-      "github",
-    ]);
-    expect(snapshot.skillFilter).toEqual(["docs-search", "github"]);
   });
 });

@@ -187,7 +187,7 @@ extension OpenClawChatViewModel {
         let activeLeaf: String? = branches.isEmpty ? nil : Self.activeBranchLeafEntryID(in: branches)
         guard branches.isEmpty || activeLeaf != nil else { return false }
         let leaves = Set(branches.map(\.leafEntryId).filter { !$0.isEmpty })
-        /// Bootstrap pins one presentation; background replay follows a matching visible scope.
+        // Bootstrap pins one presentation; background replay follows a matching visible scope.
         func visibleSession() -> SessionSnapshot? {
             let session = capturedSession ?? self.currentSessionSnapshot()
             let isVisible = capturedSession.map(self.isCurrentSession)

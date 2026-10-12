@@ -60,7 +60,7 @@ export function createChatReplySessionReader(
           assertWorkCurrent,
         }
       : undefined;
-  const assertBorrowedRouting = captureSessionMutationRouting(session.cfg);
+  const assertBorrowedRouting = captureSessionMutationRouting(session.cfg, undefined, [session]);
   const assertRetainedSourceCurrent = borrowed
     ? () => {
         borrowed.assertWorkCurrent();
@@ -113,7 +113,9 @@ export function createChatReplySessionReader(
           },
         });
       }
-      const assertRoutingCurrent = captureSessionMutationRouting(cfg);
+      const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [
+        { sessionKey: key, agentId },
+      ]);
       return await loadGatewaySessionEntryReadOnlyInWorker({
         ...session.sessionLoadOptions,
         cfg,

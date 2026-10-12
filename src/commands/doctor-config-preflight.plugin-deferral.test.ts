@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import * as terminalNote from "../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -30,7 +32,7 @@ afterAll(() => restoreMigrationRuntime?.());
 
 function createPluginConfig(pluginId: string, config?: Record<string, string>, paths?: string[]) {
   return {
-    gateway: { mode: "local" },
+    gateway: { mode: "local" as const },
     plugins: {
       allow: [pluginId],
       entries: { [pluginId]: { enabled: true, ...(config ? { config } : {}) } },
@@ -203,6 +205,56 @@ describe("configured plugin migration deferral", () => {
       );
     });
   });
+
+  it.each(["linked", "unrecorded"] as const)(
+    "keeps a %s config-path plugin available only when package convergence skips it",
+    async (install) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        const pluginRoot = path.join(home, "linked-plugin");
+        const pluginId = "linked-fixture";
+        const source = path.join(home, "legacy-binding.json");
+        const migrated = path.join(home, "migrated-binding.json");
+        await fs.writeFile(source, '{"binding":"retained"}\n');
+        await installMigrationFixture({ root: pluginRoot, pluginId, source, migrated });
+        const config = createPluginConfig(pluginId, undefined, [pluginRoot]);
+        await writeOpenClawConfig(home, config);
+        if (install === "linked") {
+          await seedInstalledPluginIndex(
+            { [pluginId]: { source: "path", sourcePath: pluginRoot, installPath: pluginRoot } },
+            { config },
+          );
+        }
+
+        await withEnvAsync(
+          {
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+            OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
+          },
+          async () => {
+            await runDoctorConfigPreflight(doctorOptions);
+            expect(readDeferredPluginMigrations()).toEqual(
+              install === "linked"
+                ? []
+                : [
+                    expect.objectContaining({
+                      pluginId,
+                      reason: expect.stringContaining("Package convergence must wait"),
+                    }),
+                  ],
+            );
+            expect(await fs.readFile(install === "linked" ? migrated : source, "utf8")).toBe(
+              '{"binding":"retained"}\n',
+            );
+            await expect(fs.stat(install === "linked" ? source : migrated)).rejects.toMatchObject({
+              code: "ENOENT",
+            });
+          },
+        );
+      });
+    },
+  );
 
   it("preserves a newer migration obligation after an ordinary Doctor observed a stateless plugin", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
@@ -384,7 +436,9 @@ describe("configured plugin migration deferral", () => {
     });
   });
 
-  it("keeps failed doctor inspection debt after the artifact disappears", async () => {
+  it("settles inspection-only debt when the installed plugin has no migration contract", async () => {
+    const note = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
+    onTestFinished(() => note.mockRestore());
     await withDoctorConfigPreflightHome(async (home) => {
       const pluginRoot = path.join(home, "inspection-plugin");
       const pluginId = "inspection-fixture";
@@ -407,13 +461,32 @@ describe("configured plugin migration deferral", () => {
         ]);
         await fs.unlink(path.join(pluginRoot, "doctor-contract-api.cjs"));
         await installStatelessFixture(pluginRoot, pluginId);
-        await runDoctorConfigPreflight(options);
-        expect(readDeferredPluginMigrations()).toEqual([
-          expect.objectContaining({ pluginId, requiresDoctorInspection: true }),
-        ]);
-        await installStatelessFixture(pluginRoot, pluginId, "config-only");
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        const original = await fs.readFile(configPath, "utf8");
         await runDoctorConfigPreflight(options);
         expect(readDeferredPluginMigrations()).toEqual([]);
+        expect(note).toHaveBeenCalledWith(
+          '- Plugin "inspection-fixture" version "1.0.0": no plugin migration contract. No migration ran; existing data and settings have been kept.',
+          "Doctor warnings",
+        );
+        const databasePath = path.join(home, ".openclaw", "state", "openclaw.sqlite");
+        await closeOpenClawStateDatabaseByPathAsync(databasePath);
+        const { DatabaseSync } = requireNodeSqlite();
+        const database = new DatabaseSync(databasePath, { readOnly: true });
+        try {
+          const row = database
+            .prepare("SELECT status, report_json FROM migration_runs WHERE id = ?")
+            .get(`deferred-plugin-migration:${pluginId}`);
+          expect(row?.status).toBe("completed");
+          expect(JSON.parse(String(row?.report_json))).toMatchObject({
+            reason: expect.stringContaining("no plugin migration contract"),
+          });
+        } finally {
+          database.close();
+        }
+        await runDoctorConfigPreflight(options);
+        expect(readDeferredPluginMigrations()).toEqual([]);
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
         expect((await readConfigFileSnapshot()).warnings).toEqual([]);
       });
     });

@@ -24,7 +24,7 @@ import {
 } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import type { SessionsListResult } from "../session-utils.types.js";
-import type { WorkerPlacementMoveIntent } from "../worker-environments/placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "../worker-environments/placement-move-intent.types.js";
 import type { WorkerSessionPlacementReader } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";

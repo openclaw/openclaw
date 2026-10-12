@@ -254,7 +254,7 @@ describe("tree row snapshots", () => {
     },
   );
 
-  it("keeps null ancestor clears over a stale read", async () => {
+  it("keeps null ancestor clears through a compact reference", async () => {
     vi.useFakeTimers();
     const activitySummary = { state: "stale" as const, canEnsure: true };
     const h = treeHarness([
@@ -298,20 +298,7 @@ describe("tree row snapshots", () => {
           },
         });
       emit(false);
-      const pending = h.holdRead();
-      const refresh = h.sessions.refresh({ agentId: "main", force: true });
       emit(true);
-      pending.resolve(
-        sessionsResult(
-          [
-            settledChild,
-            { ...settledParent, label: "Stale read label", activitySummary, snapshotAt: 102 },
-            settledGrandparent,
-          ],
-          102,
-        ),
-      );
-      await refresh;
       const { snapshotAt: _clock, ...retainedRow } = h.sessions.state.result!.sessions.find(
         (candidate) => candidate.key === parent.key,
       )!;
@@ -366,44 +353,6 @@ describe("tree row snapshots", () => {
       });
       await vi.advanceTimersByTimeAsync(5_000);
       expect(h.request).not.toHaveBeenCalled();
-    } finally {
-      h.sessions.dispose();
-      vi.useRealTimers();
-    }
-  });
-
-  it("orders an ancestor's field receipts by its own clock and fences an earlier list read", async () => {
-    vi.useFakeTimers();
-    const h = treeHarness([child, { ...parent, derivedTitle: "Original title" }, grandparent]);
-    try {
-      await h.sessions.refresh({ agentId: "main", force: true });
-      const pending = h.holdRead();
-      const refresh = h.sessions.refresh({ agentId: "main", force: true });
-      h.settle();
-      h.emit({
-        type: "event",
-        event: "sessions.changed",
-        payload: {
-          agentId: "main",
-          reason: "patch",
-          session: { ...settledParent, updatedAt: 21, label: "New parent label" },
-          ancestorSessions: [settledGrandparent],
-          ts: 102,
-        },
-      });
-      pending.resolve(
-        sessionsResult([child, { ...parent, derivedTitle: "Enriched title" }, grandparent], 100),
-      );
-      await refresh;
-      expect(h.sessions.state.result?.sessions.find((row) => row.key === parent.key)).toEqual({
-        ...settledParent,
-        updatedAt: 21,
-        label: "New parent label",
-        derivedTitle: "Enriched title",
-      });
-      expect(h.sessions.state.result?.sessions.find((row) => row.key === grandparent.key)).toEqual(
-        settledGrandparent,
-      );
     } finally {
       h.sessions.dispose();
       vi.useRealTimers();

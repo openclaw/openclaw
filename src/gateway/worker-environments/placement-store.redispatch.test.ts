@@ -53,7 +53,8 @@ describe("failed worker placement redispatch", () => {
         if (
           isRecord(value) &&
           value.sessionId === SESSION.sessionId &&
-          value.state === "requested"
+          isRecord(value.placement) &&
+          value.placement.state === "requested"
         ) {
           corrupted += 1;
           return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);

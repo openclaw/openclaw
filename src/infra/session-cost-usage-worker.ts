@@ -7,7 +7,6 @@ import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
-import { listSessionTranscriptInstances } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readTranscriptStatsBatchReadOnlySync } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
@@ -16,6 +15,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readHotSessionTranscriptSnapshot } from "../config/sessions/session-cold-storage-read.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import {
   openOpenClawAgentDatabaseReadOnly,

@@ -15,7 +15,7 @@ vi.mock("../delivery-plan.js", () => {
 
 it.each([
   "cron.planStartup",
-  "cron.releaseReservations",
+  "cron.deferStartupJobs",
   "cron.mutateJobs",
   "cron.maintainHistory",
   "cron.scheduleUnowned",

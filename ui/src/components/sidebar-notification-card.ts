@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
-import "./relative-time.ts";
+import "./relative-time.tsx";
 
 export function renderSidebarDismissButton(
   itemLabel: string,

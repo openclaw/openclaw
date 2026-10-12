@@ -301,6 +301,7 @@ export async function printResult(
     report = renderUpdateRunReport(updateRunReportInputFromResult(result, run), {
       ...reportHints,
       mode: result.mode === "unknown" ? run?.target.kind : result.mode,
+      markdownLimit: Infinity,
     });
     return report;
   };

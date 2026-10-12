@@ -20,6 +20,7 @@ import {
   SYNC_REBUILD_MAX_ROWS,
 } from "../../config/sessions/session-transcript-index.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
+import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -43,7 +44,7 @@ import {
 } from "./session-persistence-operation.js";
 
 export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
-  /** @deprecated Use removeTrailingEntriesAsync; removed at the next Plugin SDK major. */
+  /** @deprecated Use removeTrailingEntriesAsync; removed in the next Plugin SDK major. */
   removeTrailingEntries(
     predicate: (entry: SessionEntry) => boolean,
     options?: { preserveTrailing?: (entry: SessionEntry) => boolean },
@@ -81,7 +82,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
           throw new Error("Session transcript changed during suffix preparation");
         }
       };
-      const reader = prepareSessionManagerHydration(target);
+      const reader = prepareSessionManagerHydration(target, { lane: targetDiscoveryLane });
       const { env: _env, ...scope } = withOwnedSessionTranscriptWriterFence(target);
       const { withSessionMetadataWorker } = await import("./session-manager-metadata-runtime.js");
       assertCurrent();

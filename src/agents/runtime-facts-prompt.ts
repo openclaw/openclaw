@@ -1,7 +1,10 @@
 /** Compact current-turn snapshots; instructions belong in the stable system prompt. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildTemporalContextText } from "./date-time.js";
 import type { RuntimeContextFragment } from "./internal-runtime-context.js";
+import { buildInterruptedInputContext } from "./interrupted-input-context.js";
 import { buildMediaTaskRuntimeContext } from "./media-generation-task-status.js";
+import type { AgentRunSessionTarget } from "./run-session-target.types.js";
 import {
   buildExecutionHostRuntimeFacts,
   type ExecutionHostRuntimeFactsParams,
@@ -12,6 +15,7 @@ export async function buildRuntimeFactsContext(
   params: ExecutionHostRuntimeFactsParams & {
     cfg: OpenClawConfig;
     executionHost?: boolean;
+    sessionTarget?: AgentRunSessionTarget;
   },
 ): Promise<RuntimeContextFragment[]> {
   const includeEmptySnapshots = params.includeEmptySnapshots === true;
@@ -30,5 +34,16 @@ export async function buildRuntimeFactsContext(
   if (media) {
     facts.push({ kind: "conversation-data", text: media });
   }
+  const interrupted = await buildInterruptedInputContext(params);
+  if (interrupted) {
+    facts.push(interrupted);
+  }
+  facts.push({
+    kind: "conversation-data",
+    text: buildTemporalContextText({
+      configuredTimezone: params.cfg.agents?.defaults?.userTimezone,
+      sessionStatusAvailable: params.capabilityToolNames.has("session_status"),
+    }),
+  });
   return facts;
 }

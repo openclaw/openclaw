@@ -238,7 +238,7 @@ export type ProviderPlugin = {
    */
   buildReplayPolicy?: (ctx: ProviderReplayPolicyContext) => ProviderReplayPolicy | null | undefined;
   /**
-   * @deprecated Use sanitizeReplayHistoryAsync; removed at the next Plugin SDK major.
+   * @deprecated Use sanitizeReplayHistoryAsync; removed in the next Plugin SDK major.
    * Provider-owned replay-history sanitization.
    *
    * Runs after OpenClaw performs generic transcript cleanup. Use this for

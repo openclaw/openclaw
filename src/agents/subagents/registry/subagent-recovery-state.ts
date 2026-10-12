@@ -2,6 +2,15 @@ import type { SessionEntry } from "../../../config/sessions.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+export function isQuietSubagentRestartContinuation(entry: SubagentRunRecord): boolean {
+  return (
+    !entry.collect &&
+    entry.expectsCompletionMessage === false &&
+    entry.completionTarget === "parent" &&
+    entry.execution.interruptionReason === "gateway-restart"
+  );
+}
+
 export function shouldSuppressSubagentRecoverySessionEffects(entry: SubagentRunRecord): boolean {
   if (entry.execution.suppressSessionEffects === true) {
     return true;

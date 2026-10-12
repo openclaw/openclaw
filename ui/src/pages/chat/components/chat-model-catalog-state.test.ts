@@ -2,12 +2,10 @@
 
 import { render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
-import {
-  renderChatModelCatalogRefresh,
-  renderChatModelCatalogState,
-} from "./chat-model-catalog-state.ts";
-import { renderChatModelPicker } from "./chat-model-picker.ts";
+import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
+import { ChatModelCatalogRefresh, ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
+import { ChatModelPicker } from "./chat-model-picker.tsx";
 
 describe("model catalog refresh presentation", () => {
   it.each([
@@ -27,7 +25,7 @@ describe("model catalog refresh presentation", () => {
   ] as const)(
     "presents %s with options=%s and pending=%j",
     (status, hasOptions, pendingProviders, presentation, label) => {
-      const state: ChatModelCatalogState = {
+      const state: ModelCatalogState = {
         hasSnapshot: presentation !== "loading",
         status,
         pendingProviders: pendingProviders ? [...pendingProviders] : undefined,
@@ -35,17 +33,17 @@ describe("model catalog refresh presentation", () => {
       const container = document.createElement("div");
       const setup = vi.fn();
       render(
-        renderChatModelCatalogState(
+        solidTemplate(ChatModelCatalogState, {
           state,
           hasOptions,
-          hasOptions,
-          presentation === "setup" ? setup : undefined,
-        ),
+          hasSelectableOptions: hasOptions,
+          onModelSetup: presentation === "setup" ? setup : undefined,
+        }),
         container,
       );
       if (presentation === "refresh") {
         expect(container.querySelector("[role=status]")).toBeNull();
-        render(renderChatModelCatalogRefresh(state), container);
+        render(solidTemplate(ChatModelCatalogRefresh, { state }), container);
         expect(container.querySelector(".btn__spinner")?.getAttribute("aria-hidden")).toBe("true");
         expect(container.querySelector(".sr-only")?.textContent).toBe(label);
       } else {
@@ -58,7 +56,7 @@ describe("model catalog refresh presentation", () => {
         container.querySelector<HTMLButtonElement>("[data-chat-model-setup]")?.click();
         expect(setup).toHaveBeenCalledOnce();
       } else if (presentation === "settled") {
-        render(renderChatModelCatalogRefresh(state), container);
+        render(solidTemplate(ChatModelCatalogRefresh, { state }), container);
         expect(container.querySelector("[data-chat-model-refresh]")).toBeNull();
       }
     },
@@ -79,9 +77,9 @@ describe("model catalog refresh presentation", () => {
       container.remove();
       elsewhere.remove();
     });
-    const update = (modelCatalogState: ChatModelCatalogState, hasOptions = true) =>
+    const update = (modelCatalogState: ModelCatalogState, hasOptions = true) =>
       render(
-        renderChatModelPicker({
+        solidTemplate(ChatModelPicker, {
           disabled: false,
           modelSelectionLocked: false,
           modelCatalogState,
@@ -105,7 +103,7 @@ describe("model catalog refresh presentation", () => {
         }),
         container,
       );
-    const pending: ChatModelCatalogState = {
+    const pending: ModelCatalogState = {
       hasSnapshot: true,
       status: "ready",
       pendingProviders: ["example"],
@@ -163,7 +161,7 @@ describe("model catalog refresh presentation", () => {
     (provider, agentRuntimeId, label) => {
       const container = document.createElement("div");
       render(
-        renderChatModelPicker({
+        solidTemplate(ChatModelPicker, {
           disabled: false,
           modelSelectionLocked: false,
           modelCatalogState: { hasSnapshot: true, status: "ready" },

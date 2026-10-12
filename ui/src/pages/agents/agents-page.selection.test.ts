@@ -17,9 +17,8 @@ import {
   setPageGateway,
   settingsSelection,
   snapshot,
-  type TestAgentsPage,
+  createAgentsPage,
 } from "./agents-page.test-support.ts";
-import "./agents-page.ts";
 
 const files = (agentId: string, workspace: string) => ({ agentId, workspace, files: [] });
 
@@ -38,7 +37,7 @@ describe("AgentsPage routing", () => {
     ({ requestedAgentId, selectedId, expectedAgentId }) => {
       const currentGateway = gateway(snapshot(null, false));
       const selection = settingsSelection(roster, selectedId);
-      const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+      const page = createAgentsPage();
       page.context = {
         basePath: "",
         gateway: currentGateway,
@@ -53,7 +52,7 @@ describe("AgentsPage routing", () => {
         panel: "tools",
       };
 
-      page.willUpdate(new Map([["routeData", undefined]]));
+      page.applyRoute();
 
       expect(page.agentsPanel).toBe("tools");
       expect(page.agentsSelectedId).toBe(expectedAgentId);
@@ -86,7 +85,7 @@ describe("AgentsPage routing", () => {
     );
     const currentGateway = gateway(snapshot(null, false));
     const agents = agentsCapability(async () => files("main", "main"));
-    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    const page = createAgentsPage();
     page.context = {
       ...pageContext(currentGateway, agents),
       settingsAgentSelection: selection,
@@ -100,13 +99,68 @@ describe("AgentsPage routing", () => {
     expect(page.context.navigate).not.toHaveBeenCalled();
 
     page.routeData = preloaded;
-    page.willUpdate(new Map([["routeData", undefined]]));
+    page.applyRoute();
 
     expect(selection.state.selectedId).toBe("research");
     expect(page.agentsSelectedId).toBe("research");
     expect(page.context.navigate).not.toHaveBeenCalled();
     page.subscriptions.hostDisconnected();
     selection.dispose();
+  });
+
+  it("navigates only for explicit selection intent after the roster changes its default", () => {
+    const listeners = new Set<() => void>();
+    const rosterSource = {
+      state: { agentsList: roster as AgentsListResult | null },
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const selection = createAgentSelectionCapability(
+      {
+        connection: { gatewayUrl: "ws://settings.test" },
+        snapshot: { assistantAgentId: "main" },
+        subscribe: () => () => undefined,
+      },
+      rosterSource,
+      undefined,
+      undefined,
+      { requireConfiguredAgent: true },
+    );
+    const currentGateway = gateway(snapshot(null, false));
+    const page = createAgentsPage();
+    page.context = {
+      ...pageContext(
+        currentGateway,
+        agentsCapability(async () => files("main", "main")),
+      ),
+      settingsAgentSelection: selection,
+    };
+    page.routeData = agentsRouteData(currentGateway, roster, "main", selection);
+    page.subscriptions.hostConnected();
+    try {
+      page.applyRoute();
+      rosterSource.state.agentsList = { ...roster, agents: [{ id: "research" }] };
+      listeners.forEach((listener) => listener());
+
+      expect(page.agentsSelectedId).toBe("research");
+      expect(page.context.navigate).not.toHaveBeenCalled();
+
+      rosterSource.state.agentsList = roster;
+      listeners.forEach((listener) => listener());
+      expect(page.agentsSelectedId).toBe("main");
+      expect(page.context.navigate).not.toHaveBeenCalled();
+
+      selection.set("research");
+
+      expect(page.context.navigate).toHaveBeenCalledExactlyOnceWith("agents", {
+        pathname: "/settings/agents/research/files",
+      });
+    } finally {
+      page.subscriptions.hostDisconnected();
+      selection.dispose();
+    }
   });
 
   it.each([
@@ -138,7 +192,7 @@ describe("AgentsPage routing", () => {
         undefined,
         { requireConfiguredAgent: true },
       );
-      const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+      const page = createAgentsPage();
       const context = pageContext(currentGateway, agents);
       page.context = {
         ...context,
@@ -152,7 +206,7 @@ describe("AgentsPage routing", () => {
       setPageGateway(page, client);
       page.subscriptions.hostConnected();
       try {
-        page.willUpdate(new Map([["routeData", undefined]]));
+        page.applyRoute();
         await waitForFast(() => expect(page.agentFilesList?.workspace).toBe("main"));
 
         agents.state.agentsList = null;
@@ -162,7 +216,7 @@ describe("AgentsPage routing", () => {
         // The transient outlet reuses this element while the next loader has no data.
         page.routeData = undefined;
         if (pendingUpdate) {
-          page.willUpdate(new Map([["routeData", nextData]]));
+          page.applyRoute();
         }
         agents.state.agentsList = roster;
         listeners.forEach((listener) => listener());
@@ -174,7 +228,7 @@ describe("AgentsPage routing", () => {
           selection.set("main");
         }
         page.routeData = nextData;
-        page.willUpdate(new Map([["routeData", undefined]]));
+        page.applyRoute();
 
         const expectedAgentId = newerIntent ? "main" : "research";
         expect(selection.state.selectedId).toBe(expectedAgentId);
@@ -200,7 +254,7 @@ describe("AgentsPage routing", () => {
   it("does not restore a preloaded agent after a newer sidebar choice, including an ABA change", () => {
     const currentGateway = gateway(snapshot(null, false));
     const selection = settingsSelection(roster, "main");
-    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    const page = createAgentsPage();
     const replace = vi.fn();
     page.context = {
       basePath: "",
@@ -212,7 +266,7 @@ describe("AgentsPage routing", () => {
     selection.set("research");
     selection.set("main");
 
-    page.willUpdate(new Map([["routeData", undefined]]));
+    page.applyRoute();
 
     expect(selection.state.selectedId).toBe("main");
     expect(page.agentsSelectedId).toBe("main");
@@ -234,7 +288,7 @@ describe("AgentsPage routing", () => {
         agentId === "main" ? pending.promise : Promise.resolve(files("research", "research")),
       ),
     };
-    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    const page = createAgentsPage();
     page.context = {
       ...pageContext(currentGateway, agents),
       settingsAgentSelection: selection,
@@ -285,7 +339,7 @@ describe("AgentsPage routing", () => {
         undefined,
         { requireConfiguredAgent: true },
       );
-      const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+      const page = createAgentsPage();
       page.context = { ...pageContext(currentGateway, agents), settingsAgentSelection: selection };
       page.gateway.applySnapshot(currentGateway.snapshot, { initial: true, sourceChanged: false });
       page.subscriptions.hostConnected();
@@ -352,7 +406,7 @@ describe("AgentsPage routing", () => {
         mutations.push(mutation);
         return mutation;
       };
-      const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+      const page = createAgentsPage();
       page.context = {
         ...context,
         agentIdentity: { ...context.agentIdentity, invalidate: vi.fn() },
@@ -404,7 +458,7 @@ describe("AgentsPage routing", () => {
     const currentGateway = gateway(snapshot(client));
     const selection = settingsSelection(roster, "main");
     const agents = agentsCapability(async () => files("main", "main"));
-    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    const page = createAgentsPage();
     const runExternalMutation = vi.fn<ApplicationContext["runtimeConfig"]["runExternalMutation"]>(
       async (task, options) => {
         await admission.promise;

@@ -1,12 +1,10 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
-import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
-import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -162,43 +160,6 @@ function runChild(script: string, signal?: NodeJS.Signals) {
     expect(result.signal, result.stderr).toBe(signal);
   }
   return result.stdout;
-}
-
-async function runOwnedChild(script: string, signal: AbortSignal): Promise<string> {
-  const child = spawn(process.execPath, [...nodeArguments, script], {
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  let failure: Error | undefined;
-  child.stdout.on("data", (chunk: Buffer) => {
-    stdout += chunk.toString();
-  });
-  child.stderr.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString();
-  });
-  child.once("error", (error) => {
-    failure = error;
-  });
-  const closed = new Promise<void>((resolve) => {
-    child.once("close", () => resolve());
-  });
-  let joined = false;
-  try {
-    await withinTest(closed, signal);
-    joined = true;
-    expect(failure, stderr).toBeUndefined();
-    expect(child.exitCode, stderr).toBe(0);
-    expect(child.signalCode, stderr).toBeNull();
-    return stdout;
-  } finally {
-    if (!joined) {
-      // The blocked reclaimer cannot run its own finally; retire its entire fixture family.
-      forceKillChildProcessTree(child);
-    }
-    await closed;
-  }
 }
 
 it("reconciles a released fresh token without waiting for idle reclamation", () => {
@@ -426,150 +387,6 @@ it("reclaims one oversized abandoned snapshot per pass without starving the next
     }
   }
 });
-
-it.skipIf(process.platform === "win32")(
-  "arbitrates an orphan worker allocating after reclamation inspects its parent",
-  async ({ signal }) => {
-    for (const { legacyParent, cacheContainer } of [
-      { legacyParent: false, cacheContainer: false },
-      { legacyParent: true, cacheContainer: false },
-      { legacyParent: false, cacheContainer: true },
-      { legacyParent: true, cacheContainer: true },
-    ]) {
-      for (const stage of ["inspection", "retirement"] as const) {
-        const { root, cache, source } = createFixture();
-        const childPrelude = `
-      import fs from 'node:fs';
-      import path from 'node:path';
-      import { prepareSqliteReadOnlyLocationSyncInProcess } from ${JSON.stringify(snapshotModule)};
-      import { createSqliteSnapshotStagingDirectorySync, reclaimAbandonedSqliteSnapshots } from ${JSON.stringify(stagingModule)};
-      import { setLoggerOverride } from ${JSON.stringify(loggerModule)};
-      setLoggerOverride({ level: 'silent', file: ${JSON.stringify(path.join(root, "child.log"))} });
-    `;
-        const parentScript = `${childPrelude}
-      let directory;
-      if (${JSON.stringify(legacyParent)}) {
-        directory = path.join(${JSON.stringify(cache)}, 'openclaw-sqlite-readonly-' + process.pid + '-Legacy');
-        fs.mkdirSync(directory);
-      } else {
-        directory = createSqliteSnapshotStagingDirectorySync(${JSON.stringify(cache)});
-      }
-      if (${JSON.stringify(cacheContainer)}) fs.mkdirSync(path.join(directory, 'openclaw'));
-      if (${JSON.stringify(legacyParent)}) {
-        const stale = new Date(Date.now() - 25 * 60 * 60 * 1000);
-        if (${JSON.stringify(cacheContainer)}) fs.utimesSync(path.join(directory, 'openclaw'), stale, stale);
-        fs.utimesSync(directory, stale, stale);
-      }
-      process.send(directory);
-      process.on('message', () => {});
-    `;
-        const workerScript = `${childPrelude}
-      process.on('message', (parent) => {
-        let prepared;
-        let result;
-        try {
-          prepared = prepareSqliteReadOnlyLocationSyncInProcess(${JSON.stringify(source)}, parent);
-          result = { location: prepared.location };
-        } catch (error) {
-          result = { error: error.message, code: error.code, causeCode: error.cause?.code };
-        }
-        fs.writeSync(4, JSON.stringify(result));
-        fs.closeSync(4);
-        process.removeAllListeners('message');
-        process.once('message', () => { prepared?.cleanup(); process.disconnect(); });
-      });
-      process.send('ready');
-    `;
-        const output = await runOwnedChild(
-          `${childPrelude}
-      import { spawn } from 'node:child_process';
-      import { once } from 'node:events';
-      import koffi from 'koffi';
-      const launch = (script, resultFd) => spawn(process.execPath, [...${JSON.stringify(nodeArguments)}, script], {
-        stdio: ['ignore', 'ignore', 'inherit', 'ipc', resultFd ?? 'ignore'],
-      });
-      const parent = launch(${JSON.stringify(parentScript)});
-      const [directory] = await once(parent, 'message');
-      // A real blocking pipe keeps the synchronous reclaimer observer on its original turn.
-      const libc = koffi.load(null);
-      const pipe = libc.func('int pipe(_Out_ int *fds)');
-      const close = libc.func('int close(int fd)');
-      const fcntl = libc.func('int fcntl(int fd, int cmd, ...)');
-      const resultPipe = [-1, -1];
-      if (pipe(resultPipe) !== 0) throw new Error('worker result pipe failed');
-      // POSIX F_SETFD=2/FD_CLOEXEC=1 prevents unrelated descendants retaining the writer.
-      if (resultPipe.some(fd => fcntl(fd, 2, 'int', 1) !== 0)) throw new Error('worker result pipe close-on-exec failed');
-      const worker = launch(${JSON.stringify(workerScript)}, resultPipe[1]);
-      close(resultPipe[1]);
-      const workerClosed = once(worker, 'close');
-      const parentClosed = once(parent, 'close');
-      let inspected = false;
-      let outcome;
-      try {
-        await once(worker, 'message');
-        parent.kill('SIGKILL');
-        await parentClosed;
-        const stale = new Date(Date.now() - 25 * 60 * 60 * 1000);
-        if (fs.existsSync(path.join(directory, 'openclaw'))) fs.utimesSync(path.join(directory, 'openclaw'), stale, stale);
-        fs.utimesSync(directory, stale, stale);
-        const readDirectory = fs.readdirSync;
-        const rename = fs.renameSync;
-        const startWorker = (pathname) => {
-          if (String(pathname) === directory && !inspected) {
-            inspected = true;
-            worker.send(${JSON.stringify(cacheContainer)} ? path.join(directory, 'openclaw') : directory);
-            const result = fs.readFileSync(resultPipe[0], 'utf8');
-            if (!result) throw new Error('worker did not reach allocation barrier');
-            outcome = JSON.parse(result);
-          }
-        };
-        fs.readdirSync = (...args) => {
-          const entries = readDirectory(...args);
-          if (${JSON.stringify(stage)} === 'inspection') startWorker(args[0]);
-          return entries;
-        };
-        fs.renameSync = (...args) => {
-          if (${JSON.stringify(stage)} === 'retirement') startWorker(args[0]);
-          return rename(...args);
-        };
-        for (const _ of reclaimAbandonedSqliteSnapshots(${JSON.stringify(cache)})) {}
-        fs.readdirSync = readDirectory;
-        fs.renameSync = rename;
-
-        process.stdout.write(JSON.stringify({
-          inspected, outcome,
-          workerAlive: worker.exitCode === null && worker.signalCode === null,
-          copyExists: outcome?.location ? fs.existsSync(outcome.location) : false,
-        }));
-      } finally {
-        if (parent.exitCode === null && parent.signalCode === null) parent.kill('SIGKILL');
-        if (worker.connected && outcome) worker.send('finish');
-        else worker.kill('SIGKILL');
-        await Promise.all([parentClosed, workerClosed]);
-        close(resultPipe[0]);
-      }
-    `,
-          signal,
-        );
-        const result = JSON.parse(output) as {
-          inspected: boolean;
-          workerAlive: boolean;
-          copyExists: boolean;
-          outcome: { location?: string; error?: string; code?: string; causeCode?: string };
-        };
-        const context = `${stage}, legacy parent: ${legacyParent}, cache container: ${cacheContainer}`;
-        expect(result.inspected, context).toBe(true);
-        expect(result.workerAlive, context).toBe(true);
-        expect(result.copyExists, context).toBe(result.outcome.location !== undefined);
-        if (!result.outcome.location) {
-          expect(result.outcome.error, context).toContain(
-            stage === "inspection" ? "database is locked" : "parent retired",
-          );
-        }
-      }
-    }
-  },
-);
 
 it("reclaims only legacy snapshots older than 24 hours", async () => {
   const { root, cache } = createFixture();

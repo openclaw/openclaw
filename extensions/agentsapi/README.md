@@ -13,8 +13,37 @@ original API key to submit input to an existing hosted session, even when anothe
 key can read it. If the service rejects input for this reason, restore the
 creating key to continue the same session.
 
-Model, environment, and effective HTTP MCP configuration changes still require a
-session reset. Bindings created before this change are not migrated or supported.
+Model, environment, effective HTTP MCP configuration, and native web-search policy
+changes still require a session reset.
+
+### Upgrading saved sessions
+
+The plugin admits supported `authFingerprint` bindings (including `v2026.9.9`)
+on their first continuation. It verifies the historical fingerprint using the
+original model, API key, and environment/MCP settings, then checks current API
+access to that same native session. Only then does its leased binding owner
+atomically replace the credential-dependent digest with `configFingerprint`.
+It keeps the remote session ID and does not create a replacement conversation.
+Subsequent starts use the current format and key-rotation behavior above.
+
+If the key was already rotated, the old digest cannot distinguish rotation from
+a configuration change. Remote session reads omit MCP secrets and report
+effective environment defaults, so readable metadata alone is not sufficient
+to verify the original configuration. Restore the original key and settings
+and retry the continuation. If those are unavailable, `/reset` or session
+deletion uses the owning agent's current API-key authentication to settle the
+original native work before removing the local binding. Remote conversation
+history is not deleted. Inaccessible sessions, failed settlement, malformed
+rows, and refused migrations retain their saved identity for recovery; no
+replacement session is silently allocated. Changing native search restrictions
+or adopting an executor controller requires a reset, not migration.
+
+Normal updates retain their existing pre-upgrade backup and rollback workflow.
+Before a manual package replacement, back up OpenClaw state. Successful
+conversion is forward-only: to return to a release that requires
+`authFingerprint`, restore its matching pre-upgrade state backup, not just the
+older binary. Executor records predating plugin ownership remain a separate
+unsupported format; retire those sessions with the previous version first.
 
 Start with the [setup and supported features guide](https://docs.openclaw.ai/plugins/agentsapi).
 Enable the `agentsapi` plugin and select it for the model through
@@ -25,6 +54,18 @@ overrides are covered in the
 [harness configuration reference](https://docs.openclaw.ai/plugins/sdk-agent-harness/runtime-config).
 
 Multi-user Gateways are not supported by the Agents API MVP.
+
+The opt-in live regression uses an isolated Gateway and synthetic files. Supply
+`OPENAI_API_KEY` and set `OPENCLAW_LIVE_AGENTS_API_MODEL` to a model available to
+your Agents API project, then run:
+
+```bash
+OPENCLAW_LIVE_AGENTS_API=1 pnpm test:live test/gateway-agentsapi.live.test.ts
+```
+
+It verifies native execution, Gateway functions, disabled web search, follow-up
+replies, file transfer, restart, Stop, reset, and deletion. Provider usage is billed;
+the test deletes only the cloud sessions it creates.
 
 Configure native Agents API tools with
 `plugins.entries.agentsapi.config.nativeTools`. Omitting the setting uses live
@@ -49,7 +90,10 @@ is equivalent to:
 ```
 
 A supplied list replaces the defaults. List every native tool declaration you
-want to send. Each entry requires a `type` string; other tool options are passed
+want to send. The global `tools.web.search.enabled: false` setting and the
+session’s Web search disable override remove native `web_search` declarations
+from new sessions. A change to the effective search setting requires a new or
+reset session before inference can continue. Each entry requires a `type` string; other tool options are passed
 unchanged to the session's `agent.tools`. OpenClaw does not maintain an enum of
 tool types or options; the API validates them and reports unsupported values.
 

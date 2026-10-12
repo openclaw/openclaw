@@ -740,6 +740,10 @@ export type ChannelMessageActionAdapter = {
   describeMessageTool: (
     params: ChannelMessageActionDiscoveryContext,
   ) => ChannelMessageToolDiscovery | null | undefined;
+  /** Runtime discovery that may read worker-owned account state. Preferred by the host. */
+  describeMessageToolAsync?: (
+    params: ChannelMessageActionDiscoveryContext,
+  ) => Promise<ChannelMessageToolDiscovery | null | undefined>;
   /** Delegate conversation-read admission to the provider for registrations the host permits. */
   providerOwnedReadGates?: true | readonly ChannelMessageActionName[];
   /**

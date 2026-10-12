@@ -6,14 +6,17 @@ import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
+import * as exec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   withMockedPlatform,
   withMockedWindowsPlatform,
   withRestoredMocks,
+  mockProcessPlatform,
 } from "../test-utils/vitest-spies.js";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory.js";
+import { pkgQueryResult } from "./update-freebsd-pkg-ownership.test-support.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 import {
   canResolveRegistryVersionForPackageTarget,
@@ -631,25 +634,47 @@ describe("update global helpers", () => {
     expect(resolveNpmGlobalPrefixLayoutFromGlobalRoot("/tmp/node_modules")).toBeNull();
   });
 
-  it("cleans only renamed package directories", async () => {
-    await withTestDir({ prefix: "openclaw-update-cleanup-" }, async (root) => {
-      await fs.mkdir(path.join(root, ".openclaw-123"), { recursive: true });
-      await fs.mkdir(path.join(root, ".openclaw-456"), { recursive: true });
-      await fs.writeFile(path.join(root, ".openclaw-file"), "nope", "utf8");
-      await fs.mkdir(path.join(root, "openclaw"), { recursive: true });
+  it.each(["missing", "failed"] as const)(
+    "cleans only renamed package directories when pacman is %s",
+    async (probe) => {
+      await withRestoredMocks(
+        [
+          mockProcessPlatform("linux"),
+          vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
+            pkgQueryResult(
+              "",
+              probe === "missing"
+                ? {
+                    code: null,
+                    termination: "error",
+                    error: Object.assign(new Error("pacman unavailable"), { code: "ENOENT" }),
+                  }
+                : { code: 1 },
+            ),
+          ),
+        ],
+        async () => {
+          await withTestDir({ prefix: "openclaw-update-cleanup-" }, async (root) => {
+            await fs.mkdir(path.join(root, ".openclaw-123"), { recursive: true });
+            await fs.mkdir(path.join(root, ".openclaw-456"), { recursive: true });
+            await fs.writeFile(path.join(root, ".openclaw-file"), "nope", "utf8");
+            await fs.mkdir(path.join(root, "openclaw"), { recursive: true });
 
-      const result = await cleanupGlobalRenameDirs({
-        globalRoot: root,
-        packageName: "openclaw",
-      });
-      expect(result.removed.toSorted()).toEqual([".openclaw-123", ".openclaw-456"]);
-      expect((await fs.readdir(root)).toSorted()).toEqual([".openclaw-file", "openclaw"]);
-      const packageDirStat = await fs.stat(path.join(root, "openclaw"));
-      const markerFileStat = await fs.stat(path.join(root, ".openclaw-file"));
-      expect(packageDirStat.isDirectory()).toBe(true);
-      expect(markerFileStat.isFile()).toBe(true);
-    });
-  });
+            const result = await cleanupGlobalRenameDirs({
+              globalRoot: root,
+              packageName: "openclaw",
+            });
+            expect(result.removed.toSorted()).toEqual([".openclaw-123", ".openclaw-456"]);
+            expect((await fs.readdir(root)).toSorted()).toEqual([".openclaw-file", "openclaw"]);
+            const packageDirStat = await fs.stat(path.join(root, "openclaw"));
+            const markerFileStat = await fs.stat(path.join(root, ".openclaw-file"));
+            expect(packageDirStat.isDirectory()).toBe(true);
+            expect(markerFileStat.isFile()).toBe(true);
+          });
+        },
+      );
+    },
+  );
 
   it("checks installed dist against the packaged inventory", async () => {
     await withTestDir({ prefix: "openclaw-update-global-pkg-" }, async (packageRoot) => {

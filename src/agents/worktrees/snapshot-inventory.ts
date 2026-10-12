@@ -363,7 +363,7 @@ async function prepareSnapshotIndex(
   inventory: SnapshotInventory,
   indexEnv: SnapshotIndexEnvironment,
   temporaryDirectory: string,
-): Promise<{ missing: Set<string>; tracked: Set<string> }> {
+): Promise<{ missing: Set<string>; tracked: Set<string>; changed: boolean }> {
   const metadataBytes = [
     ...inventory.headPaths.map((entry) => entry.path),
     ...inventory.paths.values(),
@@ -448,7 +448,11 @@ async function prepareSnapshotIndex(
       purpose: "worktree safety snapshot",
     },
   });
-  return { missing, tracked };
+  return {
+    missing,
+    tracked,
+    changed: candidates.some(([key]) => !provisioned.has(key)),
+  };
 }
 
 function assertNoProvisionedTreePaths(tree: GitTreePath[], provisionedPaths: readonly string[]) {
@@ -536,7 +540,7 @@ export async function snapshotWorktree(
   }
   missingPaths.sort((left, right) => Buffer.compare(right, left));
   await assertCurrent();
-  if (!exact) {
+  if (prepared?.changed) {
     await requireGit(
       input.checkoutPath,
       [...snapshotIndexArgs, "update-index", "--add", "--remove", "-z", "--stdin"],
@@ -563,9 +567,44 @@ export async function snapshotWorktree(
       },
     );
   }
-  const tree = await requireGit(input.checkoutPath, [...snapshotIndexArgs, "write-tree"], { env });
+  let tree: string;
+  const unchanged = prepared?.changed === false;
+  if (unchanged) {
+    // A clean checkout is only recoverable if its promised objects still exist.
+    // Batch the check: write-tree repeatedly rescans fragmented packs on a miss.
+    const objects = await requireGitBuffer(
+      input.checkoutPath,
+      ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+      {
+        input: Buffer.from(
+          [
+            ...new Set(
+              inventory.headPaths
+                .filter((entry) => entry.mode !== "160000")
+                .map((entry) => entry.oid),
+            ),
+          ]
+            .map((oid) => `${oid}\n`)
+            .join(""),
+        ),
+      },
+    );
+    const missingObject = /^([a-f0-9]{40,64}) missing$/mu.exec(objects.toString("ascii"));
+    if (missingObject) {
+      throw new Error(
+        `Worktree snapshot has missing blob ${missingObject[1]}; repair the repository before retrying cleanup. Checkout preserved.`,
+      );
+    }
+    tree = await requireGit(input.checkoutPath, ["rev-parse", `${inventory.head}^{tree}`]);
+  } else {
+    tree = await requireGit(input.checkoutPath, [...snapshotIndexArgs, "write-tree"], { env });
+  }
   assertNoProvisionedTreePaths(
-    parseGitTreePaths(await requireGitBuffer(input.checkoutPath, ["ls-tree", "-r", "-z", tree])),
+    unchanged
+      ? inventory.headPaths
+      : parseGitTreePaths(
+          await requireGitBuffer(input.checkoutPath, ["ls-tree", "-r", "-z", tree]),
+        ),
     input.provisionedPaths,
   );
   const assertHeadCurrent = async () => {

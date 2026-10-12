@@ -10,6 +10,7 @@ import type {
   WorkboardStaleState,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import {
   buildWorkerContext,
@@ -547,10 +548,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
     if (ids.length === 0) {
       throw new Error("ids are required.");
     }
-    const patch =
-      input.patch && typeof input.patch === "object" && !Array.isArray(input.patch)
-        ? (input.patch as WorkboardCardPatch)
-        : {};
+    const patch = asNonArrayRecord(input.patch);
     const cards: WorkboardCard[] = [];
     for (const id of ids) {
       const updated =

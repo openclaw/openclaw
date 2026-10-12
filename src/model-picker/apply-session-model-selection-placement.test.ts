@@ -7,10 +7,12 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { applySessionModelSelection as applySdkModelSelection } from "../plugin-sdk/model-session-runtime.js";
 import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createModelSelectionInputs } from "./apply-session-model-selection.test-support.js";
 
@@ -51,7 +53,15 @@ vi.mock("../config/config.js", factories.config);
 vi.mock("../logging/subsystem.js", factories.logging);
 
 vi.mock("../gateway/session-worker-placement-context.js", factories.placementContext);
-vi.mock("../gateway/worker-environments/placement-session-runtime.js", factories.placementRuntime);
+// mock-isolation: The placement runtime is a hand-built fixture so capability resolution is observed without loading the worker runtime.
+vi.mock("../gateway/worker-environments/placement-session-runtime.js", () => ({
+  ...factories.placementRuntime(),
+  resolveWorkerPlacementSessionRuntimeCapabilitiesAsync: async (
+    params: Parameters<
+      typeof import("../gateway/worker-environments/placement-session-runtime.js").resolveWorkerPlacementSessionRuntimeCapabilitiesAsync
+    >[0],
+  ) => placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities(params),
+}));
 
 import { applySessionModelSelectionInternal as applySessionModelSelection } from "./apply-session-model-selection.js";
 
@@ -91,6 +101,31 @@ beforeEach(() => {
 afterEach(() => unsubscribeLifecycle());
 
 describe("applySessionModelSelection — placement guard", () => {
+  it("keeps released SDK validators inside the native session transaction", async () => {
+    const storePath = path.join(sessionDirs.make(), "openclaw-agent.sqlite");
+    const sessionKey = "agent:main:sdk-model-validator";
+    const sessionEntry = createEntry({ sessionId: "sdk-model-validator" });
+    await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+    let validatedInTransaction = false;
+    const result = await applySdkModelSelection(
+      createParams({
+        sessionEntry,
+        sessionKey,
+        storePath,
+        validateAuthProfileSelection: () => {
+          validatedInTransaction ||= database.db.isTransaction;
+          expect(loadSessionEntryReadOnly({ sessionKey, storePath })?.sessionId).toBe(
+            sessionEntry.sessionId,
+          );
+          return undefined;
+        },
+      }),
+    );
+    expect(result.status).toBe("applied");
+    expect(validatedInTransaction).toBe(true);
+  });
+
   it("rejects a model selection incompatible with an active cloud placement without persisting", async () => {
     const sessionEntry = createEntry({ sessionId: "placement-active-1" });
     const initial = structuredClone(sessionEntry);

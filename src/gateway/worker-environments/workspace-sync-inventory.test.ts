@@ -368,7 +368,7 @@ describe("runWorkspaceInventoryCommandToFile", () => {
   // Windows taskkill cannot recover descendants after their parent has exited.
   it
     .skipIf(process.platform === "win32")
-    .each(["ordinary-exit", "abort-exit", "timeout-exit"] as const)(
+    .each(["ordinary-exit", "abort-exit", "timeout-exit", "timeout-clean-exit"] as const)(
     "preserves the command outcome before delayed stdio close (%s)",
     async (mode) => {
       const root = tempDirs.make("openclaw-workspace-command-exit-");
@@ -376,6 +376,8 @@ describe("runWorkspaceInventoryCommandToFile", () => {
       const marker = path.join(root, "command-identity");
       const controller = new AbortController();
       const cancellation = new Error("inventory stopped after command outcome");
+      const timeout = mode.startsWith("timeout-");
+      const exitCode = mode === "timeout-clean-exit" ? 0 : 7;
       const ready = createDeferred();
       const exited = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
       const closed = vi.fn();
@@ -412,7 +414,8 @@ describe("runWorkspaceInventoryCommandToFile", () => {
       ].join("");
       const script = [
         'const { spawn } = require("node:child_process");',
-        'process.on("SIGTERM", () => process.exit(7));',
+        `process.on("SIGTERM", () => process.exit(${exitCode}));`,
+        'process.stdout.write("partial inventory\\n");',
         `const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], { stdio: ["ignore", "ignore", 2, "ipc"] });`,
         "child.unref();",
         'child.once("message", () => process.stderr.write("fixture ready\\n", () => {',
@@ -421,7 +424,7 @@ describe("runWorkspaceInventoryCommandToFile", () => {
           : "setInterval(() => {}, 1000);",
         "}));",
       ].join("");
-      if (mode === "timeout-exit") {
+      if (timeout) {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       }
       const producing = runWorkspaceInventoryCommandToFile({
@@ -433,35 +436,38 @@ describe("runWorkspaceInventoryCommandToFile", () => {
       void producing.then(settled, settled);
       try {
         await ready.promise;
-        if (mode === "timeout-exit") {
+        if (timeout) {
           await vi.advanceTimersByTimeAsync(10_000);
         }
         if (mode !== "abort-exit") {
-          expect(await exited.promise, observedStderr).toEqual({ code: 7, signal: null });
+          expect(await exited.promise, observedStderr).toEqual({ code: exitCode, signal: null });
         }
         expect(closed).not.toHaveBeenCalled();
         expect(settled).not.toHaveBeenCalled();
-        controller.abort(cancellation);
-        if (mode === "timeout-exit") {
+        if (mode !== "timeout-clean-exit") {
+          controller.abort(cancellation);
+        }
+        if (timeout) {
           await vi.advanceTimersByTimeAsync(300);
         }
         const error = await producing.catch((value: unknown) => value);
-        expect(await exited.promise, observedStderr).toEqual({ code: 7, signal: null });
+        expect(await exited.promise, observedStderr).toEqual({ code: exitCode, signal: null });
         expect(closed).toHaveBeenCalledOnce();
         if (mode === "ordinary-exit") {
           expect(error).toMatchObject({
             message: expect.stringContaining("ordinary inventory failure"),
           });
-        } else if (mode === "timeout-exit") {
+        } else if (timeout) {
           expect(error).toMatchObject({
-            message: expect.stringContaining("file enumeration failed"),
+            message: expect.stringContaining("file enumeration failed: timed out after 10000ms"),
           });
+          await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("partial inventory\n");
         } else {
           expect(error).toBe(cancellation);
         }
       } finally {
         controller.abort(cancellation);
-        if (mode === "timeout-exit") {
+        if (timeout) {
           await vi.runOnlyPendingTimersAsync();
           vi.useRealTimers();
         }

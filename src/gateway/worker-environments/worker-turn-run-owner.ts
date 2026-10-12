@@ -5,6 +5,7 @@ import {
   setActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
 } from "../../agents/embedded-agent-runner/runs.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import {
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError,
@@ -17,6 +18,7 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
+import { logWarn } from "../../logger.js";
 import {
   closeDiagnosticEmbeddedRunOwner,
   createDiagnosticEmbeddedRunOwner,
@@ -26,13 +28,17 @@ import {
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
+import { boundedWorkerError } from "./worker-error.js";
 
 export type ActiveWorkerTurn = {
   claim: WorkerSessionTurnClaim;
   sessionKey: string;
   signal: AbortSignal;
+  settled: Promise<void>;
+  isReplyDelivered: () => boolean;
   recoverTerminal?: (assertCurrent?: () => void) => Promise<string | undefined>;
   dispose: () => void;
 };
@@ -49,11 +55,39 @@ type WorkerRunOwner = WorkerTurnLiveEventOwner & {
 
 const activeOwners = new Map<string, WorkerRunOwner>();
 
+export async function prepareWorkerTurnReplyDelivery(
+  previous: ActiveWorkerTurn | undefined,
+  turn: Pick<SessionPlacementTurnParams, "runId" | "abortSignal">,
+) {
+  // Settlement can invalidate placement reads even after the reply has completed.
+  if (previous?.isReplyDelivered() && previous.claim.runId !== turn.runId) {
+    await raceNodeWorkerOperation(previous.settled, turn.abortSignal);
+  }
+  const reply = createDeferredCore<EmbeddedAgentRunResult>();
+  let delivered = false;
+  return {
+    isDelivered: () => delivered,
+    deliver(this: void, result: EmbeddedAgentRunResult) {
+      delivered = true;
+      reply.resolve(result);
+    },
+    wait(this: void, execution: Promise<EmbeddedAgentRunResult>) {
+      void execution.catch((error: unknown) => {
+        if (delivered) {
+          logWarn(`Cloud worker background settlement failed: ${boundedWorkerError(error)}`);
+        }
+      });
+      return Promise.race([reply.promise, execution]);
+    },
+  };
+}
+
 export async function createWorkerTurnRunOwner(params: {
   placements: WorkerSessionPlacementStore;
   claim: WorkerSessionTurnClaim;
   turn: SessionPlacementTurnParams;
   sessionKey: string;
+  isReplyDelivered: () => boolean;
   assertCurrent?: () => void;
 }): Promise<ActiveWorkerTurn> {
   const { claim: requestedClaim, turn, sessionKey } = params;
@@ -225,7 +259,14 @@ export async function createWorkerTurnRunOwner(params: {
     assertCurrent();
     signal.throwIfAborted();
     activeOwners.set(claim.sessionId, owner);
-    return { claim, sessionKey, signal, dispose: cleanup };
+    return {
+      claim,
+      sessionKey,
+      signal,
+      settled: completion.promise,
+      isReplyDelivered: params.isReplyDelivered,
+      dispose: cleanup,
+    };
   } catch (error) {
     cleanup();
     throw error;

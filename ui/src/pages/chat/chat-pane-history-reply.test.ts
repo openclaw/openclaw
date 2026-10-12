@@ -87,11 +87,13 @@ describe("chat pane reply-source history navigation", () => {
         expect(request).toHaveBeenNthCalledWith(1, "chat.history", {
           sessionKey: state.sessionKey,
           limit: 1000,
+          toolResultMaxChars: 2_000,
           offset: 2,
         });
         expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
           sessionKey: state.sessionKey,
           limit: 1000,
+          toolResultMaxChars: 2_000,
           offset: 4,
         });
       } else {

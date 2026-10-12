@@ -42,6 +42,8 @@ describe("prepared fleet batches", () => {
       mocks.configuredAgentIds = Array.from({ length: 64 }, (_, index) => `fleet-${index}`);
       const acquiring = createDeferredCore();
       const acquired = createDeferredCore();
+      const lastAcquiring = createDeferredCore();
+      const lastAcquired = createDeferredCore();
       const completed = createDeferredCore();
       const unregister = registerPreparedModelRuntimePublicationListener(({ phase }) => {
         if (phase === "published" && getPreparedModelRuntimeStartupStatus()?.degraded === false) {
@@ -63,6 +65,10 @@ describe("prepared fleet batches", () => {
           acquiring.resolve();
           await acquired.promise;
         }
+        if ((options as { workspaceDir: string }).workspaceDir === "/tmp/workspace-fleet-63") {
+          lastAcquiring.resolve();
+          await lastAcquired.promise;
+        }
         return { entries: [] };
       });
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -75,6 +81,7 @@ describe("prepared fleet batches", () => {
       const ready = expect(publication).resolves.toBeUndefined();
       // Attach before advancing timers so the expected pre-fix rejection is always observed.
       void ready.catch(() => undefined);
+      let admission: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
       try {
         await acquiring.promise;
         if (earlyAuth) {
@@ -88,9 +95,13 @@ describe("prepared fleet batches", () => {
           stage: `static provider catalog; agent ${heldAgent}`,
         });
         expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining(`agent ${heldAgent}`));
-        await expect(
-          loadPublishedGatewayReplyDispatchRuntime({ agentId: heldAgent }),
-        ).rejects.toThrow(heldAgent);
+        admission = loadPublishedGatewayReplyDispatchRuntime({ agentId: heldAgent });
+        let admissionSettled = false;
+        void admission
+          .finally(() => {
+            admissionSettled = true;
+          })
+          .catch(() => undefined);
         if (heldIndex > 0) {
           await expect(
             loadPublishedGatewayReplyDispatchRuntime({ agentId: "fleet-0" }),
@@ -111,7 +122,11 @@ describe("prepared fleet batches", () => {
               .authStorage.getAll(),
           ).toEqual(credentials);
         }
+        expect(admissionSettled).toBe(false);
         acquired.resolve();
+        await lastAcquiring.promise;
+        await expect(admission).resolves.toMatchObject({ agentId: heldAgent });
+        lastAcquired.resolve();
         await completed.promise;
         expect(getPreparedModelRuntimeStartupStatus()).toEqual({
           degraded: false,
@@ -129,7 +144,8 @@ describe("prepared fleet batches", () => {
         ).toBeDefined();
       } finally {
         acquired.resolve();
-        await Promise.allSettled([publication]);
+        lastAcquired.resolve();
+        await Promise.allSettled([publication, admission]);
         await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
         unregister();
         vi.useRealTimers();

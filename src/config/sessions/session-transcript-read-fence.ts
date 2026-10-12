@@ -13,6 +13,7 @@ import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import { transcriptEventNavigationSql } from "./transcript-payload.js";
 
@@ -60,35 +61,41 @@ export function withSessionTranscriptQuestionAnswers<T>(
   );
 }
 
-export function resolveSessionTranscriptQuestionAnswer(
+export function captureSessionTranscriptQuestionAnswers(
   database: Pick<OpenClawAgentDatabase, "path">,
   sessionId: string,
-  entryId: string,
   admittedUserId?: string,
-): UserTurnTranscriptAdmissionReceipt | undefined {
+) {
   const scope = questionAnswerStorage.getStore();
-  const input = scope?.inputs.get(entryId);
-  if (
-    !scope ||
-    !input ||
-    !isSameTranscriptStore(input.storePath, database.path) ||
-    input.sessionId !== sessionId
-  ) {
+  const answers = [...(scope?.inputs.values() ?? [])].filter(
+    (input) =>
+      isSameTranscriptStore(input.storePath, database.path) && input.sessionId === sessionId,
+  );
+  if (!scope || answers.length === 0) {
     return undefined;
   }
-  scope.assertActive();
-  const creator = scope.recorder && getUserTurnTranscriptAdmissionOwner(scope.recorder);
-  const original = creator?.receipt();
-  return original &&
-    !creator?.blocked() &&
-    original.agentId === input.agentId &&
-    original.sessionId === input.sessionId &&
-    original.sessionKey === input.sessionKey &&
-    isSameTranscriptStore(original.storePath, input.storePath) &&
-    original.generation === input.generation &&
-    (admittedUserId === undefined || original.entryId === admittedUserId)
-    ? input
-    : undefined;
+  const assertCurrent = () => {
+    scope.assertActive();
+    const creator = scope.recorder && getUserTurnTranscriptAdmissionOwner(scope.recorder);
+    const original = creator?.receipt();
+    if (
+      !original ||
+      creator?.blocked() ||
+      !answers.every(
+        (input) =>
+          original.agentId === input.agentId &&
+          original.sessionId === input.sessionId &&
+          original.sessionKey === input.sessionKey &&
+          isSameTranscriptStore(original.storePath, input.storePath) &&
+          original.generation === input.generation &&
+          (admittedUserId === undefined || original.entryId === admittedUserId),
+      )
+    ) {
+      throw new SqliteTranscriptMutationConflictError(sessionId);
+    }
+  };
+  assertCurrent();
+  return { answers, assertCurrent };
 }
 
 type SessionTranscriptReadFence = Readonly<{

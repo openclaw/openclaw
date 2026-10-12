@@ -220,10 +220,6 @@ describe("retained session receipt recovery", () => {
       fs.writeFileSync(backupPaths[1]!, bytes);
 
       fs.writeFileSync(source, "");
-      closeOpenClawAgentDatabasesForTest();
-      const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
-      fs.copyFileSync(sqlitePath, `${sqlitePath}.replacement`);
-      fs.renameSync(`${sqlitePath}.replacement`, sqlitePath);
       const recovered = await runDoctorSessionSqlite({ ...options, mode: "recover" });
       const issues = recovered.targets.flatMap((target) => target.issues);
       expect(issues).not.toContainEqual(
@@ -249,7 +245,7 @@ describe("retained session receipt recovery", () => {
       );
     });
   });
-  it("refuses empty-source recovery without backup or canonical transcript rows", async () => {
+  it("reports missing history while superseding a foreign empty-source receipt", async () => {
     await withOpenClawTestState({ label: "receipt-empty-missing-history" }, async (state) => {
       const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
         state,
@@ -273,15 +269,15 @@ describe("retained session receipt recovery", () => {
       const issues = recovered.targets.flatMap((target) => target.issues);
       expect(issues).toContainEqual(
         expect.objectContaining({
-          code: "retained_plugin_source_conflict",
-          message: expect.stringContaining(`Restore a complete verified transcript at ${source}`),
+          code: "historical_transcript_deferred",
+          message: expect.stringContaining(source),
         }),
       );
       expect(issues.map((issue) => issue.message).join("\n")).toContain(sqlitePath);
       expect(recovered.totals.archivedTranscriptFiles).toBe(0);
       expect(fs.readFileSync(source, "utf8")).toBe("");
       expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toEqual([]);
-      expect(receipt(state.env)).toEqual(before);
+      expect(receipt(state.env)).toMatchObject({ ...before, superseded: "different-database" });
     });
   });
   it("protects retained history when replacement events are reordered", async () => {
@@ -314,6 +310,7 @@ describe("retained session receipt recovery", () => {
       db.exec("COMMIT;");
 
       db.close();
+      const reordered = loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" });
       const manifest = readSessionSqliteMigrationManifest(imported.migrationRun!.manifestPath)!;
       manifest.failedAt = new Date().toISOString();
       const historicalIssues = Array.from({ length: 11 }, (_, index) => ({
@@ -331,11 +328,18 @@ describe("retained session receipt recovery", () => {
       });
       expect(recovered.targets.flatMap((target) => target.issues)).toContainEqual(
         expect.objectContaining({
-          code: "retained_plugin_source_conflict",
-          message: expect.stringContaining("legacy-kept.jsonl"),
+          code: "retained_plugin_receipt_superseded",
         }),
       );
-      expect(receipt(state.env)).toEqual(before);
+      expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toEqual(reordered);
+      const superseded = withExistingOpenClawStateDatabaseReadOnly(
+        ({ db: stateDb }) =>
+          stateDb
+            .prepare("SELECT report_json FROM migration_runs WHERE status = 'superseded'")
+            .get(),
+        { env: state.env },
+      );
+      expect(JSON.parse(String(superseded?.report_json))).toMatchObject({ receipt: before });
       const jsonReport = JSON.parse(
         fs.readFileSync(recovered.migrationRun!.failureReportJsonPath!, "utf8"),
       ) as {

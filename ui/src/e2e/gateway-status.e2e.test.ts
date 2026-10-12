@@ -11,9 +11,13 @@ const suite = createControlUiE2eSuite({ name: "Gateway status with native accoun
 
 async function connectionStatusOverlapsComposer(page: Page): Promise<boolean> {
   return page.evaluate(() => {
-    const statusBounds = document
-      .querySelector(".shell-connection-status")!
-      .getBoundingClientRect();
+    const status =
+      document.querySelector(".shell-connection-status") ??
+      document.querySelector(".sidebar-identity-card[data-connection-status]");
+    if (!status) {
+      throw new Error("Expected a visible Gateway connection status surface");
+    }
+    const statusBounds = status.getBoundingClientRect();
     const composerBounds = document
       .querySelector(".agent-chat__composer-shell")!
       .getBoundingClientRect();
@@ -118,10 +122,11 @@ suite.define(() => {
         });
         await page.locator(".shell--nav-collapsed").waitFor({ state: "visible" });
         await gateway.setOnline(false);
-        await page
-          .locator(".shell-connection-status .gateway-status__label")
-          .getByText("Reconnecting…", { exact: true })
-          .waitFor({ state: "visible" });
+        const retainedStatus = page.locator(
+          ".sidebar-identity-card[data-connection-status=reconnecting]",
+        );
+        await retainedStatus.waitFor({ state: "visible" });
+        expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting…");
         await expect.poll(() => connectionStatusOverlapsComposer(page)).toBe(false);
       },
     );
@@ -180,12 +185,13 @@ suite.define(() => {
             path: path.join(suite.artifactDir, "native-reconnecting.png"),
           });
         }
-        const visibleStatus = footer.locator(".gateway-status__label");
-        expect(await visibleStatus.count()).toBe(1);
-        expect(await visibleStatus.textContent()).toBe("Reconnecting…");
+        const identityStatus = footer.locator(".sidebar-identity-card");
+        expect(await identityStatus.isVisible()).toBe(true);
+        expect(await identityStatus.getAttribute("aria-label")).toContain("Reconnecting…");
         expect(await footer.locator(".sidebar-identity-card").textContent()).toContain("Alex");
         expect(await footer.locator(".sidebar-identity-card [role=status]").count()).toBe(0);
-        const announcement = footer.getByRole("status");
+        const announcement = footer.locator(":scope > [role=status]");
+        expect(await announcement.count()).toBe(1);
         expect(await announcement.textContent()).toContain("Reconnecting…");
         expect(await announcement.textContent()).not.toContain("in outbox");
         expect(await footer.textContent()).not.toContain("in outbox");

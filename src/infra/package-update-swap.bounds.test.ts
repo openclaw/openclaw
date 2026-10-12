@@ -18,6 +18,7 @@ import { interceptPackageFileHashes } from "./package-update-integrity-hasher.te
 import {
   createPackageIntegrityReader,
   PackageIntegrityLimitError,
+  PackageIntegrityTimeoutError,
 } from "./package-update-integrity.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
@@ -47,6 +48,30 @@ function captureReaderLogs() {
 }
 
 describe("package verification bounds", () => {
+  it("keeps a fresh reader usable after a wall-clock jump forward", async () => {
+    await withTestDir({ prefix: "openclaw-integrity-clock-forward-" }, async (base) => {
+      const reader = createPackageIntegrityReader(1_000);
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+      await expect(reader.entries(base)).resolves.toEqual([]);
+    });
+  });
+
+  it("expires a read on time despite a wall-clock jump backward", async () => {
+    await withTestDir({ prefix: "openclaw-integrity-clock-backward-" }, async (base) => {
+      let now = performance.now();
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const reader = createPackageIntegrityReader(15);
+      const opendir = fs.opendir.bind(fs);
+      vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
+        const directory = await opendir(...args);
+        now += 20;
+        return directory;
+      });
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() - 60_000);
+      await expect(reader.entries(base)).rejects.toBeInstanceOf(PackageIntegrityTimeoutError);
+    });
+  });
+
   it("rehashes same-tick observations even after they age", async () => {
     await withTestDir({ prefix: "openclaw-integrity-reuse-" }, async (base) => {
       const clock = Date.now.bind(Date);
@@ -487,7 +512,7 @@ describe("package verification bounds", () => {
         const beforeActivate = vi.fn();
         const onLiveMutation = vi.fn();
         const observations = captureReaderLogs();
-        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
         const update = swapStagedPackageInstall({
           ...params,
           beforeActivate,
@@ -522,10 +547,10 @@ describe("package verification bounds", () => {
             readerId: begin!.readerId,
             outcome: "timed-out",
             budgetMs: 40,
-            deadlineClock: "wall",
+            deadlineClock: "monotonic",
           });
           expect(Number(settled!.pendingIo)).toBeGreaterThanOrEqual(window);
-          expect(settled!.deadlineAtUnixMs).toBe(begin!.deadlineAtUnixMs);
+          expect(settled!.deadlineAtMonotonicMs).toBe(begin!.deadlineAtMonotonicMs);
           expect(settled!.elapsedMs).toBe(
             Number(settled!.settledAtMonotonicMs) - Number(begin!.startedAtMonotonicMs),
           );
@@ -606,7 +631,7 @@ describe("package verification bounds", () => {
         }
         return directory;
       });
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       const update = swapStagedPackageInstall({ ...params, timeoutMs: 40 });
       try {
         await withinTest(

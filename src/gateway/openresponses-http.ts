@@ -58,6 +58,7 @@ import {
   type Usage,
 } from "./open-responses.schema.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
+import { resolveOpenAiStreamParams } from "./openai-compat-errors.js";
 import {
   type OpenAiCompatiblePendingToolCall,
   readOpenAiHttpRunTerminal,
@@ -407,17 +408,11 @@ export async function handleOpenResponsesHttpRequest(
     }
   };
   const outputItemId = `msg_${randomUUID()}`;
-  const streamMaxTokens = payload.max_output_tokens;
-  const streamTemperature = payload.temperature;
-  const streamTopP = payload.top_p;
-  const streamParams =
-    streamMaxTokens !== undefined || streamTemperature !== undefined || streamTopP !== undefined
-      ? {
-          ...(streamMaxTokens !== undefined ? { maxTokens: streamMaxTokens } : {}),
-          ...(streamTemperature !== undefined ? { temperature: streamTemperature } : {}),
-          ...(streamTopP !== undefined ? { topP: streamTopP } : {}),
-        }
-      : undefined;
+  const streamParams = resolveOpenAiStreamParams({
+    maxTokens: payload.max_output_tokens,
+    temperature: payload.temperature,
+    topP: payload.top_p,
+  });
   const runAgentCommand = async () => {
     let result;
     try {

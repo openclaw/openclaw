@@ -115,14 +115,14 @@ describe("applyModelProviderToolPolicy", () => {
       native: true,
     },
     {
-      name: "unauthenticated direct",
+      name: "direct without auth-profile metadata",
       modelProvider: "openai",
       auth: false,
       suppressManagedWebSearch: undefined,
-      native: false,
+      native: true,
     },
   ])(
-    "selects one Codex search route for $name",
+    "selects the admitted Codex transport's search route for $name",
     ({ modelProvider, auth, suppressManagedWebSearch, native }) => {
       const filtered = selectedTools(baseTools, {
         config: {

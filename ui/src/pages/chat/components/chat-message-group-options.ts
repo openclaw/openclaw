@@ -5,23 +5,16 @@ import type { renderForwardedAvatar } from "../chat-avatar.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { renderGroupedMessage } from "./chat-message-bubble.ts";
-import type { MessageReplyTarget } from "./chat-message-markdown.ts";
-import type { MessageReactionOptions } from "./chat-message-reactions.ts";
+import type { MessageReplyTarget } from "./chat-message-markdown.types.ts";
+import type { MessageReactionOptions } from "./chat-message-reaction-model.ts";
 import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import type { StreamGroupOptions, StreamGroupPart } from "./chat-message-stream.ts";
 import type { ReplyLine } from "./chat-reply-attribution.ts";
 import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 
-type ActiveContinuation = {
-  parts: StreamGroupPart[];
-  options: StreamGroupOptions;
-};
-
-type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
-
 export type RenderMessageGroupOptions = Omit<
-  GroupedMessageRenderOptions,
+  Parameters<typeof renderGroupedMessage>[2],
   | "isStreaming"
   | "duplicateCount"
   | "assistantMessageDisclosure"
@@ -58,7 +51,7 @@ export type RenderMessageGroupOptions = Omit<
     resolveReplyPreview?: ReplyPreviewLookup;
     onRewind?: () => void;
     rewindDisabled?: boolean;
-    activeContinuation?: ActiveContinuation;
+    activeContinuation?: { parts: StreamGroupPart[]; options: StreamGroupOptions };
     /** Only this run may supply live copy for an activity disclosure. */
     activityRunId?: string | null;
     activityGroupKey?: string;

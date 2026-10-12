@@ -7,6 +7,11 @@ import { withCurrentProjectionSnapshot } from "../config/sessions/session-access
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptBoundedMessageTailOptions } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import { readRestoredSessionTranscript } from "../config/sessions/session-cold-storage-read.js";
 import { captureIncognitoSessionHistoryBinding } from "../config/sessions/session-incognito-binding.js";
 import {
@@ -28,6 +33,7 @@ import {
   createIncognitoSessionHistoryReader,
   type IncognitoSessionHistoryReader,
 } from "./session-history-snapshot.js";
+import { createSessionActorTranscriptReader } from "./session-transcript-memory-reader.js";
 import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
 import {
   resolveTranscriptReadTarget,
@@ -114,6 +120,21 @@ export async function readSessionMessagesAsync(
   options: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
   suppliedIncognito?: IncognitoSessionHistoryReader,
 ): Promise<unknown[]> {
+  const memory = captureSessionActorTranscriptRead(scope);
+  if (memory) {
+    const readers = createSessionActorTranscriptReader(memory);
+    const captured = structuredClone(options);
+    const messages =
+      captured.mode === "recent"
+        ? (await readers.readRecentSessionMessagesWithStatsAsync(scope, captured)).messages
+        : await collectSessionTranscriptMessages(
+            (...args) => readers.readSessionMessagesWithSourceAsync(...args),
+            scope,
+            captured,
+          );
+    memory.assertCurrent();
+    return messages;
+  }
   const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryReader(scope);
   if (incognito) {
     const captured = structuredClone(options);
@@ -148,6 +169,7 @@ function createHistoryPageReader<Options, Result>(
     reader: SessionTranscriptReader,
     target: SessionTranscriptReadScope,
     options: Options,
+    signal?: AbortSignal,
   ) => Promise<Result>,
 ) {
   return async (
@@ -158,10 +180,14 @@ function createHistoryPageReader<Options, Result>(
   ): Promise<Result> => {
     signal?.throwIfAborted();
     const options = structuredClone(inputOptions);
+    const memory = captureSessionActorTranscriptRead(scope, signal);
+    if (memory) {
+      return readActor(createSessionActorTranscriptReader(memory), scope, options, signal);
+    }
     const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryReader(scope, signal);
     if (incognito) {
       const result = await incognito.consume(scope, (readers) =>
-        readActor(readers, scope, options),
+        readActor(readers, scope, options, signal),
       );
       signal?.throwIfAborted();
       return result;
@@ -206,6 +232,14 @@ export async function readSessionTranscriptAccountingAsync(
   signal?: AbortSignal,
   suppliedIncognito?: IncognitoSessionHistoryBinding,
 ) {
+  const memory = captureSessionActorTranscriptRead(scope, signal);
+  if (memory) {
+    const result = await memory.read("session.history.accounting", {
+      options: structuredClone(options),
+    });
+    memory.assertCurrent();
+    return result;
+  }
   const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
   if (incognito) {
     return readIncognitoSessionHistory(
@@ -238,6 +272,14 @@ export async function readSessionTranscriptBoundedMessageTailPageAsync(
   signal?: AbortSignal,
   suppliedIncognito?: IncognitoSessionHistoryBinding,
 ) {
+  const memory = captureSessionActorTranscriptRead(scope, signal);
+  if (memory) {
+    const result = await memory.read("session.history.bounded-tail", {
+      options: structuredClone(options),
+    });
+    memory.assertCurrent();
+    return result;
+  }
   const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
   if (incognito) {
     return readIncognitoSessionHistory(
@@ -258,14 +300,18 @@ export const readRecentSessionMessagesWithStatsAsync = createHistoryPageReader(
 
 export const readSessionMessagesPageWithStatsAsync = createHistoryPageReader(
   sessionTranscriptReader.readSessionMessagesPageWithStatsAsync,
-  (read, target, options) => read({ kind: "message-page", params: { target, options } }),
-  (reader, scope, options) => reader.readSessionMessagesPageWithStatsAsync(scope, options),
+  (read, target, options, signal) =>
+    read({ kind: "message-page", params: { target, options } }, signal),
+  (reader, scope, options, signal) =>
+    reader.readSessionMessagesPageWithStatsAsync(scope, options, signal),
 );
 
 export const readSessionMessagesAroundIdWithStatsAsync = createHistoryPageReader(
   sessionTranscriptReader.readSessionMessagesAroundIdWithStatsAsync,
-  (read, target, options) => read({ kind: "around-id", params: { target, options } }),
-  (reader, scope, options) => reader.readSessionMessagesAroundIdWithStatsAsync(scope, options),
+  (read, target, options, signal) =>
+    read({ kind: "around-id", params: { target, options } }, signal),
+  (reader, scope, options, signal) =>
+    reader.readSessionMessagesAroundIdWithStatsAsync(scope, options, signal),
 );
 
 export function readSessionTranscriptSummaryAsync<Query extends SessionTranscriptSummaryQuery>(
@@ -278,6 +324,19 @@ export async function readSessionTranscriptSummaryAsync(
   inputQuery: SessionTranscriptSummaryQuery,
   suppliedIncognito?: IncognitoSessionHistoryReader,
 ): Promise<SessionTranscriptSummaryResult> {
+  const memory = captureSessionActorTranscriptRead(scope);
+  if (memory) {
+    const query = structuredClone(inputQuery);
+    const { prepareSessionTranscriptSummaryReader } =
+      await import("./session-transcript-summary.js");
+    const select = await prepareSessionTranscriptSummaryReader(query);
+    const messages: unknown[] = [];
+    await createSessionActorTranscriptReader(memory).visitSessionMessagesAsync(scope, (message) =>
+      messages.push(message),
+    );
+    memory.assertCurrent();
+    return select((visit) => messages.forEach(visit));
+  }
   const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryReader(scope);
   if (incognito) {
     const query = structuredClone(inputQuery);
@@ -310,6 +369,18 @@ export async function readSessionArtifacts(
   inputQuery: SessionArtifactReadQuery,
   suppliedIncognito?: IncognitoSessionHistoryReader,
 ): Promise<SessionArtifactReadResult> {
+  const memory = captureSessionActorTranscriptRead(scope);
+  if (memory) {
+    const query = structuredClone(inputQuery);
+    const { selectSessionArtifacts } = await import("./session-artifact-read.js");
+    const result = await selectSessionArtifacts(
+      scope,
+      query,
+      createSessionActorTranscriptReader(memory),
+    );
+    memory.assertCurrent();
+    return result;
+  }
   const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryReader(scope);
   if (incognito) {
     const query = structuredClone(inputQuery);
@@ -337,13 +408,23 @@ export async function readSessionMessageByIdAsync(
   scope: SessionTranscriptReadScope,
   messageId: string,
   options?: Parameters<typeof sessionTranscriptReader.readSessionMessageByIdAsync>[2],
-  suppliedIncognito?: IncognitoSessionHistoryReader,
+  signal?: AbortSignal,
 ) {
-  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryReader(scope);
+  signal?.throwIfAborted();
+  const memory = captureSessionActorTranscriptRead(scope, signal);
+  if (memory) {
+    return createSessionActorTranscriptReader(memory).readSessionMessageByIdAsync(
+      scope,
+      messageId,
+      options,
+      signal,
+    );
+  }
+  const incognito = captureIncognitoSessionHistoryReader(scope, signal);
   if (incognito) {
     const captured = options ? structuredClone(options) : undefined;
     return incognito.consume(scope, (readers) =>
-      readers.readSessionMessageByIdAsync(scope, messageId, captured),
+      readers.readSessionMessageByIdAsync(scope, messageId, captured, signal),
     );
   }
   const target = captureHistoryReadScope(scope);
@@ -353,10 +434,13 @@ export async function readSessionMessageByIdAsync(
   const capturedOptions = options ? structuredClone(options) : undefined;
   const { readSessionHistoryPageInWorker } =
     await import("../config/sessions/session-history-worker-runtime.js");
-  return readSessionHistoryPageInWorker({
-    kind: "message-by-id",
-    params: { target, messageId, options: capturedOptions },
-  });
+  return readSessionHistoryPageInWorker(
+    {
+      kind: "message-by-id",
+      params: { target, messageId, options: capturedOptions },
+    },
+    signal,
+  );
 }
 
 export { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
@@ -373,6 +457,10 @@ export async function readSessionMessageCountAsync(
   scope: SessionTranscriptReadScope,
   suppliedIncognito?: IncognitoSessionHistoryReader,
 ): Promise<number> {
+  const memory = captureSessionActorTranscriptRead(scope);
+  if (memory) {
+    return createSessionActorTranscriptReader(memory).readSessionMessageCountAsync(scope);
+  }
   const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryReader(scope);
   if (incognito) {
     return incognito.consume(scope, (readers) => readers.readSessionMessageCountAsync(scope));
@@ -401,6 +489,42 @@ export async function readSessionMessageCountAsync(
 }
 
 export async function readSessionReactionsAsync(scope: SessionTranscriptReadScope) {
+  const selected = getSessionActorStorageBinding({});
+  if (selected && (!scope.sessionKey || isIncognitoSessionKey(scope.sessionKey))) {
+    const namespace = captureSessionActorStorageOwner(scope)!;
+    const sessionKey =
+      scope.sessionKey ??
+      (namespace.agentId === selected.agentId
+        ? selected.actor.storage!.readCurrent(
+            { type: "session.entry.readById", input: { sessionId: scope.sessionId } },
+            selected.authority,
+          )?.sessionKey
+        : namespace.owner?.readSessionById(scope.sessionId, namespace.authority)?.sessionKey);
+    if (!sessionKey) {
+      return {};
+    }
+    const direct =
+      namespace.agentId === selected.agentId && sessionKey === selected.actor.target.sessionKey;
+    const actor = direct
+      ? selected.actor
+      : await namespace.owner?.acquireExisting(sessionKey, {
+          assertCurrent: () => selected.actor.assertReadable(),
+          assertReadable: () => selected.actor.assertReadable(),
+        });
+    if (!actor) {
+      return {};
+    }
+    try {
+      return await actor.storage!.read(
+        { type: "session.reactions.read", input: { sessionId: scope.sessionId } },
+        namespace.authority,
+      );
+    } finally {
+      if (!direct) {
+        await actor.release();
+      }
+    }
+  }
   const incognito = captureIncognitoSessionHistoryBinding(scope);
   if (incognito) {
     const { actor, authority, target } = incognito;
@@ -431,6 +555,24 @@ export async function readSessionConversationBindingAsync(
   scope: SessionTranscriptReadScope,
   conversationRef: string,
 ) {
+  const memory = captureSessionActorTranscriptRead(scope);
+  if (memory) {
+    const { readConversation } = await import("../config/sessions/conversation-registry.js");
+    const conversation = await readConversation(
+      {
+        agentId: memory.target.agentId,
+        storePath: memory.target.storePath,
+        env: memory.target.env,
+      },
+      conversationRef,
+    );
+    memory.assertCurrent();
+    if (!conversation) {
+      return null;
+    }
+    const { channel, accountId, target, threadId, nativeChannelId } = conversation;
+    return { channel, accountId, target, threadId, nativeChannelId };
+  }
   const incognito = captureIncognitoSessionHistoryBinding(scope);
   if (incognito) {
     return readIncognitoSessionHistory(incognito, scope, (target) => ({

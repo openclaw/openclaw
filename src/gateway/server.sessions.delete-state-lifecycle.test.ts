@@ -19,9 +19,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import * as sessionArchiveStore from "../config/sessions/session-accessor.sqlite-archive-store.js";
 import * as sessionArchive from "../config/sessions/session-accessor.sqlite-archive.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   emitSessionIdentityMutation,
   onSessionIdentityMutation,
@@ -189,7 +190,7 @@ test("repository ownership survives reset and archive, then permanent deletion r
   await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
-test.each(["foreign grant", "retained placeholder", "folded sibling", "malformed row"] as const)(
+test.each(["owner grant", "retained placeholder", "folded sibling", "malformed row"] as const)(
   "repository cleanup preserves full logical absence checks for %s",
   async (boundary) => {
     const { storePath } = await createSessionStoreDir();
@@ -220,7 +221,7 @@ test.each(["foreign grant", "retained placeholder", "folded sibling", "malformed
     }
     const peer = new DatabaseSync(databasePath);
     const successor = sessionStoreEntry("repository-cleanup-successor", {
-      lifecycleRevision: "foreign-cleanup-generation",
+      lifecycleRevision: "cleanup-successor-generation",
       repositoryWorkspaceId: repository.workspaceId,
     });
     let injected = false;
@@ -229,14 +230,14 @@ test.each(["foreign grant", "retained placeholder", "folded sibling", "malformed
       expect(
         peer.prepare("SELECT session_key FROM session_nodes WHERE session_key = ?").get(sessionKey),
       ).toBeUndefined();
+      if (boundary === "owner grant") {
+        replaceSessionEntrySync({ agentId: "main", storePath, sessionKey }, successor);
+        injected = true;
+        return;
+      }
       const key = boundary === "folded sibling" ? sessionKey.toLowerCase() : sessionKey;
-      const json =
-        boundary === "retained placeholder"
-          ? "{}"
-          : boundary === "foreign grant"
-            ? JSON.stringify(successor)
-            : "{";
-      // A separate native connection changes durable rows without in-process publications.
+      const json = boundary === "retained placeholder" ? "{}" : "{";
+      // Malformed and historical fixtures intentionally bypass the canonical writer.
       peer.exec("BEGIN IMMEDIATE");
       try {
         peer
@@ -268,54 +269,52 @@ test.each(["foreign grant", "retained placeholder", "folded sibling", "malformed
         const store = createStore(options);
         const remove = store.delete.bind(store);
         store.delete = async (input) => {
-          if (input.workspaceId === repository.workspaceId && boundary !== "foreign grant") {
+          if (input.workspaceId === repository.workspaceId && boundary !== "owner grant") {
             inject();
           }
           await remove(input);
         };
         return store;
       });
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-    const admission = vi
-      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          const wrapped =
-            isRecord(request.facts) && request.facts.kind === "session-entry-current"
-              ? request.facts
-              : undefined;
-          const facts = wrapped?.domainFacts ?? request.facts;
-          if (
-            boundary === "foreign grant" &&
-            !injected &&
-            request.stage === "commit" &&
-            isRecord(facts) &&
-            facts.workspaceId === repository.workspaceId &&
-            facts.changed === true &&
-            facts.workspace === undefined
-          ) {
-            nativeAbsent = wrapped !== undefined && wrapped.entry === undefined;
-            // Run every real host guard first; commit the peer write before releasing the native grant.
-            admit(request, () => {
-              inject();
-              return grant();
-            });
-            return;
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+      const wrapped =
+        isRecord(request.facts) && request.facts.kind === "session-entry-current"
+          ? request.facts
+          : undefined;
+      const facts = wrapped?.domainFacts ?? request.facts;
+      if (
+        boundary === "owner grant" &&
+        !injected &&
+        request.stage === "commit" &&
+        isRecord(facts) &&
+        facts.workspaceId === repository.workspaceId &&
+        facts.changed === true &&
+        facts.workspace === undefined
+      ) {
+        nativeAbsent = wrapped !== undefined && wrapped.entry === undefined;
+        // Commit through the owner after host guards and before releasing the native grant.
+        admit(request, () => {
+          inject();
+          return grant();
+        });
+        return;
+      }
+      admit(request, grant);
+    });
     try {
       const observed = await directSessionReq("sessions.delete", { key: sessionKey }).then(
         (response) => ({ response, error: undefined }),
         (error: unknown) => ({ response: undefined, error }),
       );
       expect(injected).toBe(true);
-      if (boundary === "foreign grant") {
+      if (boundary === "owner grant") {
         const current = peer
           .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
           .get(sessionKey);
-        expect(current?.entry_json).toBe(JSON.stringify(successor));
+        expect(JSON.parse(String(current?.entry_json))).toEqual({
+          ...successor,
+          delivery: { kind: "none" },
+        });
       }
       if (boundary === "retained placeholder") {
         expect(observed.error).toBeUndefined();
@@ -328,13 +327,13 @@ test.each(["foreign grant", "retained placeholder", "folded sibling", "malformed
         expect(observed.error).toBeInstanceOf(Error);
         expect(observed.error).toMatchObject({
           message: expect.stringContaining(
-            boundary === "foreign grant"
+            boundary === "owner grant"
               ? "Session currency changed while awaiting its native grant"
               : "invalid persisted session row",
           ),
         });
       }
-      if (boundary === "foreign grant") {
+      if (boundary === "owner grant") {
         expect(nativeAbsent).toBe(true);
         expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(successor);
       } else if (boundary === "retained placeholder") {

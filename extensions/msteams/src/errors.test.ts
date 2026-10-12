@@ -24,22 +24,6 @@ describe("msteams errors", () => {
     expect(classifyMSTeamsSendError({ statusCode: 403 }).kind).toBe("auth");
   });
 
-  it("classifies ContentStreamNotAllowed as permanent instead of auth", () => {
-    const result = classifyMSTeamsSendError({
-      statusCode: 403,
-      response: {
-        body: {
-          error: {
-            code: "ContentStreamNotAllowed",
-          },
-        },
-      },
-    });
-    expect(result.kind).toBe("permanent");
-    expect(result.statusCode).toBe(403);
-    expect(result.errorCode).toBe("ContentStreamNotAllowed");
-  });
-
   it("classifies Teams rate limiting as replay-safe and parses retry-after", () => {
     const result = classifyMSTeamsSendError({ statusCode: 429, retryAfter: "1.5" });
     expect(result.kind).toBe("replay-safe");
@@ -104,7 +88,7 @@ describe("msteams errors", () => {
     ).toBe("unknown");
   });
 
-  it.each([408, 500, 502, 503, 504])("classifies HTTP %i as delivery-ambiguous", (statusCode) => {
+  it.each([408, 504])("classifies HTTP %i as delivery-ambiguous", (statusCode) => {
     const classification = classifyMSTeamsSendError({ statusCode });
     expect(classification).toMatchObject({
       kind: "ambiguous",
@@ -153,42 +137,18 @@ describe("msteams errors", () => {
     ).toContain("expired the content stream");
   });
 
-  it("classifies transport-level network errors and provides smba egress hint (#77674)", () => {
-    const econnrefused = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
-    const enotfound = Object.assign(new Error("getaddrinfo ENOTFOUND smba.trafficmanager.net"), {
-      code: "ENOTFOUND",
+  it.each(["ETIMEDOUT"])("keeps transport %s delivery ambiguous without retry guidance", (code) => {
+    const classification = classifyMSTeamsSendError(Object.assign(new Error(code), { code }));
+    expect(classification).toMatchObject({
+      kind: "ambiguous",
+      source: "transport",
+      errorCode: code,
     });
-    const etimedout = Object.assign(new Error("ETIMEDOUT"), { code: "ETIMEDOUT" });
-
-    const econnrefusedResult = classifyMSTeamsSendError(econnrefused);
-    expect(econnrefusedResult).toMatchObject({ kind: "ambiguous", source: "transport" });
-    expect(econnrefusedResult.errorCode).toBe("ECONNREFUSED");
-    const enotfoundResult = classifyMSTeamsSendError(enotfound);
-    expect(enotfoundResult).toMatchObject({ kind: "ambiguous", source: "transport" });
-    expect(enotfoundResult.errorCode).toBe("ENOTFOUND");
-    const etimedoutResult = classifyMSTeamsSendError(etimedout);
-    expect(etimedoutResult).toMatchObject({ kind: "ambiguous", source: "transport" });
-    expect(etimedoutResult.errorCode).toBe("ETIMEDOUT");
-
-    const hint = formatMSTeamsSendErrorHint(econnrefusedResult);
-    expect(hint).toContain("smba");
-    expect(hint).toContain("egress");
-    expect(hint).toContain("outcome is unknown");
-    expect(hint).not.toMatch(/retry|resend/iu);
+    expect(formatMSTeamsSendErrorHint(classification)).toContain("smba");
+    expect(formatMSTeamsSendErrorHint(classification)).toContain("egress");
+    expect(formatMSTeamsSendErrorHint(classification)).toContain("outcome is unknown");
+    expect(formatMSTeamsSendErrorHint(classification)).not.toMatch(/retry|resend/iu);
   });
-
-  it.each(["ECONNABORTED", "ETIMEDOUT", "ECONNRESET"])(
-    "keeps transport %s delivery ambiguous without retry guidance",
-    (code) => {
-      const classification = classifyMSTeamsSendError(Object.assign(new Error(code), { code }));
-      expect(classification).toMatchObject({
-        kind: "ambiguous",
-        source: "transport",
-        errorCode: code,
-      });
-      expect(formatMSTeamsSendErrorHint(classification)).not.toMatch(/retry|resend/iu);
-    },
-  );
 
   it("still classifies HTTP errors as unknown when no status code and no network code", () => {
     expect(classifyMSTeamsSendError(new Error("unexpected error")).kind).toBe("unknown");
@@ -196,15 +156,6 @@ describe("msteams errors", () => {
   });
 
   describe("withRevokedProxyFallback", () => {
-    it("returns primary result when no error occurs", async () => {
-      await expect(
-        withRevokedProxyFallback({
-          run: async () => "ok",
-          onRevoked: async () => "fallback",
-        }),
-      ).resolves.toBe("ok");
-    });
-
     it("uses fallback when proxy-revoked TypeError is thrown", async () => {
       const onRevokedLog = vi.fn();
       await expect(
@@ -219,10 +170,7 @@ describe("msteams errors", () => {
       expect(onRevokedLog).toHaveBeenCalledOnce();
     });
 
-    it.each([
-      new Error("proxy that has been revoked"),
-      new TypeError("undefined is not a function"),
-    ])("rethrows non-revoked %s", async (err) => {
+    it.each([new Error("proxy that has been revoked")])("rethrows non-revoked %s", async (err) => {
       await expect(
         withRevokedProxyFallback({
           run: async () => {

@@ -49,6 +49,10 @@ const EXECUTION_DECISION_SELECTOR_PREFIX = "decision-fact:";
 
 const ensureExecutionDecisionFactSchema = createOpenClawStateSchemaEnsurer({
   table: "execution_decision_facts",
+  indexes: [
+    "execution_decision_facts_context_occurred_idx",
+    "execution_decision_facts_run_occurred_idx",
+  ],
   endMarker: "  ON execution_decision_facts (run_id, occurred_at, receipt_id);\n",
   operationLabel: "audit.execution-decision.schema.ensure",
 });

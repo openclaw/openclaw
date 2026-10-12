@@ -13,6 +13,7 @@ import {
   releaseChatAttachmentPayloads,
 } from "../chat/attachment-payload-store.ts";
 import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
+import { retainCreatedComposer, type CreationComposer } from "./creation-composer.ts";
 import type { InstantThreadHandoff } from "./instant-thread-handoff.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
 import type { StartedSessionNavigation } from "./started-session-navigation.ts";
@@ -56,6 +57,7 @@ function retainInitialSessionTurn(options: InitialTurn, retryAfter?: Promise<boo
 export async function completeInitialSessionTurn(
   options: InitialTurn & {
     instant: InstantThreadHandoff | undefined;
+    composer?: CreationComposer;
     navigation: StartedSessionNavigation;
     isCurrent: () => boolean;
     clearDraft: (releasePayloads: boolean, keepPending?: boolean) => Promise<void>;
@@ -83,7 +85,6 @@ export async function completeInitialSessionTurn(
       ? readAgentRuntimeRestrictionErrorDetails(initialRun.errorDetails)
       : undefined;
   const retry = restriction ? createDeferredCore<boolean>() : undefined;
-  let draftCleanup: Promise<void> | undefined;
   try {
     if (initialRun.status === "rejected" && options.onRejectedPrompt) {
       // The launcher and destination retain separate owners of a rejected prompt.
@@ -98,8 +99,8 @@ export async function completeInitialSessionTurn(
       options.onRejectedPrompt(initialRun.error);
     } else {
       const handedOffAttachments = retainInitialSessionTurn(options, retry?.promise);
-      // Retirement fences the submitted mutation synchronously; storage can settle after navigation.
-      draftCleanup = options.clearDraft(!handedOffAttachments);
+      // The confirmed URL must survive closing the tab without restoring the sent draft.
+      await options.clearDraft(!handedOffAttachments);
     }
     if (!options.isCurrent() || (instant && !instant.isCurrent())) {
       return;
@@ -112,6 +113,10 @@ export async function completeInitialSessionTurn(
     ) {
       options.onAccepted?.();
       return;
+    }
+    if (options.composer) {
+      options.composer.accept(result);
+      retainCreatedComposer(context, key, options.composer);
     }
     instant?.admitted(key, agentId);
     await options.navigation.navigate(
@@ -155,6 +160,5 @@ export async function completeInitialSessionTurn(
     }
   } finally {
     retry?.resolve(false);
-    await draftCleanup;
   }
 }

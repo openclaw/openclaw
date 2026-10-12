@@ -12,9 +12,9 @@ import {
   clearRuntimeConfigSnapshot,
   createMockSpeechProvider,
   getTtsPersona,
-  getTtsProvider,
+  getTtsProviderAsync,
   installSpeechProviders,
-  isTtsProviderConfigured,
+  isTtsProviderConfiguredAsync,
   maybeApplyTtsToPayload,
   prepareSynthesisMock,
   requireAttempt,
@@ -60,7 +60,7 @@ describe("TTS runtime persona behavior", () => {
     installSpeechProviders([createMockSpeechProvider()]);
   });
 
-  it("selects persona preferred provider before config fallback", () => {
+  it("selects persona preferred provider before config fallback", async () => {
     const cfg = personaConfig(
       {
         label: "Alfred",
@@ -73,10 +73,10 @@ describe("TTS runtime persona behavior", () => {
     const prefsPath = "/tmp/openclaw-speech-core-persona-provider.json";
 
     expect(getTtsPersona(config, prefsPath)?.id).toBe("alfred");
-    expect(getTtsProvider(config, prefsPath)).toBe("mock");
+    expect(await getTtsProviderAsync(config, prefsPath)).toBe("mock");
   });
 
-  it("treats provider configuration errors as unconfigured", () => {
+  it("treats provider configuration errors as unconfigured", async () => {
     installSpeechProviders([
       createMockSpeechProvider("broken", {
         resolveConfig: () => {
@@ -93,8 +93,29 @@ describe("TTS runtime persona behavior", () => {
     } as OpenClawConfig;
     const config = resolveTtsConfig(cfg);
 
-    expect(isTtsProviderConfigured(config, "broken", cfg)).toBe(false);
-    expect(getTtsProvider(config, prefsPath)).toBe("");
+    expect(await isTtsProviderConfiguredAsync(config, "broken", cfg)).toBe(false);
+    expect(await getTtsProviderAsync(config, prefsPath)).toBe("");
+  });
+
+  it("uses async availability for synthesis without invoking the legacy probe", async () => {
+    const isConfigured = vi.fn(() => {
+      throw new Error("sync availability must not run");
+    });
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        isConfigured,
+        isConfiguredAsync: async () => true,
+      }),
+    ]);
+
+    const result = await synthesizeSpeech({
+      text: "Synthesis uses the async provider availability contract.",
+      cfg: { tts: { provider: "mock" } },
+    });
+
+    expect(result.success).toBe(true);
+    expect(synthesizeMock).toHaveBeenCalledOnce();
+    expect(isConfigured).not.toHaveBeenCalled();
   });
 
   it("merges active persona provider binding into synthesis config", async () => {

@@ -62,8 +62,7 @@ const rejectedGoalReasons = new Set([
 ]);
 
 function rejectGoalOperation(host: ChatHost, message: string): false {
-  setChatError(host, message);
-  host.requestUpdate?.();
+  setChatError(host, message, true);
   return false;
 }
 
@@ -106,11 +105,7 @@ function goalOperationTarget(host: ChatHost) {
               saved.sessionKey === sessionKey &&
               saved.agentId === agentId &&
               saved.sessionId === sessionId
-            ? {
-                // SAFETY: The exact action schema and session ownership fields were checked above.
-                params: saved as GoalParams,
-                pending: false,
-              }
+            ? { params: saved, pending: false }
             : { retired: "invalid", pending: false };
       if (operation.retired) {
         storage?.setItem(storageKey, JSON.stringify(operation.retired));
@@ -387,8 +382,7 @@ async function runGoalOperation(
     }
   };
   operation.pending = true;
-  setChatError(host, null);
-  host.requestUpdate?.();
+  setChatError(host, null, true);
   try {
     const result = await client.request<SessionsGoalMutationResult>(
       "action" in params ? "sessions.goal.update" : "sessions.goal.clear",
@@ -408,8 +402,7 @@ async function runGoalOperation(
         void refreshChatSessionListForTarget(host, { sessionKey, agentId }).catch(
           (error: unknown) => {
             if (targetIsCurrent()) {
-              setChatError(host, formatUiError(error));
-              host.requestUpdate?.();
+              setChatError(host, formatUiError(error), true);
             }
           },
         );

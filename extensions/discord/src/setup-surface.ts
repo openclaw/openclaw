@@ -68,25 +68,6 @@ async function promptDiscordAllowFrom(params: {
   });
 }
 
-async function resolveDiscordGroupAllowlist(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  credentialValues: { token?: string };
-  entries: string[];
-}) {
-  return await resolveEntriesWithOptionalToken({
-    token:
-      resolveDiscordToken(params.cfg, { accountId: params.accountId }).token ||
-      (typeof params.credentialValues.token === "string" ? params.credentialValues.token : ""),
-    entries: params.entries,
-    buildWithoutToken: (input) => ({
-      input,
-      resolved: false,
-    }),
-    resolveEntries: resolveDiscordChannelAllowlist,
-  });
-}
-
 export const discordSetupWizard: ChannelSetupWizard = createDiscordSetupWizardBase({
   promptAllowFrom: promptDiscordAllowFrom,
   resolveAllowFromEntries: async ({ cfg, accountId, credentialValues, entries }) =>
@@ -97,5 +78,13 @@ export const discordSetupWizard: ChannelSetupWizard = createDiscordSetupWizardBa
       entries,
       resolveEntries: resolveDiscordUserAllowlist,
     }),
-  resolveGroupAllowlist: resolveDiscordGroupAllowlist,
+  resolveGroupAllowlist: async (params) =>
+    await resolveEntriesWithOptionalToken({
+      token:
+        resolveDiscordToken(params.cfg, { accountId: params.accountId }).token ||
+        (typeof params.credentialValues.token === "string" ? params.credentialValues.token : ""),
+      entries: params.entries,
+      buildWithoutToken: (input) => ({ input, resolved: false }),
+      resolveEntries: resolveDiscordChannelAllowlist,
+    }),
 });

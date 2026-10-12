@@ -1,3 +1,4 @@
+import type { inspectConversationBinding } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
@@ -38,20 +39,15 @@ const getNodeConversationState = defineCodexBuildState(
 
 function isCurrentPublicBinding(
   binding: PluginConversationBinding,
-  service: ReturnType<
-    typeof import("openclaw/plugin-sdk/conversation-binding-runtime").getSessionBindingService
-  >,
+  inspect: typeof inspectConversationBinding,
 ): boolean {
-  return (
-    service.resolveByConversation({
-      channel: binding.channel,
-      accountId: binding.accountId,
-      conversationId: binding.conversationId,
-      ...(binding.parentConversationId
-        ? { parentConversationId: binding.parentConversationId }
-        : {}),
-    })?.bindingId === binding.bindingId
-  );
+  const inspection = inspect({
+    channel: binding.channel,
+    accountId: binding.accountId,
+    conversationId: binding.conversationId,
+    ...(binding.parentConversationId ? { parentConversationId: binding.parentConversationId } : {}),
+  });
+  return inspection.status === "available" && inspection.binding?.bindingId === binding.bindingId;
 }
 
 export async function handleCodexConversationInboundClaim(
@@ -93,9 +89,9 @@ export async function handleCodexConversationInboundClaim(
           if (!resume) {
             return "Codex CLI node binding is unavailable because Gateway node runtime is not attached.";
           }
-          const { getSessionBindingService } =
-            await import("openclaw/plugin-sdk/conversation-binding-runtime");
-          if (!isCurrentPublicBinding(publicBinding, getSessionBindingService())) {
+          const { inspectConversationBinding } =
+            await import("openclaw/plugin-sdk/conversation-binding-inspection-runtime");
+          if (!isCurrentPublicBinding(publicBinding, inspectConversationBinding)) {
             return "This Codex conversation was detached or changed before its message could run.";
           }
           const resumed = await resume({
@@ -113,26 +109,19 @@ export async function handleCodexConversationInboundClaim(
       return { handled: true, reply: { text } };
     }
     const identity = { kind: "conversation" as const, bindingId: data.bindingId };
-    // Capture and reserve before any import yields: retirement must not overtake
+    // Start the read and reserve before yielding: retirement must not overtake
     // an already-arrived message, even when the execution module is still cold.
-    const expected = options.bindingStore.read(identity);
+    const pendingExpected = options.bindingStore.readAsync(identity);
+    // The queue may wait behind retirement; observe early rejection until its callback joins it.
+    void pendingExpected.catch(() => {});
     const result = await withCodexConversationThreadActivity(data.bindingId, async () => {
-      const { resolveCodexNativeExecutionBlock } = await import("./app-server/sandbox-guard.js");
-      const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
-        config: options.config,
-        sessionKey,
-        agentId: data.agentId,
-        surface: "Codex app-server conversation binding",
-      });
-      if (nativeExecutionBlock) {
-        return { text: nativeExecutionBlock };
-      }
-      const { getSessionBindingService } =
-        await import("openclaw/plugin-sdk/conversation-binding-runtime");
+      const expected = await pendingExpected;
       const { runBoundTurnWithMissingThreadRecovery } = await import("./conversation-binding.js");
+      const { inspectConversationBinding } =
+        await import("openclaw/plugin-sdk/conversation-binding-inspection-runtime");
       const current = options.bindingStore.read(identity);
       if (
-        !isCurrentPublicBinding(publicBinding, getSessionBindingService()) ||
+        !isCurrentPublicBinding(publicBinding, inspectConversationBinding) ||
         (expected &&
           (!current ||
             current.threadId !== expected.threadId ||
@@ -182,7 +171,7 @@ export async function handleCodexConversationBindingResolved(
     return;
   }
   const identity = { kind: "conversation" as const, bindingId: data.bindingId };
-  const binding = options.bindingStore.read(identity);
+  const binding = await options.bindingStore.readAsync(identity);
   assertCodexBindingMayBeReplaced(binding, "clearing a denied conversation binding");
   if (binding && (!data.start?.id || binding.conversationStartId === data.start.id)) {
     await withCodexConversationThreadActivity(identity.bindingId, async () => {

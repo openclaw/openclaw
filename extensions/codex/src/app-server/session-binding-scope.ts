@@ -32,13 +32,14 @@ export function scopeCodexRunBindingStore(params: {
   return {
     ...params.bindingStore,
     read: (identity) => params.bindingStore.read(mapIdentity(identity)),
+    readAsync: (identity) => params.bindingStore.readAsync(mapIdentity(identity)),
     readMany: (identities) => params.bindingStore.readMany(identities.map(mapIdentity)),
-    readNativeSubagentAssignments: (identity, owner) =>
+    readNativeSubagentAssignments: async (identity, owner) =>
       (
-        params.bindingStore.readNativeSubagentAssignments?.(
+        (await params.bindingStore.readNativeSubagentAssignments?.(
           mapIdentity(identity),
           mapHistoryOwner(identity, owner),
-        ) ?? []
+        )) ?? []
       ).map((assignment) =>
         Object.assign({}, assignment, {
           owner: { ...assignment.owner, sessionId: owner.sessionId },

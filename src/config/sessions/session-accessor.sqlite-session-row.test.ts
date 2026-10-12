@@ -16,6 +16,8 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import { readSessionMaintenanceAgeQueries } from "./session-accessor.sqlite-maintenance-age-queries.js";
 import {
   projectPublicSessionEntry,
   projectPublicSessionEntryPatch,
@@ -38,6 +40,38 @@ afterEach(async () => {
 });
 
 describe("SQLite session row persistence", () => {
+  it("updates maintenance and retained-reference predicates with the canonical entry", async () => {
+    const scope = createScope("predicate-columns");
+    await upsertSessionEntryCore(scope, {
+      sessionId: "current",
+      updatedAt: 10,
+      sessionStartedAt: 5,
+      previousSessionId: "previous",
+    });
+    const database = openOpenClawAgentDatabase(scope);
+    const prepare = vi.spyOn(database.db, "prepare");
+    const startedAt = () =>
+      [...readSessionMaintenanceAgeQueries(database.db).activity(undefined)].find(
+        (row) => row.session_key === scope.sessionKey,
+      )?.session_started_at;
+    const references = () => readReferencedSessionIds(database, new Set(), ["previous"]);
+    expect(startedAt()).toBe(5);
+    expect(references().has("previous")).toBe(true);
+
+    await patchSessionEntryCore(
+      scope,
+      () => ({ sessionStartedAt: 8, previousSessionId: undefined }),
+      { skipMaintenance: true },
+    );
+    expect(startedAt()).toBe(8);
+    expect(references().has("previous")).toBe(false);
+    const queries = prepare.mock.calls.map(([query]) => query);
+    expect(queries.some((query) => query.includes('"session_started_at"'))).toBe(true);
+    expect(queries.some((query) => query.includes('"has_optional_references" ='))).toBe(true);
+    expect(queries.every((query) => !query.includes("$.sessionStartedAt"))).toBe(true);
+    prepare.mockRestore();
+  });
+
   it("bounds saved-prompt decoding while publishing identity changes", async () => {
     const env = {
       ...process.env,

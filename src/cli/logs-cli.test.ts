@@ -504,12 +504,18 @@ describe("logs cli", () => {
     it("keeps journal polling responsive while a Gateway recovery probe is pending", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       const closeError = transientCloseError();
-      const pendingProbe = new Promise<never>(() => {
-        // The broken-pipe path must cancel this unresolved recovery probe.
-      });
-      callGatewayFromCli
-        .mockRejectedValueOnce(closeError)
-        .mockImplementationOnce(() => pendingProbe);
+      callGatewayFromCli.mockRejectedValueOnce(closeError).mockImplementationOnce(
+        (...args: Parameters<typeof import("./gateway-rpc.js").callGatewayFromCli>) =>
+          new Promise<never>((_resolve, reject) => {
+            // Model the RPC cancellation contract: final teardown joins the probe.
+            const signal = args[3]?.signal;
+            signal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("The operation was aborted", "AbortError")),
+              { once: true },
+            );
+          }),
+      );
       readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
       execFileUtf8Tail
         .mockResolvedValueOnce(journalPage("first journal line", "abc"))

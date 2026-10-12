@@ -14,7 +14,7 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { runByteLimitedArchiveCleanupFixture } from "./test-helpers.js";
 import type { SessionEntry } from "./types.js";

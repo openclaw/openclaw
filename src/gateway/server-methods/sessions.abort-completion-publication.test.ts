@@ -21,7 +21,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import * as writerQueue from "../../shared/store-writer-queue.js";
 import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../state/openclaw-agent-execution.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import * as stateOperation from "../../state/openclaw-state-worker-operation.js";
 
 const fixture = useSubagentControlFixture();

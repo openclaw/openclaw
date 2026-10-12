@@ -8,9 +8,9 @@ import {
   appendTranscriptMessage,
   applySessionEntryLifecycleMutation,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
@@ -33,7 +33,6 @@ import {
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
   setCronSessionRuntimeModel,
-  resolveCronLifecycleRevisionIdentity,
   syncCronSessionLiveSelection,
   type CronSessionRowWriter,
   type MutableCronSession,
@@ -773,7 +772,7 @@ describe("createPersistCronSessionEntry", () => {
     });
     const activeLease = await beginSessionWorkAdmission({
       scope: storePath,
-      identities: [resolveCronLifecycleRevisionIdentity(activeRevision)],
+      identities: [`cron-lifecycle-revision:${activeRevision}`],
       assertAllowed: () => {},
     });
 

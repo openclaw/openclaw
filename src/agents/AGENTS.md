@@ -1,79 +1,36 @@
 # Agent Runtime And Tests
 
-This directory owns agent assembly, run authority, and their focused tests.
-Agent tests are often import-bound; treat slow files as architecture signals,
-not just runner noise.
+Own agent assembly, run authority, and focused tests. Slow, import-bound tests
+are architecture signals.
 
 ## Guardrails
 
-- Benchmark before and after performance edits. Prefer existing grouped
-  artifacts when comparing suites, or use `/usr/bin/time -l pnpm test <file>`
-  for a scoped hotspot.
-- If a test only needs schema, capability, routing, or static discovery data,
-  do not cold-load full bundled plugin/channel/provider runtime. Add or reuse a
-  lightweight typed artifact and keep full runtime as a fallback.
-- Keep expensive bootstrap, embedded runner, provider, plugin, and channel
-  runtime work behind dependency injection or narrow helpers so tests can cover
-  behavior without starting the whole runtime.
-- Treat channel/plugin lookups inside agent hot paths as suspect. If the code
-  only needs target parsing, peer-kind inference, setup hints, or static
-  descriptors, use a local pure helper or lightweight public artifact before
-  reaching for `getChannelPlugin()` / bundled runtime fallback.
-- In spawn/session/requester-origin logic, keep routing and delivery-context
-  normalization deterministic and runtime-free. Add explicit parser coverage for
-  channel-specific prefixes instead of loading a channel plugin just to classify
-  a target.
-- Prepared model/tool selection follows the plugin owner's
-  [availability and selection contract](../plugins/AGENTS.md#availability-and-selection).
-  Keep network discovery outside repeated selection; this does not forbid the
-  model or tool request that the user actually asked to execute.
-- If moving coverage out of a slow integration test, preserve the exact
-  production composition in a named helper and test that helper. Do not remove
-  the behavior proof just because the old proof was slow.
-- Avoid broad `importOriginal()` partial mocks and module resets in hot agent
-  tests. Use explicit mock factories, one-time imports, and reset only the
-  state the test mutates.
+- Benchmark performance edits before/after; reuse grouped artifacts or `/usr/bin/time -l pnpm test <file>`. Report seconds and RSS.
+- Schema, capability, routing, and static-discovery tests use lightweight typed artifacts, not cold-loaded plugin/channel/provider runtimes. Keep runtime fallbacks; isolate expensive bootstrap/runners behind injection or narrow helpers.
+- Hot paths use pure helpers/lightweight public artifacts for target parsing, peer-kind inference, setup hints, and descriptors before `getChannelPlugin()`/bundled runtime. Spawn/session/requester-origin normalization stays deterministic and runtime-free; test channel-prefix parsing.
+- Prepared model/tool selection follows the plugin owner's [availability and selection contract](../plugins/AGENTS.md#availability-and-selection). Keep discovery outside repeated selection; user-requested model/tool execution remains allowed.
+- Moving slow integration coverage must preserve and test exact production composition in a named helper.
+- Avoid broad `importOriginal()` partial mocks/module resets. Use explicit factories, one-time imports, and reset only mutated state.
 
 ## Client Capability Scope
 
-- Tools that act through an attached client derive availability from the current
-  connection/session capability contract. Backend process flags describe the
-  host, not what a remote client supports; one backend can serve different clients.
-- Keep client-dependent capability caches within their connection/session
-  lifecycle. Process-stable provider metadata can be shared; a cached answer for
-  one client's capabilities cannot select another client's tool set.
-- Availability is not authorization. Preserve server validation, tool grants,
-  and live execution authority. Backend-owned tools that produce portable
-  artifacts do not require a client merely because the UI can display the result.
-- Verify differing clients on one backend and a supported remote client without
-  a backend-local UI flag. Retired client capabilities must not survive through
-  a cached tool selection.
+- Attached-client tools use current connection/session capabilities, never backend host flags; clients differ.
+- Scope capability caches to connection/session lifecycles; only process-stable provider metadata is shared. Another client's cached answer must not select tools.
+- Availability is not authorization: preserve server validation, tool grants, and live authority. Backend portable-artifact tools need no client merely for UI display.
+- Prove differing clients on one backend, a supported remote client without a local UI flag, and retirement of cached capabilities.
 
 ## Run Authority
 
-- Prepare one admitted run context after runtime selection. Retries and fallbacks reuse that exact context; they do not mint replacement authority.
-- The lifecycle owner closes admission in `finally`. Terminal, error, cancellation, and unsupported recovery paths must all release it.
-- Harness host capabilities capture the exact admitted authority. Gate tool binding, preparation, execution, hooks, and approvals, and revalidate after awaited work before an allowed result crosses the action boundary.
-- Retained tools, preparers, callbacks, and approval handles must fail after close, replacement, release, abort, claim loss, or lifecycle rotation.
+- Prepare one admitted context after runtime selection; retries/fallbacks reuse it, never mint authority.
+- Close admission in the lifecycle owner's `finally` on terminal, error, cancellation, and unsupported recovery paths.
+- Harness host capabilities capture exact admitted authority. Gate tool binding/preparation/execution, hooks, and approvals; revalidate after awaits before results cross the action boundary.
+- Retained tools, preparers, callbacks, and approval handles fail after close, replacement, release, abort, claim loss, or lifecycle rotation.
 
 ## Source Reply Completion
 
-- A message action suppresses required-reply finalization only through the
-  canonical host-owned current-source completion fact after settled, complete,
-  non-dry-run delivery. A terminal reaction qualifies only when explicit
-  `final: true` adds a nonempty reaction to the current
-  channel/account/conversation/message. Acknowledgments, progress reactions,
-  removals, empty reactions, wrong targets, failures, partial delivery, no-ops,
-  and dry runs never qualify. Do not special-case a channel or the fallback
-  finalizer.
-- A `final: false` text send to the current source becomes that completion fact
-  only at runtime settlement, when it was the settled turn's last tool batch and
-  the terminal response is empty or `NO_REPLY`. Any tool work after or beside it,
-  including after an asynchronous send, keeps finalization.
+- Only the canonical host-owned current-source completion fact suppresses required-reply finalization after settled, complete, non-dry-run delivery. A terminal reaction needs explicit `final: true` and a nonempty addition to the current channel/account/conversation/message. Acknowledgments, progress/removal/empty reactions, wrong targets, failures, partial delivery, no-ops, and dry runs never qualify. No channel/fallback-finalizer exceptions.
+- A current-source `final: false` text send becomes completion only at settlement when it was the last tool batch and terminal response is empty or `NO_REPLY`. Work after or beside it, including asynchronous-send follow-up, keeps finalization.
 
 ## Verification
 
-- For agent performance changes, record seconds and RSS before/after in the
-  handoff or benchmark report.
-- If the change touches lazy-loading, plugin runtime imports, or bundled
-  artifacts, run `pnpm build`.
+- Root proof policy applies: narrow trusted local proof, broad PR CI. Lazy-loading, plugin-runtime import, or bundled-artifact changes require `pnpm build`.

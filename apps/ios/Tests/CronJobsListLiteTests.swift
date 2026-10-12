@@ -4,31 +4,29 @@ import Testing
 @testable import OpenClaw
 
 struct CronJobsListLiteTests {
-    @Test @MainActor func `cron collector preserves snapshot order and normalized revision`() async throws {
+    @Test @MainActor func `cron collector preserves page order`() async throws {
         let collected = await Self.collectCronPages([
-            Self.cronPage(["z", "a"], total: 3, revision: " rev-1 ", hasMore: true, nextOffset: 2),
-            Self.cronPage(["m"], total: 3, revision: "rev-1\n"),
+            Self.cronPage(["z", "a"], total: 3, hasMore: true, nextOffset: 2),
+            Self.cronPage(["m"], total: 3),
         ], maximumPageCount: 2)
         let snapshot = try #require(collected.snapshot)
 
         #expect(collected.offsets == [0, 2])
         #expect(snapshot.jobs.map(\.id) == ["z", "a", "m"])
-        #expect(snapshot.snapshotRevision == "rev-1")
         #expect(snapshot.total == 3)
         #expect(!snapshot.hasMore)
         #expect(snapshot.nextOffset == nil)
     }
 
-    @Test @MainActor func `cron collector accepts empty advancing pages and absent identity`() async throws {
+    @Test @MainActor func `cron collector accepts empty advancing pages`() async throws {
         let collected = await Self.collectCronPages([
-            Self.cronPage(revision: " \n", hasMore: true, nextOffset: 3),
+            Self.cronPage(hasMore: true, nextOffset: 3),
             Self.cronPage(["a"], nextOffset: 99),
         ])
         let snapshot = try #require(collected.snapshot)
 
         #expect(collected.offsets == [0, 3])
         #expect(snapshot.jobs.map(\.id) == ["a"])
-        #expect(snapshot.snapshotRevision == nil)
         #expect(snapshot.total == nil)
         #expect(!snapshot.hasMore)
         #expect(snapshot.nextOffset == nil)
@@ -38,40 +36,25 @@ struct CronJobsListLiteTests {
         let page = try JSONDecoder().decode(
             CronJobsListLite.self,
             from: Data(#"{"jobs":[],"total":0}"#.utf8))
-        #expect(page.snapshotRevision == nil)
         #expect(!page.hasMore)
         #expect(page.nextOffset == nil)
     }
 
-    @Test @MainActor func `cron collector rejects snapshot identity changes including missing values`() async {
-        let cases: [(name: String, firstTotal: Int?, firstRevision: String?, total: Int?, revision: String?)] = [
-            ("revision changes", 2, "rev-1", 2, "rev-2"),
-            ("revision appears", 2, nil, 2, "rev-1"),
-            ("revision disappears", 2, "rev-1", 2, nil),
-            ("total changes", 2, "rev-1", 3, "rev-1"),
-            ("total appears", nil, nil, 2, nil),
-            ("total disappears", 2, nil, nil, nil),
-        ]
-        for scenario in cases {
+    @Test @MainActor func `cron collector tolerates edits between pages`() async throws {
+        for total in [3, nil] as [Int?] {
             let collected = await Self.collectCronPages([
-                Self.cronPage(
-                    ["a"], total: scenario.firstTotal, revision: scenario.firstRevision,
-                    hasMore: true, nextOffset: 1),
-                Self.cronPage(["b"], total: scenario.total, revision: scenario.revision),
+                Self.cronPage(["a"], total: 2, hasMore: true, nextOffset: 1),
+                Self.cronPage(["a", "b"], total: total),
             ])
-            #expect(collected.snapshot == nil, "\(scenario.name)")
-            #expect(collected.offsets == [0, 1], "\(scenario.name)")
+            #expect(try #require(collected.snapshot).jobs.map(\.id) == ["a", "b"])
+            #expect(collected.offsets == [0, 1])
         }
     }
 
-    @Test @MainActor func `cron collector rejects duplicate rows count contradictions and missing pages`() async {
+    @Test @MainActor func `cron collector rejects oversized or unavailable pages`() async {
         let first = Self.cronPage(["a"], hasMore: true, nextOffset: 1)
         let cases: [(name: String, pages: [CronJobsListLite?], offsets: [Int])] = [
-            ("duplicate within page", [Self.cronPage(["a", "a"])], [0]),
-            ("duplicate across pages", [first, Self.cronPage(["a"])], [0, 1]),
             ("negative total", [Self.cronPage(total: -1)], [0]),
-            ("total below collected count", [Self.cronPage(["a", "b"], total: 1)], [0]),
-            ("more after exact total", [Self.cronPage(["a"], total: 1, hasMore: true, nextOffset: 1)], [0]),
             ("page exceeds job budget", [Self.cronPage(["a", "b", "c", "d"])], [0]),
             ("aggregate exceeds job budget", [
                 Self.cronPage(["a", "b"], hasMore: true, nextOffset: 2), Self.cronPage(["c", "d"]),
@@ -159,13 +142,11 @@ struct CronJobsListLiteTests {
     private static func cronPage(
         _ ids: [String] = [],
         total: Int? = nil,
-        revision: String? = nil,
         hasMore: Bool = false,
         nextOffset: Int? = nil) -> CronJobsListLite
     {
         CronJobsListLite(
             jobs: ids.map { Self.job(id: $0) },
-            snapshotRevision: revision,
             total: total,
             hasMore: hasMore,
             nextOffset: nextOffset)

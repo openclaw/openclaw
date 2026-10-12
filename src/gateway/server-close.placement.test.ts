@@ -6,6 +6,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -40,27 +41,15 @@ it("settles accepted placement retirement across the close prelude before shared
     );
     let acceptedSignal: AbortSignal | undefined;
     let retirementDispatches = 0;
-    const run = stateWorker.runOpenClawStateWorkerOperation;
-    const recording = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        run(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                if (command.type === "workerPlacements.retire") {
-                  retirementDispatches++;
-                  acceptedSignal = getAsyncWorkSignal();
-                  retirementEntered.resolve();
-                  await releaseRetirement.promise;
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-      );
+    const recording = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (command.type === "workerPlacements.retire") {
+        retirementDispatches++;
+        acceptedSignal = getAsyncWorkSignal();
+        retirementEntered.resolve();
+        await releaseRetirement.promise;
+      }
+      return scope.execute(command, executeOptions);
+    });
     restoreRetirement = () => recording.mockRestore();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     kernel.sdkResourceHost.run(() =>

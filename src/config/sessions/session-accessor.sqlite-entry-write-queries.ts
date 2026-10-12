@@ -1,3 +1,4 @@
+import { sql } from "kysely";
 import { createSqliteQueryCache, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { bindSessionNode, bindSessionRoot } from "./session-accessor.sqlite-session-row.js";
@@ -79,6 +80,10 @@ export const getSessionEntryWriteQueries = createSqliteQueryCache((database) => 
           session_key: parameter((row) => row.session_key),
           current_session_id: parameter((row) => row.current_session_id),
           entry_json: parameter((row) => row.entry_json),
+          session_started_at: /* kysely-allow-raw: exact int64 bind; generated INTEGER reads are numbers. */ sql<
+            number | null
+          >`${parameter((row) => row.session_started_at)}`,
+          has_optional_references: parameter((row) => row.has_optional_references),
           entry_valid: parameter((row) => row.entry_valid),
           updated_at: parameter((row) => row.updated_at),
           status: parameter((row) => row.status),
@@ -106,6 +111,8 @@ export const getSessionEntryWriteQueries = createSqliteQueryCache((database) => 
           conflict.column("session_key").doUpdateSet((eb) => ({
             current_session_id: eb.ref("excluded.current_session_id"),
             entry_json: eb.ref("excluded.entry_json"),
+            session_started_at: eb.ref("excluded.session_started_at"),
+            has_optional_references: eb.ref("excluded.has_optional_references"),
             entry_valid: eb.ref("excluded.entry_valid"),
             updated_at: eb.ref("excluded.updated_at"),
             status: eb.ref("excluded.status"),
@@ -129,16 +136,6 @@ export const getSessionEntryWriteQueries = createSqliteQueryCache((database) => 
             last_interaction_at: eb.ref("excluded.last_interaction_at"),
             last_activity_at: eb.ref("excluded.last_activity_at"),
           })),
-        ),
-    ),
-    markValid: prepareSqliteQuerySync<string>(database, (parameter) =>
-      db
-        .updateTable("session_nodes")
-        .set({ entry_valid: 1 })
-        .where(
-          "session_key",
-          "=",
-          parameter((key) => key),
         ),
     ),
     claimWindow: window(false),

@@ -46,9 +46,9 @@ describe("minimax image-generation provider", () => {
 
   it.each(["minimax", "minimax-portal"])(
     "advertises %s image generation using its own config-only credential",
-    (providerId) => {
+    async (providerId) => {
       expect(
-        buildMinimaxImageGenerationProvider(providerId).isConfigured?.({
+        await buildMinimaxImageGenerationProvider(providerId).isConfiguredAsync?.({
           cfg: {
             models: {
               providers: {

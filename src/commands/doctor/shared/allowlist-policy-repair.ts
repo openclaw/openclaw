@@ -82,8 +82,5 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
     }
   }
 
-  if (changes.length === 0) {
-    return { config: cfg, changes: [] };
-  }
-  return { config: next, changes };
+  return { config: changes.length > 0 ? next : cfg, changes };
 }

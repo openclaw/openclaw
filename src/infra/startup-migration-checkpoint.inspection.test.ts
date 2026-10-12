@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, renameSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,6 +39,12 @@ function parameters() {
 async function initializeLeaseDatabase() {
   const lease = await acquireStartupMigrationLeaseWithWait(parameters());
   lease.release();
+  closeOpenClawStateDatabaseForTest();
+  const pathname = resolveOpenClawStateSqlitePath(env);
+  // Integrity hooks exercise first admission, before this physical file has a receipt.
+  const seedPath = `${pathname}.seed`;
+  renameSync(pathname, seedPath);
+  copyFileSync(seedPath, pathname);
 }
 
 describe("startup lease integrity and admission", () => {
@@ -104,7 +110,7 @@ describe("startup lease integrity and admission", () => {
           );
         }
         expect(committed).toBe(true);
-        expect(checker).toHaveBeenCalledTimes(corrupt ? 2 : 3);
+        expect(checker).toHaveBeenCalledTimes(2);
       } finally {
         checker.mockRestore();
         if (corrupt) {

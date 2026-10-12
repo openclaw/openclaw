@@ -180,49 +180,38 @@ export async function editMessageTelegram(
         return accepted!.result;
       };
 
+      const editCaption = (caption: string, html: boolean, label = "editMessageCaption") =>
+        edit(
+          () =>
+            api.editMessageCaption(chatId, messageId, {
+              caption,
+              ...(html ? { parse_mode: "HTML" as const } : {}),
+              ...replyMarkupParams,
+            }),
+          label,
+        );
       const performCaptionEdit = () =>
         withTelegramPlainFallback({
           kind: "html",
           context: "editMessageCaption",
           plainText,
           warn: (message) => sendLogger.warn(message),
-          sendFormatted: () =>
-            edit(
-              () =>
-                api.editMessageCaption(chatId, messageId, {
-                  caption: htmlText,
-                  parse_mode: "HTML",
-                  ...replyMarkupParams,
-                }),
-              "editMessageCaption",
-            ),
-          sendPlain: (_plan, label) =>
-            edit(
-              () =>
-                api.editMessageCaption(chatId, messageId, {
-                  caption: plainText,
-                  ...replyMarkupParams,
-                }),
-              label,
-            ),
+          sendFormatted: () => editCaption(htmlText, true),
+          sendPlain: (_plan, label) => editCaption(plainText, false, label),
         });
 
       let editedMessage: TelegramOutboundPromptContextMessage | true | undefined;
       try {
         const editMode = opts.editMode ?? "text";
-        if (editMode === "caption") {
-          editedMessage = await performCaptionEdit();
-        } else {
-          try {
-            editedMessage = await performTextEdit();
-          } catch (err) {
-            if (editMode === "auto" && isTelegramMessageHasNoTextError(err)) {
-              editedMessage = await performCaptionEdit();
-            } else {
-              throw err;
-            }
-          }
-        }
+        editedMessage =
+          editMode === "caption"
+            ? await performCaptionEdit()
+            : await performTextEdit().catch((err: unknown) => {
+                if (editMode === "auto" && isTelegramMessageHasNoTextError(err)) {
+                  return performCaptionEdit();
+                }
+                throw err;
+              });
       } catch (err) {
         if (!isTelegramMessageNotModifiedError(err)) {
           throw err;

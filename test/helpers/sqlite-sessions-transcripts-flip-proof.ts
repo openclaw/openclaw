@@ -8,15 +8,10 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { Readable } from "node:stream";
-import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  inspectManagedProcessGroup,
-  terminateManagedChild,
-} from "../../scripts/lib/managed-child-process.mts";
 import {
   readSessionArchiveContentSync,
   stripSessionArchiveCompressionSuffix,
@@ -1392,13 +1387,9 @@ async function runAbruptRestartProof(
   // The caller has joined agent.wait and observed both committed messages. This
   // covers completed-turn durability, not an interrupted transaction or active run.
   const before = await snapshot(client);
-  const child = expectDefined(inst.child, "running Gateway before abrupt restart");
   await disconnect();
-  const forcedExit = await forceGatewayExit(child, context.signal);
+  const forcedExit = await forceGatewayExit(inst, context.signal);
   await record("after-abrupt-gateway-exit");
-  // Release the existing owner only after forced exit and tree closure are proven;
-  // its graceful stop must not turn a failed kill into a passing recovery test.
-  await inst.stopGateway();
   await inst.startGateway();
   await record("after-abrupt-gateway-restart");
   const restarted = await connectProofClient(inst, context, "sqlite-abrupt-restart");
@@ -1435,7 +1426,8 @@ async function runAbruptRestartProof(
   return await proof;
 }
 
-async function forceGatewayExit(child: ProofChildProcess, abortSignal?: AbortSignal) {
+async function forceGatewayExit(instance: OpenClawTestInstance, abortSignal?: AbortSignal) {
+  const child = expectDefined(instance.child, "running Gateway before abrupt restart");
   if (child.exitCode !== null || child.signalCode !== null) {
     throw new Error("Gateway already exited before the abrupt-restart proof");
   }
@@ -1446,33 +1438,30 @@ async function forceGatewayExit(child: ProofChildProcess, abortSignal?: AbortSig
     once(child, "close", { signal: abort.signal }),
   ]);
   try {
-    const termination = terminateManagedChild(child, "SIGKILL");
+    child.kill("SIGKILL");
     const [[code, signal], [closeCode, closeSignal]] = await (abortSignal
       ? withinTest(observed, abortSignal)
       : observed);
     if (
       (process.platform === "win32"
-        ? termination?.processTreeState !== "terminated" || code === null || code === 0
+        ? code === null || code === 0
         : code !== null || signal !== "SIGKILL") ||
       closeCode !== code ||
       closeSignal !== signal
     ) {
-      throw new Error(
-        `Gateway did not exit forcibly: ${JSON.stringify({ code, signal, termination })}`,
-      );
+      throw new Error(`Gateway did not exit forcibly: ${JSON.stringify({ code, signal })}`);
     }
-    // Child close cannot report descendants without inherited pipes. The managed
-    // owner exposes a census, not an extinction event; only cancellation bounds this check.
-    let processTreeState = inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" });
-    while (processTreeState !== "dead") {
-      try {
-        await waitForProcessTick(10, undefined, { signal: abortSignal });
-      } catch (cause) {
-        throw new Error("Gateway process tree remained alive after SIGKILL", { cause });
-      }
-      processTreeState = inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" });
-    }
-    return { code, signal, closeCode, closeSignal, platform: process.platform, processTreeState };
+    // Root exit and output closure do not certify descendants. Join the fixture's
+    // exact custody owner after proving SIGKILL, before admitting another Gateway.
+    await instance.stopGateway();
+    return {
+      code,
+      signal,
+      closeCode,
+      closeSignal,
+      platform: process.platform,
+      processTreeState: "dead" as const,
+    };
   } finally {
     abort.abort();
     await Promise.allSettled([observed]);

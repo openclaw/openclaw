@@ -40,13 +40,13 @@ extension CLIInstaller {
                   let recognized = BundledRuntime.legacyManagedNodeCommand(text, stateDirectory: state)
             else {
                 throw GatewayHostingError(
-                    message: "The canonical managed Node CLI changed ownership; it was preserved.")
+                    message: "The managed Node CLI changed ownership; it was preserved.")
             }
             command = recognized
         } else {
             guard let recognized = try GatewayLaunchAgentManager.legacyManagedNodeCommand(stateDirectory: state) else {
                 throw GatewayHostingError(
-                    message: "The canonical managed Node CLI is unavailable; restore it before retrying.")
+                    message: "The managed Node CLI is unavailable; restore it before retrying.")
             }
             command = recognized
         }
@@ -55,7 +55,7 @@ extension CLIInstaller {
         guard GatewayLaunchAgentManager.isManagedNode(concrete[0], stateDirectory: resolvedState),
               GatewayLaunchAgentManager.isWithinState(concrete[1], stateDirectory: resolvedState)
         else {
-            throw GatewayHostingError(message: "The canonical managed Node CLI changed ownership; it was preserved.")
+            throw GatewayHostingError(message: "The managed Node CLI changed ownership; it was preserved.")
         }
         return CanonicalUpdateAuthority(
             executable: url,

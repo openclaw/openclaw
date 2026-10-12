@@ -263,6 +263,61 @@ describe("ModelRegistry models.json auth", () => {
     }
   });
 
+  it("keeps estimates out of SQLite catalog metadata and reconstructs them on reload", async () => {
+    const provider = "window-fixture";
+    const modelsPath = await writeModelsJsonWithPluginCatalog({
+      root: { providers: {} },
+      pluginRelativePath: "plugins/window-fixture/catalog.json",
+      pluginCatalog: {
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          [provider]: {
+            api: "openai-responses",
+            baseUrl: "https://models.example/v1",
+            models: [
+              { id: "unknown" },
+              { id: "prompt-only", contextTokens: 777_000 },
+              { id: "reported", contextWindow: 128_000, contextTokens: 777_000 },
+              { id: "authored", contextWindow: 64_000 },
+            ],
+          },
+        },
+      },
+    });
+    const pluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(dirname(modelsPath));
+    expect(pluginCatalogs).toHaveLength(1);
+    const stored = JSON.parse(pluginCatalogs[0]!.contents).providers[provider].models;
+    for (const id of ["unknown", "prompt-only"]) {
+      expect(stored.find((row: { id: string }) => row.id === id)).not.toHaveProperty(
+        "contextWindow",
+      );
+    }
+    expect(pluginCatalogs[0]!.contents).not.toContain("contextWindowSource");
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
+      pluginCatalogs,
+      pluginMetadataSnapshot: pluginOwnerSnapshot(provider, provider),
+    });
+    for (const candidate of [registry, registry.fork(AuthStorage.inMemory())]) {
+      expect(candidate.find(provider, "unknown")).toMatchObject({
+        contextWindow: 128_000,
+        contextWindowSource: "synthetic",
+      });
+      expect(candidate.find(provider, "prompt-only")).toMatchObject({
+        contextWindow: 777_000,
+        contextTokens: 777_000,
+        contextWindowSource: "synthetic",
+      });
+      for (const [id, window] of [
+        ["reported", 128_000],
+        ["authored", 64_000],
+      ] as const) {
+        const runtime = candidate.find(provider, id);
+        expect(runtime?.contextWindow).toBe(window);
+        expect(runtime).not.toHaveProperty("contextWindowSource");
+      }
+    }
+  });
+
   it("loads only lifecycle-captured generated catalogs when the root catalog is absent", () => {
     const modelsPath = writeModelsJson({ providers: {} });
     rmSync(modelsPath);

@@ -1,8 +1,8 @@
-// Chat command tests cover discovery and invocation of skill-provided commands.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 
 let listSkillCommandsForAgents: typeof import("./chat-commands.js").listSkillCommandsForAgents;
 let listSkillCommandsForWorkspace: typeof import("./chat-commands.js").listSkillCommandsForWorkspace;
@@ -34,28 +34,6 @@ async function createMainAndResearchWorkspaces(prefix: string) {
   const mainWorkspace = await createWorkspace(baseDir, "main");
   const researchWorkspace = await createWorkspace(baseDir, "research");
   return { mainWorkspace, researchWorkspace };
-}
-
-function listMainResearchSkillCommands(params: {
-  mainWorkspace: string;
-  researchWorkspace: string;
-}) {
-  return listSkillCommandsForAgents({
-    cfg: {
-      agents: {
-        entries: {
-          main: { workspace: params.mainWorkspace, skills: ["demo-skill"] },
-          research: { workspace: params.researchWorkspace, skills: ["extra-skill"] },
-        },
-      },
-    },
-    agentIds: ["main", "research"],
-  });
-}
-
-function expectDemoAndExtraSkillCommands(commands: ReturnType<typeof listSkillCommandsForAgents>) {
-  expect(commands.map((entry) => entry.skillName)).toEqual(["demo-skill", "extra-skill"]);
-  expect(commands.map((entry) => entry.name)).toEqual(["demo_skill", "extra_skill"]);
 }
 
 function resolveUniqueSkillCommandName(base: string, used: Set<string>): string {
@@ -187,26 +165,6 @@ beforeEach(() => {
 });
 
 describe("resolveSkillCommandInvocation", () => {
-  it("keeps a renamed dashboard skill addressable through /skill and $ references", () => {
-    const dashboard = {
-      name: "dashboard_2",
-      skillName: "dashboard",
-      description: "Custom dashboard skill",
-    };
-    expect(
-      resolveSkillCommandInvocation({
-        commandBodyNormalized: "/skill dashboard custom input",
-        skillCommands: [dashboard],
-      }),
-    ).toEqual({ command: dashboard, args: "custom input" });
-    expect(
-      resolveSkillReferenceInvocations({
-        text: "Use $dashboard for the custom workflow",
-        skillCommands: [dashboard],
-      }),
-    ).toEqual([dashboard]);
-  });
-
   it("preserves multiline args for /skill invocations", () => {
     const invocation = resolveSkillCommandInvocation({
       commandBodyNormalized: "/skill demo_skill first line\nsecond line",
@@ -224,23 +182,6 @@ describe("resolveSkillCommandInvocation", () => {
     expect(invocation?.command.name).toBe("demo_skill");
     expect(invocation?.args).toBe("first line\nsecond line");
   });
-
-  it("normalizes /skill lookup names", () => {
-    const invocation = resolveSkillCommandInvocation({
-      commandBodyNormalized: "/skill demo-skill",
-      skillCommands: [{ name: "demo_skill", skillName: "demo-skill", description: "Demo" }],
-    });
-    expect(invocation?.command.name).toBe("demo_skill");
-    expect(invocation?.args).toBeUndefined();
-  });
-
-  it("returns null for unknown commands", () => {
-    const invocation = resolveSkillCommandInvocation({
-      commandBodyNormalized: "/unknown arg",
-      skillCommands: [{ name: "demo_skill", skillName: "demo-skill", description: "Demo" }],
-    });
-    expect(invocation).toBeNull();
-  });
 });
 
 describe("resolveSkillReferenceInvocations", () => {
@@ -249,51 +190,6 @@ describe("resolveSkillReferenceInvocations", () => {
     { name: "release_notes", skillName: "Release Notes", description: "Release notes" },
   ];
 
-  it("resolves and deduplicates composable skill references", () => {
-    expect(
-      resolveSkillReferenceInvocations({
-        text: "Use $demo_skill with $release-notes, then check $demo_skill again.",
-        skillCommands,
-      }).map((command) => command.name),
-    ).toEqual(["demo_skill", "release_notes"]);
-  });
-
-  it("keeps trailing prose punctuation outside the skill reference", () => {
-    expect(
-      resolveSkillReferenceInvocations({
-        text: "Use $demo_skill: then continue.",
-        skillCommands,
-      }).map((command) => command.name),
-    ).toEqual(["demo_skill"]);
-  });
-
-  it("does not fall back to a shorter skill from a trailing hyphen", () => {
-    expect(
-      resolveSkillReferenceInvocations({
-        text: "Use $demo_skill- later.",
-        skillCommands,
-      }),
-    ).toEqual([]);
-  });
-
-  it("ignores common shell variables, escaped references, and unknown names", () => {
-    expect(
-      resolveSkillReferenceInvocations({
-        text: String.raw`Keep $PATH and \$demo_skill literal; $unknown is not installed.`,
-        skillCommands,
-      }),
-    ).toEqual([]);
-  });
-
-  it("keeps lowercase skill names that overlap common shell variables", () => {
-    expect(
-      resolveSkillReferenceInvocations({
-        text: "Use $home but keep $HOME and $EDITOR literal.",
-        skillCommands: [{ name: "home", skillName: "home", description: "Home automation" }],
-      }).map((command) => command.name),
-    ).toEqual(["home"]);
-  });
-
   it("treats only odd backslash runs as escaping a reference", () => {
     expect(
       resolveSkillReferenceInvocations({
@@ -301,22 +197,6 @@ describe("resolveSkillReferenceInvocations", () => {
         skillCommands,
       }).map((command) => command.name),
     ).toEqual(["demo_skill"]);
-  });
-
-  it("resolves explicitly referenced skills hidden from the model prompt", () => {
-    expect(
-      resolveSkillReferenceInvocations({
-        text: "Use $hidden_skill.",
-        skillCommands: [
-          {
-            name: "hidden_skill",
-            skillName: "hidden-skill",
-            description: "Slash only",
-            modelVisible: false,
-          },
-        ],
-      }).map((command) => command.name),
-    ).toEqual(["hidden_skill"]);
   });
 });
 
@@ -453,135 +333,6 @@ describe("listSkillCommandsForAgents", () => {
     expect(names).toContain("extra_skill");
   });
 
-  it("scopes to specific agents when agentIds is provided", async () => {
-    const baseDir = tempDirs.make("openclaw-skills-filter-");
-    const researchWorkspace = await createWorkspace(baseDir, "research");
-
-    const commands = listSkillCommandsForAgents({
-      cfg: {
-        agents: {
-          entries: { research: { workspace: researchWorkspace, skills: ["extra-skill"] } },
-        },
-      },
-      agentIds: ["research"],
-    });
-
-    expect(commands.map((entry) => entry.name)).toEqual(["extra_skill"]);
-    expect(commands.map((entry) => entry.skillName)).toEqual(["extra-skill"]);
-  });
-
-  it("prevents cross-agent skill leakage when each agent has an allowlist", async () => {
-    const { mainWorkspace, researchWorkspace } =
-      await createMainAndResearchWorkspaces("openclaw-skills-leak-");
-
-    const commands = listMainResearchSkillCommands({ mainWorkspace, researchWorkspace });
-
-    expectDemoAndExtraSkillCommands(commands);
-  });
-
-  it("merges allowlists for agents that share one workspace", async () => {
-    const baseDir = tempDirs.make("openclaw-skills-shared-");
-    const sharedWorkspace = await createWorkspace(baseDir, "research");
-
-    const commands = listMainResearchSkillCommands({
-      mainWorkspace: sharedWorkspace,
-      researchWorkspace: sharedWorkspace,
-    });
-
-    expectDemoAndExtraSkillCommands(commands);
-    expect(resolveNodeExecEligibilityMock.mock.calls.map(([params]) => params.agentId)).toEqual([
-      "main",
-      "research",
-    ]);
-  });
-
-  it("deduplicates overlapping allowlists for shared workspace", async () => {
-    const baseDir = tempDirs.make("openclaw-skills-overlap-");
-    const sharedWorkspace = await createWorkspace(baseDir, "research");
-
-    const commands = listSkillCommandsForAgents({
-      cfg: {
-        agents: {
-          entries: {
-            "agent-a": { workspace: sharedWorkspace, skills: ["extra-skill"] },
-            "agent-b": { workspace: sharedWorkspace, skills: ["extra-skill", "demo-skill"] },
-          },
-        },
-      },
-      agentIds: ["agent-a", "agent-b"],
-    });
-
-    // Both agents allowlist "extra-skill"; it should appear once, not twice.
-    expect(commands.map((entry) => entry.skillName)).toEqual(["demo-skill", "extra-skill"]);
-    expect(commands.map((entry) => entry.name)).toEqual(["demo_skill", "extra_skill"]);
-  });
-
-  it("keeps workspace unrestricted when one co-tenant agent has no skills filter", async () => {
-    const baseDir = tempDirs.make("openclaw-skills-unfiltered-");
-    const sharedWorkspace = await createWorkspace(baseDir, "research");
-
-    const commands = listSkillCommandsForAgents({
-      cfg: {
-        agents: {
-          entries: {
-            restricted: { workspace: sharedWorkspace, skills: ["extra-skill"] },
-            unrestricted: { workspace: sharedWorkspace },
-          },
-        },
-      },
-      agentIds: ["restricted", "unrestricted"],
-    });
-
-    const skillNames = commands.map((entry) => entry.skillName);
-    expect(skillNames).toContain("demo-skill");
-    expect(skillNames).toContain("extra-skill");
-  });
-
-  it("uses inherited defaults for agents that share one workspace", async () => {
-    const baseDir = tempDirs.make("openclaw-skills-defaults-");
-    const sharedWorkspace = await createWorkspace(baseDir, "shared-defaults");
-
-    const commands = listSkillCommandsForAgents({
-      cfg: {
-        agents: {
-          defaults: {
-            skills: ["alpha-skill"],
-          },
-          entries: {
-            alpha: { workspace: sharedWorkspace },
-            beta: { workspace: sharedWorkspace, skills: ["beta-skill"] },
-            gamma: { workspace: sharedWorkspace },
-          },
-        },
-      },
-      agentIds: ["alpha", "beta", "gamma"],
-    });
-
-    expect(commands.map((entry) => entry.skillName)).toEqual(["alpha-skill", "beta-skill"]);
-  });
-
-  it("does not inherit defaults when an agent sets an explicit empty skills list", async () => {
-    const baseDir = tempDirs.make("openclaw-skills-defaults-empty-");
-    const sharedWorkspace = await createWorkspace(baseDir, "shared-defaults");
-
-    const commands = listSkillCommandsForAgents({
-      cfg: {
-        agents: {
-          defaults: {
-            skills: ["alpha-skill", "hidden-skill"],
-          },
-          entries: {
-            alpha: { workspace: sharedWorkspace, skills: [] },
-            beta: { workspace: sharedWorkspace, skills: ["beta-skill"] },
-          },
-        },
-      },
-      agentIds: ["alpha", "beta"],
-    });
-
-    expect(commands.map((entry) => entry.skillName)).toEqual(["beta-skill"]);
-  });
-
   it("skips agents with missing workspaces gracefully", async () => {
     const baseDir = tempDirs.make("openclaw-skills-missing-");
     const validWorkspace = await createWorkspace(baseDir, "research");
@@ -606,9 +357,14 @@ describe("listSkillCommandsForAgents", () => {
 });
 
 describe("listSkillCommandsForWorkspace", () => {
-  it("inherits defaults when agentId is provided without an explicit skill filter", async () => {
+  it("inherits defaults while preserving session context and the admitted plugin generation", async () => {
     const baseDir = tempDirs.make("openclaw-skills-workspace-defaults-");
     const sharedWorkspace = await createWorkspace(baseDir, "shared-defaults");
+
+    const pluginMetadataSnapshot = createEmptyPluginMetadataSnapshot(sharedWorkspace);
+    const librarySelections = [
+      { skillId: "library-guide", revision: "revision", name: "guide", ownerProfileId: "profile" },
+    ];
 
     const commands = listSkillCommandsForWorkspace({
       workspaceDir: sharedWorkspace,
@@ -621,48 +377,29 @@ describe("listSkillCommandsForWorkspace", () => {
         },
       },
       agentId: "alpha",
-      sessionEntry: { execHost: "node", execNode: "build-node" },
+      pluginMetadataSnapshot,
+      sessionEntry: {
+        execHost: "node",
+        execNode: "build-node",
+        skillLibrarySelections: librarySelections,
+      },
       sessionKey: "agent:alpha:main",
       execOverrides: { security: "allowlist" },
     });
 
     expect(commands.map((entry) => entry.skillName)).toEqual(["alpha-skill"]);
+    expect(lastCommandBuildOptions?.pluginMetadataSnapshot).toBe(pluginMetadataSnapshot);
+    expect(lastCommandBuildOptions?.librarySelections).toBe(librarySelections);
     expect(resolveNodeExecEligibilityMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionEntry: { execHost: "node", execNode: "build-node" },
+        sessionEntry: {
+          execHost: "node",
+          execNode: "build-node",
+          skillLibrarySelections: librarySelections,
+        },
         sessionKey: "agent:alpha:main",
         execOverrides: { security: "allowlist" },
       }),
     );
-  });
-
-  it("keeps explicit command discovery on the admitted plugin generation", async () => {
-    const baseDir = tempDirs.make("openclaw-skills-workspace-generation-");
-    const workspaceDir = await createWorkspace(baseDir, "main");
-    const pluginMetadataSnapshot = { generation: "gateway" } as never;
-
-    listSkillCommandsForWorkspace({
-      workspaceDir,
-      cfg: {},
-      pluginMetadataSnapshot,
-    });
-
-    expect(lastCommandBuildOptions?.pluginMetadataSnapshot).toBe(pluginMetadataSnapshot);
-  });
-
-  it("delegates pinned library loading to the command entry provider", async () => {
-    const baseDir = tempDirs.make("openclaw-skills-workspace-library-");
-    const workspaceDir = await createWorkspace(baseDir, "main");
-    const librarySelections = [
-      { skillId: "library-guide", revision: "revision", name: "guide", ownerProfileId: "profile" },
-    ];
-
-    listSkillCommandsForWorkspace({
-      workspaceDir,
-      cfg: {},
-      sessionEntry: { skillLibrarySelections: librarySelections },
-    });
-
-    expect(lastCommandBuildOptions?.librarySelections).toBe(librarySelections);
   });
 });

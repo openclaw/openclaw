@@ -279,6 +279,12 @@ describe("legacy operator cron acceptance", () => {
     );
   });
 
+  it("accepts Doctor pinning an ownerless job to its historical owner", () => {
+    const jobs = migratedJobs();
+    jobs[0]!.agentId = "main";
+    expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).not.toThrow();
+  });
+
   it("rejects a missing job and an explicit owner rewritten behind a correct projection", () => {
     expect(() =>
       assertLegacyOperatorCronOwners({ jobs: migratedJobs().slice(1) }, { jobs: baselineJobs }),

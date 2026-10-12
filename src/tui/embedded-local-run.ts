@@ -30,6 +30,7 @@ export type LocalRunState = {
     summaryLines: string[];
   };
   queuedAfter?: QueuedSessionRun;
+  promise?: Promise<void>;
   queuedRunReady: Promise<void>;
   markQueuedRunReady: () => void;
 };

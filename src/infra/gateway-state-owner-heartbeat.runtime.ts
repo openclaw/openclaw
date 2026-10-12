@@ -10,7 +10,6 @@ export type GatewayStateOwnerHeartbeatData = {
   lastBeat: SharedArrayBuffer;
   events: MessagePort;
 };
-const monotonic = process.hrtime.bigint.bind(process.hrtime);
 
 /** Native main-thread work cannot stall renewal; an expired worker never resumes custody. */
 export function runGatewayStateOwnerHeartbeat(
@@ -18,8 +17,17 @@ export function runGatewayStateOwnerHeartbeat(
   parent: MessagePort | null,
 ) {
   const lastBeat = new BigInt64Array(data.lastBeat);
-  const now = () => monotonic() / 1_000_000n;
+  const now = () => BigInt(Date.now());
   const rootPath = Object.keys(data.locks)[0];
+  const remainingMs = (at = now()) => {
+    const renewedAt = Atomics.load(lastBeat, 0);
+    const age = Number(at - renewedAt);
+    if (age < 0) {
+      data.events.postMessage(`${rootPath}: heartbeat clock moved backwards`, []);
+      return 0;
+    }
+    return data.failureMs - age;
+  };
   const descriptors = new Map<string, number>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let backoff = 0;
@@ -45,8 +53,7 @@ export function runGatewayStateOwnerHeartbeat(
     parent?.close();
   };
   const beat = () => {
-    const beatStartedAt = now();
-    const remaining = data.failureMs - Number(beatStartedAt - Atomics.load(lastBeat, 0));
+    const remaining = remainingMs();
     if (remaining <= 0) {
       stop();
       return;
@@ -79,14 +86,17 @@ export function runGatewayStateOwnerHeartbeat(
           continue;
         }
         const renewalStartedAt = now();
-        if (Number(renewalStartedAt - Atomics.load(lastBeat, 0)) >= data.failureMs) {
+        // A recovered clock cannot make an older captured timestamp safe to write.
+        if (remainingMs(renewalStartedAt) <= 0 || remainingMs() <= 0) {
           stop();
           return;
         }
         // A suspension after verification can only touch this held inode, never its successor.
-        const stamp = new Date();
+        const stamp = new Date(Number(renewalStartedAt));
         fs.futimesSync(fd, stamp, stamp);
-        renewedAt ??= renewalStartedAt;
+        if (renewedAt === undefined || renewalStartedAt < renewedAt) {
+          renewedAt = renewalStartedAt;
+        }
       } catch (error) {
         if (hasErrnoCode(error, "ENOENT")) {
           if (lockPath === rootPath) {
@@ -100,7 +110,7 @@ export function runGatewayStateOwnerHeartbeat(
         failure ??= `${lockPath}: utimes renewal failed: ${coerceErrorMessage(error)}`;
       }
     }
-    if (Number(now() - Atomics.load(lastBeat, 0)) >= data.failureMs) {
+    if (remainingMs() <= 0) {
       stop();
       return;
     }

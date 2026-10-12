@@ -4,6 +4,7 @@ const {
   loadMSTeamsSdkWithAuthMock,
   createMSTeamsTokenProviderMock,
   fetchWithSsrFGuardMock,
+  resolveDelegatedAccessTokenMock,
   resolveMSTeamsCredentialsMock,
 } = vi.hoisted(() => {
   return {
@@ -16,6 +17,7 @@ const {
         release: async () => undefined,
       }),
     ),
+    resolveDelegatedAccessTokenMock: vi.fn(),
     resolveMSTeamsCredentialsMock: vi.fn(),
   };
 });
@@ -25,8 +27,15 @@ vi.mock("./sdk.js", () => ({
   createMSTeamsTokenProvider: createMSTeamsTokenProviderMock,
 }));
 
-vi.mock("./token.js", () => ({
+vi.mock("./token-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./token-config.js")>()),
+  hasConfiguredMSTeamsCredentials: () => false,
   resolveMSTeamsCredentials: resolveMSTeamsCredentialsMock,
+}));
+
+vi.mock("./token.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./token.js")>()),
+  resolveDelegatedAccessToken: resolveDelegatedAccessTokenMock,
 }));
 
 vi.mock("../runtime-api.js", async (importOriginal) => {
@@ -58,6 +67,7 @@ import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 const originalFetch = globalThis.fetch;
 const graphToken = "graph-token";
 const mockCredentials = {
+  type: "secret",
   appId: "app-id",
   appPassword: "app-password",
   tenantId: "tenant-id",
@@ -448,6 +458,119 @@ describe("msteams graph helpers", () => {
 
     await rejection;
     expect(getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
+  });
+
+  it("resolves Graph credentials from the named Teams account", async () => {
+    const { getAccessToken } = mockGraphTokenResolution();
+
+    await expect(
+      resolveGraphToken(
+        {
+          channels: {
+            msteams: {
+              appId: "root-app",
+              appPassword: "root-password",
+              tenantId: "root-tenant",
+              accounts: {
+                secondary: {
+                  appId: "secondary-app",
+                  appPassword: "secondary-password",
+                  tenantId: "secondary-tenant",
+                  webhook: { path: "/api/messages/named" },
+                },
+              },
+            },
+          },
+        },
+        { accountId: "secondary" },
+      ),
+    ).resolves.toBe("resolved-token");
+
+    expect(resolveMSTeamsCredentialsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appId: "secondary-app",
+        appPassword: "secondary-password",
+        tenantId: "secondary-tenant",
+      }),
+      expect.objectContaining({
+        allowEnvFallback: false,
+        pathPrefix: "channels.msteams.accounts.secondary",
+      }),
+    );
+    expect(createMSTeamsTokenProviderMock).toHaveBeenCalledWith(mockApp);
+    expect(getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
+  });
+
+  it("rejects a disabled named account without blocking an enabled sibling", async () => {
+    const { getAccessToken } = mockGraphTokenResolution();
+    const cfg = {
+      channels: {
+        msteams: {
+          accounts: {
+            disabled: {
+              enabled: false,
+              appId: "disabled-app",
+              appPassword: "disabled-password",
+              tenantId: "tenant-id",
+              webhook: { path: "/api/messages/named" },
+            },
+            active: {
+              enabled: true,
+              appId: "active-app",
+              appPassword: "active-password",
+              tenantId: "tenant-id",
+              webhook: { path: "/api/messages/named" },
+            },
+          },
+        },
+      },
+    };
+
+    await expectRejectsToThrow(
+      resolveGraphToken(cfg, { accountId: "disabled" }),
+      "MS Teams account disabled: disabled",
+    );
+    await expect(resolveGraphToken(cfg, { accountId: "active" })).resolves.toBe("resolved-token");
+
+    expect(loadMSTeamsSdkWithAuthMock).toHaveBeenCalledTimes(1);
+    expect(getAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects Graph token resolution when the Teams channel is disabled", async () => {
+    mockGraphTokenResolution();
+
+    await expectRejectsToThrow(
+      resolveGraphToken({ channels: { msteams: { enabled: false } } }),
+      "MS Teams account disabled: default",
+    );
+
+    expect(loadMSTeamsSdkWithAuthMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes delegated Graph token lookup by account", async () => {
+    resolveMSTeamsCredentialsMock.mockReturnValue(mockCredentials);
+    resolveDelegatedAccessTokenMock.mockResolvedValue("delegated-token");
+
+    await expect(
+      resolveGraphToken(
+        {
+          channels: {
+            msteams: {
+              delegatedAuth: { enabled: true },
+            },
+          },
+        },
+        { accountId: "secondary", preferDelegated: true },
+      ),
+    ).resolves.toBe("delegated-token");
+
+    expect(resolveDelegatedAccessTokenMock).toHaveBeenCalledWith({
+      tenantId: "tenant-id",
+      clientId: "app-id",
+      clientSecret: "app-password",
+      accountId: "secondary",
+    });
+    expect(loadMSTeamsSdkWithAuthMock).not.toHaveBeenCalled();
   });
 
   it("fails closed for China cloud Graph token resolution", async () => {

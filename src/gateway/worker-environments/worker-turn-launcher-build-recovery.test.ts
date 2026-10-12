@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunHandleActive,
+  waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
@@ -17,6 +18,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
@@ -54,6 +56,8 @@ import {
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
+
+afterAll(closeStateDatabaseForTest);
 
 async function expectSinglePersistedInput() {
   expect(
@@ -184,6 +188,7 @@ async function createBuildRecoveryHarness(
   };
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
   const dispatch = createWorkerPlacementDispatchService({
+    initialPlacements: placements.list(),
     placements,
     environments,
     runnerAvailability: { read: () => undefined, version: () => 0 },
@@ -304,7 +309,7 @@ async function createBuildRecoveryHarness(
 
 describe("worker turn launcher build recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
   afterEach(() => {
     resetGatewayWorkAdmission();
     resetDiagnosticRunActivityForTest();
@@ -431,6 +436,7 @@ describe("worker turn launcher build recovery", () => {
         await expect(execution).resolves.toMatchObject({
           payloads: [{ text: "Ran on the refreshed worker" }],
         });
+        await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
         expect(harness.claimTurn).toHaveBeenCalledTimes(fence ? 2 : 1);
         expect(harness.acquireTurnCredential).toHaveBeenCalledOnce();
         expect(harness.onAdmitted).toHaveBeenCalledOnce();
@@ -629,6 +635,7 @@ describe("worker turn launcher build recovery", () => {
         const settled = await result;
         if (outcome === "reconnected") {
           expect(settled).toHaveProperty("value");
+          await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
           expect(harness.launchTurn).toHaveBeenCalledOnce();
           await expectSinglePersistedInput();
         } else {
@@ -732,6 +739,7 @@ describe("worker turn launcher build recovery", () => {
       const before = placements.get(SESSION_ID);
       const result = await harness.execute();
       expect(result.payloads).toEqual([{ text: "Continued on the replacement worker" }]);
+      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
       expect(harness.redispatchPlacement).not.toHaveBeenCalled();
       expect(harness.launchTurn).toHaveBeenCalledOnce();
       expect(harness.onAdmitted).toHaveBeenCalledOnce();
@@ -758,6 +766,7 @@ describe("worker turn launcher build recovery", () => {
       const harness = await createBuildRecoveryHarness({ rejection });
       const result = await harness.execute(new AbortController().signal);
       expect(result.payloads).toEqual([{ text: "Continued on the replacement worker" }]);
+      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
       expect(harness.redispatchPlacement).toHaveBeenCalledOnce();
       expect(harness.onAdmitted).toHaveBeenCalledOnce();
       expect(harness.launchTurn).toHaveBeenCalledOnce();

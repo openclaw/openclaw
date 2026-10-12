@@ -40,7 +40,8 @@ import {
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
 import { readActiveTranscriptStats } from "../../config/sessions/session-accessor.sqlite-history.test-support.js";
-import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import * as transcriptAccounting from "../../config/sessions/session-transcript-accounting.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -424,8 +425,7 @@ describe("runMemoryFlushIfNeeded", () => {
       const previous = params.sessionStore[sessionKey] as SessionEntry;
       const nextEntry: SessionEntry = {
         ...previous,
-        compactionCount: (previous.compactionCount ?? 0) + Math.max(0, params.amount ?? 1),
-        transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
+        ...projectCompactionAccountingPatch(previous, params),
       };
       params.sessionStore[sessionKey] = nextEntry;
       if (typeof params.storePath === "string") {
@@ -455,7 +455,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
-      assertCurrent: vi.fn(),
+      assertCurrent: vi.fn<() => void>(),
       retain: () => releaseOperatorAuthority,
     });
     runEmbeddedAgentMock
@@ -886,8 +886,7 @@ describe("runMemoryFlushIfNeeded", () => {
       modelSelectionLocked: true,
     });
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "skipped");
+    expect(onCompactionNotice.mock.calls.map(([phase]) => phase)).toEqual(["start", "skipped"]);
 
     onCompactionNotice.mockClear();
     compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
@@ -898,8 +897,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await expect(run({ onCompactionNotice })).rejects.toThrow(
       "Preflight compaction required but failed: no real conversation messages",
     );
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "incomplete");
+    expect(onCompactionNotice.mock.calls.map(([phase]) => phase)).toEqual(["start", "incomplete"]);
   });
 
   it("passes persisted session policy and runtime policy key to preflight compaction", async () => {
@@ -2183,7 +2181,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
-  it("emits preflight compaction notices around a successful budget compaction", async () => {
+  it("reports bounded context when server compaction leaves oversized history", async () => {
     await writeTranscript([
       { type: "message", message: { role: "user", content: "x".repeat(5_000) } },
     ]);
@@ -2209,12 +2207,10 @@ describe("runMemoryFlushIfNeeded", () => {
       onCompactionNotice,
     });
 
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(
-      2,
-      "end",
-      "🧹 Server-side compaction complete (8.6k → 736)",
-    );
+    expect(onCompactionNotice.mock.calls.map(([phase]) => phase)).toEqual([
+      "start",
+      "context_bounded",
+    ]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

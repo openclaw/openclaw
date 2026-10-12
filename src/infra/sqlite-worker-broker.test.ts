@@ -4,7 +4,9 @@ import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import * as os from "node:os";
 import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import * as logging from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
@@ -37,6 +39,83 @@ const { databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-broker
 
 const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
+
+it("cancels queued opens without overtaking an accepted open or abandoning its settlement", async ({
+  signal,
+}) => {
+  const broker = new SqliteWorkerBroker();
+  const acceptedCancel = new AbortController();
+  const queuedCancel = new AbortController();
+  const acceptedPath = databasePath();
+  const queuedPath = databasePath();
+  const successorPath = databasePath();
+  const held = createDeferredCore();
+  let release: (() => void) | undefined;
+  const requests = vi.spyOn(Worker.prototype, "postMessage");
+  const messages = vi.spyOn(Worker.prototype, "emit");
+  messages.mockImplementation(function (this: Worker, event: string | symbol, ...args: unknown[]) {
+    const reply = args[0];
+    if (
+      event === "message" &&
+      isRecord(reply) &&
+      typeof reply.ok === "boolean" &&
+      requests.mock.calls.some(
+        ([request], index) =>
+          requests.mock.contexts[index] === this &&
+          isRecord(request) &&
+          request.type === "open" &&
+          request.databasePath === acceptedPath &&
+          request.id === reply.id,
+      )
+    ) {
+      messages.mockRestore();
+      release = () => EventEmitter.prototype.emit.call(this, event, ...args);
+      held.resolve();
+      return true;
+    }
+    return EventEmitter.prototype.emit.call(this, event, ...args);
+  });
+  const openStore = (pathname: string, cancel?: AbortController) =>
+    broker.open<FixtureOperations>(
+      {
+        moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+        databasePath: pathname,
+        input: undefined,
+      },
+      undefined,
+      undefined,
+      { signal: cancel?.signal },
+    );
+  const accepted = openStore(acceptedPath, acceptedCancel);
+  const acceptedOutcome = Promise.allSettled([accepted]);
+  const pending: Promise<unknown>[] = [accepted];
+  try {
+    await withinTest(held.promise, signal);
+    const queued = openStore(queuedPath, queuedCancel);
+    const successor = openStore(successorPath);
+    pending.push(queued, successor);
+    const reason = new Error("queued open deadline expired");
+    const rejected = expect(queued).rejects.toBe(reason);
+    queuedCancel.abort(reason);
+    acceptedCancel.abort(new Error("accepted open still owns native settlement"));
+    await withinTest(rejected, signal);
+    expect(existsSync(queuedPath)).toBe(false);
+    expect(existsSync(successorPath)).toBe(false);
+    release?.();
+    release = undefined;
+    await expect(acceptedOutcome).resolves.toMatchObject([{ status: "fulfilled" }]);
+    const next = await withinTest(successor, signal);
+    assert(next, "Successor store missing");
+    expect(await append(next, "survived canceled open")).toMatchObject({ writes: 1 });
+    expect(existsSync(queuedPath)).toBe(false);
+  } finally {
+    requests.mockRestore();
+    messages.mockRestore();
+    release?.();
+    await Promise.allSettled(pending);
+    await broker.close();
+  }
+});
 
 poolIt("keeps an independent database responsive while another worker is at capacity", async () => {
   const busy = await open(databasePath());
@@ -300,7 +379,7 @@ it("charges admission waiters to the byte budget and releases canceled reservati
 
 poolIt.each([
   { cores: 1, workers: 2 },
-  { cores: 128, workers: 8 },
+  { cores: 128, workers: 2 },
 ])("uses $workers worker threads for $cores available CPUs", async ({ cores, workers }) => {
   const parallelism = vi.spyOn(os, "availableParallelism").mockReturnValue(cores);
   const broker = new SqliteWorkerBroker();

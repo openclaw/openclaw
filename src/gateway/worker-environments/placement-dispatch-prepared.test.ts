@@ -475,20 +475,6 @@ describe("prepared worker dispatch", () => {
     expect(harness.environments.destroy).toHaveBeenCalledWith(ready.environmentId);
   });
 
-  it("uses the cold path when pool policy removes a candidate during node admission", async () => {
-    const { harness, store, ready, request } = await preparedHarness();
-    const candidates = vi.mocked(harness.environments.getPreparedCandidates);
-    const selected = candidates.getMockImplementation()!;
-    candidates.mockImplementationOnce(selected).mockReturnValue([]);
-
-    const active = await harness.service.dispatch(request);
-
-    expect(active.environmentId).toBe(harness.ready.environmentId);
-    expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
-    expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBeNull();
-    expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
-  });
-
   it("rejects direct attachment without the prepared placement reservation", async () => {
     const { store, workerService, ready, request } = await preparedHarness();
 

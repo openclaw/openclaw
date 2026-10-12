@@ -58,7 +58,6 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "src/daemon/schtasks.env-case.real.test.ts": 8.9,
   "src/daemon/schtasks.startup-fallback.test.ts": 8.3,
   "src/flows/doctor-health-contributions.windows-cloud-state.test.ts": 13.1,
-  "src/gateway/control-ui-asset-retention.publication.test.ts": 3.2,
   "src/gateway/gateway-cron-process-identity.windows.test.ts": 15.1,
   "src/gateway/worker-environments/workspace-quiescence.windows.test.ts": 4.2,
   "src/gateway/worker-environments/workspace-result-ref-mutation.test.ts": 15,

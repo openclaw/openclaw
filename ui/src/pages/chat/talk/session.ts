@@ -65,12 +65,10 @@ export class RealtimeTalkSession {
   private closed = false;
   private closeCompletion: Promise<void> = Promise.resolve();
   private lifecycleGeneration = 0;
-  private videoEnabled = false;
   private videoOperation = 0;
   private voiceSessionId: string | undefined;
   private transportGeneration = 0;
   private transcriptItems: ClientVoiceTranscriptQueue | undefined;
-  private acceptingTranscripts = false;
   private transcriptQueue = VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue();
   private clientVoiceSessionOwner: ClientVoiceSessionOwner | undefined;
 
@@ -149,24 +147,18 @@ export class RealtimeTalkSession {
         ownerTransferred = true;
         return;
       }
-      const nextTransportGeneration = lifecycleGeneration;
       if (transport !== "gateway-relay") {
         // SDP setup can already deliver provider items. The logical allocation
         // owns their queue before its still-provisional transport becomes ready.
         this.voiceSessionId = voiceSessionId;
-        this.transportGeneration = nextTransportGeneration;
-        this.acceptingTranscripts = true;
+        this.transportGeneration = lifecycleGeneration;
         this.clientVoiceSessionOwner = owner;
         ownerTransferred = true;
       }
       const callbacks =
         transport === "gateway-relay"
           ? this.callbacks
-          : this.clientOwnedTranscriptCallbacks(
-              voiceSessionId,
-              nextTransportGeneration,
-              owner.signal,
-            );
+          : this.clientOwnedTranscriptCallbacks(voiceSessionId, lifecycleGeneration, owner.signal);
       const transcriptQueue = this.transcriptQueue;
       let nextTransport: RealtimeTalkTransport | null = null;
       const retireCandidate = () => {
@@ -227,8 +219,7 @@ export class RealtimeTalkSession {
       this.selectedTransport = transport;
       if (transport === "gateway-relay") {
         this.voiceSessionId = voiceSessionId;
-        this.transportGeneration = nextTransportGeneration;
-        this.acceptingTranscripts = true;
+        this.transportGeneration = lifecycleGeneration;
         owner.release();
       }
       ownerTransferred = true;
@@ -476,9 +467,7 @@ export class RealtimeTalkSession {
     );
     this.transcriptItems = transcripts;
     const isCurrent = () =>
-      this.transportGeneration === owningGeneration &&
-      this.voiceSessionId === owningVoiceSessionId &&
-      this.acceptingTranscripts;
+      this.transportGeneration === owningGeneration && this.voiceSessionId === owningVoiceSessionId;
     const applyTranscript = <T>(operation: () => T): T | undefined => {
       if (!isCurrent()) {
         return undefined;
@@ -524,11 +513,7 @@ export class RealtimeTalkSession {
   }
 
   private failTranscriptPersistence(owningGeneration: number, detail: string): void {
-    if (
-      this.transportGeneration !== owningGeneration ||
-      !this.acceptingTranscripts ||
-      !this.voiceSessionId
-    ) {
+    if (this.transportGeneration !== owningGeneration || !this.voiceSessionId) {
       return;
     }
     void this.retireTransport();
@@ -556,7 +541,6 @@ export class RealtimeTalkSession {
     this.transcriptItems = undefined;
     this.transcriptQueue.seal();
     this.voiceSessionId = undefined;
-    this.acceptingTranscripts = false;
     this.transcriptQueue = VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue();
     this.clientVoiceSessionOwner = undefined;
     if (missingItems.length > 0) {
@@ -612,7 +596,7 @@ export class RealtimeTalkSession {
       throw new Error("Camera is unavailable for this realtime session");
     }
     const operation = ++this.videoOperation;
-    const previousEnabled = this.videoEnabled;
+    const previousEnabled = activeRealtimeTalkSessions.has(this);
     this.rememberVideoEnabled(enabled);
     try {
       await transport.setVideoEnabled(enabled);
@@ -628,7 +612,6 @@ export class RealtimeTalkSession {
   }
 
   private rememberVideoEnabled(enabled: boolean): void {
-    this.videoEnabled = enabled;
     if (enabled) {
       activeRealtimeTalkSessions.add(this);
     } else {
@@ -646,7 +629,7 @@ export class RealtimeTalkSession {
   }
 
   async switchCameraIfEnabled(videoDeviceId: string | undefined): Promise<void> {
-    if (!this.videoEnabled) {
+    if (!activeRealtimeTalkSessions.has(this)) {
       return;
     }
     try {

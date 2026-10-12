@@ -2,8 +2,10 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { getBrowserStateRuntime } from "../browser-runtime-state.js";
+import { createBrowserToolSessionTabs } from "../browser-tool-session-tabs.js";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
+import { browserSessionTabStorageKey } from "./session-tab-identity.js";
 import {
   clearProcessLocalTabState,
   installSessionTabRegistrySqliteHarness,
@@ -15,10 +17,95 @@ import {
   type DurableTab,
   durableOwnership as ownership,
 } from "./session-tab-registry.sqlite.test-helpers.js";
-import { browserSessionTabStorageKey } from "./session-tab-store.js";
 
 describe("durable session tab registry", () => {
   const { openStore, installRuntime, freshRegistry } = installSessionTabRegistrySqliteHarness();
+
+  it.each(["volatile", "durable", "restarted"])(
+    "keeps another agent's global tabs during %s cleanup",
+    async (kind) => {
+      const registry = await freshRegistry("agent-scope");
+      for (const agentId of ["alpha", "beta"]) {
+        const params = { agentId, sessionKey: "global", defaultProfile: "remote", registry };
+        const tabs = createBrowserToolSessionTabs(params);
+        await tabs.trackOpened(
+          {
+            targetId: `${agentId}-tab`,
+            resolvedProfile: "remote",
+            ...(kind === "volatile" ? {} : { ownership: ownership(`${agentId}-tab`) }),
+          },
+          async () => {},
+        );
+      }
+      if (kind === "restarted") {
+        clearProcessLocalTabState();
+        await installRuntime();
+      }
+      const closed: string[] = [];
+      const closeTab = async ({ targetId }: { targetId: string }) => {
+        closed.push(targetId);
+      };
+      const closeDurableTab = async ({ nativeTargetId }: { nativeTargetId: string }) => {
+        closed.push(nativeTargetId);
+        return { status: "closed" as const };
+      };
+      await registry.closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["global"],
+        closeTab,
+        closeDurableTab,
+      });
+      expect(closed).toEqual([]);
+      await registry.closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:alpha:global"],
+        closeTab,
+        closeDurableTab,
+      });
+      expect(closed).toEqual(["alpha-tab"]);
+      await registry.closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:beta:global"],
+        closeTab,
+        closeDurableTab,
+      });
+      expect(closed).toEqual(["alpha-tab", "beta-tab"]);
+    },
+  );
+
+  it("prunes legacy raw ownership without adopting or closing its tabs", async () => {
+    const registry = await freshRegistry("legacy-ownership");
+    const record = {
+      version: 1,
+      sessionKey: "global",
+      nativeTargetId: "legacy-tab",
+      profile: "remote",
+      profileFingerprint: "profile",
+      browserInstanceFingerprint: "browser",
+      interactionTargetKind: "native",
+      trackedAt: 0,
+      lastUsedAt: 0,
+    };
+    const key = browserSessionTabStorageKey(record);
+    openStore().register(key, record);
+    const unknownRecord = { ...record, version: 999 };
+    openStore().register("unknown-legacy", unknownRecord);
+    clearProcessLocalTabState();
+    await installRuntime();
+    const closeDurableTab = vi.fn(async () => ({ status: "closed" as const }));
+    expect(
+      await registry.filterTrackedSessionBrowserTabs({
+        sessionKey: "agent:alpha:global",
+        profile: "remote",
+        tabs: [{ targetId: "legacy-tab" }],
+      }),
+    ).toEqual([]);
+    await registry.closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["global", "agent:alpha:global"],
+      closeDurableTab,
+    });
+    await registry.sweepTrackedBrowserTabs({ now: 1000, idleMs: 1, closeDurableTab });
+    expect(closeDurableTab).not.toHaveBeenCalled();
+    expect(openStore().lookup(key)).toBeUndefined();
+    expect(openStore().lookup("unknown-legacy")).toBeUndefined();
+  });
 
   it("does not publish volatile ownership after its hydrated runtime is replaced", async () => {
     const registry = await freshRegistry("volatile-runtime-replacement");

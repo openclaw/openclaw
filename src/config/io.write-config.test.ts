@@ -44,6 +44,7 @@ import {
   defaultedDemoPluginRegistry,
 } from "./io.write-config.test-support.js";
 import { registerConfigWritePreflightTests } from "./io.write-preflight.test-support.js";
+import { registerConfigWriteWarningTests } from "./io.write-warnings.test-support.js";
 import { replaceConfigFile, transformConfigFile, transformConfigFileWithRetry } from "./mutate.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
@@ -553,46 +554,7 @@ describe("config io write", () => {
     );
   }
 
-  itWithHome(
-    "dedupes validation warnings across writes and reloads until config becomes clean",
-    async (home) => {
-      const warn = vi.fn();
-      const io = createFastConfigIO(home, {
-        logger: { warn, error: vi.fn() },
-      });
-      const staleConfig = {
-        plugins: { entries: { demo: { enabled: true } } },
-      };
-      // An existing file keeps first-write catalog opt-outs out of these literal rewrites.
-      await writeConfigFixture(home, {});
-
-      await io.writeConfigFile(staleConfig);
-      await io.writeConfigFile(staleConfig);
-      io.loadConfig();
-      expect(warn).toHaveBeenCalledTimes(1);
-
-      await expect(
-        io.writeConfigFile(
-          {},
-          {
-            preCommitRuntimePreflight: async () => {
-              throw new Error("blocked");
-            },
-          },
-        ),
-      ).rejects.toThrow("blocked");
-      io.loadConfig();
-      expect(warn).toHaveBeenCalledTimes(1);
-
-      await io.writeConfigFile(staleConfig, { skipPluginValidation: true });
-      io.loadConfig();
-      expect(warn).toHaveBeenCalledTimes(1);
-
-      await io.writeConfigFile({}, { allowConfigSizeDrop: true });
-      await io.writeConfigFile(staleConfig);
-      expect(warn).toHaveBeenCalledTimes(2);
-    },
-  );
+  registerConfigWriteWarningTests({ itWithHome, createFastConfigIO, writeConfigFixture });
 
   itWithHome(
     "keeps writes inside an OPENCLAW_STATE_DIR override even when the real home config exists",

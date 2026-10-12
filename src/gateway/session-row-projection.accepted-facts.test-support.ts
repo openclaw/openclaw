@@ -9,14 +9,15 @@ import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-fac
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import * as agentDatabases from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import * as databaseFactsRead from "./session-row-database-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
-import * as databaseFactsRead from "./session-row-projection-read.js";
 import { ready, type Row } from "./session-row-projection-record.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import * as rowInputs from "./session-utils-row.js";
@@ -143,22 +144,7 @@ export async function withAcceptedSuffix(
         };
       });
       const retain = agentDatabases.retainOpenClawAgentDatabaseReadCandidates;
-      vi.spyOn(agentDatabases, "retainOpenClawAgentDatabaseReadCandidates").mockImplementation(
-        (...args) => {
-          const owner = retain(...args);
-          if (!trackingCustody) {
-            return owner;
-          }
-          expect(owner.databases).toHaveLength(1);
-          return {
-            ...owner,
-            release() {
-              owner.release();
-              releases.push("native");
-            },
-          };
-        },
-      );
+      const nativeCustody = vi.spyOn(agentDatabases, "retainOpenClawAgentDatabaseReadCandidates");
       const reads: SessionRowDatabaseFacts[][] = [];
       const readDatabases = history.withSessionHistoryWorkerDatabases;
       vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
@@ -193,6 +179,18 @@ export async function withAcceptedSuffix(
       const readFacts = databaseFactsRead.withSessionRowDatabaseFacts;
       vi.spyOn(databaseFactsRead, "withSessionRowDatabaseFacts").mockImplementationOnce(
         async (...args) => {
+          // The row reader acquires its hold before worker admission retains its own.
+          nativeCustody.mockImplementationOnce((...selected) => {
+            const owner = retain(...selected);
+            expect(owner.databases).toHaveLength(1);
+            return {
+              ...owner,
+              release() {
+                owner.release();
+                releases.push("native");
+              },
+            };
+          });
           trackingCustody = true;
           try {
             await readFacts(...args);
@@ -208,6 +206,12 @@ export async function withAcceptedSuffix(
           { agentId: "main", sessionKey },
           { ...entries[index]!, updatedAt: 2, label: `accepted-${index}` },
         );
+        sessionChanges.emit({
+          agentId: "main",
+          storePath: previous.storeTarget.storePath,
+          sessionKey,
+          factsInvalidated: true,
+        });
       }
       reading = projection.ensureMaterialized();
       await Promise.race([

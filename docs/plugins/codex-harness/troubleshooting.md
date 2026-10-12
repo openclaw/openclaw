@@ -24,8 +24,8 @@ and enabled. Affirmative reasoning support and native reasoning-effort metadata
 do not count as request overrides. Headers, request parameters, timeouts, and
 payload compatibility switches still do: Codex declares an OpenClaw fallback
 that preserves the exact request, including for explicit runtime selections.
-Other unsupported routes/authentication and missing explicit harnesses fail
-closed. The `openai/gpt-*` prefix and `agentRuntime.id: "codex"` alone are not
+Other unsupported routes/authentication and missing explicit harnesses
+stop execution with an error. The `openai/gpt-*` prefix and `agentRuntime.id: "codex"` alone are not
 execution proof; inspect the actual harness in the completed result. See
 [Runtime selection](/concepts/agent-runtimes#runtime-selection).
 

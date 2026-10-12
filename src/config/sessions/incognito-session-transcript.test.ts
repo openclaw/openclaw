@@ -25,7 +25,7 @@ import {
   resolveSessionEntryCandidateTarget,
   resolveSessionTranscriptRuntimeTarget,
 } from "./session-accessor.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 const sessionKey = "agent:main:dashboard:incognito-round-trip";
 

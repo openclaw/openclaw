@@ -21,6 +21,7 @@ import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
+  asOptionalRecord,
   normalizeOptionalString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -589,6 +590,10 @@ type SlackConversationDeliveryScan = {
   evidence: "none" | "partial" | "conflict" | "complete";
 };
 
+function unresolvedSlackDelivery(error: string, retryable: boolean) {
+  return { status: "unresolved" as const, error, retryable };
+}
+
 const SLACK_RECONCILIATION_EVIDENCE_RANK = {
   none: 0,
   partial: 1,
@@ -605,19 +610,8 @@ function findSlackConversationDeliveryParts(params: {
 }): SlackDeliveryPart[] {
   const matches: SlackDeliveryPart[] = [];
   for (const message of params.messages) {
-    if (
-      !message.metadata ||
-      typeof message.metadata !== "object" ||
-      Array.isArray(message.metadata)
-    ) {
-      continue;
-    }
-    const eventPayload = (message.metadata as { event_payload?: unknown }).event_payload;
-    if (!eventPayload || typeof eventPayload !== "object" || Array.isArray(eventPayload)) {
-      continue;
-    }
-    const marker = eventPayload as Record<string, unknown>;
-    if (marker[SLACK_DELIVERY_METADATA_KEY] !== params.deliveryId) {
+    const marker = asOptionalRecord(asOptionalRecord(message.metadata)?.event_payload);
+    if (!marker || marker[SLACK_DELIVERY_METADATA_KEY] !== params.deliveryId) {
       continue;
     }
     const partIndex = marker[SLACK_DELIVERY_METADATA_PART_INDEX_KEY];
@@ -706,11 +700,10 @@ async function scanSlackConversationForDelivery(params: {
         (existing && existing.messageId !== match.messageId)
       ) {
         return {
-          reconciliation: {
-            status: "unresolved",
-            error: "Slack history contains conflicting durable delivery markers",
-            retryable: false,
-          },
+          reconciliation: unresolvedSlackDelivery(
+            "Slack history contains conflicting durable delivery markers",
+            false,
+          ),
           evidence: "conflict",
         };
       }
@@ -745,25 +738,22 @@ async function scanSlackConversationForDelivery(params: {
       // Marker absence cannot prove that Slack never committed the request: a
       // delayed, deleted, or visibility-filtered message would make replay duplicate it.
       return {
-        reconciliation: {
-          status: "unresolved",
-          error:
-            deliveryParts.size > 0
-              ? "Slack history contains an incomplete durable delivery marker set"
-              : "Slack history contains no exact durable delivery marker",
-          retryable: params.retryCount < 2,
-        },
+        reconciliation: unresolvedSlackDelivery(
+          deliveryParts.size > 0
+            ? "Slack history contains an incomplete durable delivery marker set"
+            : "Slack history contains no exact durable delivery marker",
+          params.retryCount < 2,
+        ),
         evidence: deliveryParts.size > 0 ? "partial" : "none",
       };
     }
     cursor = nextCursor;
   }
   return {
-    reconciliation: {
-      status: "unresolved",
-      error: "Slack unknown-send reconciliation exceeded its history page budget",
-      retryable: params.retryCount < 2,
-    },
+    reconciliation: unresolvedSlackDelivery(
+      "Slack unknown-send reconciliation exceeded its history page budget",
+      params.retryCount < 2,
+    ),
     evidence: deliveryParts.size > 0 ? "partial" : "none",
   };
 }
@@ -778,38 +768,31 @@ export async function reconcileSlackUnknownSend(
   });
   const deliveryId = createSlackDeliveryMetadataId(ctx.queueId);
   if (!deliveryId) {
-    return {
-      status: "unresolved",
-      error: "Slack unknown-send reconciliation requires a durable delivery id",
-      retryable: false,
-    };
+    return unresolvedSlackDelivery(
+      "Slack unknown-send reconciliation requires a durable delivery id",
+      false,
+    );
   }
   const recipient = parseRecipient(ctx.to);
   try {
     assertSlackDetachedTargetAllowed(account.accountId, recipient.teamId);
   } catch (error) {
-    return {
-      status: "unresolved",
-      error: error instanceof Error ? error.message : String(error),
-      retryable: false,
-    };
+    return unresolvedSlackDelivery(error instanceof Error ? error.message : String(error), false);
   }
   const readToken = resolveSlackOperationToken(account, "read");
   if (!readToken) {
-    return {
-      status: "unresolved",
-      error: `Slack read token missing for account "${account.accountId}"`,
-      retryable: false,
-    };
+    return unresolvedSlackDelivery(
+      `Slack read token missing for account "${account.accountId}"`,
+      false,
+    );
   }
   const userRecipient = recipient.kind === "user";
   const writeToken = resolveSlackOperationToken(account, "write");
   if (userRecipient && !writeToken) {
-    return {
-      status: "unresolved",
-      error: `Slack write token missing for direct-message reconciliation on account "${account.accountId}"`,
-      retryable: false,
-    };
+    return unresolvedSlackDelivery(
+      `Slack write token missing for direct-message reconciliation on account "${account.accountId}"`,
+      false,
+    );
   }
   const readClient = createSlackReadClient(readToken, { teamId: recipient.teamId });
   const writeClient = writeToken
@@ -885,11 +868,7 @@ export async function reconcileSlackUnknownSend(
     throw lookupError;
   } catch (err) {
     const enriched = enrichSlackWebApiError(err);
-    return {
-      status: "unresolved",
-      error: readSlackRequestErrorMessage(enriched),
-      retryable: ctx.retryCount < 3,
-    };
+    return unresolvedSlackDelivery(readSlackRequestErrorMessage(enriched), ctx.retryCount < 3);
   }
 }
 

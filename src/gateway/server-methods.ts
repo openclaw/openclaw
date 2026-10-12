@@ -345,7 +345,13 @@ export async function handleGatewayRequest(
         : captureGatewayRequestOperatorGuard(opts);
       const assertOperatorCurrent = () =>
         (capturedOperatorGuard ??= captureGatewayRequestOperatorGuard(opts))();
-      const requestFacts = { method: req.method, requestParams: req.params, client, context };
+      const requestFacts = {
+        method: req.method,
+        requestParams: req.params,
+        client,
+        context,
+        signal,
+      };
       const authorization = await authorizeGatewayRequestPreDispatch({
         ...requestFacts,
         methodRegistry,

@@ -28,6 +28,7 @@ import {
   getAgentRunContextOwnerStatus,
 } from "../../../infra/agent-run-registry.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as hookRunnerGlobal from "../../../plugins/hook-runner-global.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
@@ -38,7 +39,10 @@ import type { AgentWaitResult } from "../../run-wait.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import * as persistence from "./subagent-registry-persistence.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  SubagentRegistryVersionConflictError,
+} from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
@@ -179,19 +183,14 @@ it.each(["transaction", "commit"] as const)(
       retainAttachmentsOnKeep: true,
     });
     const source = subagentRuns.get("lifecycle-predecessor")!;
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     let rotated = false;
-    const admission = vi
-      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === stage && !rotated) {
-            rotated = true;
-            rotateAgentEventLifecycleGeneration();
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+      if (request.stage === stage && !rotated) {
+        rotated = true;
+        rotateAgentEventLifecycleGeneration();
+      }
+      admit(request, grant);
+    });
     try {
       await expect(
         replaceSubagentRunAfterSteerCore({
@@ -701,7 +700,6 @@ it.each([
   "source replaced",
   "stamp admitted during wait",
   "caller retired during late stamp",
-  "source replaced during late stamp",
   "cleanup admitted during wait",
 ] as const)(
   "settles the predecessor's admitted writes before follow-up publication (%s)",
@@ -770,35 +768,29 @@ it.each([
       return result;
     };
     vi.spyOn(persistence, "mutateSubagentRuns").mockImplementation(observeMutation);
-    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-      (context, operation, options) =>
-        runWorker(
-          context,
-          (scope) =>
-            operation({
-              async execute(command, executeOptions) {
-                if (command.type === "subagents.persistChanges") {
-                  if (holdFirst) {
-                    holdFirst = false;
-                    firstEntered.resolve();
-                    await releaseFirst.promise;
-                  } else if (holdStamp) {
-                    holdStamp = false;
-                    if (lateCleanup) {
-                      const receipt = await scope.execute(command, executeOptions);
-                      entered.resolve();
-                      await release.promise;
-                      return receipt;
-                    }
-                    entered.resolve();
-                    await release.promise;
-                  }
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
+    probe.command(
+      stateWorker,
+      async (command, executeOptions, scope) => {
+        if (command.type === "subagents.persistChanges") {
+          if (holdFirst) {
+            holdFirst = false;
+            firstEntered.resolve();
+            await releaseFirst.promise;
+          } else if (holdStamp) {
+            holdStamp = false;
+            if (lateCleanup) {
+              const receipt = await scope.execute(command, executeOptions);
+              entered.resolve();
+              await release.promise;
+              return receipt;
+            }
+            entered.resolve();
+            await release.promise;
+          }
+        }
+        return scope.execute(command, executeOptions);
+      },
+      { original: runWorker },
     );
     await import("./subagent-registry.js");
     let firstWrite: Promise<void> | undefined;
@@ -899,12 +891,11 @@ it.each([
       release.resolve();
       await hook;
       if (callerRetired || sourceReplaced) {
+        // An out-of-band writer is refused at the version check without reloading/replaying.
         expect(await followup).toMatchObject({
-          error: new Error(
-            callerRetired
-              ? "follow-up caller retired"
-              : "subagent follow-up source changed while its writes settled",
-          ),
+          error: sourceReplaced
+            ? new SubagentRegistryVersionConflictError([original.runId])
+            : new Error("follow-up caller retired"),
         });
         const stored = loadSubagentRegistryFromSqlite();
         expect(stored.has("after-ended-hook")).toBe(false);

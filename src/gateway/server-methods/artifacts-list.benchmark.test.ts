@@ -4,9 +4,9 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";

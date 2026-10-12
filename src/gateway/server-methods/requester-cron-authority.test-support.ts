@@ -85,6 +85,7 @@ export function installRequesterCronAuthorityTestHooks() {
 
   afterEach(async () => {
     cron?.stop();
+    await cron?.waitForIdle();
     revokeRequesterCronAuthority(SESSION);
     await cleanupSessionStateForTest({ stateDir });
     closeOpenClawAgentDatabasesForTest(stateDir);

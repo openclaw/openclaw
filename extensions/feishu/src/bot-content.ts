@@ -140,26 +140,21 @@ export function normalizeFeishuCommandProbeBody(text: string): string {
     .trim();
 }
 
-function parseMediaKeys(
+function parseMediaResource(
   content: string,
   messageType: string,
-): { imageKey?: string; fileKey?: string; fileName?: string } {
+): { key?: string; fileName?: string } {
   try {
     const parsed = JSON.parse(content);
     const imageKey = normalizeFeishuExternalKey(parsed.image_key);
     const fileKey = normalizeFeishuExternalKey(parsed.file_key);
-    switch (messageType) {
-      case "image":
-        return { imageKey, fileName: parsed.file_name };
-      case "file":
-      case "audio":
-        return { fileKey, fileName: parsed.file_name };
-      case "video":
-      case "media":
-        return { fileKey, imageKey, fileName: parsed.file_name };
-      default:
-        return {};
-    }
+    const key =
+      messageType === "image"
+        ? imageKey
+        : messageType === "video" || messageType === "media"
+          ? fileKey || imageKey
+          : fileKey;
+    return { key, fileName: parsed.file_name };
   } catch {
     return {};
   }
@@ -231,15 +226,14 @@ export async function resolveFeishuMediaList(params: {
       });
     }
   } else {
-    const mediaKeys = parseMediaKeys(content, messageType);
-    const fileKey = mediaKeys.fileKey || mediaKeys.imageKey;
-    if (!fileKey) {
+    const resource = parseMediaResource(content, messageType);
+    if (!resource.key) {
       return [{ kind: resolveFeishuMediaKind(messageType) }];
     }
     resources.push({
-      key: fileKey,
+      key: resource.key,
       type: messageType === "image" ? "image" : "file",
-      fileName: mediaKeys.fileName,
+      fileName: resource.fileName,
       kind: resolveFeishuMediaKind(messageType),
       label: `${messageType} media`,
     });

@@ -44,6 +44,7 @@ import {
   expectedDiagnosticsTargetBlock,
   expectResultTextContains,
   mockArg,
+  oauthProfile,
   readDiagnosticsConfirmationToken,
   requestParams,
   runCommand,
@@ -66,17 +67,6 @@ function publicConversationBinding(data?: Record<string, unknown>) {
     conversationId: "conversation",
     boundAt: 1,
     ...(data ? { data } : {}),
-  };
-}
-
-function oauthProfile(email: string, now: number) {
-  return {
-    type: "oauth" as const,
-    provider: "openai",
-    access: "access-token",
-    refresh: "refresh-token",
-    expires: now + 60 * 60 * 1000,
-    email,
   };
 }
 
@@ -2578,7 +2568,11 @@ describe("codex command", () => {
       return { ok: true as const, value: { threadId: "thread-race" } };
     });
     const deps = createDeps({
-      bindingStore: { ...testCodexAppServerBindingStore, read: readBinding },
+      bindingStore: {
+        ...testCodexAppServerBindingStore,
+        read: readBinding,
+        readAsync: async () => readBinding(),
+      },
       safeCodexControlRequest,
     });
 
@@ -3148,7 +3142,11 @@ describe("codex command", () => {
           },
         });
         release.resolve();
-        expect((await command).text).toContain("Codex session generation is no longer current");
+        expect((await command).text).toContain(
+          args === "permissions default"
+            ? "Codex session execution policy changed"
+            : "Codex session generation is no longer current",
+        );
         expect(writes).toBe(0);
       } finally {
         release.resolve();

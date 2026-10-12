@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
@@ -113,10 +114,12 @@ function makeRecoveryInput(
           storePath: path.join(runParams.workspaceDir, "openclaw-agent.sqlite"),
         },
       },
-      assertActive: () => {
-        runParams.abortSignal?.throwIfAborted();
-        overrides.assertRecoveryActive?.();
-      },
+      assertActive: composeSessionSourceAssertion([
+        () => {
+          runParams.abortSignal?.throwIfAborted();
+          overrides.assertRecoveryActive?.();
+        },
+      ]),
       withTranscriptWrites: async <T>(signal: AbortSignal | undefined, run: () => Promise<T>) => {
         signal?.throwIfAborted();
         return await run();
@@ -124,7 +127,7 @@ function makeRecoveryInput(
     }),
     prepareRecoverySession: async () => ({
       sessionManager: SessionManager.inMemory(),
-      assertActive: vi.fn(),
+      assertActive: composeSessionSourceAssertion([]),
       withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
         await operation(),
     }),

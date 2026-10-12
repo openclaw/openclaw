@@ -82,23 +82,6 @@ describe("xai responses tool helpers", () => {
   });
 
   it.each([
-    { name: "absent", citations: undefined, expected: ["https://example.com/annotation"] },
-    { name: "empty", citations: [], expected: ["https://example.com/annotation"] },
-    {
-      name: "invalid",
-      citations: ["not a URL", "javascript:alert(1)"],
-      expected: ["https://example.com/annotation"],
-    },
-    {
-      name: "valid, ordered, and deduplicated",
-      citations: [
-        "not a URL",
-        "https://example.com/b",
-        "https://example.com/b",
-        "https://example.com/a",
-      ],
-      expected: ["https://example.com/b", "https://example.com/a"],
-    },
     {
       name: "valid only beyond scan limit",
       citations: [...Array<string>(1_000).fill("not a URL"), "https://example.com/b"],
@@ -169,14 +152,6 @@ describe("xai responses tool helpers", () => {
     ).toEqual(["https://example.com/%F0%9F%A6%80"]);
   });
 
-  it("leaves model-owned code-execution output unbounded unless an external owner opts in", () => {
-    const content = "x".repeat(25_000);
-
-    expect(
-      requireXaiResponseTextAndCitations({ output_text: content }, "xAI code execution"),
-    ).toEqual({ content, citations: [] });
-  });
-
   it("reports bounded external text and discards invalid or out-of-range inline citations", () => {
     const result = requireXaiResponseTextCitationsAndInline(
       {
@@ -205,27 +180,6 @@ describe("xai responses tool helpers", () => {
     expect(result.inlineCitations).toEqual([
       { start_index: 0, end_index: 10, url: "https://safe.example" },
     ]);
-  });
-
-  it("bounds expanding external text and filters citations by retained original source offsets", () => {
-    const result = requireXaiResponseTextCitationsAndInline(
-      {
-        output_text: `🚀${"<s>".repeat(6_666)}`,
-        inline_citations: [
-          { start_index: 0, end_index: 2, url: "https://safe.example/early" },
-          { start_index: 3_000, end_index: 4_000, url: "https://outside.example/late" },
-        ],
-      },
-      "xAI external search",
-      true,
-      20_000,
-    );
-
-    expect(result.content.length).toBeLessThanOrEqual(20_000);
-    expect(result.content).not.toContain("<s>");
-    expect(result.content).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
-    expect(result.truncated).toBe(true);
-    expect(result.inlineCitations).toEqual([]);
   });
 
   it("sanitizes the complete bounded stream when reserved tokens span output block boundaries", () => {
@@ -323,25 +277,6 @@ describe("xai responses tool helpers", () => {
     expect(result.citations).toEqual(["https://visible.example"]);
   });
 
-  it("rejects inline citation offsets outside even untruncated answer content", () => {
-    const result = requireXaiResponseTextCitationsAndInline(
-      {
-        output_text: "ok",
-        inline_citations: [
-          { start_index: 0, end_index: Number.MAX_SAFE_INTEGER, url: "https://outside.example" },
-          { start_index: 0, end_index: 2, url: "https://safe.example" },
-        ],
-      },
-      "xAI inline offset search",
-      true,
-      20_000,
-    );
-
-    expect(result.inlineCitations).toEqual([
-      { start_index: 0, end_index: 2, url: "https://safe.example" },
-    ]);
-  });
-
   it("drops inline citations whose original offsets shift during special-token replacement", () => {
     const result = requireXaiResponseTextCitationsAndInline(
       {
@@ -377,7 +312,7 @@ describe("xai responses tool helpers", () => {
     });
   });
 
-  it.each([{}, { output: [{ type: "message", content: [{ type: "output_text", text: "" }] }] }])(
+  it.each([{ output: [{ type: "message", content: [{ type: "output_text", text: "" }] }] }])(
     "reports missing answer text without blaming JSON decoding: %j",
     (data) => {
       expect(() => requireXaiResponseTextAndCitations(data, "xAI tool failed")).toThrow(

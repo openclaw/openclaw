@@ -32,7 +32,10 @@ import {
 import { appendNameOrdinal, validateName } from "./name.js";
 import { assertOwnerWorktreeReuse, worktreeOwnerMatches } from "./owner.js";
 import { readPendingWorktrees, releasePendingWorktree } from "./pending-slots.js";
-import { startWorktreePreparationPhase } from "./preparation-timing.js";
+import {
+  startWorktreePreparationPhase,
+  timeWorktreePreparationPhase,
+} from "./preparation-timing.js";
 import {
   prepareWorktreeRegistryGuard,
   readRegistryWorktrees,
@@ -230,79 +233,80 @@ export async function withWorktreeSources<T>(
 ): Promise<T> {
   const context = captureWorktreeRunEndContext(env);
   const held = new Map<string, Awaited<ReturnType<typeof acquireWorktreeRunLease>>>();
-  const retainRepository = async (params: WorktreeSourceRepository) => {
-    // Restore already holds this checkout's mutation custody; incomplete recovery
-    // must be able to take its removal claim without conflicting with itself.
-    const records = (await readRegistryWorktrees(env, { liveOnly: true })).filter(
-      (record) => record.id !== params.restoringId,
-    );
-    const { repository } = params;
-    const requiredPaths = new Set([
-      repository.sourceRoot,
-      repository.repoRoot,
-      repository.commonDir,
-      ...(params.requiredPaths ?? []),
-    ]);
-    const reuseTargets = records.filter(
-      (record) =>
-        (params.ownerId && worktreeOwnerMatches(record, params)) ||
-        (params.name === record.name && record.repoFingerprint === repository.fingerprint),
-    );
-    const retainSources = async (paths: readonly string[], initial = false) => {
-      const previousSize = requiredPaths.size;
-      for (const required of paths) {
-        requiredPaths.add(required);
-      }
-      if (!initial && requiredPaths.size === previousSize) {
-        return;
-      }
-      const source = await runGitWorkerOperation(
-        {
-          type: "worktree.eviction-source",
-          input: {
-            sourceRoot: repository.sourceRoot,
-            commonDir: repository.commonDir,
-            requiredPaths: [...requiredPaths],
-            records: records.map(({ id, path: checkoutPath, repoRoot }) => ({
-              id,
-              path: checkoutPath,
-              repoRoot,
-            })),
-          },
-        },
-        { signal: params.signal, assertCurrent: params.commitGuard },
+  const retainRepository = async (params: WorktreeSourceRepository) =>
+    timeWorktreePreparationPhase("sources", async () => {
+      // Restore already holds this checkout's mutation custody; incomplete recovery
+      // must be able to take its removal claim without conflicting with itself.
+      const records = (await readRegistryWorktrees(env, { liveOnly: true })).filter(
+        (record) => record.id !== params.restoringId,
       );
-      if (!source.complete) {
-        throw new Error(
-          "Managed worktree source Git storage cannot be inspected safely. Repair its Git metadata before retrying.",
+      const { repository } = params;
+      const requiredPaths = new Set([
+        repository.sourceRoot,
+        repository.repoRoot,
+        repository.commonDir,
+        ...(params.requiredPaths ?? []),
+      ]);
+      const reuseTargets = records.filter(
+        (record) =>
+          (params.ownerId && worktreeOwnerMatches(record, params)) ||
+          (params.name === record.name && record.repoFingerprint === repository.fingerprint),
+      );
+      const retainSources = async (paths: readonly string[], initial = false) => {
+        const previousSize = requiredPaths.size;
+        for (const required of paths) {
+          requiredPaths.add(required);
+        }
+        if (!initial && requiredPaths.size === previousSize) {
+          return;
+        }
+        const source = await runGitWorkerOperation(
+          {
+            type: "worktree.eviction-source",
+            input: {
+              sourceRoot: repository.sourceRoot,
+              commonDir: repository.commonDir,
+              requiredPaths: [...requiredPaths],
+              records: records.map(({ id, path: checkoutPath, repoRoot }) => ({
+                id,
+                path: checkoutPath,
+                repoRoot,
+              })),
+            },
+          },
+          { signal: params.signal, assertCurrent: params.commitGuard },
         );
-      }
-      const needed = new Set([...source.worktreeIds, ...reuseTargets.map(({ id }) => id)]);
-      for (const record of records) {
-        if (!needed.has(record.id) || held.has(record.id)) {
-          continue;
+        if (!source.complete) {
+          throw new Error(
+            "Managed worktree source Git storage cannot be inspected safely. Repair its Git metadata before retrying.",
+          );
+        }
+        const needed = new Set([...source.worktreeIds, ...reuseTargets.map(({ id }) => id)]);
+        for (const record of records) {
+          if (!needed.has(record.id) || held.has(record.id)) {
+            continue;
+          }
+          params.commitGuard();
+          const missing = !(await worktreePathExists(record.path));
+          params.commitGuard();
+          held.set(
+            record.id,
+            await acquireWorktreeRunLease(record.id, {
+              env,
+              source: { context, record },
+              ...(missing ? { allowMissingCheckout: true } : {}),
+            }),
+          );
+          if (held.size % 8 === 0) {
+            await yieldTurn();
+          }
         }
         params.commitGuard();
-        const missing = !(await worktreePathExists(record.path));
-        params.commitGuard();
-        held.set(
-          record.id,
-          await acquireWorktreeRunLease(record.id, {
-            env,
-            source: { context, record },
-            ...(missing ? { allowMissingCheckout: true } : {}),
-          }),
-        );
-        if (held.size % 8 === 0) {
-          await yieldTurn();
-        }
-      }
+      };
+      await retainSources([], true);
       params.commitGuard();
-    };
-    await retainSources([], true);
-    params.commitGuard();
-    return retainSources;
-  };
+      return retainSources;
+    });
   let outcome: { ok: true; value: T } | { ok: false; error: unknown };
   try {
     outcome = { ok: true, value: await run(retainRepository) };
@@ -310,8 +314,8 @@ export async function withWorktreeSources<T>(
     outcome = { ok: false, error };
   }
   if (outcome.ok || !hasWorktreeUnknownOutcome(outcome.error)) {
-    const released = await Promise.allSettled(
-      [...held.values()].map(async (lease) => await lease.release()),
+    const released = await timeWorktreePreparationPhase("sourceRelease", () =>
+      Promise.allSettled([...held.values()].map(async (lease) => await lease.release())),
     );
     const cleanupErrors = released.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
@@ -492,10 +496,12 @@ async function resolveRepositoryFromRealPath(
 }
 
 export async function resolveRepository(repoRoot: string): Promise<ResolvedRepository> {
-  const requested = await fs.realpath(repoRoot).catch(() => {
-    throw new Error(`repository does not exist: ${repoRoot}`);
+  return await timeWorktreePreparationPhase("repository", async () => {
+    const requested = await fs.realpath(repoRoot).catch(() => {
+      throw new Error(`repository does not exist: ${repoRoot}`);
+    });
+    return await resolveRepositoryFromRealPath(requested, repoRoot);
   });
-  return await resolveRepositoryFromRealPath(requested, repoRoot);
 }
 
 /** Rebind a live checkout only after its canonical repository and recorded origin agree. */

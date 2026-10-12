@@ -166,7 +166,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
         storePath: "integration",
         model: undefined,
       }),
-      resolvePromptContextAmbientWatermark: () => undefined,
+      resolvePromptContextAmbientWatermark: async () => undefined,
       recordMessageForReplyChain: async (msg) => ({
         messageId: String(msg.message_id),
         sender: "integration sender",

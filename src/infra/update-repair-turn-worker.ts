@@ -10,8 +10,7 @@ import { withSynchronousArtifactPreservingStateSnapshot } from "../state/opencla
 import type { UpdateRepairTurnMessage, UpdateRepairTurnResult } from "./update-repair-protocol.js";
 import { repairSummary, runLocalUpdateRepairTurn } from "./update-repair-turn.js";
 import {
-  createManagedUpdateRequesterAuthority,
-  createManagedUpdateRequesterContinuationAuthority,
+  createDelegatedUpdateRequesterAuthority,
   resolveManagedUpdateRequester,
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
@@ -68,13 +67,12 @@ export async function runDelegatedUpdateRepairTurn(
         fence.assertCurrent();
         const requester = requesterInput
           ? await runtime.withUpdateRepairEnvironment(message.target, () =>
-              requesterInput.authorizationSource?.startsWith("profile:")
-                ? createManagedUpdateRequesterContinuationAuthority(
-                    requesterInput,
-                    { runId: message.runId, executor: fence },
-                    admissionEnv,
-                  )
-                : createManagedUpdateRequesterAuthority(requesterInput, admissionEnv),
+              createDelegatedUpdateRequesterAuthority(
+                requesterInput,
+                message.runId,
+                fence,
+                admissionEnv,
+              ),
             )
           : undefined;
         const assertAuthority = () => {

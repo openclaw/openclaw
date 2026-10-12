@@ -37,10 +37,15 @@ export type {
   AgentEventStream,
 } from "./agent-events.types.js";
 
-type AgentEventListener = (evt: AgentEventRuntimePayload) => void;
+type AgentEventListener = (
+  evt: AgentEventRuntimePayload,
+  isDeliveryCurrent?: () => boolean,
+) => void;
+type CaptureAgentEventDelivery = (evt: AgentEventRuntimePayload) => () => boolean;
 type AgentEventRegistration = {
   readonly listener: AgentEventListener;
   readonly id: number;
+  readonly captureDelivery?: CaptureAgentEventDelivery;
 };
 type AgentEventListeners = Map<AgentEventListener, AgentEventRegistration>;
 
@@ -548,6 +553,7 @@ function enrichAgentEvent(
 function* iterateAgentEventListeners(
   state: AgentEventState,
   enriched: AgentEventRuntimePayload,
+  deliveries: ReadonlyMap<AgentEventRegistration, () => boolean>,
 ): Generator<AgentEventListener, void> {
   let lastId = -1;
   let revision = -1;
@@ -581,7 +587,14 @@ function* iterateAgentEventListeners(
       return;
     }
     lastId = next.id;
-    yield next.listener;
+    yield next.captureDelivery
+      ? (event) => {
+          const isDeliveryCurrent = deliveries.get(next);
+          if (isDeliveryCurrent?.()) {
+            next.listener(event, isDeliveryCurrent);
+          }
+        }
+      : next.listener;
   }
 }
 
@@ -606,7 +619,18 @@ function dispatchAgentEvent(
   if (!enriched) {
     return false;
   }
-  notifyListeners(iterateAgentEventListeners(state, enriched), enriched);
+  const deliveries = new Map<AgentEventRegistration, () => boolean>();
+  // Capture registrations before callbacks can replace them. New subscriptions
+  // during this emission have no captured delivery authority until the next event.
+  notifyListeners(
+    Array.from(state.listeners.values(), (registration) => () => {
+      if (registration.captureDelivery) {
+        deliveries.set(registration, registration.captureDelivery(enriched));
+      }
+    }),
+    enriched,
+  );
+  notifyListeners(iterateAgentEventListeners(state, enriched, deliveries), enriched);
   return true;
 }
 
@@ -692,8 +716,11 @@ export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
 }
 
 /** Subscribes Gateway internals that consume non-public ownership and routing metadata. */
-export function onAgentRuntimeEvent(listener: (evt: AgentEventRuntimePayload) => void) {
-  return registerAgentEventListener(listener);
+export function onAgentRuntimeEvent(
+  listener: AgentEventListener,
+  captureDelivery?: CaptureAgentEventDelivery,
+) {
+  return registerAgentEventListener(listener, undefined, captureDelivery);
 }
 
 /**
@@ -705,12 +732,16 @@ export function onAgentEventForRun(runId: string, listener: (evt: AgentEventPayl
   return registerAgentEventListener(listener, runId);
 }
 
-function registerAgentEventListener(listener: AgentEventListener, runId?: string) {
+function registerAgentEventListener(
+  listener: AgentEventListener,
+  runId?: string,
+  captureDelivery?: CaptureAgentEventDelivery,
+) {
   const state = getAgentEventState();
   const bucket: AgentEventListeners =
     runId === undefined ? state.listeners : (state.runListeners.get(runId) ?? new Map());
   if (!bucket.has(listener)) {
-    bucket.set(listener, { listener, id: state.nextListenerId++ });
+    bucket.set(listener, { listener, id: state.nextListenerId++, captureDelivery });
     if (runId !== undefined) {
       state.runListeners.set(runId, bucket);
     }

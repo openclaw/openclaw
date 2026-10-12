@@ -51,7 +51,7 @@ suite.define(() => {
           localStorage.setItem(
             key,
             JSON.stringify({
-              sidebarEntries: ["route:agents-home", "plugin:workboard/board-sessions"],
+              railShortcuts: ["route:agents-home", "plugin:workboard/board-sessions"],
             }),
           );
         }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));

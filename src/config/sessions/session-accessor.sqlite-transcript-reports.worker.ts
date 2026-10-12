@@ -14,10 +14,8 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
-import {
-  advanceCliHistoryBoundaryRangeInTransaction,
-  type CliHistoryWriterFacts,
-} from "./session-accessor.sqlite-cli-history-boundary.js";
+import type { CliHistoryWriterFacts } from "./cli-history-boundary.js";
+import { advanceCliHistoryBoundaryRangeInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type {
   SessionTranscriptWriteScope,
   SessionTranscriptContextVersion,

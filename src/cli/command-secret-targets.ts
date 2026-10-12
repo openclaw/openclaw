@@ -55,16 +55,20 @@ const STATIC_TTS_TARGET_IDS = [
   "tts.providers.*.apiKey",
   "tts.personas.*.providers.*.apiKey",
 ] as const;
+const STATIC_MEMORY_TARGET_IDS = [
+  "memory.search.remote.apiKey",
+  "memory.search.remote.headers.*",
+  "agents.entries.*.memory.search.remote.apiKey",
+  "agents.entries.*.memory.search.remote.headers.*",
+] as const;
 const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   ...STATIC_TTS_TARGET_IDS,
-  "memory.search.remote.apiKey",
-  "agents.entries.*.memory.search.remote.apiKey",
+  ...STATIC_MEMORY_TARGET_IDS,
   "skills.entries.*.apiKey",
 ] as const;
 const STATIC_MEMORY_EMBEDDING_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
-  "memory.search.remote.apiKey",
-  "agents.entries.*.memory.search.remote.apiKey",
+  ...STATIC_MEMORY_TARGET_IDS,
 ] as const;
 const STATIC_GATEWAY_AUTH_TARGET_IDS = [
   "gateway.auth.token",
@@ -74,8 +78,7 @@ const STATIC_GATEWAY_AUTH_TARGET_IDS = [
 ] as const;
 const STATIC_STATUS_TARGET_IDS = [
   ...STATIC_GATEWAY_AUTH_TARGET_IDS,
-  "memory.search.remote.apiKey",
-  "agents.entries.*.memory.search.remote.apiKey",
+  ...STATIC_MEMORY_TARGET_IDS,
 ] as const;
 
 type CommandSecretTargetScope = {

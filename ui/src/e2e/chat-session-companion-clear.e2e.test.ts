@@ -10,6 +10,7 @@ import {
   navigateToControlUiSession,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -37,12 +38,15 @@ type CompanionSurface = {
   page: Page;
 };
 
-async function withCompanion(run: (surface: CompanionSurface) => Promise<void>): Promise<void> {
+async function withCompanion(
+  run: (surface: CompanionSurface) => Promise<void>,
+  width = 1200,
+): Promise<void> {
   await suite.withPage(
     {
       locale: "en-US",
       serviceWorkers: "block",
-      viewport: { height: 800, width: 1200 },
+      viewport: { height: 800, width },
       ...(artifactDir
         ? { recordVideo: { dir: artifactDir, size: { height: 800, width: 1200 } } }
         : {}),
@@ -100,43 +104,48 @@ async function clearCompanion(clearButton: Locator): Promise<void> {
 }
 
 suite.define(() => {
-  it("preserves the thread on reset failure and a newer draft after a successful retry", async () => {
-    await withCompanion(async ({ clearButton, companion, gateway, page }) => {
-      await clearCompanion(clearButton);
-      await gateway.waitForRequest("sessions.companion.reset");
+  it.each([1200, 390])(
+    "preserves the thread on reset failure and a newer draft after a successful retry at %ipx",
+    async (width) => {
+      await withCompanion(async ({ clearButton, companion, gateway, page }) => {
+        await clearCompanion(clearButton);
+        await gateway.waitForRequest("sessions.companion.reset");
 
-      const alert = page.getByRole("alert").filter({ hasText: resetError });
-      await alert.waitFor({ state: "visible" });
-      await companion.getByText(answer, { exact: true }).waitFor();
-      if (artifactDir) {
-        await writeFile(
-          path.join(artifactDir, "reset-failure.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [alert, companion]),
-        );
-      }
+        const alert = page.getByRole("alert").filter({ hasText: resetError });
+        await alert.waitFor({ state: "visible" });
+        await companion.getByText(answer, { exact: true }).waitFor();
+        if (artifactDir) {
+          await writeFile(
+            path.join(artifactDir, "reset-failure.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [alert, companion]),
+          );
+        }
 
-      await alert.getByRole("button", { name: "Dismiss error" }).click();
-      await gateway.setMethodResponse("sessions.companion.reset", { ok: true });
-      await gateway.deferNext("sessions.companion.reset");
-      await clearCompanion(clearButton);
+        const details = await openChatDetails(page);
+        await details.getByRole("button", { name: "Close details", exact: true }).click();
+        await alert.getByRole("button", { name: "Dismiss error" }).click();
+        await gateway.setMethodResponse("sessions.companion.reset", { ok: true });
+        await gateway.deferNext("sessions.companion.reset");
+        await clearCompanion(clearButton);
 
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.companion.reset")).length)
-        .toBe(2);
-      const input = companion.getByRole("textbox", { name: "Ask in side chat", exact: true });
-      await input.fill("Keep the question I typed after Clear");
-      await gateway.resolveDeferred("sessions.companion.reset", { ok: true });
-      await expect.poll(() => companion.getByText(answer, { exact: true }).count()).toBe(0);
-      expect(await input.inputValue()).toBe("Keep the question I typed after Clear");
-      expect(await page.getByRole("alert").count()).toBe(0);
-      if (artifactDir) {
-        await writeFile(
-          path.join(artifactDir, "reset-success.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [clearButton]),
-        );
-      }
-    });
-  });
+        await expect
+          .poll(async () => (await gateway.getRequests("sessions.companion.reset")).length)
+          .toBe(2);
+        const input = companion.getByRole("textbox", { name: "Ask in side chat", exact: true });
+        await input.fill("Keep the question I typed after Clear");
+        await gateway.resolveDeferred("sessions.companion.reset", { ok: true });
+        await expect.poll(() => companion.getByText(answer, { exact: true }).count()).toBe(0);
+        expect(await input.inputValue()).toBe("Keep the question I typed after Clear");
+        expect(await page.getByRole("alert").count()).toBe(0);
+        if (artifactDir) {
+          await writeFile(
+            path.join(artifactDir, "reset-success.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [clearButton]),
+          );
+        }
+      }, width);
+    },
+  );
 
   it("retains a question sent after Clear while its answer is pending", async () => {
     await withCompanion(async ({ clearButton, companion, gateway }) => {

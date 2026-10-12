@@ -23,6 +23,11 @@ import { buildSessionListRowMetadataContext } from "./session-utils-projection.j
 it("retains completed catalog facts during runtime replacement and adopts completed or failed publications", async () => {
   const pluginRegistry = createEmptyPluginRegistry();
   const metadataSnapshot = createPluginMetadataSnapshotFixture();
+  const other = createPreparedGatewayModelCatalog({
+    entries: [{ provider: "unit-test", id: "other", name: "Other", contextTokens: 32_768 }],
+    pluginRegistry,
+    metadataSnapshot,
+  });
   const view = (contextTokens: number) =>
     new Map([
       [
@@ -33,6 +38,7 @@ it("retains completed catalog facts during runtime replacement and adopts comple
           metadataSnapshot,
         }),
       ],
+      ["other", other],
     ]);
   let next: Map<string, PreparedGatewayModelCatalog | undefined> = view(8_192);
   const read = vi.fn(async () => next);
@@ -44,6 +50,7 @@ it("retains completed catalog facts during runtime replacement and adopts comple
   });
   try {
     await catalog.refresh();
+    expect(refreshed).toHaveBeenLastCalledWith(undefined);
     const original = catalog.current;
     refreshed.mockClear();
     read.mockClear();
@@ -54,7 +61,10 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     expect(refreshed).not.toHaveBeenCalled();
     const first = createDeferredCore();
     notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: first.promise });
-    next = new Map([["main", undefined]]);
+    next = new Map([
+      ["main", undefined],
+      ["other", other],
+    ]);
     await catalog.refresh();
     expect(catalog.current).toBe(original);
     expect(refreshed).not.toHaveBeenCalled();
@@ -64,36 +74,58 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
     await catalog.refresh();
     expect(catalog.current).toBe(original);
-    const second = createDeferredCore();
-    notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: second.promise });
+    next = view(8_192);
     first.resolve();
     await first.promise;
-    await catalog.refresh();
-    expect(catalog.current).toBe(original);
-    next = view(8_192);
-    second.resolve();
-    await second.promise;
     notifyPreparedModelRuntimePublication({ phase: "published" });
     await catalog.refresh();
-    expect(refreshed).toHaveBeenLastCalledWith(false);
+    expect(refreshed).toHaveBeenLastCalledWith(new Set());
     expect(catalog.current).toBe(next);
 
     // A scoped auth refresh can finish without a global publication.
     notifyPreparedModelRuntimePublication({ phase: "invalidated" });
     next = view(16_384);
     await catalog.refresh();
-    expect(refreshed).toHaveBeenLastCalledWith(true);
+    expect(refreshed).toHaveBeenLastCalledWith(new Set(["main"]));
     expect(catalog.current).toBe(next);
 
     const failed = createDeferredCore();
     notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: failed.promise });
-    next = new Map([["main", undefined]]);
+    next = new Map([
+      ["main", undefined],
+      ["other", other],
+    ]);
     notifyPreparedModelRuntimePublication({ phase: "failed", error: new Error("Refresh failed") });
     failed.reject(new Error("Refresh failed"));
     await failed.promise.catch(() => {});
     await catalog.refresh();
-    expect(refreshed).toHaveBeenLastCalledWith(true);
+    expect(refreshed).toHaveBeenLastCalledWith(undefined);
     expect(catalog.current).toBe(next);
+
+    next = new Map([["other", other]]);
+    notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
+    await catalog.refresh();
+    expect(refreshed).toHaveBeenLastCalledWith(undefined);
+    expect(catalog.current).toBe(next);
+
+    const replacementRegistry = createEmptyPluginRegistry();
+    // First replace the policy owner, then its metadata; both retire global fallback facts.
+    for (const nextMetadata of [metadataSnapshot, createPluginMetadataSnapshotFixture()]) {
+      next = new Map([
+        [
+          "other",
+          createPreparedGatewayModelCatalog({
+            entries: other.entries,
+            pluginRegistry: replacementRegistry,
+            metadataSnapshot: nextMetadata,
+          }),
+        ],
+      ]);
+      notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
+      await catalog.refresh();
+      expect(refreshed).toHaveBeenLastCalledWith(undefined);
+      expect(catalog.current).toBe(next);
+    }
   } finally {
     catalog.dispose();
   }

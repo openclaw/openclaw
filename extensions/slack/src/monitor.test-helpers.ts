@@ -492,7 +492,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   return {
     ...actual,
     readSessionUpdatedAtAsync: vi.fn(async () => undefined),
-    getSessionEntry: vi.fn(() => undefined),
+    getSessionEntryAsync: vi.fn(async () => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
     resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
     updateLastRoute: (...args: unknown[]) => slackTestState.updateLastRouteMock(...args),

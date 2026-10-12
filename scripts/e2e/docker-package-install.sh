@@ -39,6 +39,7 @@ docker_e2e_build_or_reuse "$MUSL_IMAGE_NAME" docker-package-install-musl "$ROOT_
 # The package proofs share the registry and lifecycle harness. Copy its complete
 # script roots so all three managers install the same candidate dependency bytes.
 for harness_path in \
+  packages/llm-core/src/types.ts \
   packages/normalization-core/src \
   scripts; do
   mkdir -p "$PACKAGE_HARNESS_DIR/$(dirname "$harness_path")"

@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
@@ -5,6 +7,8 @@ import {
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   type WorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createPlacementFailureActions } from "./placement-dispatch-failure.js";
@@ -16,9 +20,15 @@ import {
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
+import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
+import { stagePendingWorkerWorkspaceResult } from "./workspace-recovery.test-support.js";
+import {
+  hasWorkerWorkspaceResultRef,
+  workerWorkspaceResultRef,
+} from "./workspace-result-staging.js";
 
 function createPlacementStore() {
   return createWorkerSessionPlacementStore({
@@ -858,6 +868,110 @@ describe("worker placement restart recovery", () => {
         destroyRequestedAtMs: null,
       });
       expect(tunnelManager.start).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    { reclaim: false, restart: true },
+    { reclaim: true, restart: true },
+    { reclaim: false, restart: false },
+  ])(
+    "recovers an accepted unstaged result without its node (reclaim=$reclaim, restart=$restart)",
+    async ({ reclaim, restart }) => {
+      const root = support.testState.root;
+      let database = support.testState.stateDb;
+      const placementStore = createPlacementStore();
+      const workspacePath = path.join(root, "accepted-unchanged-result");
+      const priorConflictRef = workerWorkspaceResultRef("prior-conflict");
+      const priorConflict = { paths: ["result.txt"], stagedResultRef: priorConflictRef };
+      const original = createHarness(database, placementStore, { workspacePath });
+      const active = await original.placements.seedActive(2);
+      if (active.state !== "active") {
+        throw new Error("expected an active placement");
+      }
+      if (reclaim) {
+        await placementStore.startDrain({
+          sessionId: active.sessionId,
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+          expectedGeneration: active.generation,
+        });
+      }
+      const claimInput = {
+        ...REQUEST,
+        claimId: reclaim ? "reclaim-unchanged" : "unchanged-turn",
+        runId: reclaim ? "reclaim-unchanged" : "unchanged-turn",
+        owner: placementTurnOwner(active),
+      };
+      const claim = reclaim
+        ? await placementStore.claimReclaimWorkspaceResult(claimInput)
+        : await placementStore.claimTurn(claimInput);
+      await placementStore.markWorkspaceResultPending(claim);
+      const prior = await stagePendingWorkerWorkspaceResult({
+        store: placementStore,
+        claim,
+        workspacePath,
+        base: "base\n",
+        current: "prior worker conflict\n",
+        record: false,
+        stagedResultRef: priorConflictRef,
+      });
+      // Crash after unchanged acceptance, before conflict settlement or source teardown.
+      await placementStore.updateWorkspaceBaseManifest({
+        claim,
+        manifestRef: prior.baseManifestRef,
+      });
+      await placementStore.acceptWorkspaceResult(claim);
+      expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
+        { stagedResultRef: null, workspaceAcceptedAtMs: 1_000 },
+      ]);
+      await fs.writeFile(path.join(workspacePath, "result.txt"), "later local edit\n");
+      if (restart) {
+        await closeStateDatabaseForTest();
+        database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+      } else {
+        await placementStore.handoffWorkspaceResultRecovery(claim);
+      }
+      const restartedStore = restart
+        ? createWorkerSessionPlacementStore({ database, now: () => 2_000 })
+        : placementStore;
+      const recovered = createHarness(database, restartedStore, {
+        workspacePath,
+        priorWorkspaceResultConflict: priorConflict,
+      });
+      if (restart) {
+        recovered.markEnvironmentDestroyed();
+      } else {
+        recovered.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+      }
+      vi.mocked(recovered.environments.startTunnel).mockRejectedValue(
+        new Error("node unavailable"),
+      );
+
+      await recovered.service.reconcile(restart ? "startup" : undefined);
+
+      expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
+      expect(recovered.placements.current()).toMatchObject({ state: "reclaimed", turnClaim: null });
+      expect(recovered.environments.startTunnel).not.toHaveBeenCalled();
+      expect(recovered.reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).toBe(
+        "later local edit\n",
+      );
+      expect(
+        await hasWorkerWorkspaceResultRef({
+          root: workspacePath,
+          stagedResultRef: priorConflictRef,
+        }),
+      ).toBe(reclaim);
+      if (reclaim) {
+        expect(recovered.reportWorkspaceResultConflict).not.toHaveBeenCalled();
+      } else {
+        expect(recovered.reportWorkspaceResultConflict).toHaveBeenCalledWith({
+          sessionId: REQUEST.sessionId,
+          sessionKey: REQUEST.sessionKey,
+          agentId: REQUEST.agentId,
+          cleared: true,
+        });
+      }
     },
   );
 });

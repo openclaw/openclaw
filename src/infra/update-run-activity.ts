@@ -1,4 +1,4 @@
-import { getSelfAndAncestorPidsSync } from "./restart-stale-pids.js";
+import { inspectSelfAndAncestorPidsSync } from "./restart-stale-pids.js";
 import { inspectUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
 import {
   isExpiredLegacyUpdateRun,
@@ -47,14 +47,17 @@ function isCurrentUpdateRunContinuation(
     return false;
   }
   const drivers = recordedUpdateRunDrivers(record);
-  const ancestors = getSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true });
+  const ancestry = inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true });
+  if (!ancestry.complete) {
+    return false;
+  }
   let ownsDriver = false;
   for (const driver of drivers) {
     const liveness = inspectUpdateRunDriver(driver);
     if (liveness === "dead") {
       continue;
     }
-    if (liveness !== "alive" || !ancestors.has(driver.pid)) {
+    if (liveness !== "alive" || !ancestry.pids.has(driver.pid)) {
       return false;
     }
     ownsDriver = true;

@@ -2,12 +2,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
+  resolveRuntimeConversationBindingRouteAsync,
 } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { shouldIgnoreStaleDiscordRouteBinding } from "./route-resolution.js";
 
-export function resolveDiscordConversationBindingRoute(params: {
+type DiscordConversationBindingRouteParams = {
   cfg: OpenClawConfig;
   resolveRoute: NonNullable<
     Parameters<typeof resolveRuntimeConversationBindingRoute>[0]["resolveRoute"]
@@ -17,10 +18,14 @@ export function resolveDiscordConversationBindingRoute(params: {
   configuredConversationId: string;
   parentConversationId?: string;
   touchBinding?: boolean;
-}) {
+};
+
+function prepareDiscordBindingRoute(params: DiscordConversationBindingRouteParams) {
   let baseRoute: ResolvedAgentRoute | undefined;
-  let runtimeRoute = resolveRuntimeConversationBindingRoute({
-    resolveRoute: (selection) => {
+  const input = {
+    resolveRoute: (
+      selection: Parameters<DiscordConversationBindingRouteParams["resolveRoute"]>[0],
+    ) => {
       baseRoute = params.resolveRoute(selection);
       return baseRoute;
     },
@@ -31,7 +36,32 @@ export function resolveDiscordConversationBindingRoute(params: {
       conversationId: params.runtimeConversationId,
       parentConversationId: params.parentConversationId,
     },
-  });
+  };
+  return { input, getBaseRoute: () => baseRoute };
+}
+
+export function resolveDiscordConversationBindingRoute(
+  params: DiscordConversationBindingRouteParams,
+) {
+  const prepared = prepareDiscordBindingRoute(params);
+  const runtimeRoute = resolveRuntimeConversationBindingRoute(prepared.input);
+  return applyDiscordBindingRoute(params, runtimeRoute, prepared.getBaseRoute());
+}
+
+export async function resolveDiscordConversationBindingRouteAsync(
+  params: DiscordConversationBindingRouteParams,
+) {
+  const prepared = prepareDiscordBindingRoute(params);
+  const runtimeRoute = await resolveRuntimeConversationBindingRouteAsync(prepared.input);
+  return applyDiscordBindingRoute(params, runtimeRoute, prepared.getBaseRoute());
+}
+
+function applyDiscordBindingRoute(
+  params: DiscordConversationBindingRouteParams,
+  resolvedRuntimeRoute: ReturnType<typeof resolveRuntimeConversationBindingRoute>,
+  baseRoute: ResolvedAgentRoute | undefined,
+) {
+  let runtimeRoute = resolvedRuntimeRoute;
   const route = baseRoute ?? runtimeRoute.route;
   if (
     shouldIgnoreStaleDiscordRouteBinding({

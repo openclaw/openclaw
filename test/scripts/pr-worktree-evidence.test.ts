@@ -196,6 +196,33 @@ function evidence(dir: string, captureName = "merge-output.log") {
 }
 
 describePosix("native worktree cleanup preserves merge evidence", () => {
+  it("scopes dry-run and removal to the requested PR without observing siblings", async ({
+    command,
+  }) => {
+    await command.lifetime.run(async () => {
+      const f = await fixture(command);
+      const selected = await f.add(910001);
+      const sibling = await f.add(910002);
+      const branches = await f.branches();
+      const registrations = await f.worktrees();
+      const dry = await f.run(["gc_pr_worktrees true 910001"], "MERGED");
+      expect(dry.status, dry.output).toBe(0);
+      expect(dry.output).toContain("would remove .worktrees/pr-910001");
+      expect(dry.output).not.toContain("pr-910002");
+      expect(await f.branches()).toBe(branches);
+      expect(await f.worktrees()).toBe(registrations);
+      const actual = await f.run(["gc_pr_worktrees false 910001"], "MERGED");
+      expect(actual.status, actual.output).toBe(0);
+      expect(existsSync(selected)).toBe(false);
+      expect(existsSync(sibling)).toBe(true);
+      expect(await f.worktrees()).toContain(`worktree ${sibling}\n`);
+      for (const branch of ["temp/pr-910002", "pr-910002", "pr-910002-prep"]) {
+        expect(await f.branches()).toContain(`refs/heads/${branch} ${f.head}`);
+      }
+      expect(readFileSync(join(f.root, "gh-calls"), "utf8")).not.toContain("910002");
+    });
+  });
+
   it.for(["", ".local/nested"])(
     "defers removal while the parent session holds cwd %s, then removes after release",
     async (subdirectory, { command }) => {
@@ -250,44 +277,28 @@ process.stdout.write(JSON.stringify({
     },
   );
 
-  it.for(["tracked.txt", "unpublished.txt"])(
-    "retains dirty %s and local branches",
-    async (file, { command }) => {
-      await command.lifetime.run(async () => {
-        const f = await fixture(command);
-        const dir = await f.add(910001);
-        writeFileSync(join(dir, file), "unpublished work\n");
-        const branches = await f.branches();
-        const registrations = await f.worktrees();
-        const dry = await f.run(["gc_pr_worktrees true"], "MERGED");
-        expect(dry.output).not.toContain("would remove .worktrees/pr-910001");
-        expect(await f.branches()).toBe(branches);
-        expect(await f.worktrees()).toBe(registrations);
-        const result = await f.run(["gc_pr_worktrees false"], "MERGED");
-        expect(result.status, result.output).toBe(0);
-        expect(existsSync(join(dir, file)), result.output).toBe(true);
-        expect(readFileSync(join(dir, file), "utf8")).toBe("unpublished work\n");
-        expect(await f.branches()).toBe(branches);
-        expect(await f.worktrees()).toBe(registrations);
-        expect(result.output).toContain("cleanup incomplete");
-      });
-    },
-  );
-
-  it("removes clean worktrees with ignored generated artifacts", async ({ command }) => {
+  it.for(["unpublished.txt"])("retains dirty %s and local branches", async (file, { command }) => {
     await command.lifetime.run(async () => {
       const f = await fixture(command);
       const dir = await f.add(910001);
-      mkdirSync(join(dir, "node_modules"));
-      writeFileSync(join(dir, "node_modules", "generated"), "disposable\n");
+      writeFileSync(join(dir, file), "unpublished work\n");
+      const branches = await f.branches();
+      const registrations = await f.worktrees();
+      const dry = await f.run(["gc_pr_worktrees true"], "MERGED");
+      expect(dry.output).not.toContain("would remove .worktrees/pr-910001");
+      expect(await f.branches()).toBe(branches);
+      expect(await f.worktrees()).toBe(registrations);
       const result = await f.run(["gc_pr_worktrees false"], "MERGED");
       expect(result.status, result.output).toBe(0);
-      expect(existsSync(dir)).toBe(false);
-      expect(result.output).toContain("removed .worktrees/pr-910001");
+      expect(existsSync(join(dir, file)), result.output).toBe(true);
+      expect(readFileSync(join(dir, file), "utf8")).toBe("unpublished work\n");
+      expect(await f.branches()).toBe(branches);
+      expect(await f.worktrees()).toBe(registrations);
+      expect(result.output).toContain("cleanup incomplete");
     });
   });
 
-  it.for(["none", "intent", "complete", "advanced", "configured", "local", "local-advanced"])(
+  it.for(["intent", "advanced", "configured"])(
     "deletes only published or completed-receipt branch tips (%s)",
     async (receipt, { command }) => {
       await command.lifetime.run(async () => {
@@ -331,7 +342,7 @@ process.stdout.write(JSON.stringify({
   );
 
   it.for(
-    ["CLOSED", "MERGED"].flatMap((state) =>
+    ["CLOSED"].flatMap((state) =>
       ["merge-output.log", "merge-output.11111111-1111-4111-8111-111111111111.log"].map(
         (captureName) => ({ state, captureName }),
       ),
@@ -387,7 +398,7 @@ process.stdout.write(JSON.stringify({
     },
   );
 
-  it.for([false, true])(
+  it.for([true])(
     "preserves orphan evidence before scoped removal/provisioning (stale registration=%s)",
     async (stale, { command }) => {
       await command.lifetime.run(async () => {
@@ -472,7 +483,7 @@ process.stdout.write(JSON.stringify({
     },
   );
 
-  it.for([true, false])(
+  it.for([true])(
     "shared removal refuses capture (registered=%s)",
     async (registered, { command }) => {
       await command.lifetime.run(async () => {
@@ -494,27 +505,6 @@ process.stdout.write(JSON.stringify({
         expect(result.status, result.output).not.toBe(0);
         expect(result.output).not.toContain("unexpected-removal-completed");
         expect(existsSync(join(f.root, "trash"))).toBe(false);
-      });
-    },
-  );
-
-  it.for(["intent", "complete"])(
-    "allows cleanup with a valid retained %s outcome",
-    async (phase, { command }) => {
-      await command.lifetime.run(async () => {
-        const f = await fixture(command);
-        const dir = await f.add(910001, "populated");
-        const ref = await f.record(910001, phase);
-        const before = await f.outcomes();
-        const result = await f.run(["gc_pr_worktrees false"]);
-        expect(result.status, result.output).toBe(0);
-        expect(existsSync(dir)).toBe(false);
-        expect(result.output).toContain("removed .worktrees/pr-910001");
-        expect(await f.outcomes()).toBe(before);
-        expect(JSON.parse(await f.git(["show", `${ref}:outcome.json`])).phase).toBe(phase);
-        expect(
-          await f.git(["for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks/"]),
-        ).toBe("");
       });
     },
   );

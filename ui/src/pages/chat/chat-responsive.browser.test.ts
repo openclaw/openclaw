@@ -28,6 +28,7 @@ import {
   getBoundingBox,
   getRect,
   readUiCss,
+  mountMcpAppSurfaceFixture,
   rectsOverlap,
   waitForLayoutSettled,
   type ControlRect,
@@ -1503,25 +1504,21 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       if (!realChatServer) {
         throw new Error("Expected the Control UI server to be ready");
       }
-      await page.goto(realChatServer.baseUrl, { waitUntil: "domcontentloaded" });
-      await page.addScriptTag({
-        type: "module",
-        url: new URL("src/components/mcp-app-view-registration.ts", realChatServer.baseUrl).href,
-      });
-      const backgrounds = await page.evaluate(async () => {
+      const provider = await mountMcpAppSurfaceFixture(page, realChatServer.baseUrl);
+      const backgrounds = await provider.evaluate(async (owner: HTMLElement) => {
         await customElements.whenDefined("mcp-app-view");
         const readFrameBackground = async (boardSurface?: string) => {
-          const owner = document.createElement("div");
           if (boardSurface) {
             owner.style.setProperty("--board-surface", boardSurface);
+          } else {
+            owner.style.removeProperty("--board-surface");
           }
           const view = document.createElement("mcp-app-view") as HTMLElement & {
             updateComplete: Promise<boolean>;
           };
-          owner.append(view);
-          document.body.replaceChildren(owner);
+          owner.replaceChildren(view);
           await view.updateComplete;
-          const mount = view.shadowRoot?.querySelector(".mount");
+          const mount = view.querySelector(".mount");
           if (!mount) {
             throw new Error("MCP App mount is missing");
           }

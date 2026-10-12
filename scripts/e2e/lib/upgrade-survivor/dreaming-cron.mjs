@@ -9,6 +9,12 @@ import { pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import {
+  findInstalledPackageRoot,
+  inspectCronBackups,
+  readDatabase,
+  recordProcessExitSnapshot,
+} from "./observations.mjs";
+import {
   assertWorkerCellPackageIdentity,
   readWorkerCellPackageIdentity,
 } from "./worker-cell-package.mjs";
@@ -52,8 +58,7 @@ function installedIdentity(root) {
 }
 
 function inspectSharedSchema(databasePath) {
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  try {
+  return readDatabase(databasePath, (db) => {
     const userVersion = db.prepare("PRAGMA user_version").get().user_version;
     assert(Number.isSafeInteger(userVersion) && userVersion >= 0);
     const hasMarkers = db
@@ -67,35 +72,23 @@ function inspectSharedSchema(databasePath) {
     const marker = row ? JSON.parse(row.value_json) : null;
     assert(marker === null || (Number.isSafeInteger(marker) && marker >= 0));
     return { userVersion, marker, contentVersion: Math.max(userVersion, marker ?? 0) };
-  } finally {
-    db.close();
-  }
+  });
 }
 
 function inspectRows(databasePath) {
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  try {
+  return readDatabase(databasePath, (db) => {
     return db
       .prepare("SELECT * FROM cron_jobs ORDER BY store_key, sort_order, job_id")
       .all()
       .map((row) => Object.assign({}, row));
-  } finally {
-    db.close();
-  }
-}
-
-function inspectBackups(databasePath) {
-  const directory = path.dirname(databasePath);
-  const prefix = `${path.basename(databasePath)}.doctor-cron-`;
-  return fs
-    .readdirSync(directory)
-    .filter((name) => name.startsWith(prefix) && name.endsWith(".bak"))
-    .toSorted()
-    .map((name) => ({ name, sha256: hash(fs.readFileSync(path.join(directory, name))) }));
+  });
 }
 
 function snapshot(fixture) {
-  return { rows: inspectRows(fixture.databasePath), backups: inspectBackups(fixture.databasePath) };
+  return {
+    rows: inspectRows(fixture.databasePath),
+    backups: inspectCronBackups(fixture.databasePath),
+  };
 }
 
 function configure(stateDir) {
@@ -398,31 +391,17 @@ function observeProcess() {
       fixture.databasePath,
       path.join(process.env.OPENCLAW_STATE_DIR, "state/openclaw.sqlite"),
     );
-    let root = path.dirname(fs.realpathSync(process.argv[1]));
-    for (let depth = 0; depth < 3; depth++, root = path.dirname(root)) {
-      if (
-        fs.existsSync(path.join(root, "package.json")) &&
-        readJson(path.join(root, "package.json")).name === "openclaw"
-      ) {
-        receipt.identity = installedIdentity(root);
-        receipt.entrypoint = path.relative(root, fs.realpathSync(process.argv[1]));
-        break;
-      }
+    const root = findInstalledPackageRoot(path.dirname(fs.realpathSync(process.argv[1])), 3);
+    if (root) {
+      receipt.identity = installedIdentity(root);
+      receipt.entrypoint = path.relative(root, fs.realpathSync(process.argv[1]));
     }
     receipt.before = snapshot(fixture);
   } catch (error) {
     receipt.observationError = String(error);
   }
   const file = path.join(observations, `dreaming-cron-${role}-${process.pid}.json`);
-  writeJson(file, receipt);
-  process.once("exit", (exitCode) => {
-    try {
-      receipt.after = snapshot(fixture);
-    } catch (error) {
-      receipt.observationError = String(error);
-    }
-    writeJson(file, { ...receipt, exitCode });
-  });
+  recordProcessExitSnapshot(file, receipt, () => snapshot(fixture));
 }
 
 function assertUpdated(artifacts, observations, packageRoot, candidateTarball) {
@@ -508,8 +487,7 @@ function assertUpdated(artifacts, observations, packageRoot, candidateTarball) {
   );
   assert.equal(added.length, 1, "Repair must retain exactly one new cron backup");
   const backupPath = path.join(path.dirname(fixture.databasePath), added[0].name);
-  const backup = new DatabaseSync(backupPath, { readOnly: true });
-  try {
+  readDatabase(backupPath, (backup) => {
     assert.deepEqual(
       backup
         .prepare("PRAGMA integrity_check")
@@ -518,9 +496,7 @@ function assertUpdated(artifacts, observations, packageRoot, candidateTarball) {
       ["ok"],
     );
     assert.deepEqual(backup.prepare("PRAGMA foreign_key_check").all(), []);
-  } finally {
-    backup.close();
-  }
+  });
   assert.deepEqual(
     inspectRows(backupPath),
     fixture.before.rows,

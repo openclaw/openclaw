@@ -1,21 +1,24 @@
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import type {
   AgentDatabaseGenerationClaim,
   AgentDatabaseRequestExecutionSource,
-  OpenClawAgentDatabaseExecution,
-} from "../../state/openclaw-agent-execution-contract.js";
+} from "../../state/openclaw-agent-execution-admission-contract.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { runOpenClawAgentWriteAdmissions } from "../../state/openclaw-agent-write-admission.js";
-import { resolveStateDir } from "../state-dir.js";
-import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";
 import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
+import {
+  readRetainedSessionEntryFacts,
+  retainSessionEntryReadFacts,
+} from "./session-entry-read-facts.js";
 import { captureSessionEntryWorkerRequest } from "./session-entry-read-request.js";
 import type {
   PreparedSessionEntryWorkerRead,
@@ -36,23 +39,6 @@ type ReadSessionStore = <T>(
     assertCurrent: () => void;
   }) => Promise<T>,
 ) => Promise<T>;
-
-export function assertSessionEntryCohortScope(
-  reader: SessionEntryCohortReader,
-  input: SessionAccessScope,
-) {
-  reader.assertCurrent();
-  const key = resolveSqliteSessionKey(input.sessionKey, reader.logicalAgentId);
-  if (
-    key !== reader.sessionKey ||
-    (input.agentId && normalizeAgentId(input.agentId) !== reader.logicalAgentId) ||
-    (input.storePath && !reader.storePaths.includes(path.resolve(input.storePath))) ||
-    (input.env && resolveStateDir(input.env) !== resolveStateDir(reader.database.env))
-  ) {
-    throw new Error("Session read differs from its original admitted target");
-  }
-  return key;
-}
 
 /** Data-only return; decisions/effects consume withRead's synchronous callback directly. */
 export function readAdmittedSessionEntry(
@@ -106,7 +92,14 @@ export function createAdmittedSessionEntryCohortReader(params: {
     async withRead(request, assertCallerCurrent, consume) {
       assertOwnerCurrent();
       assertCallerCurrent();
-      const captured = structuredClone({ ...request, expected });
+      const captured = structuredClone({
+        ...request,
+        expected,
+        transcript: request.transcript && {
+          ...request.transcript,
+          agentId: params.logicalAgentId,
+        },
+      });
       let assertNativeCurrent: (() => void) | undefined;
       const assertCurrent = () => {
         if (!assertNativeCurrent) {
@@ -134,8 +127,14 @@ export function createAdmittedSessionEntryCohortReader(params: {
       const result = await params.execution.runExisting(
         source,
         async (worker) => {
-          const read = await worker.execute({ type: "session.entry.read", input: captured });
+          const before = readSqliteDatabaseWriteTokenForPath(database.path);
+          const cached = readRetainedSessionEntryFacts(database, captured, params.generation);
+          const read =
+            cached ?? (await worker.execute({ type: "session.entry.read", input: captured }));
           assertCurrent();
+          if (!cached) {
+            retainSessionEntryReadFacts(database, captured, read, before);
+          }
           const value = consume(read, assertCurrent);
           if (isPromiseLike(value)) {
             void Promise.resolve(value).catch(() => {});
@@ -286,12 +285,20 @@ export async function withOrderedSessionEntriesInWorker<T>(
           const reads: PreparedSessionEntryWorkerRead[] = [];
           for (const { input: selectedInput, owner, database, continuation } of selected) {
             assertCurrent();
-            const result = await owner.readExactEntries({
-              ...captureSessionEntryWorkerRequest(selectedInput),
-              env: database.env,
-              continuation,
-            });
+            const request = captureSessionEntryWorkerRequest(selectedInput);
+            const before = readSqliteDatabaseWriteTokenForPath(database.path);
+            const cached = readRetainedSessionEntryFacts(database, request);
+            const result =
+              cached ??
+              (await owner.readExactEntries({
+                ...request,
+                env: database.env,
+                continuation,
+              }));
             assertCurrent();
+            if (!cached) {
+              retainSessionEntryReadFacts(database, request, result, before);
+            }
             reads.push({ result, database, assertCurrent });
           }
           const result = consume(reads);

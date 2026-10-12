@@ -2,16 +2,30 @@
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { teamsQuotedTableReply } from "./format.test-fixtures.js";
-import { deleteMessageMSTeams, editAdaptiveCardMSTeams, sendMessageMSTeams } from "./send.js";
+import {
+  deleteMessageMSTeams,
+  editAdaptiveCardMSTeams,
+  editMessageMSTeams,
+  sendMessageMSTeams,
+} from "./send.js";
 
 const mockState = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
   resolveMSTeamsSendContext: vi.fn(),
-  resolveMarkdownTableMode: vi.fn(() => "off"),
-  convertMarkdownTables: vi.fn((text: string) => text),
+  resolveMarkdownTableMode: vi.fn<
+    typeof import("openclaw/plugin-sdk/markdown-table-runtime").resolveMarkdownTableMode
+  >(() => "off"),
+  convertMarkdownTables: vi.fn<
+    typeof import("openclaw/plugin-sdk/text-chunking").convertMarkdownTables
+  >((text) => text),
   runtimeResolveMarkdownTableMode: vi.fn(() => "off"),
   runtimeConvertMarkdownTables: vi.fn((text: string) => text),
   requiresFileConsent: vi.fn(),
@@ -21,7 +35,9 @@ const mockState = vi.hoisted(() => ({
   extractFilename: vi.fn(async () => "fallback.bin"),
   sendMSTeamsMessages: vi.fn(),
   sendMSTeamsActivityWithReference: vi.fn(async () => ({ id: "message-1" })),
-  updateMSTeamsActivityWithReference: vi.fn(async () => ({ id: "updated" })),
+  updateMSTeamsActivityWithReference: vi.fn<
+    typeof import("./sdk-proactive.js").updateMSTeamsActivityWithReference
+  >(async () => ({ id: "updated" })),
   deleteMSTeamsActivityWithReference: vi.fn(async () => {}),
   uploadAndShareSharePoint: vi.fn(),
   getDriveItemProperties: vi.fn(),
@@ -477,12 +493,60 @@ describe("sendMessageMSTeams", () => {
     expect(result.receipt?.parts[0]?.kind).toBe("text");
 
     expect(mockState.resolveMarkdownTableMode).toHaveBeenCalledWith({
-      cfg: {},
+      cfg: { channels: { msteams: {} } },
       channel: "msteams",
     });
     expect(mockState.convertMarkdownTables).toHaveBeenCalledWith(text, "off");
     expect(firstObjectArg(mockState.sendMSTeamsMessages).messages).toEqual([
       { text: expected, mediaUrl: undefined },
+    ]);
+  });
+
+  it("formats proactive sends with the named account Teams config", async () => {
+    mockState.resolveMarkdownTableMode.mockReturnValue("code");
+    mockState.convertMarkdownTables.mockReturnValue("converted");
+
+    await sendMessageMSTeams({
+      cfg: {
+        channels: {
+          msteams: {
+            markdown: { tables: "off" },
+            accounts: {
+              support: {
+                appId: "support-app",
+                appPassword: "support-secret",
+                tenantId: "tenant-id",
+                webhook: { path: "/api/messages/support" },
+                markdown: { tables: "code" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "support",
+      to: "conversation:19:conversation@thread.tacv2",
+      text: "| A |\n| - |\n| B |",
+    });
+
+    expect(mockState.resolveMarkdownTableMode).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({
+        channels: expect.objectContaining({
+          msteams: expect.objectContaining({
+            appId: "support-app",
+            appPassword: "support-secret",
+            tenantId: "tenant-id",
+            markdown: { tables: "code" },
+          }),
+        }),
+      }),
+      channel: "msteams",
+    });
+    expect(mockState.convertMarkdownTables).toHaveBeenCalledWith("| A |\n| - |\n| B |", "code");
+    const sendPayload = firstObjectArg(mockState.sendMSTeamsMessages);
+    expect(sendPayload.messages).toEqual([
+      expect.objectContaining({
+        text: "converted",
+      }),
     ]);
   });
 
@@ -569,11 +633,70 @@ describe("sendMessageMSTeams", () => {
 });
 
 describe("editMessageMSTeams", () => {
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+    mockState.resolveMarkdownTableMode.mockReset().mockReturnValue("off");
+    mockState.convertMarkdownTables.mockReset().mockImplementation((text) => text);
+  });
+
   beforeEach(() => {
     mockState.resolveMSTeamsSendContext.mockReset();
     mockState.updateMSTeamsActivityWithReference.mockReset();
     mockState.updateMSTeamsActivityWithReference.mockResolvedValue({ id: "updated" });
   });
+
+  it.each(["support", undefined])(
+    "applies selected/default account table policy to edited activities (%s)",
+    async (accountId) => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "msteams",
+            source: "test",
+            plugin: { id: "msteams", meta: { id: "msteams" } },
+          },
+        ]),
+      );
+      const markdown = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/markdown-table-runtime")
+      >("openclaw/plugin-sdk/markdown-table-runtime");
+      const text = await vi.importActual<typeof import("openclaw/plugin-sdk/text-chunking")>(
+        "openclaw/plugin-sdk/text-chunking",
+      );
+      mockState.resolveMarkdownTableMode.mockImplementation(markdown.resolveMarkdownTableMode);
+      mockState.convertMarkdownTables.mockImplementation(text.convertMarkdownTables);
+      mockState.resolveMSTeamsSendContext.mockResolvedValue({
+        app: {},
+        conversationId: "19:conversation@thread.tacv2",
+        ref: { conversation: { id: "19:conversation@thread.tacv2" } },
+        log: { debug: vi.fn(), info: vi.fn() },
+        sdkCloudOptions: { cloud: "Public" },
+      });
+      const cfg: OpenClawConfig = {
+        channels: {
+          msteams: {
+            defaultAccount: "support",
+            markdown: { tables: "off" },
+            accounts: {
+              support: { markdown: { tables: "bullets" } },
+            },
+          },
+        },
+      };
+      await editMessageMSTeams({
+        cfg,
+        accountId,
+        to: "conversation:19:conversation@thread.tacv2",
+        activityId: "edited-message",
+        text: "| Name | Status |\n| --- | --- |\n| Widget | Ready |",
+      });
+      const activity = mockState.updateMSTeamsActivityWithReference.mock.calls[0]?.[3];
+      expect(activity).toMatchObject({ type: "message", id: "edited-message" });
+      expect(activity).toMatchObject({ text: expect.stringContaining("Widget") });
+      expect(activity).toMatchObject({ text: expect.stringContaining("Status: Ready") });
+      expect(activity).not.toMatchObject({ text: expect.stringContaining("| Name |") });
+    },
+  );
 
   it("updates an existing activity with a replacement Adaptive Card", async () => {
     const mockApp = { id: "adaptive-card-app" };

@@ -277,7 +277,7 @@ describe("paired-device automatic placement selection", () => {
     {
       name: "all hosts full",
       environments: [nodeEnvironment("full", 0)],
-      message: "all paired session-host nodes are at capacity",
+      message: "device worker is at capacity",
     },
     {
       name: "an outdated node whose live runner can no longer advertise session hosting",

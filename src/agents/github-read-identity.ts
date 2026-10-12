@@ -256,6 +256,8 @@ export type GitHubReadIdentityStarter = <T>(start: () => T) => Promise<Awaited<T
 export type GitHubReadIdentityPreparation = GitHubIdentityPreparation & {
   /** Fixed public capabilities ignore the repository host; other reads use its configured issuer. */
   issuer?: "github.com";
+  /** Account display facts may refresh in the background; never grants write authority. */
+  allowStale?: boolean;
   getCurrentConfig: () => OpenClawConfig;
   assertActive: () => void;
   startActive?: GitHubReadIdentityStarter;
@@ -296,6 +298,7 @@ export type GitHubReadIdentitySelection = Readonly<{
   accountId: number;
 }>;
 type GitHubReadAuthority = {
+  stale?: true;
   cacheScope: string;
   assertSelected: () => void;
   revalidate: () => Promise<void>;
@@ -314,6 +317,7 @@ export function createGitHubReadIdentity(
     assertSelected: () => void;
     startActive?: GitHubReadIdentityStarter;
     readToken: () => Promise<string | undefined>;
+    stale?: true;
   } & (
     | { token: string; selection: GitHubReadIdentitySelection }
     | { token: undefined; selection: Readonly<{ source: "anonymous" }> }
@@ -331,6 +335,7 @@ export function createGitHubReadIdentity(
     }, caller);
   };
   const authority: GitHubReadAuthority = {
+    ...(params.stale ? { stale: true } : {}),
     cacheScope:
       selection.source === "anonymous"
         ? "anonymous"

@@ -21,6 +21,19 @@ export class ModelCache {
   private readonly models = new Map<string, { session: InferenceSession; adapter: ModelAdapter }>();
   constructor(private readonly config: WorkerConfig) {}
 
+  async close(): Promise<void> {
+    const models = [...this.models.values()];
+    this.models.clear();
+    const results = await Promise.allSettled(models.map(({ session }) => session.release()));
+    const failures = results.filter((result) => result.status === "rejected");
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((result) => result.reason),
+        "ONNX session release failed",
+      );
+    }
+  }
+
   async get(id: string): Promise<ModelAdapter> {
     const existing = this.models.get(id);
     if (existing) {

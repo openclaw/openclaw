@@ -183,28 +183,6 @@ describe("createInboundDebouncer", () => {
     await debouncer.drain();
   });
 
-  it("supersedes a pending flush check when another item appends", async () => {
-    const check = createDeferred<boolean>();
-    const { calls, debouncer } = createRecordingDebouncer({
-      debounceMs: 10,
-      shouldHoldFlush: () => check.promise,
-    });
-
-    await debouncer.enqueue({ key: "a", id: "1" });
-    await vi.advanceTimersByTimeAsync(10);
-    expect(calls).toEqual([]);
-
-    await vi.advanceTimersByTimeAsync(5);
-    await debouncer.enqueue({ key: "a", id: "2" });
-    check.resolve(false);
-    await vi.advanceTimersByTimeAsync(9);
-    expect(calls).toEqual([]);
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(calls).toEqual([["1", "2"]]);
-    await debouncer.drain();
-  });
-
   it.each([false, true])(
     "forces the deadline flush without another hold check (check pending: %s)",
     async (pending) => {
@@ -298,6 +276,26 @@ describe("createInboundDebouncer", () => {
 
     expect(canceled).toEqual([["2"]]);
     expect(calls).toEqual([["1"], ["3"]]);
+  });
+
+  it("cancels immediate work waiting behind an active flush without canceling later arrivals", async () => {
+    const canceled: string[][] = [];
+    const { debouncer, started, finished, entered, release } = createBlockedDebouncer({
+      debounceMs: 50,
+      shouldDebounce: (item) => item.id === "1",
+      onCancel: (items) => canceled.push(items.map((item) => item.id)),
+    });
+    await debouncer.enqueue({ key: "a", id: "1" });
+    const first = debouncer.flushKey("a");
+    await entered.promise;
+    const second = debouncer.enqueue({ key: "a", id: "2" });
+    expect(debouncer.cancelKey("a")).toBe(true);
+    const third = debouncer.enqueue({ key: "a", id: "3" });
+    release.resolve();
+    await Promise.all([first, second, third, debouncer.drain()]);
+    expect(canceled).toEqual([["2"]]);
+    expect(started).toEqual(["1", "3"]);
+    expect(finished).toEqual(["1", "3"]);
   });
 
   it("flushes buffered items before non-debounced item", async () => {

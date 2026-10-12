@@ -398,6 +398,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                       ...projectCompactionAccountingPatch(existingEntry, {
                         compactionKind: result.compactionKind,
                         tokensAfter: result.result?.tokensAfter,
+                        transcriptByteCompactionLatch:
+                          result.compactionKind === "native-harness" ? undefined : null,
                       }),
                     },
                   };

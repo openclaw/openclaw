@@ -383,6 +383,36 @@ describe("subagent registry state read cache", () => {
     expect(mocks.readCompactRuns).not.toHaveBeenCalled();
   });
 
+  it("reads a warm session tree without enumerating unrelated live runs", async () => {
+    await prepareEmptyReadCaches();
+    const root = "agent:main:indexed-tree";
+    const child = { ...createRun("indexed-child"), requesterSessionKey: root };
+    const grandchild = {
+      ...createRun("indexed-grandchild"),
+      requesterSessionKey: child.childSessionKey,
+    };
+    const unrelated = createRun("indexed-unrelated");
+    persistRegistryFixture(new Map([[grandchild.runId, grandchild]]));
+    subagentRuns.set(child.runId, child);
+    subagentRuns.set(unrelated.runId, unrelated);
+    const read = () => [
+      ...getSubagentSessionListRunsSnapshotForSessions(subagentRuns, [root]).keys(),
+    ];
+    try {
+      expect(read()).toEqual([grandchild.runId, child.runId]);
+      const values = vi.spyOn(subagentRuns, "values");
+      const entries = vi.spyOn(subagentRuns, Symbol.iterator);
+      expect(read()).toEqual([grandchild.runId, child.runId]);
+      subagentRuns.set(child.runId, { ...child, childSessionKey: "agent:main:moved" });
+      expect(read()).toEqual([child.runId]);
+      expect(values).not.toHaveBeenCalled();
+      expect(entries).not.toHaveBeenCalled();
+    } finally {
+      subagentRuns.delete(child.runId);
+      subagentRuns.delete(unrelated.runId);
+    }
+  });
+
   it.each(["agent:main:unrelated-requester", "global"])(
     "retains all child generations when a newer %s requester vetoes old descendants",
     async (requesterSessionKey) => {

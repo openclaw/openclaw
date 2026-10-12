@@ -46,15 +46,12 @@ export function assignProviderModelOrder(
 }
 
 export function compareModelCatalogEntries(a: ModelCatalogEntry, b: ModelCatalogEntry): number {
-  const providerComparison = normalizeProviderId(a.provider).localeCompare(
-    normalizeProviderId(b.provider),
+  return (
+    normalizeProviderId(a.provider).localeCompare(normalizeProviderId(b.provider)) ||
+    (a.providerOrder ?? Number.MAX_SAFE_INTEGER) - (b.providerOrder ?? Number.MAX_SAFE_INTEGER) ||
+    a.id.localeCompare(b.id) ||
+    a.name.localeCompare(b.name)
   );
-  if (providerComparison !== 0) {
-    return providerComparison;
-  }
-  const orderComparison =
-    (a.providerOrder ?? Number.MAX_SAFE_INTEGER) - (b.providerOrder ?? Number.MAX_SAFE_INTEGER);
-  return orderComparison || a.id.localeCompare(b.id) || a.name.localeCompare(b.name);
 }
 
 export type ModelPickerRecommendationRank = (

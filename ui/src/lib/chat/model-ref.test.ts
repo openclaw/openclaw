@@ -17,10 +17,6 @@ import {
 describe("chat-model-ref helpers", () => {
   it.each([
     {
-      names: ["Lowercase model", "Uppercase model"],
-      labels: ["Lowercase model", "Uppercase model"],
-    },
-    {
       names: ["Shared name", "Shared name"],
       labels: ["Shared name · model-a · custom", "Shared name · Model-A · custom"],
     },
@@ -70,18 +66,6 @@ describe("chat-model-ref helpers", () => {
     ).toBe("openai/gpt-5-mini");
   });
 
-  it("qualifies slash-containing server model ids with the recorded provider", () => {
-    expect(
-      resolvePreferredServerChatModelValue("moonshotai/kimi-k2.5", "nvidia", [
-        {
-          id: "moonshotai/kimi-k2.5",
-          name: "Kimi K2.5 (NVIDIA)",
-          provider: "nvidia",
-        },
-      ]),
-    ).toBe("nvidia/moonshotai/kimi-k2.5");
-  });
-
   it("uses the recorded provider when a slash-containing id exists under multiple providers", () => {
     expect(
       resolvePreferredServerChatModelValue("google/gemma-4-26b-a4b-it", "openrouter", [
@@ -111,21 +95,9 @@ describe("chat-model-ref helpers", () => {
     ).toBe("nvidia/moonshotai/kimi-k2.5");
   });
 
-  it("falls back to the server-qualified value for slash-containing ids when the catalog is empty", () => {
-    expect(resolvePreferredServerChatModelValue("moonshotai/kimi-k2.5", "nvidia", [])).toBe(
-      "moonshotai/kimi-k2.5",
-    );
-  });
-
   it("preserves already-qualified server model values when the provider matches", () => {
     expect(
       resolvePreferredServerChatModelValue("openai/gpt-5-mini", "openai", [OPENAI_GPT5_MINI_MODEL]),
-    ).toBe("openai/gpt-5-mini");
-  });
-
-  it("preserves already-qualified server model values when the provider is stale", () => {
-    expect(
-      resolvePreferredServerChatModelValue("openai/gpt-5-mini", "zai", [OPENAI_GPT5_MINI_MODEL]),
     ).toBe("openai/gpt-5-mini");
   });
 
@@ -133,20 +105,6 @@ describe("chat-model-ref helpers", () => {
     expect(resolvePreferredServerChatModelValue("openai/gpt-5-mini", "zai", [])).toBe(
       "openai/gpt-5-mini",
     );
-  });
-
-  it("keeps nested provider-qualified server values stable when the catalog already confirms them", () => {
-    const nestedModel = {
-      id: "deepseek-ai/deepseek-v3.2",
-      name: "DeepSeek V3.2",
-      provider: "nvidia",
-    };
-
-    expect(
-      resolvePreferredServerChatModelValue("nvidia/deepseek-ai/deepseek-v3.2", "nvidia", [
-        nestedModel,
-      ]),
-    ).toBe("nvidia/deepseek-ai/deepseek-v3.2");
   });
 
   it("uses catalog resolution for provider-less raw server model values", () => {

@@ -154,9 +154,9 @@ class OwnedGroupTest(unittest.TestCase):
                 driver.prepare_owned_group(instance, Path(root) / "group.json")
         self.assertEqual(instance.client.requests, [])
 
-    def test_private_production_forum_is_owned_and_deleted(self):
+    def forum_fixture(self, test_server):
         instance = self.fixture()
-        instance.config["testDc"] = False
+        instance.config["testDc"] = test_server
 
         def request(payload, timeout=20):
             instance.client.requests.append(payload)
@@ -197,15 +197,19 @@ class OwnedGroupTest(unittest.TestCase):
             raise AssertionError(kind)
 
         instance.client.request = request
+        return instance
+
+    def test_private_production_forum_is_owned_and_deleted(self):
+        instance = self.forum_fixture(test_server=False)
         with tempfile.TemporaryDirectory() as root:
             manifest = Path(root) / "private-forum.json"
-            prepared = driver.prepare_private_forum(instance, manifest)
+            prepared = driver.prepare_forum(instance, manifest, False)
             self.assertEqual(prepared["groupId"], "-1002042")
             self.assertEqual(prepared["forumTopicId"], 777)
             self.assertNotIn("inviteLink", prepared)
             self.assertIn("inviteLink", driver.read_json(manifest))
 
-            cleaned = driver.cleanup_private_forum(instance, manifest)
+            cleaned = driver.cleanup_forum(instance, manifest, False)
             self.assertEqual(cleaned["status"], "deleted")
             self.assertNotIn("inviteLink", driver.read_json(manifest))
 
@@ -225,6 +229,102 @@ class OwnedGroupTest(unittest.TestCase):
                 "deleteChat",
             ],
         )
+
+    def test_test_server_forum_is_owned_and_deleted_without_an_invite(self):
+        instance = self.forum_fixture(test_server=True)
+        with tempfile.TemporaryDirectory() as root:
+            manifest = Path(root) / "owned-test-forum.json"
+            prepared = driver.prepare_forum(instance, manifest, True)
+            self.assertEqual(prepared, {
+                "ok": True, "status": "ready", "groupId": "-1002042", "forumTopicId": 777,
+                "title": prepared["title"], "topicTitle": prepared["topicTitle"],
+            })
+            self.assertNotIn("inviteLink", driver.read_json(manifest))
+            self.assertEqual(driver.cleanup_forum(instance, manifest, True)["status"], "deleted")
+
+        kinds = [request["@type"] for request in instance.client.requests]
+        self.assertNotIn("createChatInviteLink", kinds)
+        self.assertEqual(kinds[-1], "deleteChat")
+
+    def test_uncertain_forum_creation_is_reconciled_or_retained(self):
+        for outcome in ("deleted", "missing", "search-timeout", "readback-present", "readback-error", "noncreator", "wrong-identity"):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as root:
+                instance = self.forum_fixture(test_server=True)
+                original = instance.client.request
+                title = "OpenClaw QA forum test-owned"
+                settled = False
+
+                def request(payload, timeout=20):
+                    kind = payload["@type"]
+                    if settled and kind in ("getChat", "getChatMember", "deleteChat"):
+                        raise AssertionError("Verification must not reopen or re-delete the group")
+                    if kind == "createNewBasicGroupChat":
+                        raise driver.DriverError("Timed out waiting for createNewBasicGroupChat")
+                    if kind == "searchChatsOnServer":
+                        instance.client.requests.append(payload)
+                        if outcome == "search-timeout":
+                            raise driver.DriverError("Timed out waiting for searchChatsOnServer")
+                        return {"chat_ids": [] if settled or outcome == "missing" else [-2042, -2043]}
+                    if kind == "getChat":
+                        return {"id": payload["chat_id"],
+                                "title": title if payload["chat_id"] == -2042 else title + " other",
+                                "type": {"@type": "chatTypeBasicGroup", "basic_group_id": 2042}}
+                    if kind == "getBasicGroup":
+                        if outcome == "readback-error":
+                            raise driver.DriverError("Timed out waiting for getBasicGroup")
+                        return {"is_active": outcome == "readback-present"}
+                    if kind == "getChatMember" and outcome == "noncreator":
+                        return {"status": {"@type": "chatMemberStatusMember"}}
+                    return original(payload, timeout)
+
+                instance.client.request = request
+                manifest = Path(root) / "owned-test-forum.json"
+                with patch.object(driver.secrets, "token_hex", return_value="test-owned"):
+                    with self.assertRaisesRegex(driver.DriverError, "Timed out"):
+                        driver.prepare_forum(instance, manifest, True)
+                if outcome == "wrong-identity":
+                    record = driver.read_json(manifest)
+                    record["testerUserId"] = "999"
+                    driver.write_json_private(manifest, record)
+                if outcome in ("noncreator", "wrong-identity"):
+                    with self.assertRaises(driver.DriverError):
+                        driver.cleanup_forum(instance, manifest, True)
+                    self.assertFalse(any(p["@type"] == "deleteChat" for p in instance.client.requests))
+                    continue
+                result = driver.cleanup_forum(instance, manifest, True)
+                self.assertEqual(result["title"], title)
+                self.assertEqual(result["testerUserId"], "123")
+                self.assertTrue(result["createdAt"])
+                pending = outcome in ("readback-present", "readback-error")
+                self.assertEqual(result["status"], "deleted" if outcome == "deleted" else
+                                 "deletion-pending-verification" if pending else "uncertain-creation")
+                self.assertEqual(result["ok"], outcome == "deleted")
+                if outcome == "deleted":
+                    self.assertTrue(result["deletionReadback"])
+                deletes = [p for p in instance.client.requests if p["@type"] == "deleteChat"]
+                self.assertEqual(len(deletes), int(outcome in ("deleted", "readback-present", "readback-error")))
+                if deletes:
+                    self.assertEqual(deletes[0]["chat_id"], -2042)
+                if pending:
+                    self.assertEqual(result["deletion"], {"@type": "ok"})
+                    persisted = driver.read_json(manifest)
+                    self.assertEqual(persisted["status"], "deletion-pending-verification")
+                    self.assertEqual(persisted["deletion"], result["deletion"])
+                    settled = True
+                    retried = driver.cleanup_forum(instance, manifest, True)
+                    self.assertEqual(retried["status"], "deleted")
+                    self.assertTrue(retried["deletionReadback"])
+                    self.assertEqual(retried["deletion"], result["deletion"])
+                    self.assertEqual(sum(p["@type"] == "deleteChat" for p in instance.client.requests), 1)
+
+    def test_forum_commands_refuse_the_other_environment(self):
+        for test_server in (True, False):
+            instance = self.forum_fixture(test_server=not test_server)
+            with tempfile.TemporaryDirectory() as root:
+                with self.assertRaisesRegex(driver.DriverError, "Test Server" if test_server else "production"):
+                    driver.prepare_forum(instance, Path(root) / "forum.json", test_server)
+                self.assertFalse((Path(root) / "forum.json").exists())
+            self.assertEqual(instance.client.requests, [])
 
     def test_private_forum_cleanup_deletes_an_interrupted_basic_group(self):
         instance = self.fixture()
@@ -250,7 +350,7 @@ class OwnedGroupTest(unittest.TestCase):
                     "testerUserId": "123",
                 },
             )
-            cleaned = driver.cleanup_private_forum(instance, manifest)
+            cleaned = driver.cleanup_forum(instance, manifest, False)
             self.assertEqual(cleaned["status"], "deleted")
 
         self.assertEqual(
@@ -1011,7 +1111,7 @@ class ServeTargetTest(unittest.TestCase):
         events = []
         with patch.object(driver, "load_config", return_value=({}, {})), \
                 patch.object(driver, "UserDriver", return_value=instance), \
-                patch.object(driver, "cleanup_private_forum", return_value={"ok": True, "status": "deleted"}) as cleanup, \
+                patch.object(driver, "cleanup_forum", return_value={"ok": True, "status": "deleted"}) as cleanup, \
                 patch.object(driver, "write_ndjson", side_effect=events.append), \
                 patch.object(driver.sys, "stdin", io.StringIO("\n".join(driver.json.dumps(value) for value in commands))), \
                 patch.object(driver.select, "select", side_effect=lambda *_: ([driver.sys.stdin], [], [])):
@@ -1022,7 +1122,7 @@ class ServeTargetTest(unittest.TestCase):
         self.assertEqual(sent[-1]["forumTopicId"], 42)
         self.assertIn("positive integer", events[-1]["error"])
         self.assertEqual(instance.send_text.call_count, 3)
-        cleanup.assert_called_once_with(instance, driver.STATE_DIR / "owned-private-forum.json")
+        cleanup.assert_called_once_with(instance, driver.STATE_DIR / "owned-private-forum.json", False)
         self.assertEqual([call.args[0] for call in instance.check_group_write_access.call_args_list], [-1001, -2002, 200])
 
 

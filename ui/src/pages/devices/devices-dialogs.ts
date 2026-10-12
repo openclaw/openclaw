@@ -83,31 +83,28 @@ export class DevicesDialogController {
   }
 
   confirmInventoryRemoval(prompt: InventoryRemovalPrompt): Promise<void> {
-    if (prompt.kind === "entry") {
-      const entry = prompt.entry;
-      return this.confirmDestructiveAction(
-        {
-          title: t("devices.inventory.removePromptTitle", { name: entry.name }),
-          message: t("devices.inventory.removePromptBody"),
-          details: t("devices.inventory.deviceId", { id: entry.id }),
-          confirmLabel: t("devices.inventory.remove"),
-        },
-        (pageState) => removeInventoryEntry(pageState, entry),
-      );
-    }
-    const entries = prompt.entries;
     return this.confirmDestructiveAction(
       {
-        title: t(
-          entries.length === 1
-            ? "devices.inventory.removeStalePromptTitleOne"
-            : "devices.inventory.removeStalePromptTitle",
-          { count: String(entries.length) },
-        ),
-        message: t("devices.inventory.removeStalePromptBody"),
         confirmLabel: t("devices.inventory.remove"),
+        ...(prompt.kind === "entry"
+          ? {
+              title: t("devices.inventory.removePromptTitle", { name: prompt.entry.name }),
+              message: t("devices.inventory.removePromptBody"),
+              details: t("devices.inventory.deviceId", { id: prompt.entry.id }),
+            }
+          : {
+              title: t(
+                prompt.entries.length === 1
+                  ? "devices.inventory.removeStalePromptTitleOne"
+                  : "devices.inventory.removeStalePromptTitle",
+                { count: String(prompt.entries.length) },
+              ),
+              message: t("devices.inventory.removeStalePromptBody"),
+            }),
       },
-      (pageState) => removeStaleInventoryEntries(pageState, entries),
+      prompt.kind === "entry"
+        ? (pageState) => removeInventoryEntry(pageState, prompt.entry)
+        : (pageState) => removeStaleInventoryEntries(pageState, prompt.entries),
     );
   }
 

@@ -153,7 +153,10 @@ describe("user profiles", () => {
       const profile = ensureProfileForEmail("reader@example.test", options);
       setUserProfileRole(profile.id, "maintainer", options);
       expect(setAvatar(profile.id, new Uint8Array([1, 2, 3]), "image/png", options).ok).toBe(true);
-      const reader = openNodeSqliteDatabase(options.path, { readOnly: true });
+      const reader =
+        mode === "unadmitted"
+          ? new (requireNodeSqlite().DatabaseSync)(options.path, { readOnly: true })
+          : openNodeSqliteDatabase(options.path, { readOnly: true });
       enableNodeSqliteKyselyStatementCache(reader);
       if (mode !== "unadmitted") {
         admitSqliteSchema(reader);

@@ -17,7 +17,7 @@ import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -286,7 +286,7 @@ export async function settleEmbeddedAttemptStream(input: {
   let captured: ReturnType<typeof captureStreamSnapshot>;
   try {
     captured = await input.withOwnedTranscriptWrite(() =>
-      withSessionManagerWrite(sessionManager, async () => {
+      withSessionManagerAppend(sessionManager, async () => {
         const { timedOutDuringCompaction } = input.readLifecycleState();
         const compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
         const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
@@ -413,6 +413,10 @@ export async function prepareEmbeddedAttemptTransport(input: {
   const streamExtraParamsOverride = {
     ...attempt.streamParams,
     fastMode: attempt.fastMode,
+    // Memory extraction must see the original history, not a provider summary.
+    ...(attempt.trigger === "memory"
+      ? { anthropicServerCompaction: false, responsesServerCompaction: false }
+      : {}),
   };
   const selectedAuth = attempt.runtimePlan?.auth;
   const auth = selectedAuth?.selectedAuthMode

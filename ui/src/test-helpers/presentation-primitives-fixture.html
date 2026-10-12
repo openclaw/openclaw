@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Presentation primitives proof</title>
+  </head>
+  <body>
+    <script type="module">
+      const renderer = new URLSearchParams(location.search).get("renderer");
+      const fixture =
+        renderer === "solid"
+          ? "presentation-primitives-solid.tsx"
+          : "presentation-primitives-lit.ts";
+      // Baseline archives intentionally contain only the Lit fixture.
+      const entry = new URL(`./${fixture}`, location.href).href;
+      await import(/* @vite-ignore */ entry);
+    </script>
+  </body>
+</html>

@@ -11,7 +11,7 @@ import {
   type WorkerComputeCapacity,
 } from "./worker-task-capacity.js";
 import { captureWorkerTaskContext } from "./worker-task-context.js";
-import { WorkerTaskError } from "./worker-task-error.js";
+import { WorkerTaskError, workerTaskTimeoutError } from "./worker-task-error.js";
 import { serviceNativeWorkerPass, type WorkerTaskHost } from "./worker-task-host.js";
 import { createWorkerNativeSectionState } from "./worker-task-native-sections.js";
 import { createWorkerTaskPoolBootstrap } from "./worker-task-pool-bootstrap.js";
@@ -23,6 +23,7 @@ import {
 import {
   armWorkerTaskTimeout,
   closeOwnedWorkerTask,
+  createWorkerHostExchange,
   dispatchOwnedWorkerRequest,
   joinOwnedWorkerTask,
   prepareWorkerTaskInput,
@@ -109,9 +110,7 @@ export class WorkerTaskPoolCore<Input, Output> {
   private nextTaskId = 0;
   private readonly retireIdleOnPressure = () => this.retirement.retireIdle(this.resourceClosures);
   private readonly expireTasks = () =>
-    expireWorkerTasks(this.queue, this.slots, (task) =>
-      this.cancel(task, new WorkerTaskError("worker task timed out", "timeout")),
-    );
+    expireWorkerTasks(this.queue, this.slots, (task) => this.timeout(task));
 
   constructor(
     private readonly options: WorkerTaskPoolOptions<Output>,
@@ -251,9 +250,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     this.pendingBytes += inputBytes;
     task.observation = this.observeTask?.(task.options.diagnosticOperation);
     if (options.timeoutMs !== undefined) {
-      armWorkerTaskTimeout(task, options.timeoutMs, () =>
-        this.cancel(task, new WorkerTaskError("worker task timed out", "timeout")),
-      );
+      armWorkerTaskTimeout(task, options.timeoutMs, () => this.timeout(task));
     }
     options.signal?.addEventListener("abort", task.abort, { once: true });
     this.queue.push(task);
@@ -549,19 +546,13 @@ export class WorkerTaskPoolCore<Input, Output> {
       clearTimeout(task.timer);
       task.deadline = undefined;
     }
-    const exchange: Task<Input, Output>["exchange"] = {
-      id: ++task.exchangeSequence,
-      pressure: new AbortController(),
-      sent: false,
-      onConsumed: undefined,
-    };
-    task.exchange = exchange;
+    const exchange = createWorkerHostExchange(task, message.value);
     task.hostWaitStartedAt = performance.now();
     this.dispatch();
     this.computeCapacity?.requestCheckpoints();
     const accept = (response: WorkerTaskResponse) => {
       if (!task.done && task.deadline !== undefined && performance.now() >= task.deadline) {
-        this.cancel(task, new WorkerTaskError("worker task timed out", "timeout"));
+        this.timeout(task);
       }
       if (task.done || slot.task !== task || slot.retiring) {
         // A slow host handler may settle after cancellation. Never feed a successor.
@@ -582,9 +573,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.finishHostWait(task);
       exchange.onConsumed = response.onConsumed;
       exchange.sent = true;
-      armWorkerTaskTimeout(task, response.timeoutMs, () =>
-        this.cancel(task, new WorkerTaskError("worker task timed out", "timeout")),
-      );
+      armWorkerTaskTimeout(task, response.timeoutMs, () => this.timeout(task));
       try {
         slot.worker!.postMessage(
           {
@@ -609,6 +598,13 @@ export class WorkerTaskPoolCore<Input, Output> {
       closedError: () =>
         new WorkerTaskError("worker task closed before host dispatch", "unavailable"),
     });
+  }
+
+  private timeout(task: Task<Input, Output>): void {
+    if (task.done) {
+      return;
+    }
+    this.cancel(task, workerTaskTimeoutError(task.exchange, this.options.workerUrl));
   }
 
   private cancel(task: Task<Input, Output>, error: Error): void {
@@ -675,7 +671,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     task.done = true;
     task.observation?.completed();
     task.observation = undefined;
-    task.runInContext(() => task.controller?.abort());
+    task.runInContext(() => task.controller?.abort(error));
     clearTimeout(task.timer);
     task.deadline = undefined;
     task.options.signal?.removeEventListener("abort", task.abort);

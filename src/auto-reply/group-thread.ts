@@ -84,24 +84,19 @@ export async function runGroupThread<T>(params: {
   const results: T[] = [];
   let adoption: Promise<void> | undefined;
   let lifecycle: TurnAdoptionLifecycle | undefined;
-  let adoptionFailed = false;
-  let adoptionError: unknown;
+  let adoptionFailure: { error: unknown } | undefined;
+  const shouldStop = () =>
+    params.abortSignal?.aborted ||
+    lifecycle?.abortSignal?.aborted ||
+    turnsStarted >= group.maxTurns;
   try {
     for (let round = 1; round <= group.maxRounds && eligible.length > 0; round++) {
-      if (
-        params.abortSignal?.aborted ||
-        lifecycle?.abortSignal?.aborted ||
-        turnsStarted >= group.maxTurns
-      ) {
+      if (shouldStop()) {
         break;
       }
       const current: RoundReply[] = [];
       const launch = (agentId: string): Promise<void> => {
-        if (
-          params.abortSignal?.aborted ||
-          lifecycle?.abortSignal?.aborted ||
-          turnsStarted >= group.maxTurns
-        ) {
+        if (shouldStop()) {
           return Promise.resolve();
         }
         // This increment must stay synchronous, before the first awaited participant work.
@@ -137,8 +132,7 @@ export async function runGroupThread<T>(params: {
                 adoption = Promise.resolve()
                   .then(() => owner.onAdopted())
                   .catch((error: unknown) => {
-                    adoptionFailed = true;
-                    adoptionError = error;
+                    adoptionFailure = { error };
                     throw error;
                   });
               }
@@ -202,8 +196,8 @@ export async function runGroupThread<T>(params: {
         );
       });
     }
-    if (adoptionFailed) {
-      throw adoptionError;
+    if (adoptionFailure) {
+      throw adoptionFailure.error;
     }
     return { results, turnsStarted, failedTurns };
   } finally {

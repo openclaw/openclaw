@@ -28,12 +28,7 @@ describe("browser tab icon settings", () => {
     document.body.append(container);
     containers.push(container);
     render(renderTabIconSection(props), container);
-    const group = container.querySelector("wa-radio-group")!;
-    await group.updateComplete;
-    await Promise.all(
-      [...container.querySelectorAll("wa-radio")].map((radio) => radio.updateComplete),
-    );
-    await userEvent.click(container.querySelector('wa-radio[value="lobster"]')!);
+    await userEvent.click(container.querySelector('.settings-segmented__input[value="lobster"]')!);
     expect(props.tabIcon).toBe("lobster:crimson");
     const choices = container.querySelectorAll<HTMLButtonElement>(".settings-tab-icon__pick");
     expect(choices).toHaveLength(2);
@@ -48,7 +43,73 @@ describe("browser tab icon settings", () => {
     expect(pixel.getAnimations({ subtree: true })).toHaveLength(0);
   });
 
-  it("keeps unavailable saved choices and makes an empty collection quietly unavailable", async () => {
+  it("hides collected artwork without changing the saved preference and restores it when enabled", () => {
+    const props: TabIconViewProps = {
+      tabIcon: "lobster:crimson",
+      lobsterdexEnabled: false,
+      tabIconLobsters: LOBSTER_PET_PALETTES.filter((palette) => palette.id === "crimson"),
+      setTabIconMode: vi.fn(),
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    render(renderTabIconSection(props), container);
+    expect(container.querySelector('.settings-segmented__input[value="lobster"]')).toBeNull();
+    expect(container.querySelector(".settings-tab-icon__lobsters")).toBeNull();
+    expect(container.textContent).not.toContain("Lobsterdex");
+    expect(
+      container.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value,
+    ).toBe("default");
+    expect(props.tabIcon).toBe("lobster:crimson");
+    expect(props.setTabIconMode).not.toHaveBeenCalled();
+
+    props.lobsterdexEnabled = true;
+    render(renderTabIconSection(props), container);
+    expect(container.querySelector('.settings-segmented__input[value="lobster"]')).not.toBeNull();
+    expect(
+      container.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value,
+    ).toBe("lobster");
+    expect(container.querySelector('.settings-tab-icon__pick[aria-pressed="true"]')).not.toBeNull();
+  });
+
+  it("shows avatar shapes only for agent artwork and supports keyboard selection", async () => {
+    const props: TabIconViewProps = {
+      tabIcon: "agent",
+      setTabIconMode: (choice) => {
+        props.tabIcon = choice;
+        render(renderTabIconSection(props), container);
+      },
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    render(renderTabIconSection(props), container);
+    const choices = container.querySelectorAll<HTMLButtonElement>(
+      ".settings-tab-icon__shapes button",
+    );
+    expect(choices).toHaveLength(3);
+    expect(choices[0]?.getAttribute("aria-pressed")).toBe("true");
+    const circle = container.querySelector<HTMLButtonElement>('button[aria-label="Circle"]')!;
+    circle.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(props.tabIcon).toBe("agent:circle");
+    expect(circle.getAttribute("aria-pressed")).toBe("true");
+    expect(choices[0]?.getAttribute("aria-pressed")).toBe("false");
+    expect(
+      container.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value,
+    ).toBe("agent");
+    const rounded = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Rounded corners"]',
+    )!;
+    await userEvent.click(rounded);
+    expect(props.tabIcon).toBe("agent:rounded");
+    props.setTabIconMode("default");
+    expect(container.querySelector(".settings-tab-icon__shapes")).toBeNull();
+    props.setTabIconMode("lobster:crimson");
+    expect(container.querySelector(".settings-tab-icon__shapes")).toBeNull();
+  });
+
+  it("keeps unavailable saved choices and makes an empty collection quietly unavailable", () => {
     const props: TabIconViewProps = { tabIcon: "lobster:gold", setTabIconMode: vi.fn() };
     const container = document.createElement("div");
     document.body.append(container);
@@ -56,16 +117,17 @@ describe("browser tab icon settings", () => {
     render(renderTabIconSection(props), container);
     expect(container.textContent).toContain("not unlocked in this browser");
     expect(container.querySelectorAll(".settings-tab-icon__pick")).toHaveLength(0);
-    const group = container.querySelector("wa-radio-group")!;
-    await group.updateComplete;
-    expect(group.value).toBe("lobster");
+    expect(
+      container.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value,
+    ).toBe("lobster");
     expect(props.setTabIconMode).not.toHaveBeenCalled();
     props.tabIcon = "default";
     render(renderTabIconSection(props), container);
     expect(container.textContent).toContain("No lobsters unlocked");
-    expect(container.querySelector('wa-radio[value="lobster"]')?.hasAttribute("disabled")).toBe(
-      true,
-    );
+    expect(
+      container.querySelector<HTMLInputElement>('.settings-segmented__input[value="lobster"]')
+        ?.disabled,
+    ).toBe(true);
   });
 
   it("selects personal artwork while preserving its uncropped preview", async () => {
@@ -79,25 +141,27 @@ describe("browser tab icon settings", () => {
     document.body.append(container);
     containers.push(container);
     render(renderTabIconSection(props), container);
-    const group = container.querySelector("wa-radio-group")!;
-    await group.updateComplete;
-    await Promise.all(
-      [...container.querySelectorAll("wa-radio")].map((radio) => radio.updateComplete),
-    );
-    const agent = container.querySelector('wa-radio[value="agent"]')!;
+    const agent = container.querySelector<HTMLInputElement>(
+      '.settings-segmented__input[value="agent"]',
+    )!;
+    const agentLabel = agent.closest("label")!;
     await userEvent.click(agent);
     expect(vi.mocked(props.setTabIconMode).mock.calls.at(-1)?.[0]).toBe("agent");
-    const image = agent.querySelector<HTMLImageElement>(".identity-avatar__image")!;
+    const image = agentLabel.querySelector<HTMLImageElement>(".identity-avatar__image")!;
     expect(image.getAttribute("src")).toBe(source);
     expect(getComputedStyle(image).objectFit).toBe("contain");
-    expect(container.querySelector('wa-radio[value="default"] img')?.getAttribute("src")).toContain(
-      "favicon.svg",
-    );
+    expect(
+      container
+        .querySelector('.settings-segmented__btn:has(input[value="default"]) img')
+        ?.getAttribute("src"),
+    ).toContain("favicon.svg");
     props.tabIcon = "agent";
     props.tabIconAgentAvatar = null;
     render(renderTabIconSection(props), container);
-    expect(group.value).toBe("agent");
-    expect(agent.querySelector(".identity-avatar__image")).toBeNull();
-    expect(agent.querySelector(".identity-avatar__fallback img")).not.toBeNull();
+    expect(
+      container.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value,
+    ).toBe("agent");
+    expect(agentLabel.querySelector(".identity-avatar__image")).toBeNull();
+    expect(agentLabel.querySelector(".identity-avatar__fallback img")).not.toBeNull();
   });
 });

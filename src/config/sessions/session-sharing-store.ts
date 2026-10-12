@@ -1,3 +1,4 @@
+import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -7,14 +8,21 @@ import {
 import { resolveStateDir } from "../state-dir.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
+import {
+  captureIncognitoSessionOperation,
+  captureIncognitoSessionSource,
+} from "./session-incognito-binding.js";
+import type { SessionMember } from "./session-membership-facts.types.js";
 import {
   hasSessionMemberInDatabase,
   listSessionMembersInDatabase,
   readSessionMembersInDatabase,
-  type SessionMember,
   type SessionMembersSnapshot,
 } from "./session-sharing-store.kernel.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
@@ -32,7 +40,28 @@ function readSessionMembers<T>(
   return result.found ? result.value : fallback;
 }
 
+function readMemorySessionMembers(
+  scope: SessionCollaborationScope,
+): SessionMembersSnapshot | undefined {
+  if (!isIncognitoSessionKey(scope.sessionKey)) {
+    return undefined;
+  }
+  const memory = captureSessionActorStorageOwner(scope);
+  if (!memory) {
+    return undefined;
+  }
+  const current =
+    scope.sessionKey.trim() === memory.binding.actor.target.sessionKey
+      ? getSessionActorStorageBinding(scope)!.actor.snapshot(memory.authority)
+      : memory.owner?.readSession(scope.sessionKey, memory.authority);
+  return structuredClone({ entry: current?.entry, members: current?.members ?? [] });
+}
+
 export function listSessionMembers(scope: SessionAccessScope): SessionMember[] {
+  const memory = readMemorySessionMembers(scope);
+  if (memory) {
+    return memory.members;
+  }
   return readSessionMembers(scope, [], listSessionMembersInDatabase);
 }
 
@@ -40,10 +69,18 @@ export function listSessionMembers(scope: SessionAccessScope): SessionMember[] {
 export async function readSessionMembersInWorker(
   input: SessionCollaborationScope,
 ): Promise<SessionMembersSnapshot> {
-  const env = { ...(input.env ?? process.env) };
+  const memory = readMemorySessionMembers(input);
+  if (memory) {
+    return memory;
+  }
+  const source = input.incognito ? undefined : captureIncognitoSessionSource(input);
+  if (source && "kind" in source) {
+    return { entry: undefined, members: [] };
+  }
+  const resolved = resolveSqliteScope(input);
+  const env = { ...(resolved.env ?? process.env) };
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-  const resolved = resolveSqliteScope({ ...input, env });
-  const options = toDatabaseOptions(resolved);
+  const options = toDatabaseOptions({ ...resolved, env });
   const databasePath = resolveOpenClawAgentSqlitePath(options);
   const incognito = input.incognito ?? captureIncognitoSessionOperation(input);
   if (incognito) {
@@ -51,10 +88,11 @@ export async function readSessionMembersInWorker(
     if (actor.agentId !== resolved.agentId || actor.path !== databasePath) {
       throw new Error("Membership target differs from its captured incognito actor");
     }
-    const members = await actor.sessions.sideData(authority, {
-      type: "session.members.read",
-      input: { sessionKey: resolved.sessionKey },
-    });
+    const members = await actor.sessions.sideData(
+      authority,
+      { type: "session.members.read", input: { sessionKey: resolved.sessionKey } },
+      source?.admissionSignal,
+    );
     authority.assertCurrent();
     actor.assertReadable();
     return members;
@@ -79,6 +117,10 @@ export function isSessionMember(scope: SessionAccessScope, identityId: string): 
   const normalizedIdentityId = identityId.trim();
   if (!normalizedIdentityId) {
     return false;
+  }
+  const memory = readMemorySessionMembers(scope);
+  if (memory) {
+    return memory.members.some((member) => member.identityId === normalizedIdentityId);
   }
   return readSessionMembers(scope, false, (database, sessionKey) =>
     hasSessionMemberInDatabase(database, sessionKey, normalizedIdentityId),

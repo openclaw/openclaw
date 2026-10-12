@@ -431,7 +431,7 @@ suite.define(() => {
     "late follower without metadata",
     "late follower without metadata, metadata first",
     "late follower, catalog first",
-  ])("coalesces invalidations behind an unfinished pair (%s)", async (presentation) => {
+  ])("shares pending catalog reads across metadata invalidations (%s)", async (presentation) => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const paneCount = presentation === "shared" ? 2 : 1;
       if (presentation === "shared") {
@@ -508,7 +508,7 @@ suite.define(() => {
           (presentation.startsWith("late follower") && !presentation.includes("without metadata")
             ? 1
             : 2),
-        "models.list": before["models.list"] + 2,
+        "models.list": before["models.list"] + 1,
       });
     });
   });

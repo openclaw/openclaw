@@ -1,4 +1,4 @@
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDiscordRuntime } from "../runtime.js";

@@ -75,11 +75,11 @@ describe("utility completion with an unavailable implicit harness", () => {
         name: "Utility fixture",
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
-        reasoning: false,
+        reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 1024,
+        contextWindow: 32_768,
+        maxTokens: 16_384,
       },
       auth: { apiKey: "synthetic-utility-key", mode: "api-key", source: "test" },
     });
@@ -130,7 +130,10 @@ describe("utility completion with an unavailable implicit harness", () => {
         expect.anything(),
       );
       expect(transport).toHaveBeenCalledWith(
-        expect.objectContaining({ context: expect.objectContaining({ tools: [] }) }),
+        expect.objectContaining({
+          context: expect.objectContaining({ tools: [] }),
+          options: expect.objectContaining({ maxTokens: 8_492, temperature: 0.2 }),
+        }),
       );
       expect(runtimeMocks.runEmbeddedAttempt).not.toHaveBeenCalled();
     } finally {
@@ -186,7 +189,10 @@ describe("utility completion with an unavailable implicit harness", () => {
         });
       });
       expect(transport).toHaveBeenCalledWith(
-        expect.objectContaining({ context: expect.objectContaining({ tools: [] }) }),
+        expect.objectContaining({
+          context: expect.objectContaining({ tools: [] }),
+          options: expect.objectContaining({ maxTokens: 8_432, temperature: 0.2 }),
+        }),
       );
       expect(runtimeMocks.runEmbeddedAttempt).not.toHaveBeenCalled();
     } finally {

@@ -3,7 +3,7 @@ import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { ChatPaneSessionMenu } from "./chat-pane-session-menu.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
+import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import { closeSlot, openSlot } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
@@ -174,10 +174,9 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     const active = state.sidebarLayout.columns.some((column) =>
       column.panels.some((panel) => panel.slot === "discussion"),
     );
-    const label = t(active ? "chat.sessionDiscussion.hide" : "chat.sessionDiscussion.show");
     return {
       active,
-      label,
+      label: t(active ? "chat.sessionDiscussion.hide" : "chat.sessionDiscussion.show"),
       onToggle: () =>
         active
           ? this.commitSidebarLayout(closeSlot(state.sidebarLayout, "discussion"))

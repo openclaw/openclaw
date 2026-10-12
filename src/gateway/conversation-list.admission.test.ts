@@ -5,7 +5,7 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   listConversations,
   registerConversationAddresses,
-  resolveConversationRegistryScope,
+  prepareConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.entry.js";
 import {
@@ -35,7 +35,7 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-function createDirectory(
+async function createDirectory(
   params: { agentId?: string; physicalAgentId?: string; peerIds?: string[] } = {},
 ) {
   const agentId = params.agentId ?? "main";
@@ -47,7 +47,7 @@ function createDirectory(
     agents: { entries: { [agentId]: {} } },
     session: { store: storePath },
   };
-  const scope = resolveConversationRegistryScope({ config, agentId });
+  const scope = await prepareConversationRegistryScope({ config, agentId });
   const routed = createDeferredCore();
   const deps = {
     listConversations,
@@ -83,7 +83,7 @@ describe("conversation directory write admission", () => {
     "rechecks route ownership after waiting for the writer: %s",
     async (eligibility) => {
       const peerIds = ["peer", "peer-two", "peer-three"];
-      const fixture = createDirectory({ peerIds });
+      const fixture = await createDirectory({ peerIds });
       let currentConfig = fixture.config;
       const release = createDeferredCore();
       const blocker = runOpenClawAgentWriteAdmission(
@@ -160,7 +160,7 @@ describe("conversation directory write admission", () => {
   it.each(["environment", "working directory"] as const)(
     "keeps a shared physical store and logical route when the %s changes during discovery",
     async (changed) => {
-      const fixture = createDirectory({
+      const fixture = await createDirectory({
         agentId: "logical-agent",
         physicalAgentId: "schema-owner",
       });

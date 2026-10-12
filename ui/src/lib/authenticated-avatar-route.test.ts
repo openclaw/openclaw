@@ -1,4 +1,3 @@
-import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
 import { notifyBrowserAuthRestored } from "../app/browser-http.ts";
 import { AuthenticatedAvatarRouteLoader } from "./authenticated-avatar-route.ts";
@@ -7,7 +6,7 @@ const loaders: AuthenticatedAvatarRouteLoader[] = [];
 beforeEach(() => vi.useFakeTimers());
 afterEach(async () => {
   for (const loader of loaders.splice(0)) {
-    loader.hostDisconnected();
+    loader.disconnect();
   }
   await vi.runOnlyPendingTimersAsync();
   vi.useRealTimers();
@@ -24,15 +23,9 @@ function createLoader(
   onUpdate: Mock<() => void>,
   options?: ConstructorParameters<typeof AuthenticatedAvatarRouteLoader>[1],
 ) {
-  const host: ReactiveControllerHost = {
-    addController: vi.fn(),
-    removeController: vi.fn(),
-    requestUpdate: onUpdate,
-    updateComplete: Promise.resolve(true),
-  };
-  const loader = new AuthenticatedAvatarRouteLoader(host, options);
+  const loader = new AuthenticatedAvatarRouteLoader(onUpdate, options);
   loaders.push(loader);
-  loader.hostConnected();
+  loader.connect();
   onUpdate.mockClear();
   return loader;
 }
@@ -50,7 +43,7 @@ it("cancels an advertised retry when the last consumer releases the route", asyn
   await Promise.resolve();
   expect(fetchMock).toHaveBeenCalledOnce();
 
-  loader.hostDisconnected();
+  loader.disconnect();
   expect(loader.resolve("/avatar/retrying", ["token"])).toBeNull();
   await vi.advanceTimersByTimeAsync(1_000);
 
@@ -84,9 +77,9 @@ it.each(["auth restoration", "reconnect"])(
     mockBlobUrl("blob:restored");
     fetchMock.mockResolvedValue({ ok: true, blob: async () => new Blob(["icon"]) });
     if (recovery === "reconnect") {
-      loader.hostDisconnected();
+      loader.disconnect();
       await vi.advanceTimersByTimeAsync(0);
-      loader.hostConnected();
+      loader.connect();
     } else {
       notifyBrowserAuthRestored();
     }

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   parseApprovalRequestedEvent,
@@ -9,7 +9,11 @@ import {
   type ExecApprovalRequest,
 } from "../app/exec-approval.ts";
 import { i18n } from "../i18n/index.ts";
-import { renderExecApprovalCard, renderSidebarApprovalRow } from "./exec-approval-card.ts";
+import { LitContent, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
+import { ExecApprovalCard } from "./exec-approval-card-solid.tsx";
+import { renderSidebarApprovalRow } from "./exec-approval-card.ts";
 
 let container: HTMLDivElement;
 
@@ -32,16 +36,19 @@ function approval(overrides: Partial<ExecApprovalRequest> = {}): ExecApprovalReq
 }
 
 function renderCard(request: ExecApprovalRequest, variant: "inline" | "modal" = "modal") {
-  render(
-    renderExecApprovalCard({
-      approval: request,
-      busy: false,
-      canGrant: true,
-      error: null,
-      variant,
-      onDecision: vi.fn(),
-    }),
-    container,
+  mountSolid(
+    () =>
+      createComponent(ExecApprovalCard, {
+        props: {
+          approval: request,
+          busy: false,
+          canGrant: true,
+          error: null,
+          variant,
+          onDecision: vi.fn(),
+        },
+      }),
+    { container },
   );
   return container.querySelector<HTMLElement>(".exec-approval-card");
 }
@@ -55,6 +62,7 @@ describe("exec approval card", () => {
 
   afterEach(() => {
     container.remove();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -70,6 +78,49 @@ describe("exec approval card", () => {
     const card = renderCard(approval({ pluginSeverity }));
 
     expect(card?.classList.contains(`exec-approval-card--severity-${expected}`)).toBe(true);
+  });
+
+  it("expires a mounted sidebar approval and disables its decisions", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(0);
+    const onDecision = vi.fn();
+    const view = mountSolid(
+      () =>
+        createComponent(LitContent, {
+          render: () =>
+            renderSidebarApprovalRow({
+              approval: approval({ expiresAtMs: 2_000 }),
+              busy: false,
+              canGrant: true,
+              error: null,
+              onDecision,
+            }),
+        }),
+      { container },
+    );
+    await container.querySelector<SolidBridgeElement<object>>("openclaw-sidebar-approval-row")!
+      .updateComplete;
+    const timer = view.getByRole("timer");
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
+    expect(buttons).toHaveLength(3);
+    expect(timer.getAttribute("aria-label")).toBe("expires in 00:02");
+    expect(buttons.every((button) => !button.disabled)).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    flush();
+
+    expect(timer.textContent).toBe("00:00");
+    expect(timer.getAttribute("aria-label")).toBe("expired");
+    expect(timer.getAttribute("title")).toBe("expired");
+    expect(buttons.every((button) => button.disabled)).toBe(true);
+    for (const button of buttons) {
+      button.click();
+    }
+    expect(onDecision).not.toHaveBeenCalled();
+    view.unmount();
+    // Disconnected bridges retire their roots at the microtask checkpoint.
+    await Promise.resolve();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("always gives exec approvals the warning accent", () => {
@@ -168,15 +219,23 @@ describe("exec approval card", () => {
         return resolveApprovalRequest(client, request, decision);
       });
       const props = { approval: request, busy: false, canGrant: true, error: null };
-      render(
-        variant === "sidebar"
-          ? renderSidebarApprovalRow({
-              ...props,
-              onDecision: (_event, id, decision) => void onDecision(id, decision),
-            })
-          : renderExecApprovalCard({ ...props, variant, onDecision }),
-        container,
+      mountSolid(
+        () =>
+          variant === "sidebar"
+            ? createComponent(LitContent, {
+                render: () =>
+                  renderSidebarApprovalRow({
+                    ...props,
+                    onDecision: (_event, id, decision) => void onDecision(id, decision),
+                  }),
+              })
+            : createComponent(ExecApprovalCard, { props: { ...props, variant, onDecision } }),
+        { container },
       );
+      if (variant === "sidebar") {
+        await container.querySelector<SolidBridgeElement<object>>("openclaw-sidebar-approval-row")!
+          .updateComplete;
+      }
       const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
       expect(buttons.map((button) => button.textContent?.trim())).toEqual([
         "Allow once",

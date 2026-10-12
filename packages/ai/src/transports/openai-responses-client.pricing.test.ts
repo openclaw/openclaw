@@ -103,39 +103,35 @@ describe("managed Responses transport service-tier pricing", () => {
     expect(result.usage.cost.total).toBeCloseTo(30, 6);
   });
 
-  describe.each(["managed", "simple"] as const)(
-    "%s Responses service-tier observations",
-    (route) => {
-      it.each(["ultrafast", "default", null, undefined, "x".repeat(65)])(
-        "observes raw terminal tier %s against the final payload",
-        async (responseTier) => {
-          sseState.outcomes.push(completedResponse(responseTier));
-          const observations: ResponsesServiceTierObservation[] = [];
-          const options = {
-            apiKey: "test-key",
-            transport: "sse" as const,
-            serviceTier: "priority" as const,
-            onPayload: (payload: unknown) => ({
-              ...(payload as Record<string, unknown>),
-              service_tier: "ultrafast",
-            }),
-          };
-          responsesServiceTierObserver.set(options, (observation) =>
-            observations.push(observation),
-          );
-          const streamFn =
-            route === "managed"
-              ? createOpenAIResponsesTransportStreamFn()
-              : streamSimpleOpenAIResponses;
-          const stream = await streamFn(model, { messages: [], tools: [] }, { ...options });
-          expect((await stream.result()).stopReason).toBe("stop");
-          expect(sseState.requests[0]?.service_tier).toBe("ultrafast");
-          expect(observations).toEqual(
-            responseTier === "ultrafast" || responseTier === "default"
-              ? [{ requestedTier: "ultrafast", responseTier }]
-              : [],
-          );
-        },
+  it.each([
+    { route: "managed", responseTier: "ultrafast" },
+    { route: "simple", responseTier: undefined },
+  ])(
+    "observes $route terminal tier $responseTier against the final payload",
+    async ({ route, responseTier }) => {
+      sseState.outcomes.push(completedResponse(responseTier));
+      const observations: ResponsesServiceTierObservation[] = [];
+      const options = {
+        apiKey: "test-key",
+        transport: "sse" as const,
+        serviceTier: "priority" as const,
+        onPayload: (payload: unknown) => ({
+          ...(payload as Record<string, unknown>),
+          service_tier: "ultrafast",
+        }),
+      };
+      responsesServiceTierObserver.set(options, (observation) => observations.push(observation));
+      const streamFn =
+        route === "managed"
+          ? createOpenAIResponsesTransportStreamFn()
+          : streamSimpleOpenAIResponses;
+      const stream = await streamFn(model, { messages: [], tools: [] }, { ...options });
+      expect((await stream.result()).stopReason).toBe("stop");
+      expect(sseState.requests[0]?.service_tier).toBe("ultrafast");
+      expect(observations).toEqual(
+        responseTier === "ultrafast" || responseTier === "default"
+          ? [{ requestedTier: "ultrafast", responseTier }]
+          : [],
       );
     },
   );

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { i18n } from "../i18n/index.ts";
@@ -85,6 +86,7 @@ afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
   document.documentElement.style.removeProperty("--openclaw-css-ok");
+  document.documentElement.removeAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE);
 });
 
 describe("isStaleChunkImportError", () => {
@@ -572,6 +574,54 @@ describe("scheduleStaleChunkReload", () => {
 });
 
 describe("retryStaleChunkReloadWhenReachable single-shot", () => {
+  it.each([
+    { routeBase: "", resourceBase: "", automatic: false },
+    { routeBase: "/control", resourceBase: "/control", automatic: false },
+    { routeBase: "/portable", resourceBase: "", automatic: false },
+    { routeBase: "/control", resourceBase: "/control", automatic: true },
+    { routeBase: "", resourceBase: "", automatic: false, devGateway: true },
+  ])(
+    "reloads a chat deep link through its serving document ($routeBase, $resourceBase, automatic: $automatic, dev: $devGateway)",
+    async ({ routeBase, resourceBase, automatic, devGateway }) => {
+      const replace = stubDocumentNavigation();
+      const location = new URL(
+        `http://localhost${routeBase}/chat/main/12345678aaaa40008000000000000001?view=split#files`,
+      );
+      Object.assign(window.location, { href: location.href, pathname: location.pathname });
+      document.documentElement.setAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE, resourceBase);
+      if (devGateway) {
+        vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
+          gatewayUrl: "ws://gateway.example/control",
+          proxyPath: "/__gateway__",
+        });
+      }
+      const fetchMock = vi.fn<typeof fetch>(async (input) => {
+        const target = new URL(input instanceof Request ? input.url : input, location);
+        // Canonical chat documents deliberately reject HEAD before reading a session.
+        return new Response(null, {
+          status: target.pathname === `${resourceBase}/index.html` ? 200 : 405,
+        });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        automatic
+          ? scheduleStaleChunkReload()
+          : retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }),
+      ).resolves.toBe(true);
+
+      expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+        `${location.origin}${resourceBase}/index.html`,
+        expect.objectContaining({ method: "HEAD", cache: "no-store" }),
+      );
+      expect(replace).toHaveBeenCalledOnce();
+      const destination = new URL(replace.mock.calls[0]![0]);
+      expect(destination.pathname).toBe(location.pathname);
+      expect(destination.searchParams.get("view")).toBe("split");
+      expect(destination.hash).toBe("#files");
+    },
+  );
+
   it("rearms bounded automatic recovery when the gateway is reachable", async () => {
     const reload = vi.fn();
     const storage = memoryStorage({ [GUARD_KEY]: "replacement-build" });

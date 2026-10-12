@@ -3181,7 +3181,19 @@
                 "group": "Project and contributing",
                 "pages": [
                   "reference/credits",
-                  "reference/pull-request-review-flow"
+                  "reference/pull-request-review-flow",
+                  {
+                    "group": "Maintainer scripts",
+                    "pages": [
+                      "reference/scripts/pr-preparation",
+                      "reference/scripts/pr-tooling",
+                      "reference/scripts/remote-gates",
+                      "reference/scripts/github-transport",
+                      "reference/scripts/prior-ci",
+                      "reference/scripts/merge-admission",
+                      "reference/scripts/merge-recovery"
+                    ]
+                  }
                 ]
               }
             ]
@@ -3193,6 +3205,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.10.1",
                   "releases/2026.9.9",
                   "releases/2026.9.8",
                   "releases/2026.9.7",

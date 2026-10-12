@@ -13,7 +13,6 @@ import { registerSharedClientAuthRefreshTests } from "./shared-client-auth-refre
 import { waitForCodexAppServerClientExit } from "./shared-client-lifecycle.js";
 import {
   captureCodexAppServerClientLifetime,
-  captureSharedCodexAppServerCatalogLifetime,
   createIsolatedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
   getSharedCodexAppServerClient,
@@ -478,12 +477,10 @@ export function registerSharedClientLifetimeTests(
     await retained?.release();
     expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
     expect(assertCurrent).not.toThrow();
-    const catalogCurrent = captureSharedCodexAppServerCatalogLifetime(client);
     const configWrite = client.request("config/batchWrite", { edits: [], reloadUserConfig: false });
     const written = JSON.parse(harness.writes.at(-1)!);
     harness.send({ id: written.id, result: {} });
     await configWrite;
-    expect(catalogCurrent()).toBe(false);
     expect(assertCurrent).not.toThrow();
     client.close();
     expect(assertCurrent).toThrow(CodexAdoptedThreadActiveError);

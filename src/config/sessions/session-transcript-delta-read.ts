@@ -9,8 +9,12 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import { toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
-import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
+import {
+  captureIncognitoSessionHistoryBinding,
+  captureIncognitoSessionSource,
+} from "./session-incognito-binding.js";
 import { prepareIncognitoSessionHistoryRead } from "./session-incognito-history-read.js";
 import { isSessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
@@ -37,7 +41,43 @@ export async function withSessionTranscriptDeltaReader<T>(
     sessionId: scope.sessionId,
   });
   const admission = receipt && structuredClone(receipt);
-  const incognito = captureIncognitoSessionHistoryBinding(scope);
+  const memory = captureSessionActorTranscriptRead(scope, signal);
+  if (memory) {
+    let active = true;
+    const assertActive = () => {
+      signal?.throwIfAborted();
+      if (!active) {
+        throw new Error("Transcript delta reader is no longer active");
+      }
+    };
+    try {
+      const result = await consume({
+        raw: async (limits) => {
+          assertActive();
+          if (memory.missing) {
+            memory.assertCurrent();
+            return { kind: "missing" };
+          }
+          return memory.read("session.history.raw-delta", { limits });
+        },
+        visible: async (limits) => {
+          assertActive();
+          if (memory.missing) {
+            memory.assertCurrent();
+            return { kind: "missing" };
+          }
+          return memory.read("session.history.visible-delta", { limits });
+        },
+      });
+      assertActive();
+      return result;
+    } finally {
+      active = false;
+    }
+  }
+  const incognitoSource = captureIncognitoSessionSource(scope);
+  const absent = incognitoSource && "kind" in incognitoSource ? incognitoSource : undefined;
+  const incognito = absent ? undefined : captureIncognitoSessionHistoryBinding(scope);
   let active = true;
   const assertActive = () => {
     signal?.throwIfAborted();
@@ -46,6 +86,17 @@ export async function withSessionTranscriptDeltaReader<T>(
     }
   };
   try {
+    if (absent) {
+      const missing = async (): Promise<{ kind: "missing" }> => {
+        assertActive();
+        absent.assertCurrent();
+        return { kind: "missing" };
+      };
+      const result = await consume({ raw: missing, visible: missing });
+      assertActive();
+      absent.assertCurrent();
+      return result;
+    }
     if (incognito) {
       const prepared = prepareIncognitoSessionHistoryRead(incognito, scope, signal);
       const read = async <Value>(operation: () => Promise<Value>) => {

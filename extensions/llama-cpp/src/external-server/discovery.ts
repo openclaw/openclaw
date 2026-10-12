@@ -32,12 +32,15 @@ export async function discoverLlamaServer(params: {
   baseUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;
+  allowPrivateNetwork?: boolean;
   signal?: AbortSignal;
+  useRuntimeDefaults?: boolean;
 }): Promise<LlamaServerDiscoveryResult> {
   const endpoint = resolveLlamaServerEndpoint(params.baseUrl);
   const result = await discoverOpenAICompatibleLocalModels({
     baseUrl: endpoint.inferenceBaseUrl,
     serverBaseUrl: endpoint.origin,
+    allowPrivateNetwork: params.allowPrivateNetwork,
     apiKey: params.apiKey,
     headers: params.headers,
     label: "llama-server",
@@ -55,7 +58,7 @@ export async function discoverLlamaServer(params: {
     kind: "success" as const,
     endpoint,
     models: result.rows.flatMap(({ model, props }) => {
-      const mapped = mapLlamaServerModel(model, props);
+      const mapped = mapLlamaServerModel(model, props, params.useRuntimeDefaults);
       return mapped ? [mapped] : [];
     }),
   };

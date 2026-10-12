@@ -10,10 +10,8 @@ import * as sessionEntryReaders from "../config/sessions/session-entry-read-runt
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import {
-  runOpenClawAgentWriteAdmission,
-  SQLITE_SESSION_WRITER_QUEUES,
-} from "../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   resolveGatewaySessionStoreTargetWithStore,

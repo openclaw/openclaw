@@ -82,7 +82,7 @@ export async function withCodexThreadLifecycleBinding(
     params.bindingStore.withLease(
       identity,
       async () => {
-        const binding = params.bindingStore.read(identity);
+        const binding = await params.bindingStore.readAsync(identity);
         assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership);
         // Never prepare a replacement under the queue selected for an obsolete snapshot.
         if (binding?.threadId !== snapshot?.threadId || binding?.clientId !== snapshot?.clientId) {

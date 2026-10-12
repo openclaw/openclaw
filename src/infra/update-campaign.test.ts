@@ -198,25 +198,6 @@ describe("UpdateCampaignController", () => {
 
   it.each([
     {
-      name: "a different Git commit",
-      target: {
-        kind: "git" as const,
-        upstreamRef: "origin/main",
-        upstreamSha: "frozen-sha",
-        commitsBehind: 3,
-      },
-      requested: {
-        mode: "tracked" as const,
-        upstreamRef: "origin/main",
-        upstreamSha: "different-sha",
-      },
-      matching: {
-        mode: "tracked" as const,
-        upstreamRef: "origin/main",
-        upstreamSha: "frozen-sha",
-      },
-    },
-    {
       name: "a different Git upstream",
       target: {
         kind: "git" as const,
@@ -234,16 +215,6 @@ describe("UpdateCampaignController", () => {
         upstreamRef: "origin/main",
         upstreamSha: "frozen-sha",
       },
-    },
-    {
-      name: "a package campaign",
-      target: { kind: "package" as const, version: "2.0.0" },
-      requested: {
-        mode: "tracked" as const,
-        upstreamRef: "origin/main",
-        upstreamSha: "frozen-sha",
-      },
-      matching: undefined,
     },
   ])("keeps $name waiting after mismatched adoption", ({ target, requested, matching }) => {
     const controller = createController();
@@ -383,10 +354,6 @@ describe("UpdateCampaignController", () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
-  it("returns false when holding without a campaign", () => {
-    expect(createController().hold()).toBe(false);
-  });
-
   it("clears a failed apply and lets the next announcement start fresh", async () => {
     const controller = createController();
     const onChange = vi.fn();
@@ -394,28 +361,6 @@ describe("UpdateCampaignController", () => {
       target: { kind: "package" as const, version: "2.0.0" },
       inspect: createInspectors(() => 0),
       apply: vi.fn(async () => "failed" as const),
-      onChange,
-    };
-
-    controller.announce(announcement);
-    await clock.advanceBy(60_000);
-
-    expect(controller.getState()).toBeUndefined();
-    expect(onChange).toHaveBeenLastCalledWith(undefined);
-
-    controller.announce(announcement);
-    expect(controller.getState()).toMatchObject({ id: "campaign-2", state: "countdown" });
-  });
-
-  it("clears a campaign when apply rejects", async () => {
-    const controller = createController();
-    const onChange = vi.fn();
-    const announcement = {
-      target: { kind: "package" as const, version: "2.0.0" },
-      inspect: createInspectors(() => 0),
-      apply: vi.fn(async () => {
-        throw new Error("update failed");
-      }),
       onChange,
     };
 

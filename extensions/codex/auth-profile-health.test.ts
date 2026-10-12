@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
-  saveAuthProfileStore,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { HealthCheck, OpenClawConfig } from "openclaw/plugin-sdk/health";
@@ -100,7 +99,10 @@ describe("native profile recovery", () => {
   });
 
   it("honors shared state ownership and agent-local profiles without warning on unpinned native login", async () => {
-    const state = await createOpenClawTestState({ label: "codex-persisted-profile-recovery" });
+    const state = await createOpenClawTestState({
+      label: "codex-persisted-profile-recovery",
+      applyEnv: false,
+    });
     try {
       const check = recoveryCheck();
       await expect(check.detect(doctorContext(state, {}))).resolves.toEqual([]);
@@ -109,7 +111,7 @@ describe("native profile recovery", () => {
       expect(localFindings).toHaveLength(1);
       expect(localFindings[0]?.message).toContain("Affected agents: main.");
 
-      saveAuthProfileStore(managedStore);
+      await state.writeAuthProfiles(managedStore);
       await expect(check.detect(doctorContext(state))).resolves.toEqual([]);
     } finally {
       await state.cleanup();

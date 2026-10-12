@@ -6,7 +6,7 @@ import {
   normalizeMimeType,
 } from "openclaw/plugin-sdk/media-mime";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -212,7 +212,7 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
     defaultModel,
     models: ids,
     resolveModelCapabilities: resolveDeepInfraVideoModelCapabilities,
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "deepinfra", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "deepinfra", ...ctx }),
     capabilities: {
       ...capabilities,
       generate: {

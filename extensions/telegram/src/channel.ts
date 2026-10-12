@@ -91,6 +91,7 @@ import { parseTelegramThreadId } from "./outbound-params.js";
 import { releaseStoppedTelegramPollingLease } from "./polling-lease.js";
 import type { TelegramProbe } from "./probe.js";
 import * as probeModule from "./probe.js";
+import { isTelegramTextOnlyChannelData } from "./prompt-context-projection.js";
 import { resolveTelegramStartupProbeTimeoutMs } from "./request-timeouts.js";
 import { getOptionalTelegramRuntime, getTelegramRuntime } from "./runtime.js";
 import { telegramSecurityAdapter } from "./security.js";
@@ -217,6 +218,10 @@ const telegramMessageAdapter = createChannelMessageAdapterFromOutbound<OpenClawC
   },
   outbound: telegramChannelOutbound,
 });
+telegramMessageAdapter.durableFinal = {
+  ...telegramMessageAdapter.durableFinal,
+  isTextOnlyChannelData: isTelegramTextOnlyChannelData,
+};
 
 function normalizeTelegramAcpConversationId(conversationId: string, parentConversationId?: string) {
   const parsed = parseTelegramTopicConversation({ conversationId, parentConversationId });
@@ -238,13 +243,11 @@ function targetsMatchTelegramReplySuppression(params: {
   const target = parseTelegramTarget(params.targetKey);
   const originConversation = buildTelegramConversationId({
     chatId: origin.chatId,
-    thread: resolveTelegramTargetThread(origin) ?? { scope: "none" },
+    thread: resolveTelegramTargetThread(origin),
   });
   const targetConversation = buildTelegramConversationId({
     chatId: target.chatId,
-    thread: resolveTelegramTargetThread(target, normalizeOptionalString(params.targetThreadId)) ?? {
-      scope: "none",
-    },
+    thread: resolveTelegramTargetThread(target, normalizeOptionalString(params.targetThreadId)),
   });
   return (
     normalizeOptionalLowercaseString(originConversation) ===
@@ -255,16 +258,16 @@ function targetsMatchTelegramReplySuppression(params: {
 function resolveTelegramTargetThread(
   target: ReturnType<typeof parseTelegramTarget>,
   fallbackThreadId?: string | number | null,
-): TelegramThreadSpec | undefined {
+): TelegramThreadSpec {
   if (target.directMessagesTopicId != null) {
     return { id: target.directMessagesTopicId, scope: "direct-messages" };
   }
   const forumThreadId = target.messageThreadId ?? fallbackThreadId;
   if (forumThreadId == null) {
-    return undefined;
+    return { scope: "none" };
   }
   const id = Number(forumThreadId);
-  return Number.isFinite(id) ? { id, scope: "forum" } : undefined;
+  return Number.isFinite(id) ? { id, scope: "forum" } : { scope: "none" };
 }
 
 function resolveTelegramCommandConversation(params: {
@@ -283,10 +286,7 @@ function resolveTelegramCommandConversation(params: {
       continue;
     }
     const thread = resolveTelegramTargetThread(parsedTarget, params.threadId);
-    const conversationId = buildTelegramConversationId({
-      chatId,
-      thread: thread ?? { scope: "none" },
-    });
+    const conversationId = buildTelegramConversationId({ chatId, thread });
     if (conversationId !== chatId || !chatId.startsWith("-")) {
       return { conversationId, parentConversationId: chatId };
     }
@@ -324,7 +324,7 @@ function resolveTelegramInboundConversation(params: {
   return {
     conversationId: buildTelegramConversationId({
       chatId,
-      thread: resolveTelegramTargetThread(parsedTarget, params.threadId) ?? { scope: "none" },
+      thread: resolveTelegramTargetThread(parsedTarget, params.threadId),
     }),
     parentConversationId: chatId,
   };
@@ -404,11 +404,9 @@ function resolveTelegramOutboundSessionRoute(params: {
     return null;
   }
   const thread = resolveTelegramTargetThread(parsed, parseTelegramThreadId(params.threadId));
-  const resolvedThreadId = thread ? Number(thread.id) : undefined;
-  const conversationId = buildTelegramConversationId({
-    chatId,
-    thread: thread ?? { scope: "none" },
-  });
+  const resolvedThreadId = thread.id;
+  const topicScope = thread.scope === "none" ? "forum" : thread.scope;
+  const conversationId = buildTelegramConversationId({ chatId, thread });
   const resolvedKind = params.resolvedTarget?.kind;
   const isGroup =
     parsed.chatType === "group" ||
@@ -463,7 +461,7 @@ function resolveTelegramOutboundSessionRoute(params: {
       ? buildTelegramCanonicalTopicThreadId({
           chatId,
           topicId: resolvedThreadId,
-          scope: thread?.scope ?? "forum",
+          scope: topicScope,
         })
       : undefined;
   const route = buildThreadAwareOutboundSessionRoute({
@@ -482,7 +480,7 @@ function resolveTelegramOutboundSessionRoute(params: {
       routeThreadId !== undefined
         ? buildTelegramRoutingTarget(chatId, {
             id: Number(routeThreadId),
-            scope: thread?.scope ?? "forum",
+            scope: topicScope,
           })
         : `telegram:${chatId}`,
   };

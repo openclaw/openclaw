@@ -20,10 +20,7 @@ export type SessionMutationsHost = PendingRowHost &
       isErrorCurrent?: () => boolean,
     ) => Promise<SessionRefreshOutcome>;
     publishedRow: (key: string) => GatewaySessionRow | undefined;
-    archiveFields: Pick<
-      ReturnType<typeof createSessionRowProvenance>,
-      "fieldObservation" | "observeFields" | "inheritRow" | "mergeRow"
-    >;
+    archiveFields: Pick<ReturnType<typeof createSessionRowProvenance>, "inheritRow">;
     readRevision: () => number;
     notifyCreated: (key: string, entry?: SessionCreateOutcome["entry"], agentId?: string) => void;
     clearThink: (key: string, agentId?: string | null) => void;

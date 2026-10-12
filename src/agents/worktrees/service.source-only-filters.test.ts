@@ -12,6 +12,7 @@ import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
+import { listTemplatesAsync } from "./template-registry-async.js";
 
 vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.fn() }));
 const exec = promisify(execFile);
@@ -28,7 +29,8 @@ let root: string,
   globalConfig: string,
   marker: string,
   script: string,
-  service: ManagedWorktreeService;
+  service: ManagedWorktreeService,
+  backend: ReturnType<typeof createCopyWorktreeBackend>;
 beforeEach(async () => {
   root = sessionDirs.make();
   globalConfig = path.join(root, "global-config");
@@ -54,7 +56,8 @@ beforeEach(async () => {
   await fs.writeFile(path.join(repo, ".gitattributes"), "README.md filter=late\n");
   await git(repo, "add", ".gitattributes");
   await git(repo, "commit", "-qm", "filter attributes");
-  vi.mocked(detectWorktreeFilesystemBackend).mockResolvedValue(createCopyWorktreeBackend());
+  backend = createCopyWorktreeBackend();
+  vi.mocked(detectWorktreeFilesystemBackend).mockResolvedValue(backend);
   service = new ManagedWorktreeService({ getConfig: () => ({}) });
 });
 
@@ -96,6 +99,50 @@ async function configure(scope: string, kind: string, cwd: string) {
     await git(repo, "config", `filter.late.${kind}`, command);
   }
 }
+
+it("keeps source-only clones away from an inherited external Git index", async () => {
+  const externalIndex = path.join(root, "external-index");
+  vi.stubEnv("GIT_INDEX_FILE", externalIndex);
+  await git(repo, "read-tree", "HEAD");
+  const originalIndex = await fs.readFile(externalIndex);
+
+  const created = await createSourceOnly("external-index");
+  expect(backend.createTemplate).not.toHaveBeenCalled();
+  expect(await fs.readFile(externalIndex)).toEqual(originalIndex);
+  vi.stubEnv("GIT_INDEX_FILE", undefined);
+  expect(await git(created.path, "status", "--porcelain")).toBe("");
+  expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+});
+
+it("reuses and refreshes source-only templates without running host filters", async () => {
+  await configure("repository", "smudge", repo);
+  const first = await createSourceOnly("template-first");
+  const [original] = await listTemplatesAsync(process.env);
+  expect(original?.status).toBe("ready");
+  await fs.writeFile(path.join(first.path, "README.md"), "independent edit\n");
+  const second = await createSourceOnly("template-second");
+  expect(await fs.readFile(path.join(second.path, "README.md"), "utf8")).toBe("base\n");
+  expect(backend.createTemplate).toHaveBeenCalledTimes(1);
+  expect(backend.cloneTemplate).toHaveBeenCalledTimes(2);
+  expect((await listTemplatesAsync(process.env))[0]?.id).toBe(original?.id);
+
+  await git(repo, "config", "core.autocrlf", "true");
+  const policy = await createSourceOnly("template-policy");
+  expect(await fs.readFile(path.join(policy.path, "README.md"), "utf8")).toBe("base\r\n");
+  expect(backend.createTemplate).toHaveBeenCalledTimes(2);
+  const policyId = (await listTemplatesAsync(process.env))[0]?.id;
+  expect(policyId).not.toBe(original?.id);
+
+  await fs.writeFile(path.join(repo, "README.md"), "new revision\n");
+  await git(repo, "add", "README.md");
+  await git(repo, "commit", "-qm", "advance source template");
+  const third = await createSourceOnly("template-third");
+  expect(await fs.readFile(path.join(third.path, "README.md"), "utf8")).toBe("new revision\r\n");
+  expect(backend.createTemplate).toHaveBeenCalledTimes(3);
+  expect(backend.cloneTemplate).toHaveBeenCalledTimes(4);
+  expect((await listTemplatesAsync(process.env))[0]?.id).not.toBe(policyId);
+  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+});
 
 it.each([
   ["repository", "smudge"],

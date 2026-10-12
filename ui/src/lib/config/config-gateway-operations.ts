@@ -18,6 +18,7 @@ import {
   applyConfigSnapshot,
   serializeFormForSubmit,
   type ConfigWriteAck,
+  type ConfigPatchAck,
 } from "./config-draft-model.ts";
 import {
   configMutationFailure,
@@ -77,11 +78,6 @@ export type ConfigPatchOptions = {
 
 export type ConfigPatchBuildResult = { options: ConfigPatchOptions } | { error: string };
 type ConfigPatchBuilder = (config: Readonly<Record<string, unknown>>) => ConfigPatchBuildResult;
-// Gateway commitGatewayConfigWrite returns persisted hashes; only a no-op patch omits one.
-export type ConfigPatchAck =
-  | { noop: true; config: Record<string, unknown> }
-  | (ConfigWriteAck & { noop?: false });
-
 export type RuntimeConfigExternalMutationResult<T> =
   | {
       ok: true;
@@ -401,10 +397,7 @@ async function readConfig(
 
 export async function loadConfigSchema(state: RuntimeConfigState) {
   const client = state.client;
-  if (!client || !state.connected) {
-    return;
-  }
-  if (state.configSchemaLoading) {
+  if (!client || !state.connected || state.configSchemaLoading) {
     return;
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);

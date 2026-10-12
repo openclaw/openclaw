@@ -161,7 +161,6 @@ export {
   conversationBindingMocks,
   createPluginRuntime,
   hoisted,
-  markPluginRegistryActive,
   resolveRegisteredCatalogCreateTarget,
   sessionCatalogHandlers,
 };

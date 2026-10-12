@@ -349,6 +349,8 @@ If all profiles for a provider fail, OpenClaw moves to the next model in `agents
 
 Provider-busy signals such as `ModelNotReadyException` land in the overloaded bucket and follow the same one-rotation-then-fallback policy as rate limits.
 
+`agents.defaults.timeoutSeconds` and run-specific model timeouts apply to each model candidate attempt. When an attempt times out, the next configured fallback receives its own full budget, so total elapsed time can exceed the setting. Progress does not renew an attempt's budget. User cancellation stops the entire fallback chain, and an independent outer deadline, such as the cron scheduler's deadline, still applies. See [Agent timeouts](/concepts/agent-loop#timeouts).
+
 The failover controller owns OpenClaw's transient recovery budget. Rate limits receive up to **10 total attempts** before auth-profile rotation or model fallback. Jittered exponential waits cap at 30 seconds, while provider `retry-after` and `retry-after-ms` hints remain minimum waits even beyond that cap. Other transient failures retain eight retries and a 90-second window for consecutive outages. A completed successful model response clears that window without resetting the total retry count; partial output and tool activity alone do not. Once that budget or window is exhausted, recovery proceeds to eligible auth-profile rotation, configured model fallback, or a visible error. Continuations preserve the transcript instead of replaying the original user request. Recovery and any fallback winner remain turn-local.
 
 The embedded runtime's existing session setting `retry.provider.maxRetries` overrides its recovery retry budget. `0` disables retries, and rate limits remain capped at 10 total attempts. It is not an `openclaw.json` key and does not change a native harness's internal request retries. Native harnesses may finish their own request retries before OpenClaw starts continuation recovery. The reply runner does not add another whole-turn replay loop. See [Retry policy](/concepts/retry) for pacing and exclusions.
@@ -375,6 +377,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - When no explicit fallback override is supplied, configured fallbacks are tried before the configured primary even if the requested model uses a different provider.
     - When no explicit fallback override is supplied to the fallback runner, the configured primary is appended at the end. The chain can then settle back onto the normal default once earlier candidates are exhausted.
     - When a caller supplies `fallbacksOverride`, the runner uses exactly the requested model plus that override list. An empty list disables model fallback and prevents the configured primary from being appended as a hidden retry target.
+    - Plugins can return `fallbacksOverride` from `before_model_resolve` to select a run-scoped chain, including `[]` to fail on the selected model instead of trying configured fallbacks. See [local model routing](/plugins/hooks/prompt-and-session#restrict-a-run-to-local-models).
 
   </Accordion>
 </AccordionGroup>

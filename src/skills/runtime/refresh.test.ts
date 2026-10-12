@@ -142,7 +142,7 @@ it("uses prepared plugin metadata to observe nested companion skills", async () 
   const plugin = await import("../loading/plugin-skills.js");
   vi.mocked(plugin.resolvePluginSkillRoots).mockClear();
   vi.mocked(plugin.resolvePluginSkillRootsFromMetadata).mockClear();
-  const root = await fixture.createFixtureDirectory("plugin");
+  const root = await fixture.createFixtureDirectory(".cache/plugin");
   await writeSkill({
     dir: path.join(root, "skills/group/demo"),
     name: "demo",
@@ -158,6 +158,18 @@ it("uses prepared plugin metadata to observe nested companion skills", async () 
     expect(plugin.resolvePluginSkillRoots).not.toHaveBeenCalled();
     const observed = observer.forRoot(path.join(root, "skills"));
     expect(observed.options.scopes[0]!.depth).toBeGreaterThanOrEqual(7);
+    for (const included of [
+      root,
+      path.join(root, "skills"),
+      path.join(root, "skills/group/demo"),
+    ]) {
+      expect(
+        observed.options.exclude?.({
+          path: path.relative(observed.authority.rootDir, included),
+          kind: "directory",
+        }),
+      ).toBe(false);
+    }
     for (const ignored of [".git", "node_modules", "dist", ".venv", "__pycache__", "build"]) {
       expect(
         observed.options.exclude?.({

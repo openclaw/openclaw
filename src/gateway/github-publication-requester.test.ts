@@ -6,7 +6,6 @@ import {
   OLD_HEAD,
   WORKSPACE_TREE,
   commandResult,
-  createGitHubPublicationRequesterFixture,
   createRealPublicationWorkspace,
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
@@ -27,8 +26,9 @@ import {
 } from "../state/user-profile-writes.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
-import { captureGitHubPublicationRequester } from "./github-publication-requester.js";
+import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import {
+  createGitHubPublicationRequesterFixture,
   createRequesterPolicyFixture,
   createRequesterPublicationFixture,
   guestScopes,
@@ -65,7 +65,7 @@ describe("shared GitHub publication requester authority", () => {
   it("distinguishes explicit System authority from missing, unclassified, and closed sources", async () => {
     const f = await createRequesterPolicyFixture();
     const { context, session } = f.guestSource;
-    const system = await captureGitHubPublicationRequester(
+    const system = await prepareGitHubPublicationRequesterV2(
       {
         client: createSyntheticPluginRuntimeClient({
           operatorRoleActor: { kind: "system" },
@@ -88,7 +88,7 @@ describe("shared GitHub publication requester authority", () => {
       ["unclassified", { ...f.guestSource.client, internal: undefined }],
     ] as const) {
       await expect(
-        captureGitHubPublicationRequester({ client, context }, session),
+        prepareGitHubPublicationRequesterV2({ client, context }, session),
         label,
       ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
     }
@@ -98,7 +98,7 @@ describe("shared GitHub publication requester authority", () => {
     }))!;
     source.release();
     await expect(
-      captureGitHubPublicationRequester(
+      prepareGitHubPublicationRequesterV2(
         {
           client: {
             ...f.guestSource.client,
@@ -126,7 +126,7 @@ describe("shared GitHub publication requester authority", () => {
     });
     const source = (await captureGatewayOperatorRunAuthority({ client, context }))!;
     onTestFinished(source.release);
-    const captured = await captureGitHubPublicationRequester(
+    const captured = await prepareGitHubPublicationRequesterV2(
       {
         client: {
           ...client,

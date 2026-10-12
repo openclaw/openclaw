@@ -22,6 +22,7 @@ title: "Thinking levels"
 - Provider notes:
   - Thinking menus and pickers are provider-profile driven. Provider plugins declare the exact level set for the selected model, including labels such as binary `on`.
   - `adaptive`, `xhigh`, and `max` are advertised only when the provider/model supports them. Ultra is a separate harness mode, not an additional provider API effort. Typed directives for unsupported native levels are rejected with that model's valid options.
+  - Agent turns use the published capability facts retained for their selected model and runtime, without fetching a model list during the turn. Explicit configured thinking-level maps and effort lists still take precedence. A `reasoning: true` declaration alone does not freeze the provider's supported levels. Sign in to xAI again to remove effort lists copied by an older sign-in; future levels then come from the live catalog.
   - Existing stored unsupported levels are remapped by provider profile rank. When `adaptive` is not selectable, it uses the provider's declared non-off default; otherwise its ranked fallback preserves enabled thinking, usually `medium`. `xhigh` and `max` fall back to the largest supported non-off level for the selected model.
   - Anthropic Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
   - Anthropic Claude Opus 4.8 and Opus 4.7 keep thinking off unless you explicitly set a thinking level. Opus 4.8's provider-owned effort default is `high` after adaptive thinking is enabled.
@@ -40,6 +41,41 @@ title: "Thinking levels"
   - MiniMax M2.x (`minimax/MiniMax-M2*`) on the Anthropic-compatible streaming path defaults to `thinking: { type: "disabled" }` unless you explicitly set thinking in model params or request params. This avoids leaked `reasoning_content` deltas from M2.x's non-native Anthropic stream format. MiniMax-M3 (and M3.x) is exempt: M3 emits proper Anthropic thinking blocks and returns empty content when thinking is disabled, so OpenClaw keeps M3 on the provider's omitted/adaptive thinking path.
   - Z.AI (`zai/*`) is binary (`on`/`off`) for most GLM models. GLM-5.2 and GLM-5.3 are the exceptions. GLM-5.2 exposes `/think off|low|high|max` with an `off` default, maps `low` and `high` to Z.AI `reasoning_effort: "high"`, and maps `max` to `reasoning_effort: "max"`. GLM-5.3 exposes `/think low|high|max` with a `max` default, maps `off`, `minimal`, and `low` to `reasoning_effort: "low"`, `medium` and `high` to `"high"`, and `xhigh`, `adaptive`, and `max` to `"max"`.
   - Moonshot API Kimi K3 (`moonshot/kimi-k3`) always thinks at `max`, sends `reasoning_effort: "max"`, omits the K2 `thinking` field and fixed sampling overrides, and preserves K3-supported tool choices. Kimi Code K3 (`kimi/k3` and `kimi/k3-256k`) exposes the full `/think` ladder with a `high` default: `off` sends `thinking.type: "disabled"`, `minimal`/`low` map to low effort, `medium`/`high`/`adaptive` to high effort, and `xhigh`/`max` to max effort. Kimi Code refs also include `kimi/kimi-for-coding` and `kimi/kimi-for-coding-highspeed`. Kimi K2.7 Code (`moonshot/kimi-k2.7-code` and `moonshot/kimi-k2.7-code-highspeed`) always thinks, exposes only `on`, and omits both outbound `thinking` and `reasoning_effort`. Other `moonshot/*` models map `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When K2 thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
+
+## Custom OpenAI-compatible endpoints
+
+For custom providers using `api: "openai-completions"`, a model marked
+`reasoning: true` sends `reasoning_effort` when thinking is enabled without needing
+`compat.supportsReasoningEffort: true`. An explicit
+`compat.supportsReasoningEffort: false` on the model disables this control. This
+default also applies to existing custom configurations after upgrading. If an
+endpoint rejects `reasoning_effort`, the request error points to that opt-out.
+
+Advanced levels such as `xhigh` and `max` require a model declaration or mapping
+before the CLI accepts them. Use `compat.supportedReasoningEfforts` to declare the
+endpoint's accepted values, and `compat.reasoningEffortMap` or `thinkingLevelMap`
+to map thinking levels to those values. Requested enabled efforts are clamped to
+a declared ladder. Sending a level does not guarantee that the server or model
+distinguishes it from other levels: some models offer only binary thinking, and
+some servers ignore the field.
+
+`/think off` omits `reasoning_effort` by default on custom routes, because many
+servers accept only `low`, `medium`, and `high`. Omission leaves the server's own
+default in effect and does not guarantee zero reasoning. If the endpoint accepts
+`none` to disable thinking, declare it explicitly on the model:
+
+```json5 validate=false
+{
+  reasoning: true,
+  compat: {
+    supportedReasoningEfforts: ["none", "low", "medium", "high"],
+    reasoningEffortMap: { off: "none" },
+  },
+}
+```
+
+These defaults apply to custom routes. Bundled provider plugins retain their
+provider-specific thinking contracts, including native Ollama's `think` control.
 
 ## Resolution order
 
@@ -153,13 +189,14 @@ check the per-agent setting if the model default still does not take effect.
 - Directive-only message toggles whether thinking blocks are shown in replies.
 - When enabled, reasoning is sent as a **separate message** prefixed with `Thinking`.
 - `stream`: streams reasoning while the reply is generating when the active channel supports reasoning previews, then sends the final answer without reasoning. Channel previews remove recognized internal runtime context before delivery; the original reasoning remains unchanged for model replay.
+- Control UI shows native-provider reasoning during generation for `on` and `stream`, with **View → Reasoning** enabled. Each tool step keeps the reasoning that preceded it while later steps run. In `on`, each preview hands off to its saved reasoning without duplication; in `stream`, all previews disappear when the run ends.
 - Control UI history shows saved reasoning only for `on`, with **View → Reasoning** enabled. `off` and `stream` keep it hidden, including after reload.
 - Visible Control UI reasoning preserves Markdown paragraphs and fenced code blocks, including blank lines inside code.
 - Alias: `/reason`.
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
 - Resolution order: inline directive, then session override, then per-agent default (`agents.entries.*.reasoningDefault`), then global default (`agents.defaults.reasoningDefault`), then fallback (`off`).
 
-Malformed local-model reasoning tags are handled conservatively. Closed `<think>...</think>` blocks stay hidden on normal replies, and unclosed reasoning after already visible text is also hidden. If a reply is fully wrapped in a single unclosed opening tag and would otherwise deliver as empty text, OpenClaw removes the malformed opening tag and delivers the remaining text.
+Malformed local-model reasoning tags are handled conservatively. Closed `<think>...</think>` blocks stay hidden on normal replies, and unclosed reasoning after already visible text is also hidden. If a reply ends normally and is fully wrapped in a single unclosed opening tag and would otherwise deliver as empty text, OpenClaw removes the malformed opening tag and delivers the remaining text. A Chat Completions stream that reaches its output token limit or reports an error does not recover unfinished reasoning as answer text. If the token limit leaves no visible answer, OpenClaw reports that the model reached its output token limit before generating an answer.
 
 ## Related
 
@@ -175,7 +212,8 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 ## Web chat UI
 
 - Model, thinking-level, and fast-mode overrides can be changed in an existing session with `operator.write`; administrator access is not required for these three controls. Read-only clients cannot change them.
-- These are session preferences for subsequent turns, not a promise to change an already-running model call. The composer disables the controls while a reply is running and while a model change is being applied.
+- Model and thinking controls remain available while a message is sending, preparing, or streaming. They display the chosen session preference; saving a change does not interrupt or change an already-executing turn. Ordinary queued messages that have not started use the latest saved preference, while explicit per-message overrides keep their existing precedence.
+- While a model change is being applied, model and effort controls remain disabled until the new model's supported settings arrive. Fast mode remains disabled during an active reply.
 - The web chat thinking selector shows the explicit session override, or the inherited configured/provider default when no override is stored.
 - Refreshing, reloading, or compacting a conversation keeps an inherited choice inherited; it does not store the resolved level as an override. While model metadata is loading, refreshes retain the known thinking profile for the same model and runtime.
 - Selecting a level on the effort slider writes an explicit session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.
@@ -189,7 +227,7 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 
 - Provider plugins can expose `resolveThinkingProfile(ctx)` to define the model's supported levels and default.
 - Provider plugins that proxy Claude models should reuse `resolveClaudeThinkingProfile(modelId)` from `openclaw/plugin-sdk/provider-model-shared` so direct Anthropic and proxy catalogs stay aligned.
-- Each profile level has a stored canonical `id` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, or `ultra`) and may include a display `label`. Binary providers use `{ id: "low", label: "on" }`.
+- Each profile level has a stored `id` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, or `ultra`) and may include a display `label`. Binary providers use `{ id: "low", label: "on" }`.
 - Profile hooks receive merged catalog facts when available, including `reasoning`, `thinkingLevelMap`, `compat.thinkingFormat`, `compat.supportsReasoningEffort`, and `compat.supportedReasoningEfforts`. Use those facts to expose binary or custom profiles only when the configured request contract supports the matching payload. A `null` entry in `thinkingLevelMap` removes that level before choosing a default.
 - Tool plugins that need to validate an explicit thinking override should use `api.runtime.agent.resolveThinkingPolicy({ provider, model, agentRuntime })` plus `api.runtime.agent.normalizeThinkingLevel(...)`; they should not keep their own provider/model level lists. Pass `agentRuntime` when the tool owns the execution path, such as an always-embedded run.
 - Tool plugins with access to configured custom model metadata can pass `catalog` into `resolveThinkingPolicy` so `compat.supportedReasoningEfforts` opt-ins are reflected in plugin-side validation.

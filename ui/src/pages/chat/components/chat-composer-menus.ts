@@ -1,20 +1,20 @@
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { resolveThinkingCommandArgOptionsForSession } from "../../../lib/chat/thinking.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
-import type { ComposerEmojiMenu } from "./chat-composer-emoji.ts";
-import type { HumanMentionMenu } from "./chat-composer-mention-menu.ts";
+import type { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
+import type { HumanMentionMenu } from "./chat-composer-mention-menu.tsx";
 import {
   getActiveSkillMenuOptionId,
   getActiveSkillMenuOptionLabel,
   isSkillMenuVisible,
   type SkillMenuState,
-} from "./chat-composer-skill-menu.ts";
+} from "./chat-composer-skill-menu.tsx";
 import {
   getActiveSlashMenuOptionId,
   getActiveSlashMenuOptionLabel,
   isSlashMenuVisible,
   type SlashMenuState,
-} from "./chat-composer-slash-menu.ts";
+} from "./chat-composer-slash-menu.tsx";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 export function resolveChatSlashCommandArgOptions(

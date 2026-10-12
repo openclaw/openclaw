@@ -12,13 +12,93 @@ import {
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { upsertSessionEntryCore, withTranscriptWriteLock } from "./session-accessor.js";
+import type { SessionTranscriptRawDeltaResult } from "./session-accessor.sqlite-contract.js";
+import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readSessionTranscriptContextProjectionAsync } from "./session-transcript-context-read.js";
+import { withSessionTranscriptDeltaReader } from "./session-transcript-delta-read.js";
+import * as transcriptReaders from "./session-transcript-execution-read.js";
 import { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import * as contextWorker from "./session-transcript-read-worker-runtime.js";
 import { readSessionTranscriptWatermarkAsync } from "./session-transcript-watermark.js";
-import * as historyReaders from "./session-transcript-worker-readers.js";
+import { historyLane } from "./session-transcript-worker-resources.js";
+import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
+
+it("keeps admitted delta reads with their writer when independent history cannot settle", async () => {
+  await withOpenClawTestState({ label: "locked-admitted-delta" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "locked-admitted-delta",
+      sessionKey: "agent:main:locked-admitted-delta",
+      storePath: state.statePath("transcript.sqlite"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(target);
+    await manager.appendMessageAsync({ role: "user", content: "earlier", timestamp: 1 });
+    const { databaseClaim } = await loadSessionEntryForAdmission(target);
+    if (!("kind" in databaseClaim) || databaseClaim.kind !== "worker" || !databaseClaim.reader) {
+      throw new Error("Expected admitted durable session reader");
+    }
+    try {
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget: target,
+          sessionReader: databaseClaim.reader,
+          withTranscriptWrite: async (write) => write(),
+        },
+        () =>
+          withTranscriptWriteLock(target, async (locked) => {
+            const independentRead = createDeferred();
+            const blockedHistory = createDeferred<never>();
+            void blockedHistory.promise.catch(() => {});
+            const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(() => {
+              independentRead.resolve();
+              return blockedHistory.promise;
+            });
+            let reading: Promise<SessionTranscriptRawDeltaResult> | undefined;
+            const read = async () => {
+              reading = withSessionTranscriptDeltaReader(target, (reader) => reader.raw({}));
+              return await Promise.race([
+                reading,
+                independentRead.promise.then(() => {
+                  throw new Error("Admitted writer waited on independent history custody");
+                }),
+              ]);
+            };
+            try {
+              const earlier = {
+                event: expect.objectContaining({
+                  type: "message",
+                  message: expect.objectContaining({ role: "user", content: "earlier" }),
+                }),
+              };
+              await expect(read()).resolves.toMatchObject({
+                kind: "page",
+                events: expect.arrayContaining([expect.objectContaining(earlier)]),
+              });
+              await locked.appendMessage({
+                message: { role: "user", content: "later", timestamp: 2 },
+                prepareMessageAfterIdempotencyCheckAsync: async (message) => {
+                  await expect(read()).resolves.toMatchObject({
+                    kind: "page",
+                    events: expect.arrayContaining([expect.objectContaining(earlier)]),
+                  });
+                  return message;
+                },
+              });
+            } finally {
+              blockedHistory.reject(new Error("Synthetic history custody released"));
+              await reading?.catch(() => {});
+              spy.mockRestore();
+            }
+          }),
+      );
+    } finally {
+      await databaseClaim.release();
+    }
+  });
+});
 
 it("validates context projection inside a transcript lock and append preparation", async ({
   signal,
@@ -28,7 +108,7 @@ it("validates context projection inside a transcript lock and append preparation
       agentId: "main",
       sessionId: "locked-context",
       sessionKey: "agent:main:locked-context",
-      storePath: state.statePath("transcript.sqlite"),
+      storePath: state.statePath("sessions.json"),
     };
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target);
@@ -48,18 +128,41 @@ it("validates context projection inside a transcript lock and append preparation
         signal,
       );
     await withTranscriptWriteLock(target, async (locked) => {
-      await expect(project()).resolves.toMatchObject([{ role: "user", content: "earlier" }]);
-      await locked.appendMessage({
-        message: { role: "user", content: "later", timestamp: 2 },
-        prepareMessageAfterIdempotencyCheckAsync: async (message) => {
-          await expect(project()).resolves.toMatchObject([{ role: "user", content: "earlier" }]);
-          return message;
-        },
+      const independentRead = createDeferred();
+      const blockedHistory = createDeferred<never>();
+      void blockedHistory.promise.catch(() => {});
+      const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(() => {
+        independentRead.resolve();
+        return blockedHistory.promise;
       });
-      await expect(project()).resolves.toMatchObject([
-        { role: "user", content: "earlier" },
-        { role: "user", content: "later" },
-      ]);
+      let reading: ReturnType<typeof project> | undefined;
+      const read = async () => {
+        reading = project();
+        return await Promise.race([
+          reading,
+          independentRead.promise.then(() => {
+            throw new Error("Context acceptance waited on independent history custody");
+          }),
+        ]);
+      };
+      try {
+        await expect(read()).resolves.toMatchObject([{ role: "user", content: "earlier" }]);
+        await locked.appendMessage({
+          message: { role: "user", content: "later", timestamp: 2 },
+          prepareMessageAfterIdempotencyCheckAsync: async (message) => {
+            await expect(read()).resolves.toMatchObject([{ role: "user", content: "earlier" }]);
+            return message;
+          },
+        });
+        await expect(read()).resolves.toMatchObject([
+          { role: "user", content: "earlier" },
+          { role: "user", content: "later" },
+        ]);
+      } finally {
+        blockedHistory.reject(new Error("Synthetic history custody released"));
+        await reading?.catch(() => {});
+        spy.mockRestore();
+      }
     });
   });
 });
@@ -202,11 +305,11 @@ it("refuses a rewrite after final worker validation but before host consumption"
     const source = SessionManager.open(scope);
     source.appendMessage({ role: "user", content: "original", timestamp: 1 });
     const rewritten = createDeferred();
-    const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+    const createReaders = transcriptReaders.createPreparedSessionTranscriptReads;
     const spy = vi
-      .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-      .mockImplementation((runRequest) => {
-        const readers = createReaders(runRequest);
+      .spyOn(transcriptReaders, "createPreparedSessionTranscriptReads")
+      .mockImplementation((params) => {
+        const readers = createReaders(params);
         return {
           ...readers,
           readAnchors: async (input, signal) => {

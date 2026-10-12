@@ -20,6 +20,11 @@ const agentsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runPluginsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const pluginsCliLoadedMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: This suite owns route dispatch; process tests cover ownership admission.
+vi.mock("../local-state-owner.js", () => ({
+  runWithLocalStateOwner: ({ runLocal }: { runLocal: () => Promise<void> }) => runLocal(),
+}));
+
 vi.mock("../command-execution-startup.js", () => ({
   applyCliExecutionStartupPresentation: vi.fn(async () => {}),
   ensureCliExecutionBootstrap: vi.fn(async () => {}),

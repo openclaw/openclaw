@@ -2,24 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
-import {
-  deleteSessionEntryLifecycle,
-  loadTranscriptEvents,
-  replaceSessionEntry,
-  resetSessionEntryLifecycle,
-} from "../../config/sessions/session-accessor.js";
+import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../../config/sessions/session-accessor.sqlite-read.js";
-import {
-  MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
-  resolveManagedOutgoingMediaArtifactDownload,
-} from "../../gateway/managed-image-attachments.js";
-import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
-import { managedImageRecordOperations } from "../../gateway/managed-image-record-store.kernel.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -29,146 +19,21 @@ import {
   beginSessionWorkAdmission,
   getActiveSessionLifecycleMutationCount,
 } from "../../sessions/session-lifecycle-admission.js";
-import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
-import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { requestActiveCronJobCancellation } from "../active-jobs.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
-import { makeCronJob } from "../delivery.test-helpers.js";
-import { createCliDeps } from "../isolated-agent.delivery.test-helpers.js";
-import type { CronStoredJob } from "../types.js";
-import { commitCurrentSessionCronCompletion } from "./current-session-completion.js";
-import type { DispatchCronDeliveryParams } from "./delivery-dispatch-types.js";
+import { CronService } from "../service.js";
+import { createNoopLogger } from "../service.test-harness.js";
+import { createCompletionFixture, PNG } from "./current-session-completion.test-fixtures.js";
+import * as deliveryPolicy from "./delivery-dispatch-policy.js";
 import { dispatchCronDelivery } from "./delivery-dispatch.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
-
-const PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=",
-  "base64",
-);
-
-async function createCompletionFixture(
-  state: OpenClawTestState,
-  sessionTarget: "current" | "isolated" = "current",
-) {
-  const sessionKey = "agent:main:webchat:direct:report";
-  const sessionId = "report-session";
-  const scope = {
-    agentId: "main",
-    sessionKey,
-    sessionId,
-    storePath: path.join(state.stateDir, "agents", "main", "sessions", "sessions.json"),
-  };
-  const generation = { sessionId, lifecycleRevision: "report-generation" };
-  await replaceSessionEntry(scope, { ...generation, updatedAt: 1 });
-  await fs.mkdir(state.workspaceDir, { recursive: true });
-  const imagePath = path.join(state.workspaceDir, "report.png");
-  await fs.writeFile(imagePath, PNG);
-  const cfg = {
-    agents: { entries: { main: { workspace: state.workspaceDir } } },
-    session: { store: scope.storePath },
-  };
-  const payload: ReplyPayload = { text: "Example report", mediaUrl: imagePath };
-  const job: CronStoredJob = {
-    ...makeCronJob({ id: "report-job", sessionTarget, sessionKey }),
-    ...(sessionTarget === "isolated"
-      ? {
-          sourceConversation: { sessionKey, ...generation },
-          delivery: { mode: "announce", channel: "last" },
-        }
-      : {}),
-  };
-  const params: DispatchCronDeliveryParams = {
-    deliveryAttemptFence: null,
-    cfgWithAgentDefaults: cfg,
-    deps: createCliDeps(),
-    job,
-    agentId: "main",
-    agentSessionKey: "agent:main:cron:report-job",
-    sourceSessionKey: sessionKey,
-    sourceSessionGeneration: generation,
-    runSessionKey: "agent:main:cron:report-job:run:report-run",
-    sessionId: "report-run",
-    lifecycleRevision: "run-generation",
-    sessionUpdatedAt: 1000,
-    runStartedAt: 1000,
-    timeoutMs: 30000,
-    resolvedDelivery: { ok: false, mode: "implicit", error: new Error("No external channel") },
-    deliveryPlan: resolveCronDeliveryPlan(job),
-    deliveryRequested: true,
-    undeliveredRunStatus: "ok",
-    spawnOnlyHandoff: false,
-    sourceDeliveryOutcome: {
-      visibleDeliveries: [],
-      verifiedMessageToolDelivery: false,
-      satisfiesSourceDelivery: false,
-      unverifiedMessageToolDelivery: false,
-    },
-    deliveryBestEffort: false,
-    deliveryPayloadHasStructuredContent: true,
-    deliveryPayloads: [payload],
-    isAborted: () => false,
-    abortReason: () => "aborted",
-  };
-  const records = () => listManagedImageRecordEntries({ stateDir: state.stateDir, sessionKey });
-  const database = openOpenClawStateDatabase({ env: state.env });
-  const downloads: Array<ReturnType<typeof resolveManagedOutgoingMediaArtifactDownload>> = [];
-  const readDownloads = async () =>
-    (await Promise.allSettled(downloads)).map((result) => {
-      if (result.status === "rejected") {
-        throw result.reason;
-      }
-      return result.value;
-    });
-  let updates = 0;
-  const unsubscribe = onSessionTranscriptUpdate((update) => {
-    if (update.target.sessionId !== sessionId) {
-      return;
-    }
-    updates += 1;
-    // Observe records at publication, before a wrongly late write could make the test pass.
-    const entries = managedImageRecordOperations["managedImages.entries"](
-      { sessionKey },
-      { open: () => database, stateOptions: () => ({ path: database.path, env: state.env }) },
-    );
-    for (const { record } of entries) {
-      const pending = resolveManagedOutgoingMediaArtifactDownload({
-        sessionKey,
-        agentId: "main",
-        stateDir: state.stateDir,
-        artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${record.attachmentId}`,
-      });
-      void pending.catch(() => {});
-      downloads.push(pending);
-    }
-  });
-  return {
-    payload,
-    job,
-    params,
-    scope,
-    records,
-    downloads: readDownloads,
-    updates: () => updates,
-    dispose: async () => {
-      unsubscribe();
-      await readDownloads();
-    },
-    commit: () => commitCurrentSessionCronCompletion(params),
-    messages: async () =>
-      (await loadTranscriptEvents(scope)).filter(
-        (event) => readTranscriptEventMessage(event)?.role === "assistant",
-      ),
-  };
-}
 
 describe("current-session completion delivery", () => {
   it.each(["leading-token", "silent-media-caption"] as const)(
@@ -182,7 +47,6 @@ describe("current-session completion delivery", () => {
           fixture.params.deliveryPayloads = [
             { text, ...(hasMedia ? { mediaUrl: fixture.payload.mediaUrl } : {}) },
           ];
-          fixture.params.deliveryPayloadHasStructuredContent = hasMedia;
           fixture.params.synthesizedText = text;
           fixture.params.outputText = text;
           fixture.params.summary = text;
@@ -209,7 +73,7 @@ describe("current-session completion delivery", () => {
   );
 
   it.each([{ to: "recipient" }, { accountId: "work" }, { threadId: 0 }])(
-    "preserves the committed report and reports unresolved explicit intent %j",
+    "does not write a report into the creator when explicit intent is unresolved %j",
     async (coordinates) => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {
         const fixture = await createCompletionFixture(state);
@@ -217,200 +81,14 @@ describe("current-session completion delivery", () => {
           fixture.params.job.delivery = { mode: "announce", ...coordinates };
           fixture.params.deliveryPlan = resolveCronDeliveryPlan(fixture.params.job);
           fixture.params.deliveryPayloads = [{ text: "Final report" }];
-          const completion = await fixture.commit();
+          const completion = await dispatchCronDelivery(fixture.params);
           const messages = await fixture.messages();
-          expect(messages).toHaveLength(1);
-          expect(readTranscriptEventMessage(messages[0])?.content).toEqual([
-            { type: "text", text: "Final report" },
-          ]);
-          expect(completion).toEqual({
-            ok: true,
-            requiresExternalDelivery: false,
+          expect(messages).toEqual([]);
+          expect(completion).toMatchObject({
+            delivered: false,
             deliveryError: "No external channel",
-          });
-        } finally {
-          await fixture.dispose();
-        }
-      });
-    },
-  );
-});
-
-describe("isolated completion in the creating conversation", () => {
-  it.each(["unchanged", "reset"] as const)(
-    "fences implicit external delivery against the %s source generation after resolution",
-    async (sourceState) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const fixture = await createCompletionFixture(state, "isolated");
-        const registry = captureActivePluginRegistrySnapshot();
-        const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "report-message" }));
-        setActivePluginRegistry(
-          createTestRegistry([
-            {
-              pluginId: "telegram",
-              source: "test",
-              plugin: {
-                ...createChannelTestPluginBase({ id: "telegram" }),
-                outbound: { deliveryMode: "direct", sendText },
-              },
-            },
-          ]),
-        );
-        try {
-          await replaceSessionEntry(fixture.scope, {
-            sessionId: fixture.scope.sessionId,
-            lifecycleRevision: "report-generation",
-            updatedAt: 1,
-            delivery: normalizeSessionDeliveryState({
-              context: { channel: "telegram", to: "123" },
-            }),
-          });
-          fixture.params.deliveryPayloads = [{ text: "tick" }];
-          fixture.params.deliveryPayloadHasStructuredContent = false;
-          fixture.params.synthesizedText = "tick";
-          fixture.params.resolvedDelivery = await resolveDeliveryTarget(
-            fixture.params.cfgWithAgentDefaults,
-            "main",
-            { ...fixture.job, ...fixture.params.deliveryPlan },
-          );
-          expect(fixture.params.resolvedDelivery).toMatchObject({
-            ok: true,
-            channel: "telegram",
-            to: "123",
-          });
-          if (sourceState === "reset") {
-            await resetSessionEntryLifecycle({
-              storePath: fixture.scope.storePath,
-              target: {
-                canonicalKey: fixture.scope.sessionKey,
-                storeKeys: [fixture.scope.sessionKey],
-              },
-              buildNextEntry: () => ({
-                sessionId: "replacement-session",
-                lifecycleRevision: "replacement-generation",
-                updatedAt: 3000,
-              }),
-            });
-          }
-
-          const delivery = await dispatchCronDelivery(fixture.params);
-          if (sourceState === "reset") {
-            expect(delivery).toMatchObject({
-              delivered: false,
-              deliveryState: { status: "not-delivered" },
-              deliveryError: expect.stringContaining("original session generation"),
-            });
-            expect(sendText).not.toHaveBeenCalled();
-          } else {
-            expect(delivery).toMatchObject({ delivered: true });
-            await expect(dispatchCronDelivery(fixture.params)).resolves.toMatchObject({
-              delivered: true,
-            });
-            expect(sendText).toHaveBeenCalledOnce();
-          }
-        } finally {
-          restoreActivePluginRegistrySnapshot(registry);
-          await fixture.dispose();
-        }
-      });
-    },
-  );
-
-  it.each(["deleted", "reset"] as const)(
-    "records a delivery failure when the creating conversation is %s",
-    async (change) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const fixture = await createCompletionFixture(state, "isolated");
-        try {
-          fixture.params.deliveryPayloads = [{ text: "tick" }];
-          fixture.params.deliveryPayloadHasStructuredContent = false;
-          fixture.params.synthesizedText = "tick";
-          if (change === "deleted") {
-            await deleteSessionEntryLifecycle({
-              archiveTranscript: false,
-              storePath: fixture.scope.storePath,
-              target: {
-                canonicalKey: fixture.scope.sessionKey,
-                storeKeys: [fixture.scope.sessionKey],
-              },
-            });
-          } else {
-            await resetSessionEntryLifecycle({
-              storePath: fixture.scope.storePath,
-              target: {
-                canonicalKey: fixture.scope.sessionKey,
-                storeKeys: [fixture.scope.sessionKey],
-              },
-              buildNextEntry: () => ({
-                sessionId: "replacement-session",
-                lifecycleRevision: "replacement-generation",
-                updatedAt: 3000,
-              }),
-            });
-          }
-
-          const delivery = await dispatchCronDelivery(fixture.params);
-          expect(delivery).toMatchObject({
-            delivered: false,
-            deliveryAttempted: true,
-            deliveryError: expect.stringContaining("session rebound"),
             disposition: { kind: "error", errorKind: "delivery-target" },
           });
-          expect(await fixture.messages()).toEqual([]);
-          expect(fixture.updates()).toBe(0);
-        } finally {
-          await fixture.dispose();
-        }
-      });
-    },
-  );
-
-  it("keeps a silent isolated result out of the creating conversation", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const fixture = await createCompletionFixture(state, "isolated");
-      try {
-        fixture.params.deliveryPayloads = [{ text: "NO_REPLY" }];
-        fixture.params.deliveryPayloadHasStructuredContent = false;
-        fixture.params.synthesizedText = "NO_REPLY";
-        await expect(dispatchCronDelivery(fixture.params)).resolves.toMatchObject({
-          disposition: { kind: "suppressed" },
-          deliverySuppressionReason: "silent",
-        });
-        expect(await fixture.messages()).toEqual([]);
-        expect(fixture.updates()).toBe(0);
-      } finally {
-        await fixture.dispose();
-      }
-    });
-  });
-
-  it.each(["explicit", "remembered"] as const)(
-    "does not replace an unavailable %s external route with a conversation commit",
-    async (route) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const fixture = await createCompletionFixture(state, "isolated");
-        try {
-          fixture.params.deliveryPayloads = [{ text: "tick" }];
-          fixture.params.synthesizedText = "tick";
-          if (route === "explicit") {
-            fixture.params.job.delivery = { mode: "announce", channel: "missing-channel" };
-            fixture.params.deliveryPlan = resolveCronDeliveryPlan(fixture.params.job);
-          } else {
-            fixture.params.resolvedDelivery = {
-              ok: false,
-              channel: "telegram",
-              mode: "implicit",
-              error: new Error("Remembered channel unavailable"),
-            };
-          }
-          await expect(dispatchCronDelivery(fixture.params)).resolves.toMatchObject({
-            delivered: false,
-            deliveryError:
-              route === "explicit" ? "No external channel" : "Remembered channel unavailable",
-            disposition: { kind: "error", errorKind: "delivery-target" },
-          });
-          expect(await fixture.messages()).toEqual([]);
-          expect(fixture.updates()).toBe(0);
         } finally {
           await fixture.dispose();
         }
@@ -420,51 +98,146 @@ describe("isolated completion in the creating conversation", () => {
 });
 
 describe("current-session completion media", () => {
-  it("refuses publication when occurrence authority ends during media preparation", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const fixture = await createCompletionFixture(state);
-      let current = true;
-      const beforeAttempt = vi.fn(async () => {});
-      fixture.params.deliveryAttemptFence = {
-        beforeAttempt,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("completion occurrence expired");
-          }
-        },
-      };
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (
-              request.stage === "commit" &&
-              isRecord(request.facts) &&
-              request.facts.type === "managedImages.insert"
-            ) {
-              current = false;
-            }
-            admit(request, grant);
-          }, attachment),
+  it.each([
+    { stage: "commit", revoke: "cancel" },
+    { stage: "commit", revoke: "owner" },
+    { stage: "send", revoke: "cancel" },
+    { stage: "send", revoke: "owner" },
+  ] as const)(
+    "honors the real occurrence fence after $revoke before $stage",
+    async ({ stage, revoke }) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const fixture = await createCompletionFixture(
+          state,
+          "current",
+          "agent:main:telegram:direct:12345",
         );
-      try {
-        const [completion] = await Promise.allSettled([fixture.commit()]);
-        expect(current).toBe(false);
-        expect(completion).toMatchObject({
-          status: "rejected",
-          reason: expect.objectContaining({ message: "completion occurrence expired" }),
+        fixture.params.cfgWithAgentDefaults.session = {
+          ...fixture.params.cfgWithAgentDefaults.session,
+          dmScope: "per-channel-peer",
+        };
+        const registry = captureActivePluginRegistrySnapshot();
+        const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "forbidden" }));
+        const sendMedia = vi.fn(async () => ({ channel: "telegram", messageId: "media" }));
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "telegram",
+              source: "test",
+              plugin: {
+                ...createChannelTestPluginBase({ id: "telegram" }),
+                outbound: { deliveryMode: "direct", sendText, sendMedia },
+              },
+            },
+          ]),
+        );
+        let available = true;
+        let revoked = false;
+        const revokeOccurrence = () => {
+          revoked = true;
+          if (revoke === "cancel") {
+            requestActiveCronJobCancellation(fixture.params.job.id, "test occurrence cancelled");
+          } else {
+            available = false;
+          }
+        };
+        const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+          if (
+            stage === "commit" &&
+            request.stage === "commit" &&
+            isRecord(request.facts) &&
+            request.facts.type === "managedImages.insert"
+          ) {
+            expect(sendMedia).toHaveBeenCalledOnce();
+            revokeOccurrence();
+          }
+          admit(request, grant);
         });
-        expect(beforeAttempt).toHaveBeenCalledOnce();
-        expect(await fixture.messages()).toEqual([]);
-        expect(await fixture.records()).toEqual([]);
-        expect(fixture.updates()).toBe(0);
-      } finally {
-        spy.mockRestore();
-        await fixture.dispose();
-      }
-    });
-  });
+        const tts = vi
+          .spyOn(deliveryPolicy, "maybeApplyTtsToCronPayloads")
+          .mockImplementation(async ({ payloads }) => {
+            if (stage === "send") {
+              expect(await fixture.messages()).toHaveLength(0);
+              revokeOccurrence();
+            }
+            return payloads;
+          });
+        const cron = new CronService({
+          scheduler: createTestGatewayScheduler(),
+          storePath: state.path("cron", "jobs.json"),
+          cronEnabled: false,
+          defaultAgentId: "main",
+          isAgentAvailable: () => available,
+          log: createNoopLogger(),
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: async ({ job, abortSignal, deliveryAttemptFence }) => {
+            expect(deliveryAttemptFence).not.toBeNull();
+            fixture.params.job = job;
+            fixture.params.deliveryPlan = resolveCronDeliveryPlan(job);
+            fixture.params.deliveryAttemptFence = deliveryAttemptFence;
+            fixture.params.abortSignal = abortSignal;
+            fixture.params.isAborted = () => abortSignal?.aborted === true;
+            fixture.params.runStartedAt = Date.now();
+            fixture.params.resolvedDelivery = await resolveDeliveryTarget(
+              fixture.params.cfgWithAgentDefaults,
+              "main",
+              { ...job, ...fixture.params.deliveryPlan },
+            );
+            const result = await dispatchCronDelivery(fixture.params);
+            expect(result.delivered).toBe(stage === "commit");
+            if (stage === "commit") {
+              expect(result).toMatchObject({
+                deliveryError: undefined,
+                diagnostics: {
+                  entries: expect.arrayContaining([
+                    expect.objectContaining({
+                      source: "delivery",
+                      severity: "warn",
+                      message: expect.stringContaining(
+                        "result was delivered but was not added to the conversation:",
+                      ),
+                    }),
+                  ]),
+                },
+              });
+            }
+            return {
+              status: result.delivered ? "ok" : "error",
+              error: result.deliveryError,
+            };
+          },
+        });
+        try {
+          await state.writeConfig(fixture.params.cfgWithAgentDefaults);
+          await cron.start();
+          const job = await cron.add({
+            name: "fenced result",
+            enabled: true,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "current",
+            sessionKey: fixture.scope.sessionKey,
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "produce a result" },
+            delivery: { mode: "announce", channel: "telegram", to: "12345" },
+          });
+          await cron.run(job.id, "force");
+          expect(revoked).toBe(true);
+          expect(sendMedia).toHaveBeenCalledTimes(stage === "commit" ? 1 : 0);
+          expect(await fixture.messages()).toHaveLength(0);
+          if (stage === "commit") {
+            expect(await fixture.records()).toEqual([]);
+          }
+        } finally {
+          cron.stop();
+          admission.mockRestore();
+          tts.mockRestore();
+          restoreActivePluginRegistrySnapshot(registry);
+          await fixture.dispose();
+        }
+      });
+    },
+  );
 
   it.each(["ordinary", "promotion-failure"] as const)(
     "publishes downloadable media and replays the original message after %s",
@@ -474,21 +247,16 @@ describe("current-session completion media", () => {
         let restorePromotionAdmission: (() => void) | undefined;
         try {
           if (mode === "promotion-failure") {
-            const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-            const spy = vi
-              .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-              .mockImplementation((admit, attachment) =>
-                createAdmission((request, grant) => {
-                  if (
-                    request.stage === "commit" &&
-                    isRecord(request.facts) &&
-                    request.facts.type === "managedImages.attach"
-                  ) {
-                    throw new Error("report promotion failed");
-                  }
-                  admit(request, grant);
-                }, attachment),
-              );
+            const spy = probe.admission(operationAdmission, (request, grant, admit) => {
+              if (
+                request.stage === "commit" &&
+                isRecord(request.facts) &&
+                request.facts.type === "managedImages.attach"
+              ) {
+                throw new Error("report promotion failed");
+              }
+              admit(request, grant);
+            });
             restorePromotionAdmission = () => spy.mockRestore();
             await expect(fixture.commit()).rejects.toThrow("report promotion failed");
             expect(fixture.updates()).toBe(0);

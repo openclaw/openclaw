@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { LinkReaderHovercardProvider as LinkHovercardProvider } from "./link-reader-hovercard.ts";
 import {
   LINK_READER_HOVERCARD_PROVIDER_TAG as LINK_HOVERCARD_TAG,
@@ -81,12 +82,14 @@ function card() {
   return document.querySelector<HTMLElement>(".link-hovercard");
 }
 async function hover(anchor: HTMLElement) {
+  await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
   anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
   await vi.advanceTimersByTimeAsync(250);
 }
 beforeEach(() => vi.useFakeTimers());
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.resolve();
   vi.useRealTimers();
 });
 
@@ -297,12 +300,14 @@ describe("generic link hovercards", () => {
     for (const image of card()!.querySelectorAll("img")) {
       image.dispatchEvent(new Event("error"));
     }
+    flush();
     expect(card()?.querySelectorAll("img").length).toBe(0);
     expect(card()?.querySelector("a")?.target).toBe("_blank");
   });
 
   it("supports shadow-root links, keyboard traversal and Escape without reopening", async () => {
     const view = fixture(true);
+    await view.provider.updateComplete;
     view.anchor.focus();
     view.provider.activateFromBootstrap(
       view.anchor,

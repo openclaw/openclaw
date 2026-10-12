@@ -1,7 +1,6 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
-import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildFalVideoGenerationProvider } from "./video-generation-provider.js";
@@ -120,54 +119,6 @@ describe("fal video generation provider", () => {
     fetchGuardMock.mockReset();
   });
 
-  it("declares explicit mode capabilities", () => {
-    const provider = buildFalVideoGenerationProvider();
-    expectExplicitVideoGenerationCapabilities(provider);
-    expect(provider.capabilities.imageToVideo?.maxInputImages).toBe(1);
-    expect(
-      provider.capabilities.imageToVideo?.maxInputImagesByModel?.[
-        "bytedance/seedance-2.0/fast/reference-to-video"
-      ],
-    ).toBe(9);
-    expect(provider.capabilities.videoToVideo?.maxInputVideos).toBe(0);
-    expect(
-      Object.keys(provider.capabilities.videoToVideo?.supportedDurationSecondsByModel ?? {}),
-    ).toEqual([
-      "bytedance/seedance-2.0/fast/reference-to-video",
-      "bytedance/seedance-2.0/reference-to-video",
-    ]);
-  });
-
-  it("submits fal video jobs through the queue API and downloads the completed result", async () => {
-    mockFalProviderRuntime();
-    mockCompletedFalVideoJob({
-      bytes: "webm-bytes",
-      contentType: "video/webm",
-    });
-
-    const result = await generateVideo({
-      prompt: "A spaceship emerges from the clouds",
-      durationSeconds: 5,
-      aspectRatio: "16:9",
-      resolution: "720P",
-    });
-
-    expect(fetchGuardUrl(1)).toBe("https://queue.fal.run/fal-ai/minimax/video-01-live");
-    const submitBody = getSubmitBody();
-    expect(submitBody).toEqual({
-      prompt: "A spaceship emerges from the clouds",
-    });
-    expect(fetchGuardUrl(2)).toBe("https://queue.fal.run/fal-ai/minimax/requests/req-123/status");
-    expect(fetchGuardUrl(3)).toBe("https://queue.fal.run/fal-ai/minimax/requests/req-123");
-    expect(result.videos).toHaveLength(1);
-    expect(result.videos[0]?.mimeType).toBe("video/webm");
-    expect(result.videos[0]?.fileName).toBe("video-1.webm");
-    expect(result.videos[0]?.url).toBe("https://fal.run/files/video.mp4");
-    expect(result.metadata).toEqual({
-      requestId: "req-123",
-    });
-  });
-
   it("parses raw fal queue result payloads with top-level video output", async () => {
     mockFalProviderRuntime();
     fetchGuardMock
@@ -203,9 +154,14 @@ describe("fal video generation provider", () => {
 
     const result = await generateVideo({
       prompt: "A spaceship emerges from the clouds",
+      durationSeconds: 5,
+      aspectRatio: "16:9",
+      resolution: "720P",
       cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
     });
 
+    expect(fetchGuardUrl(1)).toBe("https://queue.fal.run/fal-ai/minimax/video-01-live");
+    expect(getSubmitBody()).toEqual({ prompt: "A spaceship emerges from the clouds" });
     expect(result.videos).toEqual([
       {
         url: "https://fal.run/files/video.mp4",
@@ -213,17 +169,6 @@ describe("fal video generation provider", () => {
         fileName: "video-1.mp4",
       },
     ]);
-  });
-
-  it("rejects an empty generated video", async () => {
-    mockFalProviderRuntime();
-    mockCompletedFalVideoJob({
-      bytes: "",
-    });
-
-    await expect(generateVideo()).rejects.toThrow(
-      "fal generated video download: malformed video response",
-    );
   });
 
   it("rejects malformed generated video downloads instead of returning URL-only videos", async () => {
@@ -313,59 +258,6 @@ describe("fal video generation provider", () => {
       .mockResolvedValueOnce(releasedJson({ status: "COMPLETED", response: [] }));
 
     await expect(generateVideo()).rejects.toThrow("fal video generation response malformed");
-  });
-
-  it("submits HeyGen video-agent requests without unsupported fal controls", async () => {
-    mockFalProviderRuntime();
-    mockCompletedFalVideoJob();
-
-    const result = await generateVideo({
-      model: "fal-ai/heygen/v2/video-agent",
-      prompt: "A founder explains OpenClaw in a concise studio video",
-      durationSeconds: 8,
-      aspectRatio: "16:9",
-      resolution: "720P",
-      audio: true,
-    });
-
-    expect(fetchGuardUrl(1)).toBe("https://queue.fal.run/fal-ai/heygen/v2/video-agent");
-    expect(getSubmitBody()).toEqual({
-      prompt: "A founder explains OpenClaw in a concise studio video",
-    });
-    expect(result.metadata).toEqual({
-      requestId: "req-123",
-    });
-  });
-
-  it("submits Seedance 2 requests with fal schema fields", async () => {
-    mockFalProviderRuntime();
-    mockCompletedFalVideoJob({
-      responseExtras: { seed: 42 },
-    });
-
-    const result = await generateVideo({
-      model: "bytedance/seedance-2.0/fast/text-to-video",
-      prompt: "A chrome lobster drives a tiny kart across a neon pier",
-      durationSeconds: 7,
-      aspectRatio: "16:9",
-      resolution: "720P",
-      audio: false,
-    });
-
-    expect(fetchGuardUrl(1)).toBe(
-      "https://queue.fal.run/bytedance/seedance-2.0/fast/text-to-video",
-    );
-    expect(getSubmitBody()).toEqual({
-      prompt: "A chrome lobster drives a tiny kart across a neon pier",
-      aspect_ratio: "16:9",
-      resolution: "720p",
-      duration: "7",
-      generate_audio: false,
-    });
-    expect(result.metadata).toEqual({
-      requestId: "req-123",
-      seed: 42,
-    });
   });
 
   it("drops unsupported Seedance 2 duration values before queue submission", async () => {

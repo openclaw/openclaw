@@ -39,8 +39,11 @@ export async function probeCodexNativeAuth(params: {
     ) {
       return undefined;
     }
+    // Login status reads the same auth.json on every Codex version; skip the
+    // installed-binary probe so this short auth check never waits on it.
     const start = await resolveManagedCodexAppServerStartOptions(options.start, {
       pluginRoot: params.pluginRoot,
+      preferInstalled: false,
     });
     const env = resolveCodexAppServerSpawnEnv(start, params.env ?? process.env);
     const invocation = materializeWindowsSpawnProgram(

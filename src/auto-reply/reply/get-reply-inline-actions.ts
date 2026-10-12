@@ -24,6 +24,7 @@ import {
   copyReplyPayloadMetadata,
   markCommandReplyForDelivery,
   markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { ElevatedLevel, VerboseLevel } from "../thinking.js";
@@ -154,6 +155,7 @@ export async function handleInlineActions(
     provider: params.provider,
     model: params.model,
     contextTokens: params.contextTokens,
+    contextTokenProjection: params.contextTokenProjection,
     isGroup: params.isGroup,
     typing: params.typing,
   };
@@ -203,12 +205,11 @@ export async function handleInlineActions(
   let directives = initialDirectives;
   let cleanedBody = initialCleanedBody;
   const updateAgentBody = (body: string) => {
-    ctx.Body = body;
-    ctx.agentText = body;
-    ctx.BodyForAgent = body;
-    sessionCtx.Body = body;
-    sessionCtx.agentText = body;
-    sessionCtx.BodyForAgent = body;
+    for (const target of [ctx, sessionCtx]) {
+      target.Body = body;
+      target.agentText = body;
+      target.BodyForAgent = body;
+    }
     sessionCtx.BodyStripped = body;
     cleanedBody = body;
   };
@@ -464,14 +465,14 @@ export async function handleInlineActions(
     if (!reply || !opts?.onBlockReply) {
       return;
     }
-    await opts.onBlockReply(
-      markReplyPayloadForSourceSuppressionDelivery(
-        copyReplyPayloadMetadata(reply, {
-          ...reply,
-          isStatusNotice: true,
-        }),
-      ),
+    const payload = markReplyPayloadForSourceSuppressionDelivery(
+      copyReplyPayloadMetadata(reply, {
+        ...reply,
+        isStatusNotice: true,
+      }),
     );
+    setReplyPayloadMetadata(payload, { inlineCommandReply: true });
+    await opts.onBlockReply(payload);
   };
 
   // Standalone commands use ordinary dispatch even when the prompt contains extra context.
@@ -505,7 +506,6 @@ export async function handleInlineActions(
       isGroup,
     }) &&
     inlineStatusRequested;
-  let didSendInlineStatus = false;
   let queueModeOverride: QueueMode | undefined;
   if (handleInlineStatus) {
     const { buildStatusReply } = await commandsRuntimeLoader.load();
@@ -519,13 +519,12 @@ export async function handleInlineActions(
       mediaDecisions: ctx.MediaUnderstandingDecisions,
     });
     await sendInlineReply(inlineStatusReply);
-    didSendInlineStatus = true;
     directives = { ...directives, hasStatusDirective: false };
   }
 
   const runCommands = async (commandInput: typeof command) => {
     const { handleCommands } = await commandsRuntimeLoader.load();
-    return handleCommands({
+    const result = await handleCommands({
       ...commandParams,
       // Command handlers mutate the continuation context and retain the dispatch context.
       ctx: sessionCtx,
@@ -546,6 +545,10 @@ export async function handleInlineActions(
         skillFilter,
       }),
     });
+    queueModeOverride = result.queueModeOverride ?? queueModeOverride;
+    skillSelections = mergeSelections(skillSelections, result.explicitSkillSelections);
+    notifyInlineCommandSessionMetadataChanges();
+    return result;
   };
 
   if (inlineCommand) {
@@ -555,9 +558,6 @@ export async function handleInlineActions(
       commandBodyNormalized: inlineCommand,
     };
     const inlineResult = await runCommands(inlineCommandContext);
-    queueModeOverride = inlineResult.queueModeOverride;
-    skillSelections = mergeSelections(skillSelections, inlineResult.explicitSkillSelections);
-    notifyInlineCommandSessionMetadataChanges();
     if (inlineResult.reply) {
       if (!cleanedBody) {
         return finishCommand(inlineResult.reply);
@@ -587,7 +587,7 @@ export async function handleInlineActions(
       isGroup ? stripMentions(strippedBody, ctx, cfg, agentId) : strippedBody
     ).trim();
     if (
-      didSendInlineStatus &&
+      handleInlineStatus &&
       (remainingBodyAfterInlineStatus.length === 0 ||
         isMentionOnlyResidualText(remainingBodyAfterInlineStatus, ctx.WasMentioned))
     ) {
@@ -597,9 +597,6 @@ export async function handleInlineActions(
     const commandBodyBeforeRun = command.commandBodyNormalized;
     const bodyBeforeRun = sessionCtx.agentText;
     const commandResult = await runCommands(command);
-    queueModeOverride = commandResult.queueModeOverride ?? queueModeOverride;
-    skillSelections = mergeSelections(skillSelections, commandResult.explicitSkillSelections);
-    notifyInlineCommandSessionMetadataChanges();
     if (!commandResult.shouldContinue) {
       return finishCommand(commandResult.reply);
     }

@@ -7,7 +7,7 @@ import {
   CRON_SETUP_TIMEOUT_ERROR,
   isCronTimeoutErrorText,
 } from "../execution-error-constants.js";
-import type { CronAgentExecutionStarted } from "../types.js";
+import type { CronAgentExecutionStarted, CronRunErrorClassification } from "../types.js";
 
 function formatCronTimeoutMessage(message: string, execution?: CronAgentExecutionStarted): string {
   const phase = formatEmbeddedAgentExecutionPhase(execution?.phase);
@@ -58,6 +58,13 @@ export function resolveCronAbortReasonText(reason: unknown): string | undefined 
 /** Extracts a human timeout/abort reason, falling back to the canonical cron timeout text. */
 export function abortErrorMessage(signal?: AbortSignal): string {
   return resolveCronAbortReasonText(signal?.reason) ?? timeoutErrorMessage();
+}
+
+/** The controller owns whether an interruption was a watchdog timeout or a cancellation. */
+export function cronAbortErrorClassification(signal?: AbortSignal): CronRunErrorClassification {
+  return !signal || (signal.reason instanceof Error && signal.reason.name === "TimeoutError")
+    ? { kind: "reason", reason: "timeout" }
+    : { kind: "aborted" };
 }
 
 /** Normalizes thrown cron run failures into stable log/run-history text. */

@@ -5,7 +5,6 @@ import {
   createReplyDispatchEvent,
 } from "./dispatch-from-config.events.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
-import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
 export function runReplyDispatchHook(
   state: PrepareDispatchOperationReadyState,
@@ -79,27 +78,4 @@ export function runReplyDispatchHook(
       );
     });
   return options.isTailDispatch ? run() : state.traceReplyPhase("reply.reply_dispatch_hooks", run);
-}
-
-export async function runReplyDispatchTakeover(
-  state: PrepareDispatchOperationReadyState,
-  shouldSendToolSummaries: () => boolean,
-  shouldSendToolSummariesAsync: () => Promise<boolean>,
-): Promise<{ status: "complete"; result: DispatchFromConfigResult } | undefined> {
-  const result = await runReplyDispatchHook(state, {
-    shouldSendToolSummaries,
-    shouldSendToolSummariesAsync,
-  });
-  if (!result?.handled) {
-    return undefined;
-  }
-  state.commitInboundDedupeIfClaimed();
-  state.completeDispatchReplyOperation();
-  return {
-    status: "complete",
-    result: state.attachSourceReplyDeliveryMode({
-      queuedFinal: result.queuedFinal,
-      counts: result.counts,
-    }),
-  };
 }

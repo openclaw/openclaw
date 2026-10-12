@@ -62,7 +62,10 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     return { status: "skipped", reason: "alerts-disabled" };
   }
   const policy = createHeartbeatDispatch(opts, wake, prepared);
-  const state: ReplyOperationRunState = { heartbeat: policy };
+  const state: ReplyOperationRunState = {
+    heartbeat: policy,
+    sessionEventDelivery: prepared.canRelayToUser ? undefined : false,
+  };
   const execRequestOwners = [
     ...new Set(
       prepared.inspectedSystemEventsToConsume.flatMap(
@@ -84,6 +87,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   if (cancelledBeforeDispatch) {
     return cancelledBeforeDispatch;
   }
+  const settledResult = () => cancelledExecResult() ?? policy.result;
   const signal = execRequestAbortSignal(execRequestOwners, getHeartbeatWakeAbortSignal());
   const eventQueueKey = resolveSystemEventQueueKey(prepared.sessionKey, agentId);
   const deferredGenericIds = new Set(prepared.deferredGenericEvents.map((event) => event.id));
@@ -212,6 +216,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
         },
         {
           sessionKey: prepared.inspectsRunQueue ? prepared.sessionKey : runSessionKey,
+          heartbeatEventQueueSessionKey: eventQueueKey,
           execRequestOwners,
           events: prepared.inspectsRunQueue ? prepared.genericEvents : [],
           deferredEventIds: [...deferredGenericIds, ...ordinaryGenericIds].filter(
@@ -233,12 +238,9 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
           ),
       },
     });
-    const cancelled = cancelledExecResult();
-    if (cancelled) {
-      return cancelled;
-    }
-    if (policy.result) {
-      return policy.result;
+    const settled = settledResult();
+    if (settled) {
+      return settled;
     }
     const execution = resolveReplyOperationAgentTurn(state);
     const reason =
@@ -250,12 +252,9 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     emitHeartbeatEvent({ status: "skipped", reason, durationMs: Date.now() - startedAt });
     return { status: "skipped", reason };
   } catch (error) {
-    const cancelled = cancelledExecResult();
-    if (cancelled) {
-      return cancelled;
-    }
-    if (policy.result) {
-      return policy.result;
+    const settled = settledResult();
+    if (settled) {
+      return settled;
     }
     const reason = formatErrorMessage(error);
     emitHeartbeatEvent({

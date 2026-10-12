@@ -841,12 +841,8 @@ suite.define(() => {
       const dialog = page.getByRole("dialog", { name: "Add MCP server" });
       const modal = page.locator("openclaw-modal-dialog").filter({ hasText: "Add MCP server" });
       await expect.poll(() => dialog.isVisible()).toBe(true);
-      const sessionScope = modal.locator('wa-radio[value="session"]');
-      await expect
-        .poll(() =>
-          sessionScope.evaluate((radio) => (radio as HTMLElement & { checked: boolean }).checked),
-        )
-        .toBe(true);
+      const sessionScope = modal.getByRole("radio", { name: "This session", exact: true });
+      await expect.poll(() => sessionScope.isChecked()).toBe(true);
       await modal.getByLabel("Name").fill("bad name");
       await modal.getByLabel("URL or command").fill("https://mcp.example.test");
       await modal.getByRole("button", { name: "Add server" }).click();
@@ -909,7 +905,7 @@ suite.define(() => {
       const everywhereDialog = page
         .locator("openclaw-modal-dialog")
         .filter({ hasText: "Add MCP server" });
-      await everywhereDialog.locator('wa-radio[value="everywhere"]').click();
+      await everywhereDialog.getByRole("radio", { name: "Everywhere", exact: true }).check();
       await everywhereDialog.getByLabel("Name").fill("global-docs");
       await everywhereDialog.getByLabel("URL or command").fill("docs-mcp --stdio");
       await everywhereDialog.getByLabel("Transport").selectOption("stdio");

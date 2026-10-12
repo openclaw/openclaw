@@ -40,8 +40,9 @@ vi.mock("../dashboard-session-title.js", async (importOriginal) => {
   mocks.maybeGenerateSessionTitle.mockImplementation(actual.maybeGenerateSessionTitle);
   return { ...actual, maybeGenerateSessionTitle: mocks.maybeGenerateSessionTitle };
 });
+// mock-isolation: Discussion tests supply title fields without starting transcript workers.
 vi.mock("../session-transcript-title-reader.js", () => ({
-  readSessionTitleFieldsFromTranscript: mocks.readSessionTitleFields,
+  readSessionTitleFieldsFromTranscriptAsync: mocks.readSessionTitleFields,
 }));
 vi.mock("./session-change-event.js", () => ({
   emitSessionsChanged: mocks.emitSessionsChanged,

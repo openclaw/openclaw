@@ -9,9 +9,11 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type {
-  AgentDatabaseExecutionScope,
   AgentDatabaseGenerationClaim,
   AgentDatabaseRequestExecutionSource,
+} from "../../state/openclaw-agent-execution-admission-contract.js";
+import type {
+  AgentDatabaseExecutionScope,
   OpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution-contract.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -233,13 +235,18 @@ export function createPreparedSessionTranscriptReads(params: {
           ),
         signal,
       ),
-    readColdMetadata: async (input) => ({
+    readColdMetadata: async (input, signal) => ({
       kind: "cold-metadata",
-      archive: await read((worker) =>
-        worker.execute({
-          type: "session.transcript.coldMetadata.read",
-          input: { sessionId: input.sessionId, expectedIdentity },
-        }),
+      archive: await read(
+        (worker) =>
+          worker.execute(
+            {
+              type: "session.transcript.coldMetadata.read",
+              input: { sessionId: input.sessionId, expectedIdentity },
+            },
+            { signal },
+          ),
+        signal,
       ),
     }),
   };

@@ -10,6 +10,9 @@ export function createPluginStateRuntimeMock(): PluginRuntime["state"] {
     openKeyedStore: vi.fn(() => {
       throw new Error("openKeyedStore mock is not configured");
     }),
+    openKeyedStoreV2: vi.fn(() => {
+      throw new Error("openKeyedStoreV2 mock is not configured");
+    }),
     openSyncKeyedStore: vi.fn(() => {
       throw new Error("openSyncKeyedStore mock is not configured");
     }),

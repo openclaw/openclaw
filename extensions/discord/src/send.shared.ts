@@ -43,10 +43,14 @@ const DISCORD_UPLOAD_TOO_LARGE_STATUS = 413;
 const DISCORD_UPLOAD_TOO_LARGE_NOTICE =
   "Attachment skipped: Discord rejected the file as too large.";
 
-function resolveRequiredDiscordSendPermissions(channelType?: number): string[] {
-  return isDiscordThreadChannelType(channelType)
+function resolveRequiredDiscordSendPermissions(channelType: number | undefined, hasMedia: boolean) {
+  const permissions = isDiscordThreadChannelType(channelType)
     ? ["ViewChannel", "SendMessagesInThreads"]
     : ["ViewChannel", "SendMessages"];
+  if (hasMedia) {
+    permissions.push("AttachFiles");
+  }
+  return permissions;
 }
 
 type DiscordRequest = DiscordRetryRunner;
@@ -192,10 +196,7 @@ async function buildDiscordSendError(
     });
     probedChannelType = permissions.channelType;
     const current = new Set(permissions.permissions);
-    const required = resolveRequiredDiscordSendPermissions(probedChannelType);
-    if (ctx.hasMedia) {
-      required.push("AttachFiles");
-    }
+    const required = resolveRequiredDiscordSendPermissions(probedChannelType, ctx.hasMedia);
     missing = required.filter((permission) => !current.has(permission));
   } catch {
     /* ignore permission probe errors */
@@ -205,11 +206,9 @@ async function buildDiscordSendError(
   const apiDetails = [`code=${code}`, status != null ? `status=${status}` : undefined]
     .filter(Boolean)
     .join(" ");
-  const probedPermissions = resolveRequiredDiscordSendPermissions(probedChannelType);
-  if (ctx.hasMedia) {
-    probedPermissions.push("AttachFiles");
-  }
-  const probeSummary = probedPermissions.join("/");
+  const probeSummary = resolveRequiredDiscordSendPermissions(probedChannelType, ctx.hasMedia).join(
+    "/",
+  );
   const missingLabel = missing.length
     ? `discord missing permissions in channel ${ctx.channelId}: ${missing.join(", ")}`
     : `discord missing permissions in channel ${ctx.channelId}; permission check did not identify missing ${probeSummary}`;
@@ -233,10 +232,7 @@ async function resolveChannelId(
   if (recipient.kind === "channel") {
     return { channelId: recipient.id };
   }
-  const dmChannel = (await request(
-    () => createUserDmChannel(rest, recipient.id),
-    "dm-channel",
-  )) as { id: string };
+  const dmChannel = await request(() => createUserDmChannel(rest, recipient.id), "dm-channel");
   if (!dmChannel?.id) {
     throw new Error("Failed to create Discord DM channel");
   }

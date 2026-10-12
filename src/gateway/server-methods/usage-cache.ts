@@ -68,9 +68,6 @@ export async function loadUsageResultCached<T extends object>(params: {
     params
       .load()
       .then((value) => {
-        if (cache.get(cacheKey) !== entry) {
-          return value;
-        }
         if (params.isComplete?.(value) ?? true) {
           entry.value = value;
           entry.updatedAt = Date.now();
@@ -88,10 +85,8 @@ export async function loadUsageResultCached<T extends object>(params: {
         throw error;
       })
       .finally(() => {
-        if (cache.get(cacheKey) === entry && entry.inFlight === inFlight) {
-          entry.inFlight = undefined;
-          entry.lastAccessedAt = Date.now();
-        }
+        entry.inFlight = undefined;
+        entry.lastAccessedAt = Date.now();
       }),
   );
 

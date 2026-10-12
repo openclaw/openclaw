@@ -19,6 +19,8 @@ import {
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
 } from "../../logging/diagnostic-stability.js";
+import { setLoggerOverride } from "../../logging/logger.js";
+import { loggingState } from "../../logging/state.js";
 import { registerSkillUsageTracking } from "../../skills/workshop/skill-usage.js";
 import {
   createGatewaySchedulerClock,
@@ -68,6 +70,7 @@ function createMonitorHarness(params?: { cpuMsPerWallMs?: number; utilization?: 
   };
   return {
     monitor,
+    scheduler,
     cpuUsage,
     eventLoopUtilization,
     clock,
@@ -84,6 +87,31 @@ function createMonitorHarness(params?: { cpuMsPerWallMs?: number; utilization?: 
 }
 
 describe("createGatewayEventLoopHealthMonitor", () => {
+  it("logs the blocking scheduler job once when its callback also contains the overdue sample", async () => {
+    const warn = vi.fn();
+    const rawConsole = loggingState.rawConsole;
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    loggingState.rawConsole = { ...console, warn };
+    try {
+      const harness = createMonitorHarness();
+      harness.scheduler.schedule({
+        id: "maintenance:synthetic-work",
+        delayMs: 0,
+        run: () => harness.elapseWithoutSampling(1_200),
+      });
+      await harness.sample();
+      await harness.sample();
+      await harness.sample();
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn.mock.calls[0]?.[0]).toContain(
+        'main-thread stall: elapsedMs=1200 task="scheduler:maintenance:synthetic-work" taskMs=1200',
+      );
+    } finally {
+      loggingState.rawConsole = rawConsole;
+      setLoggerOverride(null);
+    }
+  });
+
   it("does not turn reads without samples into healthy observations", async () => {
     const harness = createMonitorHarness({ cpuMsPerWallMs: 1, utilization: 1 });
     harness.elapseWithoutSampling(1_200);

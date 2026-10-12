@@ -30,12 +30,12 @@ import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
-import { truncateUtf16Safe } from "../../utils.js";
 import {
   captureLifecycleDatabaseScope,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import {
   prepareIncognitoSessionHistoryRead,
@@ -46,6 +46,12 @@ import {
   isSessionTranscriptIndexReconcileRunning,
   startSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
+import {
+  boundSessionTranscriptSearchSnippet,
+  sessionTranscriptSearchFtsQuery,
+  sessionTranscriptSearchLimit,
+  validateSessionTranscriptSearchQuery,
+} from "./session-transcript-search-policy.js";
 import type {
   SessionTranscriptSearchParams,
   SessionTranscriptSearchReadResult,
@@ -54,10 +60,7 @@ import type {
 import { transcriptSearchLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
-const SEARCH_SNIPPET_MAX_CHARS = 500;
-const SEARCH_LIMIT_MAX = 25;
-const SEARCH_QUERY_MAX_CHARS = 4096;
-// SQLite data_version values are comparable only on the same live connection.
+// Local mutation revisions are comparable only on the same live connection.
 const searchConnections = new WeakMap<DatabaseSync, string>();
 
 function readSearchRevision(database: DatabaseSync): string | undefined {
@@ -75,7 +78,7 @@ function readSearchRevision(database: DatabaseSync): string | undefined {
         unregister();
       });
     }
-    return `${connection}:${revision.schema.revision}:${revision.dataVersion}:${revision.mutationRevision}`;
+    return `${connection}:${revision.schema.revision}:${revision.writeRevision}:${revision.mutationRevision}`;
   });
 }
 
@@ -91,23 +94,23 @@ export function isSessionTranscriptSearchCurrentSync(
   return result.found && result.value;
 }
 
-function toFtsQuery(query: string, match: SessionTranscriptSearchParams["match"]): string {
-  return query
-    .split(/\s+/u)
-    .map(
-      (token, index, tokens) =>
-        `"${token.replaceAll('"', '""')}"${match === "prefix" && index === tokens.length - 1 ? "*" : ""}`,
-    )
-    .join(" AND ");
-}
-
 /** Query a captured disk owner off-thread; reconciliation remains host-owned. */
 export async function searchSessionTranscripts(
   params: SessionTranscriptSearchParams,
   preparedDatabase?: { agentId: string; path: string },
   incognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionTranscriptSearchResult> {
-  validateSearchQuery(params.query);
+  validateSessionTranscriptSearchQuery(params.query);
+  const memory = getSessionActorStorageBinding({
+    ...params,
+    storePath: preparedDatabase?.path ?? params.storePath,
+  });
+  if (memory) {
+    return memory.actor.storage!.read(
+      { type: "session.history.search", input: params },
+      memory.authority,
+    );
+  }
   const shared = incognito
     ? undefined
     : captureIncognitoSessionBinding({
@@ -302,23 +305,12 @@ export async function searchSessionTranscripts(
   }
 }
 
-function validateSearchQuery(input: string): string {
-  const query = input.trim();
-  if (!query) {
-    throw new Error("query must not be empty");
-  }
-  if (query.length > SEARCH_QUERY_MAX_CHARS) {
-    throw new Error(`query must not exceed ${SEARCH_QUERY_MAX_CHARS} characters`);
-  }
-  return query;
-}
-
 /** Native query kernel; projection readiness belongs to the maintenance owner. */
 export function searchSessionTranscriptsReadOnlySync(
   params: SessionTranscriptSearchParams,
   preparedDatabase?: OpenClawAgentDatabaseOptions,
 ): SessionTranscriptSearchReadResult {
-  const query = validateSearchQuery(params.query);
+  const query = validateSessionTranscriptSearchQuery(params.query);
   const scope = preparedDatabase ? { agentId: params.agentId } : resolveSqliteReadScope(params);
   const databaseOptions = preparedDatabase ?? toDatabaseOptions(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
@@ -328,7 +320,7 @@ export function searchSessionTranscriptsReadOnlySync(
       ...runSqliteDeferredTransactionSync(
         database.db,
         () => {
-          const limit = Math.min(Math.max(1, params.limit ?? 10), SEARCH_LIMIT_MAX);
+          const limit = sessionTranscriptSearchLimit(params.limit);
           // Shared databases hold multiple logical agents. Filter before LIMIT;
           // reserved global/unknown sentinels retain their store-wide scope.
           const db = getNodeSqliteKysely<DB>(database.db);
@@ -359,7 +351,7 @@ export function searchSessionTranscriptsReadOnlySync(
             )?.count ?? 0;
           const match =
             /* kysely-allow-raw: FTS5 table MATCH with a bound search query. */
-            sql<boolean>`session_transcript_fts MATCH ${toFtsQuery(query, params.match)}`;
+            sql<boolean>`session_transcript_fts MATCH ${sessionTranscriptSearchFtsQuery(query, params.match)}`;
           /* kysely-allow-raw: Shared FTS ordering, including SQLite-only rowid for recent ties. */
           const order =
             params.order === "recent"
@@ -456,10 +448,7 @@ export function searchSessionTranscriptsReadOnlySync(
                 messageId: row.message_id,
                 role: row.role,
                 timestamp: Number.isFinite(timestamp) ? timestamp : 0,
-                snippet:
-                  row.snippet.length > SEARCH_SNIPPET_MAX_CHARS
-                    ? `${truncateUtf16Safe(row.snippet, SEARCH_SNIPPET_MAX_CHARS)}…`
-                    : row.snippet,
+                snippet: boundSessionTranscriptSearchSnippet(row.snippet),
                 score: Number.isFinite(rank) ? -rank : 0,
               },
             ];

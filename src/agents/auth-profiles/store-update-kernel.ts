@@ -39,12 +39,6 @@ export type AuthStoreUpdateCommitted = {
   store: AuthProfileStore;
   publication: AuthStoreUpdatePublication;
 };
-export type AuthStoreUpdateCommittedWire = {
-  store: AuthProfileStore;
-  publication: Omit<AuthStoreUpdatePublication, "oauthRefreshClaimIds"> & {
-    oauthRefreshClaimIds: Array<[string, string | null]>;
-  };
-};
 export type AuthStoreUpdateResponse =
   | { save: false }
   | {
@@ -189,14 +183,8 @@ export function updateAuthProfileStoreInDatabase(
     }
     sendAuthProfileUpdateValue(port1, {
       store: markRuntimePersistedProfiles(next),
-      publication: {
-        ...publication,
-        oauthRefreshClaimIds: Array.from(
-          publication.oauthRefreshClaimIds,
-          ([profileId, claimId]): [string, string | null] => [profileId, claimId ?? null],
-        ),
-      },
-    } satisfies AuthStoreUpdateCommittedWire);
+      publication,
+    } satisfies AuthStoreUpdateCommitted);
   } finally {
     port1.close();
     port2.close();
