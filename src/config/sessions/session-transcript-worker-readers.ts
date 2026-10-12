@@ -160,6 +160,11 @@ export function createSessionHistoryWorkerReaders(
       "lifecycle artifact plan",
       (value) => value,
     ),
+    readTranscriptStatsBatch: reader(
+      "transcript-stats-batch",
+      "transcript statistics",
+      (value) => value.stats,
+    ),
     readTranscriptInstances: reader(
       "session-transcript-instances",
       "transcript instances",

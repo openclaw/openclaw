@@ -33,6 +33,7 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     sourceKey?: string;
     bound?: boolean;
     tail?: boolean;
+    prepared?: boolean;
   }>([
     {
       name: "local command target from ACP source",
@@ -48,11 +49,26 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
       tail: true,
       expectedKind: "acp",
     },
+    {
+      name: "prepared bound ACP reset tail",
+      sourceKey: "agent:test:discord:channel:C1",
+      targetKey: "agent:test:acp:bound",
+      bound: true,
+      tail: true,
+      prepared: true,
+      expectedKind: "acp",
+    },
   ])("scopes reply hooks to the prepared $name", async (scenario) => {
     const onAgentRunStart = vi.fn(() => "reply-dispatch");
+    const onPreparedAgentRunStart = vi.fn(() => "reply-dispatch");
     const dispatchRun: ReplyDispatchRun = {
       completionSource: "reply-dispatch",
       getResult: () => ({}),
+    };
+    const preparedStart = {
+      runId: "dispatched-run",
+      options: dispatchRun,
+      transcriptStart: null,
     };
     const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
       input: { text: "source user turn" },
@@ -90,9 +106,11 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
       const event = eventValue as { isTailDispatch?: boolean };
       if (!scenario.tail || event.isTailDispatch) {
         const context = contextValue as PluginHookReplyDispatchContext;
-        expect(context.onAgentRunStart?.("dispatched-run", undefined, dispatchRun)).toBe(
-          "reply-dispatch",
-        );
+        expect(
+          scenario.prepared
+            ? context.onPreparedAgentRunStart?.(preparedStart)
+            : context.onAgentRunStart?.("dispatched-run", undefined, dispatchRun),
+        ).toBe("reply-dispatch");
         context.userTurnTranscriptRecorder?.replaceTextBeforePersistence?.("accepted user turn");
       }
       return scenario.tail && !event.isTailDispatch
@@ -130,7 +148,10 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
       cfg: emptyConfig,
       dispatcher: createDispatcher(),
       replyResolver,
-      replyOptions: { onAgentRunStart, userTurnTranscriptRecorder },
+      replyOptions: {
+        ...(scenario.prepared ? { onPreparedAgentRunStart } : { onAgentRunStart }),
+        userTurnTranscriptRecorder,
+      },
     });
     expect(result.queuedFinal).toBe(true);
     expect(hookMocks.runner.hasHooks).toHaveBeenCalledWith("reply_dispatch", {
@@ -142,11 +163,16 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     expect(replyResolver).toHaveBeenCalledTimes(
       scenario.expectedKind === "agent" || scenario.tail ? 1 : 0,
     );
-    expect(onAgentRunStart).toHaveBeenCalledExactlyOnceWith(
-      "dispatched-run",
-      undefined,
-      dispatchRun,
-    );
+    if (scenario.prepared) {
+      expect(onPreparedAgentRunStart).toHaveBeenCalledExactlyOnceWith(preparedStart);
+      expect(onAgentRunStart).not.toHaveBeenCalled();
+    } else {
+      expect(onAgentRunStart).toHaveBeenCalledExactlyOnceWith(
+        "dispatched-run",
+        undefined,
+        dispatchRun,
+      );
+    }
     expect(userTurnTranscriptRecorder.message?.content).toBe(
       scenario.expectedKind === "acp" ? "accepted user turn" : "source user turn",
     );

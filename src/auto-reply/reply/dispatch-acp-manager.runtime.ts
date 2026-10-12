@@ -3,6 +3,7 @@ import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/sessi
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
 import type { GetReplyOptions, ReplyDispatchRun } from "../get-reply-options.types.js";
 export { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 export { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
@@ -16,11 +17,12 @@ export async function prepareAcpDispatchStart(params: {
   sessionId?: string;
   runId: string;
   onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
+  onPreparedAgentRunStart?: GetReplyOptions["onPreparedAgentRunStart"];
   getResult: ReplyDispatchRun["getResult"];
 }) {
   const { agentId, sessionKey, storePath } = params.scope;
   const transcriptStart =
-    params.onAgentRunStart && params.sessionId
+    (params.onPreparedAgentRunStart || params.onAgentRunStart) && params.sessionId
       ? await (
           await import("../../config/sessions/session-transcript-watermark.js")
         ).readSessionTranscriptStartAsync({
@@ -31,12 +33,11 @@ export async function prepareAcpDispatchStart(params: {
         })
       : null;
   return () => {
-    const owner = params.onAgentRunStart?.(
-      params.runId,
-      undefined,
-      { completionSource: "reply-dispatch", getResult: params.getResult },
+    const owner = notifyPreparedAgentRunStart(params, {
+      runId: params.runId,
+      options: { completionSource: "reply-dispatch", getResult: params.getResult },
       transcriptStart,
-    );
+    });
     // Only a synchronous acknowledgement transfers completion from lifecycle events.
     return owner === "reply-dispatch" ? owner : undefined;
   };

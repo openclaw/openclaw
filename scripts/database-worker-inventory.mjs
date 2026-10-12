@@ -1074,9 +1074,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
-        operations: ["setCanonicalSqliteSessionMainKey"],
+        operations: ["setCanonicalSqliteSessionMainKey", "markCanonicalSessionValidationPending"],
         evidence:
-          "Only startup-migration.ts:291 boot admission and commands/doctor-session-canonical-keys.ts:438,518 repair call this setter; other canonical-key runtime operations stay T1.",
+          "The setter serves startup-migration.ts boot admission and commands/doctor-session-canonical-keys.ts repair. Pending validation is written only by that setter or explicit allowStoredAlias(s)/allowCanonicalRepair imports and repairs: legacy-main-session-migration-operations.ts, session-accessor.sqlite-import.ts, and Doctor projection/rewrite. Import's retained recovery path is Doctor-only via doctor-session-sqlite-retained.ts -> rebuildDeferredPluginSessionSourceIndex. The in-memory runtime validation SELECT remains T1.",
       },
     ],
   ],
@@ -2280,6 +2280,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/config/sessions/session-accessor.sqlite-worktree-owner.ts", // Only session-entry-read.worker.ts reads the worktree projection after owner-protection's worker cutover.
   "src/gateway/worker-environments/placement-move-intent.ts", // Move reads and mutations run only in placement lifecycle, turn-claim, and projection workers.
   "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.

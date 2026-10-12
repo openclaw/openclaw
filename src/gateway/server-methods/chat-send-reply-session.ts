@@ -10,7 +10,10 @@ import {
   omitInternalSessionEffectsEntries,
 } from "../session-utils-store-selection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
-import { resolveChatReplyTranscriptStart } from "./chat-send-reply-delivery.js";
+import {
+  resolveChatReplyTranscriptStart,
+  resolveLegacyChatReplyTranscriptStart,
+} from "./chat-send-reply-delivery.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 
 export type ChatReplySession = Pick<
@@ -76,11 +79,14 @@ export function createChatReplySessionReader(
       }
     },
     captureTranscriptStart(this: void, prepared?: PreparedReplyTranscriptStart | null) {
-      const start = resolveChatReplyTranscriptStart(
-        session,
-        { entry: preparedSession, storePath: preparedSession.storePath ?? initialStorePath },
-        prepared,
-      );
+      const current = {
+        entry: preparedSession,
+        storePath: preparedSession.storePath ?? initialStorePath,
+      };
+      const start =
+        prepared === undefined
+          ? resolveLegacyChatReplyTranscriptStart(session, current)
+          : resolveChatReplyTranscriptStart(session, current, prepared);
       return start ? { ...start, lifecycleRevision: preparedSession.lifecycleRevision } : undefined;
     },
     async readCurrentSession(this: void, key = session.sessionKey, agentId = session.agentId) {

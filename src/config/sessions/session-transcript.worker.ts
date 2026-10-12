@@ -217,6 +217,21 @@ serveOwnedWorkerTasks(
           pending: result.found && result.value,
         };
       }
+      if (request.kind === "transcript-stats-batch") {
+        const { readTranscriptStatsBatchReadOnlySync } =
+          await import("./session-accessor.sqlite-read.js");
+        return {
+          kind: request.kind,
+          stats: readTranscriptStatsBatchReadOnlySync(
+            request.sessionIds.map((sessionId) => ({
+              ...request.database,
+              storePath: request.database.path,
+              sessionId,
+              env: request.env,
+            })),
+          ),
+        };
+      }
       if (request.kind === "session-transcript-instances") {
         const { listSessionTranscriptInstances } = await import("./session-history.js");
         return {

@@ -13,6 +13,7 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { observeAgentRunStart } from "./agent-run-start.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
 import { resolveGroupThreadConfig } from "./group-thread-config.js";
 import {
@@ -181,11 +182,10 @@ function prepareParticipant(
         suppressNextUserMessagePersistence: undefined,
         messageInjectionDisposition: undefined,
         runId: undefined,
-        onAgentRunStart: (...args) => {
-          runState.runId = args[0];
-          runState.executionIdentityToken = args[1];
-          return original?.onAgentRunStart?.(...args);
-        },
+        ...observeAgentRunStart(original, (start) => {
+          runState.runId = start.runId;
+          runState.executionIdentityToken = start.executionIdentityToken;
+        }),
         promptCacheKey: undefined,
         onSessionPrepared: undefined,
         replyOperation: undefined,

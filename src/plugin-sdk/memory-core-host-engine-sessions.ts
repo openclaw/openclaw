@@ -1,4 +1,5 @@
 /** Private-local SDK subpath for memory session transcript helpers. */
+import { isMainThread } from "node:worker_threads";
 import {
   buildSessionEntry as buildSessionEntryFromHost,
   listSessionTranscriptCorpusEntriesForAgent as listSessionTranscriptCorpusEntriesFromHost,
@@ -21,6 +22,7 @@ import type {
   MemorySessionTarget,
 } from "../config/sessions/session-memory-targets.types.js";
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
 export type {
@@ -46,6 +48,7 @@ export {
   isDreamingNarrativeSessionStoreKey,
   matchesSessionEntryPrefixHash,
   parseUsageCountedSessionIdFromFileName,
+  readTranscriptStatsBatchReadOnlyAsync,
   readTranscriptStatsBatchReadOnlySync,
   sessionPathForFile,
   sessionPathForSessionIdentity,
@@ -79,6 +82,13 @@ export function loadMemorySessionMetadata(params: {
   sessionKey?: string;
   storePath?: string;
 }): MemorySessionTarget | undefined {
+  if (isMainThread) {
+    warnPluginSdkDeprecation({
+      family: "memory-session",
+      method: "loadMemorySessionMetadata",
+      replacement: "loadMemorySessionMetadataAsync",
+    });
+  }
   assertBoundIncognitoMemorySyncAccess(
     params,
     "loadMemorySessionMetadata",
@@ -101,6 +111,13 @@ export function loadMemorySessionMetadataBatch(params: {
   storePath?: string;
   sessions: readonly { sessionId: string; sessionKey?: string }[];
 }): MemorySessionTarget[] {
+  if (isMainThread) {
+    warnPluginSdkDeprecation({
+      family: "memory-session",
+      method: "loadMemorySessionMetadataBatch",
+      replacement: "loadMemorySessionMetadataBatchAsync",
+    });
+  }
   for (const session of params.sessions) {
     assertBoundIncognitoMemorySyncAccess(
       { ...params, ...session },

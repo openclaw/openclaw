@@ -16,6 +16,7 @@ import {
 import { logMessageReceived } from "../logging/diagnostic.js";
 import { createKeyedFifoLeaseRegistry, type KeyedFifoLease } from "../shared/keyed-fifo-lease.js";
 import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
+import { observeAgentRunStart } from "./agent-run-start.js";
 import {
   resolveCommandTurnContext,
   resolveCommandTurnTargetSessionKey,
@@ -240,13 +241,11 @@ export async function dispatchInboundMessage(params: {
   const replyPayloadRunState = params.replyPayloadRunState ?? {
     runId: replyOptions?.runId,
   };
-  const onAgentRunStart = replyOptions?.onAgentRunStart;
   const replyOptionsWithRunState: InternalDispatchReplyOptions = {
     ...replyOptions,
-    onAgentRunStart: (...args) => {
-      replyPayloadRunState.runId = args[0];
-      return onAgentRunStart?.(...args);
-    },
+    ...observeAgentRunStart(replyOptions, (start) => {
+      replyPayloadRunState.runId = start.runId;
+    }),
   };
   const finalized = measureDiagnosticsTimelineSpanSync(
     "auto_reply.finalize_context",

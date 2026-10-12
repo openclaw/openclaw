@@ -9,7 +9,10 @@ import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal
 import { resolveWebchatPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
-import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  GetReplyOptions,
+  ReplyDispatchRun,
+} from "../../auto-reply/get-reply-options.types.js";
 import { isReplyPayloadStatusNotice } from "../../auto-reply/reply-payload.js";
 import { REPLY_ADMISSION_TICKET } from "../../auto-reply/reply/reply-admission-ticket.js";
 import { isInternalSourceReplyChannel } from "../../auto-reply/reply/source-reply-delivery-mode.js";
@@ -305,6 +308,64 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           assertWorkspaceRunOwnership?.();
           applyChatSendManagedMedia(ctx, pluginBoundMedia, managedMediaApplyMode);
           phase?.mark("replyInitialization");
+          const onAgentRunStart: NonNullable<GetReplyOptions["onAgentRunStart"]> = (
+            runId,
+            _identity,
+            options,
+            transcriptStart,
+          ) => {
+            queuedFollowup.onRunStarted(runId);
+            diagnostics.finish();
+            titleTurn.onAgentRunStart(runId);
+            replyDispatchRun = options;
+            if (activeRunAbort.markExecutionStarted()) {
+              admission.armOperatorRunCancellation();
+              emitSessionsChanged(
+                context,
+                { sessionKey, agentId, reason: "agent.run.started" },
+                { accessChanged: false },
+              );
+            }
+            // A bound runtime can start on a different transcript than the source chat.
+            agentRunStarted = true;
+            replyDispatch.captureAgentTranscriptStart(runId, transcriptStart);
+            emitServerTiming(
+              "agent-run-started",
+              runId !== clientRunId ? { agentRunId: runId } : undefined,
+              dispatchStartedAtMs,
+            );
+            const connId = typeof client?.connId === "string" ? client.connId : undefined;
+            const wantsToolEvents = hasGatewayClientCap(
+              client?.connect?.caps,
+              GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+            );
+            if (connId && wantsToolEvents) {
+              context.registerToolEventRecipient(runId, connId);
+              // Register for any other active runs *in the same session* so
+              // late-joining clients (e.g. page refresh mid-response) receive
+              // in-progress tool events without leaking cross-session data.
+              const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(
+                cfg,
+                sessionKey,
+              );
+              const selectedSessionAgentId = selectedAgent.agentId;
+              for (const [activeRunId, active] of context.chatAbortControllers) {
+                const sameSelectedAgent =
+                  selectedSessionAgentId !== undefined &&
+                  chatRunBelongsToSelectedAgent({
+                    agentId: active.agentId,
+                    sessionKey: active.sessionKey,
+                    defaultAgentId: compatibilityOwnerAgentId,
+                    selectedAgentId: selectedSessionAgentId,
+                  });
+                const sameSession = active.sessionKey === sessionKey && sameSelectedAgent;
+                if (activeRunId !== runId && sameSession) {
+                  context.registerToolEventRecipient(activeRunId, connId);
+                }
+              }
+            }
+            return options?.completionSource;
+          };
           const dispatchInbound = () => {
             assertWorkspaceRunOwnership?.();
             return dispatchInboundMessageWithProjectedDispatcher({
@@ -387,59 +448,13 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                   : {}),
                 ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                 fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
-                onAgentRunStart: (runId, _identity, options, transcriptStart) => {
-                  queuedFollowup.onRunStarted(runId);
-                  diagnostics.finish();
-                  titleTurn.onAgentRunStart(runId);
-                  replyDispatchRun = options;
-                  if (activeRunAbort.markExecutionStarted()) {
-                    admission.armOperatorRunCancellation();
-                    emitSessionsChanged(
-                      context,
-                      { sessionKey, agentId, reason: "agent.run.started" },
-                      { accessChanged: false },
-                    );
-                  }
-                  // A bound runtime can start on a different transcript than the source chat.
-                  agentRunStarted = true;
-                  replyDispatch.captureAgentTranscriptStart(runId, transcriptStart);
-                  emitServerTiming(
-                    "agent-run-started",
-                    runId !== clientRunId ? { agentRunId: runId } : undefined,
-                    dispatchStartedAtMs,
-                  );
-                  const connId = typeof client?.connId === "string" ? client.connId : undefined;
-                  const wantsToolEvents = hasGatewayClientCap(
-                    client?.connect?.caps,
-                    GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
-                  );
-                  if (connId && wantsToolEvents) {
-                    context.registerToolEventRecipient(runId, connId);
-                    // Register for any other active runs *in the same session* so
-                    // late-joining clients (e.g. page refresh mid-response) receive
-                    // in-progress tool events without leaking cross-session data.
-                    const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(
-                      cfg,
-                      sessionKey,
-                    );
-                    const selectedSessionAgentId = selectedAgent.agentId;
-                    for (const [activeRunId, active] of context.chatAbortControllers) {
-                      const sameSelectedAgent =
-                        selectedSessionAgentId !== undefined &&
-                        chatRunBelongsToSelectedAgent({
-                          agentId: active.agentId,
-                          sessionKey: active.sessionKey,
-                          defaultAgentId: compatibilityOwnerAgentId,
-                          selectedAgentId: selectedSessionAgentId,
-                        });
-                      const sameSession = active.sessionKey === sessionKey && sameSelectedAgent;
-                      if (activeRunId !== runId && sameSession) {
-                        context.registerToolEventRecipient(activeRunId, connId);
-                      }
-                    }
-                  }
-                  return options?.completionSource;
-                },
+                onAgentRunStart,
+                onPreparedAgentRunStart: ({
+                  runId,
+                  executionIdentityToken,
+                  options,
+                  transcriptStart,
+                }) => onAgentRunStart(runId, executionIdentityToken, options, transcriptStart),
                 onModelSelected: (modelSelection) => {
                   updateChatRunProvider(context.chatAbortControllers, {
                     runId: clientRunId,

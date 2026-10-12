@@ -64,6 +64,7 @@ export function runReplyDispatchHook(
                 abortSignal: state.getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
                 onReplyStart: params.replyOptions?.onReplyStart,
                 onAgentRunStart: params.replyOptions?.onAgentRunStart,
+                onPreparedAgentRunStart: params.replyOptions?.onPreparedAgentRunStart,
                 userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
                 prepareAssistantTranscriptMessage:
                   params.replyOptions?.prepareAssistantTranscriptMessage,

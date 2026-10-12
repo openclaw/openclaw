@@ -42,6 +42,7 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { progressCardRefreshRunProjection } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
 import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
 import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../types.js";
@@ -246,7 +247,9 @@ async function executeAgentTurnInternalLoop(
   const createAgentRunStartCallbacks = () => {
     let active = true;
     let preparedTranscriptStart: PreparedReplyTranscriptStart | null | undefined =
-      params.opts?.onAgentRunStart && params.sessionKey ? undefined : null;
+      (params.opts?.onPreparedAgentRunStart || params.opts?.onAgentRunStart) && params.sessionKey
+        ? undefined
+        : null;
     let transcriptStartPreparation: Promise<void> | undefined;
     const prepareAgentRunStart = () => {
       if (
@@ -293,12 +296,11 @@ async function executeAgentTurnInternalLoop(
         markReplyOperationExecutionStarted(params.replyOperation);
       }
       params.followupRun.run.internalEventExecution?.onStarted(runId);
-      params.opts?.onAgentRunStart?.(
+      notifyPreparedAgentRunStart(params.opts, {
         runId,
-        admittedRunContext.current?.executionIdentityToken,
-        undefined,
-        prepared,
-      );
+        executionIdentityToken: admittedRunContext.current?.executionIdentityToken,
+        transcriptStart: prepared,
+      });
     };
     const signalExecutionPhaseForTyping = (
       info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],

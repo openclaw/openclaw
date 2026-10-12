@@ -8,6 +8,7 @@ import type { TranscriptArchivePresenceRead } from "./session-accessor.sqlite-ar
 import type {
   SessionTranscriptInstance,
   SessionTranscriptInstanceListOptions,
+  SessionTranscriptStats,
 } from "./session-accessor.sqlite-contract.js";
 import type { SessionAccessScope, SessionEntryListScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
@@ -63,6 +64,13 @@ type SessionTranscriptInstancesWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
+type SessionTranscriptStatsBatchWorkerInput = {
+  kind: "transcript-stats-batch";
+  database: { agentId: string; path: string };
+  sessionIds: readonly string[];
+  env: NodeJS.ProcessEnv;
+};
+
 type SessionArchivePresenceWorkerInput = TranscriptArchivePresenceRead & {
   kind: "session-archive-presence";
 };
@@ -86,12 +94,17 @@ export type SessionColdStorageInventoryWorkerInput = {
 };
 
 export type SessionTranscriptInventoryWorkerInput =
+  | SessionTranscriptStatsBatchWorkerInput
   | SessionTranscriptInstancesWorkerInput
   | MemorySessionTargetsWorkerInput
   | SessionArchiveInventoryWorkerInput
   | SessionCorpusInventoryWorkerInput
   | SessionArchivePresenceWorkerInput;
 export type SessionTranscriptInventoryWorkerValues = {
+  "transcript-stats-batch": {
+    kind: "transcript-stats-batch";
+    stats: Array<SessionTranscriptStats | null>;
+  };
   "session-transcript-instances": {
     kind: "session-transcript-instances";
     instances: SessionTranscriptInstance[];
@@ -108,6 +121,9 @@ export type SessionTranscriptInventoryWorkerValues = {
   "session-archive-presence": { kind: "session-archive-presence"; registered: boolean };
 };
 export type SessionTranscriptInventoryReaders = {
+  readTranscriptStatsBatch: (
+    input: Omit<SessionTranscriptStatsBatchWorkerInput, "kind" | "database">,
+  ) => Promise<Array<SessionTranscriptStats | null>>;
   readTranscriptInstances: (
     input: Omit<SessionTranscriptInstancesWorkerInput, "kind" | "database">,
   ) => Promise<SessionTranscriptInstance[]>;

@@ -165,11 +165,7 @@ it.each([
             });
           } finally {
             sql.restore();
-            // Preparation is observable too, but only executions count toward the SQL budget.
-            expect(
-              sql.calls.slice(1).reduce((count, call) => count + call.mock.calls.length, 0),
-            ).toBe(native ? 2 : 0);
-            expect(sql.queries.every((query) => query.includes('from "session_nodes"'))).toBe(true);
+            expect(sql.queries).toEqual([]);
           }
         });
         try {
@@ -201,7 +197,7 @@ it.each([
   },
 );
 
-it.each(["foreign-lifecycle", "pinned-lifecycle", "authority"] as const)(
+it.each(["foreign-lifecycle", "pinned-lifecycle", "in-process-writer", "authority"] as const)(
   "refuses reset metadata when %s changes while the shared worker request is pending",
   async (replacement) => {
     await withOpenClawTestState(
@@ -243,6 +239,8 @@ it.each(["foreign-lifecycle", "pinned-lifecycle", "authority"] as const)(
           );
           if (replacement === "authority") {
             live = false;
+          } else if (replacement === "in-process-writer") {
+            await replaceSessionEntry(f.scope, { ...f.entry, activeWriterRunId: "successor" });
           } else {
             if (replacement === "pinned-lifecycle") {
               native.db.exec("BEGIN");
@@ -283,8 +281,16 @@ it.each(["foreign-lifecycle", "pinned-lifecycle", "authority"] as const)(
             );
           }
           expect(f.read(f.entry)).toBeUndefined();
-          expect(f.read(replacement === "authority" ? f.previous : successor)).toEqual(
-            replacement === "authority" ? META : successorMeta,
+          expect(
+            f.read(
+              replacement === "authority" || replacement === "in-process-writer"
+                ? f.previous
+                : successor,
+            ),
+          ).toEqual(
+            replacement === "authority" || replacement === "in-process-writer"
+              ? META
+              : successorMeta,
           );
         } finally {
           if (native.db.isTransaction) {
