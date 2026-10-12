@@ -13,6 +13,7 @@ import {
   createPluginStateError,
   deleteExpiredPluginStateEntries,
   deletePluginStateEntry,
+  deletePluginStateEntryRow,
   getPluginStateKysely,
   hasPluginStateEntry,
   insertPluginStateEntryIfAbsent,
@@ -173,11 +174,10 @@ export function consumePluginStateEntry(
   store: PluginStateDatabase,
   params: { pluginId: string; namespace: string; key: string },
 ): unknown {
-  const row = selectPluginStateEntry(store.db, { ...params, now: Date.now() });
+  const row = deletePluginStateEntryRow(store.db, { ...params, now: Date.now() });
   if (!row) {
     return undefined;
   }
-  deletePluginStateEntry(store.db, params);
   return parseStoredJson(row.value_json, "consume", store.path);
 }
 

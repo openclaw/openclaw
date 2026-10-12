@@ -1,6 +1,5 @@
 import type { MockInstance } from "vitest";
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
-import type { SubagentRunsDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import {
   createPluginStateKeyedStore,
@@ -189,16 +188,13 @@ async function createFixture(
           ? rewindSessionToMessage({ ...scope, entryId })
           : switchSessionBranch({ ...scope, leafEntryId: entryId }),
       ),
-    remove: (
-      options: { archiveTranscript?: boolean; descendantRunBasis?: SubagentRunsDurableBasis } = {},
-    ) =>
+    remove: (options: { archiveTranscript?: boolean } = {}) =>
       withPluginRuntimeRegistryScope(registry, () =>
         deleteSessionEntryLifecycle({
           ...scope,
           target,
           archiveTranscript: options.archiveTranscript ?? false,
           deleteTranscriptWithoutArchive: true,
-          descendantRunBasis: options.descendantRunBasis,
         }),
       ),
   };

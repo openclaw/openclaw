@@ -250,6 +250,13 @@ export function deletePluginStateEntry(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; key: string },
 ): number {
+  return deletePluginStateEntryRow(db, params) ? 1 : 0;
+}
+
+export function deletePluginStateEntryRow(
+  db: DatabaseSync,
+  params: { pluginId: string; namespace: string; key: string; now?: number },
+) {
   const result = executeSqliteQuerySync(
     db,
     getPluginStateKysely(db)
@@ -257,10 +264,18 @@ export function deletePluginStateEntry(
       .where("plugin_id", "=", params.pluginId)
       .where("namespace", "=", params.namespace)
       .where("entry_key", "=", params.key)
-      .returning(["plugin_id", "namespace", "entry_key"]),
+      .$if(params.now !== undefined, (query) =>
+        query.where((eb) =>
+          eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now!)]),
+        ),
+      )
+      .returning(["plugin_id", "namespace", "entry_key"])
+      .returning((eb) =>
+        (params.now === undefined ? eb.val("") : eb.ref("value_json")).as("value_json"),
+      ),
   );
   pluginStatePublication.stageDeletions(db, result.rows);
-  return result.rows.length;
+  return result.rows[0];
 }
 
 const pluginStateExpiryQuery = createSqliteQueryCache((db) =>

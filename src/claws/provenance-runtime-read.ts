@@ -43,7 +43,7 @@ type ClawInstallSchemaVersionReadOptions = OpenClawStateDatabaseOptions & {
   artifactPreservingReadOnly?: boolean;
 };
 
-// Refresh on every runtime config snapshot because another process may mutate Claw provenance.
+// Config preparation publishes reads; in-process Claw writes publish their committed changes.
 const snapshotsByPath = new Map<string, ClawInstallSchemaVersionSnapshot>();
 const snapshotListeners = new Set<() => void>();
 const handedOffFacts = resolveGlobalSingleton(
@@ -119,28 +119,18 @@ function failedSchemaVersionSnapshot(
 }
 
 registerOpenClawStateDatabaseLifecycleListener((event) => {
-  if (event.kind === "failure-cleared") {
+  if (event.kind === "failure-cleared" || event.kind === "opened") {
     return;
   }
-  const previous = snapshotsByPath.get(event.kind === "opened" ? event.database.path : event.path);
-  if (event.kind === "opened") {
-    const snapshot = readSchemaVersions(event.database.db);
-    snapshotsByPath.set(
-      event.database.path,
-      snapshot.kind === "state-error"
-        ? failedSchemaVersionSnapshot(snapshot.error, previous, isOwnershipUnknown(previous))
-        : snapshot,
-    );
-  } else {
-    const error =
-      event.kind === "open-error" || event.kind === "terminal-failure"
-        ? event.error
-        : new Error("OpenClaw state database closed before consent provenance verification.");
-    snapshotsByPath.set(
-      event.path,
-      failedSchemaVersionSnapshot(error, previous, isOwnershipUnknown(previous)),
-    );
-  }
+  const previous = snapshotsByPath.get(event.path);
+  const error =
+    event.kind === "open-error" || event.kind === "terminal-failure"
+      ? event.error
+      : new Error("OpenClaw state database closed before consent provenance verification.");
+  snapshotsByPath.set(
+    event.path,
+    failedSchemaVersionSnapshot(error, previous, isOwnershipUnknown(previous)),
+  );
   notifySnapshotListeners();
 });
 

@@ -207,7 +207,6 @@ export async function sweepCronRunSessions(params: {
           env: context.environment,
           storePath,
           removals,
-          descendantRunBasis: descendants?.basis,
           commitGuard: () => {
             assertCurrent();
             // Descendants can acquire the continuation while deletion preparation awaits.

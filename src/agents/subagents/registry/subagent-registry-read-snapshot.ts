@@ -20,10 +20,7 @@ import {
   selectSubagentCacheStateForRead,
   type SubagentRunsCache,
 } from "./subagent-registry-read-cache.js";
-import type {
-  SubagentRunReadRecord,
-  SubagentRunsDurableBasis,
-} from "./subagent-registry-read.types.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
@@ -203,12 +200,11 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
 }
 
 export type PreparedSubagentSessionsRead = PreparedSubagentRunsRead & {
-  readonly basis: SubagentRunsDurableBasis;
   // The protected cron deletion adapter still calls this resource-shaped API.
   dispose(): void;
 };
 
-/** The durable basis is fresh worker evidence; live liveness remains parent-owned. */
+/** The worker selects durable descendants; current liveness remains parent-owned. */
 export async function prepareSubagentSessionRunReadSnapshot(params: {
   inMemoryRuns: Map<string, SubagentRunRecord>;
   fullCache: SubagentRunsCache<SubagentRunRecord>;
@@ -234,30 +230,18 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
     (!reply.ok ||
       reply.type !== "subagents.runs" ||
       reply.projection === "maintenance" ||
-      !reply.descendantBasis)
+      !reply.descendants)
   ) {
-    throw new Error("Subagent descendant read omitted its durable basis");
+    throw new Error("Subagent descendant read omitted its selection");
   }
   const persisted = reply?.runs ?? new Map<string, SubagentRunRecord>();
-  const selected =
-    reply?.descendantBasis?.sessionKeys ?? collectSubagentSessionReadKeys(roots, links);
-  const basis: SubagentRunsDurableBasis = Object.freeze({
-    databasePath: context.admission.databasePath,
-    databaseIdentity: context.admission.identity.key,
-    ...(context.admission.identity.birthtime
-      ? { databaseBirthtime: context.admission.identity.birthtime }
-      : {}),
-    sessionKeys: roots,
-    liveTopology: links,
-    digest: reply?.descendantBasis?.digest ?? null,
-  });
+  const selected = reply?.descendants?.sessionKeys ?? collectSubagentSessionReadKeys(roots, links);
   return {
-    basis,
     dispose() {},
     consume(consume) {
       signal?.throwIfAborted();
       assertSubagentReadContext(context);
-      // A changed live tree needs a new selection; durable changes are checked at deletion.
+      // Registry writers publish live changes; raw outside writes during deletion are unsupported.
       const current = getSubagentSessionReadLookup(inMemoryRuns).captureTopology();
       const relevant = (values: typeof links) =>
         values.filter(
